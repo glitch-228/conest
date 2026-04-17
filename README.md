@@ -14,7 +14,7 @@ Conest is a phased secure text-exchange app. This repository now contains the fi
 - One account on one device.
 - Direct text conversations only.
 - Invite payloads with LAN and relay route hints.
-- Route hints carry both route kind and protocol, currently `tcp` or `udp`.
+- Route hints carry both route kind and protocol, currently `tcp`, `udp`, `http`, or `https`.
 - Rotating pairing code derived from the payload in 30-second windows.
 - Desktop-style relay behavior enabled by default through the app's local LAN node.
 - X25519-derived shared secret encryption per direct conversation.
@@ -51,9 +51,9 @@ cargo build --release -p conest_relay
   --max-requests-per-minute 240
 ```
 
-Open TCP and/or UDP port `7667` on the host firewall or provider security group. If the host is UDP-only, add it in the app as `udp://your-domain:7667`; if you enter a bare host, the app adds both TCP and UDP variants.
+Open TCP and/or UDP port `7667` on the host firewall or provider security group. The same relay port also accepts HTTP requests, so HTTP tunnels such as LocalTunnel can forward to it. If the host is UDP-only, add it in the app as `udp://your-domain:7667`; for LocalTunnel-style URLs, add the relay as `https://your-subdomain.loca.lt`.
 
-The relay speaks the same JSON protocol as the app over TCP newline-delimited requests and UDP single-datagram requests:
+The relay speaks the same JSON protocol as the app over TCP newline-delimited requests, UDP single-datagram requests, and HTTP/HTTPS POST requests:
 
 - `health` checks availability and returns basic queue stats.
 - `store` accepts encrypted envelopes for a recipient mailbox.
@@ -61,6 +61,19 @@ The relay speaks the same JSON protocol as the app over TCP newline-delimited re
 - `pairing_announcement` envelopes are reusable during TTL and deduped by sender device, so multiple clients can discover the same codephrase.
 
 UDP is intended for v0.1 text/control envelopes. Large attachment chunks are a later protocol phase and will need chunking instead of one datagram.
+
+Manual checks:
+
+```bash
+# TCP newline JSON
+printf '{"action":"health"}\n' | nc -w 3 127.0.0.1 7667
+
+# HTTP on the same local relay port
+curl -sS http://127.0.0.1:7667/health
+
+# LocalTunnel forwards HTTPS externally to the local HTTP relay endpoint
+curl -sS -H 'bypass-tunnel-reminder: true' https://your-subdomain.loca.lt/health
+```
 
 Useful environment variables mirror the CLI flags: `CONEST_RELAY_BIND`, `CONEST_RELAY_ID`, `CONEST_RELAY_TTL_SECONDS`, `CONEST_RELAY_MAX_QUEUE_PER_MAILBOX`, `CONEST_RELAY_MAX_FETCH_LIMIT`, `CONEST_RELAY_MAX_ENVELOPE_BYTES`, `CONEST_RELAY_MAX_LINE_BYTES`, and `CONEST_RELAY_MAX_REQUESTS_PER_MINUTE`.
 

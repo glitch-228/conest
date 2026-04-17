@@ -142,6 +142,20 @@ class RelayClient {
         timeout: timeout,
         request: request,
       ),
+      PeerRouteProtocol.http => _sendHttpRequest(
+        scheme: 'http',
+        host: host,
+        port: port,
+        timeout: timeout,
+        request: request,
+      ),
+      PeerRouteProtocol.https => _sendHttpRequest(
+        scheme: 'https',
+        host: host,
+        port: port,
+        timeout: timeout,
+        request: request,
+      ),
     };
   }
 
@@ -229,6 +243,90 @@ class RelayClient {
     );
   }
 
+  Future<Map<String, dynamic>> _sendHttpRequest({
+    required String scheme,
+    required String host,
+    required int port,
+    required Duration timeout,
+    required Map<String, dynamic> request,
+  }) async {
+    final socket = scheme == 'https'
+        ? await SecureSocket.connect(host, port, timeout: timeout)
+        : await Socket.connect(host, port, timeout: timeout);
+    try {
+      final requestBody = utf8.encode(jsonEncode(request));
+      final requestHead =
+          'POST / HTTP/1.1\r\n'
+          'Host: $host\r\n'
+          'Content-Type: application/json\r\n'
+          'Accept: application/json\r\n'
+          'Content-Length: ${requestBody.length}\r\n'
+          'Connection: close\r\n'
+          // Harmless on normal relays; useful with some public HTTP tunnels.
+          'bypass-tunnel-reminder: true\r\n'
+          'ngrok-skip-browser-warning: true\r\n'
+          '\r\n';
+      socket.add(utf8.encode(requestHead));
+      socket.add(requestBody);
+      await socket.flush();
+      final responseBytes = await socket
+          .fold<List<int>>(<int>[], (buffer, chunk) => buffer..addAll(chunk))
+          .timeout(timeout);
+      final response = _decodeHttpResponse(responseBytes);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw StateError(
+          'HTTP relay returned ${response.statusCode}: ${_shortBody(response.body)}',
+        );
+      }
+      return _decodeResponse(response.body);
+    } finally {
+      await socket.close();
+    }
+  }
+
+  _HttpRelayResponse _decodeHttpResponse(List<int> bytes) {
+    final headerEnd = _httpHeaderEnd(bytes);
+    if (headerEnd == null) {
+      throw const FormatException('HTTP relay response has no headers.');
+    }
+    final headerText = latin1.decode(
+      bytes.take(headerEnd.headerBytes).toList(),
+      allowInvalid: true,
+    );
+    final statusLine = headerText.split(RegExp(r'\r?\n')).first;
+    final statusParts = statusLine.split(' ');
+    final statusCode = statusParts.length >= 2
+        ? int.tryParse(statusParts[1]) ?? 0
+        : 0;
+    final body = utf8.decode(bytes.sublist(headerEnd.totalHeaderBytes));
+    return _HttpRelayResponse(statusCode: statusCode, body: body);
+  }
+
+  _HttpHeaderEnd? _httpHeaderEnd(List<int> bytes) {
+    for (var index = 0; index <= bytes.length - 4; index++) {
+      if (bytes[index] == 13 &&
+          bytes[index + 1] == 10 &&
+          bytes[index + 2] == 13 &&
+          bytes[index + 3] == 10) {
+        return _HttpHeaderEnd(headerBytes: index, totalHeaderBytes: index + 4);
+      }
+    }
+    for (var index = 0; index <= bytes.length - 2; index++) {
+      if (bytes[index] == 10 && bytes[index + 1] == 10) {
+        return _HttpHeaderEnd(headerBytes: index, totalHeaderBytes: index + 2);
+      }
+    }
+    return null;
+  }
+
+  String _shortBody(String body) {
+    final normalized = body.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (normalized.length <= 160) {
+      return normalized;
+    }
+    return '${normalized.substring(0, 160)}...';
+  }
+
   Map<String, dynamic> _decodeResponse(String line) {
     final response = jsonDecode(line) as Map<String, dynamic>;
     if (response['ok'] == false) {
@@ -236,4 +334,21 @@ class RelayClient {
     }
     return response;
   }
+}
+
+class _HttpRelayResponse {
+  const _HttpRelayResponse({required this.statusCode, required this.body});
+
+  final int statusCode;
+  final String body;
+}
+
+class _HttpHeaderEnd {
+  const _HttpHeaderEnd({
+    required this.headerBytes,
+    required this.totalHeaderBytes,
+  });
+
+  final int headerBytes;
+  final int totalHeaderBytes;
 }

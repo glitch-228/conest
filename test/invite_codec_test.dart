@@ -53,7 +53,12 @@ void main() {
     );
     final https = PeerEndpoint.normalized(
       kind: PeerRouteKind.relay,
-      host: 'https://everything-earnings.gl.at.ply.gg:21639',
+      host: 'https://everything-earnings.gl.at.ply.gg',
+      port: 7667,
+    );
+    final http = PeerEndpoint.normalized(
+      kind: PeerRouteKind.relay,
+      host: 'http://relay.local',
       port: 7667,
     );
 
@@ -62,8 +67,12 @@ void main() {
     expect(udp.protocol, PeerRouteProtocol.udp);
     expect(udp.label, 'udp://everything-earnings.gl.at.ply.gg:21639');
     expect(https.host, 'everything-earnings.gl.at.ply.gg');
-    expect(https.port, 21639);
-    expect(https.protocol, PeerRouteProtocol.tcp);
+    expect(https.port, 443);
+    expect(https.protocol, PeerRouteProtocol.https);
+    expect(https.label, 'https://everything-earnings.gl.at.ply.gg:443');
+    expect(http.host, 'relay.local');
+    expect(http.port, 80);
+    expect(http.protocol, PeerRouteProtocol.http);
   });
 
   test(
@@ -90,7 +99,7 @@ void main() {
       });
       expect(invite.routeHints.map((route) => route.port).toSet(), {21639});
       expect(invite.routeHints.map((route) => route.protocol).toSet(), {
-        PeerRouteProtocol.tcp,
+        PeerRouteProtocol.https,
         PeerRouteProtocol.udp,
       });
     },

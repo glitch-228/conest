@@ -395,12 +395,114 @@ fn handle_client(
     if bytes_read == 0 {
         return Ok(());
     }
-    let response = handle_request_bytes(line.as_bytes(), bytes_read, &state, &peer);
-    serde_json::to_writer(&mut writer, &response)?;
-    writer.write_all(b"\n")?;
+    if is_http_request_line(&line) {
+        let (status, response) = handle_http_request(&line, &mut reader, &state, &peer);
+        write_http_response(&mut writer, status, &response)?;
+    } else {
+        let response = handle_request_bytes(line.as_bytes(), bytes_read, &state, &peer);
+        serde_json::to_writer(&mut writer, &response)?;
+        writer.write_all(b"\n")?;
+    }
     writer.flush()?;
 
     Ok(())
+}
+
+fn is_http_request_line(line: &str) -> bool {
+    line.starts_with("GET ") || line.starts_with("POST ") || line.starts_with("OPTIONS ")
+}
+
+fn handle_http_request<R: BufRead>(
+    request_line: &str,
+    reader: &mut R,
+    state: &RelayState,
+    peer: &str,
+) -> (u16, RelayResponse) {
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default();
+    let path = parts.next().unwrap_or("/");
+    if path != "/" && path != "/health" && path != "/relay" {
+        return (404, RelayResponse::error("unknown HTTP relay path"));
+    }
+
+    let mut headers = Vec::new();
+    let mut content_length = 0_usize;
+    loop {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => return (400, RelayResponse::error("incomplete HTTP headers")),
+            Ok(_) => {
+                if line == "\r\n" || line == "\n" {
+                    break;
+                }
+                if headers.len() + line.len() > state.config.max_line_bytes {
+                    return (413, RelayResponse::error("HTTP headers too large"));
+                }
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.trim().eq_ignore_ascii_case("content-length") {
+                        content_length = value.trim().parse::<usize>().unwrap_or(0);
+                    }
+                }
+                headers.extend_from_slice(line.as_bytes());
+            }
+            Err(error) => {
+                return (
+                    400,
+                    RelayResponse::error(format!("HTTP header read failed: {error}")),
+                );
+            }
+        }
+    }
+
+    match method {
+        "GET" | "OPTIONS" => (200, handle_request(RelayRequest::Health, state)),
+        "POST" => {
+            if content_length == 0 {
+                return (400, RelayResponse::error("HTTP relay POST body is empty"));
+            }
+            if content_length > state.config.max_line_bytes {
+                return (413, RelayResponse::error("HTTP relay POST body too large"));
+            }
+            let mut body = vec![0_u8; content_length];
+            if let Err(error) = reader.read_exact(&mut body) {
+                return (
+                    400,
+                    RelayResponse::error(format!("HTTP body read failed: {error}")),
+                );
+            }
+            (200, handle_request_bytes(&body, body.len(), state, peer))
+        }
+        _ => (405, RelayResponse::error("unsupported HTTP method")),
+    }
+}
+
+fn write_http_response<W: Write>(
+    writer: &mut W,
+    status: u16,
+    response: &RelayResponse,
+) -> std::io::Result<()> {
+    let body = serde_json::to_vec(response)?;
+    let status_text = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        413 => "Payload Too Large",
+        _ => "Relay Response",
+    };
+    write!(
+        writer,
+        "HTTP/1.1 {status} {status_text}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Cache-Control: no-store\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         Access-Control-Allow-Headers: content-type, bypass-tunnel-reminder, ngrok-skip-browser-warning\r\n\
+         Connection: close\r\n\
+         \r\n",
+        body.len()
+    )?;
+    writer.write_all(&body)
 }
 
 fn serve_udp(socket: UdpSocket, state: RelayState, config: RelayConfig) {
@@ -715,6 +817,62 @@ mod tests {
         assert!(stored.stored);
         assert_eq!(fetched.messages.len(), 1);
         assert_eq!(fetched.messages[0]["messageId"], "msg-udp");
+    }
+
+    #[test]
+    fn http_post_handler_uses_same_relay_protocol() {
+        let state = RelayState::new(test_config());
+        let peer = "127.0.0.1";
+        let store = json!({
+            "action": "store",
+            "recipient_device_id": "dev-b",
+            "envelope": envelope("direct_message", "msg-http", "dev-a")
+        })
+        .to_string();
+        let fetch = json!({
+            "action": "fetch",
+            "recipient_device_id": "dev-b",
+            "limit": 4
+        })
+        .to_string();
+
+        let store_request = format!(
+            "Host: relay.test\r\nContent-Length: {}\r\n\r\n{}",
+            store.len(),
+            store
+        );
+        let fetch_request = format!(
+            "Host: relay.test\r\nContent-Length: {}\r\n\r\n{}",
+            fetch.len(),
+            fetch
+        );
+        let mut store_reader = BufReader::new(store_request.as_bytes());
+        let mut fetch_reader = BufReader::new(fetch_request.as_bytes());
+
+        let (store_status, stored) =
+            handle_http_request("POST / HTTP/1.1\r\n", &mut store_reader, &state, peer);
+        let (fetch_status, fetched) =
+            handle_http_request("POST /relay HTTP/1.1\r\n", &mut fetch_reader, &state, peer);
+
+        assert_eq!(store_status, 200);
+        assert!(stored.ok);
+        assert!(stored.stored);
+        assert_eq!(fetch_status, 200);
+        assert_eq!(fetched.messages.len(), 1);
+        assert_eq!(fetched.messages[0]["messageId"], "msg-http");
+    }
+
+    #[test]
+    fn http_get_health_reports_relay_instance_id() {
+        let state = RelayState::new(test_config());
+        let mut reader = BufReader::new("Host: relay.test\r\n\r\n".as_bytes());
+        let (status, response) =
+            handle_http_request("GET /health HTTP/1.1\r\n", &mut reader, &state, "127.0.0.1");
+        let stats = response.stats.expect("health should include stats");
+
+        assert_eq!(status, 200);
+        assert!(response.ok);
+        assert_eq!(stats.relay_id, "relay-test");
     }
 
     #[test]

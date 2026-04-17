@@ -52,6 +52,57 @@ void main() {
     },
   );
 
+  test(
+    'relay client can store and fetch through HTTP local relay protocol',
+    () async {
+      final reserved = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final port = reserved.port;
+      await reserved.close();
+
+      final node = LocalRelayNode();
+      addTearDown(node.stop);
+      await node.start(port);
+
+      const client = RelayClient();
+      final envelope = RelayEnvelope(
+        kind: 'debug_http_loopback',
+        messageId: 'msg-http',
+        conversationId: 'conv-http',
+        senderAccountId: 'acc-a',
+        senderDeviceId: 'dev-a',
+        recipientDeviceId: 'dev-b',
+        createdAt: DateTime.utc(2026, 4, 17),
+        payloadBase64: 'aGVsbG8=',
+      );
+
+      final health = await client.inspectHealth(
+        host: '127.0.0.1',
+        port: port,
+        protocol: PeerRouteProtocol.http,
+        timeout: const Duration(seconds: 2),
+      );
+      final stored = await client.storeEnvelope(
+        host: '127.0.0.1',
+        port: port,
+        protocol: PeerRouteProtocol.http,
+        recipientDeviceId: 'dev-b',
+        envelope: envelope,
+        timeout: const Duration(seconds: 2),
+      );
+      final fetched = await client.fetchEnvelopes(
+        host: '127.0.0.1',
+        port: port,
+        protocol: PeerRouteProtocol.http,
+        recipientDeviceId: 'dev-b',
+        timeout: const Duration(seconds: 2),
+      );
+
+      expect(health.ok, isTrue);
+      expect(stored, isTrue);
+      expect(fetched.single.messageId, 'msg-http');
+    },
+  );
+
   test('local relay notifies when an envelope is stored', () async {
     final reserved = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = reserved.port;

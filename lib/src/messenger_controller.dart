@@ -859,12 +859,39 @@ class MessengerController extends ChangeNotifier {
         port: parsed.port,
         protocol: PeerRouteProtocol.udp,
       ),
+      PeerEndpoint(
+        kind: PeerRouteKind.relay,
+        host: parsed.host,
+        port: parsed.port,
+        protocol: PeerRouteProtocol.http,
+      ),
+      PeerEndpoint(
+        kind: PeerRouteKind.relay,
+        host: parsed.host,
+        port: parsed.port,
+        protocol: PeerRouteProtocol.https,
+      ),
+      if (!parsed.hasExplicitPort && parsed.port != 80)
+        PeerEndpoint(
+          kind: PeerRouteKind.relay,
+          host: parsed.host,
+          port: 80,
+          protocol: PeerRouteProtocol.http,
+        ),
+      if (!parsed.hasExplicitPort && parsed.port != 443)
+        PeerEndpoint(
+          kind: PeerRouteKind.relay,
+          host: parsed.host,
+          port: 443,
+          protocol: PeerRouteProtocol.https,
+        ),
     ];
+    final dedupedCandidates = dedupePeerEndpoints(candidates);
     if (!detectProtocols) {
-      return candidates;
+      return dedupedCandidates;
     }
     final checks = await Future.wait(
-      candidates.map((route) => _checkRouteHealth(route)),
+      dedupedCandidates.map((route) => _checkRouteHealth(route)),
     );
     final detected = checks
         .where((check) => check.available)
@@ -872,8 +899,8 @@ class MessengerController extends ChangeNotifier {
         .toList(growable: false);
     if (detected.isEmpty) {
       throw ArgumentError(
-        'Relay ${parsed.host}:${parsed.port} did not answer over TCP or UDP. '
-        'Check the tunnel/origin, or use tcp://host:port or udp://host:port to force a protocol.',
+        'Relay ${parsed.host}:${parsed.port} did not answer over TCP, UDP, HTTP, or HTTPS. '
+        'Check the tunnel/origin, or use tcp://, udp://, http://, or https:// to force a protocol.',
       );
     }
     return detected;
@@ -949,7 +976,7 @@ class MessengerController extends ChangeNotifier {
     required String host,
     required int port,
   }) {
-    return <PeerEndpoint>[
+    final routes = <PeerEndpoint>[
       PeerEndpoint(kind: kind, host: host, port: port),
       PeerEndpoint(
         kind: kind,
@@ -958,6 +985,23 @@ class MessengerController extends ChangeNotifier {
         protocol: PeerRouteProtocol.udp,
       ),
     ];
+    if (kind == PeerRouteKind.relay) {
+      routes.addAll([
+        PeerEndpoint(
+          kind: kind,
+          host: host,
+          port: port,
+          protocol: PeerRouteProtocol.http,
+        ),
+        PeerEndpoint(
+          kind: kind,
+          host: host,
+          port: port,
+          protocol: PeerRouteProtocol.https,
+        ),
+      ]);
+    }
+    return routes;
   }
 
   Future<void> removeRelay(PeerEndpoint relay) async {
@@ -2548,7 +2592,8 @@ class MessengerController extends ChangeNotifier {
       return const DebugCheckResult(
         name: 'Relay protocol rediscovery',
         status: DebugCheckStatus.skip,
-        detail: 'No configured relay hosts to probe for TCP/UDP variants.',
+        detail:
+            'No configured relay hosts to probe for TCP/UDP/HTTP/HTTPS variants.',
       );
     }
     final refresh = await _refreshConfiguredRelayProtocols(me);
@@ -2559,8 +2604,8 @@ class MessengerController extends ChangeNotifier {
           ? DebugCheckStatus.warn
           : DebugCheckStatus.pass,
       detail: refresh.addedRoutes.isEmpty
-          ? 'Checked ${refresh.checkedRoutes} TCP/UDP relay route(s); ${refresh.availableRoutes} available; no new protocol routes detected.'
-          : 'Checked ${refresh.checkedRoutes} TCP/UDP relay route(s); ${refresh.availableRoutes} available; added $added.',
+          ? 'Checked ${refresh.checkedRoutes} TCP/UDP/HTTP/HTTPS relay route(s); ${refresh.availableRoutes} available; no new protocol routes detected.'
+          : 'Checked ${refresh.checkedRoutes} TCP/UDP/HTTP/HTTPS relay route(s); ${refresh.availableRoutes} available; added $added.',
     );
   }
 

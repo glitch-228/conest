@@ -87,7 +87,7 @@ This file lists the functionality currently implemented in the Conest prototype.
 
 ## Routing And Delivery
 - Peer route model supports LAN and relay routes.
-- Peer route model includes an explicit transport protocol, currently TCP or UDP.
+- Peer route model includes an explicit transport protocol, currently TCP, UDP, HTTP, or HTTPS.
 - Peer route model reserves direct-internet routes, ranked after LAN and before relay fallback.
 - Route hints are deduplicated.
 - Per-route availability checks.
@@ -103,25 +103,26 @@ This file lists the functionality currently implemented in the Conest prototype.
 - Network summary reports LAN node status, LAN addresses, relay routes, and relay health.
 
 ## Relay And LAN Runtime
-- Built-in local relay node for app-integrated TCP/UDP relay/LAN queue behavior.
-- Standalone Rust relay app/package that speaks the current Flutter TCP/UDP JSON relay protocol.
-- Standalone relay supports TCP and UDP health, encrypted envelope store/fetch, pairing announcement reuse, TTL cleanup, mailbox queue caps, fetch caps, envelope size caps, and basic per-IP rate limiting.
+- Built-in local relay node for app-integrated TCP/UDP/HTTP relay/LAN queue behavior.
+- Standalone Rust relay app/package that speaks the current Flutter TCP/UDP/HTTP JSON relay protocol.
+- Standalone relay supports TCP, UDP, and HTTP health, encrypted envelope store/fetch, pairing announcement reuse, TTL cleanup, mailbox queue caps, fetch caps, envelope size caps, and basic per-IP rate limiting.
 - Standalone relay health returns a relay instance id; `--relay-id` / `CONEST_RELAY_ID` can make that id stable across restarts.
 - Desktop devices enable relay mode by default for new identities.
 - Android devices keep relay mode disabled by default for new identities.
 - Relay mode can be enabled/disabled in settings.
 - Local relay port can be changed in settings.
 - Configured internet relay list can be added to and removed from settings.
-- Bare relay hosts add TCP and UDP route variants; `tcp://host:port` and `udp://host:port` can be used to force one protocol.
+- Bare relay hosts add TCP, UDP, HTTP, and HTTPS route variants; `tcp://host:port`, `udp://host:port`, `http://host`, and `https://host` can be used to force one protocol.
+- HTTP/HTTPS relay routes support HTTP tunnel providers such as LocalTunnel by posting the existing relay JSON protocol through the tunnel URL.
 - Optional auto-use of relay-capable routes learned from contacts.
 - Auto-use contacts as relays is enabled by default for new identities.
 - Relay availability check button in settings.
 - Relay availability checks configured internet relays, contact relays, local relay loopback, and LAN addresses.
 - Relay availability and debug diagnostics group different endpoints that report the same relay instance id.
 - Relay debug loopback, pairing reuse, and availability checks include trusted contact relay endpoints and cached same-relay aliases even when automatic contact relay use is disabled.
-- Bare relay hosts are auto-detected when added from onboarding/settings: TCP and UDP are probed, and only answering protocols are saved.
-- Explicit `tcp://host:port` or `udp://host:port` relay entries can still be forced when a tunnel is expected to work later or cannot be probed locally.
-- Existing configured relay hosts can rediscover newly working TCP/UDP sibling routes during relay availability/debug checks, while stopped protocols remain separate unavailable routes instead of blocking working ones.
+- Bare relay hosts are auto-detected when added from onboarding/settings: TCP, UDP, HTTP, and HTTPS are probed, and only answering protocols are saved.
+- Explicit `tcp://host:port`, `udp://host:port`, `http://host`, or `https://host` relay entries can still be forced when a tunnel is expected to work later or cannot be probed locally.
+- Existing configured relay hosts can rediscover newly working TCP/UDP/HTTP/HTTPS sibling routes during relay availability/debug checks, while stopped protocols remain separate unavailable routes instead of blocking working ones.
 - Startup no longer blocks on best-effort relay pairing announcements; slower relay checks run after the app is ready.
 - LAN pairing beacon listener advertises TCP and UDP local pairing routes and responds to nearby pairing discovery pings.
 - LAN pairing beacons from already-trusted contacts are used to rediscover new direct paths after network changes.

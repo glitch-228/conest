@@ -19,7 +19,7 @@ enum DeliveryState {
 
 enum PeerRouteKind { lan, directInternet, relay }
 
-enum PeerRouteProtocol { tcp, udp }
+enum PeerRouteProtocol { tcp, udp, http, https }
 
 class PeerEndpoint {
   const PeerEndpoint({
@@ -81,17 +81,21 @@ class ParsedPeerEndpointInput {
     required this.port,
     required this.protocol,
     required this.hasExplicitProtocol,
+    required this.hasExplicitPort,
   });
 
   final String host;
   final int port;
   final PeerRouteProtocol protocol;
   final bool hasExplicitProtocol;
+  final bool hasExplicitPort;
 }
 
 PeerRouteProtocol peerRouteProtocolFromString(String? value) {
   return switch (value?.trim().toLowerCase()) {
     'udp' || 'conest+udp' => PeerRouteProtocol.udp,
+    'http' || 'conest+http' => PeerRouteProtocol.http,
+    'https' || 'conest+https' => PeerRouteProtocol.https,
     _ => PeerRouteProtocol.tcp,
   };
 }
@@ -106,6 +110,7 @@ ParsedPeerEndpointInput parsePeerEndpointInput({
   var parsedPort = fallbackPort;
   var parsedProtocol = defaultProtocol;
   var hasExplicitProtocol = false;
+  var hasExplicitPort = false;
 
   final schemeIndex = value.indexOf('://');
   if (schemeIndex > 0) {
@@ -118,6 +123,9 @@ ParsedPeerEndpointInput parsePeerEndpointInput({
       parsedHost = uri.host;
       if (uri.hasPort) {
         parsedPort = uri.port;
+        hasExplicitPort = true;
+      } else if (hasExplicitProtocol) {
+        parsedPort = _defaultPortForProtocol(parsedProtocol) ?? fallbackPort;
       }
     } else {
       value = value.substring(schemeIndex + 3);
@@ -131,6 +139,7 @@ ParsedPeerEndpointInput parsePeerEndpointInput({
       if (maybePort != null) {
         parsedHost = value.substring(0, lastColon);
         parsedPort = maybePort;
+        hasExplicitPort = true;
       }
     }
   }
@@ -147,13 +156,29 @@ ParsedPeerEndpointInput parsePeerEndpointInput({
     port: parsedPort,
     protocol: parsedProtocol,
     hasExplicitProtocol: hasExplicitProtocol,
+    hasExplicitPort: hasExplicitPort,
   );
 }
 
 bool _isExplicitRouteProtocolScheme(String scheme) {
   return switch (scheme.trim().toLowerCase()) {
-    'tcp' || 'udp' || 'conest+tcp' || 'conest+udp' => true,
+    'tcp' ||
+    'udp' ||
+    'http' ||
+    'https' ||
+    'conest+tcp' ||
+    'conest+udp' ||
+    'conest+http' ||
+    'conest+https' => true,
     _ => false,
+  };
+}
+
+int? _defaultPortForProtocol(PeerRouteProtocol protocol) {
+  return switch (protocol) {
+    PeerRouteProtocol.http => 80,
+    PeerRouteProtocol.https => 443,
+    PeerRouteProtocol.tcp || PeerRouteProtocol.udp => null,
   };
 }
 

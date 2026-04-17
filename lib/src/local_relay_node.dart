@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'models.dart';
 
@@ -58,30 +59,215 @@ class LocalRelayNode {
   }
 
   Future<void> _handleClient(Socket socket) async {
+    var isHttp = false;
     try {
-      final line = await socket
-          .cast<List<int>>()
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .first
-          .timeout(const Duration(seconds: 4));
-      final request = jsonDecode(line) as Map<String, dynamic>;
-      final response = _handleRequest(request);
-      socket.writeln(jsonEncode(response));
+      final wireRequest = await _readWireRequest(socket);
+      isHttp = wireRequest.isHttp;
+      final response = _handleRequest(wireRequest.request);
+      if (isHttp) {
+        _writeHttpResponse(socket, response);
+      } else {
+        socket.writeln(jsonEncode(response));
+      }
       await socket.flush();
     } catch (error) {
-      socket.writeln(
-        jsonEncode({
-          'ok': false,
-          'stored': false,
-          'messages': const [],
-          'error': error.toString(),
-        }),
-      );
+      final response = {
+        'ok': false,
+        'stored': false,
+        'messages': const [],
+        'error': error.toString(),
+      };
+      if (isHttp) {
+        _writeHttpResponse(socket, response, statusCode: 400);
+      } else {
+        socket.writeln(jsonEncode(response));
+      }
       await socket.flush();
     } finally {
       await socket.close();
     }
+  }
+
+  Future<_RelayWireRequest> _readWireRequest(Socket socket) {
+    final completer = Completer<_RelayWireRequest>();
+    final buffer = BytesBuilder(copy: false);
+    StreamSubscription<List<int>>? subscription;
+    Timer? timer;
+
+    void completeWithError(Object error) {
+      if (completer.isCompleted) {
+        return;
+      }
+      timer?.cancel();
+      unawaited(subscription?.cancel());
+      completer.completeError(error);
+    }
+
+    void tryComplete() {
+      if (completer.isCompleted) {
+        return;
+      }
+      final bytes = buffer.toBytes();
+      final completion = _wireRequestCompletion(bytes);
+      if (completion == null) {
+        return;
+      }
+      try {
+        final request = _parseWireRequest(bytes.take(completion).toList());
+        timer?.cancel();
+        unawaited(subscription?.cancel());
+        completer.complete(request);
+      } catch (error) {
+        completeWithError(error);
+      }
+    }
+
+    timer = Timer(
+      const Duration(seconds: 4),
+      () => completeWithError(TimeoutException('Relay request timed out.')),
+    );
+    subscription = socket.listen(
+      (chunk) {
+        buffer.add(chunk);
+        tryComplete();
+      },
+      onError: completeWithError,
+      onDone: () {
+        if (!completer.isCompleted) {
+          tryComplete();
+        }
+        if (!completer.isCompleted) {
+          completeWithError(
+            const FormatException('Relay request ended early.'),
+          );
+        }
+      },
+      cancelOnError: true,
+    );
+    return completer.future;
+  }
+
+  int? _wireRequestCompletion(List<int> bytes) {
+    if (bytes.isEmpty) {
+      return null;
+    }
+    final previewLength = bytes.length < 16 ? bytes.length : 16;
+    final preview = latin1.decode(
+      bytes.take(previewLength).toList(),
+      allowInvalid: true,
+    );
+    final isHttp =
+        preview.startsWith('GET ') ||
+        preview.startsWith('POST ') ||
+        preview.startsWith('OPTIONS ');
+    if (!isHttp) {
+      final newline = bytes.indexOf(10);
+      return newline == -1 ? null : newline + 1;
+    }
+
+    final headerEnd = _httpHeaderEnd(bytes);
+    if (headerEnd == null) {
+      return null;
+    }
+    final headerText = latin1.decode(
+      bytes.take(headerEnd.headerBytes).toList(),
+      allowInvalid: true,
+    );
+    final contentLength = _httpContentLength(headerText);
+    return bytes.length >= headerEnd.totalHeaderBytes + contentLength
+        ? headerEnd.totalHeaderBytes + contentLength
+        : null;
+  }
+
+  _HttpHeaderEnd? _httpHeaderEnd(List<int> bytes) {
+    for (var index = 0; index <= bytes.length - 4; index++) {
+      if (bytes[index] == 13 &&
+          bytes[index + 1] == 10 &&
+          bytes[index + 2] == 13 &&
+          bytes[index + 3] == 10) {
+        return _HttpHeaderEnd(headerBytes: index, totalHeaderBytes: index + 4);
+      }
+    }
+    for (var index = 0; index <= bytes.length - 2; index++) {
+      if (bytes[index] == 10 && bytes[index + 1] == 10) {
+        return _HttpHeaderEnd(headerBytes: index, totalHeaderBytes: index + 2);
+      }
+    }
+    return null;
+  }
+
+  int _httpContentLength(String headerText) {
+    for (final line in const LineSplitter().convert(headerText)) {
+      final separator = line.indexOf(':');
+      if (separator <= 0) {
+        continue;
+      }
+      final name = line.substring(0, separator).trim().toLowerCase();
+      if (name != 'content-length') {
+        continue;
+      }
+      return int.tryParse(line.substring(separator + 1).trim()) ?? 0;
+    }
+    return 0;
+  }
+
+  _RelayWireRequest _parseWireRequest(List<int> bytes) {
+    final text = utf8.decode(bytes, allowMalformed: true);
+    if (text.startsWith('GET ') ||
+        text.startsWith('POST ') ||
+        text.startsWith('OPTIONS ')) {
+      final headerEnd = _httpHeaderEnd(bytes);
+      if (headerEnd == null) {
+        throw const FormatException('HTTP relay request has no headers.');
+      }
+      final firstLine = text.split(RegExp(r'\r?\n')).first;
+      final parts = firstLine.split(' ');
+      final method = parts.isEmpty ? '' : parts.first.toUpperCase();
+      if (method == 'GET' || method == 'OPTIONS') {
+        return const _RelayWireRequest(
+          isHttp: true,
+          request: {'action': 'health'},
+        );
+      }
+      if (method != 'POST') {
+        throw FormatException('Unsupported HTTP relay method: $method');
+      }
+      final bodyBytes = bytes.sublist(headerEnd.totalHeaderBytes);
+      final request = jsonDecode(utf8.decode(bodyBytes));
+      if (request is! Map<String, dynamic>) {
+        throw const FormatException('HTTP relay body must be a JSON object.');
+      }
+      return _RelayWireRequest(isHttp: true, request: request);
+    }
+
+    final firstLine = text.split(RegExp(r'\r?\n')).first;
+    final request = jsonDecode(firstLine);
+    if (request is! Map<String, dynamic>) {
+      throw const FormatException('TCP relay line must be a JSON object.');
+    }
+    return _RelayWireRequest(isHttp: false, request: request);
+  }
+
+  void _writeHttpResponse(
+    Socket socket,
+    Map<String, dynamic> response, {
+    int statusCode = 200,
+  }) {
+    final body = utf8.encode(jsonEncode(response));
+    final statusText = statusCode == 200 ? 'OK' : 'Bad Request';
+    socket.add(
+      utf8.encode(
+        'HTTP/1.1 $statusCode $statusText\r\n'
+        'Content-Type: application/json\r\n'
+        'Content-Length: ${body.length}\r\n'
+        'Cache-Control: no-store\r\n'
+        'Access-Control-Allow-Origin: *\r\n'
+        'Access-Control-Allow-Headers: content-type, bypass-tunnel-reminder, ngrok-skip-browser-warning\r\n'
+        'Connection: close\r\n'
+        '\r\n',
+      ),
+    );
+    socket.add(body);
   }
 
   void _handleUdpEvent(RawSocketEvent event) {
@@ -209,6 +395,23 @@ class _QueueEntry {
 
   final DateTime queuedAt;
   final RelayEnvelope envelope;
+}
+
+class _RelayWireRequest {
+  const _RelayWireRequest({required this.isHttp, required this.request});
+
+  final bool isHttp;
+  final Map<String, dynamic> request;
+}
+
+class _HttpHeaderEnd {
+  const _HttpHeaderEnd({
+    required this.headerBytes,
+    required this.totalHeaderBytes,
+  });
+
+  final int headerBytes;
+  final int totalHeaderBytes;
 }
 
 Future<List<String>> discoverLanAddresses() async {

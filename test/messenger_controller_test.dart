@@ -1112,7 +1112,11 @@ void main() {
 
   test('addRelay auto-detects UDP-only bare relay hosts', () async {
     final relayClient = _FakeRelayClient(
-      failingHosts: <String>{'tcp://playit.example:21639'},
+      failingHosts: <String>{
+        'tcp://playit.example:21639',
+        'http://playit.example:21639',
+        'https://playit.example:21639',
+      },
     );
     final controller = await _createController(
       relayClient: relayClient,
@@ -1188,13 +1192,22 @@ void main() {
           .where((route) => route.host == 'playit.example')
           .map((route) => route.protocol)
           .toSet();
-      expect(protocols, {PeerRouteProtocol.tcp, PeerRouteProtocol.udp});
+      expect(protocols, {
+        PeerRouteProtocol.tcp,
+        PeerRouteProtocol.udp,
+        PeerRouteProtocol.http,
+        PeerRouteProtocol.https,
+      });
     },
   );
 
   test('relay protocol health is tracked independently per endpoint', () async {
     final relayClient = _FakeRelayClient(
-      failingHosts: <String>{'tcp://playit.example:21639'},
+      failingHosts: <String>{
+        'tcp://playit.example:21639',
+        'http://playit.example:21639',
+        'https://playit.example:21639',
+      },
     );
     final controller = await _createController(
       relayClient: relayClient,
@@ -1220,5 +1233,32 @@ void main() {
     );
     expect(controller.routeHealthFor(tcp)?.available, isFalse);
     expect(controller.routeHealthFor(udp)?.available, isTrue);
+  });
+
+  test('addRelay accepts HTTPS tunnel URLs with default port', () async {
+    final relayClient = _FakeRelayClient(
+      failingHosts: <String>{
+        'tcp://silver-ghosts-jog.loca.lt:443',
+        'udp://silver-ghosts-jog.loca.lt:443',
+        'http://silver-ghosts-jog.loca.lt:443',
+      },
+    );
+    final controller = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+      internetRelayHost: null,
+    );
+    addTearDown(controller.dispose);
+
+    await controller.addRelay(
+      host: 'https://silver-ghosts-jog.loca.lt',
+      port: 7667,
+    );
+
+    final detected = controller.configuredRelays.singleWhere(
+      (route) => route.host == 'silver-ghosts-jog.loca.lt',
+    );
+    expect(detected.port, 443);
+    expect(detected.protocol, PeerRouteProtocol.https);
   });
 }
