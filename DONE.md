@@ -29,7 +29,9 @@ This file lists the functionality currently implemented in the Conest prototype.
 - Contact invites include a pairing nonce so the visible codephrase can be rotated immediately.
 - Contact invites include a relay-capable flag so direct LAN paths and relay candidacy are separate.
 - QR invite generation.
-- QR invite payloads are compacted to a small ranked set of LAN and relay route hints so several active networks do not produce oversized QR codes.
+- QR invite payloads use a compact `ci5` wire format instead of base64-wrapped verbose JSON, with legacy JSON payload decode still supported.
+- QR invite payloads are compacted to a very small ranked set of LAN and relay route hints so several active networks do not produce oversized QR codes.
+- Invite screen has a full-screen QR view for cameras that struggle with the inline code.
 - QR-only contact add flow.
 - Manual payload paste contact add flow.
 - Codephrase-only contact discovery and add flow.

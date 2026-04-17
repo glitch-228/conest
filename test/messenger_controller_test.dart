@@ -424,23 +424,31 @@ void main() {
     final controller = await _createController(
       relayClient: relayClient,
       displayName: 'Alice',
-      lanAddresses: const <String>['192.168.1.20', '10.0.0.20', '172.16.0.20'],
+      lanAddresses: const <String>['10.0.0.20', '172.16.0.20', '192.168.1.20'],
     );
     addTearDown(controller.dispose);
 
     final invite = await controller.buildInvite();
     final payload = invite.encodePayload();
 
-    expect(invite.routeHints.length, lessThanOrEqualTo(6));
+    expect(invite.routeHints.length, lessThanOrEqualTo(4));
     expect(
       invite.routeHints.where((route) => route.kind == PeerRouteKind.lan),
-      hasLength(4),
+      hasLength(2),
+    );
+    expect(
+      invite.routeHints
+          .where((route) => route.kind == PeerRouteKind.lan)
+          .map((route) => route.host)
+          .toSet(),
+      {'192.168.1.20'},
     );
     expect(
       invite.routeHints.where((route) => route.kind == PeerRouteKind.relay),
-      hasLength(lessThanOrEqualTo(3)),
+      hasLength(lessThanOrEqualTo(2)),
     );
-    expect(payload.length, lessThan(1800));
+    expect(payload.length, lessThan(900));
+    expect(payload, startsWith('ci5|'));
   });
 
   test(

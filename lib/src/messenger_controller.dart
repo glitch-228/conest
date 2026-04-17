@@ -17,8 +17,8 @@ List<int> _secureRandomBytes(int length) {
   return List<int>.generate(length, (_) => random.nextInt(256));
 }
 
-const int _maxInviteRouteHints = 6;
-const int _maxInviteLanHosts = 2;
+const int _maxInviteRouteHints = 4;
+const int _maxInviteLanHosts = 1;
 const int _maxInviteRelayRoutes = 2;
 const int _maxLanPairingScanHostsPerAddress = 64;
 const int _pairingBeaconPort = defaultRelayPort + 1;
@@ -460,8 +460,7 @@ class MessengerController extends ChangeNotifier {
       );
       add(
         'Invite payload size',
-        payloadBytes <= 1800 &&
-                decoded.routeHints.length <= _maxInviteRouteHints
+        payloadBytes <= 900 && decoded.routeHints.length <= _maxInviteRouteHints
             ? DebugCheckStatus.pass
             : DebugCheckStatus.warn,
         '$payloadBytes byte(s), ${decoded.routeHints.length}/$_maxInviteRouteHints route hint(s). QR stays compact by publishing only ranked LAN/relay hints.',
@@ -3721,7 +3720,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   List<PeerEndpoint> _inviteRouteHintsForIdentity(IdentityRecord identity) {
-    final lanRoutes = identity.lanAddresses
+    final lanRoutes = _rankLanInviteAddresses(identity.lanAddresses)
         .take(_maxInviteLanHosts)
         .expand(
           (address) => _protocolRoutes(
@@ -3748,6 +3747,36 @@ class MessengerController extends ChangeNotifier {
       ...configuredRelayRoutes,
       ...contactRelayRoutes,
     ]).take(_maxInviteRouteHints).toList(growable: false);
+  }
+
+  List<String> _rankLanInviteAddresses(Iterable<String> addresses) {
+    final ranked = addresses.toSet().toList();
+    ranked.sort((left, right) {
+      final priorityCompare = _lanInviteAddressPriority(
+        left,
+      ).compareTo(_lanInviteAddressPriority(right));
+      if (priorityCompare != 0) {
+        return priorityCompare;
+      }
+      return left.compareTo(right);
+    });
+    return ranked;
+  }
+
+  int _lanInviteAddressPriority(String address) {
+    if (address.startsWith('192.168.')) {
+      return 0;
+    }
+    if (address.startsWith('10.')) {
+      return 1;
+    }
+    if (address.startsWith('172.')) {
+      return 2;
+    }
+    if (address.startsWith('169.254.')) {
+      return 3;
+    }
+    return 4;
   }
 
   List<PeerEndpoint> _rankInviteRoutes(Iterable<PeerEndpoint> routes) {

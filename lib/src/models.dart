@@ -471,7 +471,28 @@ class ContactInvite {
   }
 
   String encodePayload() {
+    return _encodeCompactPayload();
+  }
+
+  String encodeLegacyPayload() {
     return base64Url.encode(utf8.encode(jsonEncode(toJson())));
+  }
+
+  String _encodeCompactPayload() {
+    final routes = routeHints.map(_encodeCompactRoute).join(';');
+    return [
+      'ci5',
+      version.toString(),
+      accountId,
+      deviceId,
+      Uri.encodeComponent(displayName),
+      Uri.encodeComponent(bio),
+      pairingNonce,
+      pairingEpochMs.toRadixString(36),
+      relayCapable ? '1' : '0',
+      publicKeyBase64,
+      routes,
+    ].join('|');
   }
 
   factory ContactInvite.fromJson(Map<String, dynamic> json) {
@@ -517,6 +538,9 @@ class ContactInvite {
 
   factory ContactInvite.decodePayload(String payload) {
     final normalized = payload.trim();
+    if (normalized.startsWith('ci5|')) {
+      return _decodeCompactPayload(normalized);
+    }
     final decoded = utf8.decode(
       base64Url.decode(base64Url.normalize(normalized)),
     );
@@ -531,6 +555,82 @@ class ContactInvite {
       return null;
     }
   }
+
+  static ContactInvite _decodeCompactPayload(String payload) {
+    final parts = payload.split('|');
+    if (parts.length < 10 || parts.first != 'ci5') {
+      throw const FormatException('Invalid compact invite payload.');
+    }
+    final routes = parts.length > 10 ? parts.sublist(10).join('|') : '';
+    return ContactInvite(
+      version: int.tryParse(parts[1]) ?? 5,
+      accountId: parts[2],
+      deviceId: parts[3],
+      displayName: Uri.decodeComponent(parts[4]),
+      bio: Uri.decodeComponent(parts[5]),
+      pairingNonce: parts[6],
+      pairingEpochMs: int.tryParse(parts[7], radix: 36) ?? 0,
+      relayCapable: parts[8] == '1',
+      publicKeyBase64: parts[9],
+      routeHints: dedupePeerEndpoints(
+        routes.isEmpty
+            ? const <PeerEndpoint>[]
+            : routes
+                  .split(';')
+                  .map(_decodeCompactRoute)
+                  .nonNulls
+                  .toList(growable: false),
+      ),
+    );
+  }
+}
+
+String _encodeCompactRoute(PeerEndpoint route) {
+  final kind = switch (route.kind) {
+    PeerRouteKind.lan => 'l',
+    PeerRouteKind.directInternet => 'd',
+    PeerRouteKind.relay => 'r',
+  };
+  final protocol = switch (route.protocol) {
+    PeerRouteProtocol.tcp => 't',
+    PeerRouteProtocol.udp => 'u',
+    PeerRouteProtocol.http => 'h',
+    PeerRouteProtocol.https => 's',
+  };
+  return '$kind$protocol${route.port.toRadixString(36)}:${Uri.encodeComponent(route.host)}';
+}
+
+PeerEndpoint? _decodeCompactRoute(String value) {
+  if (value.length < 4) {
+    return null;
+  }
+  final separator = value.indexOf(':', 2);
+  if (separator == -1) {
+    return null;
+  }
+  final kind = switch (value[0]) {
+    'l' => PeerRouteKind.lan,
+    'd' => PeerRouteKind.directInternet,
+    'r' => PeerRouteKind.relay,
+    _ => null,
+  };
+  final protocol = switch (value[1]) {
+    't' => PeerRouteProtocol.tcp,
+    'u' => PeerRouteProtocol.udp,
+    'h' => PeerRouteProtocol.http,
+    's' => PeerRouteProtocol.https,
+    _ => null,
+  };
+  final port = int.tryParse(value.substring(2, separator), radix: 36);
+  if (kind == null || protocol == null || port == null) {
+    return null;
+  }
+  return PeerEndpoint(
+    kind: kind,
+    host: Uri.decodeComponent(value.substring(separator + 1)),
+    port: port,
+    protocol: protocol,
+  );
 }
 
 class ContactRecord {

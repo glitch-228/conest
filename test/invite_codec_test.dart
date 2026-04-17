@@ -31,8 +31,13 @@ void main() {
         ],
       );
 
-      final decoded = ContactInvite.decodePayload(invite.encodePayload());
+      final payload = invite.encodePayload();
+      final legacyPayload = invite.encodeLegacyPayload();
+      final decoded = ContactInvite.decodePayload(payload);
+      final legacyDecoded = ContactInvite.decodePayload(legacyPayload);
 
+      expect(payload, startsWith('ci5|'));
+      expect(payload.length, lessThan(legacyPayload.length));
       expect(decoded.deviceId, invite.deviceId);
       expect(decoded.bio, invite.bio);
       expect(decoded.pairingNonce, invite.pairingNonce);
@@ -42,6 +47,8 @@ void main() {
       expect(decoded.routeHints.first.kind, PeerRouteKind.lan);
       expect(decoded.routeHints.last.host, 'relay.example');
       expect(decoded.routeHints.last.protocol, PeerRouteProtocol.udp);
+      expect(legacyDecoded.deviceId, invite.deviceId);
+      expect(legacyDecoded.routeHints.last.protocol, PeerRouteProtocol.udp);
     },
   );
 

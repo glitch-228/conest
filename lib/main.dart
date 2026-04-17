@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -2103,6 +2104,19 @@ class _InviteScreenState extends State<InviteScreen> {
     unawaited(widget.controller.refreshPairingAdvertisement());
   }
 
+  Future<void> _openFullscreenQr() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (context) => FullscreenQrScreen(
+          payload: _payload,
+          codephrase: currentPairingCodeSnapshotForPayload(_payload).codephrase,
+          palette: widget.palette,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final pairingSnapshot = currentPairingCodeSnapshotForPayload(_payload);
@@ -2152,28 +2166,41 @@ class _InviteScreenState extends State<InviteScreen> {
                         ),
                         const SizedBox(height: 14),
                         if (_showQr)
-                          Container(
-                            padding: const EdgeInsets.all(18),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(24),
-                            ),
-                            child: QrImageView(
-                              data: _payload,
-                              version: QrVersions.auto,
-                              size: 220,
-                              gapless: false,
-                              errorStateBuilder: (context, error) {
-                                return _QrFallback(
-                                  palette: palette,
-                                  error: error.toString(),
-                                );
-                              },
-                              eyeStyle: QrEyeStyle(color: palette.ink),
-                              dataModuleStyle: QrDataModuleStyle(
-                                color: palette.ink,
+                          Column(
+                            children: [
+                              GestureDetector(
+                                onTap: _openFullscreenQr,
+                                child: Container(
+                                  padding: const EdgeInsets.all(18),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(24),
+                                  ),
+                                  child: QrImageView(
+                                    data: _payload,
+                                    version: QrVersions.auto,
+                                    size: 260,
+                                    gapless: false,
+                                    errorStateBuilder: (context, error) {
+                                      return _QrFallback(
+                                        palette: palette,
+                                        error: error.toString(),
+                                      );
+                                    },
+                                    eyeStyle: QrEyeStyle(color: palette.ink),
+                                    dataModuleStyle: QrDataModuleStyle(
+                                      color: palette.ink,
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
+                              const SizedBox(height: 10),
+                              OutlinedButton.icon(
+                                onPressed: _openFullscreenQr,
+                                icon: const Icon(Icons.open_in_full),
+                                label: const Text('Open Fullscreen QR'),
+                              ),
+                            ],
                           )
                         else
                           Container(
@@ -2235,9 +2262,15 @@ class _InviteScreenState extends State<InviteScreen> {
                         ),
                         const SizedBox(height: 12),
                         Text(
-                          'Scanning the QR is enough on its own. Sharing only the current codephrase is also enough: the other device can discover this invite over nearby LAN routes or the configured relay.',
+                          'Scanning the compact QR is enough on its own. If the camera still struggles, open it full screen or use only the current codephrase.',
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: palette.inkSoft),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'QR payload: ${_payload.length} characters',
+                          style: Theme.of(context).textTheme.labelSmall
                               ?.copyWith(color: palette.inkSoft),
                         ),
                         const SizedBox(height: 10),
@@ -2300,6 +2333,94 @@ class _InviteScreenState extends State<InviteScreen> {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class FullscreenQrScreen extends StatelessWidget {
+  const FullscreenQrScreen({
+    super.key,
+    required this.payload,
+    required this.codephrase,
+    required this.palette,
+  });
+
+  final String payload;
+  final String codephrase;
+  final ConestPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final size = math.max(
+              260.0,
+              math.min(constraints.maxWidth - 32, constraints.maxHeight - 180),
+            );
+            return Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: IconButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close),
+                        tooltip: 'Close',
+                      ),
+                    ),
+                    QrImageView(
+                      data: payload,
+                      version: QrVersions.auto,
+                      size: size,
+                      gapless: false,
+                      errorStateBuilder: (context, error) {
+                        return _QrFallback(
+                          palette: palette,
+                          error: error.toString(),
+                        );
+                      },
+                      eyeStyle: QrEyeStyle(color: palette.ink),
+                      dataModuleStyle: QrDataModuleStyle(color: palette.ink),
+                    ),
+                    const SizedBox(height: 18),
+                    Text(
+                      'Fullscreen compact invite QR',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: Colors.black,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    SelectableText(
+                      codephrase,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        color: Colors.black87,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${payload.length} characters. Increase screen brightness if scanning is unreliable.',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: Colors.black54),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
         ),
       ),
     );

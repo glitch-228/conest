@@ -3,7 +3,7 @@
 Conest is a phased secure text-exchange app. This repository now contains the first working `v0.1` implementation cut:
 
 - Flutter client for Linux, Windows, and Android.
-- QR invite export plus Android QR scanning.
+- QR invite export plus Android QR scanning and a full-screen QR view.
 - QR-import-only and codephrase-only contact pairing.
 - Encrypted local vault for identity, contacts, and message history.
 - LAN-first direct text delivery with TCP/UDP route variants, relay fallback, and queued offline delivery.
@@ -13,7 +13,7 @@ Conest is a phased secure text-exchange app. This repository now contains the fi
 
 - One account on one device.
 - Direct text conversations only.
-- Compact invite payloads with ranked LAN and relay route hints.
+- Compact `ci5` invite payloads with ranked LAN and relay route hints.
 - Route hints carry both route kind and protocol, currently `tcp`, `udp`, `http`, or `https`.
 - Rotating pairing code derived from the payload in 120-second windows.
 - Desktop-style relay behavior enabled by default through the app's local LAN node.
