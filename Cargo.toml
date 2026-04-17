@@ -1,0 +1,3 @@
+[workspace]
+members = ["native/conest_core", "native/conest_relay"]
+resolver = "2"

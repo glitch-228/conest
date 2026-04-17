@@ -1,0 +1,61 @@
+# Phased Roadmap For A Secure P2P Messenger
+
+**Summary**
+- Build a greenfield app with Flutter for Linux/Windows/Android UI and a Rust core for crypto, transport, relay logic, and storage.
+- Keep the first release narrow and truly usable, then add features in small shippable versions.
+- Lock the core architecture early so later LAN support, self-hosting, and multi-device identity can be added without rewriting the protocol.
+
+**Phase Plan**
+- `v0.1` Direct text ready
+  - 1:1 encrypted text chat only.
+  - Contact add flow via QR invite and manual codephrase pairing.
+  - Internet delivery path: direct peer connection first, relay fallback second, short-lived encrypted relay queue for offline recipients third.
+  - Local encrypted message history, safety numbers, desktop tray/background runtime, Android foreground service.
+  - UI exposes one account on one device only, but protocol already separates account and device identity.
+- `v0.1.x` Hardening gate
+  - Freeze feature scope and focus on reliability, reconnect behavior, state recovery, migrations, relay abuse controls, and security review.
+  - Do not start the next feature phase until pairing, delivery, and resume-after-failure behavior are stable.
+- `v0.2` Groups
+  - Small invite-only text groups, capped at 16 members.
+  - Pairwise fanout over existing direct encrypted sessions.
+  - Membership changes are explicit events; new members get history from join onward only.
+- `v0.3` Relay maturity
+  - Standalone self-hostable relay binary.
+  - App-integrated desktop relay mode with default-on when suitable and user opt-out.
+  - Signed default relay list, custom relay list, relay health checks, queue TTL, quotas, and rate limits.
+- `v0.4` Local network mode
+  - Add LAN peer discovery and local route preference.
+  - Reuse the same identity, session, and conversation model; LAN is just another route source.
+- `v0.5` Multi-device identity
+  - One logical account can authorize multiple devices.
+  - Existing trusted device provisions a new one through signed enrollment and encrypted state transfer.
+  - Conversation sync stays end-to-end encrypted and per-device sessions remain distinct.
+- Later phases
+  - `v0.6` Images/files.
+  - `v0.7` Broadcast/channels.
+  - Voice/video only after messaging, relay, and multi-device behavior are stable.
+
+**Core Architecture Locked From Day One**
+- Identity model: separate `account_id` and `device_id` now, even though `v0.1` only enables one visible device.
+- Transport model: abstract route providers behind one send/receive API so direct internet, relay, and future LAN routes share the same message pipeline.
+- Conversation model: support `direct` and `group` kinds in storage and protocol from the start, even if `v0.1` only exposes direct chat.
+- Envelope model: typed envelopes for message, ack, key update, membership update, relay store/fetch, and reserved future attachment metadata.
+- Storage model: encrypted SQLite with schema versioning and forward migrations from the first release.
+- Crypto model: account/device key hierarchy plus X3DH-style bootstrap and Double Ratchet for direct sessions; groups reuse pairwise encryption in `v0.2` instead of introducing MLS early.
+
+**Public Interfaces / Types**
+- Rust service surfaces: `IdentityApi`, `ContactsApi`, `ChatApi`, `NetworkApi`, `RelayApi`.
+- Stable core types: `AccountId`, `DeviceId`, `ContactInvite`, `PeerRoute`, `ConversationId`, `ConversationKind`, `MessageEnvelope`, `DeliveryState`.
+- Reserved for later phases without breaking protocol shape: `LanRouteHint`, `DeviceEnrollment`, `AttachmentDescriptor`.
+
+**Test Plan**
+- Every version must ship as a usable app on Linux, Windows, and Android, with installers/builds and migrations validated for that phase.
+- `v0.1` tests: QR/codephrase pairing, first-message bootstrap, direct delivery, relay fallback, offline queue, ack and duplicate suppression, safety-number view, DB recovery after crash.
+- `v0.2` tests: group create/join/leave, member add/remove, concurrent sends, membership version conflicts, removed-member exclusion from future messages.
+- `v0.4` tests: LAN discovery, LAN route preference, LAN-to-internet fallback, reconnect after route change.
+- `v0.5` tests: device enrollment, device revocation, encrypted state sync, cross-device ordering and replay protection.
+
+**Assumptions**
+- `v0.1` remains text-only on purpose.
+- “Base app perfect” means a mandatory hardening cycle before adding the next major feature.
+- Relay fallback is acceptable for internet reliability; anonymity-network routing is not part of the base roadmap.
