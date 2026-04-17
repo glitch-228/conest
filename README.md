@@ -13,13 +13,13 @@ Conest is a phased secure text-exchange app. This repository now contains the fi
 
 - One account on one device.
 - Direct text conversations only.
-- Invite payloads with LAN and relay route hints.
+- Compact invite payloads with ranked LAN and relay route hints.
 - Route hints carry both route kind and protocol, currently `tcp`, `udp`, `http`, or `https`.
-- Rotating pairing code derived from the payload in 30-second windows.
+- Rotating pairing code derived from the payload in 120-second windows.
 - Desktop-style relay behavior enabled by default through the app's local LAN node.
 - X25519-derived shared secret encryption per direct conversation.
 - Nearby pairing and messaging that try LAN routes first, then continue through internet relay routes when available.
-- Codephrase discovery over nearby LAN routes or the configured shared relay.
+- Codephrase discovery over LAN beacons, bounded nearby LAN scans, or the configured shared relay.
 - Relay polling, outbound queueing, duplicate suppression, and ack-based delivery state updates.
 - Protocol shapes reserved for groups, LAN routes, attachments, and multi-device enrollment.
 

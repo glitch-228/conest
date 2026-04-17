@@ -1195,7 +1195,7 @@ class DebugRunReport {
 }
 
 const int defaultRelayPort = 7667;
-const Duration pairingCodeWindow = Duration(seconds: 30);
+const Duration pairingCodeWindow = Duration(seconds: 120);
 
 const List<String> codephraseWords = [
   'amber',
@@ -1252,17 +1252,34 @@ PairingCodeSnapshot currentPairingCodeSnapshotForPayload(
   String payload, {
   DateTime? now,
 }) {
-  final timestamp = (now ?? DateTime.now()).toUtc();
-  final slotMs = pairingCodeWindow.inMilliseconds;
-  final nowMs = timestamp.millisecondsSinceEpoch;
-  final epochMs = _pairingEpochMsForPayload(payload);
-  final elapsedMs = (nowMs - epochMs).clamp(0, 1 << 62);
-  final slot = elapsedMs ~/ slotMs;
-  final secondsRemaining = ((slot + 1) * slotMs - elapsedMs) ~/ 1000;
+  final slotState = _pairingSlotState(payload, now: now);
+  final secondsRemaining =
+      ((slotState.slot + 1) * slotState.slotMs - slotState.elapsedMs) ~/ 1000;
   return PairingCodeSnapshot(
-    codephrase: deriveCodephrase('$payload:$slot'),
+    codephrase: deriveCodephrase('$payload:${slotState.slot}'),
     secondsRemaining: secondsRemaining.clamp(0, pairingCodeWindow.inSeconds),
   );
+}
+
+List<String> pairingCodephrasesForPayload(
+  String payload, {
+  DateTime? now,
+  Iterable<int> slotOffsets = const [-1, 0, 1],
+}) {
+  final slotState = _pairingSlotState(payload, now: now);
+  final phrases = <String>[];
+  final seen = <String>{};
+  for (final offset in slotOffsets) {
+    final slot = slotState.slot + offset;
+    if (slot < 0) {
+      continue;
+    }
+    final phrase = deriveCodephrase('$payload:$slot');
+    if (seen.add(phrase)) {
+      phrases.add(phrase);
+    }
+  }
+  return phrases;
 }
 
 bool matchesDynamicCodephraseForPayload(
@@ -1275,13 +1292,11 @@ bool matchesDynamicCodephraseForPayload(
     return false;
   }
   final timestamp = (now ?? DateTime.now()).toUtc();
-  final slotMs = pairingCodeWindow.inMilliseconds;
   final epochMs = _pairingEpochMsForPayload(payload);
-  final elapsedMs = (timestamp.millisecondsSinceEpoch - epochMs).clamp(
-    0,
-    1 << 62,
-  );
-  final slot = elapsedMs ~/ slotMs;
+  final elapsedMs = (timestamp.millisecondsSinceEpoch - epochMs)
+      .clamp(0, 1 << 62)
+      .toInt();
+  final slot = elapsedMs ~/ pairingCodeWindow.inMilliseconds;
   for (final offset in const [-1, 0, 1]) {
     final candidateSlot = slot + offset;
     if (candidateSlot < 0) {
@@ -1309,6 +1324,31 @@ int _pairingEpochMsForPayload(String payload) {
   } catch (_) {
     return 0;
   }
+}
+
+_PairingSlotState _pairingSlotState(String payload, {DateTime? now}) {
+  final timestamp = (now ?? DateTime.now()).toUtc();
+  final slotMs = pairingCodeWindow.inMilliseconds;
+  final nowMs = timestamp.millisecondsSinceEpoch;
+  final epochMs = _pairingEpochMsForPayload(payload);
+  final elapsedMs = (nowMs - epochMs).clamp(0, 1 << 62).toInt();
+  return _PairingSlotState(
+    slot: elapsedMs ~/ slotMs,
+    elapsedMs: elapsedMs,
+    slotMs: slotMs,
+  );
+}
+
+class _PairingSlotState {
+  const _PairingSlotState({
+    required this.slot,
+    required this.elapsedMs,
+    required this.slotMs,
+  });
+
+  final int slot;
+  final int elapsedMs;
+  final int slotMs;
 }
 
 String _normalizeCodephrase(String value) {

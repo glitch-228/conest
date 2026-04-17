@@ -17,9 +17,15 @@ List<int> _secureRandomBytes(int length) {
   return List<int>.generate(length, (_) => random.nextInt(256));
 }
 
-const int _maxInviteRouteHints = 12;
+const int _maxInviteRouteHints = 6;
+const int _maxInviteLanHosts = 2;
+const int _maxInviteRelayRoutes = 2;
+const int _maxLanPairingScanHostsPerAddress = 64;
 const int _pairingBeaconPort = defaultRelayPort + 1;
 const Duration _pairingBeaconTtl = Duration(seconds: 45);
+const Duration _debugLanRouteTimeout = Duration(milliseconds: 250);
+const Duration _debugInternetRouteTimeout = Duration(milliseconds: 900);
+const Duration _debugRelayOperationTimeout = Duration(milliseconds: 900);
 const String _lanLobbyMailboxId = 'lan-lobby-v1';
 const String _lanLobbyConversationId = 'conv-lan-lobby';
 const Duration _slowPollInterval = Duration(seconds: 5);
@@ -344,6 +350,8 @@ class MessengerController extends ChangeNotifier {
   Future<List<PeerRouteHealth>> checkContactRoutes(
     ContactRecord contact, {
     bool persist = true,
+    bool exchangeRouteUpdate = true,
+    bool fast = false,
   }) async {
     await _refreshLanAddresses(persist: false);
     await _ensureLocalRelayRunning();
@@ -353,10 +361,13 @@ class MessengerController extends ChangeNotifier {
       await Future<void>.delayed(const Duration(milliseconds: 300));
     }
     final current = _contactByDeviceId(contact.deviceId) ?? contact;
-    final checks = await _rankRouteHealthForDelivery(
-      current.prioritizedRouteHints,
-    );
-    final routeUpdateSent = await _sendRouteUpdate(current, requestReply: true);
+    final checks = fast
+        ? await _rankRouteHealthForDebug(current.prioritizedRouteHints)
+        : await _rankRouteHealthForDelivery(current.prioritizedRouteHints);
+    final routeUpdateSent =
+        exchangeRouteUpdate && checks.any((check) => check.available)
+        ? await _sendRouteUpdate(current, requestReply: true)
+        : false;
     if (persist) {
       final available = checks.where((check) => check.available).length;
       await _persist(
@@ -438,12 +449,30 @@ class MessengerController extends ChangeNotifier {
       final payload = _inviteForIdentity(me).encodePayload();
       final decoded = ContactInvite.decodePayload(payload);
       final code = currentPairingCodeSnapshotForPayload(payload).codephrase;
+      final pairingCodes = pairingCodephrasesForPayload(payload);
+      final payloadBytes = utf8.encode(payload).length;
       add(
         'Invite codec',
         decoded.deviceId == me.deviceId
             ? DebugCheckStatus.pass
             : DebugCheckStatus.fail,
         'Invite payload round-tripped; current codephrase is $code.',
+      );
+      add(
+        'Invite payload size',
+        payloadBytes <= 1800 &&
+                decoded.routeHints.length <= _maxInviteRouteHints
+            ? DebugCheckStatus.pass
+            : DebugCheckStatus.warn,
+        '$payloadBytes byte(s), ${decoded.routeHints.length}/$_maxInviteRouteHints route hint(s). QR stays compact by publishing only ranked LAN/relay hints.',
+      );
+      add(
+        'Pairing code window',
+        pairingCodeWindow >= const Duration(seconds: 90) &&
+                pairingCodes.length >= 2
+            ? DebugCheckStatus.pass
+            : DebugCheckStatus.warn,
+        '${pairingCodeWindow.inSeconds}s visible window; ${pairingCodes.length} adjacent mailbox code(s) are announced to tolerate rotation during pairing.',
       );
     } catch (error) {
       add('Invite codec', DebugCheckStatus.fail, 'Invite failed: $error');
@@ -493,6 +522,7 @@ class MessengerController extends ChangeNotifier {
 
     final relayProtocolRefresh = await _runRelayProtocolRediscoveryCheck(
       _requireIdentity(),
+      fast: true,
     );
     add(
       relayProtocolRefresh.name,
@@ -528,7 +558,7 @@ class MessengerController extends ChangeNotifier {
         'No configured or contact-provided internet relay routes.',
       );
     } else {
-      final checks = await _rankRouteHealthForDelivery(relayRoutes);
+      final checks = await _rankRouteHealthForDebug(relayRoutes);
       final available = checks.where((check) => check.available).toList();
       add(
         'Internet relay availability',
@@ -556,8 +586,15 @@ class MessengerController extends ChangeNotifier {
         'This device has ${contacts.length} trusted contact(s), so multi-device probes can run.',
       );
       var contactsWithPath = 0;
+      final contactChecks = <String, List<PeerRouteHealth>>{};
       for (final contact in contacts) {
-        final checks = await checkContactRoutes(contact, persist: false);
+        final checks = await checkContactRoutes(
+          contact,
+          persist: false,
+          exchangeRouteUpdate: false,
+          fast: true,
+        );
+        contactChecks[contact.deviceId] = checks;
         final available = checks.where((check) => check.available).toList();
         if (available.isNotEmpty) {
           contactsWithPath++;
@@ -582,13 +619,18 @@ class MessengerController extends ChangeNotifier {
       var relayProbesAccepted = 0;
       var twoWayAccepted = 0;
       for (final contact in contacts) {
-        if (await _sendDebugProbe(contact: contact)) {
+        final checks = contactChecks[contact.deviceId];
+        if (await _sendDebugProbe(contact: contact, rankedChecks: checks)) {
           probesAccepted++;
         }
-        if (await _sendDebugProbe(contact: contact, relayOnly: true)) {
+        if (await _sendDebugProbe(
+          contact: contact,
+          relayOnly: true,
+          rankedChecks: checks,
+        )) {
           relayProbesAccepted++;
         }
-        if (await _sendDebugTwoWayMessage(contact)) {
+        if (await _sendDebugTwoWayMessage(contact, rankedChecks: checks)) {
           twoWayAccepted++;
         }
       }
@@ -642,10 +684,14 @@ class MessengerController extends ChangeNotifier {
       }
     }
 
-    final relayLoopback = await _runRelayLoopbackCheck(_requireIdentity());
+    final relayLoopback = await _runRelayLoopbackCheck(
+      _requireIdentity(),
+      fast: true,
+    );
     add(relayLoopback.name, relayLoopback.status, relayLoopback.detail);
     final relayPairingReuse = await _runRelayPairingReuseCheck(
       _requireIdentity(),
+      fast: true,
     );
     add(
       relayPairingReuse.name,
@@ -683,6 +729,15 @@ class MessengerController extends ChangeNotifier {
       'Message queue',
       pendingOutboundCount == 0 ? DebugCheckStatus.pass : DebugCheckStatus.warn,
       '$pendingOutboundCount pending outbound message(s), $totalMessageCount total message(s).',
+    );
+
+    final elapsed = DateTime.now().toUtc().difference(startedAt);
+    add(
+      'Debug runtime',
+      elapsed <= const Duration(seconds: 30)
+          ? DebugCheckStatus.pass
+          : DebugCheckStatus.warn,
+      'Completed in ${elapsed.inMilliseconds}ms. Debug checks use shorter probe timeouts than production delivery.',
     );
 
     await _persist(
@@ -912,8 +967,9 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<_RelayProtocolRefreshResult> _refreshConfiguredRelayProtocols(
-    IdentityRecord me,
-  ) async {
+    IdentityRecord me, {
+    bool fast = false,
+  }) async {
     final candidates = _relayProtocolCandidatesFor(me.configuredRelays);
     if (candidates.isEmpty) {
       return const _RelayProtocolRefreshResult(
@@ -922,7 +978,9 @@ class MessengerController extends ChangeNotifier {
         addedRoutes: <PeerEndpoint>[],
       );
     }
-    final checks = await Future.wait(candidates.map(_checkRouteHealth));
+    final checks = fast
+        ? await _rankRouteHealthForDebug(candidates)
+        : await Future.wait(candidates.map(_checkRouteHealth));
     final available = checks
         .where((check) => check.available)
         .map((check) => check.route)
@@ -2486,6 +2544,7 @@ class MessengerController extends ChangeNotifier {
   Future<bool> _sendDebugProbe({
     required ContactRecord contact,
     bool relayOnly = false,
+    List<PeerRouteHealth>? rankedChecks,
   }) async {
     if (!kDebugMode) {
       return false;
@@ -2509,16 +2568,14 @@ class MessengerController extends ChangeNotifier {
         ),
       ),
     );
-    final checks = await _rankRouteHealthForDelivery(
-      contact.prioritizedRouteHints,
-    );
+    final checks =
+        rankedChecks ??
+        await _rankRouteHealthForDebug(contact.prioritizedRouteHints);
     final routes = checks
         .where(
           (check) =>
               check.available &&
-              (!relayOnly ||
-                  check.route.kind == PeerRouteKind.relay ||
-                  contact.relayCapable),
+              (!relayOnly || check.route.kind == PeerRouteKind.relay),
         )
         .map((check) => check.route)
         .toList(growable: false);
@@ -2530,6 +2587,9 @@ class MessengerController extends ChangeNotifier {
         routes: routes,
         recipientDeviceId: contact.deviceId,
         envelope: probe,
+        lanTimeout: _debugRelayOperationTimeout,
+        directInternetTimeout: _debugRelayOperationTimeout,
+        relayTimeout: _debugRelayOperationTimeout,
       );
       return true;
     } catch (_) {
@@ -2537,7 +2597,10 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  Future<bool> _sendDebugTwoWayMessage(ContactRecord contact) async {
+  Future<bool> _sendDebugTwoWayMessage(
+    ContactRecord contact, {
+    List<PeerRouteHealth>? rankedChecks,
+  }) async {
     if (!kDebugMode) {
       return false;
     }
@@ -2561,11 +2624,24 @@ class MessengerController extends ChangeNotifier {
         ),
       ),
     );
+    final checks =
+        rankedChecks ??
+        await _rankRouteHealthForDebug(contact.prioritizedRouteHints);
+    final routes = checks
+        .where((check) => check.available)
+        .map((check) => check.route)
+        .toList(growable: false);
+    if (routes.isEmpty) {
+      return false;
+    }
     try {
-      await _deliverToContact(
-        contact: contact,
+      await _deliverAcrossRoutes(
+        routes: routes,
         recipientDeviceId: contact.deviceId,
         envelope: probe,
+        lanTimeout: _debugRelayOperationTimeout,
+        directInternetTimeout: _debugRelayOperationTimeout,
+        relayTimeout: _debugRelayOperationTimeout,
       );
       return true;
     } catch (_) {
@@ -2586,8 +2662,9 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<DebugCheckResult> _runRelayProtocolRediscoveryCheck(
-    IdentityRecord me,
-  ) async {
+    IdentityRecord me, {
+    bool fast = false,
+  }) async {
     if (me.configuredRelays.isEmpty) {
       return const DebugCheckResult(
         name: 'Relay protocol rediscovery',
@@ -2596,7 +2673,7 @@ class MessengerController extends ChangeNotifier {
             'No configured relay hosts to probe for TCP/UDP/HTTP/HTTPS variants.',
       );
     }
-    final refresh = await _refreshConfiguredRelayProtocols(me);
+    final refresh = await _refreshConfiguredRelayProtocols(me, fast: fast);
     final added = refresh.addedRoutes.map((route) => route.label).join(', ');
     return DebugCheckResult(
       name: 'Relay protocol rediscovery',
@@ -2719,7 +2796,10 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
-  Future<DebugCheckResult> _runRelayLoopbackCheck(IdentityRecord me) async {
+  Future<DebugCheckResult> _runRelayLoopbackCheck(
+    IdentityRecord me, {
+    bool fast = false,
+  }) async {
     final relayRoutes = _diagnosticRelayRoutesForIdentity(
       me,
     ).where((route) => route.kind == PeerRouteKind.relay).toList();
@@ -2730,7 +2810,9 @@ class MessengerController extends ChangeNotifier {
         detail: 'No internet relay route is configured.',
       );
     }
-    final checks = await _rankRouteHealthForDelivery(relayRoutes);
+    final checks = fast
+        ? await _rankRouteHealthForDebug(relayRoutes)
+        : await _rankRouteHealthForDelivery(relayRoutes);
     PeerRouteHealth? selected;
     for (final check in checks) {
       if (check.available) {
@@ -2765,7 +2847,9 @@ class MessengerController extends ChangeNotifier {
         protocol: selected.route.protocol,
         recipientDeviceId: mailbox,
         envelope: envelope,
-        timeout: const Duration(seconds: 4),
+        timeout: fast
+            ? _debugRelayOperationTimeout
+            : const Duration(seconds: 4),
       );
       final fetched = await _relayClient.fetchEnvelopes(
         host: selected.route.host,
@@ -2773,7 +2857,9 @@ class MessengerController extends ChangeNotifier {
         protocol: selected.route.protocol,
         recipientDeviceId: mailbox,
         limit: 8,
-        timeout: const Duration(seconds: 4),
+        timeout: fast
+            ? _debugRelayOperationTimeout
+            : const Duration(seconds: 4),
       );
       final delivered = fetched.any(
         (candidate) => candidate.messageId == messageId,
@@ -2794,7 +2880,10 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  Future<DebugCheckResult> _runRelayPairingReuseCheck(IdentityRecord me) async {
+  Future<DebugCheckResult> _runRelayPairingReuseCheck(
+    IdentityRecord me, {
+    bool fast = false,
+  }) async {
     final relayRoutes = _diagnosticRelayRoutesForIdentity(
       me,
     ).where((route) => route.kind == PeerRouteKind.relay).toList();
@@ -2805,7 +2894,9 @@ class MessengerController extends ChangeNotifier {
         detail: 'No internet relay route is configured.',
       );
     }
-    final checks = await _rankRouteHealthForDelivery(relayRoutes);
+    final checks = fast
+        ? await _rankRouteHealthForDebug(relayRoutes)
+        : await _rankRouteHealthForDelivery(relayRoutes);
     PeerRouteHealth? selected;
     for (final check in checks) {
       if (check.available) {
@@ -2842,7 +2933,9 @@ class MessengerController extends ChangeNotifier {
         protocol: selected.route.protocol,
         recipientDeviceId: mailbox,
         envelope: envelope,
-        timeout: const Duration(seconds: 4),
+        timeout: fast
+            ? _debugRelayOperationTimeout
+            : const Duration(seconds: 4),
       );
       final first = await _relayClient.fetchEnvelopes(
         host: selected.route.host,
@@ -2850,7 +2943,9 @@ class MessengerController extends ChangeNotifier {
         protocol: selected.route.protocol,
         recipientDeviceId: mailbox,
         limit: 4,
-        timeout: const Duration(seconds: 4),
+        timeout: fast
+            ? _debugRelayOperationTimeout
+            : const Duration(seconds: 4),
       );
       final second = await _relayClient.fetchEnvelopes(
         host: selected.route.host,
@@ -2858,7 +2953,9 @@ class MessengerController extends ChangeNotifier {
         protocol: selected.route.protocol,
         recipientDeviceId: mailbox,
         limit: 4,
-        timeout: const Duration(seconds: 4),
+        timeout: fast
+            ? _debugRelayOperationTimeout
+            : const Duration(seconds: 4),
       );
       final firstDelivered = first.any(
         (candidate) => candidate.messageId == messageId,
@@ -3079,19 +3176,48 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<List<PeerRouteHealth>> _rankRouteHealthForDelivery(
-    List<PeerEndpoint> routes,
-  ) async {
+    List<PeerEndpoint> routes, {
+    Duration? lanTimeout,
+    Duration? directInternetTimeout,
+    Duration? relayTimeout,
+    bool includeAliasRoutes = true,
+  }) async {
     final uniqueRoutes = dedupePeerEndpoints(routes);
     if (uniqueRoutes.isEmpty) {
       return const <PeerRouteHealth>[];
     }
-    final checks = await Future.wait(uniqueRoutes.map(_checkRouteHealth));
-    final aliasRoutes = await _sameRelayAliasRoutesFor(
-      checks: checks,
-      existingRoutes: uniqueRoutes,
+    final checks = await Future.wait(
+      uniqueRoutes.map(
+        (route) => _checkRouteHealth(
+          route,
+          lanTimeout: lanTimeout,
+          directInternetTimeout: directInternetTimeout,
+          relayTimeout: relayTimeout,
+        ),
+      ),
     );
-    if (aliasRoutes.isNotEmpty) {
-      checks.addAll(await Future.wait(aliasRoutes.map(_checkRouteHealth)));
+    if (includeAliasRoutes) {
+      final aliasRoutes = await _sameRelayAliasRoutesFor(
+        checks: checks,
+        existingRoutes: uniqueRoutes,
+        lanTimeout: lanTimeout,
+        directInternetTimeout: directInternetTimeout,
+        relayTimeout: relayTimeout,
+      );
+      if (aliasRoutes.isNotEmpty) {
+        checks.addAll(
+          await Future.wait(
+            aliasRoutes.map(
+              (route) => _checkRouteHealth(
+                route,
+                lanTimeout: lanTimeout,
+                directInternetTimeout: directInternetTimeout,
+                relayTimeout: relayTimeout,
+              ),
+            ),
+          ),
+        );
+      }
     }
     final healthyLan =
         checks
@@ -3154,9 +3280,24 @@ class MessengerController extends ChangeNotifier {
     ];
   }
 
+  Future<List<PeerRouteHealth>> _rankRouteHealthForDebug(
+    List<PeerEndpoint> routes,
+  ) {
+    return _rankRouteHealthForDelivery(
+      routes,
+      lanTimeout: _debugLanRouteTimeout,
+      directInternetTimeout: _debugInternetRouteTimeout,
+      relayTimeout: _debugInternetRouteTimeout,
+      includeAliasRoutes: false,
+    );
+  }
+
   Future<List<PeerEndpoint>> _sameRelayAliasRoutesFor({
     required List<PeerRouteHealth> checks,
     required List<PeerEndpoint> existingRoutes,
+    Duration? lanTimeout,
+    Duration? directInternetTimeout,
+    Duration? relayTimeout,
   }) async {
     final relayIds = checks
         .where(
@@ -3182,7 +3323,14 @@ class MessengerController extends ChangeNotifier {
       return const <PeerEndpoint>[];
     }
     final candidateChecks = await Future.wait(
-      candidates.map(_checkRouteHealth),
+      candidates.map(
+        (route) => _checkRouteHealth(
+          route,
+          lanTimeout: lanTimeout,
+          directInternetTimeout: directInternetTimeout,
+          relayTimeout: relayTimeout,
+        ),
+      ),
     );
     return candidateChecks
         .where(
@@ -3201,11 +3349,17 @@ class MessengerController extends ChangeNotifier {
     return leftLatency.compareTo(rightLatency);
   }
 
-  Future<PeerRouteHealth> _checkRouteHealth(PeerEndpoint route) async {
+  Future<PeerRouteHealth> _checkRouteHealth(
+    PeerEndpoint route, {
+    Duration? lanTimeout,
+    Duration? directInternetTimeout,
+    Duration? relayTimeout,
+  }) async {
     final timeout = switch (route.kind) {
-      PeerRouteKind.lan => const Duration(milliseconds: 800),
-      PeerRouteKind.directInternet => const Duration(seconds: 2),
-      PeerRouteKind.relay => const Duration(seconds: 3),
+      PeerRouteKind.lan => lanTimeout ?? const Duration(milliseconds: 800),
+      PeerRouteKind.directInternet =>
+        directInternetTimeout ?? const Duration(seconds: 2),
+      PeerRouteKind.relay => relayTimeout ?? const Duration(seconds: 3),
     };
     try {
       final stopwatch = Stopwatch()..start();
@@ -3247,6 +3401,9 @@ class MessengerController extends ChangeNotifier {
     required List<PeerEndpoint> routes,
     required String recipientDeviceId,
     required RelayEnvelope envelope,
+    Duration? lanTimeout,
+    Duration? directInternetTimeout,
+    Duration? relayTimeout,
   }) async {
     Object? lastError;
     for (final route in routes) {
@@ -3258,10 +3415,10 @@ class MessengerController extends ChangeNotifier {
           recipientDeviceId: recipientDeviceId,
           envelope: envelope,
           timeout: route.kind == PeerRouteKind.lan
-              ? const Duration(milliseconds: 900)
+              ? lanTimeout ?? const Duration(milliseconds: 900)
               : route.kind == PeerRouteKind.directInternet
-              ? const Duration(seconds: 2)
-              : const Duration(seconds: 4),
+              ? directInternetTimeout ?? const Duration(seconds: 2)
+              : relayTimeout ?? const Duration(seconds: 4),
         );
         if (stored) {
           return route;
@@ -3280,6 +3437,16 @@ class MessengerController extends ChangeNotifier {
     if (pingSent) {
       await Future<void>.delayed(const Duration(milliseconds: 300));
     }
+    final beaconRoutes = _recentPairingBeaconRoutes();
+    final beaconInvite = await _resolveInviteByRoutes(
+      mailboxId: mailboxId,
+      routes: beaconRoutes,
+      lanTimeout: const Duration(milliseconds: 350),
+    );
+    if (beaconInvite != null) {
+      return beaconInvite;
+    }
+
     final relayRoutes = _internetPairingRoutesForIdentity(me);
     final relayInvite = await _resolveInviteByRoutes(
       mailboxId: mailboxId,
@@ -3289,7 +3456,6 @@ class MessengerController extends ChangeNotifier {
       return relayInvite;
     }
 
-    final beaconRoutes = _recentPairingBeaconRoutes();
     final lanRoutes = _lanPairingRoutesForIdentity(
       me,
       beaconRoutes: beaconRoutes,
@@ -3297,6 +3463,7 @@ class MessengerController extends ChangeNotifier {
     final lanInvite = await _resolveInviteByRoutes(
       mailboxId: mailboxId,
       routes: lanRoutes,
+      lanTimeout: const Duration(milliseconds: 350),
     );
     if (lanInvite != null) {
       return lanInvite;
@@ -3309,6 +3476,7 @@ class MessengerController extends ChangeNotifier {
   Future<ContactInvite?> _resolveInviteByRoutes({
     required String mailboxId,
     required List<PeerEndpoint> routes,
+    Duration lanTimeout = const Duration(milliseconds: 800),
   }) async {
     if (routes.isEmpty) {
       return null;
@@ -3318,7 +3486,11 @@ class MessengerController extends ChangeNotifier {
       final batch = routes.skip(index).take(batchSize).toList(growable: false);
       final resolved = await Future.wait(
         batch.map(
-          (route) => _resolveInviteByRoute(route: route, mailboxId: mailboxId),
+          (route) => _resolveInviteByRoute(
+            route: route,
+            mailboxId: mailboxId,
+            lanTimeout: lanTimeout,
+          ),
         ),
       );
       for (final invite in resolved) {
@@ -3333,6 +3505,7 @@ class MessengerController extends ChangeNotifier {
   Future<ContactInvite?> _resolveInviteByRoute({
     required PeerEndpoint route,
     required String mailboxId,
+    Duration lanTimeout = const Duration(milliseconds: 800),
   }) async {
     try {
       final envelopes = await _relayClient.fetchEnvelopes(
@@ -3342,7 +3515,7 @@ class MessengerController extends ChangeNotifier {
         recipientDeviceId: mailboxId,
         limit: 4,
         timeout: route.kind == PeerRouteKind.lan
-            ? const Duration(milliseconds: 800)
+            ? lanTimeout
             : const Duration(seconds: 2),
       );
       for (final envelope in envelopes) {
@@ -3437,7 +3610,11 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
       final prefix = address.substring(0, lastDot);
-      for (var hostSegment = 1; hostSegment < 255; hostSegment++) {
+      final ownHostSegment = int.tryParse(address.substring(lastDot + 1));
+      if (ownHostSegment == null) {
+        continue;
+      }
+      for (final hostSegment in _nearbyHostSegments(ownHostSegment)) {
         final host = '$prefix.$hostSegment';
         if (ownAddresses.contains(host)) {
           continue;
@@ -3456,6 +3633,37 @@ class MessengerController extends ChangeNotifier {
       }
     }
     return routes;
+  }
+
+  List<int> _nearbyHostSegments(int ownHostSegment) {
+    final seen = <int>{};
+    final segments = <int>[];
+    void add(int value) {
+      if (segments.length >= _maxLanPairingScanHostsPerAddress ||
+          value < 1 ||
+          value > 254 ||
+          !seen.add(value)) {
+        return;
+      }
+      segments.add(value);
+    }
+
+    for (var radius = 1; radius <= 8; radius++) {
+      add(ownHostSegment - radius);
+      add(ownHostSegment + radius);
+    }
+    for (final common in const [1, 2, 10, 20, 50, 100, 101, 200, 245, 254]) {
+      add(common);
+    }
+    for (
+      var radius = 9;
+      radius <= 254 && segments.length < _maxLanPairingScanHostsPerAddress;
+      radius++
+    ) {
+      add(ownHostSegment - radius);
+      add(ownHostSegment + radius);
+    }
+    return segments;
   }
 
   List<PeerEndpoint> _pairingLoopbackCheckRoutesForIdentity(IdentityRecord me) {
@@ -3513,12 +3721,68 @@ class MessengerController extends ChangeNotifier {
   }
 
   List<PeerEndpoint> _inviteRouteHintsForIdentity(IdentityRecord identity) {
-    return dedupePeerEndpoints([
-      ...identity.advertisedRouteHints,
-      ..._contactRelayRoutes().where(
+    final lanRoutes = identity.lanAddresses
+        .take(_maxInviteLanHosts)
+        .expand(
+          (address) => _protocolRoutes(
+            kind: PeerRouteKind.lan,
+            host: address,
+            port: identity.localRelayPort,
+          ),
+        )
+        .toList(growable: false);
+    final configuredRelayRoutes = _rankInviteRoutes(
+      identity.configuredRelays.where(
         (route) => route.kind == PeerRouteKind.relay,
       ),
+    ).take(_maxInviteRelayRoutes);
+    final remainingRelaySlots = max(
+      0,
+      _maxInviteRelayRoutes - configuredRelayRoutes.length,
+    );
+    final contactRelayRoutes = _rankInviteRoutes(
+      _contactRelayRoutes().where((route) => route.kind == PeerRouteKind.relay),
+    ).take(remainingRelaySlots);
+    return dedupePeerEndpoints([
+      ...lanRoutes,
+      ...configuredRelayRoutes,
+      ...contactRelayRoutes,
     ]).take(_maxInviteRouteHints).toList(growable: false);
+  }
+
+  List<PeerEndpoint> _rankInviteRoutes(Iterable<PeerEndpoint> routes) {
+    final ranked = dedupePeerEndpoints(routes);
+    ranked.sort((left, right) {
+      final leftHealth = _routeHealth[left.routeKey];
+      final rightHealth = _routeHealth[right.routeKey];
+      final leftAvailable = leftHealth?.available ?? false;
+      final rightAvailable = rightHealth?.available ?? false;
+      if (leftAvailable != rightAvailable) {
+        return leftAvailable ? -1 : 1;
+      }
+      final latencyCompare = (leftHealth?.latency?.inMicroseconds ?? 1 << 62)
+          .compareTo(rightHealth?.latency?.inMicroseconds ?? 1 << 62);
+      if (latencyCompare != 0) {
+        return latencyCompare;
+      }
+      final protocolCompare = _inviteProtocolPriority(
+        left.protocol,
+      ).compareTo(_inviteProtocolPriority(right.protocol));
+      if (protocolCompare != 0) {
+        return protocolCompare;
+      }
+      return left.label.compareTo(right.label);
+    });
+    return ranked;
+  }
+
+  int _inviteProtocolPriority(PeerRouteProtocol protocol) {
+    return switch (protocol) {
+      PeerRouteProtocol.tcp => 0,
+      PeerRouteProtocol.udp => 1,
+      PeerRouteProtocol.https => 2,
+      PeerRouteProtocol.http => 3,
+    };
   }
 
   Future<void> _announcePairingAvailabilityIfNeeded({
@@ -3530,46 +3794,51 @@ class MessengerController extends ChangeNotifier {
     }
     final invite = _inviteForIdentity(me);
     final payload = invite.encodePayload();
-    final pairingCode = currentPairingCodeSnapshotForPayload(
+    final mailboxIds = pairingCodephrasesForPayload(
       payload,
-    ).codephrase;
-    final mailboxId = pairingMailboxIdForCodephrase(pairingCode);
+    ).map(pairingMailboxIdForCodephrase).toList(growable: false);
+    final mailboxKey = mailboxIds.join('|');
     final now = DateTime.now().toUtc();
     final lastAnnouncementAt = _lastPairingAnnouncementAt;
     if (!force &&
-        _lastPairingAnnouncementMailboxId == mailboxId &&
+        _lastPairingAnnouncementMailboxId == mailboxKey &&
         lastAnnouncementAt != null &&
         now.difference(lastAnnouncementAt) < const Duration(seconds: 8)) {
       return;
     }
 
-    final announcement = RelayEnvelope(
-      kind: 'pairing_announcement',
-      messageId: _randomId('pair'),
-      conversationId: 'pairing',
-      senderAccountId: me.accountId,
-      senderDeviceId: me.deviceId,
-      recipientDeviceId: mailboxId,
-      createdAt: DateTime.now().toUtc(),
-      payloadBase64: base64Encode(utf8.encode(payload)),
-    );
+    final stores = <Future<void>>[];
     for (final route in _announcementRoutesForIdentity(me)) {
-      try {
-        await _relayClient.storeEnvelope(
-          host: route.host,
-          port: route.port,
-          protocol: route.protocol,
+      for (final mailboxId in mailboxIds) {
+        final announcement = RelayEnvelope(
+          kind: 'pairing_announcement',
+          messageId: _randomId('pair'),
+          conversationId: 'pairing',
+          senderAccountId: me.accountId,
+          senderDeviceId: me.deviceId,
           recipientDeviceId: mailboxId,
-          envelope: announcement,
-          timeout: route.kind == PeerRouteKind.lan
-              ? const Duration(milliseconds: 800)
-              : const Duration(seconds: 2),
+          createdAt: DateTime.now().toUtc(),
+          payloadBase64: base64Encode(utf8.encode(payload)),
         );
-      } catch (_) {
-        // Announcements are best-effort. Normal delivery continues to work.
+        stores.add(
+          _relayClient
+              .storeEnvelope(
+                host: route.host,
+                port: route.port,
+                protocol: route.protocol,
+                recipientDeviceId: mailboxId,
+                envelope: announcement,
+                timeout: route.kind == PeerRouteKind.lan
+                    ? const Duration(milliseconds: 500)
+                    : const Duration(seconds: 2),
+              )
+              .catchError((_) => false)
+              .then((_) {}),
+        );
       }
     }
-    _lastPairingAnnouncementMailboxId = mailboxId;
+    await Future.wait(stores);
+    _lastPairingAnnouncementMailboxId = mailboxKey;
     _lastPairingAnnouncementAt = now;
   }
 

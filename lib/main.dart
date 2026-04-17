@@ -2036,7 +2036,7 @@ class InviteScreen extends StatefulWidget {
 
 class _InviteScreenState extends State<InviteScreen> {
   late ContactInvite _invite = widget.invite;
-  String get _payload => _invite.encodePayload();
+  late String _payload = _invite.encodePayload();
   late bool _showQr = !_isWindowsPlatform;
   bool _rotating = false;
   String? _error;
@@ -2076,6 +2076,7 @@ class _InviteScreenState extends State<InviteScreen> {
       if (mounted) {
         setState(() {
           _invite = invite;
+          _payload = invite.encodePayload();
           _lastAdvertisedCodephrase = null;
         });
         _advertiseVisibleCodephrase();

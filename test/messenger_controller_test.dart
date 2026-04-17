@@ -348,6 +348,38 @@ void main() {
   );
 
   test(
+    'codephrase resolution tolerates rotation while the other device pairs',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final sender = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final receiver = await _createController(
+        relayClient: relayClient,
+        displayName: 'Carol',
+      );
+      addTearDown(sender.dispose);
+      addTearDown(receiver.dispose);
+
+      final payload = (await sender.buildInvite()).encodePayload();
+      final nextCodephrase = pairingCodephrasesForPayload(
+        payload,
+        slotOffsets: const <int>[1],
+      ).single;
+
+      final result = await receiver.addContactFromInvite(
+        alias: 'Alice',
+        payload: '',
+        codephrase: nextCodephrase,
+      );
+
+      expect(receiver.contacts.single.deviceId, sender.identity!.deviceId);
+      expect(result.exchangeStatus, ContactExchangeStatus.automatic);
+    },
+  );
+
+  test(
     'relay-disabled peers still advertise direct routes for codephrase add',
     () async {
       final relayClient = _FakeRelayClient();
@@ -386,6 +418,30 @@ void main() {
       expect(result.contact.routeHints, isNotEmpty);
     },
   );
+
+  test('invite route hints stay compact across several networks', () async {
+    final relayClient = _FakeRelayClient();
+    final controller = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+      lanAddresses: const <String>['192.168.1.20', '10.0.0.20', '172.16.0.20'],
+    );
+    addTearDown(controller.dispose);
+
+    final invite = await controller.buildInvite();
+    final payload = invite.encodePayload();
+
+    expect(invite.routeHints.length, lessThanOrEqualTo(6));
+    expect(
+      invite.routeHints.where((route) => route.kind == PeerRouteKind.lan),
+      hasLength(4),
+    );
+    expect(
+      invite.routeHints.where((route) => route.kind == PeerRouteKind.relay),
+      hasLength(lessThanOrEqualTo(3)),
+    );
+    expect(payload.length, lessThan(1800));
+  });
 
   test(
     'pairing announcements can be fetched by more than one device',

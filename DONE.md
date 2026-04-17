@@ -29,17 +29,19 @@ This file lists the functionality currently implemented in the Conest prototype.
 - Contact invites include a pairing nonce so the visible codephrase can be rotated immediately.
 - Contact invites include a relay-capable flag so direct LAN paths and relay candidacy are separate.
 - QR invite generation.
+- QR invite payloads are compacted to a small ranked set of LAN and relay route hints so several active networks do not produce oversized QR codes.
 - QR-only contact add flow.
 - Manual payload paste contact add flow.
 - Codephrase-only contact discovery and add flow.
 - Dynamic rotating codephrase derived from the invite payload.
-- Manual "rotate codephrase now" action on the invite screen resets the visible 30-second timer.
+- Manual "rotate codephrase now" action on the invite screen resets the visible 120-second timer.
+- Pairing announcements publish adjacent codephrase windows so a code can rotate during add-contact without breaking discovery.
 - Pairing announcements are reusable during their TTL instead of being consumed by the first discovery fetch.
 - Codephrase discovery over configured internet relays.
-- Codephrase discovery over nearby LAN route scans with LAN-grade route timeouts.
+- Codephrase discovery over bounded nearby LAN route scans with short LAN-grade route timeouts.
 - Codephrase discovery can use LAN UDP pairing beacons to find nearby devices without relying only on guessed `/24` scans.
 - Codephrase entry accepts hyphenated, spaced, or punctuation-free forms.
-- Invite screen republishes the visible codephrase when it changes.
+- Invite screen republishes the visible codephrase when it changes and caches the QR payload between rotations to avoid repeated QR re-encoding.
 - Pairing announcements are stored through loopback and detected LAN addresses so debug checks can distinguish local-only from LAN-reachable pairing.
 - LAN route discovery filters common Docker, WSL, Hyper-V, VM, VPN, and bridge interfaces so peers do not advertise unusable local-only adapter addresses.
 - Relay-disabled devices can still advertise direct LAN paths for pairing and messaging while avoiding relay-capable advertisement.
@@ -148,7 +150,8 @@ This file lists the functionality currently implemented in the Conest prototype.
 - Debug test runner button.
 - Debug info copy button for bug reports and error reports.
 - Contact profile path checks can be copied with full route state, latency, relay instance id, and error details.
-- Debug test runner checks identity, encrypted vault write, invite codec, current codephrase generation, pairing announcement LAN loopback, LAN beacon listener, LAN address discovery, local relay runtime, relay protocol rediscovery, notification/background settings, route protocol coverage, relay alias grouping, internet relay availability, contact route availability, two-device readiness, debug peer probes, debug probe acknowledgements, relay-forced probe sends, relay store/fetch loopback, message action state, and message queue state.
+- Debug test runner checks identity, encrypted vault write, invite codec, compact invite payload size, current/adjacent codephrase generation, pairing announcement LAN loopback, LAN beacon listener, LAN address discovery, local relay runtime, relay protocol rediscovery, notification/background settings, route protocol coverage, relay alias grouping, internet relay availability, contact route availability, two-device readiness, debug peer probes, debug probe acknowledgements, relay-forced probe sends, relay store/fetch loopback, message action state, message queue state, and debug runtime.
+- Debug test runner uses short diagnostic timeouts and reuses route checks so unreachable relays or stale contact paths do not block the run for production delivery timeouts.
 - Debug test runner checks that configured internet relays keep pairing announcements reusable across repeated discovery fetches.
 - Debug test runner sends two-way debug message probes and tracks two-way debug replies from remote debug builds.
 - Debug test runner waits briefly and polls locally after sending debug probes so fast remote replies are counted in the same run when possible.
@@ -160,7 +163,7 @@ This file lists the functionality currently implemented in the Conest prototype.
 ## Tests
 - Invite payload round-trip test.
 - Reserved attachment and transfer model round-trip test.
-- Dynamic codephrase test.
+- Dynamic and adjacent-window codephrase tests.
 - QR/payload-only contact add coverage.
 - Codephrase-only contact discovery coverage.
 - Automatic reciprocal contact exchange coverage.

@@ -144,6 +144,38 @@ void main() {
     );
   });
 
+  test('pairing announcements cover adjacent codephrase windows', () {
+    final startedAt = DateTime.utc(2026, 1, 1, 12, 0, 0);
+    final invite = ContactInvite(
+      version: 4,
+      accountId: 'acc-a1',
+      deviceId: 'dev-b2',
+      displayName: 'Alice',
+      bio: '',
+      pairingNonce: 'nonce-a',
+      pairingEpochMs: startedAt.millisecondsSinceEpoch,
+      relayCapable: false,
+      publicKeyBase64: 'public-key',
+      routeHints: const [],
+    );
+    final payload = invite.encodePayload();
+
+    final codes = pairingCodephrasesForPayload(payload, now: startedAt);
+
+    expect(pairingCodeWindow.inSeconds, 120);
+    expect(codes.length, 2);
+    expect(codes.toSet(), hasLength(codes.length));
+    expect(
+      codes,
+      contains(
+        currentPairingCodeSnapshotForPayload(
+          payload,
+          now: startedAt,
+        ).codephrase,
+      ),
+    );
+  });
+
   test('pairing epoch resets the visible codephrase timer', () {
     final rotatedAt = DateTime.utc(2026, 1, 1, 12, 0, 17);
     final invite = ContactInvite(
