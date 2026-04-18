@@ -30,6 +30,12 @@ const String _lanLobbyMailboxId = 'lan-lobby-v1';
 const String _lanLobbyConversationId = 'conv-lan-lobby';
 const Duration _slowPollInterval = Duration(seconds: 5);
 const Duration _fastLocalPollInterval = Duration(milliseconds: 900);
+const Duration _heartbeatInterval = Duration(seconds: 60);
+const Duration _onlineReachabilityWindow = Duration(minutes: 2);
+const Duration _seenRecentlyReachabilityWindow = Duration(minutes: 10);
+const Duration _knownReachabilityWindow = Duration(hours: 24);
+const Duration _pendingMessageRetryDelay = Duration(seconds: 5);
+const Duration _acceptedMessageRetryDelay = Duration(seconds: 15);
 
 class MessengerController extends ChangeNotifier {
   MessengerController({
@@ -38,11 +44,13 @@ class MessengerController extends ChangeNotifier {
     LocalRelayNode? localRelayNode,
     PlatformBridge? platformBridge,
     Future<List<String>> Function()? lanAddressProvider,
+    DateTime Function()? nowProvider,
   }) : _vaultStore = vaultStore,
        _relayClient = relayClient,
        _localRelayNode = localRelayNode ?? LocalRelayNode(),
        _platformBridge = platformBridge ?? PlatformBridge(),
-       _lanAddressProvider = lanAddressProvider ?? discoverLanAddresses {
+       _lanAddressProvider = lanAddressProvider ?? discoverLanAddresses,
+       _nowProvider = nowProvider ?? DateTime.now {
     _localRelayNode.onEnvelopeStored = _handleLocalEnvelopeStored;
   }
 
@@ -51,12 +59,14 @@ class MessengerController extends ChangeNotifier {
   final LocalRelayNode _localRelayNode;
   final PlatformBridge _platformBridge;
   final Future<List<String>> Function() _lanAddressProvider;
+  final DateTime Function() _nowProvider;
   VaultSnapshot _snapshot = VaultSnapshot.empty();
   Timer? _pollTimer;
   Timer? _fastLocalPollTimer;
   bool _ready = false;
   bool _polling = false;
   bool _fastLocalPolling = false;
+  bool _appInForeground = true;
   String? _statusMessage;
   String _lastRelayStatus = 'relay not checked yet';
   String? _lastPairingAnnouncementMailboxId;
@@ -65,6 +75,9 @@ class MessengerController extends ChangeNotifier {
   final Set<String> _debugProbeAcknowledgements = <String>{};
   final Set<String> _debugTwoWayReplies = <String>{};
   final Set<String> _locallyDeletedMessageIds = <String>{};
+  final Map<String, DateTime> _outboundAttemptedAt = <String, DateTime>{};
+  final Map<String, _PendingRouteUpdateProbe> _pendingRouteUpdateProbes =
+      <String, _PendingRouteUpdateProbe>{};
   final Map<String, _PairingBeaconRoute> _pairingBeaconRoutes = {};
   RawDatagramSocket? _pairingBeaconSocket;
   StreamSubscription<RawSocketEvent>? _pairingBeaconSubscription;
@@ -88,6 +101,8 @@ class MessengerController extends ChangeNotifier {
   List<ChatMessage> get lanLobbyMessages => _lanLobbyMessages();
   bool get supportsScanner => !kIsWeb && Platform.isAndroid;
   List<PeerEndpoint> get discoveredContactRelayRoutes => _contactRelayRoutes();
+  List<ContactReachabilityRecord> get reachabilityRecords =>
+      List.unmodifiable(_snapshot.reachabilityRecords);
   int get totalMessageCount => _snapshot.conversations.fold<int>(
     0,
     (count, conversation) => count + conversation.messages.length,
@@ -103,15 +118,48 @@ class MessengerController extends ChangeNotifier {
             )
             .length,
   );
+  int get awaitingRecipientAckCount => _snapshot.conversations.fold<int>(
+    0,
+    (count, conversation) =>
+        count +
+        conversation.messages
+            .where(
+              (message) => message.outbound && message.state.awaitsRecipientAck,
+            )
+            .length,
+  );
   int get seenEnvelopeCount => _snapshot.seenEnvelopeIds.length;
   PeerRouteHealth? routeHealthFor(PeerEndpoint route) =>
       _routeHealth[route.routeKey];
+  ContactReachabilityRecord? reachabilityRecordFor(String deviceId) =>
+      _reachabilityRecordByDeviceId(deviceId);
+  ContactReachabilityState reachabilityStateFor(String deviceId) =>
+      _reachabilityStateFor(deviceId);
   @visibleForTesting
   void rememberPairingBeaconRouteForTesting(PeerEndpoint route) {
     _pairingBeaconRoutes[route.routeKey] = _PairingBeaconRoute(
       route: route,
       seenAt: DateTime.now().toUtc(),
     );
+  }
+
+  @visibleForTesting
+  Future<void> retryUnacknowledgedMessagesNow() =>
+      _retryUnacknowledgedMessages(force: true);
+  @visibleForTesting
+  Future<int> runHeartbeatPassNow() async =>
+      (await _runHeartbeatPass(force: true)).sentCount;
+
+  DateTime _now() => _nowProvider().toUtc();
+
+  void setAppForegroundState(bool value) {
+    if (_appInForeground == value) {
+      return;
+    }
+    _appInForeground = value;
+    if (value && hasIdentity) {
+      unawaited(pollNow());
+    }
   }
 
   RelayCapabilityReport? get relayCapabilityReport {
@@ -216,6 +264,149 @@ class MessengerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  ContactReachabilityRecord? _reachabilityRecordByDeviceId(String deviceId) {
+    for (final record in _snapshot.reachabilityRecords) {
+      if (record.deviceId == deviceId) {
+        return record;
+      }
+    }
+    return null;
+  }
+
+  ContactReachabilityRecord _ensureReachabilityRecord(String deviceId) {
+    return _reachabilityRecordByDeviceId(deviceId) ??
+        ContactReachabilityRecord(deviceId: deviceId);
+  }
+
+  void _upsertReachabilityRecord(
+    String deviceId,
+    ContactReachabilityRecord Function(ContactReachabilityRecord current)
+    update,
+  ) {
+    final current = _ensureReachabilityRecord(deviceId);
+    final updated = update(current);
+    final records = List<ContactReachabilityRecord>.from(
+      _snapshot.reachabilityRecords,
+    );
+    final index = records.indexWhere((record) => record.deviceId == deviceId);
+    if (index == -1) {
+      records.add(updated);
+    } else {
+      records[index] = updated;
+    }
+    _snapshot = _snapshot.copyWith(reachabilityRecords: records);
+  }
+
+  void _removeReachabilityRecord(String deviceId) {
+    final records = _snapshot.reachabilityRecords
+        .where((record) => record.deviceId != deviceId)
+        .toList(growable: false);
+    _snapshot = _snapshot.copyWith(reachabilityRecords: records);
+  }
+
+  void _noteAnySignal(String deviceId, {DateTime? at}) {
+    final timestamp = (at ?? _now()).toUtc();
+    _upsertReachabilityRecord(
+      deviceId,
+      (current) => current.copyWith(lastAnySignalAt: timestamp),
+    );
+  }
+
+  void _noteTwoWaySuccess(String deviceId, {DateTime? at}) {
+    final timestamp = (at ?? _now()).toUtc();
+    _upsertReachabilityRecord(
+      deviceId,
+      (current) => current.copyWith(
+        lastTwoWaySuccessAt: timestamp,
+        lastAnySignalAt: timestamp,
+      ),
+    );
+  }
+
+  void _noteHeartbeatAttempt(String deviceId, {DateTime? at}) {
+    final timestamp = (at ?? _now()).toUtc();
+    _upsertReachabilityRecord(
+      deviceId,
+      (current) => current.copyWith(lastHeartbeatAttemptAt: timestamp),
+    );
+  }
+
+  void _noteHeartbeatReply(String deviceId, {DateTime? at}) {
+    final timestamp = (at ?? _now()).toUtc();
+    _upsertReachabilityRecord(
+      deviceId,
+      (current) => current.copyWith(lastHeartbeatReplyAt: timestamp),
+    );
+  }
+
+  void _noteAvailablePath(String deviceId, {DateTime? at}) {
+    final timestamp = (at ?? _now()).toUtc();
+    _upsertReachabilityRecord(
+      deviceId,
+      (current) => current.copyWith(lastAvailablePathAt: timestamp),
+    );
+  }
+
+  void _noteFailure(String deviceId, {DateTime? at}) {
+    final timestamp = (at ?? _now()).toUtc();
+    _upsertReachabilityRecord(
+      deviceId,
+      (current) => current.copyWith(lastFailureAt: timestamp),
+    );
+  }
+
+  ContactReachabilityState _reachabilityStateFor(
+    String deviceId, {
+    DateTime? now,
+  }) {
+    final record = _reachabilityRecordByDeviceId(deviceId);
+    if (record == null) {
+      return ContactReachabilityState.unknown;
+    }
+    final currentTime = (now ?? _now()).toUtc();
+    final lastTwoWaySuccessAt = record.lastTwoWaySuccessAt;
+    if (lastTwoWaySuccessAt != null &&
+        currentTime.difference(lastTwoWaySuccessAt) <=
+            _onlineReachabilityWindow) {
+      return ContactReachabilityState.online;
+    }
+    final recentObservation = _latestTimestamp([
+      record.lastAvailablePathAt,
+      record.lastAnySignalAt,
+    ]);
+    if (recentObservation != null &&
+        currentTime.difference(recentObservation) <=
+            _seenRecentlyReachabilityWindow) {
+      return ContactReachabilityState.seenRecently;
+    }
+    if (lastTwoWaySuccessAt != null &&
+        currentTime.difference(lastTwoWaySuccessAt) <=
+            _knownReachabilityWindow) {
+      return ContactReachabilityState.known;
+    }
+    return ContactReachabilityState.unknown;
+  }
+
+  bool _shouldRunAutomaticHeartbeats(IdentityRecord me) {
+    if (!Platform.isAndroid) {
+      return true;
+    }
+    return _appInForeground || me.androidBackgroundRuntimeEnabled;
+  }
+
+  DateTime? _latestTimestamp(Iterable<DateTime?> values) {
+    DateTime? latest;
+    for (final value in values) {
+      if (value == null) {
+        continue;
+      }
+      if (latest == null || value.isAfter(latest)) {
+        latest = value;
+      }
+    }
+    return latest;
+  }
+
   Future<void> refreshPairingAdvertisement() async {
     if (!hasIdentity) {
       return;
@@ -287,12 +478,14 @@ class MessengerController extends ChangeNotifier {
     }
     buffer.writeln('contacts=${contacts.length}');
     for (final contact in contacts) {
+      final reachability = _reachabilityRecordByDeviceId(contact.deviceId);
       buffer.writeln(
-        'contact alias=${contact.alias} device=${contact.deviceId} relayCapable=${contact.relayCapable} routes=${contact.prioritizedRouteHints.map((route) => '${route.kind.name}:${route.label}:${routeHealthFor(route)?.summary ?? 'not checked'}').join(' | ')}',
+        'contact alias=${contact.alias} device=${contact.deviceId} relayCapable=${contact.relayCapable} reachability=${_reachabilityStateFor(contact.deviceId).name} lastTwoWaySuccessAt=${reachability?.lastTwoWaySuccessAt?.toIso8601String() ?? ''} lastHeartbeatAttemptAt=${reachability?.lastHeartbeatAttemptAt?.toIso8601String() ?? ''} lastHeartbeatReplyAt=${reachability?.lastHeartbeatReplyAt?.toIso8601String() ?? ''} lastAvailablePathAt=${reachability?.lastAvailablePathAt?.toIso8601String() ?? ''} lastAnySignalAt=${reachability?.lastAnySignalAt?.toIso8601String() ?? ''} lastFailureAt=${reachability?.lastFailureAt?.toIso8601String() ?? ''} routes=${contact.prioritizedRouteHints.map((route) => '${route.kind.name}:${route.label}:${routeHealthFor(route)?.summary ?? 'not checked'}').join(' | ')}',
       );
     }
     buffer.writeln('totalMessages=$totalMessageCount');
     buffer.writeln('pendingOutbound=$pendingOutboundCount');
+    buffer.writeln('awaitingRecipientAck=$awaitingRecipientAckCount');
     buffer.writeln('lanLobbyMessages=${lanLobbyMessages.length}');
     buffer.writeln('seenEnvelopes=$seenEnvelopeCount');
     buffer.writeln('debugProbeAcks=${_debugProbeAcknowledgements.length}');
@@ -307,10 +500,50 @@ class MessengerController extends ChangeNotifier {
       buffer.writeln(
         'lastDebugRunSummary=pass:${report.passed} warn:${report.warned} fail:${report.failed} skip:${report.skipped}',
       );
+      buffer.writeln('lastDebugRunPeerReports=${report.peerReports.length}');
+      for (final peer in report.peerReports) {
+        buffer.writeln(
+          'peer alias=${peer.alias} device=${peer.deviceId} reachability=${peer.reachability.name} availablePaths=${peer.availablePathCount}/${peer.totalPathCount} lanPathAvailable=${peer.lanPathAvailable} directInternetPathAvailable=${peer.directInternetPathAvailable} relayPathAvailable=${peer.relayPathAvailable} expectedBestDeliveryState=${peer.expectedBestDeliveryState} heartbeatAttempted=${peer.heartbeatAttempted} heartbeatReplyReceived=${peer.heartbeatReplyReceived} bestPath=${peer.bestPathSummary} probeAccepted=${peer.probeAccepted} probeAcknowledged=${peer.probeAcknowledged} twoWayAccepted=${peer.twoWayAccepted} twoWayReplyReceived=${peer.twoWayReplyReceived} relayProbeAccepted=${peer.relayProbeAccepted} lastTwoWaySuccessAt=${peer.lastTwoWaySuccessAt?.toIso8601String() ?? ''} lastHeartbeatReplyAt=${peer.lastHeartbeatReplyAt?.toIso8601String() ?? ''} lastAvailablePathAt=${peer.lastAvailablePathAt?.toIso8601String() ?? ''} routes=${peer.routeSummary}',
+        );
+      }
+      for (final note in report.notes) {
+        buffer.writeln('note=$note');
+      }
       for (final result in report.results) {
         buffer.writeln(
           'check status=${result.status.name} name=${result.name} detail=${result.detail}',
         );
+      }
+    }
+    return buffer.toString();
+  }
+
+  String buildDebugAnalysisText({DebugRunReport? report}) {
+    final buffer = StringBuffer();
+    buffer.writeln(buildDebugSnapshotText(report: report));
+    if (report == null) {
+      return buffer.toString();
+    }
+    buffer.writeln();
+    buffer.writeln('Conest debug analysis');
+    buffer.writeln(
+      'summary=pass:${report.passed} warn:${report.warned} fail:${report.failed} skip:${report.skipped}',
+    );
+    buffer.writeln('devicesInScope=${report.deviceCount}');
+    if (report.peerReports.isNotEmpty) {
+      buffer.writeln(
+        'peerCoverage=available:${report.peersWithAvailablePaths}/${report.peerReports.length} probeAck:${report.peersWithProbeAck}/${report.peerReports.length} twoWayReply:${report.peersWithTwoWayReply}/${report.peerReports.length} relayProbe:${report.peersWithRelayProbe}/${report.peerReports.length}',
+      );
+      for (final peer in report.peerReports) {
+        buffer.writeln(
+          'peerSummary ${peer.alias} (${peer.deviceId}): reachability=${peer.reachability.label}, paths=${peer.availablePathCount}/${peer.totalPathCount}, heartbeat=${peer.heartbeatReplyReceived}, probeAck=${peer.probeAcknowledged}, twoWayReply=${peer.twoWayReplyReceived}, relayProbe=${peer.relayProbeAccepted}, bestState=${peer.expectedBestDeliveryState}, bestPath=${peer.bestPathSummary}',
+        );
+      }
+    }
+    if (report.notes.isNotEmpty) {
+      buffer.writeln('notes=');
+      for (final note in report.notes) {
+        buffer.writeln('- $note');
       }
     }
     return buffer.toString();
@@ -364,19 +597,27 @@ class MessengerController extends ChangeNotifier {
     final checks = fast
         ? await _rankRouteHealthForDebug(current.prioritizedRouteHints)
         : await _rankRouteHealthForDelivery(current.prioritizedRouteHints);
-    final routeUpdateSent =
-        exchangeRouteUpdate && checks.any((check) => check.available)
-        ? await _sendRouteUpdate(current, requestReply: true)
+    final availableChecks = checks.where((check) => check.available).toList();
+    if (availableChecks.isNotEmpty) {
+      _noteAvailablePath(current.deviceId);
+    }
+    final routeUpdateSent = exchangeRouteUpdate && availableChecks.isNotEmpty
+        ? await _sendRouteUpdate(
+            current,
+            requestReply: true,
+            reason: 'check_paths',
+            routes: [availableChecks.first.route],
+          )
         : false;
     if (persist) {
-      final available = checks.where((check) => check.available).length;
+      final available = availableChecks.length;
       await _persist(
         checks.isEmpty
             ? 'No paths are advertised for ${current.alias}.'
-            : 'Checked ${checks.length} path(s) for ${current.alias}; $available available. ${routeUpdateSent ? 'Route info exchange requested.' : 'Route info exchange could not be sent yet.'}',
+            : 'Checked ${checks.length} path(s) for ${current.alias}; $available available. Reachability is ${_reachabilityStateFor(current.deviceId).label}. ${routeUpdateSent ? 'Route info exchange requested.' : 'Route info exchange could not be sent yet.'}',
       );
     } else {
-      notifyListeners();
+      await _saveSnapshotSilently();
     }
     return checks;
   }
@@ -384,9 +625,17 @@ class MessengerController extends ChangeNotifier {
   Future<DebugRunReport> runDebugSelfTest() async {
     final startedAt = DateTime.now().toUtc();
     final results = <DebugCheckResult>[];
+    final peerReports = <DebugPeerReport>[];
+    final notes = <String>[];
+    _debugProbeAcknowledgements.clear();
+    _debugTwoWayReplies.clear();
 
     void add(String name, DebugCheckStatus status, String detail) {
       results.add(DebugCheckResult(name: name, status: status, detail: detail));
+    }
+
+    int peerCountWhere(bool Function(DebugPeerReport peer) predicate) {
+      return peerReports.where(predicate).length;
     }
 
     if (!kDebugMode) {
@@ -400,6 +649,8 @@ class MessengerController extends ChangeNotifier {
         completedAt: DateTime.now().toUtc(),
         deviceCount: 0,
         results: results,
+        peerReports: peerReports,
+        notes: notes,
       );
     }
 
@@ -415,6 +666,8 @@ class MessengerController extends ChangeNotifier {
         completedAt: DateTime.now().toUtc(),
         deviceCount: 0,
         results: results,
+        peerReports: peerReports,
+        notes: notes,
       );
     }
 
@@ -537,6 +790,14 @@ class MessengerController extends ChangeNotifier {
       notificationRuntime.status,
       notificationRuntime.detail,
     );
+    final backgroundHeartbeatPolicy = _runBackgroundHeartbeatPolicyCheck(
+      _requireIdentity(),
+    );
+    add(
+      backgroundHeartbeatPolicy.name,
+      backgroundHeartbeatPolicy.status,
+      backgroundHeartbeatPolicy.detail,
+    );
 
     final routeProtocolCoverage = _runRouteProtocolCoverageCheck(
       _requireIdentity(),
@@ -545,6 +806,14 @@ class MessengerController extends ChangeNotifier {
       routeProtocolCoverage.name,
       routeProtocolCoverage.status,
       routeProtocolCoverage.detail,
+    );
+    final autoContactRelayCheck = await _runAutoContactRelayCheck(
+      _requireIdentity(),
+    );
+    add(
+      autoContactRelayCheck.name,
+      autoContactRelayCheck.status,
+      autoContactRelayCheck.detail,
     );
 
     final relayRoutes = _diagnosticRelayRoutesForIdentity(
@@ -613,24 +882,81 @@ class MessengerController extends ChangeNotifier {
             : DebugCheckStatus.warn,
         '$contactsWithPath/${contacts.length} contact(s) have at least one currently available path.',
       );
+      final heartbeatAttemptBaseline = <String, DateTime?>{};
+      final heartbeatReplyBaseline = <String, DateTime?>{};
+      for (final contact in contacts) {
+        final record = _reachabilityRecordByDeviceId(contact.deviceId);
+        heartbeatAttemptBaseline[contact.deviceId] =
+            record?.lastHeartbeatAttemptAt;
+        heartbeatReplyBaseline[contact.deviceId] = record?.lastHeartbeatReplyAt;
+      }
+      await _runHeartbeatPass(force: true);
+      final heartbeatAttemptedIds = <String>{};
+      for (final contact in contacts) {
+        final record = _reachabilityRecordByDeviceId(contact.deviceId);
+        final attemptAt = record?.lastHeartbeatAttemptAt;
+        final baseline = heartbeatAttemptBaseline[contact.deviceId];
+        if (attemptAt != null &&
+            !attemptAt.isBefore(startedAt) &&
+            (baseline == null || attemptAt.isAfter(baseline))) {
+          heartbeatAttemptedIds.add(contact.deviceId);
+        }
+      }
+      await _waitForHeartbeatResponses(
+        heartbeatAttemptedIds,
+        startedAt: startedAt,
+      );
+      final stateCounts = <ContactReachabilityState, int>{
+        for (final state in ContactReachabilityState.values) state: 0,
+      };
+      for (final contact in contacts) {
+        stateCounts[_reachabilityStateFor(contact.deviceId)] =
+            (stateCounts[_reachabilityStateFor(contact.deviceId)] ?? 0) + 1;
+      }
+      final unknownReachability =
+          stateCounts[ContactReachabilityState.unknown]!;
+      add(
+        'Heartbeat reachability',
+        unknownReachability == 0
+            ? DebugCheckStatus.pass
+            : DebugCheckStatus.warn,
+        ContactReachabilityState.values
+            .map((state) => '${state.label} ${stateCounts[state]}')
+            .join(' • '),
+      );
 
       var probesAccepted = 0;
       var relayProbesAccepted = 0;
       var twoWayAccepted = 0;
+      final probeMessageIds = <String, String>{};
+      final relayProbeMessageIds = <String, String>{};
+      final twoWayMessageIds = <String, String>{};
       for (final contact in contacts) {
         final checks = contactChecks[contact.deviceId];
-        if (await _sendDebugProbe(contact: contact, rankedChecks: checks)) {
+        final probeMessageId = await _sendDebugProbe(
+          contact: contact,
+          rankedChecks: checks,
+        );
+        if (probeMessageId != null) {
           probesAccepted++;
+          probeMessageIds[contact.deviceId] = probeMessageId;
         }
-        if (await _sendDebugProbe(
+        final relayProbeMessageId = await _sendDebugProbe(
           contact: contact,
           relayOnly: true,
           rankedChecks: checks,
-        )) {
+        );
+        if (relayProbeMessageId != null) {
           relayProbesAccepted++;
+          relayProbeMessageIds[contact.deviceId] = relayProbeMessageId;
         }
-        if (await _sendDebugTwoWayMessage(contact, rankedChecks: checks)) {
+        final twoWayMessageId = await _sendDebugTwoWayMessage(
+          contact,
+          rankedChecks: checks,
+        );
+        if (twoWayMessageId != null) {
           twoWayAccepted++;
+          twoWayMessageIds[contact.deviceId] = twoWayMessageId;
         }
       }
       if ((probesAccepted > 0 && _debugProbeAcknowledgements.isEmpty) ||
@@ -666,6 +992,127 @@ class MessengerController extends ChangeNotifier {
             : '${_debugTwoWayReplies.length} two-way reply/replies received.',
       );
 
+      for (final contact in contacts) {
+        final checks =
+            contactChecks[contact.deviceId] ?? const <PeerRouteHealth>[];
+        final availableChecks = checks
+            .where((check) => check.available)
+            .toList();
+        final bestAvailableCheck = availableChecks.isNotEmpty
+            ? availableChecks.first
+            : null;
+        final reachability = _reachabilityRecordByDeviceId(contact.deviceId);
+        final heartbeatAttemptAt = reachability?.lastHeartbeatAttemptAt;
+        final heartbeatReplyAt = reachability?.lastHeartbeatReplyAt;
+        final probeMessageId = probeMessageIds[contact.deviceId];
+        final relayProbeMessageId = relayProbeMessageIds[contact.deviceId];
+        final twoWayMessageId = twoWayMessageIds[contact.deviceId];
+        peerReports.add(
+          DebugPeerReport(
+            alias: contact.alias,
+            deviceId: contact.deviceId,
+            reachability: _reachabilityStateFor(contact.deviceId),
+            availablePathCount: availableChecks.length,
+            totalPathCount: checks.length,
+            lanPathAvailable: availableChecks.any(
+              (check) => check.route.kind == PeerRouteKind.lan,
+            ),
+            directInternetPathAvailable: availableChecks.any(
+              (check) => check.route.kind == PeerRouteKind.directInternet,
+            ),
+            bestPathSummary: bestAvailableCheck == null
+                ? 'No advertised paths.'
+                : bestAvailableCheck.summary,
+            expectedBestDeliveryState: bestAvailableCheck == null
+                ? DeliveryState.pending.name
+                : _expectedDeliveryStateLabelForRoute(bestAvailableCheck.route),
+            routeSummary: checks.isEmpty
+                ? 'No advertised paths.'
+                : checks.map((check) => check.summary).join(' | '),
+            heartbeatAttempted:
+                heartbeatAttemptAt != null &&
+                !heartbeatAttemptAt.isBefore(startedAt) &&
+                (heartbeatAttemptBaseline[contact.deviceId] == null ||
+                    heartbeatAttemptAt.isAfter(
+                      heartbeatAttemptBaseline[contact.deviceId]!,
+                    )),
+            heartbeatReplyReceived:
+                heartbeatReplyAt != null &&
+                !heartbeatReplyAt.isBefore(startedAt) &&
+                (heartbeatReplyBaseline[contact.deviceId] == null ||
+                    heartbeatReplyAt.isAfter(
+                      heartbeatReplyBaseline[contact.deviceId]!,
+                    )),
+            probeAccepted: probeMessageId != null,
+            probeAcknowledged:
+                probeMessageId != null &&
+                _debugProbeAcknowledgements.contains(probeMessageId),
+            twoWayAccepted: twoWayMessageId != null,
+            twoWayReplyReceived:
+                twoWayMessageId != null &&
+                _debugTwoWayReplies.contains(twoWayMessageId),
+            relayProbeAccepted: relayProbeMessageId != null,
+            relayPathAvailable: checks.any(
+              (check) =>
+                  check.available && check.route.kind == PeerRouteKind.relay,
+            ),
+            lastTwoWaySuccessAt: reachability?.lastTwoWaySuccessAt,
+            lastHeartbeatReplyAt: reachability?.lastHeartbeatReplyAt,
+            lastAvailablePathAt: reachability?.lastAvailablePathAt,
+          ),
+        );
+      }
+
+      add(
+        'Heartbeat exchange',
+        peerReports.isNotEmpty &&
+                peerReports
+                    .where((peer) => peer.availablePathCount > 0)
+                    .every(
+                      (peer) =>
+                          peer.heartbeatAttempted &&
+                          peer.heartbeatReplyReceived,
+                    )
+            ? DebugCheckStatus.pass
+            : DebugCheckStatus.warn,
+        peerReports.isEmpty
+            ? 'No peer heartbeat data was collected.'
+            : 'heartbeat attempts ${peerCountWhere((peer) => peer.heartbeatAttempted)}/${peerReports.length} • heartbeat replies ${peerCountWhere((peer) => peer.heartbeatReplyReceived)}/${peerReports.length}',
+      );
+
+      add(
+        'Peer result matrix',
+        peerReports.isNotEmpty &&
+                peerReports.every(
+                  (peer) =>
+                      peer.availablePathCount > 0 &&
+                      (!peer.probeAccepted || peer.probeAcknowledged) &&
+                      (!peer.twoWayAccepted || peer.twoWayReplyReceived),
+                )
+            ? DebugCheckStatus.pass
+            : DebugCheckStatus.warn,
+        peerReports.isEmpty
+            ? 'No peer result data was collected.'
+            : 'available paths ${peerCountWhere((peer) => peer.availablePathCount > 0)}/${peerReports.length} • probe ack ${peerCountWhere((peer) => peer.probeAcknowledged)}/${peerReports.length} • two-way replies ${peerCountWhere((peer) => peer.twoWayReplyReceived)}/${peerReports.length} • relay probes ${peerCountWhere((peer) => peer.relayProbeAccepted)}/${peerReports.length}',
+      );
+      add(
+        'Delivery path coverage',
+        peerReports.isNotEmpty &&
+                peerReports
+                    .where((peer) => peer.availablePathCount > 0)
+                    .every(
+                      (peer) =>
+                          peer.expectedBestDeliveryState !=
+                              DeliveryState.pending.name &&
+                          (!peer.relayPathAvailable || peer.relayProbeAccepted),
+                    )
+            ? DebugCheckStatus.pass
+            : DebugCheckStatus.warn,
+        peerReports.isEmpty
+            ? 'No delivery path data was collected.'
+            : 'LAN ${peerCountWhere((peer) => peer.lanPathAvailable)}/${peerReports.length} • direct internet ${peerCountWhere((peer) => peer.directInternetPathAvailable)}/${peerReports.length} • relay ${peerCountWhere((peer) => peer.relayPathAvailable)}/${peerReports.length} • relay fallback verified ${peerCountWhere((peer) => !peer.relayPathAvailable || peer.relayProbeAccepted)}/${peerReports.length}',
+      );
+
       if (contacts.length >= 2) {
         add(
           'Three-device relay scenario',
@@ -679,6 +1126,26 @@ class MessengerController extends ChangeNotifier {
           'Three-device relay scenario',
           DebugCheckStatus.skip,
           'Need at least two contacts on this device to approximate a 3+ device relay scenario.',
+        );
+      }
+      if (contacts.length >= 2) {
+        final fullMeshReady = peerReports.every(
+          (peer) =>
+              peer.availablePathCount > 0 &&
+              peer.probeAcknowledged &&
+              peer.twoWayReplyReceived &&
+              peer.relayProbeAccepted,
+        );
+        add(
+          'Three-device full mesh coverage',
+          fullMeshReady ? DebugCheckStatus.pass : DebugCheckStatus.warn,
+          'For 3 devices, this device currently sees ${peerCountWhere((peer) => peer.availablePathCount > 0)}/${peerReports.length} peers with paths, ${peerCountWhere((peer) => peer.probeAcknowledged)}/${peerReports.length} probe ack(s), ${peerCountWhere((peer) => peer.twoWayReplyReceived)}/${peerReports.length} two-way reply/replies, ${peerCountWhere((peer) => peer.relayProbeAccepted)}/${peerReports.length} relay probe acceptance(s).',
+        );
+      } else {
+        add(
+          'Three-device full mesh coverage',
+          DebugCheckStatus.skip,
+          'Need this device plus at least two contacts to judge a 3-device Windows/Linux/Android run from one report.',
         );
       }
     }
@@ -697,6 +1164,32 @@ class MessengerController extends ChangeNotifier {
       relayPairingReuse.status,
       relayPairingReuse.detail,
     );
+    if (relayRoutes.isEmpty) {
+      add(
+        'Offline relay readiness',
+        DebugCheckStatus.skip,
+        'No relay route is configured, so delayed/offline relay delivery cannot be exercised.',
+      );
+    } else {
+      final relayReachablePeers = peerReports
+          .where((peer) => peer.relayPathAvailable)
+          .length;
+      final relayOnlyPeers = peerReports
+          .where(
+            (peer) =>
+                peer.relayPathAvailable &&
+                !peer.lanPathAvailable &&
+                !peer.directInternetPathAvailable,
+          )
+          .length;
+      add(
+        'Offline relay readiness',
+        relayLoopback.status == DebugCheckStatus.pass
+            ? DebugCheckStatus.pass
+            : DebugCheckStatus.warn,
+        'Relay loopback is ${relayLoopback.status.name}; peers with relay availability $relayReachablePeers/${peerReports.length}; relay-only peers $relayOnlyPeers. This covers queue/store readiness; final delivery still depends on the recipient polling or resuming.',
+      );
+    }
 
     final canceledVisible = _snapshot.conversations.fold<int>(
       0,
@@ -726,8 +1219,10 @@ class MessengerController extends ChangeNotifier {
 
     add(
       'Message queue',
-      pendingOutboundCount == 0 ? DebugCheckStatus.pass : DebugCheckStatus.warn,
-      '$pendingOutboundCount pending outbound message(s), $totalMessageCount total message(s).',
+      pendingOutboundCount == 0 && awaitingRecipientAckCount == 0
+          ? DebugCheckStatus.pass
+          : DebugCheckStatus.warn,
+      '$pendingOutboundCount pending retry message(s), $awaitingRecipientAckCount outbound message(s) still waiting for a recipient ack, $totalMessageCount total message(s).',
     );
 
     final elapsed = DateTime.now().toUtc().difference(startedAt);
@@ -739,6 +1234,19 @@ class MessengerController extends ChangeNotifier {
       'Completed in ${elapsed.inMilliseconds}ms. Debug checks use shorter probe timeouts than production delivery.',
     );
 
+    notes.add(
+      'Automated checks cover invite/pairing codec, LAN beaconing, local relay runtime, relay protocol availability, path health, heartbeat reachability, peer debug probes, two-way debug messaging, relay loopback, pairing reuse, queue state, and local message action cleanup.',
+    );
+    notes.add(
+      'Relay transport checks are host-agnostic: a public relay uses the same TCP/UDP/HTTP/HTTPS health/store/fetch code paths as a LAN-hosted relay; only the configured host or domain changes.',
+    );
+    notes.add(
+      'For a 3-device run, open Debug menu on Windows, Linux, and Android, tap Run Debug Tests on each device, then copy the analysis bundle from each one and compare the peer lines and summary counts.',
+    );
+    notes.add(
+      'Manual-only validation still matters for QR camera scanning, OS-level notification display timing, Android battery/background restrictions, and public internet reachability from networks outside your LAN.',
+    );
+
     await _persist(
       'Debug test finished: ${results.where((result) => result.status == DebugCheckStatus.fail).length} failed, ${results.where((result) => result.status == DebugCheckStatus.warn).length} warning(s).',
     );
@@ -748,6 +1256,8 @@ class MessengerController extends ChangeNotifier {
       completedAt: DateTime.now().toUtc(),
       deviceCount: contacts.length + 1,
       results: results,
+      peerReports: peerReports,
+      notes: notes,
     );
   }
 
@@ -1095,6 +1605,7 @@ class MessengerController extends ChangeNotifier {
       contacts: contacts,
       conversations: conversations,
     );
+    _removeReachabilityRecord(deviceId);
     _routeHealth.removeWhere((key, _) {
       final contact = removed;
       if (contact == null) {
@@ -1124,6 +1635,12 @@ class MessengerController extends ChangeNotifier {
     _lastPairingAnnouncementAt = null;
     _lastRelayStatus = 'relay not checked yet';
     _statusMessage = null;
+    _routeHealth.clear();
+    _pendingRouteUpdateProbes.clear();
+    _outboundAttemptedAt.clear();
+    _debugProbeAcknowledgements.clear();
+    _debugTwoWayReplies.clear();
+    _locallyDeletedMessageIds.clear();
     notifyListeners();
   }
 
@@ -1266,8 +1783,12 @@ class MessengerController extends ChangeNotifier {
         ),
       );
     final contacts = List<ContactRecord>.from(_snapshot.contacts)..add(contact);
+    final reachabilityRecords = List<ContactReachabilityRecord>.from(
+      _snapshot.reachabilityRecords,
+    )..add(ContactReachabilityRecord(deviceId: contact.deviceId));
     _snapshot = _snapshot.copyWith(
       contacts: contacts,
+      reachabilityRecords: reachabilityRecords,
       conversations: conversations,
     );
     var exchangeStatus = ContactExchangeStatus.manualActionRequired;
@@ -1290,6 +1811,7 @@ class MessengerController extends ChangeNotifier {
   Future<void> sendMessage({
     required ContactRecord contact,
     required String body,
+    ChatMessage? replyTo,
   }) async {
     final me = _requireIdentity();
     final trimmed = body.trim();
@@ -1306,6 +1828,12 @@ class MessengerController extends ChangeNotifier {
       outbound: true,
       state: DeliveryState.pending,
       createdAt: DateTime.now().toUtc(),
+      replyToMessageId: replyTo?.id,
+      replySnippet: replyTo == null ? null : _replySnippetForMessage(replyTo),
+      replySenderDeviceId: replyTo?.senderDeviceId,
+      replySenderDisplayName: replyTo == null
+          ? null
+          : _replySenderDisplayName(replyTo),
     );
     _upsertMessage(contact.deviceId, message);
     await _persist('Trying LAN first, then relay for ${contact.alias}.');
@@ -1334,6 +1862,7 @@ class MessengerController extends ChangeNotifier {
     if (message.state != DeliveryState.pending) {
       throw ArgumentError('Only pending messages can be canceled.');
     }
+    _clearOutboundAttempt(contact.deviceId, messageId);
     _deleteMessage(contact.deviceId, messageId);
     await _persist('Canceled and deleted pending message to ${contact.alias}.');
   }
@@ -1346,6 +1875,7 @@ class MessengerController extends ChangeNotifier {
     if (message == null) {
       throw ArgumentError('Message not found.');
     }
+    _clearOutboundAttempt(contact.deviceId, messageId);
     _deleteMessage(contact.deviceId, messageId);
     await _persist('Message deleted locally.');
 
@@ -1586,12 +2116,25 @@ class MessengerController extends ChangeNotifier {
   Future<bool> _sendRouteUpdate(
     ContactRecord contact, {
     required bool requestReply,
+    String reason = 'rediscovery',
+    List<PeerEndpoint>? routes,
+    String? probeId,
+    DateTime? sentAt,
   }) async {
     final me = _requireIdentity();
-    final payload = jsonEncode({
+    final effectiveProbeId =
+        probeId ?? (requestReply ? _randomId('probe') : null);
+    final effectiveSentAt = sentAt ?? _now();
+    final routeUpdatePayload = <String, dynamic>{
       'invitePayload': _inviteForIdentity(me).encodePayload(),
       'requestReply': requestReply,
-    });
+      'reason': reason,
+      'sentAt': effectiveSentAt.toIso8601String(),
+    };
+    if (effectiveProbeId != null) {
+      routeUpdatePayload['probeId'] = effectiveProbeId;
+    }
+    final payload = jsonEncode(routeUpdatePayload);
     final update = RelayEnvelope(
       kind: 'route_update',
       messageId: _randomId('route'),
@@ -1599,19 +2142,101 @@ class MessengerController extends ChangeNotifier {
       senderAccountId: me.accountId,
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
-      createdAt: DateTime.now().toUtc(),
+      createdAt: effectiveSentAt,
       payloadBase64: base64Encode(utf8.encode(payload)),
     );
     try {
-      await _deliverToContact(
-        contact: contact,
-        recipientDeviceId: contact.deviceId,
-        envelope: update,
-      );
+      if (requestReply && effectiveProbeId != null) {
+        _pendingRouteUpdateProbes[_pendingRouteUpdateProbeKey(
+          contact.deviceId,
+          effectiveProbeId,
+        )] = _PendingRouteUpdateProbe(
+          deviceId: contact.deviceId,
+          reason: reason,
+          sentAt: effectiveSentAt,
+        );
+      }
+      if (routes != null && routes.isNotEmpty) {
+        await _deliverAcrossRoutes(
+          routes: routes,
+          recipientDeviceId: contact.deviceId,
+          envelope: update,
+        );
+      } else {
+        await _deliverToContact(
+          contact: contact,
+          recipientDeviceId: contact.deviceId,
+          envelope: update,
+        );
+      }
+      if (reason == 'heartbeat') {
+        _noteHeartbeatAttempt(contact.deviceId, at: effectiveSentAt);
+      }
       return true;
     } catch (_) {
+      if (effectiveProbeId != null) {
+        _pendingRouteUpdateProbes.remove(
+          _pendingRouteUpdateProbeKey(contact.deviceId, effectiveProbeId),
+        );
+      }
+      if (reason == 'heartbeat') {
+        _noteHeartbeatAttempt(contact.deviceId, at: effectiveSentAt);
+        _noteFailure(contact.deviceId);
+      }
       return false;
     }
+  }
+
+  String _pendingRouteUpdateProbeKey(String deviceId, String probeId) {
+    return '$deviceId|$probeId';
+  }
+
+  Future<_HeartbeatPassResult> _runHeartbeatPass({bool force = false}) async {
+    if (!hasIdentity) {
+      return const _HeartbeatPassResult(sentCount: 0, changed: false);
+    }
+    final me = _requireIdentity();
+    if (!force && !_shouldRunAutomaticHeartbeats(me)) {
+      return const _HeartbeatPassResult(sentCount: 0, changed: false);
+    }
+    var sent = 0;
+    var changed = false;
+    for (final contact in contacts) {
+      final record = _reachabilityRecordByDeviceId(contact.deviceId);
+      final lastTwoWaySuccessAt = record?.lastTwoWaySuccessAt;
+      if (!force &&
+          lastTwoWaySuccessAt != null &&
+          _now().difference(lastTwoWaySuccessAt) < _heartbeatInterval) {
+        continue;
+      }
+      final lastHeartbeatAttemptAt = record?.lastHeartbeatAttemptAt;
+      if (!force &&
+          lastHeartbeatAttemptAt != null &&
+          _now().difference(lastHeartbeatAttemptAt) < _heartbeatInterval) {
+        continue;
+      }
+      final checks = await _rankRouteHealthForDelivery(
+        contact.prioritizedRouteHints,
+      );
+      final available = checks.where((check) => check.available).toList();
+      if (available.isEmpty) {
+        _noteFailure(contact.deviceId);
+        changed = true;
+        continue;
+      }
+      _noteAvailablePath(contact.deviceId);
+      changed = true;
+      final sentHeartbeat = await _sendRouteUpdate(
+        contact,
+        requestReply: true,
+        reason: 'heartbeat',
+        routes: [available.first.route],
+      );
+      if (sentHeartbeat) {
+        sent++;
+      }
+    }
+    return _HeartbeatPassResult(sentCount: sent, changed: changed);
   }
 
   Future<void> pollNow() async {
@@ -1664,7 +2289,8 @@ class MessengerController extends ChangeNotifier {
         }
       }
       processed += await _pollLanLobbyMailbox();
-      await _retryPendingMessages();
+      await _retryUnacknowledgedMessages();
+      final heartbeatResult = await _runHeartbeatPass();
 
       _lastRelayStatus = _networkSummary(
         me,
@@ -1674,6 +2300,8 @@ class MessengerController extends ChangeNotifier {
         await _persist(
           'Received $processed item(s) via ${routeNotes.isEmpty ? 'known routes' : routeNotes.join(', ')}.',
         );
+      } else if (heartbeatResult.changed) {
+        await _saveSnapshotSilently();
       } else {
         notifyListeners();
       }
@@ -2059,6 +2687,7 @@ class MessengerController extends ChangeNotifier {
       });
     for (final envelope in orderedEnvelopes) {
       if (_snapshot.seenEnvelopeIds.contains(envelope.messageId)) {
+        await _replayAckForSeenEnvelope(envelope);
         continue;
       }
       if (_locallyDeletedMessageIds.contains(envelope.messageId)) {
@@ -2067,10 +2696,15 @@ class MessengerController extends ChangeNotifier {
       }
       processed++;
       if (envelope.kind == 'ack') {
+        _noteTwoWaySuccess(envelope.senderDeviceId);
         _updateMessageState(
           envelope.senderDeviceId,
           envelope.acknowledgedMessageId ?? '',
           DeliveryState.delivered,
+        );
+        _clearOutboundAttempt(
+          envelope.senderDeviceId,
+          envelope.acknowledgedMessageId ?? '',
         );
         _markSeen(envelope.messageId);
         continue;
@@ -2151,7 +2785,10 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
 
-      final body = await _decryptMessage(contact: contact, envelope: envelope);
+      final decodedMessage = await _decryptDirectMessage(
+        contact: contact,
+        envelope: envelope,
+      );
       final existingConversation = _conversationFor(contact.deviceId);
       final alreadyKnown = existingConversation.messages.any(
         (message) => message.id == envelope.messageId,
@@ -2162,15 +2799,23 @@ class MessengerController extends ChangeNotifier {
           conversationId: envelope.conversationId,
           senderDeviceId: envelope.senderDeviceId,
           recipientDeviceId: envelope.recipientDeviceId,
-          body: body,
+          body: decodedMessage.body,
           outbound: false,
           state: DeliveryState.delivered,
           createdAt: envelope.createdAt,
+          replyToMessageId: decodedMessage.replyToMessageId,
+          replySnippet: decodedMessage.replySnippet,
+          replySenderDeviceId: decodedMessage.replySenderDeviceId,
+          replySenderDisplayName: decodedMessage.replySenderDisplayName,
         );
         _upsertMessage(contact.deviceId, inbound);
-        _showInboundMessageNotification(contact: contact, body: body);
-        await _sendAck(contact: contact, envelope: envelope);
+        _showInboundMessageNotification(
+          contact: contact,
+          body: decodedMessage.body,
+        );
       }
+      _noteTwoWaySuccess(contact.deviceId);
+      await _sendAck(contact: contact, envelope: envelope);
       _markSeen(envelope.messageId);
     }
     return processed;
@@ -2246,11 +2891,17 @@ class MessengerController extends ChangeNotifier {
     final decodedPayload = utf8.decode(base64Decode(rawPayload));
     String? invitePayload;
     var requestReply = false;
+    var reason = 'rediscovery';
+    String? probeId;
+    DateTime? sentAt;
     try {
       final decoded = jsonDecode(decodedPayload);
       if (decoded is Map<String, dynamic>) {
         invitePayload = decoded['invitePayload'] as String?;
         requestReply = decoded['requestReply'] == true;
+        reason = decoded['reason'] as String? ?? reason;
+        probeId = decoded['probeId'] as String?;
+        sentAt = DateTime.tryParse(decoded['sentAt'] as String? ?? '');
       }
     } catch (_) {
       invitePayload = decodedPayload;
@@ -2262,14 +2913,32 @@ class MessengerController extends ChangeNotifier {
     if (invite == null || invite.deviceId != envelope.senderDeviceId) {
       return;
     }
+    _noteAnySignal(sender.deviceId, at: sentAt ?? envelope.createdAt);
     final updated = await _updateExistingContactFromInvite(
       invite,
       statusBuilder: (contact) =>
           'Updated ${contact.alias} route info after path rediscovery.',
+      persistStatus: false,
     );
     final replyContact = updated ?? sender;
+    if (!requestReply && probeId != null) {
+      final pendingKey = _pendingRouteUpdateProbeKey(sender.deviceId, probeId);
+      final pending = _pendingRouteUpdateProbes.remove(pendingKey);
+      if (pending != null) {
+        if (pending.reason == 'heartbeat') {
+          _noteHeartbeatReply(sender.deviceId, at: envelope.createdAt);
+        }
+        _noteTwoWaySuccess(sender.deviceId, at: envelope.createdAt);
+      }
+    }
     if (requestReply) {
-      await _sendRouteUpdate(replyContact, requestReply: false);
+      await _sendRouteUpdate(
+        replyContact,
+        requestReply: false,
+        reason: reason,
+        probeId: probeId,
+        sentAt: sentAt ?? envelope.createdAt,
+      );
     }
   }
 
@@ -2345,6 +3014,7 @@ class MessengerController extends ChangeNotifier {
   Future<ContactRecord?> _updateExistingContactFromInvite(
     ContactInvite invite, {
     required String Function(ContactRecord contact) statusBuilder,
+    bool persistStatus = true,
   }) async {
     final existingIndex = _snapshot.contacts.indexWhere(
       (contact) => contact.deviceId == invite.deviceId,
@@ -2362,7 +3032,10 @@ class MessengerController extends ChangeNotifier {
     );
     contacts[existingIndex] = updated;
     _snapshot = _snapshot.copyWith(contacts: contacts);
-    await _persist(statusBuilder(updated));
+    _upsertReachabilityRecord(updated.deviceId, (current) => current);
+    if (persistStatus) {
+      await _persist(statusBuilder(updated));
+    }
     return updated;
   }
 
@@ -2540,13 +3213,13 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  Future<bool> _sendDebugProbe({
+  Future<String?> _sendDebugProbe({
     required ContactRecord contact,
     bool relayOnly = false,
     List<PeerRouteHealth>? rankedChecks,
   }) async {
     if (!kDebugMode) {
-      return false;
+      return null;
     }
     final me = _requireIdentity();
     final probe = RelayEnvelope(
@@ -2579,7 +3252,7 @@ class MessengerController extends ChangeNotifier {
         .map((check) => check.route)
         .toList(growable: false);
     if (routes.isEmpty) {
-      return false;
+      return null;
     }
     try {
       await _deliverAcrossRoutes(
@@ -2590,18 +3263,18 @@ class MessengerController extends ChangeNotifier {
         directInternetTimeout: _debugRelayOperationTimeout,
         relayTimeout: _debugRelayOperationTimeout,
       );
-      return true;
+      return probe.messageId;
     } catch (_) {
-      return false;
+      return null;
     }
   }
 
-  Future<bool> _sendDebugTwoWayMessage(
+  Future<String?> _sendDebugTwoWayMessage(
     ContactRecord contact, {
     List<PeerRouteHealth>? rankedChecks,
   }) async {
     if (!kDebugMode) {
-      return false;
+      return null;
     }
     final me = _requireIdentity();
     final probe = RelayEnvelope(
@@ -2631,7 +3304,7 @@ class MessengerController extends ChangeNotifier {
         .map((check) => check.route)
         .toList(growable: false);
     if (routes.isEmpty) {
-      return false;
+      return null;
     }
     try {
       await _deliverAcrossRoutes(
@@ -2642,9 +3315,9 @@ class MessengerController extends ChangeNotifier {
         directInternetTimeout: _debugRelayOperationTimeout,
         relayTimeout: _debugRelayOperationTimeout,
       );
-      return true;
+      return probe.messageId;
     } catch (_) {
-      return false;
+      return null;
     }
   }
 
@@ -2655,6 +3328,28 @@ class MessengerController extends ChangeNotifier {
       await pollNow();
       if (_debugProbeAcknowledgements.isNotEmpty &&
           _debugTwoWayReplies.isNotEmpty) {
+        return;
+      }
+    }
+  }
+
+  Future<void> _waitForHeartbeatResponses(
+    Set<String> attemptedDeviceIds, {
+    required DateTime startedAt,
+  }) async {
+    if (attemptedDeviceIds.isEmpty) {
+      return;
+    }
+    final deadline = DateTime.now().toUtc().add(const Duration(seconds: 3));
+    while (DateTime.now().toUtc().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 750));
+      await pollNow();
+      final allAnswered = attemptedDeviceIds.every((deviceId) {
+        final record = _reachabilityRecordByDeviceId(deviceId);
+        final replyAt = record?.lastHeartbeatReplyAt;
+        return replyAt != null && !replyAt.isBefore(startedAt);
+      });
+      if (allAnswered) {
         return;
       }
     }
@@ -2709,6 +3404,84 @@ class MessengerController extends ChangeNotifier {
       detail:
           'Notifications are enabled on $platform${!kIsWeb && Platform.isAndroid ? ' and Android background runtime is requested.' : '.'}',
     );
+  }
+
+  DebugCheckResult _runBackgroundHeartbeatPolicyCheck(IdentityRecord me) {
+    final previousForeground = _appInForeground;
+    final foregroundAllowed = _shouldRunAutomaticHeartbeats(me);
+    _appInForeground = false;
+    final backgroundAllowed = _shouldRunAutomaticHeartbeats(me);
+    _appInForeground = previousForeground;
+
+    if (kIsWeb) {
+      return const DebugCheckResult(
+        name: 'Background heartbeat policy',
+        status: DebugCheckStatus.skip,
+        detail: 'Background heartbeat policy is not evaluated on web builds.',
+      );
+    }
+    if (Platform.isAndroid) {
+      final expectedBackground = me.androidBackgroundRuntimeEnabled;
+      return DebugCheckResult(
+        name: 'Background heartbeat policy',
+        status: backgroundAllowed == expectedBackground
+            ? DebugCheckStatus.pass
+            : DebugCheckStatus.fail,
+        detail:
+            'Foreground heartbeats ${foregroundAllowed ? 'enabled' : 'disabled'}; simulated Android background heartbeats ${backgroundAllowed ? 'enabled' : 'disabled'}; expected ${expectedBackground ? 'enabled' : 'disabled'} from the current background-runtime setting.',
+      );
+    }
+    return DebugCheckResult(
+      name: 'Background heartbeat policy',
+      status: foregroundAllowed && backgroundAllowed
+          ? DebugCheckStatus.pass
+          : DebugCheckStatus.fail,
+      detail:
+          'Desktop/Linux/Windows builds keep heartbeats active in foreground and background so tray/background delivery can continue.',
+    );
+  }
+
+  Future<DebugCheckResult> _runAutoContactRelayCheck(IdentityRecord me) async {
+    final contactRelayRoutes = _contactRelayRoutes();
+    final trustedRelayRoutes = _trustedContactRelayRoutes();
+    if (trustedRelayRoutes.isEmpty) {
+      return const DebugCheckResult(
+        name: 'Auto contact relays',
+        status: DebugCheckStatus.skip,
+        detail:
+            'No trusted contact-provided relay routes are currently available to import.',
+      );
+    }
+    if (!me.autoUseContactRelays) {
+      return DebugCheckResult(
+        name: 'Auto contact relays',
+        status: DebugCheckStatus.warn,
+        detail:
+            '${trustedRelayRoutes.length} trusted contact relay route(s) are cached, but auto-use contact relays is off.',
+      );
+    }
+    if (contactRelayRoutes.isEmpty) {
+      return DebugCheckResult(
+        name: 'Auto contact relays',
+        status: DebugCheckStatus.warn,
+        detail:
+            '${trustedRelayRoutes.length} trusted relay route(s) exist, but none were promoted into the effective relay set.',
+      );
+    }
+    final checks = await _rankRouteHealthForDebug(contactRelayRoutes);
+    final available = checks.where((check) => check.available).length;
+    return DebugCheckResult(
+      name: 'Auto contact relays',
+      status: available > 0 ? DebugCheckStatus.pass : DebugCheckStatus.warn,
+      detail:
+          'Imported ${contactRelayRoutes.length} contact relay route(s); $available currently available. Effective relay set size: ${_effectiveRelayRoutesForIdentity(me).length}.',
+    );
+  }
+
+  String _expectedDeliveryStateLabelForRoute(PeerEndpoint route) {
+    return route.kind == PeerRouteKind.lan
+        ? DeliveryState.local.name
+        : DeliveryState.relayed.name;
   }
 
   DebugCheckResult _runRouteProtocolCoverageCheck(IdentityRecord me) {
@@ -3091,6 +3864,7 @@ class MessengerController extends ChangeNotifier {
         _messageById(contact.deviceId, message.id) == null) {
       return true;
     }
+    _noteOutboundAttempt(contact.deviceId, message.id);
     try {
       final envelope = await _encryptMessage(
         contact: contact,
@@ -3105,6 +3879,7 @@ class MessengerController extends ChangeNotifier {
         recipientDeviceId: contact.deviceId,
         envelope: envelope,
       );
+      _noteAvailablePath(contact.deviceId);
       if (_locallyDeletedMessageIds.contains(message.id) ||
           _messageById(contact.deviceId, message.id) == null) {
         await _sendMessageDeletion(
@@ -3134,15 +3909,18 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  Future<void> _retryPendingMessages() async {
+  Future<void> _retryUnacknowledgedMessages({bool force = false}) async {
     for (final contact in contacts) {
-      final pending = messagesFor(contact.deviceId)
+      final retryable = messagesFor(contact.deviceId)
           .where(
-            (message) =>
-                message.outbound && message.state == DeliveryState.pending,
+            (message) => message.outbound && message.state.awaitsRecipientAck,
           )
           .toList();
-      for (final message in pending) {
+      for (final message in retryable) {
+        if (!force &&
+            !_shouldRetryUnacknowledgedMessage(contact.deviceId, message)) {
+          continue;
+        }
         final delivered = await _tryDeliverExistingMessage(
           contact: contact,
           message: message,
@@ -3152,6 +3930,51 @@ class MessengerController extends ChangeNotifier {
         }
       }
     }
+  }
+
+  Future<void> _replayAckForSeenEnvelope(RelayEnvelope envelope) async {
+    if (envelope.kind != 'direct_message') {
+      return;
+    }
+    final contact = _contactByDeviceId(envelope.senderDeviceId);
+    if (contact == null) {
+      return;
+    }
+    try {
+      await _sendAck(contact: contact, envelope: envelope);
+    } catch (_) {
+      // Duplicate deliveries are retried best-effort; missing the replayed ack
+      // only delays sender-side confirmation until the next duplicate.
+    }
+  }
+
+  bool _shouldRetryUnacknowledgedMessage(
+    String peerDeviceId,
+    ChatMessage message,
+  ) {
+    if (!message.state.awaitsRecipientAck) {
+      return false;
+    }
+    final lastAttemptAt =
+        _outboundAttemptedAt[_outboundAttemptKey(peerDeviceId, message.id)] ??
+        message.createdAt;
+    final delay = message.state == DeliveryState.pending
+        ? _pendingMessageRetryDelay
+        : _acceptedMessageRetryDelay;
+    return DateTime.now().toUtc().difference(lastAttemptAt) >= delay;
+  }
+
+  String _outboundAttemptKey(String peerDeviceId, String messageId) {
+    return '$peerDeviceId|$messageId';
+  }
+
+  void _noteOutboundAttempt(String peerDeviceId, String messageId) {
+    _outboundAttemptedAt[_outboundAttemptKey(peerDeviceId, messageId)] =
+        DateTime.now().toUtc();
+  }
+
+  void _clearOutboundAttempt(String peerDeviceId, String messageId) {
+    _outboundAttemptedAt.remove(_outboundAttemptKey(peerDeviceId, messageId));
   }
 
   Future<PeerEndpoint> _deliverToContact({
@@ -4016,7 +4839,7 @@ class MessengerController extends ChangeNotifier {
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
       contact: contact,
-      plaintext: message.body,
+      plaintext: _encodeDirectMessagePayload(message),
       createdAt: message.createdAt,
     );
   }
@@ -4071,6 +4894,71 @@ class MessengerController extends ChangeNotifier {
       aad: utf8.encode(envelope.messageId),
     );
     return utf8.decode(cleartext);
+  }
+
+  Future<_DecodedDirectMessage> _decryptDirectMessage({
+    required ContactRecord contact,
+    required RelayEnvelope envelope,
+  }) async {
+    final decrypted = await _decryptMessage(
+      contact: contact,
+      envelope: envelope,
+    );
+    return _decodeDirectMessagePayload(decrypted);
+  }
+
+  String _encodeDirectMessagePayload(ChatMessage message) {
+    if (!message.hasReplyPreview) {
+      return message.body;
+    }
+    return jsonEncode({
+      'version': 2,
+      'body': message.body,
+      'replyToMessageId': message.replyToMessageId,
+      'replySnippet': message.replySnippet,
+      'replySenderDeviceId': message.replySenderDeviceId,
+      'replySenderDisplayName': message.replySenderDisplayName,
+    });
+  }
+
+  _DecodedDirectMessage _decodeDirectMessagePayload(String payload) {
+    try {
+      final decoded = jsonDecode(payload);
+      if (decoded is Map<String, dynamic> &&
+          decoded['version'] == 2 &&
+          decoded['body'] is String) {
+        return _DecodedDirectMessage(
+          body: decoded['body'] as String,
+          replyToMessageId: decoded['replyToMessageId'] as String?,
+          replySnippet: decoded['replySnippet'] as String?,
+          replySenderDeviceId: decoded['replySenderDeviceId'] as String?,
+          replySenderDisplayName: decoded['replySenderDisplayName'] as String?,
+        );
+      }
+    } catch (_) {
+      // Legacy direct messages are plain-text bodies.
+    }
+    return _DecodedDirectMessage(body: payload);
+  }
+
+  String _replySnippetForMessage(ChatMessage message) {
+    final normalized = message.bodyPreview.trim();
+    if (normalized.length <= 72) {
+      return normalized;
+    }
+    return '${normalized.substring(0, 72).trimRight()}...';
+  }
+
+  String _replySenderDisplayName(ChatMessage message) {
+    final me = identity;
+    if (me != null && message.senderDeviceId == me.deviceId) {
+      return 'You';
+    }
+    final contact = _contactByDeviceId(message.senderDeviceId);
+    return contact?.alias ??
+        contact?.displayName ??
+        message.senderDisplayName ??
+        message.senderDeviceId;
   }
 
   Future<SecretKey> _sessionKeyFor(ContactRecord contact) async {
@@ -4186,16 +5074,24 @@ class MessengerController extends ChangeNotifier {
     if (conversationIndex == -1) {
       return;
     }
-    final updatedMessages = conversations[conversationIndex].messages
-        .map(
-          (message) => message.id == messageId
-              ? message.copyWith(state: state)
-              : message,
-        )
-        .toList();
+    final updatedMessages = conversations[conversationIndex].messages.map((
+      message,
+    ) {
+      if (message.id != messageId) {
+        return message;
+      }
+      if (message.state == DeliveryState.delivered &&
+          state != DeliveryState.delivered) {
+        return message;
+      }
+      return message.copyWith(state: state);
+    }).toList();
     conversations[conversationIndex] = conversations[conversationIndex]
         .copyWith(messages: updatedMessages);
     _snapshot = _snapshot.copyWith(conversations: conversations);
+    if (!state.awaitsRecipientAck) {
+      _clearOutboundAttempt(peerDeviceId, messageId);
+    }
   }
 
   void _updateMessageBody(
@@ -4232,6 +5128,7 @@ class MessengerController extends ChangeNotifier {
     if (messageId.isEmpty) {
       return;
     }
+    _clearOutboundAttempt(peerDeviceId, messageId);
     _locallyDeletedMessageIds.add(messageId);
     _markSeen(messageId);
     final conversations = List<ConversationRecord>.from(
@@ -4263,8 +5160,22 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> _persist(String? status) async {
     _statusMessage = status;
+    await _saveSnapshotSilently();
+  }
+
+  Future<void> _saveSnapshotSilently({bool notify = true}) async {
+    _prunePendingRouteUpdateProbes();
     await _vaultStore.save(_snapshot);
-    notifyListeners();
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  void _prunePendingRouteUpdateProbes() {
+    final now = _now();
+    _pendingRouteUpdateProbes.removeWhere(
+      (_, probe) => now.difference(probe.sentAt) > _knownReachabilityWindow,
+    );
   }
 
   IdentityRecord _requireIdentity() {
@@ -4430,6 +5341,41 @@ class _PairingBeaconRoute {
 
   final PeerEndpoint route;
   final DateTime seenAt;
+}
+
+class _PendingRouteUpdateProbe {
+  const _PendingRouteUpdateProbe({
+    required this.deviceId,
+    required this.reason,
+    required this.sentAt,
+  });
+
+  final String deviceId;
+  final String reason;
+  final DateTime sentAt;
+}
+
+class _HeartbeatPassResult {
+  const _HeartbeatPassResult({required this.sentCount, required this.changed});
+
+  final int sentCount;
+  final bool changed;
+}
+
+class _DecodedDirectMessage {
+  const _DecodedDirectMessage({
+    required this.body,
+    this.replyToMessageId,
+    this.replySnippet,
+    this.replySenderDeviceId,
+    this.replySenderDisplayName,
+  });
+
+  final String body;
+  final String? replyToMessageId;
+  final String? replySnippet;
+  final String? replySenderDeviceId;
+  final String? replySenderDisplayName;
 }
 
 class _RelayProtocolRefreshResult {

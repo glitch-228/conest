@@ -5,15 +5,40 @@ import 'package:flutter/material.dart';
 enum ConversationKind { direct, group, lanLobby }
 
 enum DeliveryState {
-  pending(Icons.schedule),
-  local(Icons.lan_outlined),
-  relayed(Icons.cloud_done_outlined),
-  delivered(Icons.done_all),
-  canceled(Icons.cancel_outlined),
-  failed(Icons.error_outline);
+  pending(Icons.schedule, 'Waiting for a reachable path'),
+  local(Icons.lan_outlined, 'Sent over LAN; waiting for delivery receipt'),
+  relayed(
+    Icons.cloud_upload_outlined,
+    'Queued on a relay; waiting for delivery receipt',
+  ),
+  delivered(Icons.done_all, 'Delivered'),
+  canceled(Icons.cancel_outlined, 'Canceled'),
+  failed(Icons.error_outline, 'Failed');
 
-  const DeliveryState(this.icon);
+  const DeliveryState(this.icon, this.label);
 
+  final IconData icon;
+  final String label;
+
+  bool get awaitsRecipientAck => switch (this) {
+    DeliveryState.pending ||
+    DeliveryState.local ||
+    DeliveryState.relayed => true,
+    DeliveryState.delivered ||
+    DeliveryState.canceled ||
+    DeliveryState.failed => false,
+  };
+}
+
+enum ContactReachabilityState {
+  online('online', Icons.radio_button_checked),
+  seenRecently('seen recently', Icons.schedule_outlined),
+  known('known', Icons.history_toggle_off),
+  unknown('unknown', Icons.help_outline);
+
+  const ContactReachabilityState(this.label, this.icon);
+
+  final String label;
   final IconData icon;
 }
 
@@ -796,6 +821,78 @@ class ContactRecord {
   }
 }
 
+class ContactReachabilityRecord {
+  const ContactReachabilityRecord({
+    required this.deviceId,
+    this.lastTwoWaySuccessAt,
+    this.lastHeartbeatAttemptAt,
+    this.lastHeartbeatReplyAt,
+    this.lastAvailablePathAt,
+    this.lastAnySignalAt,
+    this.lastFailureAt,
+  });
+
+  final String deviceId;
+  final DateTime? lastTwoWaySuccessAt;
+  final DateTime? lastHeartbeatAttemptAt;
+  final DateTime? lastHeartbeatReplyAt;
+  final DateTime? lastAvailablePathAt;
+  final DateTime? lastAnySignalAt;
+  final DateTime? lastFailureAt;
+
+  ContactReachabilityRecord copyWith({
+    DateTime? lastTwoWaySuccessAt,
+    DateTime? lastHeartbeatAttemptAt,
+    DateTime? lastHeartbeatReplyAt,
+    DateTime? lastAvailablePathAt,
+    DateTime? lastAnySignalAt,
+    DateTime? lastFailureAt,
+  }) {
+    return ContactReachabilityRecord(
+      deviceId: deviceId,
+      lastTwoWaySuccessAt: lastTwoWaySuccessAt ?? this.lastTwoWaySuccessAt,
+      lastHeartbeatAttemptAt:
+          lastHeartbeatAttemptAt ?? this.lastHeartbeatAttemptAt,
+      lastHeartbeatReplyAt: lastHeartbeatReplyAt ?? this.lastHeartbeatReplyAt,
+      lastAvailablePathAt: lastAvailablePathAt ?? this.lastAvailablePathAt,
+      lastAnySignalAt: lastAnySignalAt ?? this.lastAnySignalAt,
+      lastFailureAt: lastFailureAt ?? this.lastFailureAt,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'deviceId': deviceId,
+      'lastTwoWaySuccessAt': lastTwoWaySuccessAt?.toIso8601String(),
+      'lastHeartbeatAttemptAt': lastHeartbeatAttemptAt?.toIso8601String(),
+      'lastHeartbeatReplyAt': lastHeartbeatReplyAt?.toIso8601String(),
+      'lastAvailablePathAt': lastAvailablePathAt?.toIso8601String(),
+      'lastAnySignalAt': lastAnySignalAt?.toIso8601String(),
+      'lastFailureAt': lastFailureAt?.toIso8601String(),
+    };
+  }
+
+  factory ContactReachabilityRecord.fromJson(Map<String, dynamic> json) {
+    DateTime? parse(String key) {
+      final value = json[key] as String?;
+      if (value == null || value.isEmpty) {
+        return null;
+      }
+      return DateTime.tryParse(value);
+    }
+
+    return ContactReachabilityRecord(
+      deviceId: json['deviceId'] as String,
+      lastTwoWaySuccessAt: parse('lastTwoWaySuccessAt'),
+      lastHeartbeatAttemptAt: parse('lastHeartbeatAttemptAt'),
+      lastHeartbeatReplyAt: parse('lastHeartbeatReplyAt'),
+      lastAvailablePathAt: parse('lastAvailablePathAt'),
+      lastAnySignalAt: parse('lastAnySignalAt'),
+      lastFailureAt: parse('lastFailureAt'),
+    );
+  }
+}
+
 class ChatMessage {
   ChatMessage({
     required this.id,
@@ -809,6 +906,10 @@ class ChatMessage {
     this.senderDisplayName,
     this.untrusted = false,
     this.editedAt,
+    this.replyToMessageId,
+    this.replySnippet,
+    this.replySenderDeviceId,
+    this.replySenderDisplayName,
   });
 
   final String id;
@@ -822,14 +923,27 @@ class ChatMessage {
   final String? senderDisplayName;
   final bool untrusted;
   final DateTime? editedAt;
+  final String? replyToMessageId;
+  final String? replySnippet;
+  final String? replySenderDeviceId;
+  final String? replySenderDisplayName;
 
   String get bodyPreview => body.replaceAll('\n', ' ');
   bool get isEdited => editedAt != null;
+  bool get hasReplyPreview =>
+      replyToMessageId != null &&
+      replyToMessageId!.isNotEmpty &&
+      replySnippet != null &&
+      replySnippet!.trim().isNotEmpty;
 
   ChatMessage copyWith({
     String? body,
     DeliveryState? state,
     DateTime? editedAt,
+    String? replyToMessageId,
+    String? replySnippet,
+    String? replySenderDeviceId,
+    String? replySenderDisplayName,
   }) {
     return ChatMessage(
       id: id,
@@ -843,6 +957,11 @@ class ChatMessage {
       senderDisplayName: senderDisplayName,
       untrusted: untrusted,
       editedAt: editedAt ?? this.editedAt,
+      replyToMessageId: replyToMessageId ?? this.replyToMessageId,
+      replySnippet: replySnippet ?? this.replySnippet,
+      replySenderDeviceId: replySenderDeviceId ?? this.replySenderDeviceId,
+      replySenderDisplayName:
+          replySenderDisplayName ?? this.replySenderDisplayName,
     );
   }
 
@@ -859,6 +978,10 @@ class ChatMessage {
       'senderDisplayName': senderDisplayName,
       'untrusted': untrusted,
       'editedAt': editedAt?.toIso8601String(),
+      'replyToMessageId': replyToMessageId,
+      'replySnippet': replySnippet,
+      'replySenderDeviceId': replySenderDeviceId,
+      'replySenderDisplayName': replySenderDisplayName,
     };
   }
 
@@ -877,6 +1000,10 @@ class ChatMessage {
       editedAt: json['editedAt'] == null
           ? null
           : DateTime.parse(json['editedAt'] as String),
+      replyToMessageId: json['replyToMessageId'] as String?,
+      replySnippet: json['replySnippet'] as String?,
+      replySenderDeviceId: json['replySenderDeviceId'] as String?,
+      replySenderDisplayName: json['replySenderDisplayName'] as String?,
     );
   }
 }
@@ -1151,12 +1278,14 @@ class VaultSnapshot {
   VaultSnapshot({
     required this.identity,
     required this.contacts,
+    required this.reachabilityRecords,
     required this.conversations,
     required this.seenEnvelopeIds,
   });
 
   final IdentityRecord? identity;
   final List<ContactRecord> contacts;
+  final List<ContactReachabilityRecord> reachabilityRecords;
   final List<ConversationRecord> conversations;
   final List<String> seenEnvelopeIds;
 
@@ -1164,6 +1293,7 @@ class VaultSnapshot {
     return VaultSnapshot(
       identity: null,
       contacts: const [],
+      reachabilityRecords: const [],
       conversations: const [],
       seenEnvelopeIds: const [],
     );
@@ -1172,6 +1302,7 @@ class VaultSnapshot {
   VaultSnapshot copyWith({
     IdentityRecord? identity,
     List<ContactRecord>? contacts,
+    List<ContactReachabilityRecord>? reachabilityRecords,
     List<ConversationRecord>? conversations,
     List<String>? seenEnvelopeIds,
     bool clearIdentity = false,
@@ -1179,6 +1310,7 @@ class VaultSnapshot {
     return VaultSnapshot(
       identity: clearIdentity ? null : identity ?? this.identity,
       contacts: contacts ?? this.contacts,
+      reachabilityRecords: reachabilityRecords ?? this.reachabilityRecords,
       conversations: conversations ?? this.conversations,
       seenEnvelopeIds: seenEnvelopeIds ?? this.seenEnvelopeIds,
     );
@@ -1188,6 +1320,9 @@ class VaultSnapshot {
     return {
       'identity': identity?.toJson(),
       'contacts': contacts.map((contact) => contact.toJson()).toList(),
+      'reachabilityRecords': reachabilityRecords
+          .map((record) => record.toJson())
+          .toList(),
       'conversations': conversations
           .map((conversation) => conversation.toJson())
           .toList(),
@@ -1204,6 +1339,11 @@ class VaultSnapshot {
           .cast<Map<String, dynamic>>()
           .map(ContactRecord.fromJson)
           .toList(),
+      reachabilityRecords:
+          (json['reachabilityRecords'] as List<dynamic>? ?? const [])
+              .cast<Map<String, dynamic>>()
+              .map(ContactReachabilityRecord.fromJson)
+              .toList(),
       conversations: (json['conversations'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>()
           .map(ConversationRecord.fromJson)
@@ -1271,18 +1411,70 @@ class DebugCheckResult {
   final String detail;
 }
 
+class DebugPeerReport {
+  const DebugPeerReport({
+    required this.alias,
+    required this.deviceId,
+    required this.reachability,
+    required this.availablePathCount,
+    required this.totalPathCount,
+    required this.lanPathAvailable,
+    required this.directInternetPathAvailable,
+    required this.bestPathSummary,
+    required this.expectedBestDeliveryState,
+    required this.routeSummary,
+    required this.heartbeatAttempted,
+    required this.heartbeatReplyReceived,
+    required this.probeAccepted,
+    required this.probeAcknowledged,
+    required this.twoWayAccepted,
+    required this.twoWayReplyReceived,
+    required this.relayProbeAccepted,
+    required this.relayPathAvailable,
+    required this.lastTwoWaySuccessAt,
+    required this.lastHeartbeatReplyAt,
+    required this.lastAvailablePathAt,
+  });
+
+  final String alias;
+  final String deviceId;
+  final ContactReachabilityState reachability;
+  final int availablePathCount;
+  final int totalPathCount;
+  final bool lanPathAvailable;
+  final bool directInternetPathAvailable;
+  final String bestPathSummary;
+  final String expectedBestDeliveryState;
+  final String routeSummary;
+  final bool heartbeatAttempted;
+  final bool heartbeatReplyReceived;
+  final bool probeAccepted;
+  final bool probeAcknowledged;
+  final bool twoWayAccepted;
+  final bool twoWayReplyReceived;
+  final bool relayProbeAccepted;
+  final bool relayPathAvailable;
+  final DateTime? lastTwoWaySuccessAt;
+  final DateTime? lastHeartbeatReplyAt;
+  final DateTime? lastAvailablePathAt;
+}
+
 class DebugRunReport {
   const DebugRunReport({
     required this.startedAt,
     required this.completedAt,
     required this.deviceCount,
     required this.results,
+    this.peerReports = const [],
+    this.notes = const [],
   });
 
   final DateTime startedAt;
   final DateTime completedAt;
   final int deviceCount;
   final List<DebugCheckResult> results;
+  final List<DebugPeerReport> peerReports;
+  final List<String> notes;
 
   int get passed =>
       results.where((result) => result.status == DebugCheckStatus.pass).length;
@@ -1292,6 +1484,15 @@ class DebugRunReport {
       results.where((result) => result.status == DebugCheckStatus.fail).length;
   int get skipped =>
       results.where((result) => result.status == DebugCheckStatus.skip).length;
+
+  int get peersWithAvailablePaths =>
+      peerReports.where((peer) => peer.availablePathCount > 0).length;
+  int get peersWithProbeAck =>
+      peerReports.where((peer) => peer.probeAcknowledged).length;
+  int get peersWithTwoWayReply =>
+      peerReports.where((peer) => peer.twoWayReplyReceived).length;
+  int get peersWithRelayProbe =>
+      peerReports.where((peer) => peer.relayProbeAccepted).length;
 }
 
 const int defaultRelayPort = 7667;

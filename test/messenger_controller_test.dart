@@ -1,5 +1,9 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:conest/main.dart' as app;
 import 'package:conest/src/local_relay_node.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/models.dart';
@@ -51,14 +55,32 @@ class _FakeRelayClient extends RelayClient {
     Set<String>? failingHosts,
     Set<String>? storeFailingHosts,
     Map<String, String>? relayInstanceIds,
+    bool Function(
+      String host,
+      int port,
+      PeerRouteProtocol protocol,
+      String recipientDeviceId,
+      RelayEnvelope envelope,
+    )?
+    shouldBlackholeStore,
   }) : _healthFailingHosts = failingHosts ?? <String>{},
        _storeFailingHosts = storeFailingHosts ?? failingHosts ?? <String>{},
-       _relayInstanceIds = relayInstanceIds ?? const <String, String>{};
+       _relayInstanceIds = relayInstanceIds ?? const <String, String>{},
+       _shouldBlackholeStore = shouldBlackholeStore;
 
   final Set<String> _healthFailingHosts;
   final Set<String> _storeFailingHosts;
   final Map<String, String> _relayInstanceIds;
+  final bool Function(
+    String host,
+    int port,
+    PeerRouteProtocol protocol,
+    String recipientDeviceId,
+    RelayEnvelope envelope,
+  )?
+  _shouldBlackholeStore;
   final List<String> storeAttempts = <String>[];
+  final List<RelayEnvelope> storedEnvelopes = <RelayEnvelope>[];
   final Map<String, List<RelayEnvelope>> _queues =
       <String, List<RelayEnvelope>>{};
 
@@ -94,6 +116,18 @@ class _FakeRelayClient extends RelayClient {
     if (_containsRoute(_storeFailingHosts, host, port, protocol)) {
       throw StateError('Route unavailable for $key');
     }
+    if (_shouldBlackholeStore?.call(
+          host,
+          port,
+          protocol,
+          recipientDeviceId,
+          envelope,
+        ) ??
+        false) {
+      storedEnvelopes.add(envelope);
+      return true;
+    }
+    storedEnvelopes.add(envelope);
     final queue = _queues.putIfAbsent(
       recipientDeviceId,
       () => <RelayEnvelope>[],
@@ -250,12 +284,14 @@ Future<MessengerController> _createController({
   required String displayName,
   List<String> lanAddresses = const <String>['192.168.1.20'],
   String? internetRelayHost = 'relay.example',
+  DateTime Function()? nowProvider,
 }) async {
   final controller = MessengerController(
     vaultStore: _MemoryVaultStore(),
     relayClient: relayClient,
     localRelayNode: _FakeLocalRelayNode(),
     lanAddressProvider: () async => lanAddresses,
+    nowProvider: nowProvider,
   );
   await controller.initialize();
   await controller.createIdentity(
@@ -572,8 +608,6 @@ void main() {
         relayClient: relayClient,
         displayName: 'Bob',
       );
-      addTearDown(alice.dispose);
-      addTearDown(bob.dispose);
 
       final result = await alice.addContactFromInvite(
         alias: 'Bob',
@@ -604,8 +638,6 @@ void main() {
         relayClient: relayClient,
         displayName: 'Bob',
       );
-      addTearDown(alice.dispose);
-      addTearDown(bob.dispose);
 
       await bob.addContactFromInvite(
         alias: 'Alice',
@@ -685,8 +717,6 @@ void main() {
       relayClient: relayClient,
       displayName: 'Bob',
     );
-    addTearDown(alice.dispose);
-    addTearDown(bob.dispose);
 
     await alice.addContactFromInvite(
       alias: 'Bob',
@@ -981,8 +1011,6 @@ void main() {
       relayClient: relayClient,
       displayName: 'Bob',
     );
-    addTearDown(alice.dispose);
-    addTearDown(bob.dispose);
 
     await alice.addContactFromInvite(
       alias: 'Bob',
@@ -1043,6 +1071,589 @@ void main() {
     expect(bob.messagesFor(bobContactForAlice.deviceId), isEmpty);
   });
 
+  test(
+    'unacknowledged messages retry and duplicate receives replay the ack',
+    () async {
+      var blackholedAckCount = 0;
+      final relayClient = _FakeRelayClient(
+        shouldBlackholeStore:
+            (host, port, protocol, recipientDeviceId, envelope) {
+              final routeKey =
+                  '$host:$port:${protocol.name}:$recipientDeviceId';
+              if (routeKey.isEmpty) {
+                return false;
+              }
+              if (envelope.kind == 'ack' && blackholedAckCount == 0) {
+                blackholedAckCount++;
+                return true;
+              }
+              return false;
+            },
+      );
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await bob.pollNow();
+      final bobContactForAlice = bob.contacts.single;
+      final aliceContactForBob = alice.contacts.single;
+
+      await alice.sendMessage(contact: aliceContactForBob, body: 'hello');
+      await bob.pollNow();
+
+      expect(bob.messagesFor(bobContactForAlice.deviceId), hasLength(1));
+      expect(
+        alice.messagesFor(aliceContactForBob.deviceId).single.state,
+        DeliveryState.local,
+      );
+
+      await alice.retryUnacknowledgedMessagesNow();
+      await bob.pollNow();
+      await alice.pollNow();
+
+      expect(
+        alice.messagesFor(aliceContactForBob.deviceId).single.state,
+        DeliveryState.delivered,
+      );
+      expect(blackholedAckCount, 1);
+    },
+  );
+
+  test('heartbeat round-trip marks a contact online', () async {
+    var now = DateTime.utc(2026, 4, 18, 12);
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+      nowProvider: () => now,
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+      nowProvider: () => now,
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: (await bob.buildInvite()).encodePayload(),
+      codephrase: '',
+    );
+    await bob.pollNow();
+    final aliceContactForBob = alice.contacts.single;
+
+    await alice.runHeartbeatPassNow();
+    await bob.pollNow();
+    await alice.pollNow();
+
+    expect(
+      alice.reachabilityStateFor(aliceContactForBob.deviceId),
+      ContactReachabilityState.online,
+    );
+    final record = alice.reachabilityRecordFor(aliceContactForBob.deviceId);
+    expect(record?.lastHeartbeatAttemptAt, isNotNull);
+    expect(record?.lastHeartbeatReplyAt, isNotNull);
+  });
+
+  test('outbound ack marks a contact online', () async {
+    var now = DateTime.utc(2026, 4, 18, 13);
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+      nowProvider: () => now,
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+      nowProvider: () => now,
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: (await bob.buildInvite()).encodePayload(),
+      codephrase: '',
+    );
+    await bob.pollNow();
+    final aliceContactForBob = alice.contacts.single;
+
+    await alice.sendMessage(contact: aliceContactForBob, body: 'ping');
+    await bob.pollNow();
+    await alice.pollNow();
+
+    expect(
+      alice.reachabilityStateFor(aliceContactForBob.deviceId),
+      ContactReachabilityState.online,
+    );
+  });
+
+  test(
+    'reachability decays from online to seen recently to known to unknown',
+    () async {
+      var now = DateTime.utc(2026, 4, 18, 14);
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        nowProvider: () => now,
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        nowProvider: () => now,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await bob.pollNow();
+      final aliceContactForBob = alice.contacts.single;
+
+      await alice.sendMessage(contact: aliceContactForBob, body: 'fresh');
+      await bob.pollNow();
+      await alice.pollNow();
+
+      expect(
+        alice.reachabilityStateFor(aliceContactForBob.deviceId),
+        ContactReachabilityState.online,
+      );
+
+      now = now.add(const Duration(minutes: 3));
+      expect(
+        alice.reachabilityStateFor(aliceContactForBob.deviceId),
+        ContactReachabilityState.seenRecently,
+      );
+
+      now = now.add(const Duration(minutes: 8));
+      expect(
+        alice.reachabilityStateFor(aliceContactForBob.deviceId),
+        ContactReachabilityState.known,
+      );
+
+      now = now.add(const Duration(hours: 24, minutes: 1));
+      expect(
+        alice.reachabilityStateFor(aliceContactForBob.deviceId),
+        ContactReachabilityState.unknown,
+      );
+    },
+  );
+
+  test('checking paths upgrades an unknown contact to seen recently', () async {
+    var now = DateTime.utc(2026, 4, 18, 15);
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+      nowProvider: () => now,
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+      nowProvider: () => now,
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: (await bob.buildInvite()).encodePayload(),
+      codephrase: '',
+    );
+    await bob.pollNow();
+    final aliceContactForBob = alice.contacts.single;
+
+    await alice.sendMessage(contact: aliceContactForBob, body: 'hello');
+    await bob.pollNow();
+    await alice.pollNow();
+    now = now.add(const Duration(hours: 24, minutes: 1));
+
+    expect(
+      alice.reachabilityStateFor(aliceContactForBob.deviceId),
+      ContactReachabilityState.unknown,
+    );
+
+    await alice.checkContactRoutes(
+      aliceContactForBob,
+      persist: false,
+      exchangeRouteUpdate: false,
+      fast: true,
+    );
+
+    expect(
+      alice.reachabilityStateFor(aliceContactForBob.deviceId),
+      ContactReachabilityState.seenRecently,
+    );
+  });
+
+  test(
+    'heartbeat failure does not falsely mark a known contact online',
+    () async {
+      var now = DateTime.utc(2026, 4, 18, 16);
+      final failingRoutes = <String>{};
+      final relayClient = _FakeRelayClient(
+        failingHosts: failingRoutes,
+        storeFailingHosts: failingRoutes,
+      );
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        nowProvider: () => now,
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        nowProvider: () => now,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await bob.pollNow();
+      final aliceContactForBob = alice.contacts.single;
+
+      await alice.sendMessage(contact: aliceContactForBob, body: 'known');
+      await bob.pollNow();
+      await alice.pollNow();
+      now = now.add(const Duration(hours: 1));
+
+      failingRoutes.addAll(<String>{'192.168.1.25:7667', 'relay.example:7667'});
+      await alice.runHeartbeatPassNow();
+
+      expect(
+        alice.reachabilityStateFor(aliceContactForBob.deviceId),
+        ContactReachabilityState.seenRecently,
+      );
+      expect(
+        alice
+            .reachabilityRecordFor(aliceContactForBob.deviceId)
+            ?.lastHeartbeatAttemptAt,
+        isNotNull,
+      );
+      expect(
+        alice
+            .reachabilityRecordFor(aliceContactForBob.deviceId)
+            ?.lastHeartbeatReplyAt,
+        isNull,
+      );
+    },
+  );
+
+  test(
+    'heartbeat pass skips contacts with very recent two-way traffic',
+    () async {
+      var now = DateTime.utc(2026, 4, 18, 17);
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        nowProvider: () => now,
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        nowProvider: () => now,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await bob.pollNow();
+      final aliceContactForBob = alice.contacts.single;
+
+      await alice.sendMessage(contact: aliceContactForBob, body: 'fresh');
+      await bob.pollNow();
+      await alice.pollNow();
+
+      relayClient.storedEnvelopes.clear();
+      await alice.pollNow();
+
+      expect(
+        relayClient.storedEnvelopes.where((envelope) {
+          if (envelope.kind != 'route_update' ||
+              envelope.recipientDeviceId != aliceContactForBob.deviceId ||
+              envelope.payloadBase64 == null) {
+            return false;
+          }
+          final payload = String.fromCharCodes(
+            base64Decode(envelope.payloadBase64!),
+          );
+          return payload.contains('"reason":"heartbeat"');
+        }),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'legacy direct-message payload still decodes as a normal message',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await bob.pollNow();
+      final bobContactForAlice = bob.contacts.single;
+      final aliceContactForBob = alice.contacts.single;
+
+      await alice.sendMessage(contact: aliceContactForBob, body: 'legacy body');
+      await bob.pollNow();
+
+      final received = bob.messagesFor(bobContactForAlice.deviceId).single;
+      expect(received.body, 'legacy body');
+      expect(received.replyToMessageId, isNull);
+      expect(received.replySnippet, isNull);
+    },
+  );
+
+  test('reply-capable direct messages preserve quoted metadata', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: (await bob.buildInvite()).encodePayload(),
+      codephrase: '',
+    );
+    await bob.pollNow();
+    final bobContactForAlice = bob.contacts.single;
+    final aliceContactForBob = alice.contacts.single;
+
+    await bob.sendMessage(contact: bobContactForAlice, body: 'original line');
+    await alice.pollNow();
+    final inboundOriginal = alice
+        .messagesFor(aliceContactForBob.deviceId)
+        .single;
+
+    await alice.sendMessage(
+      contact: aliceContactForBob,
+      body: 'reply line',
+      replyTo: inboundOriginal,
+    );
+    await bob.pollNow();
+
+    final receivedReply = bob.messagesFor(bobContactForAlice.deviceId).last;
+    expect(receivedReply.body, 'reply line');
+    expect(receivedReply.replyToMessageId, inboundOriginal.id);
+    expect(receivedReply.replySenderDeviceId, bob.identity!.deviceId);
+    expect(receivedReply.replySnippet, 'original line');
+    expect(receivedReply.hasReplyPreview, isTrue);
+  });
+
+  testWidgets(
+    'double tap incoming message opens reply preview and can cancel',
+    (tester) async {
+      tester.view.physicalSize = const Size(1400, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await bob.pollNow();
+      final bobContactForAlice = bob.contacts.single;
+      await bob.sendMessage(contact: bobContactForAlice, body: 'incoming text');
+      await alice.pollNow();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: app.HomeScreen(controller: alice, palette: app.ConestPalette()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.ensureVisible(find.text('Bob').first);
+      await tester.tap(find.text('Bob').first);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('incoming text').last);
+      await tester.tap(find.text('incoming text').last);
+      await tester.pump(const Duration(milliseconds: 80));
+      await tester.tap(find.text('incoming text').last);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Replying to Bob'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Cancel reply'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Replying to Bob'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      alice.dispose();
+      bob.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets('double tap outgoing message opens the edit dialog', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: (await bob.buildInvite()).encodePayload(),
+      codephrase: '',
+    );
+    await bob.pollNow();
+    final aliceContactForBob = alice.contacts.single;
+    await alice.sendMessage(contact: aliceContactForBob, body: 'outgoing text');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: app.HomeScreen(controller: alice, palette: app.ConestPalette()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('Bob').first);
+    await tester.tap(find.text('Bob').first);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('outgoing text').last);
+    await tester.tap(find.text('outgoing text').last);
+    await tester.pump(const Duration(milliseconds: 80));
+    await tester.tap(find.text('outgoing text').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Edit message'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    alice.dispose();
+    bob.dispose();
+    await tester.pump();
+  });
+
+  testWidgets(
+    'contact list and chat header show the current reachability chip',
+    (tester) async {
+      tester.view.physicalSize = const Size(1400, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      var now = DateTime.utc(2026, 4, 18, 18);
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        nowProvider: () => now,
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        nowProvider: () => now,
+      );
+
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await bob.pollNow();
+      final aliceContactForBob = alice.contacts.single;
+
+      await alice.sendMessage(
+        contact: aliceContactForBob,
+        body: 'reachability',
+      );
+      await bob.pollNow();
+      await alice.pollNow();
+
+      expect(
+        alice.reachabilityStateFor(aliceContactForBob.deviceId),
+        ContactReachabilityState.online,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: app.HomeScreen(controller: alice, palette: app.ConestPalette()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('online'), findsWidgets);
+
+      await tester.ensureVisible(find.text('Bob').first);
+      await tester.tap(find.text('Bob').first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('online'), findsWidgets);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      alice.dispose();
+      bob.dispose();
+      await tester.pump();
+    },
+  );
+
   test('debug self test reports runnable checks', () async {
     final relayClient = _FakeRelayClient();
     final controller = await _createController(
@@ -1081,6 +1692,22 @@ void main() {
       report.results.any(
         (result) =>
             result.name == 'Route protocol coverage' &&
+            result.status == DebugCheckStatus.pass,
+      ),
+      isTrue,
+    );
+    expect(
+      report.results.any(
+        (result) =>
+            result.name == 'Background heartbeat policy' &&
+            result.status == DebugCheckStatus.pass,
+      ),
+      isTrue,
+    );
+    expect(
+      report.results.any(
+        (result) =>
+            result.name == 'Auto contact relays' &&
             result.status == DebugCheckStatus.pass,
       ),
       isTrue,
@@ -1133,13 +1760,66 @@ void main() {
       expect(
         report.results.any(
           (result) =>
+              result.name == 'Heartbeat exchange' &&
+              result.status == DebugCheckStatus.pass,
+        ),
+        isTrue,
+      );
+      expect(
+        report.results.any(
+          (result) =>
+              result.name == 'Delivery path coverage' &&
+              result.status == DebugCheckStatus.pass,
+        ),
+        isTrue,
+      );
+      expect(
+        report.results.any(
+          (result) =>
               result.name == 'Two-way debug replies' &&
               result.status == DebugCheckStatus.pass,
         ),
         isTrue,
       );
+      expect(report.peerReports, hasLength(1));
+      expect(report.peerReports.single.alias, 'Bob');
+      expect(report.peerReports.single.probeAcknowledged, isTrue);
+      expect(report.peerReports.single.twoWayReplyReceived, isTrue);
+      expect(report.notes, isNotEmpty);
     },
   );
+
+  test('debug analysis text includes peer matrix and notes', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: (await bob.buildInvite()).encodePayload(),
+      codephrase: '',
+    );
+    await bob.pollNow();
+
+    await alice.runDebugSelfTest();
+    await bob.pollNow();
+    await alice.pollNow();
+    final report = await alice.runDebugSelfTest();
+    final analysis = alice.buildDebugAnalysisText(report: report);
+
+    expect(analysis, contains('Conest debug analysis'));
+    expect(analysis, contains('peer alias=Bob'));
+    expect(analysis, contains('peerSummary Bob'));
+    expect(analysis, contains('notes='));
+  });
 
   test('relay settings update and reset clears identity state', () async {
     final relayClient = _FakeRelayClient();

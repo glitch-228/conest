@@ -110,9 +110,25 @@ class ConestApp extends StatefulWidget {
   State<ConestApp> createState() => _ConestAppState();
 }
 
-class _ConestAppState extends State<ConestApp> {
+class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    widget.controller.setAppForegroundState(true);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final inForeground =
+        state == AppLifecycleState.resumed ||
+        state == AppLifecycleState.inactive;
+    widget.controller.setAppForegroundState(inForeground);
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.controller.dispose();
     unawaited(widget.instanceLock.release());
     super.dispose();
@@ -449,6 +465,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _selectedContactId;
   bool _lanLobbySelected = false;
   final _composerController = TextEditingController();
+  ChatMessage? _replyTarget;
 
   @override
   void initState() {
@@ -472,6 +489,15 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
     return null;
+  }
+
+  bool _replyTargetMatchesContact(ContactRecord contact) {
+    final target = _replyTarget;
+    if (target == null) {
+      return false;
+    }
+    return target.senderDeviceId == contact.deviceId ||
+        target.recipientDeviceId == contact.deviceId;
   }
 
   Future<void> _showInvite() async {
@@ -560,7 +586,10 @@ class _HomeScreenState extends State<HomeScreen> {
         !widget.controller.contacts.any(
           (contact) => contact.deviceId == selected,
         )) {
-      setState(() => _selectedContactId = null);
+      setState(() {
+        _selectedContactId = null;
+        _replyTarget = null;
+      });
     }
   }
 
@@ -570,8 +599,14 @@ class _HomeScreenState extends State<HomeScreen> {
     if (contact == null || body.isEmpty) {
       return;
     }
+    final replyTarget = _replyTarget;
     _composerController.clear();
-    await widget.controller.sendMessage(contact: contact, body: body);
+    setState(() => _replyTarget = null);
+    await widget.controller.sendMessage(
+      contact: contact,
+      body: body,
+      replyTo: replyTarget,
+    );
   }
 
   Future<void> _sendLanLobbyMessage() async {
@@ -617,7 +652,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     palette: palette,
                     contact: selectedContact,
                     composerController: _composerController,
-                    onBack: () => setState(() => _selectedContactId = null),
+                    replyTarget: _replyTarget,
+                    onBack: () => setState(() {
+                      _selectedContactId = null;
+                      _replyTarget = null;
+                    }),
+                    onCancelReply: () => setState(() => _replyTarget = null),
+                    onReplyToMessage: (message) =>
+                        setState(() => _replyTarget = message),
                     onShowProfile: () => _showContactProfile(selectedContact),
                     onSend: _sendCurrentMessage,
                   );
@@ -645,12 +687,16 @@ class _HomeScreenState extends State<HomeScreen> {
                           setState(() {
                             _selectedContactId = null;
                             _lanLobbySelected = true;
+                            _replyTarget = null;
                           });
                         },
                         onContactSelected: (contact) {
                           setState(() {
                             _lanLobbySelected = false;
                             _selectedContactId = contact.deviceId;
+                            if (!_replyTargetMatchesContact(contact)) {
+                              _replyTarget = null;
+                            }
                           });
                         },
                         onContactProfile: _showContactProfile,
@@ -676,6 +722,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                 palette: palette,
                                 contact: selectedContact,
                                 composerController: _composerController,
+                                replyTarget: _replyTarget,
+                                onCancelReply: () =>
+                                    setState(() => _replyTarget = null),
+                                onReplyToMessage: (message) =>
+                                    setState(() => _replyTarget = message),
                                 onShowProfile: () =>
                                     _showContactProfile(selectedContact),
                                 onSend: _sendCurrentMessage,
@@ -735,305 +786,308 @@ class _Sidebar extends StatelessWidget {
     final lanSummary = identity.lanAddresses.isEmpty
         ? 'no LAN address detected'
         : 'LAN ${identity.lanAddresses.take(2).join(', ')}';
-    return Padding(
+    return ListView(
       padding: const EdgeInsets.all(18),
-      child: Column(
-        children: [
-          Card(
-            elevation: 0,
-            color: palette.paperStrong,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(24),
-              side: BorderSide(color: palette.stroke),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 42,
-                        height: 42,
-                        decoration: BoxDecoration(
-                          color: palette.ink,
-                          borderRadius: BorderRadius.circular(14),
+      children: [
+        Card(
+          elevation: 0,
+          color: palette.paperStrong,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+            side: BorderSide(color: palette.stroke),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: palette.ink,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        identity.displayName.characters.first.toUpperCase(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
                         ),
-                        alignment: Alignment.center,
-                        child: Text(
-                          identity.displayName.characters.first.toUpperCase(),
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            identity.displayName,
+                            style: Theme.of(context).textTheme.titleLarge
+                                ?.copyWith(fontWeight: FontWeight.w700),
                           ),
-                        ),
+                          Text(
+                            'device ${identity.deviceIdShort}',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: palette.inkSoft),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              identity.displayName,
-                              style: Theme.of(context).textTheme.titleLarge
-                                  ?.copyWith(fontWeight: FontWeight.w700),
-                            ),
-                            Text(
-                              'device ${identity.deviceIdShort}',
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(color: palette.inkSoft),
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (onShowDebug != null)
-                        IconButton(
-                          onPressed: onShowDebug,
-                          icon: const Icon(Icons.bug_report_outlined),
-                          tooltip: 'Debug',
-                        ),
+                    ),
+                    if (onShowDebug != null)
                       IconButton(
-                        onPressed: onShowSettings,
-                        icon: const Icon(Icons.settings_outlined),
-                        tooltip: 'Settings',
+                        onPressed: onShowDebug,
+                        icon: const Icon(Icons.bug_report_outlined),
+                        tooltip: 'Debug',
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  _StatusChip(
-                    label: controller.lastRelayStatus,
-                    palette: palette,
-                    icon: Icons.route,
-                    expand: true,
-                  ),
-                  const SizedBox(height: 8),
-                  _StatusChip(
-                    label: localRelayLabel,
-                    palette: palette,
-                    icon: Icons.lan_outlined,
-                    expand: true,
-                  ),
-                  const SizedBox(height: 8),
-                  _StatusChip(
-                    label: internetRelayLabel,
-                    palette: palette,
-                    icon: Icons.cloud_outlined,
-                    expand: true,
-                  ),
-                  const SizedBox(height: 8),
-                  _StatusChip(
-                    label: lanSummary,
-                    palette: palette,
-                    icon: Icons.wifi_tethering,
-                    expand: true,
-                  ),
-                  const SizedBox(height: 8),
-                  _StatusChip(
-                    label: 'safety ${identity.shortSafetyNumber}',
-                    palette: palette,
-                    icon: Icons.verified_user_outlined,
-                    expand: true,
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: onShowInvite,
-                          icon: const Icon(Icons.qr_code_2),
-                          label: const Text('My invite'),
-                        ),
+                    IconButton(
+                      onPressed: onShowSettings,
+                      icon: const Icon(Icons.settings_outlined),
+                      tooltip: 'Settings',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                _StatusChip(
+                  label: controller.lastRelayStatus,
+                  palette: palette,
+                  icon: Icons.route,
+                  expand: true,
+                ),
+                const SizedBox(height: 8),
+                _StatusChip(
+                  label: localRelayLabel,
+                  palette: palette,
+                  icon: Icons.lan_outlined,
+                  expand: true,
+                ),
+                const SizedBox(height: 8),
+                _StatusChip(
+                  label: internetRelayLabel,
+                  palette: palette,
+                  icon: Icons.cloud_outlined,
+                  expand: true,
+                ),
+                const SizedBox(height: 8),
+                _StatusChip(
+                  label: lanSummary,
+                  palette: palette,
+                  icon: Icons.wifi_tethering,
+                  expand: true,
+                ),
+                const SizedBox(height: 8),
+                _StatusChip(
+                  label: 'safety ${identity.shortSafetyNumber}',
+                  palette: palette,
+                  icon: Icons.verified_user_outlined,
+                  expand: true,
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: onShowInvite,
+                        icon: const Icon(Icons.qr_code_2),
+                        label: const Text('My invite'),
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: FilledButton.icon(
-                          onPressed: onAddContact,
-                          icon: const Icon(Icons.person_add_alt_1),
-                          label: const Text('Add'),
-                        ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: onAddContact,
+                        icon: const Icon(Icons.person_add_alt_1),
+                        label: const Text('Add'),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  TextButton.icon(
-                    onPressed: onPoll,
-                    icon: const Icon(Icons.sync),
-                    label: const Text('Poll routes now'),
-                  ),
-                ],
-              ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                TextButton.icon(
+                  onPressed: onPoll,
+                  icon: const Icon(Icons.sync),
+                  label: const Text('Poll routes now'),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 16),
-          InkWell(
-            borderRadius: BorderRadius.circular(18),
-            onTap: onLanLobbySelected,
-            child: Ink(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: lanLobbySelected
-                    ? palette.ink.withValues(alpha: 0.08)
-                    : palette.paperStrong,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                  color: lanLobbySelected ? palette.ember : palette.stroke,
-                ),
+        ),
+        const SizedBox(height: 16),
+        InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: onLanLobbySelected,
+          child: Ink(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: lanLobbySelected
+                  ? palette.ink.withValues(alpha: 0.08)
+                  : palette.paperStrong,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: lanLobbySelected ? palette.ember : palette.stroke,
               ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 42,
-                    height: 42,
-                    decoration: BoxDecoration(
-                      color: palette.ember.withValues(alpha: 0.18),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Icon(Icons.forum_outlined, color: palette.ember),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: palette.ember.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(14),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
+                  child: Icon(Icons.forum_outlined, color: palette.ember),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'LAN lobby',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Free-for-all local chat • untrusted',
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+                      ),
+                    ],
+                  ),
+                ),
+                Text(
+                  '${controller.lanLobbyMessages.length}',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Text(
+              'Contacts',
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const Spacer(),
+            Text(
+              '${controller.contacts.length}',
+              style: Theme.of(
+                context,
+              ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (controller.contacts.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _EmptyContactsState(palette: palette),
+          )
+        else
+          for (var index = 0; index < controller.contacts.length; index++) ...[
+            if (index > 0) const SizedBox(height: 8),
+            Builder(
+              builder: (context) {
+                final contact = controller.contacts[index];
+                final preview = controller.lastMessageFor(contact.deviceId);
+                final reachabilityState = controller.reachabilityStateFor(
+                  contact.deviceId,
+                );
+                final selected = selectedContactId == contact.deviceId;
+                return InkWell(
+                  borderRadius: BorderRadius.circular(18),
+                  onTap: () => onContactSelected(contact),
+                  child: Ink(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? palette.ink.withValues(alpha: 0.08)
+                          : palette.paperStrong,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: selected ? palette.ember : palette.stroke,
+                      ),
+                    ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'LAN lobby',
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w700),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                contact.alias,
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                            Text(
+                              contact.shortSafetyNumber,
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(color: palette.inkSoft),
+                            ),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              onPressed: () => onContactProfile(contact),
+                              icon: const Icon(Icons.badge_outlined),
+                              tooltip: 'Contact profile',
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 4),
+                        _ReachabilityChip(
+                          state: reachabilityState,
+                          palette: palette,
+                        ),
+                        const SizedBox(height: 6),
                         Text(
-                          'Free-for-all local chat • untrusted',
+                          contact.routeSummary,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(color: palette.inkSoft),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          preview == null
+                              ? 'No messages yet'
+                              : preview.bodyPreview,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
                     ),
                   ),
-                  Text(
-                    '${controller.lanLobbyMessages.length}',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Text(
-                'Contacts',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const Spacer(),
-              Text(
-                '${controller.contacts.length}',
-                style: Theme.of(
-                  context,
-                ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: controller.contacts.isEmpty
-                ? _EmptyContactsState(palette: palette)
-                : ListView.separated(
-                    itemCount: controller.contacts.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 8),
-                    itemBuilder: (context, index) {
-                      final contact = controller.contacts[index];
-                      final preview = controller.lastMessageFor(
-                        contact.deviceId,
-                      );
-                      final selected = selectedContactId == contact.deviceId;
-                      return InkWell(
-                        borderRadius: BorderRadius.circular(18),
-                        onTap: () => onContactSelected(contact),
-                        child: Ink(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: selected
-                                ? palette.ink.withValues(alpha: 0.08)
-                                : palette.paperStrong,
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(
-                              color: selected ? palette.ember : palette.stroke,
-                            ),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      contact.alias,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleMedium
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                    ),
-                                  ),
-                                  Text(
-                                    contact.shortSafetyNumber,
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .labelSmall
-                                        ?.copyWith(color: palette.inkSoft),
-                                  ),
-                                  IconButton(
-                                    visualDensity: VisualDensity.compact,
-                                    onPressed: () => onContactProfile(contact),
-                                    icon: const Icon(Icons.badge_outlined),
-                                    tooltip: 'Contact profile',
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                contact.routeSummary,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.bodySmall
-                                    ?.copyWith(color: palette.inkSoft),
-                              ),
-                              const SizedBox(height: 6),
-                              Text(
-                                preview == null
-                                    ? 'No messages yet'
-                                    : preview.bodyPreview,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-          if (controller.statusMessage != null) ...[
-            const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                controller.statusMessage!,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
-              ),
+                );
+              },
             ),
           ],
+        if (controller.statusMessage != null) ...[
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              controller.statusMessage!,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+            ),
+          ),
         ],
-      ),
+        const SizedBox(height: 18),
+      ],
     );
   }
 }
@@ -1044,6 +1098,9 @@ class _ChatPanel extends StatelessWidget {
     required this.palette,
     required this.contact,
     required this.composerController,
+    required this.replyTarget,
+    required this.onCancelReply,
+    required this.onReplyToMessage,
     required this.onSend,
     required this.onShowProfile,
     this.onBack,
@@ -1053,6 +1110,9 @@ class _ChatPanel extends StatelessWidget {
   final ConestPalette palette;
   final ContactRecord contact;
   final TextEditingController composerController;
+  final ChatMessage? replyTarget;
+  final VoidCallback onCancelReply;
+  final ValueChanged<ChatMessage> onReplyToMessage;
   final VoidCallback onSend;
   final VoidCallback onShowProfile;
   final VoidCallback? onBack;
@@ -1100,9 +1160,35 @@ class _ChatPanel extends StatelessWidget {
     await controller.deleteMessage(contact: contact, messageId: message.id);
   }
 
+  String _messageSenderLabel(ChatMessage message) {
+    final me = controller.identity;
+    if (me != null && message.senderDeviceId == me.deviceId) {
+      return 'You';
+    }
+    return contact.alias;
+  }
+
+  String _replyReferenceLabel(ChatMessage message) {
+    final me = controller.identity;
+    if (me != null && message.replySenderDeviceId == me.deviceId) {
+      return 'You';
+    }
+    if (message.replySenderDeviceId == contact.deviceId) {
+      return contact.alias;
+    }
+    return message.replySenderDisplayName ?? 'Message';
+  }
+
   @override
   Widget build(BuildContext context) {
     final messages = controller.messagesFor(contact.deviceId);
+    final reachabilityState = controller.reachabilityStateFor(contact.deviceId);
+    final activeReplyTarget =
+        replyTarget != null &&
+            (replyTarget!.senderDeviceId == contact.deviceId ||
+                replyTarget!.recipientDeviceId == contact.deviceId)
+        ? replyTarget
+        : null;
     return Padding(
       padding: const EdgeInsets.all(18),
       child: Card(
@@ -1143,6 +1229,8 @@ class _ChatPanel extends StatelessWidget {
                       ],
                     ),
                   ),
+                  _ReachabilityChip(state: reachabilityState, palette: palette),
+                  const SizedBox(width: 8),
                   _StatusChip(
                     label: 'LAN first',
                     palette: palette,
@@ -1170,42 +1258,50 @@ class _ChatPanel extends StatelessWidget {
                     alignment: outbound
                         ? Alignment.centerRight
                         : Alignment.centerLeft,
-                    child: Container(
-                      constraints: const BoxConstraints(maxWidth: 520),
-                      margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: outbound ? palette.ink : palette.paper,
-                        borderRadius: BorderRadius.circular(18),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            message.body,
-                            style: Theme.of(context).textTheme.bodyLarge
-                                ?.copyWith(
-                                  color: outbound ? Colors.white : palette.ink,
-                                  height: 1.35,
-                                ),
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                formatTimestamp(message.createdAt),
-                                style: Theme.of(context).textTheme.labelSmall
-                                    ?.copyWith(
-                                      color: outbound
-                                          ? Colors.white70
-                                          : palette.inkSoft,
-                                    ),
+                    child: GestureDetector(
+                      onDoubleTap: () async {
+                        if (outbound) {
+                          await _editMessage(context, message);
+                        } else {
+                          onReplyToMessage(message);
+                        }
+                      },
+                      child: Container(
+                        constraints: const BoxConstraints(maxWidth: 520),
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: outbound ? palette.ink : palette.paper,
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (message.hasReplyPreview) ...[
+                              _QuotedReference(
+                                palette: palette,
+                                outbound: outbound,
+                                senderLabel: _replyReferenceLabel(message),
+                                snippet: message.replySnippet!,
                               ),
-                              if (message.isEdited) ...[
-                                const SizedBox(width: 6),
+                              const SizedBox(height: 10),
+                            ],
+                            Text(
+                              message.body,
+                              style: Theme.of(context).textTheme.bodyLarge
+                                  ?.copyWith(
+                                    color: outbound
+                                        ? Colors.white
+                                        : palette.ink,
+                                    height: 1.35,
+                                  ),
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
                                 Text(
-                                  'edited',
+                                  formatTimestamp(message.createdAt),
                                   style: Theme.of(context).textTheme.labelSmall
                                       ?.copyWith(
                                         color: outbound
@@ -1213,61 +1309,78 @@ class _ChatPanel extends StatelessWidget {
                                             : palette.inkSoft,
                                       ),
                                 ),
-                              ],
-                              if (outbound) ...[
-                                const SizedBox(width: 8),
-                                Icon(
-                                  message.state.icon,
-                                  size: 16,
-                                  color: Colors.white70,
-                                ),
-                              ],
-                              PopupMenuButton<String>(
-                                tooltip: 'Message actions',
-                                icon: Icon(
-                                  Icons.more_horiz,
-                                  size: 18,
-                                  color: outbound
-                                      ? Colors.white70
-                                      : palette.inkSoft,
-                                ),
-                                onSelected: (value) async {
-                                  try {
-                                    if (value == 'edit') {
-                                      await _editMessage(context, message);
-                                    } else if (value == 'cancel') {
-                                      await controller.cancelPendingMessage(
-                                        contact: contact,
-                                        messageId: message.id,
-                                      );
-                                    } else if (value == 'delete') {
-                                      await _deleteMessage(context, message);
-                                    }
-                                  } catch (error) {
-                                    controller.setStatus(error.toString());
-                                  }
-                                },
-                                itemBuilder: (context) => [
-                                  if (outbound &&
-                                      message.state == DeliveryState.pending)
-                                    const PopupMenuItem(
-                                      value: 'cancel',
-                                      child: Text('Cancel sending'),
-                                    ),
-                                  if (outbound)
-                                    const PopupMenuItem(
-                                      value: 'edit',
-                                      child: Text('Edit message'),
-                                    ),
-                                  const PopupMenuItem(
-                                    value: 'delete',
-                                    child: Text('Delete message'),
+                                if (message.isEdited) ...[
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'edited',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelSmall
+                                        ?.copyWith(
+                                          color: outbound
+                                              ? Colors.white70
+                                              : palette.inkSoft,
+                                        ),
                                   ),
                                 ],
-                              ),
-                            ],
-                          ),
-                        ],
+                                if (outbound) ...[
+                                  const SizedBox(width: 8),
+                                  Tooltip(
+                                    message: message.state.label,
+                                    child: Icon(
+                                      message.state.icon,
+                                      size: 16,
+                                      color: Colors.white70,
+                                    ),
+                                  ),
+                                ],
+                                PopupMenuButton<String>(
+                                  tooltip: 'Message actions',
+                                  icon: Icon(
+                                    Icons.more_horiz,
+                                    size: 18,
+                                    color: outbound
+                                        ? Colors.white70
+                                        : palette.inkSoft,
+                                  ),
+                                  onSelected: (value) async {
+                                    try {
+                                      if (value == 'edit') {
+                                        await _editMessage(context, message);
+                                      } else if (value == 'cancel') {
+                                        await controller.cancelPendingMessage(
+                                          contact: contact,
+                                          messageId: message.id,
+                                        );
+                                      } else if (value == 'delete') {
+                                        await _deleteMessage(context, message);
+                                      }
+                                    } catch (error) {
+                                      controller.setStatus(error.toString());
+                                    }
+                                  },
+                                  itemBuilder: (context) => [
+                                    if (outbound &&
+                                        message.state == DeliveryState.pending)
+                                      const PopupMenuItem(
+                                        value: 'cancel',
+                                        child: Text('Cancel sending'),
+                                      ),
+                                    if (outbound)
+                                      const PopupMenuItem(
+                                        value: 'edit',
+                                        child: Text('Edit message'),
+                                      ),
+                                    const PopupMenuItem(
+                                      value: 'delete',
+                                      child: Text('Delete message'),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   );
@@ -1279,24 +1392,40 @@ class _ChatPanel extends StatelessWidget {
               decoration: BoxDecoration(
                 border: Border(top: BorderSide(color: palette.stroke)),
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: composerController,
-                      minLines: 1,
-                      maxLines: 5,
-                      decoration: const InputDecoration(
-                        hintText: 'Write an encrypted message',
-                      ),
-                      onSubmitted: (_) => onSend(),
+                  if (activeReplyTarget != null) ...[
+                    _ComposerReplyPreview(
+                      palette: palette,
+                      senderLabel: _messageSenderLabel(activeReplyTarget),
+                      snippet: activeReplyTarget.bodyPreview,
+                      onCancel: onCancelReply,
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  FilledButton.icon(
-                    onPressed: onSend,
-                    icon: const Icon(Icons.north_east),
-                    label: const Text('Send'),
+                    const SizedBox(height: 12),
+                  ],
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: composerController,
+                          minLines: 1,
+                          maxLines: 5,
+                          decoration: InputDecoration(
+                            hintText: activeReplyTarget == null
+                                ? 'Write an encrypted message'
+                                : 'Write a reply',
+                          ),
+                          onSubmitted: (_) => onSend(),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      FilledButton.icon(
+                        onPressed: onSend,
+                        icon: const Icon(Icons.north_east),
+                        label: const Text('Send'),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -1609,11 +1738,31 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
     if (checks == null) {
       return;
     }
+    final reachability = widget.controller.reachabilityRecordFor(
+      widget.contact.deviceId,
+    );
+    final reachabilityState = widget.controller.reachabilityStateFor(
+      widget.contact.deviceId,
+    );
+    var alias = widget.contact.alias;
+    for (final contact in widget.controller.contacts) {
+      if (contact.deviceId == widget.contact.deviceId) {
+        alias = contact.alias;
+        break;
+      }
+    }
     final lines = <String>[
       'Conest path state',
-      'contactAlias=${widget.contact.alias}',
+      'contactAlias=$alias',
       'contactDevice=${widget.contact.deviceId}',
       'generatedAt=${DateTime.now().toUtc().toIso8601String()}',
+      'reachability=${reachabilityState.name}',
+      'lastTwoWaySuccessAt=${reachability?.lastTwoWaySuccessAt?.toIso8601String() ?? ''}',
+      'lastHeartbeatAttemptAt=${reachability?.lastHeartbeatAttemptAt?.toIso8601String() ?? ''}',
+      'lastHeartbeatReplyAt=${reachability?.lastHeartbeatReplyAt?.toIso8601String() ?? ''}',
+      'lastAvailablePathAt=${reachability?.lastAvailablePathAt?.toIso8601String() ?? ''}',
+      'lastAnySignalAt=${reachability?.lastAnySignalAt?.toIso8601String() ?? ''}',
+      'lastFailureAt=${reachability?.lastFailureAt?.toIso8601String() ?? ''}',
       for (final check in checks)
         [
           'route=${check.route.kind.name}:${check.route.label}',
@@ -1670,6 +1819,19 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
   @override
   Widget build(BuildContext context) {
     final checks = _checks;
+    var currentContact = widget.contact;
+    for (final contact in widget.controller.contacts) {
+      if (contact.deviceId == widget.contact.deviceId) {
+        currentContact = contact;
+        break;
+      }
+    }
+    final reachabilityRecord = widget.controller.reachabilityRecordFor(
+      currentContact.deviceId,
+    );
+    final reachabilityState = widget.controller.reachabilityStateFor(
+      currentContact.deviceId,
+    );
     return AlertDialog(
       scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
@@ -1706,8 +1868,22 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
                 ],
               ),
               const SizedBox(height: 16),
+              _ReachabilityChip(
+                state: reachabilityState,
+                palette: widget.palette,
+                expand: true,
+              ),
+              const SizedBox(height: 12),
               SelectableText(
-                'display ${widget.contact.displayName}\naccount ${widget.contact.accountId}\ndevice ${widget.contact.deviceId}\nsafety ${widget.contact.safetyNumber}\ntrusted ${widget.contact.trustedAt.toLocal()}',
+                'last two-way success ${_formatProfileTimestamp(reachabilityRecord?.lastTwoWaySuccessAt)}\nlast heartbeat attempt ${_formatProfileTimestamp(reachabilityRecord?.lastHeartbeatAttemptAt)}\nlast heartbeat reply ${_formatProfileTimestamp(reachabilityRecord?.lastHeartbeatReplyAt)}\nlast available path ${_formatProfileTimestamp(reachabilityRecord?.lastAvailablePathAt)}\nlast signal ${_formatProfileTimestamp(reachabilityRecord?.lastAnySignalAt)}\nlast failure ${_formatProfileTimestamp(reachabilityRecord?.lastFailureAt)}',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: widget.palette.inkSoft,
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 16),
+              SelectableText(
+                'display ${currentContact.displayName}\naccount ${currentContact.accountId}\ndevice ${currentContact.deviceId}\nsafety ${currentContact.safetyNumber}\ntrusted ${currentContact.trustedAt.toLocal()}',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: widget.palette.inkSoft,
                   height: 1.5,
@@ -1740,7 +1916,7 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
               const SizedBox(height: 8),
               if (checks == null)
                 Text(
-                  'Run a check to measure latency and availability. Paths are sorted by best direct/LAN route first, then relay fallback.',
+                  'Run a check to measure latency, availability, and reachability freshness. Paths are sorted by best direct/LAN route first, then relay fallback.',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: widget.palette.inkSoft,
                   ),
@@ -2913,10 +3089,10 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
   }
 
   Future<void> _copyDebugInfo() async {
-    final text = widget.controller.buildDebugSnapshotText(report: _report);
+    final text = widget.controller.buildDebugAnalysisText(report: _report);
     await Clipboard.setData(ClipboardData(text: text));
     if (mounted) {
-      setState(() => _notice = 'Debug info copied to clipboard.');
+      setState(() => _notice = 'Debug analysis copied to clipboard.');
     }
   }
 
@@ -2984,8 +3160,20 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
                         'lan lobby messages: ${widget.controller.lanLobbyMessages.length}',
                         'messages: ${widget.controller.totalMessageCount}',
                         'pending outbound: ${widget.controller.pendingOutboundCount}',
+                        'awaiting recipient ack: ${widget.controller.awaitingRecipientAckCount}',
                         'seen envelopes: ${widget.controller.seenEnvelopeCount}',
                         'status: ${widget.controller.statusMessage ?? '(none)'}',
+                      ],
+                      palette: widget.palette,
+                    ),
+                    const SizedBox(height: 12),
+                    _DebugInfoBlock(
+                      title: '3-device workflow',
+                      lines: const [
+                        '1. Open this debug menu on Windows, Linux, and Android debug builds.',
+                        '2. Tap Run Debug Tests on each device after all three are online.',
+                        '3. Tap Copy Debug + Analysis on each device and compare the peer matrix lines.',
+                        '4. If a peer stays warn/fail, compare available paths, probe ack, two-way reply, and relay probe fields across all three reports.',
                       ],
                       palette: widget.palette,
                     ),
@@ -3033,7 +3221,7 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
                     OutlinedButton.icon(
                       onPressed: _copyDebugInfo,
                       icon: const Icon(Icons.copy_all_outlined),
-                      label: const Text('Copy Debug Info'),
+                      label: const Text('Copy Debug + Analysis'),
                     ),
                     if (_notice != null) ...[
                       const SizedBox(height: 8),
@@ -3060,6 +3248,39 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
                         style: Theme.of(context).textTheme.titleMedium
                             ?.copyWith(fontWeight: FontWeight.w700),
                       ),
+                      const SizedBox(height: 8),
+                      _DebugInfoBlock(
+                        title: 'Run summary',
+                        lines: [
+                          'devices in scope: ${report.deviceCount}',
+                          'peer reports: ${report.peerReports.length}',
+                          'peers with available paths: ${report.peersWithAvailablePaths}/${report.peerReports.length}',
+                          'peers with heartbeat replies: ${report.peerReports.where((peer) => peer.heartbeatReplyReceived).length}/${report.peerReports.length}',
+                          'peers with probe ack: ${report.peersWithProbeAck}/${report.peerReports.length}',
+                          'peers with two-way reply: ${report.peersWithTwoWayReply}/${report.peerReports.length}',
+                          'peers with relay probe: ${report.peersWithRelayProbe}/${report.peerReports.length}',
+                        ],
+                        palette: widget.palette,
+                      ),
+                      if (report.peerReports.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          'Peer test matrix',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 8),
+                        for (final peer in report.peerReports)
+                          _DebugPeerTile(peer: peer, palette: widget.palette),
+                      ],
+                      if (report.notes.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        _DebugInfoBlock(
+                          title: 'Coverage notes',
+                          lines: report.notes,
+                          palette: widget.palette,
+                        ),
+                      ],
                       const SizedBox(height: 8),
                       for (final result in report.results)
                         _DebugResultTile(
@@ -3188,6 +3409,150 @@ class _DebugResultTile extends StatelessWidget {
       case DebugCheckStatus.skip:
         return palette.inkSoft;
     }
+  }
+}
+
+class _DebugPeerTile extends StatelessWidget {
+  const _DebugPeerTile({required this.peer, required this.palette});
+
+  final DebugPeerReport peer;
+  final ConestPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    final okColor = Colors.green.shade700;
+    final warnColor = Colors.orange.shade800;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: palette.paper,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: palette.stroke),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${peer.alias} • ${peer.reachability.label}',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              Text(
+                peer.deviceId,
+                style: Theme.of(
+                  context,
+                ).textTheme.labelSmall?.copyWith(color: palette.inkSoft),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _DebugFlagChip(
+                label:
+                    'paths ${peer.availablePathCount}/${peer.totalPathCount}',
+                ok: peer.availablePathCount > 0,
+                okColor: okColor,
+                warnColor: warnColor,
+              ),
+              _DebugFlagChip(
+                label:
+                    'heartbeat ${peer.heartbeatReplyReceived ? 'yes' : 'no'}',
+                ok: !peer.heartbeatAttempted || peer.heartbeatReplyReceived,
+                okColor: okColor,
+                warnColor: warnColor,
+              ),
+              _DebugFlagChip(
+                label: 'probe ack ${peer.probeAcknowledged ? 'yes' : 'no'}',
+                ok: !peer.probeAccepted || peer.probeAcknowledged,
+                okColor: okColor,
+                warnColor: warnColor,
+              ),
+              _DebugFlagChip(
+                label: 'two-way ${peer.twoWayReplyReceived ? 'yes' : 'no'}',
+                ok: !peer.twoWayAccepted || peer.twoWayReplyReceived,
+                okColor: okColor,
+                warnColor: warnColor,
+              ),
+              _DebugFlagChip(
+                label: 'relay probe ${peer.relayProbeAccepted ? 'yes' : 'no'}',
+                ok: peer.relayProbeAccepted,
+                okColor: okColor,
+                warnColor: warnColor,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SelectableText(
+            'best path: ${peer.bestPathSummary}',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+          ),
+          const SizedBox(height: 4),
+          SelectableText(
+            'expected sender state on best path: ${peer.expectedBestDeliveryState}',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+          ),
+          const SizedBox(height: 4),
+          SelectableText(
+            'routes: ${peer.routeSummary}',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+          ),
+          const SizedBox(height: 4),
+          SelectableText(
+            'last two-way success: ${_formatProfileTimestamp(peer.lastTwoWaySuccessAt)} • last heartbeat reply: ${_formatProfileTimestamp(peer.lastHeartbeatReplyAt)} • last available path: ${_formatProfileTimestamp(peer.lastAvailablePathAt)}',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DebugFlagChip extends StatelessWidget {
+  const _DebugFlagChip({
+    required this.label,
+    required this.ok,
+    required this.okColor,
+    required this.warnColor,
+  });
+
+  final String label;
+  final bool ok;
+  final Color okColor;
+  final Color warnColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = ok ? okColor : warnColor;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.24)),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color),
+      ),
+    );
   }
 }
 
@@ -3479,6 +3844,163 @@ class _StatusChip extends StatelessWidget {
   }
 }
 
+class _ReachabilityChip extends StatelessWidget {
+  const _ReachabilityChip({
+    required this.state,
+    required this.palette,
+    this.expand = false,
+  });
+
+  final ContactReachabilityState state;
+  final ConestPalette palette;
+  final bool expand;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = switch (state) {
+      ContactReachabilityState.online => const Color(0xFF2F8F5B),
+      ContactReachabilityState.seenRecently => palette.ember,
+      ContactReachabilityState.known => palette.inkSoft,
+      ContactReachabilityState.unknown => const Color(0xFF9A6A6A),
+    };
+    final labelWidget = Text(
+      state.label,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+    return Container(
+      width: expand ? double.infinity : null,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: accent.withValues(alpha: 0.28)),
+      ),
+      child: Row(
+        mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
+        children: [
+          Icon(state.icon, size: 16, color: accent),
+          const SizedBox(width: 8),
+          if (expand) Expanded(child: labelWidget) else labelWidget,
+        ],
+      ),
+    );
+  }
+}
+
+class _QuotedReference extends StatelessWidget {
+  const _QuotedReference({
+    required this.palette,
+    required this.outbound,
+    required this.senderLabel,
+    required this.snippet,
+  });
+
+  final ConestPalette palette;
+  final bool outbound;
+  final String senderLabel;
+  final String snippet;
+
+  @override
+  Widget build(BuildContext context) {
+    final baseColor = outbound ? Colors.white : palette.ink;
+    final borderColor = outbound
+        ? Colors.white24
+        : palette.ember.withValues(alpha: 0.4);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: outbound ? Colors.white10 : palette.paperStrong,
+        borderRadius: BorderRadius.circular(12),
+        border: Border(left: BorderSide(color: borderColor, width: 3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            senderLabel,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: baseColor.withValues(alpha: outbound ? 0.9 : 0.7),
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            snippet,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: baseColor.withValues(alpha: outbound ? 0.78 : 0.8),
+              height: 1.25,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ComposerReplyPreview extends StatelessWidget {
+  const _ComposerReplyPreview({
+    required this.palette,
+    required this.senderLabel,
+    required this.snippet,
+    required this.onCancel,
+  });
+
+  final ConestPalette palette;
+  final String senderLabel;
+  final String snippet;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: palette.paper,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: palette.stroke),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Replying to $senderLabel',
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: palette.ember,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  snippet,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: palette.inkSoft,
+                    height: 1.25,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: onCancel,
+            tooltip: 'Cancel reply',
+            icon: const Icon(Icons.close),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class ConestPalette {
   final Color paper = const Color(0xFFF4EFE7);
   final Color paperStrong = const Color(0xFFF9F5EF);
@@ -3493,6 +4015,13 @@ String formatTimestamp(DateTime value) {
   final hour = local.hour.toString().padLeft(2, '0');
   final minute = local.minute.toString().padLeft(2, '0');
   return '$hour:$minute';
+}
+
+String _formatProfileTimestamp(DateTime? value) {
+  if (value == null) {
+    return 'never';
+  }
+  return value.toLocal().toString();
 }
 
 bool get _isDesktopPlatform =>
