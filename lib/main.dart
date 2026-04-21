@@ -1160,6 +1160,11 @@ class _ChatPanel extends StatelessWidget {
     await controller.deleteMessage(contact: contact, messageId: message.id);
   }
 
+  Future<void> _copyMessage(ChatMessage message) async {
+    await Clipboard.setData(ClipboardData(text: message.body));
+    controller.setStatus('Copied message text.');
+  }
+
   String _messageSenderLabel(ChatMessage message) {
     final me = controller.identity;
     if (me != null && message.senderDeviceId == me.deviceId) {
@@ -1277,24 +1282,33 @@ class _ChatPanel extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            if (message.hasReplyPreview) ...[
-                              _QuotedReference(
-                                palette: palette,
-                                outbound: outbound,
-                                senderLabel: _replyReferenceLabel(message),
-                                snippet: message.replySnippet!,
-                              ),
-                              const SizedBox(height: 10),
-                            ],
-                            Text(
-                              message.body,
-                              style: Theme.of(context).textTheme.bodyLarge
-                                  ?.copyWith(
-                                    color: outbound
-                                        ? Colors.white
-                                        : palette.ink,
-                                    height: 1.35,
+                            SelectionArea(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (message.hasReplyPreview) ...[
+                                    _QuotedReference(
+                                      palette: palette,
+                                      outbound: outbound,
+                                      senderLabel: _replyReferenceLabel(
+                                        message,
+                                      ),
+                                      snippet: message.replySnippet!,
+                                    ),
+                                    const SizedBox(height: 10),
+                                  ],
+                                  Text(
+                                    message.body,
+                                    style: Theme.of(context).textTheme.bodyLarge
+                                        ?.copyWith(
+                                          color: outbound
+                                              ? Colors.white
+                                              : palette.ink,
+                                          height: 1.35,
+                                        ),
                                   ),
+                                ],
+                              ),
                             ),
                             const SizedBox(height: 8),
                             Row(
@@ -1345,7 +1359,9 @@ class _ChatPanel extends StatelessWidget {
                                   ),
                                   onSelected: (value) async {
                                     try {
-                                      if (value == 'edit') {
+                                      if (value == 'copy') {
+                                        await _copyMessage(message);
+                                      } else if (value == 'edit') {
                                         await _editMessage(context, message);
                                       } else if (value == 'cancel') {
                                         await controller.cancelPendingMessage(
@@ -1360,6 +1376,10 @@ class _ChatPanel extends StatelessWidget {
                                     }
                                   },
                                   itemBuilder: (context) => [
+                                    const PopupMenuItem(
+                                      value: 'copy',
+                                      child: Text('Copy message'),
+                                    ),
                                     if (outbound &&
                                         message.state == DeliveryState.pending)
                                       const PopupMenuItem(

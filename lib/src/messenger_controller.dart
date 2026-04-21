@@ -21,6 +21,7 @@ const int _maxInviteRouteHints = 4;
 const int _maxInviteLanHosts = 1;
 const int _maxInviteRelayRoutes = 2;
 const int _maxLanPairingScanHostsPerAddress = 64;
+const int _maxLanRediscoveryScanHostsPerAddress = 16;
 const int _pairingBeaconPort = defaultRelayPort + 1;
 const Duration _pairingBeaconTtl = Duration(seconds: 45);
 const Duration _debugLanRouteTimeout = Duration(milliseconds: 250);
@@ -594,12 +595,19 @@ class MessengerController extends ChangeNotifier {
       await Future<void>.delayed(const Duration(milliseconds: 300));
     }
     final current = _contactByDeviceId(contact.deviceId) ?? contact;
+    final candidateRoutes = _candidateRoutesForContact(current);
     final checks = fast
-        ? await _rankRouteHealthForDebug(current.prioritizedRouteHints)
-        : await _rankRouteHealthForDelivery(current.prioritizedRouteHints);
+        ? await _rankRouteHealthForDebug(candidateRoutes)
+        : await _rankRouteHealthForDelivery(candidateRoutes);
     final availableChecks = checks.where((check) => check.available).toList();
     if (availableChecks.isNotEmpty) {
       _noteAvailablePath(current.deviceId);
+      await _rememberLanRoutesForContact(
+        deviceId: current.deviceId,
+        routes: availableChecks
+            .map((check) => check.route)
+            .where((route) => route.kind == PeerRouteKind.lan),
+      );
     }
     final routeUpdateSent = exchangeRouteUpdate && availableChecks.isNotEmpty
         ? await _sendRouteUpdate(
@@ -746,6 +754,16 @@ class MessengerController extends ChangeNotifier {
         current.lanAddresses.isEmpty
             ? 'No LAN addresses were detected.'
             : current.lanAddresses.join(', '),
+      );
+      final hotspotLikeAddresses = current.lanAddresses
+          .where(_looksLikeHotspotGatewayAddress)
+          .toList(growable: false);
+      add(
+        'Hotspot LAN handling',
+        DebugCheckStatus.pass,
+        hotspotLikeAddresses.isEmpty
+            ? 'No hotspot-like gateway LAN address is active. Nearby LAN rediscovery is still enabled for LAN peers.'
+            : 'Hotspot-like LAN gateway address(es): ${hotspotLikeAddresses.join(', ')}. Nearby hotspot clients will be probed on the same subnet for pairing and route rediscovery.',
       );
     } catch (error) {
       add('LAN addresses', DebugCheckStatus.fail, 'LAN scan failed: $error');
@@ -959,10 +977,20 @@ class MessengerController extends ChangeNotifier {
           twoWayMessageIds[contact.deviceId] = twoWayMessageId;
         }
       }
-      if ((probesAccepted > 0 && _debugProbeAcknowledgements.isEmpty) ||
-          (twoWayAccepted > 0 && _debugTwoWayReplies.isEmpty)) {
-        await _waitForDebugResponses();
+      final expectedProbeAckIds = probeMessageIds.values.toSet();
+      final expectedTwoWayReplyIds = twoWayMessageIds.values.toSet();
+      if (expectedProbeAckIds.isNotEmpty || expectedTwoWayReplyIds.isNotEmpty) {
+        await _waitForDebugResponses(
+          expectedProbeAckIds: expectedProbeAckIds,
+          expectedTwoWayReplyIds: expectedTwoWayReplyIds,
+        );
       }
+      final probeAcknowledgementsReceived = expectedProbeAckIds
+          .where(_debugProbeAcknowledgements.contains)
+          .length;
+      final twoWayRepliesReceived = expectedTwoWayReplyIds
+          .where(_debugTwoWayReplies.contains)
+          .length;
       add(
         'Debug peer probes',
         probesAccepted == 0 ? DebugCheckStatus.warn : DebugCheckStatus.pass,
@@ -970,12 +998,12 @@ class MessengerController extends ChangeNotifier {
       );
       add(
         'Debug probe acknowledgements',
-        _debugProbeAcknowledgements.isEmpty
-            ? DebugCheckStatus.warn
-            : DebugCheckStatus.pass,
-        _debugProbeAcknowledgements.isEmpty
-            ? 'No debug probe acknowledgements received yet.'
-            : '${_debugProbeAcknowledgements.length} debug acknowledgement(s) received.',
+        probesAccepted > 0 && probeAcknowledgementsReceived == probesAccepted
+            ? DebugCheckStatus.pass
+            : DebugCheckStatus.warn,
+        probesAccepted == 0
+            ? 'No debug probes were accepted, so no acknowledgements were expected.'
+            : 'Received $probeAcknowledgementsReceived/$probesAccepted debug acknowledgement(s).',
       );
       add(
         'Two-way debug messaging',
@@ -984,12 +1012,12 @@ class MessengerController extends ChangeNotifier {
       );
       add(
         'Two-way debug replies',
-        _debugTwoWayReplies.isEmpty
-            ? DebugCheckStatus.warn
-            : DebugCheckStatus.pass,
-        _debugTwoWayReplies.isEmpty
-            ? 'No two-way debug replies received yet.'
-            : '${_debugTwoWayReplies.length} two-way reply/replies received.',
+        twoWayAccepted > 0 && twoWayRepliesReceived == twoWayAccepted
+            ? DebugCheckStatus.pass
+            : DebugCheckStatus.warn,
+        twoWayAccepted == 0
+            ? 'No two-way debug messages were accepted, so no replies were expected.'
+            : 'Received $twoWayRepliesReceived/$twoWayAccepted two-way reply/replies.',
       );
 
       for (final contact in contacts) {
@@ -2216,7 +2244,7 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
       final checks = await _rankRouteHealthForDelivery(
-        contact.prioritizedRouteHints,
+        _candidateRoutesForContact(contact),
       );
       final available = checks.where((check) => check.available).toList();
       if (available.isEmpty) {
@@ -2225,6 +2253,12 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
       _noteAvailablePath(contact.deviceId);
+      await _rememberLanRoutesForContact(
+        deviceId: contact.deviceId,
+        routes: available
+            .map((check) => check.route)
+            .where((route) => route.kind == PeerRouteKind.lan),
+      );
       changed = true;
       final sentHeartbeat = await _sendRouteUpdate(
         contact,
@@ -3321,13 +3355,24 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  Future<void> _waitForDebugResponses() async {
-    final deadline = DateTime.now().toUtc().add(const Duration(seconds: 3));
+  Future<void> _waitForDebugResponses({
+    required Set<String> expectedProbeAckIds,
+    required Set<String> expectedTwoWayReplyIds,
+  }) async {
+    if (expectedProbeAckIds.isEmpty && expectedTwoWayReplyIds.isEmpty) {
+      return;
+    }
+    final deadline = DateTime.now().toUtc().add(const Duration(seconds: 8));
     while (DateTime.now().toUtc().isBefore(deadline)) {
       await Future<void>.delayed(const Duration(milliseconds: 750));
       await pollNow();
-      if (_debugProbeAcknowledgements.isNotEmpty &&
-          _debugTwoWayReplies.isNotEmpty) {
+      final allProbeAcksReceived =
+          expectedProbeAckIds.isEmpty ||
+          expectedProbeAckIds.every(_debugProbeAcknowledgements.contains);
+      final allTwoWayRepliesReceived =
+          expectedTwoWayReplyIds.isEmpty ||
+          expectedTwoWayReplyIds.every(_debugTwoWayReplies.contains);
+      if (allProbeAcksReceived && allTwoWayRepliesReceived) {
         return;
       }
     }
@@ -3982,12 +4027,21 @@ class MessengerController extends ChangeNotifier {
     required String recipientDeviceId,
     required RelayEnvelope envelope,
   }) async {
-    final routes = await _rankRoutesForDelivery(contact.prioritizedRouteHints);
-    return _deliverAcrossRoutes(
+    final routes = await _rankRoutesForDelivery(
+      _candidateRoutesForContact(contact),
+    );
+    final deliveredVia = await _deliverAcrossRoutes(
       routes: routes,
       recipientDeviceId: recipientDeviceId,
       envelope: envelope,
     );
+    if (deliveredVia.kind == PeerRouteKind.lan) {
+      await _rememberLanRoutesForContact(
+        deviceId: contact.deviceId,
+        routes: [deliveredVia],
+      );
+    }
+    return deliveredVia;
   }
 
   Future<List<PeerEndpoint>> _rankRoutesForDelivery(
@@ -4361,6 +4415,13 @@ class MessengerController extends ChangeNotifier {
     return _diagnosticRelayRoutesForIdentity(me);
   }
 
+  List<PeerEndpoint> _candidateRoutesForContact(ContactRecord contact) {
+    return dedupePeerEndpoints([
+      ...contact.prioritizedRouteHints,
+      ..._lanRediscoveryRoutesForContact(contact),
+    ]);
+  }
+
   List<PeerEndpoint> _contactRelayRoutes() {
     final me = identity;
     if (me == null || !me.autoUseContactRelays) {
@@ -4457,11 +4518,74 @@ class MessengerController extends ChangeNotifier {
     return routes;
   }
 
-  List<int> _nearbyHostSegments(int ownHostSegment) {
+  List<PeerEndpoint> _lanRediscoveryRoutesForContact(ContactRecord contact) {
+    final me = identity;
+    if (me == null ||
+        contact.lanRouteHints.isEmpty ||
+        me.lanAddresses.isEmpty) {
+      return const <PeerEndpoint>[];
+    }
+    final ports = <int>{
+      ...contact.lanRouteHints.map((route) => route.port),
+      defaultRelayPort,
+    };
+    final knownHostSegmentsByPrefix = <String, Set<int>>{};
+    for (final route in contact.lanRouteHints) {
+      final prefix = _subnetPrefix(route.host);
+      final hostSegment = _hostSegment(route.host);
+      if (prefix == null || hostSegment == null) {
+        continue;
+      }
+      knownHostSegmentsByPrefix
+          .putIfAbsent(prefix, () => <int>{})
+          .add(hostSegment);
+    }
+    final ownAddresses = me.lanAddresses.toSet();
+    final routes = <PeerEndpoint>[];
+    final seen = contact.prioritizedRouteHints
+        .map((route) => route.routeKey)
+        .toSet();
+    for (final address in ownAddresses) {
+      final prefix = _subnetPrefix(address);
+      final ownHostSegment = _hostSegment(address);
+      if (prefix == null || ownHostSegment == null) {
+        continue;
+      }
+      final preferredSegments = knownHostSegmentsByPrefix[prefix] ?? <int>{};
+      for (final hostSegment in _nearbyHostSegments(
+        ownHostSegment,
+        preferredSegments: preferredSegments,
+        maxCount: _maxLanRediscoveryScanHostsPerAddress,
+      )) {
+        final host = '$prefix.$hostSegment';
+        if (ownAddresses.contains(host)) {
+          continue;
+        }
+        for (final port in ports) {
+          for (final route in _protocolRoutes(
+            kind: PeerRouteKind.lan,
+            host: host,
+            port: port,
+          )) {
+            if (seen.add(route.routeKey)) {
+              routes.add(route);
+            }
+          }
+        }
+      }
+    }
+    return routes;
+  }
+
+  List<int> _nearbyHostSegments(
+    int ownHostSegment, {
+    Iterable<int> preferredSegments = const <int>[],
+    int maxCount = _maxLanPairingScanHostsPerAddress,
+  }) {
     final seen = <int>{};
     final segments = <int>[];
     void add(int value) {
-      if (segments.length >= _maxLanPairingScanHostsPerAddress ||
+      if (segments.length >= maxCount ||
           value < 1 ||
           value > 254 ||
           !seen.add(value)) {
@@ -4470,6 +4594,9 @@ class MessengerController extends ChangeNotifier {
       segments.add(value);
     }
 
+    for (final preferred in preferredSegments) {
+      add(preferred);
+    }
     for (var radius = 1; radius <= 8; radius++) {
       add(ownHostSegment - radius);
       add(ownHostSegment + radius);
@@ -4479,13 +4606,83 @@ class MessengerController extends ChangeNotifier {
     }
     for (
       var radius = 9;
-      radius <= 254 && segments.length < _maxLanPairingScanHostsPerAddress;
+      radius <= 254 && segments.length < maxCount;
       radius++
     ) {
       add(ownHostSegment - radius);
       add(ownHostSegment + radius);
     }
     return segments;
+  }
+
+  String? _subnetPrefix(String address) {
+    final lastDot = address.lastIndexOf('.');
+    if (lastDot == -1) {
+      return null;
+    }
+    return address.substring(0, lastDot);
+  }
+
+  int? _hostSegment(String address) {
+    final lastDot = address.lastIndexOf('.');
+    if (lastDot == -1) {
+      return null;
+    }
+    return int.tryParse(address.substring(lastDot + 1));
+  }
+
+  bool _looksLikeHotspotGatewayAddress(String address) {
+    final hostSegment = _hostSegment(address);
+    if (hostSegment != 1) {
+      return false;
+    }
+    return address.startsWith('10.') ||
+        address.startsWith('172.') ||
+        address.startsWith('192.168.');
+  }
+
+  Future<void> _rememberLanRoutesForContact({
+    required String deviceId,
+    required Iterable<PeerEndpoint> routes,
+  }) async {
+    final lanRoutes = dedupePeerEndpoints(
+      routes.where((route) => route.kind == PeerRouteKind.lan),
+    );
+    if (lanRoutes.isEmpty) {
+      return;
+    }
+    final index = _snapshot.contacts.indexWhere(
+      (contact) => contact.deviceId == deviceId,
+    );
+    if (index == -1) {
+      return;
+    }
+    final contacts = List<ContactRecord>.from(_snapshot.contacts);
+    final contact = contacts[index];
+    final mergedRoutes = dedupePeerEndpoints([
+      ...lanRoutes,
+      ...contact.routeHints,
+    ]);
+    if (_sameRoutes(mergedRoutes, contact.routeHints)) {
+      return;
+    }
+    contacts[index] = contact.copyWith(routeHints: mergedRoutes);
+    _snapshot = _snapshot.copyWith(contacts: contacts);
+    await _saveSnapshotSilently();
+  }
+
+  bool _sameRoutes(List<PeerEndpoint> left, List<PeerEndpoint> right) {
+    if (left.length != right.length) {
+      return false;
+    }
+    final leftKeys = left.map((route) => route.routeKey).toList()..sort();
+    final rightKeys = right.map((route) => route.routeKey).toList()..sort();
+    for (var index = 0; index < leftKeys.length; index++) {
+      if (leftKeys[index] != rightKeys[index]) {
+        return false;
+      }
+    }
+    return true;
   }
 
   List<PeerEndpoint> _pairingLoopbackCheckRoutesForIdentity(IdentityRecord me) {

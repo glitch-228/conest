@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:conest/main.dart' as app;
@@ -54,6 +55,8 @@ class _FakeRelayClient extends RelayClient {
   _FakeRelayClient({
     Set<String>? failingHosts,
     Set<String>? storeFailingHosts,
+    Set<String>? allowedHosts,
+    Set<String>? storeAllowedHosts,
     Map<String, String>? relayInstanceIds,
     bool Function(
       String host,
@@ -65,11 +68,15 @@ class _FakeRelayClient extends RelayClient {
     shouldBlackholeStore,
   }) : _healthFailingHosts = failingHosts ?? <String>{},
        _storeFailingHosts = storeFailingHosts ?? failingHosts ?? <String>{},
+       _allowedHosts = allowedHosts,
+       _storeAllowedHosts = storeAllowedHosts ?? allowedHosts,
        _relayInstanceIds = relayInstanceIds ?? const <String, String>{},
        _shouldBlackholeStore = shouldBlackholeStore;
 
   final Set<String> _healthFailingHosts;
   final Set<String> _storeFailingHosts;
+  final Set<String>? _allowedHosts;
+  final Set<String>? _storeAllowedHosts;
   final Map<String, String> _relayInstanceIds;
   final bool Function(
     String host,
@@ -86,6 +93,18 @@ class _FakeRelayClient extends RelayClient {
 
   String _key(String host, int port, PeerRouteProtocol protocol) =>
       '${protocol.name}://$host:$port';
+  bool _isRouteAllowed(
+    Set<String>? values,
+    String host,
+    int port,
+    PeerRouteProtocol protocol,
+  ) {
+    if (values == null || values.isEmpty) {
+      return true;
+    }
+    return _containsRoute(values, host, port, protocol);
+  }
+
   bool _containsRoute(
     Set<String> values,
     String host,
@@ -113,6 +132,9 @@ class _FakeRelayClient extends RelayClient {
   }) async {
     final key = _key(host, port, protocol);
     storeAttempts.add('$host:$port');
+    if (!_isRouteAllowed(_storeAllowedHosts, host, port, protocol)) {
+      throw StateError('Route unavailable for $key');
+    }
     if (_containsRoute(_storeFailingHosts, host, port, protocol)) {
       throw StateError('Route unavailable for $key');
     }
@@ -152,6 +174,9 @@ class _FakeRelayClient extends RelayClient {
     int limit = 64,
     Duration timeout = const Duration(seconds: 4),
   }) async {
+    if (!_isRouteAllowed(_storeAllowedHosts, host, port, protocol)) {
+      throw StateError('Route unavailable for ${_key(host, port, protocol)}');
+    }
     final queue = _queues[recipientDeviceId] ?? <RelayEnvelope>[];
     final result = queue.take(limit).toList();
     queue.removeWhere(
@@ -168,7 +193,8 @@ class _FakeRelayClient extends RelayClient {
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     Duration timeout = const Duration(seconds: 4),
   }) async {
-    return !_containsRoute(_healthFailingHosts, host, port, protocol);
+    return _isRouteAllowed(_allowedHosts, host, port, protocol) &&
+        !_containsRoute(_healthFailingHosts, host, port, protocol);
   }
 
   @override
@@ -487,6 +513,13 @@ void main() {
     expect(payload, startsWith('ci5|'));
   });
 
+  test('hotspot gateway addresses are treated as LAN discovery addresses', () {
+    expect(isLanDiscoveryAddress('172.20.10.1'), isTrue);
+    expect(isLanDiscoveryAddress('192.168.43.1'), isTrue);
+    expect(isIgnoredLanInterfaceName('wlan0'), isFalse);
+    expect(isIgnoredLanInterfaceName('docker0'), isTrue);
+  });
+
   test(
     'pairing announcements can be fetched by more than one device',
     () async {
@@ -669,6 +702,78 @@ void main() {
     },
   );
 
+  test(
+    'checking paths and sendMessage rediscover a hotspot-host LAN peer',
+    () async {
+      final relayClient = _FakeRelayClient(
+        allowedHosts: <String>{'172.20.10.1:7667'},
+      );
+      final controller = await _createController(
+        relayClient: relayClient,
+        displayName: 'Client',
+        lanAddresses: const <String>['172.20.10.2'],
+        internetRelayHost: null,
+      );
+      addTearDown(controller.dispose);
+
+      final staleInvite = ContactInvite(
+        version: 4,
+        accountId: 'acc-hotspot',
+        deviceId: 'dev-hotspot',
+        displayName: 'Hotspot host',
+        bio: 'mobile hotspot',
+        pairingNonce: 'hotspot-nonce',
+        pairingEpochMs: 1760000000000,
+        relayCapable: false,
+        publicKeyBase64: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
+        routeHints: const <PeerEndpoint>[
+          PeerEndpoint(
+            kind: PeerRouteKind.lan,
+            host: '172.20.10.9',
+            port: defaultRelayPort,
+          ),
+        ],
+      );
+      await controller.addContactFromInvite(
+        alias: 'Hotspot host',
+        payload: staleInvite.encodePayload(),
+        codephrase: '',
+      );
+
+      var contact = controller.contacts.single;
+      final checks = await controller.checkContactRoutes(
+        contact,
+        persist: false,
+        exchangeRouteUpdate: false,
+        fast: true,
+      );
+
+      expect(
+        checks.any(
+          (check) => check.available && check.route.host == '172.20.10.1',
+        ),
+        isTrue,
+      );
+      contact = controller.contacts.single;
+      expect(
+        contact.routeHints.any((route) => route.host == '172.20.10.1'),
+        isTrue,
+      );
+
+      relayClient.storeAttempts.clear();
+      await controller.sendMessage(
+        contact: contact,
+        body: 'hello hotspot host',
+      );
+
+      expect(relayClient.storeAttempts, contains('172.20.10.1:7667'));
+      expect(
+        controller.messagesFor(contact.deviceId).single.state,
+        DeliveryState.local,
+      );
+    },
+  );
+
   test('LAN lobby sends messages to nearby peers without contacts', () async {
     final relayClient = _FakeRelayClient();
     final alice = await _createController(
@@ -738,6 +843,7 @@ void main() {
     'contact profile bio can be stored and route checks are sorted',
     () async {
       final relayClient = _FakeRelayClient(
+        allowedHosts: <String>{'192.168.1.25:7667', 'relay.example:7667'},
         failingHosts: <String>{'192.168.1.25:7667'},
       );
       final controller = await _createController(
@@ -776,6 +882,7 @@ void main() {
     'manual suggestion is returned when reciprocal exchange cannot be sent',
     () async {
       final relayClient = _FakeRelayClient(
+        allowedHosts: <String>{'192.168.1.25:7667', 'relay.example:7667'},
         failingHosts: <String>{'192.168.1.25:7667', 'relay.example:7667'},
       );
       final controller = await _createController(
@@ -795,7 +902,9 @@ void main() {
   );
 
   test('sendMessage prefers LAN routes before relay routes', () async {
-    final relayClient = _FakeRelayClient();
+    final relayClient = _FakeRelayClient(
+      allowedHosts: <String>{'192.168.1.25:7667', 'relay.example:7667'},
+    );
     final controller = await _createController(
       relayClient: relayClient,
       displayName: 'Alice',
@@ -823,6 +932,7 @@ void main() {
 
   test('sendMessage skips unavailable LAN and uses relay', () async {
     final relayClient = _FakeRelayClient(
+      allowedHosts: <String>{'192.168.1.25:7667', 'relay.example:7667'},
       failingHosts: <String>{'192.168.1.25:7667'},
     );
     final controller = await _createController(
@@ -854,6 +964,7 @@ void main() {
     'sendMessage tries relay when direct store fails after health passes',
     () async {
       final relayClient = _FakeRelayClient(
+        allowedHosts: <String>{'192.168.1.25:7667', 'relay.example:7667'},
         storeFailingHosts: <String>{'192.168.1.25:7667'},
       );
       final controller = await _createController(
@@ -874,10 +985,8 @@ void main() {
       relayClient.storeAttempts.clear();
       await controller.sendMessage(contact: contact, body: 'direct then relay');
 
-      expect(relayClient.storeAttempts, <String>[
-        '192.168.1.25:7667',
-        'relay.example:7667',
-      ]);
+      expect(relayClient.storeAttempts.first, '192.168.1.25:7667');
+      expect(relayClient.storeAttempts, contains('relay.example:7667'));
       expect(
         controller.messagesFor(contact.deviceId).single.state,
         DeliveryState.relayed,
@@ -942,6 +1051,7 @@ void main() {
 
   test('sendMessage stays pending when every route is unavailable', () async {
     final relayClient = _FakeRelayClient(
+      allowedHosts: <String>{'192.168.1.25:7667', 'relay.example:7667'},
       failingHosts: <String>{'192.168.1.25:7667', 'relay.example:7667'},
     );
     final controller = await _createController(
@@ -962,10 +1072,8 @@ void main() {
     relayClient.storeAttempts.clear();
     await controller.sendMessage(contact: contact, body: 'queue this');
 
-    expect(relayClient.storeAttempts, <String>[
-      '192.168.1.25:7667',
-      'relay.example:7667',
-    ]);
+    expect(relayClient.storeAttempts, contains('192.168.1.25:7667'));
+    expect(relayClient.storeAttempts, contains('relay.example:7667'));
     expect(
       controller.messagesFor(contact.deviceId).single.state,
       DeliveryState.pending,
@@ -974,6 +1082,7 @@ void main() {
 
   test('pending messages can be canceled before retry', () async {
     final relayClient = _FakeRelayClient(
+      allowedHosts: <String>{'192.168.1.25:7667', 'relay.example:7667'},
       failingHosts: <String>{'192.168.1.25:7667', 'relay.example:7667'},
     );
     final controller = await _createController(
@@ -1591,6 +1700,92 @@ void main() {
     await tester.pump();
   });
 
+  testWidgets('message bubbles support selection and copy message actions', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final relayClient = _FakeRelayClient();
+    String? copiedText;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+          if (call.method == 'Clipboard.setData') {
+            final arguments = call.arguments;
+            if (arguments is Map) {
+              copiedText = arguments['text'] as String?;
+            }
+          }
+          return null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: (await bob.buildInvite()).encodePayload(),
+      codephrase: '',
+    );
+    await bob.pollNow();
+    final aliceContactForBob = alice.contacts.single;
+    await alice.sendMessage(
+      contact: aliceContactForBob,
+      body: 'copyable outgoing text',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: app.HomeScreen(controller: alice, palette: app.ConestPalette()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('Bob').first);
+    await tester.tap(find.text('Bob').first);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('copyable outgoing text').last);
+
+    expect(
+      find.ancestor(
+        of: find.text('copyable outgoing text').last,
+        matching: find.byType(SelectionArea),
+      ),
+      findsOneWidget,
+    );
+
+    final popupFinder = find.byWidgetPredicate(
+      (widget) => widget is PopupMenuButton<String>,
+    );
+    final popupState = tester.state<PopupMenuButtonState<String>>(
+      popupFinder.last,
+    );
+    popupState.showButtonMenu();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Copy message'), findsOneWidget);
+    await tester.tap(find.text('Copy message'));
+    await tester.pumpAndSettle();
+
+    expect(copiedText, 'copyable outgoing text');
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    alice.dispose();
+    bob.dispose();
+    await tester.pump();
+  });
+
   testWidgets(
     'contact list and chat header show the current reachability chip',
     (tester) async {
@@ -1786,6 +1981,79 @@ void main() {
       expect(report.peerReports.single.probeAcknowledged, isTrue);
       expect(report.peerReports.single.twoWayReplyReceived, isTrue);
       expect(report.notes, isNotEmpty);
+    },
+  );
+
+  test(
+    'debug self test waits for all peer acknowledgements and replies',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        lanAddresses: const <String>['192.168.1.21'],
+      );
+      final carol = await _createController(
+        relayClient: relayClient,
+        displayName: 'Carol',
+        lanAddresses: const <String>['192.168.1.22'],
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      addTearDown(carol.dispose);
+
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await alice.addContactFromInvite(
+        alias: 'Carol',
+        payload: (await carol.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await bob.pollNow();
+      await carol.pollNow();
+
+      final delayedPeerPolls = Future<void>(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 1200));
+        await bob.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 1800));
+        await carol.pollNow();
+      });
+
+      final report = await alice.runDebugSelfTest();
+      await delayedPeerPolls;
+
+      expect(report.peerReports, hasLength(2));
+      expect(
+        report.peerReports.every(
+          (peer) => peer.probeAcknowledged && peer.twoWayReplyReceived,
+        ),
+        isTrue,
+      );
+      expect(
+        report.results.any(
+          (result) =>
+              result.name == 'Debug probe acknowledgements' &&
+              result.status == DebugCheckStatus.pass &&
+              result.detail.contains('2/2'),
+        ),
+        isTrue,
+      );
+      expect(
+        report.results.any(
+          (result) =>
+              result.name == 'Two-way debug replies' &&
+              result.status == DebugCheckStatus.pass &&
+              result.detail.contains('2/2'),
+        ),
+        isTrue,
+      );
     },
   );
 

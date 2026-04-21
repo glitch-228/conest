@@ -428,11 +428,11 @@ Future<List<String>> discoverLanAddresses() async {
     return const <String>[];
   }
   for (final interface in interfaces) {
-    if (_isIgnoredLanInterface(interface.name)) {
+    if (isIgnoredLanInterfaceName(interface.name)) {
       continue;
     }
     for (final address in interface.addresses) {
-      if (_isLanAddress(address.address)) {
+      if (isLanDiscoveryAddress(address.address)) {
         addresses.add(address.address);
       }
     }
@@ -441,7 +441,7 @@ Future<List<String>> discoverLanAddresses() async {
   return values;
 }
 
-bool _isIgnoredLanInterface(String name) {
+bool isIgnoredLanInterfaceName(String name) {
   final normalized = name.toLowerCase();
   const ignoredFragments = <String>[
     'br-',
@@ -464,10 +464,7 @@ bool _isIgnoredLanInterface(String name) {
   return ignoredFragments.any(normalized.contains);
 }
 
-bool _isLanAddress(String address) {
-  if (_isLikelyVirtualGatewayAddress(address)) {
-    return false;
-  }
+bool isLanDiscoveryAddress(String address) {
   if (address.startsWith('10.') || address.startsWith('192.168.')) {
     return true;
   }
@@ -484,18 +481,4 @@ bool _isLanAddress(String address) {
     }
   }
   return false;
-}
-
-bool _isLikelyVirtualGatewayAddress(String address) {
-  final parts = address.split('.');
-  if (parts.length != 4) {
-    return false;
-  }
-  final second = int.tryParse(parts[1]);
-  final last = int.tryParse(parts[3]);
-  return address.startsWith('172.') &&
-      second != null &&
-      second >= 16 &&
-      second <= 31 &&
-      last == 1;
 }
