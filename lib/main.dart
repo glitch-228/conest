@@ -689,6 +689,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             _lanLobbySelected = true;
                             _replyTarget = null;
                           });
+                          unawaited(widget.controller.markLanLobbyRead());
                         },
                         onContactSelected: (contact) {
                           setState(() {
@@ -698,6 +699,11 @@ class _HomeScreenState extends State<HomeScreen> {
                               _replyTarget = null;
                             }
                           });
+                          unawaited(
+                            widget.controller.markConversationRead(
+                              contact.deviceId,
+                            ),
+                          );
                         },
                         onContactProfile: _showContactProfile,
                         onShowDebug: kDebugMode ? _showDebugMenu : null,
@@ -775,6 +781,7 @@ class _Sidebar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final identity = controller.identity!;
+    final lanLobbyUnreadCount = controller.unreadLanLobbyCount;
     final localRelayLabel = controller.localRelayRunning
         ? 'LAN node :${identity.localRelayPort}'
         : 'LAN node unavailable';
@@ -961,6 +968,10 @@ class _Sidebar extends StatelessWidget {
                     ],
                   ),
                 ),
+                if (lanLobbyUnreadCount > 0) ...[
+                  const SizedBox(width: 8),
+                  _UnreadBadge(count: lanLobbyUnreadCount, palette: palette),
+                ],
                 Text(
                   '${controller.lanLobbyMessages.length}',
                   style: Theme.of(
@@ -1002,6 +1013,7 @@ class _Sidebar extends StatelessWidget {
               builder: (context) {
                 final contact = controller.contacts[index];
                 final preview = controller.lastMessageFor(contact.deviceId);
+                final unreadCount = controller.unreadCountFor(contact.deviceId);
                 final reachabilityState = controller.reachabilityStateFor(
                   contact.deviceId,
                 );
@@ -1037,6 +1049,14 @@ class _Sidebar extends StatelessWidget {
                               style: Theme.of(context).textTheme.labelSmall
                                   ?.copyWith(color: palette.inkSoft),
                             ),
+                            if (unreadCount > 0) ...[
+                              const SizedBox(width: 8),
+                              _UnreadBadge(
+                                count: unreadCount,
+                                palette: palette,
+                                compact: true,
+                              ),
+                            ],
                             IconButton(
                               visualDensity: VisualDensity.compact,
                               onPressed: () => onContactProfile(contact),
@@ -1065,7 +1085,12 @@ class _Sidebar extends StatelessWidget {
                               : preview.bodyPreview,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                fontWeight: unreadCount > 0
+                                    ? FontWeight.w700
+                                    : FontWeight.w400,
+                              ),
                         ),
                       ],
                     ),
@@ -1187,6 +1212,19 @@ class _ChatPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final messages = controller.messagesFor(contact.deviceId);
+    final unreadCount = controller.unreadCountFor(contact.deviceId);
+    if (controller.isAppForeground) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(
+          controller.refreshConversationReachabilityIfStale(contact.deviceId),
+        );
+      });
+    }
+    if (unreadCount > 0 && controller.isAppForeground) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(controller.markConversationRead(contact.deviceId));
+      });
+    }
     final reachabilityState = controller.reachabilityStateFor(contact.deviceId);
     final activeReplyTarget =
         replyTarget != null &&
@@ -1207,47 +1245,83 @@ class _ChatPanel extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
-              child: Row(
-                children: [
-                  if (onBack != null)
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final compactHeader = constraints.maxWidth < 560;
+                  final title = Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        contact.alias,
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${contact.routeSummary} • safety ${contact.shortSafetyNumber}',
+                        maxLines: compactHeader ? 3 : 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+                      ),
+                    ],
+                  );
+                  final controls = <Widget>[
+                    _ReachabilityChip(
+                      state: reachabilityState,
+                      palette: palette,
+                    ),
+                    _StatusChip(
+                      label: 'LAN first',
+                      palette: palette,
+                      icon: Icons.compare_arrows,
+                    ),
                     IconButton(
-                      onPressed: onBack,
-                      icon: const Icon(Icons.arrow_back),
+                      onPressed: onShowProfile,
+                      icon: const Icon(Icons.badge_outlined),
+                      tooltip: 'Contact profile',
                     ),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  ];
+                  if (!compactHeader) {
+                    return Row(
                       children: [
-                        Text(
-                          contact.alias,
-                          style: Theme.of(context).textTheme.headlineSmall
-                              ?.copyWith(fontWeight: FontWeight.w700),
+                        if (onBack != null)
+                          IconButton(
+                            onPressed: onBack,
+                            icon: const Icon(Icons.arrow_back),
+                          ),
+                        Expanded(child: title),
+                        const SizedBox(width: 12),
+                        ...controls.expand(
+                          (widget) => [widget, const SizedBox(width: 8)],
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${contact.routeSummary} • safety ${contact.shortSafetyNumber}',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: palette.inkSoft),
-                        ),
-                      ],
-                    ),
-                  ),
-                  _ReachabilityChip(state: reachabilityState, palette: palette),
-                  const SizedBox(width: 8),
-                  _StatusChip(
-                    label: 'LAN first',
-                    palette: palette,
-                    icon: Icons.compare_arrows,
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    onPressed: onShowProfile,
-                    icon: const Icon(Icons.badge_outlined),
-                    tooltip: 'Contact profile',
-                  ),
-                ],
+                      ]..removeLast(),
+                    );
+                  }
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          if (onBack != null)
+                            IconButton(
+                              onPressed: onBack,
+                              icon: const Icon(Icons.arrow_back),
+                            ),
+                          Expanded(child: title),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: controls,
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
             const Divider(height: 1),
@@ -1259,6 +1333,10 @@ class _ChatPanel extends StatelessWidget {
                 itemBuilder: (context, index) {
                   final message = messages[messages.length - index - 1];
                   final outbound = message.outbound;
+                  final unread = controller.isUnreadMessage(
+                    contact.deviceId,
+                    message,
+                  );
                   return Align(
                     alignment: outbound
                         ? Alignment.centerRight
@@ -1278,6 +1356,11 @@ class _ChatPanel extends StatelessWidget {
                         decoration: BoxDecoration(
                           color: outbound ? palette.ink : palette.paper,
                           borderRadius: BorderRadius.circular(18),
+                          border: outbound || !unread
+                              ? null
+                              : Border.all(
+                                  color: palette.ember.withValues(alpha: 0.45),
+                                ),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1323,6 +1406,19 @@ class _ChatPanel extends StatelessWidget {
                                             : palette.inkSoft,
                                       ),
                                 ),
+                                if (!outbound && unread) ...[
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'new',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelSmall
+                                        ?.copyWith(
+                                          color: palette.ember,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                  ),
+                                ],
                                 if (message.isEdited) ...[
                                   const SizedBox(width: 6),
                                   Text(
@@ -1527,6 +1623,12 @@ class _LanLobbyPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final messages = controller.lanLobbyMessages;
+    final unreadCount = controller.unreadLanLobbyCount;
+    if (unreadCount > 0 && controller.isAppForeground) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(controller.markLanLobbyRead());
+      });
+    }
     return Padding(
       padding: const EdgeInsets.all(18),
       child: Card(
@@ -1596,6 +1698,9 @@ class _LanLobbyPanel extends StatelessWidget {
                       itemBuilder: (context, index) {
                         final message = messages[messages.length - index - 1];
                         final outbound = message.outbound;
+                        final unread = controller.isUnreadLanLobbyMessage(
+                          message,
+                        );
                         final sender =
                             message.senderDisplayName ??
                             (outbound ? 'You' : message.senderDeviceId);
@@ -1611,7 +1716,11 @@ class _LanLobbyPanel extends StatelessWidget {
                               color: outbound ? palette.ink : palette.paper,
                               borderRadius: BorderRadius.circular(18),
                               border: Border.all(
-                                color: outbound ? palette.ink : palette.stroke,
+                                color: outbound
+                                    ? palette.ink
+                                    : unread
+                                    ? palette.ember.withValues(alpha: 0.45)
+                                    : palette.stroke,
                               ),
                             ),
                             child: Column(
@@ -1648,6 +1757,19 @@ class _LanLobbyPanel extends StatelessWidget {
                                             : palette.inkSoft,
                                       ),
                                 ),
+                                if (!outbound && unread) ...[
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'new',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelSmall
+                                        ?.copyWith(
+                                          color: palette.ember,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                  ),
+                                ],
                               ],
                             ),
                           ),
@@ -2019,6 +2141,12 @@ class _AddContactDialogState extends State<AddContactDialog> {
       return 'Find by codephrase';
     }
     return 'Add contact';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.activatePairingSession();
   }
 
   @override
@@ -3174,6 +3302,19 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
                     ),
                     const SizedBox(height: 12),
                     _DebugInfoBlock(
+                      title: 'Runtime',
+                      lines: [
+                        'mode: ${widget.controller.runtimeModeLabel}',
+                        'next poll: ${widget.controller.nextScheduledPollAt?.toIso8601String() ?? '(none)'}',
+                        'pairing session: ${widget.controller.pairingSessionActive ? 'active until ${widget.controller.pairingSessionActiveUntil?.toIso8601String() ?? '(unknown)'}' : 'inactive'}',
+                        'last pairing beacon send: ${widget.controller.lastPairingBeaconSentAt?.toIso8601String() ?? '(none)'}',
+                        'fetch/store/health: ${widget.controller.fetchCallCount}/${widget.controller.storeCallCount}/${widget.controller.healthCallCount}',
+                        'vault saves: ${widget.controller.vaultSaveCount} (${widget.controller.lastVaultSaveAt?.toIso8601String() ?? 'never'})',
+                      ],
+                      palette: widget.palette,
+                    ),
+                    const SizedBox(height: 12),
+                    _DebugInfoBlock(
                       title: 'Storage and queues',
                       lines: [
                         'contacts: ${contacts.length}',
@@ -3859,6 +4000,43 @@ class _StatusChip extends StatelessWidget {
           const SizedBox(width: 8),
           if (expand) Expanded(child: labelWidget) else labelWidget,
         ],
+      ),
+    );
+  }
+}
+
+class _UnreadBadge extends StatelessWidget {
+  const _UnreadBadge({
+    required this.count,
+    required this.palette,
+    this.compact = false,
+  });
+
+  final int count;
+  final ConestPalette palette;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = count > 99 ? '99+' : '$count';
+    return Container(
+      key: Key('unread-badge-$label'),
+      constraints: BoxConstraints(minWidth: compact ? 20 : 24),
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 6 : 8,
+        vertical: compact ? 3 : 4,
+      ),
+      decoration: BoxDecoration(
+        color: palette.ember,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: Colors.white,
+          fontWeight: FontWeight.w800,
+        ),
       ),
     );
   }

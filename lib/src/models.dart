@@ -247,6 +247,40 @@ List<PeerEndpoint> dedupePeerEndpoints(Iterable<PeerEndpoint> routes) {
   return deduped;
 }
 
+List<PeerEndpoint> prunePeerEndpointsByKind(
+  Iterable<PeerEndpoint> routes, {
+  int maxLan = 6,
+  int maxDirectInternet = 4,
+  int maxRelay = 4,
+}) {
+  final deduped = dedupePeerEndpoints(routes);
+  final pruned = <PeerEndpoint>[];
+  var lanCount = 0;
+  var directInternetCount = 0;
+  var relayCount = 0;
+  for (final route in deduped) {
+    switch (route.kind) {
+      case PeerRouteKind.lan:
+        if (lanCount >= maxLan) {
+          continue;
+        }
+        lanCount++;
+      case PeerRouteKind.directInternet:
+        if (directInternetCount >= maxDirectInternet) {
+          continue;
+        }
+        directInternetCount++;
+      case PeerRouteKind.relay:
+        if (relayCount >= maxRelay) {
+          continue;
+        }
+        relayCount++;
+    }
+    pruned.add(route);
+  }
+  return pruned;
+}
+
 List<PeerEndpoint> _peerEndpointsFromJsonList(
   List<dynamic> values, {
   required bool expandMissingProtocol,
@@ -700,7 +734,7 @@ class ContactRecord {
       bio: bio ?? this.bio,
       relayCapable: relayCapable ?? this.relayCapable,
       publicKeyBase64: publicKeyBase64,
-      routeHints: routeHints ?? this.routeHints,
+      routeHints: prunePeerEndpointsByKind(routeHints ?? this.routeHints),
       safetyNumber: safetyNumber,
       trustedAt: trustedAt,
     );
@@ -814,7 +848,7 @@ class ContactRecord {
       bio: json['bio'] as String? ?? '',
       relayCapable: json['relayCapable'] as bool? ?? true,
       publicKeyBase64: json['publicKeyBase64'] as String,
-      routeHints: routeHints,
+      routeHints: prunePeerEndpointsByKind(routeHints),
       safetyNumber: json['safetyNumber'] as String,
       trustedAt: DateTime.parse(json['trustedAt'] as String),
     );
@@ -1014,19 +1048,25 @@ class ConversationRecord {
     required this.kind,
     required this.peerDeviceId,
     required this.messages,
+    this.lastReadAt,
   });
 
   final String id;
   final ConversationKind kind;
   final String peerDeviceId;
   final List<ChatMessage> messages;
+  final DateTime? lastReadAt;
 
-  ConversationRecord copyWith({List<ChatMessage>? messages}) {
+  ConversationRecord copyWith({
+    List<ChatMessage>? messages,
+    DateTime? lastReadAt,
+  }) {
     return ConversationRecord(
       id: id,
       kind: kind,
       peerDeviceId: peerDeviceId,
       messages: messages ?? this.messages,
+      lastReadAt: lastReadAt ?? this.lastReadAt,
     );
   }
 
@@ -1036,18 +1076,31 @@ class ConversationRecord {
       'kind': kind.name,
       'peerDeviceId': peerDeviceId,
       'messages': messages.map((message) => message.toJson()).toList(),
+      'lastReadAt': lastReadAt?.toIso8601String(),
     };
   }
 
   factory ConversationRecord.fromJson(Map<String, dynamic> json) {
+    final messages = (json['messages'] as List<dynamic>)
+        .cast<Map<String, dynamic>>()
+        .map(ChatMessage.fromJson)
+        .toList();
+    final lastReadAtValue = json['lastReadAt'] as String?;
+    final inferredLastReadAt = lastReadAtValue == null
+        ? (messages.isEmpty
+              ? null
+              : messages
+                    .map((message) => message.createdAt)
+                    .reduce(
+                      (left, right) => left.isAfter(right) ? left : right,
+                    ))
+        : DateTime.tryParse(lastReadAtValue);
     return ConversationRecord(
       id: json['id'] as String,
       kind: ConversationKind.values.byName(json['kind'] as String),
       peerDeviceId: json['peerDeviceId'] as String,
-      messages: (json['messages'] as List<dynamic>)
-          .cast<Map<String, dynamic>>()
-          .map(ChatMessage.fromJson)
-          .toList(),
+      messages: messages,
+      lastReadAt: inferredLastReadAt,
     );
   }
 }

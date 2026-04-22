@@ -22,6 +22,8 @@ const int _maxInviteLanHosts = 1;
 const int _maxInviteRelayRoutes = 2;
 const int _maxLanPairingScanHostsPerAddress = 64;
 const int _maxLanRediscoveryScanHostsPerAddress = 16;
+const int _maxLanRediscoveryAdjacentHostsPerHint = 2;
+const int _maxDebugRouteSummaryItems = 8;
 const int _pairingBeaconPort = defaultRelayPort + 1;
 const Duration _pairingBeaconTtl = Duration(seconds: 45);
 const Duration _debugLanRouteTimeout = Duration(milliseconds: 250);
@@ -29,14 +31,27 @@ const Duration _debugInternetRouteTimeout = Duration(milliseconds: 900);
 const Duration _debugRelayOperationTimeout = Duration(milliseconds: 900);
 const String _lanLobbyMailboxId = 'lan-lobby-v1';
 const String _lanLobbyConversationId = 'conv-lan-lobby';
-const Duration _slowPollInterval = Duration(seconds: 5);
-const Duration _fastLocalPollInterval = Duration(milliseconds: 900);
+const Duration _foregroundActivePollInterval = Duration(seconds: 5);
+const Duration _foregroundIdlePollInterval = Duration(seconds: 15);
+const Duration _backgroundEnabledPollInterval = Duration(seconds: 30);
+const Duration _desktopBackgroundPollInterval = Duration(seconds: 15);
+const Duration _runtimeActiveWindow = Duration(seconds: 20);
+const Duration _pairingSessionDuration = Duration(minutes: 2);
+const Duration _pairingRelayAnnouncementInterval = Duration(seconds: 15);
+const Duration _saveDebounceWindow = Duration(seconds: 2);
 const Duration _heartbeatInterval = Duration(seconds: 60);
+const Duration _foregroundIdleHeartbeatInterval = Duration(minutes: 3);
+const Duration _backgroundHeartbeatInterval = Duration(minutes: 10);
+const Duration _resumeHeartbeatThreshold = Duration(seconds: 90);
 const Duration _onlineReachabilityWindow = Duration(minutes: 2);
 const Duration _seenRecentlyReachabilityWindow = Duration(minutes: 10);
 const Duration _knownReachabilityWindow = Duration(hours: 24);
 const Duration _pendingMessageRetryDelay = Duration(seconds: 5);
 const Duration _acceptedMessageRetryDelay = Duration(seconds: 15);
+const Duration _lanHealthCacheTtl = Duration(seconds: 15);
+const Duration _internetHealthCacheTtl = Duration(seconds: 45);
+const Duration _lanRecentRouteSuccessTtl = Duration(seconds: 30);
+const Duration _internetRecentRouteSuccessTtl = Duration(minutes: 2);
 
 class MessengerController extends ChangeNotifier {
   MessengerController({
@@ -63,16 +78,26 @@ class MessengerController extends ChangeNotifier {
   final DateTime Function() _nowProvider;
   VaultSnapshot _snapshot = VaultSnapshot.empty();
   Timer? _pollTimer;
-  Timer? _fastLocalPollTimer;
   bool _ready = false;
   bool _polling = false;
-  bool _fastLocalPolling = false;
   bool _appInForeground = true;
   String? _statusMessage;
   String _lastRelayStatus = 'relay not checked yet';
   String? _lastPairingAnnouncementMailboxId;
   DateTime? _lastPairingAnnouncementAt;
+  DateTime? _pairingSessionActiveUntil;
+  DateTime? _lastPairingBeaconSentAt;
+  DateTime? _runtimeActiveUntil;
+  DateTime? _nextScheduledPollAt;
+  Timer? _pendingSaveTimer;
+  Completer<void>? _pendingSaveCompleter;
+  int _vaultSaveCount = 0;
+  DateTime? _lastVaultSaveAt;
+  int _fetchCallCount = 0;
+  int _storeCallCount = 0;
+  int _healthCallCount = 0;
   final Map<String, PeerRouteHealth> _routeHealth = {};
+  final Map<String, _RouteRuntimeState> _routeRuntime = {};
   final Set<String> _debugProbeAcknowledgements = <String>{};
   final Set<String> _debugTwoWayReplies = <String>{};
   final Set<String> _locallyDeletedMessageIds = <String>{};
@@ -95,6 +120,17 @@ class MessengerController extends ChangeNotifier {
   );
   String? get statusMessage => _statusMessage;
   String get lastRelayStatus => _lastRelayStatus;
+  bool get isAppForeground => _appInForeground;
+  String get runtimeModeLabel => _runtimeMode.name;
+  DateTime? get nextScheduledPollAt => _nextScheduledPollAt;
+  bool get pairingSessionActive => _isPairingSessionActive();
+  DateTime? get pairingSessionActiveUntil => _pairingSessionActiveUntil;
+  DateTime? get lastPairingBeaconSentAt => _lastPairingBeaconSentAt;
+  int get fetchCallCount => _fetchCallCount;
+  int get storeCallCount => _storeCallCount;
+  int get healthCallCount => _healthCallCount;
+  int get vaultSaveCount => _vaultSaveCount;
+  DateTime? get lastVaultSaveAt => _lastVaultSaveAt;
   bool get localRelayRunning => _localRelayNode.isRunning;
   bool get pairingBeaconRunning => _pairingBeaconSocket != null;
   List<PeerEndpoint> get recentPairingBeaconRoutes =>
@@ -129,6 +165,10 @@ class MessengerController extends ChangeNotifier {
             )
             .length,
   );
+  int unreadCountFor(String peerDeviceId) =>
+      _unreadCountForConversation(_conversationFor(peerDeviceId));
+  int get unreadLanLobbyCount =>
+      _unreadCountForConversation(_lanLobbyConversation());
   int get seenEnvelopeCount => _snapshot.seenEnvelopeIds.length;
   PeerRouteHealth? routeHealthFor(PeerEndpoint route) =>
       _routeHealth[route.routeKey];
@@ -150,6 +190,8 @@ class MessengerController extends ChangeNotifier {
   @visibleForTesting
   Future<int> runHeartbeatPassNow() async =>
       (await _runHeartbeatPass(force: true)).sentCount;
+  @visibleForTesting
+  Duration? get currentScheduledPollInterval => _currentPollInterval();
 
   DateTime _now() => _nowProvider().toUtc();
 
@@ -159,8 +201,167 @@ class MessengerController extends ChangeNotifier {
     }
     _appInForeground = value;
     if (value && hasIdentity) {
+      _markRuntimeActivity();
+      unawaited(_pollLocalInboxOnly());
       unawaited(pollNow());
     }
+    _reschedulePolling();
+  }
+
+  void activatePairingSession() {
+    if (!hasIdentity) {
+      return;
+    }
+    _pairingSessionActiveUntil = _now().add(_pairingSessionDuration);
+    notifyListeners();
+  }
+
+  Future<void> refreshConversationReachabilityIfStale(String deviceId) async {
+    if (!hasIdentity) {
+      return;
+    }
+    final contact = _contactByDeviceId(deviceId);
+    if (contact == null) {
+      return;
+    }
+    final me = _requireIdentity();
+    if (!_shouldRunAutomaticHeartbeats(me)) {
+      return;
+    }
+    final now = _now();
+    final record = _reachabilityRecordByDeviceId(deviceId);
+    final lastTwoWaySuccessAt = record?.lastTwoWaySuccessAt;
+    if (lastTwoWaySuccessAt != null &&
+        now.difference(lastTwoWaySuccessAt) <= _resumeHeartbeatThreshold) {
+      return;
+    }
+    final lastHeartbeatAttemptAt = record?.lastHeartbeatAttemptAt;
+    if (lastHeartbeatAttemptAt != null &&
+        now.difference(lastHeartbeatAttemptAt) < _resumeHeartbeatThreshold) {
+      return;
+    }
+    final preferredRoutes = _preferredRoutesForContact(contact);
+    PeerEndpoint? selectedRoute;
+    if (preferredRoutes.isNotEmpty) {
+      selectedRoute = preferredRoutes.first;
+    } else {
+      final checks = await _rankRouteHealthForDelivery(
+        _candidateRoutesForContact(contact),
+      );
+      for (final check in checks) {
+        if (check.available && _isRouteEligibleNow(check.route)) {
+          selectedRoute = check.route;
+          break;
+        }
+      }
+    }
+    if (selectedRoute == null) {
+      _noteFailure(contact.deviceId, at: now);
+      await _saveSnapshotSilently(debounce: true);
+      return;
+    }
+    _noteAvailablePath(contact.deviceId, at: now);
+    await _rememberLanRoutesForContact(
+      deviceId: contact.deviceId,
+      routes: selectedRoute.kind == PeerRouteKind.lan
+          ? [selectedRoute]
+          : const <PeerEndpoint>[],
+    );
+    final sent = await _sendRouteUpdate(
+      contact,
+      requestReply: true,
+      reason: 'chat_resume',
+      routes: [selectedRoute],
+    );
+    if (sent) {
+      _markRuntimeActivity();
+      await _saveSnapshotSilently(debounce: true);
+    }
+  }
+
+  void _markRuntimeActivity() {
+    _runtimeActiveUntil = _now().add(_runtimeActiveWindow);
+    _reschedulePolling();
+  }
+
+  _RuntimeMode get _runtimeMode {
+    final me = identity;
+    if (me == null) {
+      return _RuntimeMode.foregroundIdle;
+    }
+    final now = _now();
+    if (!_appInForeground) {
+      if (!kIsWeb &&
+          Platform.isAndroid &&
+          !me.androidBackgroundRuntimeEnabled) {
+        return _RuntimeMode.backgroundDisabledAndroid;
+      }
+      return _RuntimeMode.backgroundEnabled;
+    }
+    if (_runtimeActiveUntil != null && !_runtimeActiveUntil!.isBefore(now)) {
+      return _RuntimeMode.foregroundActive;
+    }
+    return _RuntimeMode.foregroundIdle;
+  }
+
+  Duration? _currentPollInterval() {
+    final me = identity;
+    if (me == null) {
+      return null;
+    }
+    return switch (_runtimeMode) {
+      _RuntimeMode.foregroundActive => _foregroundActivePollInterval,
+      _RuntimeMode.foregroundIdle => _foregroundIdlePollInterval,
+      _RuntimeMode.backgroundEnabled =>
+        !kIsWeb && !Platform.isAndroid
+            ? (awaitingRecipientAckCount > 0
+                  ? _foregroundActivePollInterval
+                  : _desktopBackgroundPollInterval)
+            : _backgroundEnabledPollInterval,
+      _RuntimeMode.backgroundDisabledAndroid => null,
+    };
+  }
+
+  Duration _heartbeatIntervalForCurrentRuntime(IdentityRecord me) {
+    if (!_appInForeground) {
+      if (!kIsWeb && Platform.isAndroid) {
+        return _backgroundHeartbeatInterval;
+      }
+      return _foregroundIdleHeartbeatInterval;
+    }
+    return switch (_runtimeMode) {
+      _RuntimeMode.foregroundActive => _heartbeatInterval,
+      _RuntimeMode.foregroundIdle => _foregroundIdleHeartbeatInterval,
+      _RuntimeMode.backgroundEnabled => _backgroundHeartbeatInterval,
+      _RuntimeMode.backgroundDisabledAndroid => _backgroundHeartbeatInterval,
+    };
+  }
+
+  void _reschedulePolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _nextScheduledPollAt = null;
+    if (!hasIdentity) {
+      notifyListeners();
+      return;
+    }
+    final interval = _currentPollInterval();
+    if (interval == null) {
+      notifyListeners();
+      return;
+    }
+    _nextScheduledPollAt = _now().add(interval);
+    _pollTimer = Timer(interval, () {
+      _pollTimer = null;
+      _nextScheduledPollAt = null;
+      unawaited(pollNow());
+    });
+    notifyListeners();
+  }
+
+  bool _isPairingSessionActive() {
+    final activeUntil = _pairingSessionActiveUntil;
+    return activeUntil != null && !activeUntil.isBefore(_now());
   }
 
   RelayCapabilityReport? get relayCapabilityReport {
@@ -241,15 +442,17 @@ class MessengerController extends ChangeNotifier {
   Future<void> initialize() async {
     try {
       _snapshot = await _vaultStore.load();
+      final normalized = _normalizeStoredContactRoutes();
+      if (normalized) {
+        await _saveSnapshotSilently(notify: false);
+      }
       if (_snapshot.identity != null) {
         await _refreshLanAddresses(persist: false);
         await _ensureLocalRelayRunning();
         await _ensurePairingBeaconRunning();
         _applyAndroidBackgroundPreference();
-        _startPolling();
-        _startFastLocalPolling();
-        unawaited(_sendPairingRouteBeacon());
-        unawaited(_announcePairingAvailabilityIfNeeded(force: true));
+        _reschedulePolling();
+        unawaited(_pollLocalInboxOnly());
         unawaited(pollNow());
       }
     } catch (error) {
@@ -412,6 +615,7 @@ class MessengerController extends ChangeNotifier {
     if (!hasIdentity) {
       return;
     }
+    activatePairingSession();
     await _refreshLanAddresses(persist: false);
     await _ensureLocalRelayRunning();
     await _ensurePairingBeaconRunning();
@@ -421,6 +625,7 @@ class MessengerController extends ChangeNotifier {
 
   Future<ContactInvite> rotatePairingCodeNow() async {
     final me = _requireIdentity();
+    activatePairingSession();
     _snapshot = _snapshot.copyWith(
       identity: me.copyWith(
         pairingNonce: _randomId('pairnonce'),
@@ -448,8 +653,27 @@ class MessengerController extends ChangeNotifier {
     buffer.writeln('ready=$isReady');
     buffer.writeln('hasIdentity=$hasIdentity');
     buffer.writeln('status=${statusMessage ?? '(none)'}');
+    buffer.writeln('runtimeMode=$runtimeModeLabel');
+    buffer.writeln(
+      'nextScheduledPollAt=${nextScheduledPollAt?.toIso8601String() ?? ''}',
+    );
     buffer.writeln('lastRelayStatus=$lastRelayStatus');
     buffer.writeln('localRelayRunning=$localRelayRunning');
+    buffer.writeln('pairingSessionActive=$pairingSessionActive');
+    buffer.writeln(
+      'pairingSessionActiveUntil=${pairingSessionActiveUntil?.toIso8601String() ?? ''}',
+    );
+    buffer.writeln(
+      'lastPairingBeaconSentAt=${lastPairingBeaconSentAt?.toIso8601String() ?? ''}',
+    );
+    buffer.writeln('fetchCalls=$fetchCallCount');
+    buffer.writeln('storeCalls=$storeCallCount');
+    buffer.writeln('healthCalls=$healthCallCount');
+    buffer.writeln('vaultSaveCount=$vaultSaveCount');
+    buffer.writeln(
+      'lastVaultSaveAt=${lastVaultSaveAt?.toIso8601String() ?? ''}',
+    );
+    buffer.writeln('routeBackoffSummary=${_globalRouteBackoffSummary()}');
     if (me != null) {
       buffer.writeln('accountId=${me.accountId}');
       buffer.writeln('deviceId=${me.deviceId}');
@@ -481,7 +705,7 @@ class MessengerController extends ChangeNotifier {
     for (final contact in contacts) {
       final reachability = _reachabilityRecordByDeviceId(contact.deviceId);
       buffer.writeln(
-        'contact alias=${contact.alias} device=${contact.deviceId} relayCapable=${contact.relayCapable} reachability=${_reachabilityStateFor(contact.deviceId).name} lastTwoWaySuccessAt=${reachability?.lastTwoWaySuccessAt?.toIso8601String() ?? ''} lastHeartbeatAttemptAt=${reachability?.lastHeartbeatAttemptAt?.toIso8601String() ?? ''} lastHeartbeatReplyAt=${reachability?.lastHeartbeatReplyAt?.toIso8601String() ?? ''} lastAvailablePathAt=${reachability?.lastAvailablePathAt?.toIso8601String() ?? ''} lastAnySignalAt=${reachability?.lastAnySignalAt?.toIso8601String() ?? ''} lastFailureAt=${reachability?.lastFailureAt?.toIso8601String() ?? ''} routes=${contact.prioritizedRouteHints.map((route) => '${route.kind.name}:${route.label}:${routeHealthFor(route)?.summary ?? 'not checked'}').join(' | ')}',
+        'contact alias=${contact.alias} device=${contact.deviceId} relayCapable=${contact.relayCapable} reachability=${_reachabilityStateFor(contact.deviceId).name} lastTwoWaySuccessAt=${reachability?.lastTwoWaySuccessAt?.toIso8601String() ?? ''} lastHeartbeatAttemptAt=${reachability?.lastHeartbeatAttemptAt?.toIso8601String() ?? ''} lastHeartbeatReplyAt=${reachability?.lastHeartbeatReplyAt?.toIso8601String() ?? ''} lastAvailablePathAt=${reachability?.lastAvailablePathAt?.toIso8601String() ?? ''} lastAnySignalAt=${reachability?.lastAnySignalAt?.toIso8601String() ?? ''} lastFailureAt=${reachability?.lastFailureAt?.toIso8601String() ?? ''} routeBackoff=${_routeBackoffSummaryForRoutes(_candidateRoutesForContact(contact))} routes=${contact.prioritizedRouteHints.map((route) => '${route.kind.name}:${route.label}:${routeHealthFor(route)?.summary ?? 'not checked'}').join(' | ')}',
       );
     }
     buffer.writeln('totalMessages=$totalMessageCount');
@@ -575,10 +799,13 @@ class MessengerController extends ChangeNotifier {
       dedupePeerEndpoints(routes).map(_checkRouteHealth),
     );
     final available = checks.where((check) => check.available).length;
-    await _persist(
+    _setTransientStatus(
       'Checked ${checks.length} route(s); $available available. '
       '${protocolRefresh.addedRoutes.isEmpty ? 'No new relay protocols detected.' : 'Added ${protocolRefresh.addedRoutes.map((route) => route.label).join(', ')}.'}',
     );
+    if (protocolRefresh.addedRoutes.isNotEmpty) {
+      await _saveSnapshotSilently(debounce: true);
+    }
   }
 
   Future<List<PeerRouteHealth>> checkContactRoutes(
@@ -587,6 +814,7 @@ class MessengerController extends ChangeNotifier {
     bool exchangeRouteUpdate = true,
     bool fast = false,
   }) async {
+    _markRuntimeActivity();
     await _refreshLanAddresses(persist: false);
     await _ensureLocalRelayRunning();
     await _ensurePairingBeaconRunning();
@@ -619,13 +847,14 @@ class MessengerController extends ChangeNotifier {
         : false;
     if (persist) {
       final available = availableChecks.length;
-      await _persist(
+      _setTransientStatus(
         checks.isEmpty
             ? 'No paths are advertised for ${current.alias}.'
             : 'Checked ${checks.length} path(s) for ${current.alias}; $available available. Reachability is ${_reachabilityStateFor(current.deviceId).label}. ${routeUpdateSent ? 'Route info exchange requested.' : 'Route info exchange could not be sent yet.'}',
       );
+      await _saveSnapshotSilently(debounce: true);
     } else {
-      await _saveSnapshotSilently();
+      await _saveSnapshotSilently(debounce: true);
     }
     return checks;
   }
@@ -637,6 +866,8 @@ class MessengerController extends ChangeNotifier {
     final notes = <String>[];
     _debugProbeAcknowledgements.clear();
     _debugTwoWayReplies.clear();
+    activatePairingSession();
+    _markRuntimeActivity();
 
     void add(String name, DebugCheckStatus status, String detail) {
       results.add(DebugCheckResult(name: name, status: status, detail: detail));
@@ -771,6 +1002,12 @@ class MessengerController extends ChangeNotifier {
 
     final pairingBeacon = await _runPairingBeaconCheck();
     add(pairingBeacon.name, pairingBeacon.status, pairingBeacon.detail);
+    final pairingSessionPolicy = _runPairingSessionPolicyCheck();
+    add(
+      pairingSessionPolicy.name,
+      pairingSessionPolicy.status,
+      pairingSessionPolicy.detail,
+    );
 
     try {
       await _ensureLocalRelayRunning();
@@ -815,6 +1052,14 @@ class MessengerController extends ChangeNotifier {
       backgroundHeartbeatPolicy.name,
       backgroundHeartbeatPolicy.status,
       backgroundHeartbeatPolicy.detail,
+    );
+    final runtimeSchedulerPolicy = _runAdaptiveRuntimeSchedulerCheck(
+      _requireIdentity(),
+    );
+    add(
+      runtimeSchedulerPolicy.name,
+      runtimeSchedulerPolicy.status,
+      runtimeSchedulerPolicy.detail,
     );
 
     final routeProtocolCoverage = _runRouteProtocolCoverageCheck(
@@ -890,7 +1135,7 @@ class MessengerController extends ChangeNotifier {
           available.isEmpty ? DebugCheckStatus.warn : DebugCheckStatus.pass,
           checks.isEmpty
               ? 'No advertised paths.'
-              : checks.map((check) => check.summary).join(' | '),
+              : _summarizeRouteChecks(checks),
         );
       }
       add(
@@ -1056,7 +1301,7 @@ class MessengerController extends ChangeNotifier {
                 : _expectedDeliveryStateLabelForRoute(bestAvailableCheck.route),
             routeSummary: checks.isEmpty
                 ? 'No advertised paths.'
-                : checks.map((check) => check.summary).join(' | '),
+                : _summarizeRouteChecks(checks),
             heartbeatAttempted:
                 heartbeatAttemptAt != null &&
                 !heartbeatAttemptAt.isBefore(startedAt) &&
@@ -1263,7 +1508,7 @@ class MessengerController extends ChangeNotifier {
     );
 
     notes.add(
-      'Automated checks cover invite/pairing codec, LAN beaconing, local relay runtime, relay protocol availability, path health, heartbeat reachability, peer debug probes, two-way debug messaging, relay loopback, pairing reuse, queue state, and local message action cleanup.',
+      'Automated checks cover invite/pairing codec, adaptive polling/runtime policy, pairing-session gating, LAN beaconing, local relay runtime, relay protocol availability, path health, heartbeat reachability, peer debug probes, two-way debug messaging, relay loopback, pairing reuse, queue state, and local message action cleanup.',
     );
     notes.add(
       'Relay transport checks are host-agnostic: a public relay uses the same TCP/UDP/HTTP/HTTPS health/store/fetch code paths as a LAN-hosted relay; only the configured host or domain changes.',
@@ -1296,7 +1541,7 @@ class MessengerController extends ChangeNotifier {
       throw ArgumentError('Display name is required.');
     }
     _snapshot = _snapshot.copyWith(identity: me.copyWith(displayName: trimmed));
-    await _announcePairingAvailabilityIfNeeded(force: true);
+    await _announcePairingAvailabilityIfNeeded();
     await _persist('Display name updated.');
   }
 
@@ -1304,7 +1549,7 @@ class MessengerController extends ChangeNotifier {
     final me = _requireIdentity();
     final trimmed = bio.trim();
     _snapshot = _snapshot.copyWith(identity: me.copyWith(bio: trimmed));
-    await _announcePairingAvailabilityIfNeeded(force: true);
+    await _announcePairingAvailabilityIfNeeded();
     await _persist(trimmed.isEmpty ? 'Bio cleared.' : 'Bio updated.');
   }
 
@@ -1336,7 +1581,8 @@ class MessengerController extends ChangeNotifier {
       identity: me.copyWith(relayModeEnabled: enabled),
     );
     await _ensureLocalRelayRunning();
-    await _announcePairingAvailabilityIfNeeded(force: true);
+    await _announcePairingAvailabilityIfNeeded();
+    _markRuntimeActivity();
     await _persist(enabled ? 'Relay mode enabled.' : 'Relay mode disabled.');
   }
 
@@ -1345,7 +1591,8 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(
       identity: me.copyWith(autoUseContactRelays: enabled),
     );
-    await _announcePairingAvailabilityIfNeeded(force: true);
+    await _announcePairingAvailabilityIfNeeded();
+    _markRuntimeActivity();
     await _persist(
       enabled
           ? 'Contacts can now contribute relay routes automatically.'
@@ -1377,6 +1624,7 @@ class MessengerController extends ChangeNotifier {
       await _platformBridge.requestNotificationPermission();
     }
     await _platformBridge.setAndroidBackgroundRuntimeEnabled(enabled);
+    _reschedulePolling();
     await _persist(
       enabled
           ? 'Android background runtime enabled. If system battery/background access is blocked, notifications can still be late or never arrive.'
@@ -1391,7 +1639,8 @@ class MessengerController extends ChangeNotifier {
     final me = _requireIdentity();
     _snapshot = _snapshot.copyWith(identity: me.copyWith(localRelayPort: port));
     await _ensureLocalRelayRunning();
-    await _announcePairingAvailabilityIfNeeded(force: true);
+    await _announcePairingAvailabilityIfNeeded();
+    _markRuntimeActivity();
     await _persist('Local relay port updated to $port.');
   }
 
@@ -1409,7 +1658,8 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(
       identity: me.copyWith(configuredRelays: updated),
     );
-    await _announcePairingAvailabilityIfNeeded(force: true);
+    await _announcePairingAvailabilityIfNeeded();
+    _markRuntimeActivity();
     await _persist(
       relays.length == 1
           ? 'Relay ${relays.first.label} added.'
@@ -1533,7 +1783,7 @@ class MessengerController extends ChangeNotifier {
       _snapshot = _snapshot.copyWith(
         identity: me.copyWith(configuredRelays: updated),
       );
-      await _announcePairingAvailabilityIfNeeded(force: true);
+      await _announcePairingAvailabilityIfNeeded();
     }
     return _RelayProtocolRefreshResult(
       checkedRoutes: checks.length,
@@ -1607,7 +1857,8 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(
       identity: me.copyWith(configuredRelays: updated),
     );
-    await _announcePairingAvailabilityIfNeeded(force: true);
+    await _announcePairingAvailabilityIfNeeded();
+    _markRuntimeActivity();
     await _persist('Relay ${relay.label} removed.');
   }
 
@@ -1652,18 +1903,26 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> resetIdentity() async {
     _pollTimer?.cancel();
-    _fastLocalPollTimer?.cancel();
+    _pollTimer = null;
+    _nextScheduledPollAt = null;
+    _pendingSaveTimer?.cancel();
+    _pendingSaveTimer = null;
+    _pendingSaveCompleter = null;
     await _platformBridge.setAndroidBackgroundRuntimeEnabled(false);
     await _stopPairingBeacon();
     await _localRelayNode.stop();
     await _vaultStore.clear();
     _snapshot = VaultSnapshot.empty();
     _polling = false;
+    _pairingSessionActiveUntil = null;
+    _lastPairingBeaconSentAt = null;
+    _runtimeActiveUntil = null;
     _lastPairingAnnouncementMailboxId = null;
     _lastPairingAnnouncementAt = null;
     _lastRelayStatus = 'relay not checked yet';
     _statusMessage = null;
     _routeHealth.clear();
+    _routeRuntime.clear();
     _pendingRouteUpdateProbes.clear();
     _outboundAttemptedAt.clear();
     _debugProbeAcknowledgements.clear();
@@ -1721,18 +1980,17 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(identity: created);
     await _ensureLocalRelayRunning();
     await _ensurePairingBeaconRunning();
-    await _sendPairingRouteBeacon();
-    await _announcePairingAvailabilityIfNeeded(force: true);
     _applyAndroidBackgroundPreference();
     await _persist(
       'Device created. Share a QR invite or the current codephrase to add this contact.',
     );
-    _startPolling();
-    _startFastLocalPolling();
+    _reschedulePolling();
+    await _pollLocalInboxOnly();
     await pollNow();
   }
 
   Future<ContactInvite> buildInvite() async {
+    activatePairingSession();
     await _refreshLanAddresses();
     await _ensurePairingBeaconRunning();
     await _sendPairingRouteBeacon();
@@ -1797,7 +2055,7 @@ class MessengerController extends ChangeNotifier {
       bio: invite.bio,
       relayCapable: invite.relayCapable,
       publicKeyBase64: invite.publicKeyBase64,
-      routeHints: invite.routeHints,
+      routeHints: prunePeerEndpointsByKind(invite.routeHints),
       safetyNumber: safetyNumber,
       trustedAt: DateTime.now().toUtc(),
     );
@@ -1808,6 +2066,7 @@ class MessengerController extends ChangeNotifier {
           kind: ConversationKind.direct,
           peerDeviceId: contact.deviceId,
           messages: const [],
+          lastReadAt: _now(),
         ),
       );
     final contacts = List<ContactRecord>.from(_snapshot.contacts)..add(contact);
@@ -1864,6 +2123,7 @@ class MessengerController extends ChangeNotifier {
           : _replySenderDisplayName(replyTo),
     );
     _upsertMessage(contact.deviceId, message);
+    _markRuntimeActivity();
     await _persist('Trying LAN first, then relay for ${contact.alias}.');
 
     final delivered = await _tryDeliverExistingMessage(
@@ -2197,7 +2457,7 @@ class MessengerController extends ChangeNotifier {
           envelope: update,
         );
       }
-      if (reason == 'heartbeat') {
+      if (reason == 'heartbeat' || reason == 'chat_resume') {
         _noteHeartbeatAttempt(contact.deviceId, at: effectiveSentAt);
       }
       return true;
@@ -2207,7 +2467,7 @@ class MessengerController extends ChangeNotifier {
           _pendingRouteUpdateProbeKey(contact.deviceId, effectiveProbeId),
         );
       }
-      if (reason == 'heartbeat') {
+      if (reason == 'heartbeat' || reason == 'chat_resume') {
         _noteHeartbeatAttempt(contact.deviceId, at: effectiveSentAt);
         _noteFailure(contact.deviceId);
       }
@@ -2232,22 +2492,34 @@ class MessengerController extends ChangeNotifier {
     for (final contact in contacts) {
       final record = _reachabilityRecordByDeviceId(contact.deviceId);
       final lastTwoWaySuccessAt = record?.lastTwoWaySuccessAt;
+      final heartbeatInterval = _heartbeatIntervalForCurrentRuntime(me);
       if (!force &&
           lastTwoWaySuccessAt != null &&
-          _now().difference(lastTwoWaySuccessAt) < _heartbeatInterval) {
+          _now().difference(lastTwoWaySuccessAt) < heartbeatInterval) {
         continue;
       }
       final lastHeartbeatAttemptAt = record?.lastHeartbeatAttemptAt;
       if (!force &&
           lastHeartbeatAttemptAt != null &&
-          _now().difference(lastHeartbeatAttemptAt) < _heartbeatInterval) {
+          _now().difference(lastHeartbeatAttemptAt) < heartbeatInterval) {
         continue;
       }
-      final checks = await _rankRouteHealthForDelivery(
-        _candidateRoutesForContact(contact),
-      );
-      final available = checks.where((check) => check.available).toList();
-      if (available.isEmpty) {
+      final preferredRoutes = _preferredRoutesForContact(contact);
+      PeerEndpoint? selectedRoute;
+      if (preferredRoutes.isNotEmpty) {
+        selectedRoute = preferredRoutes.first;
+      } else {
+        final checks = await _rankRouteHealthForDelivery(
+          _candidateRoutesForContact(contact),
+        );
+        for (final check in checks) {
+          if (check.available && _isRouteEligibleNow(check.route)) {
+            selectedRoute = check.route;
+            break;
+          }
+        }
+      }
+      if (selectedRoute == null) {
         _noteFailure(contact.deviceId);
         changed = true;
         continue;
@@ -2255,16 +2527,16 @@ class MessengerController extends ChangeNotifier {
       _noteAvailablePath(contact.deviceId);
       await _rememberLanRoutesForContact(
         deviceId: contact.deviceId,
-        routes: available
-            .map((check) => check.route)
-            .where((route) => route.kind == PeerRouteKind.lan),
+        routes: selectedRoute.kind == PeerRouteKind.lan
+            ? [selectedRoute]
+            : const <PeerEndpoint>[],
       );
       changed = true;
       final sentHeartbeat = await _sendRouteUpdate(
         contact,
         requestReply: true,
         reason: 'heartbeat',
-        routes: [available.first.route],
+        routes: [selectedRoute],
       );
       if (sentHeartbeat) {
         sent++;
@@ -2288,7 +2560,8 @@ class MessengerController extends ChangeNotifier {
       final me = _requireIdentity();
       final pollRoutes = _pollRoutesForIdentity(me);
       var processed = 0;
-      bool? internetRelayHealthy;
+      var attemptedRelay = false;
+      var relaySuccess = false;
       final routeNotes = <String>[];
 
       for (final route in pollRoutes) {
@@ -2296,13 +2569,11 @@ class MessengerController extends ChangeNotifier {
           if (_shouldSkipSlowPollRoute(route)) {
             continue;
           }
-          final health = await _checkRouteHealth(route);
           if (route.kind == PeerRouteKind.relay) {
-            internetRelayHealthy = health.available;
+            attemptedRelay = true;
           }
-          if (!health.available) {
-            continue;
-          }
+          _fetchCallCount++;
+          final stopwatch = Stopwatch()..start();
           final envelopes = await _relayClient.fetchEnvelopes(
             host: route.host,
             port: route.port,
@@ -2312,13 +2583,19 @@ class MessengerController extends ChangeNotifier {
                 ? const Duration(milliseconds: 900)
                 : const Duration(seconds: 4),
           );
+          stopwatch.stop();
+          _recordRouteSuccess(route, fetch: true, latency: stopwatch.elapsed);
+          if (route.kind == PeerRouteKind.relay) {
+            relaySuccess = true;
+          }
           processed += await _processEnvelopes(envelopes);
           if (envelopes.isNotEmpty) {
             routeNotes.add('${route.kind.name}:${route.host}');
           }
-        } catch (_) {
+        } catch (error) {
+          _recordRouteFailure(route, error: error.toString());
           if (route.kind == PeerRouteKind.relay) {
-            internetRelayHealthy = false;
+            attemptedRelay = true;
           }
         }
       }
@@ -2328,14 +2605,15 @@ class MessengerController extends ChangeNotifier {
 
       _lastRelayStatus = _networkSummary(
         me,
-        internetRelayHealthy: internetRelayHealthy,
+        internetRelayHealthy: attemptedRelay ? relaySuccess : null,
       );
       if (processed > 0) {
-        await _persist(
+        _markRuntimeActivity();
+        _setTransientStatus(
           'Received $processed item(s) via ${routeNotes.isEmpty ? 'known routes' : routeNotes.join(', ')}.',
         );
       } else if (heartbeatResult.changed) {
-        await _saveSnapshotSilently();
+        await _saveSnapshotSilently(debounce: true);
       } else {
         notifyListeners();
       }
@@ -2345,20 +2623,13 @@ class MessengerController extends ChangeNotifier {
       notifyListeners();
     } finally {
       _polling = false;
+      _reschedulePolling();
       notifyListeners();
     }
   }
 
   bool _shouldSkipSlowPollRoute(PeerEndpoint route) {
-    if (route.kind == PeerRouteKind.lan) {
-      return false;
-    }
-    final cached = _routeHealth[route.routeKey];
-    if (cached == null || cached.available) {
-      return false;
-    }
-    return DateTime.now().toUtc().difference(cached.checkedAt) <
-        const Duration(seconds: 30);
+    return !_isRouteEligibleNow(route);
   }
 
   List<ChatMessage> messagesFor(String peerDeviceId) {
@@ -2394,6 +2665,29 @@ class MessengerController extends ChangeNotifier {
     return messages.last;
   }
 
+  bool isUnreadMessage(String peerDeviceId, ChatMessage message) {
+    return _isUnreadMessageInConversation(
+      _conversationFor(peerDeviceId),
+      message,
+    );
+  }
+
+  bool isUnreadLanLobbyMessage(ChatMessage message) {
+    return _isUnreadMessageInConversation(_lanLobbyConversation(), message);
+  }
+
+  Future<void> markConversationRead(String peerDeviceId) async {
+    await _markConversationReadWhere(
+      (conversation) => conversation.peerDeviceId == peerDeviceId,
+    );
+  }
+
+  Future<void> markLanLobbyRead() async {
+    await _markConversationReadWhere(
+      (conversation) => conversation.kind == ConversationKind.lanLobby,
+    );
+  }
+
   ContactRecord? _contactByDeviceId(String deviceId) {
     for (final contact in _snapshot.contacts) {
       if (contact.deviceId == deviceId) {
@@ -2409,6 +2703,7 @@ class MessengerController extends ChangeNotifier {
       return 0;
     }
     try {
+      _fetchCallCount++;
       final envelopes = await _relayClient.fetchEnvelopes(
         host: '127.0.0.1',
         port: me.localRelayPort,
@@ -2462,10 +2757,11 @@ class MessengerController extends ChangeNotifier {
         cancelOnError: false,
       );
       _pairingBeaconTimer?.cancel();
-      _pairingBeaconTimer = Timer.periodic(
-        const Duration(seconds: 5),
-        (_) => unawaited(_sendPairingRouteBeacon()),
-      );
+      _pairingBeaconTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+        if (_isPairingSessionActive()) {
+          unawaited(_sendPairingRouteBeacon());
+        }
+      });
     } catch (_) {
       _pairingBeaconSocket = null;
     }
@@ -2569,9 +2865,10 @@ class MessengerController extends ChangeNotifier {
       routeHints: dedupePeerEndpoints([route, ...contact.routeHints]),
     );
     _snapshot = _snapshot.copyWith(contacts: contacts);
-    await _persist(
+    _setTransientStatus(
       'Rediscovered LAN route ${route.label} for ${contact.alias}.',
     );
+    await _saveSnapshotSilently(debounce: true);
   }
 
   Future<void> _sendPairingRouteBeacon({
@@ -2596,17 +2893,26 @@ class MessengerController extends ChangeNotifier {
     if (targetAddress != null) {
       try {
         socket.send(bytes, targetAddress, targetPort ?? _pairingBeaconPort);
+        _lastPairingBeaconSentAt = _now();
       } catch (_) {
         // Best-effort only.
       }
       return;
     }
+    if (!_isPairingSessionActive()) {
+      return;
+    }
+    var sent = false;
     for (final target in _pairingBroadcastTargets(me)) {
       try {
         socket.send(bytes, target, _pairingBeaconPort);
+        sent = true;
       } catch (_) {
         // Best-effort only.
       }
+    }
+    if (sent) {
+      _lastPairingBeaconSentAt = _now();
     }
   }
 
@@ -2695,7 +3001,7 @@ class MessengerController extends ChangeNotifier {
       lanAddresses = await _lanAddressProvider();
     } catch (error) {
       if (persist) {
-        await _persist('LAN discovery unavailable: $error');
+        _setTransientStatus('LAN discovery unavailable: $error');
       }
       return;
     }
@@ -2707,7 +3013,8 @@ class MessengerController extends ChangeNotifier {
       identity: me.copyWith(lanAddresses: lanAddresses),
     );
     if (persist) {
-      await _persist('Updated nearby LAN routes.');
+      _setTransientStatus('Updated nearby LAN routes.');
+      await _saveSnapshotSilently(debounce: true);
     }
   }
 
@@ -2848,7 +3155,7 @@ class MessengerController extends ChangeNotifier {
           body: decodedMessage.body,
         );
       }
-      _noteTwoWaySuccess(contact.deviceId);
+      _noteAnySignal(contact.deviceId, at: envelope.createdAt);
       await _sendAck(contact: contact, envelope: envelope);
       _markSeen(envelope.messageId);
     }
@@ -2959,8 +3266,9 @@ class MessengerController extends ChangeNotifier {
       final pendingKey = _pendingRouteUpdateProbeKey(sender.deviceId, probeId);
       final pending = _pendingRouteUpdateProbes.remove(pendingKey);
       if (pending != null) {
-        if (pending.reason == 'heartbeat') {
+        if (pending.reason == 'heartbeat' || pending.reason == 'chat_resume') {
           _noteHeartbeatReply(sender.deviceId, at: envelope.createdAt);
+          _markRuntimeActivity();
         }
         _noteTwoWaySuccess(sender.deviceId, at: envelope.createdAt);
       }
@@ -3062,7 +3370,7 @@ class MessengerController extends ChangeNotifier {
       displayName: invite.displayName,
       bio: invite.bio.isEmpty ? existing.bio : invite.bio,
       relayCapable: invite.relayCapable,
-      routeHints: invite.routeHints,
+      routeHints: prunePeerEndpointsByKind(invite.routeHints),
     );
     contacts[existingIndex] = updated;
     _snapshot = _snapshot.copyWith(contacts: contacts);
@@ -3483,6 +3791,58 @@ class MessengerController extends ChangeNotifier {
           : DebugCheckStatus.fail,
       detail:
           'Desktop/Linux/Windows builds keep heartbeats active in foreground and background so tray/background delivery can continue.',
+    );
+  }
+
+  DebugCheckResult _runAdaptiveRuntimeSchedulerCheck(IdentityRecord me) {
+    final previousForeground = _appInForeground;
+    final previousActiveUntil = _runtimeActiveUntil;
+    try {
+      _appInForeground = true;
+      _runtimeActiveUntil = _now().add(_runtimeActiveWindow);
+      final foregroundActive = _currentPollInterval();
+      _runtimeActiveUntil = _now().subtract(const Duration(seconds: 1));
+      final foregroundIdle = _currentPollInterval();
+      _appInForeground = false;
+      final backgroundInterval = _currentPollInterval();
+      final expectedBackground =
+          !kIsWeb && Platform.isAndroid && !me.androidBackgroundRuntimeEnabled
+          ? null
+          : !kIsWeb && !Platform.isAndroid
+          ? (awaitingRecipientAckCount > 0
+                ? _foregroundActivePollInterval
+                : _desktopBackgroundPollInterval)
+          : _backgroundEnabledPollInterval;
+      final ok =
+          foregroundActive == _foregroundActivePollInterval &&
+          foregroundIdle == _foregroundIdlePollInterval &&
+          backgroundInterval == expectedBackground;
+      return DebugCheckResult(
+        name: 'Adaptive runtime scheduler',
+        status: ok ? DebugCheckStatus.pass : DebugCheckStatus.fail,
+        detail:
+            'foreground active ${foregroundActive?.inSeconds ?? 0}s, foreground idle ${foregroundIdle?.inSeconds ?? 0}s, background ${backgroundInterval?.inSeconds ?? 0}s${backgroundInterval == null ? ' (stopped)' : ''}. Next poll ${nextScheduledPollAt?.toIso8601String() ?? '(none)'}.',
+      );
+    } finally {
+      _appInForeground = previousForeground;
+      _runtimeActiveUntil = previousActiveUntil;
+    }
+  }
+
+  DebugCheckResult _runPairingSessionPolicyCheck() {
+    if (_isPairingSessionActive()) {
+      return DebugCheckResult(
+        name: 'Pairing session policy',
+        status: DebugCheckStatus.pass,
+        detail:
+            'Pairing session active until ${pairingSessionActiveUntil?.toIso8601String() ?? '(unknown)'}. UDP beacons can publish every ${const Duration(seconds: 5).inSeconds}s and relay pairing refresh is throttled to ${_pairingRelayAnnouncementInterval.inSeconds}s.',
+      );
+    }
+    return const DebugCheckResult(
+      name: 'Pairing session policy',
+      status: DebugCheckStatus.pass,
+      detail:
+          'Pairing session inactive. Periodic pairing beacons and relay pairing announcements are gated off while direct beacon replies stay available.',
     );
   }
 
@@ -4027,14 +4387,49 @@ class MessengerController extends ChangeNotifier {
     required String recipientDeviceId,
     required RelayEnvelope envelope,
   }) async {
-    final routes = await _rankRoutesForDelivery(
+    final candidateRoutes = dedupePeerEndpoints(
       _candidateRoutesForContact(contact),
     );
-    final deliveredVia = await _deliverAcrossRoutes(
-      routes: routes,
-      recipientDeviceId: recipientDeviceId,
-      envelope: envelope,
-    );
+    final preferredRoutes = _preferredRoutesForContact(contact);
+    Object? lastError;
+    PeerEndpoint? deliveredVia;
+    final relayOnlyCandidates =
+        candidateRoutes.isNotEmpty &&
+        candidateRoutes.every((route) => route.kind == PeerRouteKind.relay);
+    final shouldFreshRankPreferred =
+        relayOnlyCandidates &&
+        preferredRoutes.isNotEmpty &&
+        preferredRoutes.every((route) => route.kind == PeerRouteKind.relay);
+    if (preferredRoutes.isNotEmpty && !shouldFreshRankPreferred) {
+      try {
+        deliveredVia = await _deliverAcrossRoutes(
+          routes: preferredRoutes,
+          recipientDeviceId: recipientDeviceId,
+          envelope: envelope,
+        );
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (deliveredVia == null) {
+      final triedKeys = preferredRoutes.map((route) => route.routeKey).toSet();
+      final remainingRoutes = shouldFreshRankPreferred
+          ? candidateRoutes
+          : candidateRoutes
+                .where((route) => !triedKeys.contains(route.routeKey))
+                .toList(growable: false);
+      if (remainingRoutes.isNotEmpty) {
+        final rankedRoutes = await _rankRoutesForDelivery(remainingRoutes);
+        deliveredVia = await _deliverAcrossRoutes(
+          routes: rankedRoutes,
+          recipientDeviceId: recipientDeviceId,
+          envelope: envelope,
+        );
+      }
+    }
+    if (deliveredVia == null) {
+      throw lastError ?? StateError('No reachable route for recipient.');
+    }
     if (deliveredVia.kind == PeerRouteKind.lan) {
       await _rememberLanRoutesForContact(
         deviceId: contact.deviceId,
@@ -4047,7 +4442,10 @@ class MessengerController extends ChangeNotifier {
   Future<List<PeerEndpoint>> _rankRoutesForDelivery(
     List<PeerEndpoint> routes,
   ) async {
-    final checks = await _rankRouteHealthForDelivery(routes);
+    final eligibleRoutes = routes
+        .where(_isRouteEligibleNow)
+        .toList(growable: false);
+    final checks = await _rankRouteHealthForDelivery(eligibleRoutes);
     return checks.map((check) => check.route).toList(growable: false);
   }
 
@@ -4225,12 +4623,242 @@ class MessengerController extends ChangeNotifier {
     return leftLatency.compareTo(rightLatency);
   }
 
+  int _routeKindDeliveryPriority(PeerEndpoint route) {
+    return switch (route.kind) {
+      PeerRouteKind.lan => 0,
+      PeerRouteKind.directInternet => 1,
+      PeerRouteKind.relay => 2,
+    };
+  }
+
+  _RouteRuntimeState _routeRuntimeState(String routeKey) {
+    return _routeRuntime.putIfAbsent(routeKey, _RouteRuntimeState.new);
+  }
+
+  DateTime? _routeLastSuccessAt(PeerEndpoint route) {
+    final state = _routeRuntime[route.routeKey];
+    if (state == null) {
+      return null;
+    }
+    final successes = <DateTime?>[
+      state.lastFetchSuccessAt,
+      state.lastStoreSuccessAt,
+    ];
+    DateTime? latest;
+    for (final success in successes) {
+      if (success == null) {
+        continue;
+      }
+      if (latest == null || success.isAfter(latest)) {
+        latest = success;
+      }
+    }
+    return latest;
+  }
+
+  Duration _healthCacheTtlFor(PeerEndpoint route) {
+    return route.kind == PeerRouteKind.lan
+        ? _lanHealthCacheTtl
+        : _internetHealthCacheTtl;
+  }
+
+  Duration _recentRouteSuccessTtlFor(PeerEndpoint route) {
+    return route.kind == PeerRouteKind.lan
+        ? _lanRecentRouteSuccessTtl
+        : _internetRecentRouteSuccessTtl;
+  }
+
+  bool _hasFreshHealthyCache(PeerEndpoint route) {
+    final health = _routeHealth[route.routeKey];
+    if (health == null || !health.available) {
+      return false;
+    }
+    return _now().difference(health.checkedAt) <= _healthCacheTtlFor(route);
+  }
+
+  bool _hasRecentRouteSuccess(PeerEndpoint route) {
+    final successAt = _routeLastSuccessAt(route);
+    if (successAt == null) {
+      return false;
+    }
+    return _now().difference(successAt) <= _recentRouteSuccessTtlFor(route);
+  }
+
+  bool _isRouteBackedOff(PeerEndpoint route) {
+    final backoffUntil = _routeRuntime[route.routeKey]?.backoffUntil;
+    return backoffUntil != null && backoffUntil.isAfter(_now());
+  }
+
+  bool _isRouteEligibleNow(PeerEndpoint route) {
+    return !_isRouteBackedOff(route);
+  }
+
+  void _recordRouteSuccess(
+    PeerEndpoint route, {
+    bool? fetch,
+    Duration? latency,
+    String? relayInstanceId,
+    DateTime? at,
+  }) {
+    final timestamp = (at ?? _now()).toUtc();
+    final state = _routeRuntimeState(route.routeKey);
+    if (fetch != null) {
+      if (fetch) {
+        state.lastFetchSuccessAt = timestamp;
+      } else {
+        state.lastStoreSuccessAt = timestamp;
+      }
+    }
+    state.lastFailureAt = null;
+    state.failureStreak = 0;
+    state.backoffUntil = null;
+    _routeHealth[route.routeKey] = PeerRouteHealth(
+      route: route,
+      available: true,
+      latency: latency ?? _routeHealth[route.routeKey]?.latency,
+      checkedAt: timestamp,
+      relayInstanceId:
+          relayInstanceId ?? _routeHealth[route.routeKey]?.relayInstanceId,
+    );
+  }
+
+  void _recordRouteFailure(PeerEndpoint route, {DateTime? at, String? error}) {
+    final timestamp = (at ?? _now()).toUtc();
+    final state = _routeRuntimeState(route.routeKey);
+    state.lastFailureAt = timestamp;
+    state.failureStreak += 1;
+    final backoff = _routeBackoffDurationFor(
+      route,
+      failureStreak: state.failureStreak,
+    );
+    state.backoffUntil = timestamp.add(backoff);
+    _routeHealth[route.routeKey] = PeerRouteHealth(
+      route: route,
+      available: false,
+      latency: null,
+      checkedAt: timestamp,
+      error: error,
+    );
+  }
+
+  Duration _routeBackoffDurationFor(
+    PeerEndpoint route, {
+    required int failureStreak,
+  }) {
+    if (route.kind == PeerRouteKind.lan) {
+      if (failureStreak <= 1) {
+        return const Duration(seconds: 5);
+      }
+      if (failureStreak == 2) {
+        return const Duration(seconds: 15);
+      }
+      if (failureStreak == 3) {
+        return const Duration(seconds: 30);
+      }
+      return const Duration(seconds: 60);
+    }
+    if (failureStreak <= 1) {
+      return const Duration(seconds: 15);
+    }
+    if (failureStreak == 2) {
+      return const Duration(seconds: 60);
+    }
+    if (failureStreak == 3) {
+      return const Duration(seconds: 300);
+    }
+    return const Duration(seconds: 600);
+  }
+
+  List<PeerEndpoint> _preferredRoutesForContact(ContactRecord contact) {
+    final candidateRoutes = dedupePeerEndpoints(
+      _candidateRoutesForContact(contact),
+    ).where(_isRouteEligibleNow).toList(growable: false);
+    final hasNonRelayCandidate = candidateRoutes.any(
+      (route) => route.kind != PeerRouteKind.relay,
+    );
+    final recentSuccessRoutes =
+        candidateRoutes
+            .where(
+              (route) =>
+                  _hasRecentRouteSuccess(route) &&
+                  (!hasNonRelayCandidate || route.kind != PeerRouteKind.relay),
+            )
+            .toList(growable: false)
+          ..sort((left, right) {
+            final leftAt = _routeLastSuccessAt(left);
+            final rightAt = _routeLastSuccessAt(right);
+            if (leftAt == null && rightAt == null) {
+              return 0;
+            }
+            if (leftAt == null) {
+              return 1;
+            }
+            if (rightAt == null) {
+              return -1;
+            }
+            return rightAt.compareTo(leftAt);
+          });
+    final hasUntestedNonRelay = candidateRoutes.any(
+      (route) =>
+          route.kind != PeerRouteKind.relay &&
+          !_hasRecentRouteSuccess(route) &&
+          !_hasFreshHealthyCache(route),
+    );
+    final cachedHealthyRoutes =
+        candidateRoutes
+            .where((route) {
+              if (_hasRecentRouteSuccess(route) ||
+                  !_hasFreshHealthyCache(route)) {
+                return false;
+              }
+              if (hasUntestedNonRelay && route.kind == PeerRouteKind.relay) {
+                return false;
+              }
+              return true;
+            })
+            .toList(growable: false)
+          ..sort((left, right) {
+            final kindCompare = _routeKindDeliveryPriority(
+              left,
+            ).compareTo(_routeKindDeliveryPriority(right));
+            if (kindCompare != 0) {
+              return kindCompare;
+            }
+            final leftHealth = _routeHealth[left.routeKey];
+            final rightHealth = _routeHealth[right.routeKey];
+            return _compareRouteHealth(
+              leftHealth ??
+                  PeerRouteHealth(
+                    route: left,
+                    available: false,
+                    latency: null,
+                    checkedAt: DateTime.fromMillisecondsSinceEpoch(
+                      0,
+                      isUtc: true,
+                    ),
+                  ),
+              rightHealth ??
+                  PeerRouteHealth(
+                    route: right,
+                    available: false,
+                    latency: null,
+                    checkedAt: DateTime.fromMillisecondsSinceEpoch(
+                      0,
+                      isUtc: true,
+                    ),
+                  ),
+            );
+          });
+    return <PeerEndpoint>[...recentSuccessRoutes, ...cachedHealthyRoutes];
+  }
+
   Future<PeerRouteHealth> _checkRouteHealth(
     PeerEndpoint route, {
     Duration? lanTimeout,
     Duration? directInternetTimeout,
     Duration? relayTimeout,
   }) async {
+    _healthCallCount++;
     final timeout = switch (route.kind) {
       PeerRouteKind.lan => lanTimeout ?? const Duration(milliseconds: 800),
       PeerRouteKind.directInternet =>
@@ -4259,16 +4887,16 @@ class MessengerController extends ChangeNotifier {
             : null,
       );
       _routeHealth[route.routeKey] = health;
+      _recordRouteSuccess(
+        route,
+        latency: stopwatch.elapsed,
+        relayInstanceId: health.relayInstanceId,
+        at: health.checkedAt,
+      );
       return health;
     } catch (error) {
-      final health = PeerRouteHealth(
-        route: route,
-        available: false,
-        latency: null,
-        checkedAt: DateTime.now().toUtc(),
-        error: error.toString(),
-      );
-      _routeHealth[route.routeKey] = health;
+      _recordRouteFailure(route, error: error.toString());
+      final health = _routeHealth[route.routeKey]!;
       return health;
     }
   }
@@ -4284,6 +4912,8 @@ class MessengerController extends ChangeNotifier {
     Object? lastError;
     for (final route in routes) {
       try {
+        _storeCallCount++;
+        final stopwatch = Stopwatch()..start();
         final stored = await _relayClient.storeEnvelope(
           host: route.host,
           port: route.port,
@@ -4296,10 +4926,14 @@ class MessengerController extends ChangeNotifier {
               ? directInternetTimeout ?? const Duration(seconds: 2)
               : relayTimeout ?? const Duration(seconds: 4),
         );
+        stopwatch.stop();
         if (stored) {
+          _recordRouteSuccess(route, fetch: false, latency: stopwatch.elapsed);
           return route;
         }
+        _recordRouteFailure(route, error: 'Route did not accept store.');
       } catch (error) {
+        _recordRouteFailure(route, error: error.toString());
         lastError = error;
       }
     }
@@ -4308,6 +4942,8 @@ class MessengerController extends ChangeNotifier {
 
   Future<ContactInvite> _resolveInviteByCodephrase(String codephrase) async {
     final me = _requireIdentity();
+    activatePairingSession();
+    _markRuntimeActivity();
     final mailboxId = pairingMailboxIdForCodephrase(codephrase);
     final pingSent = await _sendPairingDiscoveryPing();
     if (pingSent) {
@@ -4384,6 +5020,7 @@ class MessengerController extends ChangeNotifier {
     Duration lanTimeout = const Duration(milliseconds: 800),
   }) async {
     try {
+      _fetchCallCount++;
       final envelopes = await _relayClient.fetchEnvelopes(
         host: route.host,
         port: route.port,
@@ -4552,10 +5189,9 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
       final preferredSegments = knownHostSegmentsByPrefix[prefix] ?? <int>{};
-      for (final hostSegment in _nearbyHostSegments(
-        ownHostSegment,
+      for (final hostSegment in _rediscoveryHostSegmentsForContact(
+        ownHostSegment: ownHostSegment,
         preferredSegments: preferredSegments,
-        maxCount: _maxLanRediscoveryScanHostsPerAddress,
       )) {
         final host = '$prefix.$hostSegment';
         if (ownAddresses.contains(host)) {
@@ -4575,6 +5211,59 @@ class MessengerController extends ChangeNotifier {
       }
     }
     return routes;
+  }
+
+  List<int> _rediscoveryHostSegmentsForContact({
+    required int ownHostSegment,
+    required Set<int> preferredSegments,
+  }) {
+    if (preferredSegments.isEmpty) {
+      if (ownHostSegment == 1) {
+        return const <int>[2, 3, 4, 5, 6];
+      }
+      if (ownHostSegment <= 10) {
+        return const <int>[1];
+      }
+      return const <int>[];
+    }
+    final seen = <int>{};
+    final segments = <int>[];
+    final sortedPreferredSegments = preferredSegments.toList(growable: false)
+      ..sort(
+        (left, right) => (left - ownHostSegment).abs().compareTo(
+          (right - ownHostSegment).abs(),
+        ),
+      );
+    void add(int value) {
+      if (segments.length >= _maxLanRediscoveryScanHostsPerAddress ||
+          value < 1 ||
+          value > 254 ||
+          !seen.add(value)) {
+        return;
+      }
+      segments.add(value);
+    }
+
+    for (final preferred in sortedPreferredSegments) {
+      add(preferred);
+    }
+    final likelyHotspotGateway =
+        ownHostSegment <= 10 ||
+        sortedPreferredSegments.any((segment) => segment <= 10);
+    if (likelyHotspotGateway) {
+      add(1);
+    }
+    for (final preferred in sortedPreferredSegments) {
+      for (
+        var offset = 1;
+        offset <= _maxLanRediscoveryAdjacentHostsPerHint;
+        offset++
+      ) {
+        add(preferred - offset);
+        add(preferred + offset);
+      }
+    }
+    return segments;
   }
 
   List<int> _nearbyHostSegments(
@@ -4659,7 +5348,7 @@ class MessengerController extends ChangeNotifier {
     }
     final contacts = List<ContactRecord>.from(_snapshot.contacts);
     final contact = contacts[index];
-    final mergedRoutes = dedupePeerEndpoints([
+    final mergedRoutes = prunePeerEndpointsByKind([
       ...lanRoutes,
       ...contact.routeHints,
     ]);
@@ -4668,7 +5357,7 @@ class MessengerController extends ChangeNotifier {
     }
     contacts[index] = contact.copyWith(routeHints: mergedRoutes);
     _snapshot = _snapshot.copyWith(contacts: contacts);
-    await _saveSnapshotSilently();
+    await _saveSnapshotSilently(debounce: true);
   }
 
   bool _sameRoutes(List<PeerEndpoint> left, List<PeerEndpoint> right) {
@@ -4683,6 +5372,73 @@ class MessengerController extends ChangeNotifier {
       }
     }
     return true;
+  }
+
+  bool _normalizeStoredContactRoutes() {
+    var changed = false;
+    final contacts = List<ContactRecord>.from(_snapshot.contacts);
+    for (var index = 0; index < contacts.length; index++) {
+      final current = contacts[index];
+      final pruned = prunePeerEndpointsByKind(current.routeHints);
+      if (_sameRoutes(pruned, current.routeHints)) {
+        continue;
+      }
+      contacts[index] = current.copyWith(routeHints: pruned);
+      changed = true;
+    }
+    if (changed) {
+      _snapshot = _snapshot.copyWith(contacts: contacts);
+    }
+    return changed;
+  }
+
+  String _routeBackoffSummaryForRoutes(Iterable<PeerEndpoint> routes) {
+    final entries = <String>[];
+    final seen = <String>{};
+    final now = _now();
+    for (final route in routes) {
+      if (!seen.add(route.routeKey)) {
+        continue;
+      }
+      final state = _routeRuntime[route.routeKey];
+      if (state == null) {
+        continue;
+      }
+      final backoffUntil = state.backoffUntil;
+      if (backoffUntil == null || !backoffUntil.isAfter(now)) {
+        continue;
+      }
+      entries.add(
+        '${route.label} backoff ${backoffUntil.difference(now).inSeconds}s streak ${state.failureStreak}',
+      );
+      if (entries.length >= _maxDebugRouteSummaryItems) {
+        break;
+      }
+    }
+    if (entries.isEmpty) {
+      return '(none)';
+    }
+    return entries.join(' | ');
+  }
+
+  String _globalRouteBackoffSummary() {
+    final routes = <PeerEndpoint>{
+      ..._routeHealth.values.map((health) => health.route),
+      for (final contact in contacts) ..._candidateRoutesForContact(contact),
+      ...configuredRelays,
+    };
+    return _routeBackoffSummaryForRoutes(routes);
+  }
+
+  String _summarizeRouteChecks(Iterable<PeerRouteHealth> checks) {
+    final summaries = checks
+        .map((check) => check.summary)
+        .toList(growable: false);
+    if (summaries.length <= _maxDebugRouteSummaryItems) {
+      return summaries.join(' | ');
+    }
+    final visible = summaries.take(_maxDebugRouteSummaryItems).join(' | ');
+    return '$visible | +${summaries.length - _maxDebugRouteSummaryItems} more';
   }
 
   List<PeerEndpoint> _pairingLoopbackCheckRoutesForIdentity(IdentityRecord me) {
@@ -4841,6 +5597,9 @@ class MessengerController extends ChangeNotifier {
     if (me == null) {
       return;
     }
+    if (!force && !_isPairingSessionActive()) {
+      return;
+    }
     final invite = _inviteForIdentity(me);
     final payload = invite.encodePayload();
     final mailboxIds = pairingCodephrasesForPayload(
@@ -4852,13 +5611,15 @@ class MessengerController extends ChangeNotifier {
     if (!force &&
         _lastPairingAnnouncementMailboxId == mailboxKey &&
         lastAnnouncementAt != null &&
-        now.difference(lastAnnouncementAt) < const Duration(seconds: 8)) {
+        now.difference(lastAnnouncementAt) <
+            _pairingRelayAnnouncementInterval) {
       return;
     }
 
     final stores = <Future<void>>[];
     for (final route in _announcementRoutesForIdentity(me)) {
       for (final mailboxId in mailboxIds) {
+        _storeCallCount++;
         final announcement = RelayEnvelope(
           kind: 'pairing_announcement',
           messageId: _randomId('pair'),
@@ -4881,7 +5642,19 @@ class MessengerController extends ChangeNotifier {
                     ? const Duration(milliseconds: 500)
                     : const Duration(seconds: 2),
               )
-              .catchError((_) => false)
+              .then((stored) {
+                if (stored) {
+                  _recordRouteSuccess(route, fetch: false);
+                } else {
+                  _recordRouteFailure(
+                    route,
+                    error: 'Pairing announcement store was not accepted.',
+                  );
+                }
+              })
+              .catchError((error) {
+                _recordRouteFailure(route, error: error.toString());
+              })
               .then((_) {}),
         );
       }
@@ -5195,7 +5968,68 @@ class MessengerController extends ChangeNotifier {
       kind: ConversationKind.direct,
       peerDeviceId: peerDeviceId,
       messages: const [],
+      lastReadAt: _now(),
     );
+  }
+
+  ConversationRecord _lanLobbyConversation() {
+    for (final conversation in _snapshot.conversations) {
+      if (conversation.kind == ConversationKind.lanLobby) {
+        return conversation;
+      }
+    }
+    return ConversationRecord(
+      id: _lanLobbyConversationId,
+      kind: ConversationKind.lanLobby,
+      peerDeviceId: _lanLobbyMailboxId,
+      messages: const [],
+      lastReadAt: _now(),
+    );
+  }
+
+  int _unreadCountForConversation(ConversationRecord conversation) {
+    return conversation.messages.where((message) {
+      return _isUnreadMessageInConversation(conversation, message);
+    }).length;
+  }
+
+  bool _isUnreadMessageInConversation(
+    ConversationRecord conversation,
+    ChatMessage message,
+  ) {
+    if (message.outbound) {
+      return false;
+    }
+    final lastReadAt = conversation.lastReadAt;
+    if (lastReadAt == null) {
+      return true;
+    }
+    return message.createdAt.isAfter(lastReadAt);
+  }
+
+  Future<void> _markConversationReadWhere(
+    bool Function(ConversationRecord conversation) predicate,
+  ) async {
+    final conversations = List<ConversationRecord>.from(
+      _snapshot.conversations,
+    );
+    final index = conversations.indexWhere(predicate);
+    if (index == -1) {
+      return;
+    }
+    final conversation = conversations[index];
+    final latestCreatedAt = conversation.messages.isEmpty
+        ? _now()
+        : conversation.messages
+              .map((message) => message.createdAt)
+              .reduce((left, right) => left.isAfter(right) ? left : right);
+    final currentReadAt = conversation.lastReadAt;
+    if (currentReadAt != null && !latestCreatedAt.isAfter(currentReadAt)) {
+      return;
+    }
+    conversations[index] = conversation.copyWith(lastReadAt: latestCreatedAt);
+    _snapshot = _snapshot.copyWith(conversations: conversations);
+    await _saveSnapshotSilently();
   }
 
   void _upsertMessage(String peerDeviceId, ChatMessage message) {
@@ -5212,6 +6046,7 @@ class MessengerController extends ChangeNotifier {
           kind: ConversationKind.direct,
           peerDeviceId: peerDeviceId,
           messages: [message],
+          lastReadAt: message.outbound ? message.createdAt : null,
         ),
       );
     } else {
@@ -5240,6 +6075,7 @@ class MessengerController extends ChangeNotifier {
           kind: ConversationKind.lanLobby,
           peerDeviceId: _lanLobbyMailboxId,
           messages: [message],
+          lastReadAt: message.outbound ? message.createdAt : null,
         ),
       );
     } else {
@@ -5360,9 +6196,74 @@ class MessengerController extends ChangeNotifier {
     await _saveSnapshotSilently();
   }
 
-  Future<void> _saveSnapshotSilently({bool notify = true}) async {
+  void _setTransientStatus(String? status, {bool notify = true}) {
+    _statusMessage = status;
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  Future<void> _saveSnapshotSilently({
+    bool notify = true,
+    bool debounce = false,
+  }) async {
     _prunePendingRouteUpdateProbes();
-    await _vaultStore.save(_snapshot);
+    if (debounce) {
+      final existingCompleter = _pendingSaveCompleter;
+      if (existingCompleter != null && !existingCompleter.isCompleted) {
+        if (notify) {
+          notifyListeners();
+        }
+        return existingCompleter.future;
+      }
+      final completer = Completer<void>();
+      _pendingSaveCompleter = completer;
+      _pendingSaveTimer?.cancel();
+      _pendingSaveTimer = Timer(_saveDebounceWindow, () async {
+        try {
+          _prunePendingRouteUpdateProbes();
+          await _vaultStore.save(_snapshot);
+          _vaultSaveCount++;
+          _lastVaultSaveAt = _now();
+          if (!completer.isCompleted) {
+            completer.complete();
+          }
+        } catch (error, stackTrace) {
+          if (!completer.isCompleted) {
+            completer.completeError(error, stackTrace);
+          }
+        } finally {
+          if (identical(_pendingSaveCompleter, completer)) {
+            _pendingSaveCompleter = null;
+          }
+          _pendingSaveTimer = null;
+          if (notify) {
+            notifyListeners();
+          }
+        }
+      });
+      if (notify) {
+        notifyListeners();
+      }
+      return completer.future;
+    }
+    final pendingCompleter = _pendingSaveCompleter;
+    _pendingSaveTimer?.cancel();
+    _pendingSaveTimer = null;
+    _pendingSaveCompleter = null;
+    try {
+      await _vaultStore.save(_snapshot);
+      _vaultSaveCount++;
+      _lastVaultSaveAt = _now();
+      if (pendingCompleter != null && !pendingCompleter.isCompleted) {
+        pendingCompleter.complete();
+      }
+    } catch (error, stackTrace) {
+      if (pendingCompleter != null && !pendingCompleter.isCompleted) {
+        pendingCompleter.completeError(error, stackTrace);
+      }
+      rethrow;
+    }
     if (notify) {
       notifyListeners();
     }
@@ -5413,19 +6314,6 @@ class MessengerController extends ChangeNotifier {
     return groups.join(' ');
   }
 
-  void _startPolling() {
-    _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(_slowPollInterval, (_) => unawaited(pollNow()));
-  }
-
-  void _startFastLocalPolling() {
-    _fastLocalPollTimer?.cancel();
-    _fastLocalPollTimer = Timer.periodic(
-      _fastLocalPollInterval,
-      (_) => unawaited(_pollLocalInboxOnly()),
-    );
-  }
-
   void _handleLocalEnvelopeStored(
     String recipientDeviceId,
     RelayEnvelope envelope,
@@ -5447,17 +6335,20 @@ class MessengerController extends ChangeNotifier {
     }
     final processed = await _processEnvelopes([envelope]);
     if (processed > 0) {
-      await _persist('Received $processed item(s) instantly via local relay.');
+      _markRuntimeActivity();
+      _setTransientStatus(
+        'Received $processed item(s) instantly via local relay.',
+      );
+      await _saveSnapshotSilently(debounce: true);
     } else {
       notifyListeners();
     }
   }
 
   Future<void> _pollLocalInboxOnly() async {
-    if (_fastLocalPolling || !hasIdentity || !_localRelayNode.isRunning) {
+    if (!hasIdentity || !_localRelayNode.isRunning) {
       return;
     }
-    _fastLocalPolling = true;
     try {
       final me = _requireIdentity();
       var processed = 0;
@@ -5470,6 +6361,8 @@ class MessengerController extends ChangeNotifier {
       ];
       for (final route in routes) {
         try {
+          _fetchCallCount++;
+          final stopwatch = Stopwatch()..start();
           final envelopes = await _relayClient.fetchEnvelopes(
             host: route.host,
             port: route.port,
@@ -5477,16 +6370,21 @@ class MessengerController extends ChangeNotifier {
             recipientDeviceId: me.deviceId,
             timeout: const Duration(milliseconds: 350),
           );
+          stopwatch.stop();
+          _recordRouteSuccess(route, fetch: true, latency: stopwatch.elapsed);
           processed += await _processEnvelopes(envelopes);
-        } catch (_) {
+        } catch (error) {
+          _recordRouteFailure(route, error: error.toString());
           // Full polling handles status reporting; this path only reduces LAN latency.
         }
       }
       if (processed > 0) {
-        await _persist('Received $processed item(s) via fast local inbox.');
+        _markRuntimeActivity();
+        _setTransientStatus('Received $processed item(s) via local inbox.');
+        await _saveSnapshotSilently(debounce: true);
       }
     } finally {
-      _fastLocalPolling = false;
+      _reschedulePolling();
     }
   }
 
@@ -5524,7 +6422,7 @@ class MessengerController extends ChangeNotifier {
   @override
   void dispose() {
     _pollTimer?.cancel();
-    _fastLocalPollTimer?.cancel();
+    _pendingSaveTimer?.cancel();
     _localRelayNode.onEnvelopeStored = null;
     unawaited(_stopPairingBeacon());
     unawaited(_platformBridge.setAndroidBackgroundRuntimeEnabled(false));
@@ -5557,6 +6455,21 @@ class _HeartbeatPassResult {
 
   final int sentCount;
   final bool changed;
+}
+
+enum _RuntimeMode {
+  foregroundActive,
+  foregroundIdle,
+  backgroundEnabled,
+  backgroundDisabledAndroid,
+}
+
+class _RouteRuntimeState {
+  DateTime? lastFetchSuccessAt;
+  DateTime? lastStoreSuccessAt;
+  DateTime? lastFailureAt;
+  int failureStreak = 0;
+  DateTime? backoffUntil;
 }
 
 class _DecodedDirectMessage {
