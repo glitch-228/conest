@@ -1784,6 +1784,142 @@ void main() {
     },
   );
 
+  test(
+    'markConversationReadThroughMessage only clears unread messages through the visible cutoff',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await bob.pollNow();
+      final bobContactForAlice = bob.contacts.single;
+      final aliceContactForBob = alice.contacts.single;
+
+      await bob.sendMessage(contact: bobContactForAlice, body: 'one');
+      await bob.sendMessage(contact: bobContactForAlice, body: 'two');
+      await bob.sendMessage(contact: bobContactForAlice, body: 'three');
+      await alice.pollNow();
+      await bob.pollNow();
+
+      final aliceMessages = alice.messagesFor(aliceContactForBob.deviceId);
+      expect(alice.unreadCountFor(aliceContactForBob.deviceId), 3);
+
+      await alice.markConversationReadThroughMessage(
+        aliceContactForBob.deviceId,
+        aliceMessages[1],
+      );
+
+      expect(alice.unreadCountFor(aliceContactForBob.deviceId), 1);
+      expect(
+        alice.isUnreadMessage(aliceContactForBob.deviceId, aliceMessages[0]),
+        isFalse,
+      );
+      expect(
+        alice.isUnreadMessage(aliceContactForBob.deviceId, aliceMessages[1]),
+        isFalse,
+      );
+      expect(
+        alice.isUnreadMessage(aliceContactForBob.deviceId, aliceMessages[2]),
+        isTrue,
+      );
+    },
+  );
+
+  test('read receipts upgrade delivered outbound messages to read', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: (await bob.buildInvite()).encodePayload(),
+      codephrase: '',
+    );
+    await bob.pollNow();
+    final bobContactForAlice = bob.contacts.single;
+    final aliceContactForBob = alice.contacts.single;
+
+    await alice.sendMessage(contact: aliceContactForBob, body: 'first');
+    await alice.sendMessage(contact: aliceContactForBob, body: 'second');
+    await bob.pollNow();
+    await alice.pollNow();
+
+    var aliceMessages = alice.messagesFor(aliceContactForBob.deviceId);
+    expect(aliceMessages[0].state, DeliveryState.delivered);
+    expect(aliceMessages[1].state, DeliveryState.delivered);
+
+    final bobMessages = bob.messagesFor(bobContactForAlice.deviceId);
+    await bob.markConversationReadThroughMessage(
+      bobContactForAlice.deviceId,
+      bobMessages.last,
+    );
+    await alice.pollNow();
+
+    aliceMessages = alice.messagesFor(aliceContactForBob.deviceId);
+    expect(aliceMessages[0].state, DeliveryState.read);
+    expect(aliceMessages[1].state, DeliveryState.read);
+  });
+
+  test(
+    "debug suppress-read-receipts toggle keeps sending only delivery acknowledgements",
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await bob.pollNow();
+      final bobContactForAlice = bob.contacts.single;
+      final aliceContactForBob = alice.contacts.single;
+
+      await bob.updateSuppressReadReceipts(true);
+
+      await alice.sendMessage(contact: aliceContactForBob, body: 'no read');
+      await bob.pollNow();
+      await alice.pollNow();
+
+      var aliceMessage = alice.messagesFor(aliceContactForBob.deviceId).single;
+      expect(aliceMessage.state, DeliveryState.delivered);
+
+      final bobMessage = bob.messagesFor(bobContactForAlice.deviceId).single;
+      await bob.markConversationReadThroughMessage(
+        bobContactForAlice.deviceId,
+        bobMessage,
+      );
+      await alice.pollNow();
+
+      aliceMessage = alice.messagesFor(aliceContactForBob.deviceId).single;
+      expect(aliceMessage.state, DeliveryState.delivered);
+    },
+  );
+
   testWidgets(
     'double tap incoming message opens reply preview and can cancel',
     (tester) async {

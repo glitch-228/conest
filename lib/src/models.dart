@@ -11,7 +11,8 @@ enum DeliveryState {
     Icons.cloud_upload_outlined,
     'Queued on a relay; waiting for delivery receipt',
   ),
-  delivered(Icons.done_all, 'Delivered'),
+  delivered(Icons.done, 'Delivered'),
+  read(Icons.done_all, 'Read'),
   canceled(Icons.cancel_outlined, 'Canceled'),
   failed(Icons.error_outline, 'Failed');
 
@@ -24,6 +25,7 @@ enum DeliveryState {
     DeliveryState.pending ||
     DeliveryState.local ||
     DeliveryState.relayed => true,
+    DeliveryState.read ||
     DeliveryState.delivered ||
     DeliveryState.canceled ||
     DeliveryState.failed => false,
@@ -322,6 +324,7 @@ class IdentityRecord {
     required this.autoUseContactRelays,
     required this.notificationsEnabled,
     required this.androidBackgroundRuntimeEnabled,
+    required this.suppressReadReceipts,
     required this.lanAddresses,
     required this.safetyNumber,
     required this.createdAt,
@@ -341,6 +344,7 @@ class IdentityRecord {
   final bool autoUseContactRelays;
   final bool notificationsEnabled;
   final bool androidBackgroundRuntimeEnabled;
+  final bool suppressReadReceipts;
   final List<String> lanAddresses;
   final String safetyNumber;
   final DateTime createdAt;
@@ -383,6 +387,7 @@ class IdentityRecord {
     bool? autoUseContactRelays,
     bool? notificationsEnabled,
     bool? androidBackgroundRuntimeEnabled,
+    bool? suppressReadReceipts,
     List<String>? lanAddresses,
   }) {
     return IdentityRecord(
@@ -402,6 +407,7 @@ class IdentityRecord {
       androidBackgroundRuntimeEnabled:
           androidBackgroundRuntimeEnabled ??
           this.androidBackgroundRuntimeEnabled,
+      suppressReadReceipts: suppressReadReceipts ?? this.suppressReadReceipts,
       lanAddresses: lanAddresses ?? this.lanAddresses,
       safetyNumber: safetyNumber,
       createdAt: createdAt,
@@ -426,6 +432,7 @@ class IdentityRecord {
       'autoUseContactRelays': autoUseContactRelays,
       'notificationsEnabled': notificationsEnabled,
       'androidBackgroundRuntimeEnabled': androidBackgroundRuntimeEnabled,
+      'suppressReadReceipts': suppressReadReceipts,
       'lanAddresses': lanAddresses,
       'safetyNumber': safetyNumber,
       'createdAt': createdAt.toIso8601String(),
@@ -481,6 +488,7 @@ class IdentityRecord {
       notificationsEnabled: json['notificationsEnabled'] as bool? ?? true,
       androidBackgroundRuntimeEnabled:
           json['androidBackgroundRuntimeEnabled'] as bool? ?? false,
+      suppressReadReceipts: json['suppressReadReceipts'] as bool? ?? false,
       lanAddresses: (json['lanAddresses'] as List<dynamic>? ?? const [])
           .cast<String>(),
       safetyNumber: json['safetyNumber'] as String,

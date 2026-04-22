@@ -686,6 +686,7 @@ class MessengerController extends ChangeNotifier {
       buffer.writeln(
         'androidBackgroundRuntimeEnabled=${me.androidBackgroundRuntimeEnabled}',
       );
+      buffer.writeln('suppressReadReceipts=${me.suppressReadReceipts}');
       buffer.writeln('localRelayPort=${me.localRelayPort}');
       buffer.writeln('lanAddresses=${me.lanAddresses.join(', ')}');
       buffer.writeln('pairingBeaconRunning=$pairingBeaconRunning');
@@ -1632,6 +1633,18 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  Future<void> updateSuppressReadReceipts(bool enabled) async {
+    final me = _requireIdentity();
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(suppressReadReceipts: enabled),
+    );
+    await _persist(
+      enabled
+          ? 'Read confirmations disabled on this debug build. Only delivery acknowledgements will be sent.'
+          : 'Read confirmations enabled on this debug build.',
+    );
+  }
+
   Future<void> updateLocalRelayPort(int port) async {
     if (port <= 0 || port > 65535) {
       throw ArgumentError('Relay port must be between 1 and 65535.');
@@ -1973,6 +1986,7 @@ class MessengerController extends ChangeNotifier {
       autoUseContactRelays: true,
       notificationsEnabled: true,
       androidBackgroundRuntimeEnabled: false,
+      suppressReadReceipts: false,
       lanAddresses: lanAddresses,
       safetyNumber: safetyNumber,
       createdAt: DateTime.now().toUtc(),
@@ -2677,8 +2691,37 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> markConversationRead(String peerDeviceId) async {
+    final conversation = _conversationFor(peerDeviceId);
+    ChatMessage? latestInbound;
+    for (final message in conversation.messages) {
+      if (message.outbound) {
+        continue;
+      }
+      if (latestInbound == null ||
+          message.createdAt.isAfter(latestInbound.createdAt)) {
+        latestInbound = message;
+      }
+    }
+    if (latestInbound != null) {
+      await markConversationReadThroughMessage(peerDeviceId, latestInbound);
+      return;
+    }
     await _markConversationReadWhere(
       (conversation) => conversation.peerDeviceId == peerDeviceId,
+    );
+  }
+
+  Future<void> markConversationReadThroughMessage(
+    String peerDeviceId,
+    ChatMessage message,
+  ) async {
+    if (message.outbound) {
+      return;
+    }
+    await _markConversationReadWhere(
+      (conversation) => conversation.peerDeviceId == peerDeviceId,
+      readThroughAt: message.createdAt,
+      readThroughMessageId: message.id,
     );
   }
 
@@ -3038,15 +3081,22 @@ class MessengerController extends ChangeNotifier {
       processed++;
       if (envelope.kind == 'ack') {
         _noteTwoWaySuccess(envelope.senderDeviceId);
-        _updateMessageState(
-          envelope.senderDeviceId,
-          envelope.acknowledgedMessageId ?? '',
-          DeliveryState.delivered,
-        );
-        _clearOutboundAttempt(
-          envelope.senderDeviceId,
-          envelope.acknowledgedMessageId ?? '',
-        );
+        if (_isReadReceiptAck(envelope)) {
+          _markMessagesReadThroughMessage(
+            envelope.senderDeviceId,
+            envelope.acknowledgedMessageId ?? '',
+          );
+        } else {
+          _updateMessageState(
+            envelope.senderDeviceId,
+            envelope.acknowledgedMessageId ?? '',
+            DeliveryState.delivered,
+          );
+          _clearOutboundAttempt(
+            envelope.senderDeviceId,
+            envelope.acknowledgedMessageId ?? '',
+          );
+        }
         _markSeen(envelope.messageId);
         continue;
       }
@@ -3185,6 +3235,19 @@ class MessengerController extends ChangeNotifier {
         return 1;
       default:
         return 2;
+    }
+  }
+
+  bool _isReadReceiptAck(RelayEnvelope envelope) {
+    final rawPayload = envelope.payloadBase64;
+    if (rawPayload == null || rawPayload.isEmpty) {
+      return false;
+    }
+    try {
+      final decoded = jsonDecode(utf8.decode(base64Decode(rawPayload)));
+      return decoded is Map<String, dynamic> && decoded['receipt'] == 'read';
+    } catch (_) {
+      return false;
     }
   }
 
@@ -3552,6 +3615,41 @@ class MessengerController extends ChangeNotifier {
       );
     } catch (_) {
       // Best effort acking. Missed acks only affect sender-side state display.
+    }
+  }
+
+  Future<void> _sendReadReceipt({
+    required ContactRecord contact,
+    required String conversationId,
+    required String acknowledgedMessageId,
+  }) async {
+    if (acknowledgedMessageId.isEmpty) {
+      return;
+    }
+    final me = _requireIdentity();
+    if (me.suppressReadReceipts) {
+      return;
+    }
+    final receipt = RelayEnvelope(
+      kind: 'ack',
+      messageId: _randomId('read'),
+      conversationId: conversationId,
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: contact.deviceId,
+      createdAt: DateTime.now().toUtc(),
+      acknowledgedMessageId: acknowledgedMessageId,
+      payloadBase64: base64Encode(utf8.encode(jsonEncode({'receipt': 'read'}))),
+    );
+    try {
+      await _deliverToContact(
+        contact: contact,
+        recipientDeviceId: contact.deviceId,
+        envelope: receipt,
+      );
+    } catch (_) {
+      // Best effort read receipts. Missing them only delays sender-side read
+      // state until the next read advancement.
     }
   }
 
@@ -6008,8 +6106,10 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _markConversationReadWhere(
-    bool Function(ConversationRecord conversation) predicate,
-  ) async {
+    bool Function(ConversationRecord conversation) predicate, {
+    DateTime? readThroughAt,
+    String? readThroughMessageId,
+  }) async {
     final conversations = List<ConversationRecord>.from(
       _snapshot.conversations,
     );
@@ -6018,18 +6118,54 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final conversation = conversations[index];
-    final latestCreatedAt = conversation.messages.isEmpty
-        ? _now()
-        : conversation.messages
-              .map((message) => message.createdAt)
-              .reduce((left, right) => left.isAfter(right) ? left : right);
+    final latestCreatedAt =
+        readThroughAt ??
+        (conversation.messages.isEmpty
+            ? _now()
+            : conversation.messages
+                  .map((message) => message.createdAt)
+                  .reduce((left, right) => left.isAfter(right) ? left : right));
     final currentReadAt = conversation.lastReadAt;
     if (currentReadAt != null && !latestCreatedAt.isAfter(currentReadAt)) {
       return;
     }
     conversations[index] = conversation.copyWith(lastReadAt: latestCreatedAt);
     _snapshot = _snapshot.copyWith(conversations: conversations);
-    await _saveSnapshotSilently();
+    await _saveSnapshotSilently(debounce: true);
+    if (conversation.kind != ConversationKind.direct) {
+      return;
+    }
+    final contact = _contactByDeviceId(conversation.peerDeviceId);
+    if (contact == null) {
+      return;
+    }
+    final effectiveMessageId =
+        readThroughMessageId ??
+        _latestInboundMessageAtOrBefore(conversation, latestCreatedAt)?.id;
+    if (effectiveMessageId == null || effectiveMessageId.isEmpty) {
+      return;
+    }
+    await _sendReadReceipt(
+      contact: contact,
+      conversationId: conversation.id,
+      acknowledgedMessageId: effectiveMessageId,
+    );
+  }
+
+  ChatMessage? _latestInboundMessageAtOrBefore(
+    ConversationRecord conversation,
+    DateTime cutoff,
+  ) {
+    ChatMessage? latest;
+    for (final message in conversation.messages) {
+      if (message.outbound || message.createdAt.isAfter(cutoff)) {
+        continue;
+      }
+      if (latest == null || message.createdAt.isAfter(latest.createdAt)) {
+        latest = message;
+      }
+    }
+    return latest;
   }
 
   void _upsertMessage(String peerDeviceId, ChatMessage message) {
@@ -6113,8 +6249,12 @@ class MessengerController extends ChangeNotifier {
       if (message.id != messageId) {
         return message;
       }
+      if (message.state == DeliveryState.read) {
+        return message;
+      }
       if (message.state == DeliveryState.delivered &&
-          state != DeliveryState.delivered) {
+          state != DeliveryState.delivered &&
+          state != DeliveryState.read) {
         return message;
       }
       return message.copyWith(state: state);
@@ -6125,6 +6265,49 @@ class MessengerController extends ChangeNotifier {
     if (!state.awaitsRecipientAck) {
       _clearOutboundAttempt(peerDeviceId, messageId);
     }
+  }
+
+  void _markMessagesReadThroughMessage(String peerDeviceId, String messageId) {
+    if (messageId.isEmpty) {
+      return;
+    }
+    final conversations = List<ConversationRecord>.from(
+      _snapshot.conversations,
+    );
+    final conversationIndex = conversations.indexWhere(
+      (conversation) => conversation.peerDeviceId == peerDeviceId,
+    );
+    if (conversationIndex == -1) {
+      return;
+    }
+    ChatMessage? targetMessage;
+    for (final message in conversations[conversationIndex].messages) {
+      if (message.id == messageId) {
+        targetMessage = message;
+        break;
+      }
+    }
+    if (targetMessage == null) {
+      return;
+    }
+    final cutoff = targetMessage.createdAt;
+    final updatedMessages = conversations[conversationIndex].messages.map((
+      message,
+    ) {
+      if (!message.outbound || message.createdAt.isAfter(cutoff)) {
+        return message;
+      }
+      if (message.state == DeliveryState.canceled ||
+          message.state == DeliveryState.failed ||
+          message.state == DeliveryState.read) {
+        return message;
+      }
+      _clearOutboundAttempt(peerDeviceId, message.id);
+      return message.copyWith(state: DeliveryState.read);
+    }).toList();
+    conversations[conversationIndex] = conversations[conversationIndex]
+        .copyWith(messages: updatedMessages);
+    _snapshot = _snapshot.copyWith(conversations: conversations);
   }
 
   void _updateMessageBody(

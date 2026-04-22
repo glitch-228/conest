@@ -648,6 +648,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 final isWide = constraints.maxWidth > 920;
                 if (!isWide && selectedContact != null) {
                   return _ChatPanel(
+                    key: ValueKey('chat-${selectedContact.deviceId}'),
                     controller: widget.controller,
                     palette: palette,
                     contact: selectedContact,
@@ -699,11 +700,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               _replyTarget = null;
                             }
                           });
-                          unawaited(
-                            widget.controller.markConversationRead(
-                              contact.deviceId,
-                            ),
-                          );
                         },
                         onContactProfile: _showContactProfile,
                         onShowDebug: kDebugMode ? _showDebugMenu : null,
@@ -724,6 +720,9 @@ class _HomeScreenState extends State<HomeScreen> {
                             : selectedContact == null
                             ? _EmptyChatState(palette: palette)
                             : _ChatPanel(
+                                key: ValueKey(
+                                  'chat-${selectedContact.deviceId}',
+                                ),
                                 controller: widget.controller,
                                 palette: palette,
                                 contact: selectedContact,
@@ -1117,8 +1116,9 @@ class _Sidebar extends StatelessWidget {
   }
 }
 
-class _ChatPanel extends StatelessWidget {
+class _ChatPanel extends StatefulWidget {
   const _ChatPanel({
+    super.key,
     required this.controller,
     required this.palette,
     required this.contact,
@@ -1141,6 +1141,164 @@ class _ChatPanel extends StatelessWidget {
   final VoidCallback onSend;
   final VoidCallback onShowProfile;
   final VoidCallback? onBack;
+
+  @override
+  State<_ChatPanel> createState() => _ChatPanelState();
+}
+
+class _ChatPanelState extends State<_ChatPanel> {
+  final ScrollController _scrollController = ScrollController();
+  final GlobalKey _messageListKey = GlobalKey();
+  final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
+  bool _didInitialPosition = false;
+  bool _initialPositionScheduled = false;
+  bool _readSweepScheduled = false;
+
+  MessengerController get controller => widget.controller;
+  ConestPalette get palette => widget.palette;
+  ContactRecord get contact => widget.contact;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_handleScroll);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ChatPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.contact.deviceId != widget.contact.deviceId) {
+      _messageKeys.clear();
+      _didInitialPosition = false;
+      _initialPositionScheduled = false;
+    }
+    _scheduleInitialPosition();
+    _scheduleReadSweep();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_handleScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _handleScroll() {
+    _scheduleReadSweep();
+  }
+
+  GlobalKey _messageKeyFor(String messageId) {
+    return _messageKeys.putIfAbsent(
+      messageId,
+      () => GlobalKey(debugLabel: 'chat-message-$messageId'),
+    );
+  }
+
+  void _pruneMessageKeys(List<ChatMessage> messages) {
+    final activeIds = messages.map((message) => message.id).toSet();
+    _messageKeys.removeWhere((messageId, _) => !activeIds.contains(messageId));
+  }
+
+  void _scheduleInitialPosition() {
+    if (_didInitialPosition || _initialPositionScheduled) {
+      return;
+    }
+    _initialPositionScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initialPositionScheduled = false;
+      if (!mounted || _didInitialPosition) {
+        return;
+      }
+      final messages = controller.messagesFor(contact.deviceId);
+      if (messages.isEmpty) {
+        _didInitialPosition = true;
+        return;
+      }
+      ChatMessage? firstUnread;
+      for (final message in messages) {
+        if (!message.outbound &&
+            controller.isUnreadMessage(contact.deviceId, message)) {
+          firstUnread = message;
+          break;
+        }
+      }
+      if (firstUnread != null) {
+        final unreadContext = _messageKeyFor(firstUnread.id).currentContext;
+        if (unreadContext == null) {
+          _scheduleInitialPosition();
+          return;
+        }
+        Scrollable.ensureVisible(
+          unreadContext,
+          alignment: 0.08,
+          duration: Duration.zero,
+        );
+      } else {
+        if (!_scrollController.hasClients) {
+          _scheduleInitialPosition();
+          return;
+        }
+        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+      }
+      _didInitialPosition = true;
+      _scheduleReadSweep();
+    });
+  }
+
+  void _scheduleReadSweep() {
+    if (!mounted ||
+        !_didInitialPosition ||
+        _readSweepScheduled ||
+        !controller.isAppForeground) {
+      return;
+    }
+    _readSweepScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      _readSweepScheduled = false;
+      if (!mounted || !controller.isAppForeground) {
+        return;
+      }
+      final latestVisibleUnread = _latestVisibleUnreadMessage();
+      if (latestVisibleUnread == null) {
+        return;
+      }
+      await controller.markConversationReadThroughMessage(
+        contact.deviceId,
+        latestVisibleUnread,
+      );
+    });
+  }
+
+  ChatMessage? _latestVisibleUnreadMessage() {
+    final viewportContext = _messageListKey.currentContext;
+    final viewportBox = viewportContext?.findRenderObject() as RenderBox?;
+    if (viewportBox == null || !viewportBox.attached) {
+      return null;
+    }
+    final viewportTop = viewportBox.localToGlobal(Offset.zero).dy;
+    final viewportBottom = viewportTop + viewportBox.size.height;
+    ChatMessage? latestVisibleUnread;
+    for (final message in controller.messagesFor(contact.deviceId)) {
+      if (message.outbound ||
+          !controller.isUnreadMessage(contact.deviceId, message)) {
+        continue;
+      }
+      final messageContext = _messageKeyFor(message.id).currentContext;
+      final messageBox = messageContext?.findRenderObject() as RenderBox?;
+      if (messageBox == null || !messageBox.attached) {
+        continue;
+      }
+      final messageTop = messageBox.localToGlobal(Offset.zero).dy;
+      final messageBottom = messageTop + messageBox.size.height;
+      final visible =
+          messageBottom > viewportTop + 4 && messageTop < viewportBottom - 4;
+      if (!visible) {
+        continue;
+      }
+      latestVisibleUnread = message;
+    }
+    return latestVisibleUnread;
+  }
 
   Future<void> _editMessage(BuildContext context, ChatMessage message) async {
     final updated = await showDialog<String>(
@@ -1209,10 +1367,156 @@ class _ChatPanel extends StatelessWidget {
     return message.replySenderDisplayName ?? 'Message';
   }
 
+  Widget _buildMessageBubble(BuildContext context, ChatMessage message) {
+    final outbound = message.outbound;
+    final unread = controller.isUnreadMessage(contact.deviceId, message);
+    return Align(
+      key: _messageKeyFor(message.id),
+      alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
+      child: GestureDetector(
+        onDoubleTap: () async {
+          if (outbound) {
+            await _editMessage(context, message);
+          } else {
+            widget.onReplyToMessage(message);
+          }
+        },
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 520),
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: outbound ? palette.ink : palette.paper,
+            borderRadius: BorderRadius.circular(18),
+            border: outbound || !unread
+                ? null
+                : Border.all(color: palette.ember.withValues(alpha: 0.45)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SelectionArea(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (message.hasReplyPreview) ...[
+                      _QuotedReference(
+                        palette: palette,
+                        outbound: outbound,
+                        senderLabel: _replyReferenceLabel(message),
+                        snippet: message.replySnippet!,
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                    Text(
+                      message.body,
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        color: outbound ? Colors.white : palette.ink,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    formatTimestamp(message.createdAt),
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: outbound ? Colors.white70 : palette.inkSoft,
+                    ),
+                  ),
+                  if (!outbound && unread) ...[
+                    const SizedBox(width: 6),
+                    Text(
+                      'new',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: palette.ember,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                  if (message.isEdited) ...[
+                    const SizedBox(width: 6),
+                    Text(
+                      'edited',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: outbound ? Colors.white70 : palette.inkSoft,
+                      ),
+                    ),
+                  ],
+                  if (outbound) ...[
+                    const SizedBox(width: 8),
+                    Tooltip(
+                      message: message.state.label,
+                      child: Icon(
+                        message.state.icon,
+                        size: 16,
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ],
+                  PopupMenuButton<String>(
+                    tooltip: 'Message actions',
+                    icon: Icon(
+                      Icons.more_horiz,
+                      size: 18,
+                      color: outbound ? Colors.white70 : palette.inkSoft,
+                    ),
+                    onSelected: (value) async {
+                      try {
+                        if (value == 'copy') {
+                          await _copyMessage(message);
+                        } else if (value == 'edit') {
+                          await _editMessage(context, message);
+                        } else if (value == 'cancel') {
+                          await controller.cancelPendingMessage(
+                            contact: contact,
+                            messageId: message.id,
+                          );
+                        } else if (value == 'delete') {
+                          await _deleteMessage(context, message);
+                        }
+                      } catch (error) {
+                        controller.setStatus(error.toString());
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem(
+                        value: 'copy',
+                        child: Text('Copy message'),
+                      ),
+                      if (outbound && message.state == DeliveryState.pending)
+                        const PopupMenuItem(
+                          value: 'cancel',
+                          child: Text('Cancel sending'),
+                        ),
+                      if (outbound)
+                        const PopupMenuItem(
+                          value: 'edit',
+                          child: Text('Edit message'),
+                        ),
+                      const PopupMenuItem(
+                        value: 'delete',
+                        child: Text('Delete message'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final messages = controller.messagesFor(contact.deviceId);
-    final unreadCount = controller.unreadCountFor(contact.deviceId);
+    _pruneMessageKeys(messages);
     if (controller.isAppForeground) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         unawaited(
@@ -1220,17 +1524,14 @@ class _ChatPanel extends StatelessWidget {
         );
       });
     }
-    if (unreadCount > 0 && controller.isAppForeground) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        unawaited(controller.markConversationRead(contact.deviceId));
-      });
-    }
+    _scheduleInitialPosition();
+    _scheduleReadSweep();
     final reachabilityState = controller.reachabilityStateFor(contact.deviceId);
     final activeReplyTarget =
-        replyTarget != null &&
-            (replyTarget!.senderDeviceId == contact.deviceId ||
-                replyTarget!.recipientDeviceId == contact.deviceId)
-        ? replyTarget
+        widget.replyTarget != null &&
+            (widget.replyTarget!.senderDeviceId == contact.deviceId ||
+                widget.replyTarget!.recipientDeviceId == contact.deviceId)
+        ? widget.replyTarget
         : null;
     return Padding(
       padding: const EdgeInsets.all(18),
@@ -1278,7 +1579,7 @@ class _ChatPanel extends StatelessWidget {
                       icon: Icons.compare_arrows,
                     ),
                     IconButton(
-                      onPressed: onShowProfile,
+                      onPressed: widget.onShowProfile,
                       icon: const Icon(Icons.badge_outlined),
                       tooltip: 'Contact profile',
                     ),
@@ -1286,15 +1587,15 @@ class _ChatPanel extends StatelessWidget {
                   if (!compactHeader) {
                     return Row(
                       children: [
-                        if (onBack != null)
+                        if (widget.onBack != null)
                           IconButton(
-                            onPressed: onBack,
+                            onPressed: widget.onBack,
                             icon: const Icon(Icons.arrow_back),
                           ),
                         Expanded(child: title),
                         const SizedBox(width: 12),
                         ...controls.expand(
-                          (widget) => [widget, const SizedBox(width: 8)],
+                          (control) => [control, const SizedBox(width: 8)],
                         ),
                       ]..removeLast(),
                     );
@@ -1304,9 +1605,9 @@ class _ChatPanel extends StatelessWidget {
                     children: [
                       Row(
                         children: [
-                          if (onBack != null)
+                          if (widget.onBack != null)
                             IconButton(
-                              onPressed: onBack,
+                              onPressed: widget.onBack,
                               icon: const Icon(Icons.arrow_back),
                             ),
                           Expanded(child: title),
@@ -1326,181 +1627,14 @@ class _ChatPanel extends StatelessWidget {
             ),
             const Divider(height: 1),
             Expanded(
-              child: ListView.builder(
-                reverse: true,
+              child: ListView(
+                key: _messageListKey,
+                controller: _scrollController,
                 padding: const EdgeInsets.all(18),
-                itemCount: messages.length,
-                itemBuilder: (context, index) {
-                  final message = messages[messages.length - index - 1];
-                  final outbound = message.outbound;
-                  final unread = controller.isUnreadMessage(
-                    contact.deviceId,
-                    message,
-                  );
-                  return Align(
-                    alignment: outbound
-                        ? Alignment.centerRight
-                        : Alignment.centerLeft,
-                    child: GestureDetector(
-                      onDoubleTap: () async {
-                        if (outbound) {
-                          await _editMessage(context, message);
-                        } else {
-                          onReplyToMessage(message);
-                        }
-                      },
-                      child: Container(
-                        constraints: const BoxConstraints(maxWidth: 520),
-                        margin: const EdgeInsets.only(bottom: 12),
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: outbound ? palette.ink : palette.paper,
-                          borderRadius: BorderRadius.circular(18),
-                          border: outbound || !unread
-                              ? null
-                              : Border.all(
-                                  color: palette.ember.withValues(alpha: 0.45),
-                                ),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            SelectionArea(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (message.hasReplyPreview) ...[
-                                    _QuotedReference(
-                                      palette: palette,
-                                      outbound: outbound,
-                                      senderLabel: _replyReferenceLabel(
-                                        message,
-                                      ),
-                                      snippet: message.replySnippet!,
-                                    ),
-                                    const SizedBox(height: 10),
-                                  ],
-                                  Text(
-                                    message.body,
-                                    style: Theme.of(context).textTheme.bodyLarge
-                                        ?.copyWith(
-                                          color: outbound
-                                              ? Colors.white
-                                              : palette.ink,
-                                          height: 1.35,
-                                        ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  formatTimestamp(message.createdAt),
-                                  style: Theme.of(context).textTheme.labelSmall
-                                      ?.copyWith(
-                                        color: outbound
-                                            ? Colors.white70
-                                            : palette.inkSoft,
-                                      ),
-                                ),
-                                if (!outbound && unread) ...[
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    'new',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .labelSmall
-                                        ?.copyWith(
-                                          color: palette.ember,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                  ),
-                                ],
-                                if (message.isEdited) ...[
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    'edited',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .labelSmall
-                                        ?.copyWith(
-                                          color: outbound
-                                              ? Colors.white70
-                                              : palette.inkSoft,
-                                        ),
-                                  ),
-                                ],
-                                if (outbound) ...[
-                                  const SizedBox(width: 8),
-                                  Tooltip(
-                                    message: message.state.label,
-                                    child: Icon(
-                                      message.state.icon,
-                                      size: 16,
-                                      color: Colors.white70,
-                                    ),
-                                  ),
-                                ],
-                                PopupMenuButton<String>(
-                                  tooltip: 'Message actions',
-                                  icon: Icon(
-                                    Icons.more_horiz,
-                                    size: 18,
-                                    color: outbound
-                                        ? Colors.white70
-                                        : palette.inkSoft,
-                                  ),
-                                  onSelected: (value) async {
-                                    try {
-                                      if (value == 'copy') {
-                                        await _copyMessage(message);
-                                      } else if (value == 'edit') {
-                                        await _editMessage(context, message);
-                                      } else if (value == 'cancel') {
-                                        await controller.cancelPendingMessage(
-                                          contact: contact,
-                                          messageId: message.id,
-                                        );
-                                      } else if (value == 'delete') {
-                                        await _deleteMessage(context, message);
-                                      }
-                                    } catch (error) {
-                                      controller.setStatus(error.toString());
-                                    }
-                                  },
-                                  itemBuilder: (context) => [
-                                    const PopupMenuItem(
-                                      value: 'copy',
-                                      child: Text('Copy message'),
-                                    ),
-                                    if (outbound &&
-                                        message.state == DeliveryState.pending)
-                                      const PopupMenuItem(
-                                        value: 'cancel',
-                                        child: Text('Cancel sending'),
-                                      ),
-                                    if (outbound)
-                                      const PopupMenuItem(
-                                        value: 'edit',
-                                        child: Text('Edit message'),
-                                      ),
-                                    const PopupMenuItem(
-                                      value: 'delete',
-                                      child: Text('Delete message'),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
-                },
+                children: [
+                  for (final message in messages)
+                    _buildMessageBubble(context, message),
+                ],
               ),
             ),
             Container(
@@ -1516,7 +1650,7 @@ class _ChatPanel extends StatelessWidget {
                       palette: palette,
                       senderLabel: _messageSenderLabel(activeReplyTarget),
                       snippet: activeReplyTarget.bodyPreview,
-                      onCancel: onCancelReply,
+                      onCancel: widget.onCancelReply,
                     ),
                     const SizedBox(height: 12),
                   ],
@@ -1524,7 +1658,7 @@ class _ChatPanel extends StatelessWidget {
                     children: [
                       Expanded(
                         child: TextField(
-                          controller: composerController,
+                          controller: widget.composerController,
                           minLines: 1,
                           maxLines: 5,
                           decoration: InputDecoration(
@@ -1532,12 +1666,12 @@ class _ChatPanel extends StatelessWidget {
                                 ? 'Write an encrypted message'
                                 : 'Write a reply',
                           ),
-                          onSubmitted: (_) => onSend(),
+                          onSubmitted: (_) => widget.onSend(),
                         ),
                       ),
                       const SizedBox(width: 12),
                       FilledButton.icon(
-                        onPressed: onSend,
+                        onPressed: widget.onSend,
                         icon: const Icon(Icons.north_east),
                         label: const Text('Send'),
                       ),
@@ -2974,6 +3108,20 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         title: const Text('Android background runtime'),
                         subtitle: const Text(
                           'Keeps a foreground notification so Conest can keep polling and receiving while backgrounded. If Android battery/background access is blocked, notifications can be late or never arrive.',
+                        ),
+                      ),
+                    if (kDebugMode)
+                      SwitchListTile.adaptive(
+                        value: identity.suppressReadReceipts,
+                        onChanged: _busy
+                            ? null
+                            : (value) => _run(
+                                () => widget.controller
+                                    .updateSuppressReadReceipts(value),
+                              ),
+                        title: const Text("Don't send read confirmations"),
+                        subtitle: const Text(
+                          'Debug-only. When enabled, this device still sends delivery acknowledgements but does not send read confirmations. Incoming read confirmations are still processed normally.',
                         ),
                       ),
                     const SizedBox(height: 8),
