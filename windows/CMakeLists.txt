@@ -52,6 +52,24 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 
+find_program(CARGO_EXECUTABLE cargo REQUIRED)
+set(CONEST_UPDATER_MANIFEST
+  "${CMAKE_CURRENT_SOURCE_DIR}/../native/conest_updater/Cargo.toml")
+set(CONEST_UPDATER_TARGET_DIR
+  "${CMAKE_CURRENT_BINARY_DIR}/conest_updater_target")
+set(CONEST_UPDATER_BINARY
+  "${CONEST_UPDATER_TARGET_DIR}/release/conest_updater.exe")
+add_custom_target(conest_updater ALL
+  COMMAND "${CARGO_EXECUTABLE}" build
+          --manifest-path "${CONEST_UPDATER_MANIFEST}"
+          --target-dir "${CONEST_UPDATER_TARGET_DIR}"
+          --release
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+  BYPRODUCTS "${CONEST_UPDATER_BINARY}"
+  VERBATIM
+)
+add_dependencies(${BINARY_NAME} conest_updater)
+
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
@@ -79,6 +97,9 @@ install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}
   COMPONENT Runtime)
 
 install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+  COMPONENT Runtime)
+
+install(PROGRAMS "${CONEST_UPDATER_BINARY}" DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
 
 if(PLUGIN_BUNDLED_LIBRARIES)

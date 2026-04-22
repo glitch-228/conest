@@ -53,4 +53,15 @@ class PlatformBridge {
       return;
     }
   }
+
+  Future<void> installDownloadedApk(String path) async {
+    if (!_supportsAndroidSystemCalls) {
+      return;
+    }
+    try {
+      await _channel.invokeMethod<void>('installDownloadedApk', {'path': path});
+    } on MissingPluginException {
+      return;
+    }
+  }
 }

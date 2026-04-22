@@ -7,11 +7,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import 'src/build_info.dart';
 import 'src/messenger_controller.dart';
 import 'src/models.dart';
+import 'src/platform_bridge.dart';
 import 'src/qr_scan_screen.dart';
 import 'src/relay_client.dart';
 import 'src/storage.dart';
+import 'src/update_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,12 +23,25 @@ Future<void> main() async {
     runApp(const ConestAlreadyRunningApp());
     return;
   }
+  final buildInfo = await ConestBuildInfo.load();
+  final platformBridge = PlatformBridge();
   final controller = MessengerController(
     vaultStore: VaultStore(),
     relayClient: const RelayClient(),
+    platformBridge: platformBridge,
+  );
+  final updateService = UpdateService(
+    buildInfo: buildInfo,
+    platformBridge: platformBridge,
   );
   await controller.initialize();
-  runApp(ConestApp(controller: controller, instanceLock: instanceLock));
+  runApp(
+    ConestApp(
+      controller: controller,
+      updateService: updateService,
+      instanceLock: instanceLock,
+    ),
+  );
 }
 
 class ConestAlreadyRunningApp extends StatelessWidget {
@@ -100,10 +116,12 @@ class ConestApp extends StatefulWidget {
   const ConestApp({
     super.key,
     required this.controller,
+    required this.updateService,
     required this.instanceLock,
   });
 
   final MessengerController controller;
+  final UpdateService updateService;
   final AppInstanceLock instanceLock;
 
   @override
@@ -111,11 +129,21 @@ class ConestApp extends StatefulWidget {
 }
 
 class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  String? _activeUpdatePromptTag;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     widget.controller.setAppForegroundState(true);
+    widget.updateService.addListener(_handleUpdateServiceChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      unawaited(widget.updateService.ensureStartupCheck());
+    });
   }
 
   @override
@@ -129,9 +157,45 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    widget.updateService.removeListener(_handleUpdateServiceChanged);
+    widget.updateService.dispose();
     widget.controller.dispose();
     unawaited(widget.instanceLock.release());
     super.dispose();
+  }
+
+  void _handleUpdateServiceChanged() {
+    if (!mounted || !widget.updateService.shouldPromptForAvailableUpdate) {
+      return;
+    }
+    final available = widget.updateService.availableUpdate;
+    if (available == null) {
+      return;
+    }
+    if (_activeUpdatePromptTag == available.release.tagName) {
+      return;
+    }
+    final context = _navigatorKey.currentContext;
+    if (context == null) {
+      return;
+    }
+    _activeUpdatePromptTag = available.release.tagName;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        return;
+      }
+      final dialogContext = _navigatorKey.currentContext;
+      if (dialogContext == null) {
+        _activeUpdatePromptTag = null;
+        return;
+      }
+      await showDialog<void>(
+        context: dialogContext,
+        builder: (context) =>
+            UpdatePromptDialog(updateService: widget.updateService),
+      );
+      _activeUpdatePromptTag = null;
+    });
   }
 
   @override
@@ -143,6 +207,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
         return MaterialApp(
           debugShowCheckedModeBanner: false,
           title: 'Conest',
+          navigatorKey: _navigatorKey,
           theme: ThemeData(
             brightness: Brightness.light,
             scaffoldBackgroundColor: palette.paper,
@@ -173,6 +238,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
               ? widget.controller.hasIdentity
                     ? HomeScreen(
                         controller: widget.controller,
+                        updateService: widget.updateService,
                         palette: palette,
                       )
                     : OnboardingScreen(
@@ -204,6 +270,102 @@ class SplashScreen extends StatelessWidget {
         ),
         child: const Center(child: CircularProgressIndicator()),
       ),
+    );
+  }
+}
+
+class UpdatePromptDialog extends StatelessWidget {
+  const UpdatePromptDialog({super.key, required this.updateService});
+
+  final UpdateService updateService;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: updateService,
+      builder: (context, _) {
+        final available = updateService.availableUpdate;
+        if (available == null) {
+          return AlertDialog(
+            title: const Text('Updates'),
+            content: Text(
+              updateService.statusMessage ??
+                  'No update is available right now.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Close'),
+              ),
+            ],
+          );
+        }
+        final actionLabel =
+            updateService.targetPlatform == UpdateTargetPlatform.android
+            ? 'Download & Install'
+            : 'Download & Restart';
+        return AlertDialog(
+          title: const Text('Update Available'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${available.release.tagName} is available on the ${updateService.buildInfo.channelLabel} channel.',
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'Current build: ${updateService.buildInfo.displayVersion}',
+                ),
+                const SizedBox(height: 10),
+                if (updateService.isDownloading)
+                  LinearProgressIndicator(
+                    value: updateService.downloadProgress,
+                  ),
+                if (updateService.statusMessage != null) ...[
+                  const SizedBox(height: 10),
+                  Text(updateService.statusMessage!),
+                ],
+                if (updateService.lastError != null) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    updateService.lastError!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: updateService.isDownloading
+                  ? null
+                  : () {
+                      updateService.dismissPromptForSession(
+                        available.release.tagName,
+                      );
+                      Navigator.of(context).pop();
+                    },
+              child: const Text('Later'),
+            ),
+            FilledButton(
+              onPressed: updateService.isDownloading
+                  ? null
+                  : () async {
+                      await updateService.downloadAndApplyAvailableUpdate();
+                      if (context.mounted && !updateService.isDownloading) {
+                        Navigator.of(context).pop();
+                      }
+                    },
+              child: Text(actionLabel),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -451,10 +613,12 @@ class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
     required this.controller,
+    required this.updateService,
     required this.palette,
   });
 
   final MessengerController controller;
+  final UpdateService updateService;
   final ConestPalette palette;
 
   @override
@@ -537,6 +701,7 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (context) => SettingsDialog(
         controller: widget.controller,
+        updateService: widget.updateService,
         palette: widget.palette,
       ),
     );
@@ -2889,10 +3054,12 @@ class SettingsDialog extends StatefulWidget {
   const SettingsDialog({
     super.key,
     required this.controller,
+    required this.updateService,
     required this.palette,
   });
 
   final MessengerController controller;
+  final UpdateService updateService;
   final ConestPalette palette;
 
   @override
@@ -3007,6 +3174,121 @@ class _SettingsDialogState extends State<SettingsDialog> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    Text(
+                      'Updates',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    ListenableBuilder(
+                      listenable: widget.updateService,
+                      builder: (context, _) {
+                        final updateService = widget.updateService;
+                        final buildInfo = updateService.buildInfo;
+                        final available = updateService.availableUpdate;
+                        final actionLabel =
+                            updateService.targetPlatform ==
+                                UpdateTargetPlatform.android
+                            ? 'Download & Install'
+                            : 'Download & Restart';
+                        return Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: widget.palette.paper,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(color: widget.palette.stroke),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Current build: ${buildInfo.displayVersion} • ${buildInfo.channelLabel}',
+                                style: Theme.of(context).textTheme.bodyLarge
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                              if (buildInfo.commit != null &&
+                                  buildInfo.commit!.isNotEmpty) ...[
+                                const SizedBox(height: 6),
+                                Text(
+                                  'commit ${buildInfo.commit}',
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(color: widget.palette.inkSoft),
+                                ),
+                              ],
+                              if (available != null) ...[
+                                const SizedBox(height: 10),
+                                Text(
+                                  'Available: ${available.release.tagName}',
+                                  style: Theme.of(context).textTheme.bodyMedium,
+                                ),
+                              ],
+                              if (updateService.isDownloading) ...[
+                                const SizedBox(height: 12),
+                                LinearProgressIndicator(
+                                  value: updateService.downloadProgress,
+                                ),
+                              ],
+                              if (updateService.statusMessage != null) ...[
+                                const SizedBox(height: 10),
+                                Text(
+                                  updateService.statusMessage!,
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(color: widget.palette.inkSoft),
+                                ),
+                              ],
+                              if (updateService.lastError != null) ...[
+                                const SizedBox(height: 10),
+                                Text(
+                                  updateService.lastError!,
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.error,
+                                      ),
+                                ),
+                              ],
+                              const SizedBox(height: 12),
+                              Wrap(
+                                spacing: 12,
+                                runSpacing: 12,
+                                children: [
+                                  OutlinedButton.icon(
+                                    onPressed:
+                                        _busy ||
+                                            updateService.isChecking ||
+                                            updateService.isDownloading
+                                        ? null
+                                        : () => updateService.checkForUpdate(
+                                            userInitiated: true,
+                                          ),
+                                    icon: const Icon(Icons.system_update_alt),
+                                    label: Text(
+                                      updateService.isChecking
+                                          ? 'Checking...'
+                                          : 'Check for Updates',
+                                    ),
+                                  ),
+                                  if (available != null)
+                                    FilledButton.icon(
+                                      onPressed:
+                                          _busy || updateService.isDownloading
+                                          ? null
+                                          : updateService
+                                                .downloadAndApplyAvailableUpdate,
+                                      icon: const Icon(Icons.download),
+                                      label: Text(actionLabel),
+                                    ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 24),
                     Text(
                       'Relay',
                       style: Theme.of(context).textTheme.titleLarge?.copyWith(

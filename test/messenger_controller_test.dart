@@ -1,15 +1,18 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:conest/main.dart' as app;
+import 'package:conest/src/build_info.dart';
 import 'package:conest/src/local_relay_node.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/relay_client.dart';
 import 'package:conest/src/storage.dart';
+import 'package:conest/src/update_service.dart';
 
 class _MemoryVaultStore extends VaultStore {
   VaultSnapshot _snapshot = VaultSnapshot.empty();
@@ -224,6 +227,23 @@ class _FakeRelayClient extends RelayClient {
       relayInstanceId: _relayIdFor(host, port, protocol),
     );
   }
+}
+
+UpdateService _createUpdateService() {
+  return UpdateService(
+    buildInfo: ConestBuildInfo(
+      appName: 'Conest',
+      packageName: 'dev.conest.conest',
+      version: '0.1.0',
+      buildNumber: '1',
+      channel: UpdateChannel.nightly,
+      isDebugBuild: true,
+    ),
+    targetPlatform: UpdateTargetPlatform.unsupported,
+    applicationSupportDirectoryProvider: () async => Directory.systemTemp,
+    tempDirectoryProvider: () async => Directory.systemTemp,
+    exitCallback: (_) {},
+  );
 }
 
 class _HostScopedFakeRelayClient extends RelayClient {
@@ -1949,7 +1969,11 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
-          home: app.HomeScreen(controller: alice, palette: app.ConestPalette()),
+          home: app.HomeScreen(
+            controller: alice,
+            updateService: _createUpdateService(),
+            palette: app.ConestPalette(),
+          ),
         ),
       );
       await tester.pump();
@@ -2013,7 +2037,11 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: app.HomeScreen(controller: alice, palette: app.ConestPalette()),
+        home: app.HomeScreen(
+          controller: alice,
+          updateService: _createUpdateService(),
+          palette: app.ConestPalette(),
+        ),
       ),
     );
     await tester.pump();
@@ -2090,7 +2118,11 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: app.HomeScreen(controller: alice, palette: app.ConestPalette()),
+        home: app.HomeScreen(
+          controller: alice,
+          updateService: _createUpdateService(),
+          palette: app.ConestPalette(),
+        ),
       ),
     );
     await tester.pump();
@@ -2176,7 +2208,11 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
-          home: app.HomeScreen(controller: alice, palette: app.ConestPalette()),
+          home: app.HomeScreen(
+            controller: alice,
+            updateService: _createUpdateService(),
+            palette: app.ConestPalette(),
+          ),
         ),
       );
       await tester.pump();
@@ -2230,7 +2266,11 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: app.HomeScreen(controller: alice, palette: app.ConestPalette()),
+        home: app.HomeScreen(
+          controller: alice,
+          updateService: _createUpdateService(),
+          palette: app.ConestPalette(),
+        ),
       ),
     );
     await tester.pump();

@@ -63,6 +63,24 @@ add_subdirectory("runner")
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
 
+find_program(CARGO_EXECUTABLE cargo REQUIRED)
+set(CONEST_UPDATER_MANIFEST
+  "${CMAKE_CURRENT_SOURCE_DIR}/../native/conest_updater/Cargo.toml")
+set(CONEST_UPDATER_TARGET_DIR
+  "${CMAKE_CURRENT_BINARY_DIR}/conest_updater_target")
+set(CONEST_UPDATER_BINARY
+  "${CONEST_UPDATER_TARGET_DIR}/release/conest_updater")
+add_custom_target(conest_updater ALL
+  COMMAND "${CARGO_EXECUTABLE}" build
+          --manifest-path "${CONEST_UPDATER_MANIFEST}"
+          --target-dir "${CONEST_UPDATER_TARGET_DIR}"
+          --release
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+  BYPRODUCTS "${CONEST_UPDATER_BINARY}"
+  VERBATIM
+)
+add_dependencies(${BINARY_NAME} conest_updater)
+
 # Only the install-generated bundle's copy of the executable will launch
 # correctly, since the resources must in the right relative locations. To avoid
 # people trying to run the unbundled copy, put it in a subdirectory instead of
@@ -101,6 +119,9 @@ install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}
   COMPONENT Runtime)
 
 install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+  COMPONENT Runtime)
+
+install(PROGRAMS "${CONEST_UPDATER_BINARY}" DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
 
 foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})
