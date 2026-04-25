@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 
 import 'package:conest/src/build_info.dart';
 import 'package:conest/src/platform_bridge.dart';
@@ -76,6 +78,14 @@ class _ManifestFiles {
 
   final List<int> manifestBytes;
   final String signatureText;
+}
+
+List<int> _zipBytes(Map<String, List<int>> files) {
+  final archive = Archive();
+  for (final entry in files.entries) {
+    archive.addFile(ArchiveFile(entry.key, entry.value.length, entry.value));
+  }
+  return ZipEncoder().encode(archive)!;
 }
 
 Map<String, dynamic> _assetJson({
@@ -517,6 +527,144 @@ void main() {
       expect(service.lastError, isNull);
     },
   );
+
+  test('desktop updater launch is awaited before exiting', () async {
+    final signer = await _ManifestSigner.create();
+    final helperBytes = utf8.encode('fake staged helper');
+    final zipBytes = _zipBytes({
+      'conest_updater': helperBytes,
+      'data/version.txt': utf8.encode('v0.1.1'),
+    });
+    final zipHash = sha256.convert(zipBytes).toString();
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(server.close);
+    final baseUrl = 'http://${server.address.host}:${server.port}';
+    final manifestFiles = await signer.sign(
+      tagName: 'v0.1.1',
+      assets: {
+        'conest-linux-x64-v0.1.1.zip': _ManifestAssetFixture(
+          sha256Hex: zipHash,
+          sizeBytes: zipBytes.length,
+        ),
+      },
+    );
+    server.listen((request) async {
+      switch (request.uri.path) {
+        case '/repos/glitch-228/conest/releases':
+          request.response
+            ..headers.contentType = ContentType.json
+            ..write(
+              jsonEncode([
+                {
+                  'tag_name': 'v0.1.1',
+                  'name': 'stable',
+                  'html_url': 'https://example.invalid/stable',
+                  'published_at': '2026-04-22T09:00:00Z',
+                  'prerelease': false,
+                  'draft': false,
+                  'assets': [
+                    {
+                      'name': 'conest-linux-x64-v0.1.1.zip',
+                      'browser_download_url': '$baseUrl/app.zip',
+                      'size': zipBytes.length,
+                    },
+                    ..._releaseTrustAssets(
+                      baseUrl: baseUrl,
+                      files: manifestFiles,
+                    ),
+                  ],
+                },
+              ]),
+            );
+          await request.response.close();
+          return;
+        case '/RELEASE-MANIFEST.json':
+          request.response.add(manifestFiles.manifestBytes);
+          await request.response.close();
+          return;
+        case '/RELEASE-MANIFEST.ed25519.sig':
+          request.response.write(manifestFiles.signatureText);
+          await request.response.close();
+          return;
+        case '/app.zip':
+          request.response.add(zipBytes);
+          await request.response.close();
+          return;
+      }
+      request.response.statusCode = HttpStatus.notFound;
+      await request.response.close();
+    });
+
+    final supportDir = await Directory.systemTemp.createTemp(
+      'conest-updates-test',
+    );
+    final tempDir = await Directory.systemTemp.createTemp(
+      'conest-updates-temp',
+    );
+    addTearDown(() async {
+      if (await supportDir.exists()) {
+        await supportDir.delete(recursive: true);
+      }
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    var launcherFinished = false;
+    var exited = false;
+    int? exitCode;
+    String? launchedExecutable;
+    List<String>? launchedArguments;
+    final service = UpdateService(
+      buildInfo: ConestBuildInfo(
+        appName: 'Conest',
+        packageName: 'dev.conest.conest',
+        version: '0.1.0',
+        buildNumber: '1',
+        channel: UpdateChannel.stable,
+        isDebugBuild: false,
+      ),
+      targetPlatform: UpdateTargetPlatform.linux,
+      apiBaseUri: Uri.parse(baseUrl),
+      releaseManifestPublicKeyBase64: signer.publicKeyBase64,
+      applicationSupportDirectoryProvider: () async => supportDir,
+      tempDirectoryProvider: () async => tempDir,
+      desktopUpdaterLauncher: (executable, arguments) async {
+        expect(exited, isFalse);
+        launchedExecutable = executable;
+        launchedArguments = arguments;
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        launcherFinished = true;
+      },
+      exitCallback: (code) {
+        expect(launcherFinished, isTrue);
+        exited = true;
+        exitCode = code;
+      },
+    );
+
+    await service.checkForUpdate(userInitiated: true);
+    await service.downloadAndApplyAvailableUpdate();
+
+    expect(service.lastError, isNull);
+    expect(exited, isTrue);
+    expect(exitCode, 0);
+    expect(launchedExecutable, isNotNull);
+    expect(p.basename(launchedExecutable!), 'conest_updater');
+    expect(p.isWithin(tempDir.path, launchedExecutable!), isTrue);
+    expect(await File(launchedExecutable!).readAsBytes(), helperBytes);
+
+    final arguments = launchedArguments!;
+    final stagingDir = arguments[arguments.indexOf('--staging-dir') + 1];
+    final bundleDir = arguments[arguments.indexOf('--bundle-dir') + 1];
+    final appBinary = arguments[arguments.indexOf('--app-binary') + 1];
+    expect(
+      await File(p.join(stagingDir, 'data', 'version.txt')).readAsString(),
+      'v0.1.1',
+    );
+    expect(bundleDir, File(Platform.resolvedExecutable).parent.path);
+    expect(appBinary, p.basename(Platform.resolvedExecutable));
+  });
 
   test('signed release manifest failures block update selection', () async {
     Future<String?> runCase({

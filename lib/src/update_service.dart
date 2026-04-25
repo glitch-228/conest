@@ -83,6 +83,9 @@ class UpdateAvailability {
   final String sha256Hex;
 }
 
+typedef DesktopUpdaterLauncher =
+    Future<void> Function(String executable, List<String> arguments);
+
 const _releaseManifestName = 'RELEASE-MANIFEST.json';
 const _releaseManifestSignatureName = 'RELEASE-MANIFEST.ed25519.sig';
 const _releaseManifestPublicKeyFromEnvironment = String.fromEnvironment(
@@ -214,6 +217,7 @@ class UpdateService extends ChangeNotifier {
     String repositoryOwner = 'glitch-228',
     String repositoryName = 'conest',
     String? releaseManifestPublicKeyBase64,
+    DesktopUpdaterLauncher? desktopUpdaterLauncher,
     void Function(int code)? exitCallback,
   }) : _platformBridge = platformBridge ?? PlatformBridge(),
        _httpClientFactory = httpClientFactory ?? HttpClient.new,
@@ -229,6 +233,8 @@ class UpdateService extends ChangeNotifier {
        _releaseManifestPublicKeyBase64 =
            releaseManifestPublicKeyBase64 ??
            _releaseManifestPublicKeyFromEnvironment,
+       _desktopUpdaterLauncher =
+           desktopUpdaterLauncher ?? _launchDetachedDesktopUpdater,
        _exitCallback = exitCallback ?? exit;
 
   final ConestBuildInfo buildInfo;
@@ -242,6 +248,7 @@ class UpdateService extends ChangeNotifier {
   final String _repositoryOwner;
   final String _repositoryName;
   final String _releaseManifestPublicKeyBase64;
+  final DesktopUpdaterLauncher _desktopUpdaterLauncher;
   final void Function(int code) _exitCallback;
 
   bool _startupCheckStarted = false;
@@ -646,9 +653,9 @@ class UpdateService extends ChangeNotifier {
         : 'conest_updater';
     final bundledHelper = File(p.join(bundleDir.path, helperName));
     final stagedHelper = File(p.join(sourceRoot.path, helperName));
-    final helperSource = await bundledHelper.exists()
-        ? bundledHelper
-        : stagedHelper;
+    final helperSource = await stagedHelper.exists()
+        ? stagedHelper
+        : bundledHelper;
     if (!await helperSource.exists()) {
       throw StateError(
         'Desktop updater helper $helperName was not found in the current bundle or the downloaded update.',
@@ -677,16 +684,14 @@ class UpdateService extends ChangeNotifier {
     }
     _statusMessage = 'Restarting to apply $releaseTag...';
     notifyListeners();
-    unawaited(
-      Process.start(launchedHelper.path, [
-        '--staging-dir',
-        sourceRoot.path,
-        '--bundle-dir',
-        bundleDir.path,
-        '--app-binary',
-        p.basename(appExecutable.path),
-      ], mode: ProcessStartMode.detached),
-    );
+    await _desktopUpdaterLauncher(launchedHelper.path, [
+      '--staging-dir',
+      sourceRoot.path,
+      '--bundle-dir',
+      bundleDir.path,
+      '--app-binary',
+      p.basename(appExecutable.path),
+    ]);
     _exitCallback(0);
   }
 
@@ -738,4 +743,11 @@ class UpdateService extends ChangeNotifier {
 
   String get _userAgent =>
       'Conest/${buildInfo.version} (${buildInfo.channelLabel}; ${_targetPlatform.label})';
+}
+
+Future<void> _launchDetachedDesktopUpdater(
+  String executable,
+  List<String> arguments,
+) async {
+  await Process.start(executable, arguments, mode: ProcessStartMode.detached);
 }
