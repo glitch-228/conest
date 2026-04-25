@@ -1689,9 +1689,7 @@ class MessengerController extends ChangeNotifier {
     if (parsed.host.isEmpty) {
       return const <PeerEndpoint>[];
     }
-    if (parsed.port <= 0 || parsed.port > 65535) {
-      throw ArgumentError('Relay port must be between 1 and 65535.');
-    }
+    validatePeerEndpointHostAndPort(parsed.host, parsed.port);
     if (parsed.hasExplicitProtocol) {
       return <PeerEndpoint>[
         PeerEndpoint(

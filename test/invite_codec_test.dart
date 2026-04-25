@@ -82,6 +82,33 @@ void main() {
     expect(http.protocol, PeerRouteProtocol.http);
   });
 
+  test('peer endpoints reject invalid host and port input', () {
+    expect(
+      () => PeerEndpoint.normalized(
+        kind: PeerRouteKind.relay,
+        host: 'relay.example\r\nHost: attacker',
+        port: 7667,
+      ),
+      throwsArgumentError,
+    );
+    expect(
+      () => PeerEndpoint.normalized(
+        kind: PeerRouteKind.relay,
+        host: 'relay.example/path',
+        port: 7667,
+      ),
+      throwsArgumentError,
+    );
+    expect(
+      () => PeerEndpoint.normalized(
+        kind: PeerRouteKind.relay,
+        host: 'relay.example',
+        port: 70000,
+      ),
+      throwsArgumentError,
+    );
+  });
+
   test(
     'legacy route json without protocol expands to tcp and udp variants',
     () {

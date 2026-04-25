@@ -144,4 +144,143 @@ void main() {
     );
     expect(pushed.messageId, 'msg-push');
   });
+
+  test('local relay validates mailbox ids and clamps fetch limits', () async {
+    final reserved = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final port = reserved.port;
+    await reserved.close();
+
+    final node = LocalRelayNode(maxQueuePerMailbox: 2, maxFetchLimit: 1);
+    addTearDown(node.stop);
+    await node.start(port);
+
+    const client = RelayClient();
+    RelayEnvelope envelope(String id) => RelayEnvelope(
+      kind: 'direct_message',
+      messageId: id,
+      conversationId: 'conv-cap',
+      senderAccountId: 'acc-a',
+      senderDeviceId: 'dev-a',
+      recipientDeviceId: 'dev-b',
+      createdAt: DateTime.utc(2026, 4, 18),
+      payloadBase64: 'aGVsbG8=',
+    );
+
+    await client.storeEnvelope(
+      host: '127.0.0.1',
+      port: port,
+      recipientDeviceId: 'dev-b',
+      envelope: envelope('msg-0'),
+      timeout: const Duration(seconds: 2),
+    );
+    await client.storeEnvelope(
+      host: '127.0.0.1',
+      port: port,
+      recipientDeviceId: 'dev-b',
+      envelope: envelope('msg-1'),
+      timeout: const Duration(seconds: 2),
+    );
+    await client.storeEnvelope(
+      host: '127.0.0.1',
+      port: port,
+      recipientDeviceId: 'dev-b',
+      envelope: envelope('msg-2'),
+      timeout: const Duration(seconds: 2),
+    );
+
+    final first = await client.fetchEnvelopes(
+      host: '127.0.0.1',
+      port: port,
+      recipientDeviceId: 'dev-b',
+      limit: 99,
+      timeout: const Duration(seconds: 2),
+    );
+    final second = await client.fetchEnvelopes(
+      host: '127.0.0.1',
+      port: port,
+      recipientDeviceId: 'dev-b',
+      limit: 99,
+      timeout: const Duration(seconds: 2),
+    );
+
+    expect(first.single.messageId, 'msg-1');
+    expect(second.single.messageId, 'msg-2');
+    await expectLater(
+      client.storeEnvelope(
+        host: '127.0.0.1',
+        port: port,
+        recipientDeviceId: '../bad',
+        envelope: envelope('msg-bad'),
+        timeout: const Duration(seconds: 2),
+      ),
+      throwsA(isA<StateError>()),
+    );
+  });
+
+  test(
+    'local relay rejects oversize envelopes and rate limits peers',
+    () async {
+      final reserved = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final port = reserved.port;
+      await reserved.close();
+
+      final node = LocalRelayNode(
+        maxEnvelopeBytes: 128,
+        maxLineBytes: 256,
+        maxRequestsPerMinute: 1,
+      );
+      addTearDown(node.stop);
+      await node.start(port);
+
+      const client = RelayClient();
+      final envelope = RelayEnvelope(
+        kind: 'direct_message',
+        messageId: 'msg-large',
+        conversationId: 'conv-large',
+        senderAccountId: 'acc-a',
+        senderDeviceId: 'dev-a',
+        recipientDeviceId: 'dev-b',
+        createdAt: DateTime.utc(2026, 4, 18),
+        payloadBase64: 'x' * 240,
+      );
+
+      await expectLater(
+        client.storeEnvelope(
+          host: '127.0.0.1',
+          port: port,
+          recipientDeviceId: 'dev-b',
+          envelope: envelope,
+          timeout: const Duration(seconds: 2),
+        ),
+        throwsA(isA<StateError>()),
+      );
+
+      final limited = LocalRelayNode(maxRequestsPerMinute: 1);
+      final reservedLimited = await ServerSocket.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+      );
+      final limitedPort = reservedLimited.port;
+      await reservedLimited.close();
+      addTearDown(limited.stop);
+      await limited.start(limitedPort);
+
+      expect(
+        await client.health(
+          host: '127.0.0.1',
+          port: limitedPort,
+          timeout: const Duration(seconds: 2),
+        ),
+        isTrue,
+      );
+      await expectLater(
+        client.health(
+          host: '127.0.0.1',
+          port: limitedPort,
+          timeout: const Duration(seconds: 2),
+        ),
+        throwsA(isA<StateError>()),
+      );
+    },
+  );
 }

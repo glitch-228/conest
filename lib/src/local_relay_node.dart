@@ -6,15 +6,50 @@ import 'dart:typed_data';
 
 import 'models.dart';
 
+const int _defaultMaxQueuePerMailbox = 512;
+const int _defaultMaxFetchLimit = 128;
+const int _defaultMaxEnvelopeBytes = 256 * 1024;
+const int _defaultMaxLineBytes = 300 * 1024;
+const int _defaultMaxRequestsPerMinute = 240;
+
 class LocalRelayNode {
-  LocalRelayNode({this.ttl = const Duration(days: 7), String? relayId})
-    : relayId = relayId ?? 'local-${DateTime.now().microsecondsSinceEpoch}';
+  LocalRelayNode({
+    this.ttl = const Duration(days: 7),
+    this.maxQueuePerMailbox = _defaultMaxQueuePerMailbox,
+    this.maxFetchLimit = _defaultMaxFetchLimit,
+    this.maxEnvelopeBytes = _defaultMaxEnvelopeBytes,
+    this.maxLineBytes = _defaultMaxLineBytes,
+    this.maxRequestsPerMinute = _defaultMaxRequestsPerMinute,
+    String? relayId,
+    DateTime Function()? nowProvider,
+  }) : relayId = relayId ?? 'local-${DateTime.now().microsecondsSinceEpoch}',
+       _nowProvider = nowProvider ?? DateTime.now {
+    if (maxQueuePerMailbox <= 0) {
+      throw ArgumentError('maxQueuePerMailbox must be greater than zero.');
+    }
+    if (maxFetchLimit <= 0) {
+      throw ArgumentError('maxFetchLimit must be greater than zero.');
+    }
+    if (maxEnvelopeBytes <= 0 || maxLineBytes < maxEnvelopeBytes) {
+      throw ArgumentError('maxLineBytes must be at least maxEnvelopeBytes.');
+    }
+    if (maxRequestsPerMinute <= 0) {
+      throw ArgumentError('maxRequestsPerMinute must be greater than zero.');
+    }
+  }
 
   final Duration ttl;
+  final int maxQueuePerMailbox;
+  final int maxFetchLimit;
+  final int maxEnvelopeBytes;
+  final int maxLineBytes;
+  final int maxRequestsPerMinute;
   final String relayId;
+  final DateTime Function() _nowProvider;
   void Function(String recipientDeviceId, RelayEnvelope envelope)?
   onEnvelopeStored;
   final Map<String, Queue<_QueueEntry>> _queues = {};
+  final Map<String, _RateBucket> _rateBuckets = {};
   ServerSocket? _server;
   RawDatagramSocket? _udpSocket;
   StreamSubscription<RawSocketEvent>? _udpSubscription;
@@ -63,7 +98,10 @@ class LocalRelayNode {
     try {
       final wireRequest = await _readWireRequest(socket);
       isHttp = wireRequest.isHttp;
-      final response = _handleRequest(wireRequest.request);
+      final response = _handleRequest(
+        wireRequest.request,
+        peer: socket.remoteAddress.address,
+      );
       if (isHttp) {
         _writeHttpResponse(socket, response);
       } else {
@@ -108,7 +146,13 @@ class LocalRelayNode {
         return;
       }
       final bytes = buffer.toBytes();
-      final completion = _wireRequestCompletion(bytes);
+      final int? completion;
+      try {
+        completion = _wireRequestCompletion(bytes);
+      } catch (error) {
+        completeWithError(error);
+        return;
+      }
       if (completion == null) {
         return;
       }
@@ -129,6 +173,12 @@ class LocalRelayNode {
     subscription = socket.listen(
       (chunk) {
         buffer.add(chunk);
+        if (buffer.length > maxLineBytes) {
+          completeWithError(
+            const FormatException('Relay request exceeded max size.'),
+          );
+          return;
+        }
         tryComplete();
       },
       onError: completeWithError,
@@ -162,11 +212,17 @@ class LocalRelayNode {
         preview.startsWith('OPTIONS ');
     if (!isHttp) {
       final newline = bytes.indexOf(10);
+      if (newline > maxLineBytes) {
+        throw const FormatException('Relay request line too large.');
+      }
       return newline == -1 ? null : newline + 1;
     }
 
     final headerEnd = _httpHeaderEnd(bytes);
     if (headerEnd == null) {
+      if (bytes.length > maxLineBytes) {
+        throw const FormatException('HTTP relay headers too large.');
+      }
       return null;
     }
     final headerText = latin1.decode(
@@ -174,6 +230,9 @@ class LocalRelayNode {
       allowInvalid: true,
     );
     final contentLength = _httpContentLength(headerText);
+    if (contentLength > maxLineBytes) {
+      throw const FormatException('HTTP relay POST body too large.');
+    }
     return bytes.length >= headerEnd.totalHeaderBytes + contentLength
         ? headerEnd.totalHeaderBytes + contentLength
         : null;
@@ -206,7 +265,11 @@ class LocalRelayNode {
       if (name != 'content-length') {
         continue;
       }
-      return int.tryParse(line.substring(separator + 1).trim()) ?? 0;
+      final value = int.tryParse(line.substring(separator + 1).trim());
+      if (value == null || value < 0) {
+        throw const FormatException('Invalid HTTP content-length.');
+      }
+      return value;
     }
     return 0;
   }
@@ -288,11 +351,14 @@ class LocalRelayNode {
 
   Map<String, dynamic> _handleUdpDatagram(Datagram datagram) {
     try {
+      if (datagram.data.length > maxLineBytes) {
+        throw const FormatException('UDP relay request too large.');
+      }
       final request = jsonDecode(utf8.decode(datagram.data));
       if (request is! Map<String, dynamic>) {
         throw const FormatException('UDP relay request must be a JSON object.');
       }
-      return _handleRequest(request);
+      return _handleRequest(request, peer: datagram.address.address);
     } catch (error) {
       return {
         'ok': false,
@@ -303,77 +369,175 @@ class LocalRelayNode {
     }
   }
 
-  Map<String, dynamic> _handleRequest(Map<String, dynamic> request) {
+  Map<String, dynamic> _handleRequest(
+    Map<String, dynamic> request, {
+    required String peer,
+  }) {
     _cleanup();
+    if (!_allowRequest(peer)) {
+      return {
+        'ok': false,
+        'stored': false,
+        'messages': const [],
+        'error': 'rate limit exceeded',
+      };
+    }
     final action = request['action'] as String?;
-    switch (action) {
-      case 'store':
-        final recipientDeviceId = request['recipient_device_id'] as String;
-        final envelope = RelayEnvelope.fromJson(
-          request['envelope'] as Map<String, dynamic>,
-        );
-        final queue = _queues.putIfAbsent(recipientDeviceId, Queue.new);
-        if (envelope.kind == 'pairing_announcement') {
-          final retained = queue
-              .where(
-                (entry) =>
-                    entry.envelope.kind != 'pairing_announcement' ||
-                    entry.envelope.senderDeviceId != envelope.senderDeviceId,
-              )
-              .toList(growable: false);
-          queue
-            ..clear()
-            ..addAll(retained);
+    try {
+      switch (action) {
+        case 'store':
+          final recipientDeviceId = request['recipient_device_id'] as String;
+          final envelope = RelayEnvelope.fromJson(
+            request['envelope'] as Map<String, dynamic>,
+          );
+          _store(recipientDeviceId, envelope);
+          return {'ok': true, 'stored': true, 'messages': const []};
+        case 'fetch':
+          final recipientDeviceId = request['recipient_device_id'] as String;
+          final limit = request['limit'] as int? ?? maxFetchLimit;
+          final messages = _fetch(
+            recipientDeviceId,
+            limit,
+          ).map((envelope) => envelope.toJson()).toList(growable: false);
+          return {'ok': true, 'stored': false, 'messages': messages};
+        case 'health':
+          return {
+            'ok': true,
+            'stored': false,
+            'messages': const [],
+            'stats': {
+              'relay_id': relayId,
+              'queue_count': _queues.length,
+              'queued_envelope_count': _queues.values.fold<int>(
+                0,
+                (count, queue) => count + queue.length,
+              ),
+              'ttl_seconds': ttl.inSeconds,
+              'max_queue_per_mailbox': maxQueuePerMailbox,
+              'max_fetch_limit': maxFetchLimit,
+            },
+          };
+        default:
+          return {
+            'ok': false,
+            'stored': false,
+            'messages': const [],
+            'error': 'Unsupported action: $action',
+          };
+      }
+    } catch (error) {
+      return {
+        'ok': false,
+        'stored': false,
+        'messages': const [],
+        'error': error.toString(),
+      };
+    }
+  }
+
+  void _store(String recipientDeviceId, RelayEnvelope envelope) {
+    _validateMailboxId(recipientDeviceId);
+    final envelopeBytes = utf8.encode(jsonEncode(envelope.toJson()));
+    if (envelopeBytes.length > maxEnvelopeBytes) {
+      throw StateError(
+        'envelope too large: ${envelopeBytes.length} bytes > $maxEnvelopeBytes',
+      );
+    }
+    final queue = _queues.putIfAbsent(recipientDeviceId, Queue.new);
+    if (envelope.kind == 'pairing_announcement') {
+      final retained = queue
+          .where(
+            (entry) =>
+                entry.envelope.kind != 'pairing_announcement' ||
+                entry.envelope.senderDeviceId != envelope.senderDeviceId,
+          )
+          .toList(growable: false);
+      queue
+        ..clear()
+        ..addAll(retained);
+    }
+    while (queue.length >= maxQueuePerMailbox) {
+      final entries = queue.toList(growable: false);
+      final dropIndex = entries.indexWhere(
+        (entry) => entry.envelope.kind != 'pairing_announcement',
+      );
+      if (dropIndex <= 0) {
+        queue.removeFirst();
+      } else {
+        queue
+          ..clear()
+          ..addAll([
+            ...entries.take(dropIndex),
+            ...entries.skip(dropIndex + 1),
+          ]);
+      }
+    }
+    queue.add(
+      _QueueEntry(queuedAt: _nowProvider().toUtc(), envelope: envelope),
+    );
+    onEnvelopeStored?.call(recipientDeviceId, envelope);
+  }
+
+  List<RelayEnvelope> _fetch(String recipientDeviceId, int requestedLimit) {
+    _validateMailboxId(recipientDeviceId);
+    final limit = requestedLimit.clamp(1, maxFetchLimit);
+    final queue = _queues.putIfAbsent(recipientDeviceId, Queue.new);
+    final messages = <RelayEnvelope>[];
+    final entries = queue.toList(growable: false);
+    queue.clear();
+    for (final entry in entries) {
+      if (messages.length < limit) {
+        messages.add(entry.envelope);
+        if (entry.envelope.kind == 'pairing_announcement') {
+          queue.add(entry);
         }
-        queue.add(
-          _QueueEntry(queuedAt: DateTime.now().toUtc(), envelope: envelope),
-        );
-        onEnvelopeStored?.call(recipientDeviceId, envelope);
-        return {'ok': true, 'stored': true, 'messages': const []};
-      case 'fetch':
-        final recipientDeviceId = request['recipient_device_id'] as String;
-        final limit = request['limit'] as int? ?? 64;
-        final queue = _queues.putIfAbsent(recipientDeviceId, Queue.new);
-        final messages = <Map<String, dynamic>>[];
-        final entries = queue.toList(growable: false);
-        queue.clear();
-        for (final entry in entries) {
-          if (messages.length < limit) {
-            messages.add(entry.envelope.toJson());
-            if (entry.envelope.kind == 'pairing_announcement') {
-              queue.add(entry);
-            }
-          } else {
-            queue.add(entry);
-          }
-        }
-        return {'ok': true, 'stored': false, 'messages': messages};
-      case 'health':
-        return {
-          'ok': true,
-          'stored': false,
-          'messages': const [],
-          'stats': {
-            'relay_id': relayId,
-            'queue_count': _queues.length,
-            'queued_envelope_count': _queues.values.fold<int>(
-              0,
-              (count, queue) => count + queue.length,
-            ),
-          },
-        };
-      default:
-        return {
-          'ok': false,
-          'stored': false,
-          'messages': const [],
-          'error': 'Unsupported action: $action',
-        };
+      } else {
+        queue.add(entry);
+      }
+    }
+    return messages;
+  }
+
+  bool _allowRequest(String peer) {
+    final now = _nowProvider().toUtc();
+    _rateBuckets.removeWhere(
+      (_, bucket) =>
+          now.difference(bucket.windowStarted) >= const Duration(minutes: 2),
+    );
+    final bucket = _rateBuckets.putIfAbsent(
+      peer,
+      () => _RateBucket(windowStarted: now),
+    );
+    if (now.difference(bucket.windowStarted) >= const Duration(minutes: 1)) {
+      bucket.windowStarted = now;
+      bucket.count = 0;
+    }
+    if (bucket.count >= maxRequestsPerMinute) {
+      return false;
+    }
+    bucket.count++;
+    return true;
+  }
+
+  void _validateMailboxId(String value) {
+    if (value.isEmpty || value.length > 160) {
+      throw ArgumentError('mailbox id must be 1..160 characters');
+    }
+    for (final codeUnit in value.codeUnits) {
+      final isAlphaNumeric =
+          (codeUnit >= 48 && codeUnit <= 57) ||
+          (codeUnit >= 65 && codeUnit <= 90) ||
+          (codeUnit >= 97 && codeUnit <= 122);
+      final isAllowedSymbol =
+          codeUnit == 45 || codeUnit == 95 || codeUnit == 46 || codeUnit == 58;
+      if (!isAlphaNumeric && !isAllowedSymbol) {
+        throw ArgumentError('mailbox id contains unsupported characters');
+      }
     }
   }
 
   void _cleanup() {
-    final cutoff = DateTime.now().toUtc().subtract(ttl);
+    final cutoff = _nowProvider().toUtc().subtract(ttl);
     final recipients = _queues.keys.toList(growable: false);
     for (final recipient in recipients) {
       final queue = _queues[recipient];
@@ -388,6 +552,13 @@ class LocalRelayNode {
       }
     }
   }
+}
+
+class _RateBucket {
+  _RateBucket({required this.windowStarted});
+
+  DateTime windowStarted;
+  int count = 0;
 }
 
 class _QueueEntry {

@@ -104,3 +104,42 @@ On first launch:
 cargo test
 flutter test
 ```
+
+## Release Signing
+
+Stable Android builds must be signed with a real release key. The Gradle release
+build fails unless these Gradle properties or environment variables are set:
+
+- `conest.android.storeFile` / `CONEST_ANDROID_KEYSTORE`
+- `conest.android.storePassword` / `CONEST_ANDROID_KEYSTORE_PASSWORD`
+- `conest.android.keyAlias` / `CONEST_ANDROID_KEY_ALIAS`
+- `conest.android.keyPassword` / `CONEST_ANDROID_KEY_PASSWORD`
+
+Release update metadata must include `RELEASE-MANIFEST.json` and
+`RELEASE-MANIFEST.ed25519.sig`. The signature is base64-encoded Ed25519 over
+the exact manifest bytes. Build app artifacts with
+`--dart-define=CONEST_RELEASE_MANIFEST_PUBLIC_KEY=<base64-public-key>` so the
+updater can verify release assets before trusting checksums.
+
+After placing release assets in `dist/`, generate metadata with:
+
+```bash
+CONEST_RELEASE_MANIFEST_PRIVATE_KEY=<base64-32-byte-seed> \
+  dart run tool/release_manifest.dart v0.1.0
+```
+
+Minimal manifest shape:
+
+```json
+{
+  "version": 1,
+  "tagName": "v0.1.0",
+  "assets": [
+    {
+      "name": "conest-linux-x64-v0.1.0.zip",
+      "sha256": "64 lowercase hex characters",
+      "sizeBytes": 123
+    }
+  ]
+}
+```

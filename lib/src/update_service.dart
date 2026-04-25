@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -82,6 +83,105 @@ class UpdateAvailability {
   final String sha256Hex;
 }
 
+const _releaseManifestName = 'RELEASE-MANIFEST.json';
+const _releaseManifestSignatureName = 'RELEASE-MANIFEST.ed25519.sig';
+const _releaseManifestPublicKeyFromEnvironment = String.fromEnvironment(
+  'CONEST_RELEASE_MANIFEST_PUBLIC_KEY',
+);
+
+class ReleaseManifestAsset {
+  const ReleaseManifestAsset({
+    required this.name,
+    required this.sha256Hex,
+    required this.sizeBytes,
+  });
+
+  final String name;
+  final String sha256Hex;
+  final int? sizeBytes;
+
+  factory ReleaseManifestAsset.fromJson(Map<String, dynamic> json) {
+    final name = json['name'] as String? ?? '';
+    final sha256Hex = (json['sha256'] as String? ?? '').toLowerCase();
+    final size = json['sizeBytes'] as int?;
+    if (name.isEmpty) {
+      throw const FormatException('Release manifest asset name is empty.');
+    }
+    if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(sha256Hex)) {
+      throw FormatException('Release manifest has invalid sha256 for $name.');
+    }
+    if (size != null && size < 0) {
+      throw FormatException('Release manifest has invalid size for $name.');
+    }
+    return ReleaseManifestAsset(
+      name: name,
+      sha256Hex: sha256Hex,
+      sizeBytes: size,
+    );
+  }
+}
+
+class ReleaseManifest {
+  const ReleaseManifest({
+    required this.version,
+    required this.tagName,
+    required this.assets,
+  });
+
+  final int version;
+  final String tagName;
+  final Map<String, ReleaseManifestAsset> assets;
+
+  factory ReleaseManifest.fromJson(Map<String, dynamic> json) {
+    final version = json['version'] as int? ?? 0;
+    if (version != 1) {
+      throw FormatException('Unsupported release manifest version: $version.');
+    }
+    final tagName = json['tagName'] as String? ?? '';
+    if (tagName.isEmpty) {
+      throw const FormatException('Release manifest tagName is empty.');
+    }
+    final assetValues = json['assets'] as List<dynamic>? ?? const [];
+    final assets = <String, ReleaseManifestAsset>{};
+    for (final value in assetValues) {
+      if (value is! Map<String, dynamic>) {
+        throw const FormatException(
+          'Release manifest asset must be an object.',
+        );
+      }
+      final asset = ReleaseManifestAsset.fromJson(value);
+      if (assets.containsKey(asset.name)) {
+        throw FormatException(
+          'Release manifest has duplicate asset ${asset.name}.',
+        );
+      }
+      assets[asset.name] = asset;
+    }
+    if (assets.isEmpty) {
+      throw const FormatException('Release manifest has no assets.');
+    }
+    return ReleaseManifest(version: version, tagName: tagName, assets: assets);
+  }
+
+  ReleaseManifestAsset assetFor(GithubReleaseAsset asset) {
+    final manifestAsset = assets[asset.name];
+    if (manifestAsset == null) {
+      throw StateError(
+        'Release manifest for $tagName does not include ${asset.name}.',
+      );
+    }
+    final expectedSize = manifestAsset.sizeBytes;
+    if (expectedSize != null &&
+        asset.sizeBytes > 0 &&
+        expectedSize != asset.sizeBytes) {
+      throw StateError(
+        'Release manifest size mismatch for ${asset.name}: expected $expectedSize, GitHub reported ${asset.sizeBytes}.',
+      );
+    }
+    return manifestAsset;
+  }
+}
+
 @visibleForTesting
 Map<String, String> parseSha256Sums(String content) {
   final values = <String, String>{};
@@ -113,6 +213,7 @@ class UpdateService extends ChangeNotifier {
     Uri? apiBaseUri,
     String repositoryOwner = 'glitch-228',
     String repositoryName = 'conest',
+    String? releaseManifestPublicKeyBase64,
     void Function(int code)? exitCallback,
   }) : _platformBridge = platformBridge ?? PlatformBridge(),
        _httpClientFactory = httpClientFactory ?? HttpClient.new,
@@ -125,6 +226,9 @@ class UpdateService extends ChangeNotifier {
        _apiBaseUri = apiBaseUri ?? Uri.parse('https://api.github.com'),
        _repositoryOwner = repositoryOwner,
        _repositoryName = repositoryName,
+       _releaseManifestPublicKeyBase64 =
+           releaseManifestPublicKeyBase64 ??
+           _releaseManifestPublicKeyFromEnvironment,
        _exitCallback = exitCallback ?? exit;
 
   final ConestBuildInfo buildInfo;
@@ -137,6 +241,7 @@ class UpdateService extends ChangeNotifier {
   final Uri _apiBaseUri;
   final String _repositoryOwner;
   final String _repositoryName;
+  final String _releaseManifestPublicKeyBase64;
   final void Function(int code) _exitCallback;
 
   bool _startupCheckStarted = false;
@@ -212,26 +317,12 @@ class UpdateService extends ChangeNotifier {
             'Latest ${buildInfo.channelLabel} release has no ${_targetPlatform.label} app asset.';
         return false;
       }
-      final shaAsset = selected.assets.where(
-        (candidate) => candidate.name == 'SHA256SUMS.txt',
-      );
-      if (shaAsset.isEmpty) {
-        throw StateError(
-          'Release ${selected.tagName} does not include SHA256SUMS.txt.',
-        );
-      }
-      final sumsText = await _downloadText(shaAsset.first.downloadUri);
-      final sums = parseSha256Sums(sumsText);
-      final sha256Hex = sums[asset.name];
-      if (sha256Hex == null) {
-        throw StateError(
-          'SHA256SUMS.txt for ${selected.tagName} does not include ${asset.name}.',
-        );
-      }
+      final manifest = await _fetchVerifiedReleaseManifest(selected);
+      final manifestAsset = manifest.assetFor(asset);
       _availableUpdate = UpdateAvailability(
         release: selected,
         asset: asset,
-        sha256Hex: sha256Hex,
+        sha256Hex: manifestAsset.sha256Hex,
       );
       _statusMessage =
           'Update ${selected.tagName} is available for ${_targetPlatform.label}.';
@@ -391,6 +482,10 @@ class UpdateService extends ChangeNotifier {
   }
 
   Future<String> _downloadText(Uri uri) async {
+    return utf8.decode(await _downloadBytes(uri));
+  }
+
+  Future<List<int>> _downloadBytes(Uri uri) async {
     final client = _httpClientFactory();
     try {
       final request = await client.getUrl(uri);
@@ -406,9 +501,77 @@ class UpdateService extends ChangeNotifier {
           uri: uri,
         );
       }
-      return utf8.decode(await consolidateHttpClientResponseBytes(response));
+      return await consolidateHttpClientResponseBytes(response);
     } finally {
       client.close(force: true);
+    }
+  }
+
+  Future<ReleaseManifest> _fetchVerifiedReleaseManifest(
+    GithubReleaseInfo release,
+  ) async {
+    final publicKeyText = _releaseManifestPublicKeyBase64.trim();
+    if (publicKeyText.isEmpty) {
+      throw StateError(
+        'No release manifest public key is configured for update verification.',
+      );
+    }
+    final manifestAsset = _requiredReleaseAsset(release, _releaseManifestName);
+    final signatureAsset = _requiredReleaseAsset(
+      release,
+      _releaseManifestSignatureName,
+    );
+    final manifestBytes = await _downloadBytes(manifestAsset.downloadUri);
+    final signatureText = utf8.decode(
+      await _downloadBytes(signatureAsset.downloadUri),
+    );
+    final publicKeyBytes = _decodeBase64Flexible(publicKeyText);
+    final signatureBytes = _decodeBase64Flexible(signatureText.trim());
+    final algorithm = Ed25519();
+    final verified = await algorithm.verify(
+      manifestBytes,
+      signature: Signature(
+        signatureBytes,
+        publicKey: SimplePublicKey(publicKeyBytes, type: KeyPairType.ed25519),
+      ),
+    );
+    if (!verified) {
+      throw StateError(
+        'Release manifest signature verification failed for ${release.tagName}.',
+      );
+    }
+    final decoded = jsonDecode(utf8.decode(manifestBytes));
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('Release manifest must be a JSON object.');
+    }
+    final manifest = ReleaseManifest.fromJson(decoded);
+    if (_normalizeReleaseIdentity(manifest.tagName) !=
+        _normalizeReleaseIdentity(release.tagName)) {
+      throw StateError(
+        'Release manifest tag ${manifest.tagName} does not match ${release.tagName}.',
+      );
+    }
+    return manifest;
+  }
+
+  GithubReleaseAsset _requiredReleaseAsset(
+    GithubReleaseInfo release,
+    String name,
+  ) {
+    final matches = release.assets.where((asset) => asset.name == name);
+    if (matches.isEmpty) {
+      throw StateError('Release ${release.tagName} does not include $name.');
+    }
+    return matches.first;
+  }
+
+  List<int> _decodeBase64Flexible(String value) {
+    final normalized = value.trim().replaceAll(RegExp(r'\s+'), '');
+    try {
+      return base64Decode(normalized);
+    } on FormatException {
+      final padded = base64Url.normalize(normalized);
+      return base64Url.decode(padded);
     }
   }
 

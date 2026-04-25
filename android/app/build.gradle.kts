@@ -5,6 +5,24 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+fun conestSecret(propertyName: String, envName: String): String? {
+    return (providers.gradleProperty(propertyName).orNull ?: System.getenv(envName))
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+}
+
+val conestReleaseStoreFile = conestSecret("conest.android.storeFile", "CONEST_ANDROID_KEYSTORE")
+val conestReleaseStorePassword =
+    conestSecret("conest.android.storePassword", "CONEST_ANDROID_KEYSTORE_PASSWORD")
+val conestReleaseKeyAlias = conestSecret("conest.android.keyAlias", "CONEST_ANDROID_KEY_ALIAS")
+val conestReleaseKeyPassword =
+    conestSecret("conest.android.keyPassword", "CONEST_ANDROID_KEY_PASSWORD")
+val conestReleaseSigningConfigured =
+    conestReleaseStoreFile != null &&
+        conestReleaseStorePassword != null &&
+        conestReleaseKeyAlias != null &&
+        conestReleaseKeyPassword != null
+
 android {
     namespace = "dev.conest.conest"
     compileSdk = flutter.compileSdkVersion
@@ -30,15 +48,43 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            if (conestReleaseSigningConfigured) {
+                storeFile = file(conestReleaseStoreFile!!)
+                storePassword = conestReleaseStorePassword
+                keyAlias = conestReleaseKeyAlias
+                keyPassword = conestReleaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }
 
 flutter {
     source = "../.."
+}
+
+gradle.taskGraph.whenReady {
+    val releaseTaskRequested = allTasks.any { task ->
+        task.path.startsWith(":app:") &&
+            (task.name.startsWith("assembleRelease") ||
+                task.name.startsWith("bundleRelease") ||
+                task.name.startsWith("packageRelease") ||
+                task.name.startsWith("validateSigningRelease"))
+    }
+    if (releaseTaskRequested && !conestReleaseSigningConfigured) {
+        throw GradleException(
+            "Conest release signing is not configured. Set Gradle properties " +
+                "conest.android.storeFile, conest.android.storePassword, " +
+                "conest.android.keyAlias, conest.android.keyPassword or the " +
+                "CONEST_ANDROID_KEYSTORE, CONEST_ANDROID_KEYSTORE_PASSWORD, " +
+                "CONEST_ANDROID_KEY_ALIAS, CONEST_ANDROID_KEY_PASSWORD environment variables."
+        )
+    }
 }

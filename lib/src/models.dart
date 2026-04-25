@@ -67,6 +67,7 @@ class PeerEndpoint {
       fallbackPort: port,
       defaultProtocol: protocol,
     );
+    validatePeerEndpointHostAndPort(parsed.host, parsed.port);
     return PeerEndpoint(
       kind: kind,
       host: parsed.host,
@@ -100,6 +101,32 @@ class PeerEndpoint {
       protocol: peerRouteProtocolFromString(json['protocol'] as String?),
     );
   }
+}
+
+void validatePeerEndpointHostAndPort(String host, int port) {
+  if (!isValidPeerEndpointPort(port)) {
+    throw ArgumentError('Relay port must be between 1 and 65535.');
+  }
+  if (!isValidPeerEndpointHost(host)) {
+    throw ArgumentError('Relay host contains unsupported characters.');
+  }
+}
+
+bool isValidPeerEndpointPort(int port) => port >= 1 && port <= 65535;
+
+bool isValidPeerEndpointHost(String host) {
+  if (host.isEmpty || host.trim() != host) {
+    return false;
+  }
+  for (final codeUnit in host.codeUnits) {
+    if (codeUnit <= 32 || codeUnit == 127) {
+      return false;
+    }
+    if (codeUnit == 47 || codeUnit == 92 || codeUnit == 35 || codeUnit == 63) {
+      return false;
+    }
+  }
+  return true;
 }
 
 class ParsedPeerEndpointInput {
@@ -292,7 +319,12 @@ List<PeerEndpoint> _peerEndpointsFromJsonList(
     if (value is! Map<String, dynamic>) {
       continue;
     }
-    final route = PeerEndpoint.fromJson(value);
+    final PeerEndpoint route;
+    try {
+      route = PeerEndpoint.fromJson(value);
+    } on Object {
+      continue;
+    }
     routes.add(route);
     if (expandMissingProtocol && !value.containsKey('protocol')) {
       routes.add(
@@ -692,12 +724,11 @@ PeerEndpoint? _decodeCompactRoute(String value) {
   if (kind == null || protocol == null || port == null) {
     return null;
   }
-  return PeerEndpoint(
-    kind: kind,
-    host: Uri.decodeComponent(value.substring(separator + 1)),
-    port: port,
-    protocol: protocol,
-  );
+  final host = Uri.decodeComponent(value.substring(separator + 1));
+  if (!isValidPeerEndpointHost(host) || !isValidPeerEndpointPort(port)) {
+    return null;
+  }
+  return PeerEndpoint(kind: kind, host: host, port: port, protocol: protocol);
 }
 
 class ContactRecord {

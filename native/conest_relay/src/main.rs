@@ -245,13 +245,13 @@ impl RelayState {
         self.cleanup_locked(&mut queues);
         let queue = queues.entry(recipient_device_id).or_default();
 
-        if envelope_kind(&envelope) == Some("pairing_announcement") {
-            if let Some(sender) = envelope_sender_device_id(&envelope) {
-                queue.retain(|entry| {
-                    envelope_kind(&entry.envelope) != Some("pairing_announcement")
-                        || envelope_sender_device_id(&entry.envelope) != Some(sender)
-                });
-            }
+        if envelope_kind(&envelope) == Some("pairing_announcement")
+            && let Some(sender) = envelope_sender_device_id(&envelope)
+        {
+            queue.retain(|entry| {
+                envelope_kind(&entry.envelope) != Some("pairing_announcement")
+                    || envelope_sender_device_id(&entry.envelope) != Some(sender)
+            });
         }
 
         while queue.len() >= self.config.max_queue_per_mailbox {
@@ -438,10 +438,10 @@ fn handle_http_request<R: BufRead>(
                 if headers.len() + line.len() > state.config.max_line_bytes {
                     return (413, RelayResponse::error("HTTP headers too large"));
                 }
-                if let Some((name, value)) = line.split_once(':') {
-                    if name.trim().eq_ignore_ascii_case("content-length") {
-                        content_length = value.trim().parse::<usize>().unwrap_or(0);
-                    }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse::<usize>().unwrap_or(0);
                 }
                 headers.extend_from_slice(line.as_bytes());
             }

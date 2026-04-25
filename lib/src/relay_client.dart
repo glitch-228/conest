@@ -129,34 +129,47 @@ class RelayClient {
     required Duration timeout,
     required Map<String, dynamic> request,
   }) async {
+    final endpoint = _validateEndpoint(host: host, port: port);
     return switch (protocol) {
       PeerRouteProtocol.tcp => _sendTcpRequest(
-        host: host,
-        port: port,
+        host: endpoint.host,
+        port: endpoint.port,
         timeout: timeout,
         request: request,
       ),
       PeerRouteProtocol.udp => _sendUdpRequest(
-        host: host,
-        port: port,
+        host: endpoint.host,
+        port: endpoint.port,
         timeout: timeout,
         request: request,
       ),
       PeerRouteProtocol.http => _sendHttpRequest(
         scheme: 'http',
-        host: host,
-        port: port,
+        host: endpoint.host,
+        port: endpoint.port,
         timeout: timeout,
         request: request,
       ),
       PeerRouteProtocol.https => _sendHttpRequest(
         scheme: 'https',
-        host: host,
-        port: port,
+        host: endpoint.host,
+        port: endpoint.port,
         timeout: timeout,
         request: request,
       ),
     };
+  }
+
+  _ValidatedRelayEndpoint _validateEndpoint({
+    required String host,
+    required int port,
+  }) {
+    final normalizedHost =
+        host.startsWith('[') && host.endsWith(']') && host.length > 2
+        ? host.substring(1, host.length - 1)
+        : host;
+    validatePeerEndpointHostAndPort(normalizedHost, port);
+    return _ValidatedRelayEndpoint(host: normalizedHost, port: port);
   }
 
   Future<Map<String, dynamic>> _sendTcpRequest({
@@ -255,9 +268,10 @@ class RelayClient {
         : await Socket.connect(host, port, timeout: timeout);
     try {
       final requestBody = utf8.encode(jsonEncode(request));
+      final hostHeader = _httpHostHeader(host, port);
       final requestHead =
           'POST / HTTP/1.1\r\n'
-          'Host: $host\r\n'
+          'Host: $hostHeader\r\n'
           'Content-Type: application/json\r\n'
           'Accept: application/json\r\n'
           'Content-Length: ${requestBody.length}\r\n'
@@ -282,6 +296,13 @@ class RelayClient {
     } finally {
       await socket.close();
     }
+  }
+
+  String _httpHostHeader(String host, int port) {
+    final escapedHost = host.contains(':') && !host.startsWith('[')
+        ? '[$host]'
+        : host;
+    return '$escapedHost:$port';
   }
 
   _HttpRelayResponse _decodeHttpResponse(List<int> bytes) {
@@ -334,6 +355,13 @@ class RelayClient {
     }
     return response;
   }
+}
+
+class _ValidatedRelayEndpoint {
+  const _ValidatedRelayEndpoint({required this.host, required this.port});
+
+  final String host;
+  final int port;
 }
 
 class _HttpRelayResponse {
