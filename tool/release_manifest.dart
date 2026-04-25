@@ -11,18 +11,40 @@ const _checksumName = 'SHA256SUMS.txt';
 Future<void> main(List<String> args) async {
   if (args.isEmpty || args.contains('--help') || args.contains('-h')) {
     stderr.writeln(
-      'usage: dart run tool/release_manifest.dart <tag> [asset ...]\n'
+      'usage: dart run tool/release_manifest.dart [--dist <dir>] <tag> [asset ...]\n'
       '\n'
       'Set CONEST_RELEASE_MANIFEST_PRIVATE_KEY to a base64 Ed25519 seed.\n'
-      'If no assets are listed, every file in dist/ except release metadata is included.',
+      'If no assets are listed, every file in the dist dir except release metadata is included.',
     );
     exit(args.isEmpty ? 2 : 0);
   }
 
-  final tagName = args.first;
-  final distDir = Directory('dist');
+  var distPath = 'dist';
+  final positional = <String>[];
+  for (var index = 0; index < args.length; index++) {
+    final arg = args[index];
+    if (arg == '--dist') {
+      index++;
+      if (index >= args.length) {
+        stderr.writeln('--dist requires a directory.');
+        exit(2);
+      }
+      distPath = args[index];
+    } else if (arg.startsWith('--dist=')) {
+      distPath = arg.substring('--dist='.length);
+    } else {
+      positional.add(arg);
+    }
+  }
+  if (positional.isEmpty) {
+    stderr.writeln('Missing release tag.');
+    exit(2);
+  }
+
+  final tagName = positional.first;
+  final distDir = Directory(distPath);
   if (!await distDir.exists()) {
-    stderr.writeln('dist/ does not exist.');
+    stderr.writeln('${distDir.path} does not exist.');
     exit(2);
   }
   final privateSeedText =
@@ -39,8 +61,8 @@ Future<void> main(List<String> args) async {
     exit(2);
   }
 
-  final assetFiles = args.length > 1
-      ? args.skip(1).map((name) => File('dist/$name')).toList()
+  final assetFiles = positional.length > 1
+      ? positional.skip(1).map((name) => File('${distDir.path}/$name')).toList()
       : await distDir
             .list()
             .where((entry) => entry is File)
@@ -79,15 +101,17 @@ Future<void> main(List<String> args) async {
   final signature = await algorithm.sign(manifestBytes, keyPair: keyPair);
   final publicKey = await keyPair.extractPublicKey();
 
-  await File('dist/$_manifestName').writeAsBytes(manifestBytes, flush: true);
   await File(
-    'dist/$_signatureName',
+    '${distDir.path}/$_manifestName',
+  ).writeAsBytes(manifestBytes, flush: true);
+  await File(
+    '${distDir.path}/$_signatureName',
   ).writeAsString('${base64Encode(signature.bytes)}\n', flush: true);
   await _writeSha256Sums(distDir);
 
-  stdout.writeln('Wrote dist/$_manifestName');
-  stdout.writeln('Wrote dist/$_signatureName');
-  stdout.writeln('Wrote dist/$_checksumName');
+  stdout.writeln('Wrote ${distDir.path}/$_manifestName');
+  stdout.writeln('Wrote ${distDir.path}/$_signatureName');
+  stdout.writeln('Wrote ${distDir.path}/$_checksumName');
   stdout.writeln(
     'CONEST_RELEASE_MANIFEST_PUBLIC_KEY=${base64Encode(publicKey.bytes)}',
   );
@@ -113,7 +137,9 @@ Future<void> _writeSha256Sums(Directory distDir) async {
     final digest = sha256.convert(await file.readAsBytes()).toString();
     lines.add('$digest  $name');
   }
-  await File('dist/$_checksumName').writeAsString('${lines.join('\n')}\n');
+  await File(
+    '${distDir.path}/$_checksumName',
+  ).writeAsString('${lines.join('\n')}\n');
 }
 
 List<int> _decodeBase64Flexible(String value) {
