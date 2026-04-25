@@ -242,26 +242,29 @@ fn launch_application(config: &Config) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn preserve_permissions(source: &Path, destination: &Path) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        let mode = fs::metadata(source)
-            .map_err(|error| {
-                format!(
-                    "could not inspect permissions for {}: {error}",
-                    source.display()
-                )
-            })?
-            .permissions()
-            .mode();
-        let permissions = fs::Permissions::from_mode(mode);
-        fs::set_permissions(destination, permissions).map_err(|error| {
+    let mode = fs::metadata(source)
+        .map_err(|error| {
             format!(
-                "could not preserve permissions from {} to {}: {error}",
-                source.display(),
-                destination.display()
+                "could not inspect permissions for {}: {error}",
+                source.display()
             )
-        })?;
-    }
+        })?
+        .permissions()
+        .mode();
+    let permissions = fs::Permissions::from_mode(mode);
+    fs::set_permissions(destination, permissions).map_err(|error| {
+        format!(
+            "could not preserve permissions from {} to {}: {error}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn preserve_permissions(_source: &Path, _destination: &Path) -> Result<(), String> {
     Ok(())
 }
