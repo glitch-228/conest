@@ -622,6 +622,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   String? _selectedContactId;
+  String? _selectedGroupId;
   bool _lanLobbySelected = false;
   final _composerController = TextEditingController();
   ChatMessage? _replyTarget;
@@ -650,6 +651,19 @@ class _HomeScreenState extends State<HomeScreen> {
     return null;
   }
 
+  GroupRecord? get _selectedGroup {
+    final current = _selectedGroupId;
+    if (current == null) {
+      return null;
+    }
+    for (final group in widget.controller.groups) {
+      if (group.groupId == current) {
+        return group;
+      }
+    }
+    return null;
+  }
+
   bool _replyTargetMatchesContact(ContactRecord contact) {
     final target = _replyTarget;
     if (target == null) {
@@ -657,6 +671,11 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     return target.senderDeviceId == contact.deviceId ||
         target.recipientDeviceId == contact.deviceId;
+  }
+
+  bool _replyTargetMatchesGroup(GroupRecord group) {
+    final target = _replyTarget;
+    return target != null && target.conversationId == group.groupId;
   }
 
   Future<void> _showInvite() async {
@@ -689,6 +708,48 @@ class _HomeScreenState extends State<HomeScreen> {
         palette: widget.palette,
       ),
     );
+  }
+
+  Future<void> _showCreateGroup() async {
+    final created = await showDialog<GroupRecord>(
+      context: context,
+      builder: (context) => CreateGroupDialog(
+        controller: widget.controller,
+        palette: widget.palette,
+      ),
+    );
+    if (created == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _selectedContactId = null;
+      _selectedGroupId = created.groupId;
+      _lanLobbySelected = false;
+      _replyTarget = null;
+    });
+  }
+
+  Future<void> _showGroupDetails(GroupRecord group) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => GroupDetailsDialog(
+        controller: widget.controller,
+        palette: widget.palette,
+        group: group,
+      ),
+    );
+    if (!mounted) {
+      return;
+    }
+    if (_selectedGroupId != null &&
+        !widget.controller.groups.any(
+          (group) => group.groupId == _selectedGroupId,
+        )) {
+      setState(() {
+        _selectedGroupId = null;
+        _replyTarget = null;
+      });
+    }
   }
 
   Future<void> _showSettings() async {
@@ -749,6 +810,7 @@ class _HomeScreenState extends State<HomeScreen> {
         )) {
       setState(() {
         _selectedContactId = null;
+        _selectedGroupId = null;
         _replyTarget = null;
       });
     }
@@ -770,6 +832,22 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _sendCurrentGroupMessage() async {
+    final group = _selectedGroup;
+    final body = _composerController.text.trim();
+    if (group == null || body.isEmpty) {
+      return;
+    }
+    final replyTarget = _replyTarget;
+    _composerController.clear();
+    setState(() => _replyTarget = null);
+    await widget.controller.sendGroupMessage(
+      groupId: group.groupId,
+      body: body,
+      replyTo: replyTarget,
+    );
+  }
+
   Future<void> _sendLanLobbyMessage() async {
     final body = _composerController.text.trim();
     if (body.isEmpty) {
@@ -783,17 +861,27 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final palette = widget.palette;
     final selectedContact = _selectedContact;
-    final lanLobbySelected = _lanLobbySelected && selectedContact == null;
+    final selectedGroup = _selectedGroup;
+    final lanLobbySelected =
+        _lanLobbySelected && selectedContact == null && selectedGroup == null;
     return Scaffold(
       body: DecoratedBox(
         decoration: BoxDecoration(gradient: palette.appGradient),
         child: PopScope(
-          canPop: selectedContact == null && !lanLobbySelected,
+          canPop:
+              selectedContact == null &&
+              selectedGroup == null &&
+              !lanLobbySelected,
           onPopInvokedWithResult: (didPop, result) {
-            if (!didPop && (_selectedContactId != null || _lanLobbySelected)) {
+            if (!didPop &&
+                (_selectedContactId != null ||
+                    _selectedGroupId != null ||
+                    _lanLobbySelected)) {
               setState(() {
                 _selectedContactId = null;
+                _selectedGroupId = null;
                 _lanLobbySelected = false;
+                _replyTarget = null;
               });
             }
           },
@@ -820,6 +908,25 @@ class _HomeScreenState extends State<HomeScreen> {
                     onSend: _sendCurrentMessage,
                   );
                 }
+                if (!isWide && selectedGroup != null) {
+                  return _GroupChatPanel(
+                    key: ValueKey('group-${selectedGroup.groupId}'),
+                    controller: widget.controller,
+                    palette: palette,
+                    group: selectedGroup,
+                    composerController: _composerController,
+                    replyTarget: _replyTarget,
+                    onBack: () => setState(() {
+                      _selectedGroupId = null;
+                      _replyTarget = null;
+                    }),
+                    onCancelReply: () => setState(() => _replyTarget = null),
+                    onReplyToMessage: (message) =>
+                        setState(() => _replyTarget = message),
+                    onShowDetails: () => _showGroupDetails(selectedGroup),
+                    onSend: _sendCurrentGroupMessage,
+                  );
+                }
                 if (!isWide && lanLobbySelected) {
                   return _LanLobbyPanel(
                     controller: widget.controller,
@@ -837,19 +944,34 @@ class _HomeScreenState extends State<HomeScreen> {
                         controller: widget.controller,
                         palette: palette,
                         selectedContactId: _selectedContactId,
+                        selectedGroupId: _selectedGroupId,
                         lanLobbySelected: lanLobbySelected,
                         onAddContact: _showAddContact,
+                        onCreateGroup: _showCreateGroup,
                         onLanLobbySelected: () {
                           setState(() {
                             _selectedContactId = null;
+                            _selectedGroupId = null;
                             _lanLobbySelected = true;
                             _replyTarget = null;
                           });
                           unawaited(widget.controller.markLanLobbyRead());
                         },
+                        onGroupSelected: (group) {
+                          setState(() {
+                            _lanLobbySelected = false;
+                            _selectedContactId = null;
+                            _selectedGroupId = group.groupId;
+                            if (!_replyTargetMatchesGroup(group)) {
+                              _replyTarget = null;
+                            }
+                          });
+                        },
+                        onGroupDetails: _showGroupDetails,
                         onContactSelected: (contact) {
                           setState(() {
                             _lanLobbySelected = false;
+                            _selectedGroupId = null;
                             _selectedContactId = contact.deviceId;
                             if (!_replyTargetMatchesContact(contact)) {
                               _replyTarget = null;
@@ -871,6 +993,22 @@ class _HomeScreenState extends State<HomeScreen> {
                                 palette: palette,
                                 composerController: _composerController,
                                 onSend: _sendLanLobbyMessage,
+                              )
+                            : selectedGroup != null
+                            ? _GroupChatPanel(
+                                key: ValueKey('group-${selectedGroup.groupId}'),
+                                controller: widget.controller,
+                                palette: palette,
+                                group: selectedGroup,
+                                composerController: _composerController,
+                                replyTarget: _replyTarget,
+                                onCancelReply: () =>
+                                    setState(() => _replyTarget = null),
+                                onReplyToMessage: (message) =>
+                                    setState(() => _replyTarget = message),
+                                onShowDetails: () =>
+                                    _showGroupDetails(selectedGroup),
+                                onSend: _sendCurrentGroupMessage,
                               )
                             : selectedContact == null
                             ? _EmptyChatState(palette: palette)
@@ -908,9 +1046,13 @@ class _Sidebar extends StatelessWidget {
     required this.controller,
     required this.palette,
     required this.selectedContactId,
+    required this.selectedGroupId,
     required this.lanLobbySelected,
     required this.onAddContact,
+    required this.onCreateGroup,
     required this.onLanLobbySelected,
+    required this.onGroupSelected,
+    required this.onGroupDetails,
     required this.onContactSelected,
     required this.onContactProfile,
     required this.onPoll,
@@ -922,9 +1064,13 @@ class _Sidebar extends StatelessWidget {
   final MessengerController controller;
   final ConestPalette palette;
   final String? selectedContactId;
+  final String? selectedGroupId;
   final bool lanLobbySelected;
   final VoidCallback onAddContact;
+  final VoidCallback onCreateGroup;
   final VoidCallback onLanLobbySelected;
+  final ValueChanged<GroupRecord> onGroupSelected;
+  final ValueChanged<GroupRecord> onGroupDetails;
   final ValueChanged<ContactRecord> onContactSelected;
   final ValueChanged<ContactRecord> onContactProfile;
   final Future<void> Function() onPoll;
@@ -1138,6 +1284,120 @@ class _Sidebar extends StatelessWidget {
         Row(
           children: [
             Text(
+              'Groups',
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const Spacer(),
+            IconButton(
+              onPressed: controller.contacts.isEmpty ? null : onCreateGroup,
+              icon: const Icon(Icons.group_add_outlined),
+              tooltip: 'Create group',
+            ),
+            Text(
+              '${controller.groups.length}',
+              style: Theme.of(
+                context,
+              ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (controller.groups.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(
+              controller.contacts.isEmpty
+                  ? 'Add trusted contacts before creating a group.'
+                  : 'No groups yet.',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+            ),
+          )
+        else
+          for (var index = 0; index < controller.groups.length; index++) ...[
+            if (index > 0) const SizedBox(height: 8),
+            Builder(
+              builder: (context) {
+                final group = controller.groups[index];
+                final preview = controller.lastGroupMessageFor(group.groupId);
+                final unreadCount = controller.unreadGroupCountFor(
+                  group.groupId,
+                );
+                final selected = selectedGroupId == group.groupId;
+                return InkWell(
+                  borderRadius: BorderRadius.circular(18),
+                  onTap: () => onGroupSelected(group),
+                  child: Ink(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: selected ? palette.selection : palette.paperStrong,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: selected ? palette.primary : palette.stroke,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                group.title,
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                            if (unreadCount > 0) ...[
+                              const SizedBox(width: 8),
+                              _UnreadBadge(
+                                count: unreadCount,
+                                palette: palette,
+                                compact: true,
+                              ),
+                            ],
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              onPressed: () => onGroupDetails(group),
+                              icon: const Icon(Icons.groups_2_outlined),
+                              tooltip: 'Group details',
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${group.activeMemberDeviceIds.length} member(s)',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: palette.inkSoft),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          preview == null
+                              ? 'No messages yet'
+                              : preview.bodyPreview,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                fontWeight: unreadCount > 0
+                                    ? FontWeight.w700
+                                    : FontWeight.w400,
+                              ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Text(
               'Contacts',
               style: Theme.of(
                 context,
@@ -1263,6 +1523,706 @@ class _Sidebar extends StatelessWidget {
         ],
         const SizedBox(height: 18),
       ],
+    );
+  }
+}
+
+class CreateGroupDialog extends StatefulWidget {
+  const CreateGroupDialog({
+    super.key,
+    required this.controller,
+    required this.palette,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+
+  @override
+  State<CreateGroupDialog> createState() => _CreateGroupDialogState();
+}
+
+class _CreateGroupDialogState extends State<CreateGroupDialog> {
+  final _titleController = TextEditingController();
+  final Set<String> _selectedDeviceIds = <String>{};
+  bool _creating = false;
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _create() async {
+    if (_creating) {
+      return;
+    }
+    setState(() => _creating = true);
+    try {
+      final members = widget.controller.contacts
+          .where((contact) => _selectedDeviceIds.contains(contact.deviceId))
+          .toList(growable: false);
+      final group = await widget.controller.createGroup(
+        title: _titleController.text,
+        members: members,
+      );
+      if (mounted) {
+        Navigator.of(context).pop(group);
+      }
+    } catch (error) {
+      widget.controller.setStatus(error.toString());
+      if (mounted) {
+        setState(() => _creating = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final contacts = widget.controller.contacts;
+    final canCreate =
+        _titleController.text.trim().isNotEmpty &&
+        _selectedDeviceIds.isNotEmpty &&
+        !_creating;
+    return AlertDialog(
+      title: const Text('Create group'),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _titleController,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'Group title'),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 12),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final contact in contacts)
+                    CheckboxListTile(
+                      value: _selectedDeviceIds.contains(contact.deviceId),
+                      onChanged:
+                          _selectedDeviceIds.length >= 15 &&
+                              !_selectedDeviceIds.contains(contact.deviceId)
+                          ? null
+                          : (value) {
+                              setState(() {
+                                if (value == true) {
+                                  _selectedDeviceIds.add(contact.deviceId);
+                                } else {
+                                  _selectedDeviceIds.remove(contact.deviceId);
+                                }
+                              });
+                            },
+                      title: Text(contact.alias),
+                      subtitle: Text(contact.shortSafetyNumber),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _creating ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: canCreate ? _create : null,
+          child: Text(_creating ? 'Creating' : 'Create'),
+        ),
+      ],
+    );
+  }
+}
+
+class GroupDetailsDialog extends StatefulWidget {
+  const GroupDetailsDialog({
+    super.key,
+    required this.controller,
+    required this.palette,
+    required this.group,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+  final GroupRecord group;
+
+  @override
+  State<GroupDetailsDialog> createState() => _GroupDetailsDialogState();
+}
+
+class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
+  GroupRecord get group {
+    for (final candidate in widget.controller.groups) {
+      if (candidate.groupId == widget.group.groupId) {
+        return candidate;
+      }
+    }
+    return widget.group;
+  }
+
+  bool get _isOwner =>
+      widget.controller.identity?.deviceId == group.ownerDeviceId;
+
+  Future<void> _addMember(ContactRecord contact) async {
+    try {
+      await widget.controller.addGroupMembers(
+        groupId: group.groupId,
+        members: [contact],
+      );
+      if (mounted) {
+        setState(() {});
+      }
+    } catch (error) {
+      widget.controller.setStatus(error.toString());
+    }
+  }
+
+  Future<void> _removeMember(String deviceId) async {
+    try {
+      await widget.controller.removeGroupMember(
+        groupId: group.groupId,
+        memberDeviceId: deviceId,
+      );
+      if (mounted) {
+        setState(() {});
+      }
+    } catch (error) {
+      widget.controller.setStatus(error.toString());
+    }
+  }
+
+  Future<void> _leave() async {
+    try {
+      await widget.controller.leaveGroup(group.groupId);
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    } catch (error) {
+      widget.controller.setStatus(error.toString());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final activeIds = group.activeMemberDeviceIds;
+    final addable = widget.controller.contacts
+        .where((contact) => !activeIds.contains(contact.deviceId))
+        .toList(growable: false);
+    return AlertDialog(
+      title: Text(group.title),
+      content: SizedBox(
+        width: 460,
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            Text(
+              '${activeIds.length} member(s) • owner ${widget.controller.groupMemberLabel(group.ownerDeviceId)}',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: widget.palette.inkSoft),
+            ),
+            const SizedBox(height: 12),
+            for (final deviceId in activeIds)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  deviceId == group.ownerDeviceId
+                      ? Icons.verified_user_outlined
+                      : Icons.person_outline,
+                ),
+                title: Text(widget.controller.groupMemberLabel(deviceId)),
+                subtitle: deviceId == group.ownerDeviceId
+                    ? const Text('Owner')
+                    : null,
+                trailing:
+                    _isOwner &&
+                        deviceId != widget.controller.identity?.deviceId &&
+                        deviceId != group.ownerDeviceId
+                    ? IconButton(
+                        onPressed: () => _removeMember(deviceId),
+                        icon: const Icon(Icons.person_remove_outlined),
+                        tooltip: 'Remove member',
+                      )
+                    : null,
+              ),
+            if (_isOwner && addable.isNotEmpty) ...[
+              const Divider(),
+              Text(
+                'Add trusted contact',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 8),
+              for (final contact in addable)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(contact.alias),
+                  subtitle: Text(contact.shortSafetyNumber),
+                  trailing: IconButton(
+                    onPressed: activeIds.length >= 16
+                        ? null
+                        : () => _addMember(contact),
+                    icon: const Icon(Icons.person_add_alt_1),
+                    tooltip: 'Add member',
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        if (!_isOwner &&
+            group.hasActiveMember(widget.controller.identity?.deviceId ?? ''))
+          TextButton.icon(
+            onPressed: _leave,
+            icon: const Icon(Icons.logout),
+            label: const Text('Leave'),
+          ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+}
+
+class _GroupChatPanel extends StatefulWidget {
+  const _GroupChatPanel({
+    super.key,
+    required this.controller,
+    required this.palette,
+    required this.group,
+    required this.composerController,
+    required this.replyTarget,
+    required this.onCancelReply,
+    required this.onReplyToMessage,
+    required this.onSend,
+    required this.onShowDetails,
+    this.onBack,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+  final GroupRecord group;
+  final TextEditingController composerController;
+  final ChatMessage? replyTarget;
+  final VoidCallback onCancelReply;
+  final ValueChanged<ChatMessage> onReplyToMessage;
+  final VoidCallback onSend;
+  final VoidCallback onShowDetails;
+  final VoidCallback? onBack;
+
+  @override
+  State<_GroupChatPanel> createState() => _GroupChatPanelState();
+}
+
+class _GroupChatPanelState extends State<_GroupChatPanel> {
+  final ScrollController _scrollController = ScrollController();
+  final GlobalKey _messageListKey = GlobalKey();
+  final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
+  bool _didInitialPosition = false;
+  bool _initialPositionScheduled = false;
+  bool _readSweepScheduled = false;
+
+  MessengerController get controller => widget.controller;
+  ConestPalette get palette => widget.palette;
+  GroupRecord get group => widget.group;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_scheduleReadSweep);
+  }
+
+  @override
+  void didUpdateWidget(covariant _GroupChatPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.group.groupId != widget.group.groupId) {
+      _messageKeys.clear();
+      _didInitialPosition = false;
+      _initialPositionScheduled = false;
+    }
+    _scheduleInitialPosition();
+    _scheduleReadSweep();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_scheduleReadSweep);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  GlobalKey _messageKeyFor(String messageId) {
+    return _messageKeys.putIfAbsent(
+      messageId,
+      () => GlobalKey(debugLabel: 'group-message-$messageId'),
+    );
+  }
+
+  void _pruneMessageKeys(List<ChatMessage> messages) {
+    final activeIds = messages.map((message) => message.id).toSet();
+    _messageKeys.removeWhere((messageId, _) => !activeIds.contains(messageId));
+  }
+
+  void _scheduleInitialPosition() {
+    if (_didInitialPosition || _initialPositionScheduled) {
+      return;
+    }
+    _initialPositionScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initialPositionScheduled = false;
+      if (!mounted || _didInitialPosition) {
+        return;
+      }
+      final messages = controller.messagesForGroup(group.groupId);
+      if (messages.isEmpty) {
+        _didInitialPosition = true;
+        return;
+      }
+      if (!_scrollController.hasClients) {
+        _scheduleInitialPosition();
+        return;
+      }
+      _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+      _didInitialPosition = true;
+      _scheduleReadSweep();
+    });
+  }
+
+  void _scheduleReadSweep() {
+    if (!mounted ||
+        !_didInitialPosition ||
+        _readSweepScheduled ||
+        !controller.isAppForeground) {
+      return;
+    }
+    _readSweepScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      _readSweepScheduled = false;
+      if (!mounted || !controller.isAppForeground) {
+        return;
+      }
+      final latestVisibleUnread = _latestVisibleUnreadMessage();
+      if (latestVisibleUnread == null) {
+        return;
+      }
+      await controller.markGroupReadThroughMessage(
+        group.groupId,
+        latestVisibleUnread,
+      );
+    });
+  }
+
+  ChatMessage? _latestVisibleUnreadMessage() {
+    final viewportContext = _messageListKey.currentContext;
+    final viewportBox = viewportContext?.findRenderObject() as RenderBox?;
+    if (viewportBox == null || !viewportBox.attached) {
+      return null;
+    }
+    final viewportTop = viewportBox.localToGlobal(Offset.zero).dy;
+    final viewportBottom = viewportTop + viewportBox.size.height;
+    ChatMessage? latestVisibleUnread;
+    for (final message in controller.messagesForGroup(group.groupId)) {
+      if (message.outbound ||
+          !controller.isUnreadGroupMessage(group.groupId, message)) {
+        continue;
+      }
+      final messageContext = _messageKeyFor(message.id).currentContext;
+      final messageBox = messageContext?.findRenderObject() as RenderBox?;
+      if (messageBox == null || !messageBox.attached) {
+        continue;
+      }
+      final messageTop = messageBox.localToGlobal(Offset.zero).dy;
+      final messageBottom = messageTop + messageBox.size.height;
+      if (messageBottom > viewportTop + 4 && messageTop < viewportBottom - 4) {
+        latestVisibleUnread = message;
+      }
+    }
+    return latestVisibleUnread;
+  }
+
+  Future<void> _copyMessage(ChatMessage message) async {
+    await Clipboard.setData(ClipboardData(text: message.body));
+    controller.setStatus('Copied message text.');
+  }
+
+  String _messageSenderLabel(ChatMessage message) {
+    if (message.outbound) {
+      return 'You';
+    }
+    return controller.groupMemberLabel(message.senderDeviceId);
+  }
+
+  String _replyReferenceLabel(ChatMessage message) {
+    final me = controller.identity;
+    if (me != null && message.replySenderDeviceId == me.deviceId) {
+      return 'You';
+    }
+    final senderId = message.replySenderDeviceId;
+    if (senderId == null || senderId.isEmpty) {
+      return message.replySenderDisplayName ?? 'Message';
+    }
+    return message.replySenderDisplayName ??
+        controller.groupMemberLabel(senderId);
+  }
+
+  Widget _buildMessageBubble(BuildContext context, ChatMessage message) {
+    final outbound = message.outbound;
+    final unread = controller.isUnreadGroupMessage(group.groupId, message);
+    return Align(
+      key: _messageKeyFor(message.id),
+      alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
+      child: GestureDetector(
+        onDoubleTap: () => widget.onReplyToMessage(message),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 560),
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: outbound ? palette.outboundBubble : palette.inboundBubble,
+            borderRadius: BorderRadius.circular(18),
+            border: outbound || !unread
+                ? null
+                : Border.all(color: palette.unread.withValues(alpha: 0.55)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _messageSenderLabel(message),
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: outbound ? palette.outboundMeta : palette.inboundMeta,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              SelectionArea(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (message.hasReplyPreview) ...[
+                      _QuotedReference(
+                        palette: palette,
+                        outbound: outbound,
+                        senderLabel: _replyReferenceLabel(message),
+                        snippet: message.replySnippet!,
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                    Text(
+                      message.body,
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        color: outbound
+                            ? palette.outboundText
+                            : palette.inboundText,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    formatTimestamp(message.createdAt),
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: outbound
+                          ? palette.outboundMeta
+                          : palette.inboundMeta,
+                    ),
+                  ),
+                  if (!outbound && unread) ...[
+                    const SizedBox(width: 6),
+                    Text(
+                      'new',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: palette.unread,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                  if (outbound) ...[
+                    const SizedBox(width: 8),
+                    Tooltip(
+                      message: controller.groupDeliverySummary(message),
+                      child: Icon(
+                        message.state.icon,
+                        size: 16,
+                        color: palette.outboundMeta,
+                      ),
+                    ),
+                  ],
+                  PopupMenuButton<String>(
+                    tooltip: 'Message actions',
+                    icon: Icon(
+                      Icons.more_horiz,
+                      size: 18,
+                      color: outbound
+                          ? palette.outboundMeta
+                          : palette.inboundMeta,
+                    ),
+                    onSelected: (value) async {
+                      if (value == 'copy') {
+                        await _copyMessage(message);
+                      } else if (value == 'reply') {
+                        widget.onReplyToMessage(message);
+                      }
+                    },
+                    itemBuilder: (context) => const [
+                      PopupMenuItem(value: 'reply', child: Text('Reply')),
+                      PopupMenuItem(value: 'copy', child: Text('Copy message')),
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final messages = controller.messagesForGroup(group.groupId);
+    _pruneMessageKeys(messages);
+    _scheduleInitialPosition();
+    _scheduleReadSweep();
+    final me = controller.identity;
+    final canSend = me != null && group.hasActiveMember(me.deviceId);
+    final activeReplyTarget =
+        widget.replyTarget != null &&
+            widget.replyTarget!.conversationId == group.groupId
+        ? widget.replyTarget
+        : null;
+    return Padding(
+      padding: const EdgeInsets.all(18),
+      child: Card(
+        elevation: 0,
+        color: palette.paperStrong,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(28),
+          side: BorderSide(color: palette.stroke),
+        ),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
+              child: Row(
+                children: [
+                  if (widget.onBack != null)
+                    IconButton(
+                      onPressed: widget.onBack,
+                      icon: const Icon(Icons.arrow_back),
+                    ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          group.title,
+                          style: Theme.of(context).textTheme.headlineSmall
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${group.activeMemberDeviceIds.length} member(s) • owner ${controller.groupMemberLabel(group.ownerDeviceId)}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: palette.inkSoft),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _StatusChip(
+                    label: 'pairwise',
+                    palette: palette,
+                    icon: Icons.lock_outline,
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: widget.onShowDetails,
+                    icon: const Icon(Icons.groups_2_outlined),
+                    tooltip: 'Group details',
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView(
+                key: _messageListKey,
+                controller: _scrollController,
+                padding: const EdgeInsets.all(18),
+                children: [
+                  for (final message in messages)
+                    _buildMessageBubble(context, message),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: palette.stroke)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (activeReplyTarget != null) ...[
+                    _ComposerReplyPreview(
+                      palette: palette,
+                      senderLabel: _messageSenderLabel(activeReplyTarget),
+                      snippet: activeReplyTarget.bodyPreview,
+                      onCancel: widget.onCancelReply,
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: widget.composerController,
+                          minLines: 1,
+                          maxLines: 5,
+                          enabled: canSend,
+                          decoration: InputDecoration(
+                            hintText: canSend
+                                ? activeReplyTarget == null
+                                      ? 'Write to group'
+                                      : 'Write a reply'
+                                : 'You are no longer in this group',
+                          ),
+                          onSubmitted: (_) {
+                            if (canSend) {
+                              widget.onSend();
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      FilledButton.icon(
+                        onPressed: canSend ? widget.onSend : null,
+                        icon: const Icon(Icons.north_east),
+                        label: const Text('Send'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "conest_core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "chacha20poly1305",
@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "conest_relay"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "conest_updater"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "const-oid"

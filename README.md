@@ -7,12 +7,13 @@ Conest is a phased secure text-exchange app. This repository now contains the fi
 - QR-import-only and codephrase-only contact pairing.
 - Encrypted local vault for identity, contacts, and message history.
 - LAN-first direct text delivery with TCP/UDP route variants, relay fallback, and queued offline delivery.
+- Invite-only trusted groups with pairwise encrypted text fanout.
 - Rust workspace with protocol types, crypto helpers, and a standalone relay binary.
 
 ## What Is Implemented Now
 
 - One account on one device.
-- Direct text conversations only.
+- Direct text conversations and invite-only trusted groups up to 16 members.
 - Compact `ci5` invite payloads with ranked LAN and relay route hints.
 - Route hints carry both route kind and protocol, currently `tcp`, `udp`, `http`, or `https`.
 - Rotating pairing code derived from the payload in 120-second windows.
@@ -27,7 +28,7 @@ Conest is a phased secure text-exchange app. This repository now contains the fi
 
 - Direct hole punching and libp2p route selection.
 - Desktop tray persistence and Android foreground service lifecycle.
-- Group chat, file/image transfer, automatic LAN discovery beyond current interface enumeration, and multi-device identity sync.
+- File/image transfer, automatic LAN discovery beyond current interface enumeration, and multi-device identity sync.
 - Production-hardening items such as signed relay lists, relay federation, audited abuse controls, secure key rotation, and a Double Ratchet implementation.
 
 ## Run The Relay
@@ -125,7 +126,7 @@ After placing release assets in `dist/`, generate metadata with:
 
 ```bash
 CONEST_RELEASE_MANIFEST_PRIVATE_KEY=<base64-32-byte-seed> \
-  dart run tool/release_manifest.dart v0.1.0
+  dart run tool/release_manifest.dart v0.2.0-nightly.20260425.1
 ```
 
 Minimal manifest shape:
@@ -133,10 +134,10 @@ Minimal manifest shape:
 ```json
 {
   "version": 1,
-  "tagName": "v0.1.0",
+  "tagName": "v0.2.0-nightly.20260425.1",
   "assets": [
     {
-      "name": "conest-linux-x64-v0.1.0.zip",
+      "name": "conest-linux-x64-v0.2.0-nightly.20260425.1.zip",
       "sha256": "64 lowercase hex characters",
       "sizeBytes": 123
     }

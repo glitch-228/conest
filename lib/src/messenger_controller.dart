@@ -24,6 +24,7 @@ const int _maxLanPairingScanHostsPerAddress = 64;
 const int _maxLanRediscoveryScanHostsPerAddress = 16;
 const int _maxLanRediscoveryAdjacentHostsPerHint = 2;
 const int _maxDebugRouteSummaryItems = 8;
+const int _maxGroupMembers = 16;
 const int _pairingBeaconPort = defaultRelayPort + 1;
 const Duration _pairingBeaconTtl = Duration(seconds: 45);
 const Duration _debugLanRouteTimeout = Duration(milliseconds: 250);
@@ -115,6 +116,7 @@ class MessengerController extends ChangeNotifier {
   bool get hasIdentity => _snapshot.identity != null;
   IdentityRecord? get identity => _snapshot.identity;
   List<ContactRecord> get contacts => List.unmodifiable(_snapshot.contacts);
+  List<GroupRecord> get groups => List.unmodifiable(_snapshot.groups);
   List<PeerEndpoint> get configuredRelays => List.unmodifiable(
     _snapshot.identity?.configuredRelays ?? const <PeerEndpoint>[],
   );
@@ -167,6 +169,8 @@ class MessengerController extends ChangeNotifier {
   );
   int unreadCountFor(String peerDeviceId) =>
       _unreadCountForConversation(_conversationFor(peerDeviceId));
+  int unreadGroupCountFor(String groupId) =>
+      _unreadCountForConversation(_groupConversation(groupId));
   int get unreadLanLobbyCount =>
       _unreadCountForConversation(_lanLobbyConversation());
   int get seenEnvelopeCount => _snapshot.seenEnvelopeIds.length;
@@ -2151,6 +2155,205 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  Future<GroupRecord> createGroup({
+    required String title,
+    required List<ContactRecord> members,
+  }) async {
+    final me = _requireIdentity();
+    final trimmedTitle = title.trim();
+    if (trimmedTitle.isEmpty) {
+      throw ArgumentError('Group title cannot be empty.');
+    }
+    final uniqueMembers = _dedupeContacts(members)
+        .where((contact) => contact.deviceId != me.deviceId)
+        .toList(growable: false);
+    if (uniqueMembers.isEmpty) {
+      throw ArgumentError('Choose at least one trusted contact.');
+    }
+    if (uniqueMembers.length + 1 > _maxGroupMembers) {
+      throw ArgumentError('Groups are capped at $_maxGroupMembers members.');
+    }
+    final now = _now();
+    final group = GroupRecord(
+      groupId: _randomId('grp'),
+      title: trimmedTitle,
+      ownerDeviceId: me.deviceId,
+      adminDeviceIds: const <String>[],
+      memberDeviceIds: [
+        me.deviceId,
+        ...uniqueMembers.map((contact) => contact.deviceId),
+      ],
+      removedDeviceIds: const <String>[],
+      membershipVersion: 1,
+      createdAt: now,
+      updatedAt: now,
+    );
+    _upsertGroup(group);
+    _ensureGroupConversation(group);
+    await _persist('Created group ${group.title}.');
+    await _sendGroupMembershipUpdate(
+      group,
+      targetDeviceIds: group.activeMemberDeviceIds
+          .where((deviceId) => deviceId != me.deviceId)
+          .toList(growable: false),
+      reason: 'create',
+    );
+    return group;
+  }
+
+  Future<void> addGroupMembers({
+    required String groupId,
+    required List<ContactRecord> members,
+  }) async {
+    final me = _requireIdentity();
+    final group = _requireGroup(groupId);
+    if (group.ownerDeviceId != me.deviceId) {
+      throw ArgumentError('Only the group creator can add members in v0.2.');
+    }
+    final newMemberIds = _dedupeContacts(members)
+        .map((contact) => contact.deviceId)
+        .where(
+          (deviceId) =>
+              deviceId != me.deviceId &&
+              !group.activeMemberDeviceIds.contains(deviceId),
+        )
+        .toList(growable: false);
+    if (newMemberIds.isEmpty) {
+      return;
+    }
+    final active = <String>{...group.activeMemberDeviceIds, ...newMemberIds};
+    if (active.length > _maxGroupMembers) {
+      throw ArgumentError('Groups are capped at $_maxGroupMembers members.');
+    }
+    final updated = group.copyWith(
+      memberDeviceIds: [...active],
+      removedDeviceIds: group.removedDeviceIds
+          .where((deviceId) => !newMemberIds.contains(deviceId))
+          .toList(growable: false),
+      membershipVersion: group.membershipVersion + 1,
+      updatedAt: _now(),
+    );
+    _upsertGroup(updated);
+    await _persist('Updated group ${updated.title}.');
+    await _sendGroupMembershipUpdate(
+      updated,
+      targetDeviceIds: updated.activeMemberDeviceIds
+          .where((deviceId) => deviceId != me.deviceId)
+          .toList(growable: false),
+      reason: 'add_members',
+    );
+  }
+
+  Future<void> removeGroupMember({
+    required String groupId,
+    required String memberDeviceId,
+  }) async {
+    final me = _requireIdentity();
+    final group = _requireGroup(groupId);
+    if (group.ownerDeviceId != me.deviceId) {
+      throw ArgumentError('Only the group creator can remove members in v0.2.');
+    }
+    if (memberDeviceId == me.deviceId) {
+      throw ArgumentError('The group creator cannot leave in v0.2.');
+    }
+    if (!group.activeMemberDeviceIds.contains(memberDeviceId)) {
+      return;
+    }
+    final updated = group.copyWith(
+      memberDeviceIds: group.memberDeviceIds
+          .where((deviceId) => deviceId != memberDeviceId)
+          .toList(growable: false),
+      removedDeviceIds: [...group.removedDeviceIds, memberDeviceId],
+      membershipVersion: group.membershipVersion + 1,
+      updatedAt: _now(),
+    );
+    _upsertGroup(updated);
+    await _persist('Removed a member from ${updated.title}.');
+    await _sendGroupMembershipUpdate(
+      updated,
+      targetDeviceIds: [
+        ...updated.activeMemberDeviceIds.where(
+          (deviceId) => deviceId != me.deviceId,
+        ),
+        memberDeviceId,
+      ],
+      reason: 'remove_member',
+    );
+  }
+
+  Future<void> leaveGroup(String groupId) async {
+    final me = _requireIdentity();
+    final group = _requireGroup(groupId);
+    if (group.ownerDeviceId == me.deviceId) {
+      throw ArgumentError('The group creator cannot leave in v0.2.');
+    }
+    if (!group.activeMemberDeviceIds.contains(me.deviceId)) {
+      return;
+    }
+    final updated = group.copyWith(
+      memberDeviceIds: group.memberDeviceIds
+          .where((deviceId) => deviceId != me.deviceId)
+          .toList(growable: false),
+      removedDeviceIds: [...group.removedDeviceIds, me.deviceId],
+      membershipVersion: group.membershipVersion + 1,
+      updatedAt: _now(),
+    );
+    _upsertGroup(updated);
+    await _persist('Left group ${updated.title}.');
+    await _sendGroupLeave(updated);
+  }
+
+  Future<void> sendGroupMessage({
+    required String groupId,
+    required String body,
+    ChatMessage? replyTo,
+  }) async {
+    final me = _requireIdentity();
+    final group = _requireGroup(groupId);
+    final trimmed = body.trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+    if (!group.hasActiveMember(me.deviceId)) {
+      throw ArgumentError('You are no longer a member of this group.');
+    }
+    final recipientContacts = _knownGroupRecipientContacts(group);
+    if (recipientContacts.isEmpty) {
+      throw ArgumentError('No trusted group members are available to send to.');
+    }
+    final message = ChatMessage(
+      id: _randomId('gmsg'),
+      conversationId: group.groupId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: group.groupId,
+      body: trimmed,
+      outbound: true,
+      state: DeliveryState.pending,
+      createdAt: _now(),
+      senderDisplayName: me.displayName,
+      replyToMessageId: replyTo?.id,
+      replySnippet: replyTo == null ? null : _replySnippetForMessage(replyTo),
+      replySenderDeviceId: replyTo?.senderDeviceId,
+      replySenderDisplayName: replyTo == null
+          ? null
+          : _replySenderDisplayName(replyTo),
+      recipientStates: {
+        for (final contact in recipientContacts)
+          contact.deviceId: DeliveryState.pending,
+      },
+    );
+    _upsertGroupMessage(group.groupId, message);
+    _markRuntimeActivity();
+    await _persist('Sending group message to ${group.title}.');
+    for (final contact in recipientContacts) {
+      await _tryDeliverExistingGroupMessage(
+        group: group,
+        contact: contact,
+        message: message,
+      );
+    }
+  }
+
   Future<void> cancelPendingMessage({
     required ContactRecord contact,
     required String messageId,
@@ -2413,6 +2616,85 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  Future<void> _sendGroupMembershipUpdate(
+    GroupRecord group, {
+    required List<String> targetDeviceIds,
+    required String reason,
+  }) async {
+    final me = _requireIdentity();
+    final payload = jsonEncode({
+      'version': 1,
+      'reason': reason,
+      'group': group.toJson(),
+    });
+    for (final deviceId in targetDeviceIds.toSet()) {
+      if (deviceId == me.deviceId) {
+        continue;
+      }
+      final contact = _contactByDeviceId(deviceId);
+      if (contact == null) {
+        continue;
+      }
+      final envelope = await _encryptPayloadEnvelope(
+        kind: 'group_membership',
+        messageId: _randomId('grpctl'),
+        conversationId: group.groupId,
+        senderAccountId: me.accountId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: contact.deviceId,
+        contact: contact,
+        plaintext: payload,
+      );
+      try {
+        await _deliverToContact(
+          contact: contact,
+          recipientDeviceId: contact.deviceId,
+          envelope: envelope,
+        );
+      } catch (_) {
+        // Membership updates are retried by later group activity and route polls.
+      }
+    }
+  }
+
+  Future<void> _sendGroupLeave(GroupRecord group) async {
+    final me = _requireIdentity();
+    final payload = jsonEncode({
+      'version': 1,
+      'groupId': group.groupId,
+      'membershipVersion': group.membershipVersion,
+      'leftDeviceId': me.deviceId,
+    });
+    final targets = group.memberDeviceIds
+        .where((deviceId) => deviceId != me.deviceId)
+        .toSet();
+    for (final deviceId in targets) {
+      final contact = _contactByDeviceId(deviceId);
+      if (contact == null) {
+        continue;
+      }
+      final envelope = await _encryptPayloadEnvelope(
+        kind: 'group_leave',
+        messageId: _randomId('grpleave'),
+        conversationId: group.groupId,
+        senderAccountId: me.accountId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: contact.deviceId,
+        contact: contact,
+        plaintext: payload,
+      );
+      try {
+        await _deliverToContact(
+          contact: contact,
+          recipientDeviceId: contact.deviceId,
+          envelope: envelope,
+        );
+      } catch (_) {
+        // Leaving is best effort; future owner updates resolve membership.
+      }
+    }
+  }
+
   Future<bool> _sendRouteUpdate(
     ContactRecord contact, {
     required bool requestReply,
@@ -2650,8 +2932,23 @@ class MessengerController extends ChangeNotifier {
       ..sort((left, right) => left.createdAt.compareTo(right.createdAt));
   }
 
+  List<ChatMessage> messagesForGroup(String groupId) {
+    final conversation = _groupConversation(groupId);
+    return List<ChatMessage>.from(conversation.messages)
+      ..sort((left, right) => left.createdAt.compareTo(right.createdAt));
+  }
+
   ChatMessage? _messageById(String peerDeviceId, String messageId) {
     for (final message in _conversationFor(peerDeviceId).messages) {
+      if (message.id == messageId) {
+        return message;
+      }
+    }
+    return null;
+  }
+
+  ChatMessage? _groupMessageById(String groupId, String messageId) {
+    for (final message in _groupConversation(groupId).messages) {
       if (message.id == messageId) {
         return message;
       }
@@ -2677,11 +2974,23 @@ class MessengerController extends ChangeNotifier {
     return messages.last;
   }
 
+  ChatMessage? lastGroupMessageFor(String groupId) {
+    final messages = messagesForGroup(groupId);
+    if (messages.isEmpty) {
+      return null;
+    }
+    return messages.last;
+  }
+
   bool isUnreadMessage(String peerDeviceId, ChatMessage message) {
     return _isUnreadMessageInConversation(
       _conversationFor(peerDeviceId),
       message,
     );
+  }
+
+  bool isUnreadGroupMessage(String groupId, ChatMessage message) {
+    return _isUnreadMessageInConversation(_groupConversation(groupId), message);
   }
 
   bool isUnreadLanLobbyMessage(ChatMessage message) {
@@ -2720,6 +3029,35 @@ class MessengerController extends ChangeNotifier {
       (conversation) => conversation.peerDeviceId == peerDeviceId,
       readThroughAt: message.createdAt,
       readThroughMessageId: message.id,
+    );
+  }
+
+  Future<void> markGroupReadThroughMessage(
+    String groupId,
+    ChatMessage message,
+  ) async {
+    if (message.outbound) {
+      return;
+    }
+    final group = _groupById(groupId);
+    if (group == null) {
+      return;
+    }
+    await _markConversationReadWhere(
+      (conversation) =>
+          conversation.kind == ConversationKind.group &&
+          conversation.id == groupId,
+      readThroughAt: message.createdAt,
+      readThroughMessageId: message.id,
+    );
+    final contact = _contactByDeviceId(message.senderDeviceId);
+    if (contact == null) {
+      return;
+    }
+    await _sendReadReceipt(
+      contact: contact,
+      conversationId: groupId,
+      acknowledgedMessageId: message.id,
     );
   }
 
@@ -3079,21 +3417,32 @@ class MessengerController extends ChangeNotifier {
       processed++;
       if (envelope.kind == 'ack') {
         _noteTwoWaySuccess(envelope.senderDeviceId);
-        if (_isReadReceiptAck(envelope)) {
-          _markMessagesReadThroughMessage(
-            envelope.senderDeviceId,
+        if (_groupById(envelope.conversationId) != null) {
+          _updateGroupRecipientState(
+            envelope.conversationId,
             envelope.acknowledgedMessageId ?? '',
+            envelope.senderDeviceId,
+            _isReadReceiptAck(envelope)
+                ? DeliveryState.read
+                : DeliveryState.delivered,
           );
         } else {
-          _updateMessageState(
-            envelope.senderDeviceId,
-            envelope.acknowledgedMessageId ?? '',
-            DeliveryState.delivered,
-          );
-          _clearOutboundAttempt(
-            envelope.senderDeviceId,
-            envelope.acknowledgedMessageId ?? '',
-          );
+          if (_isReadReceiptAck(envelope)) {
+            _markMessagesReadThroughMessage(
+              envelope.senderDeviceId,
+              envelope.acknowledgedMessageId ?? '',
+            );
+          } else {
+            _updateMessageState(
+              envelope.senderDeviceId,
+              envelope.acknowledgedMessageId ?? '',
+              DeliveryState.delivered,
+            );
+            _clearOutboundAttempt(
+              envelope.senderDeviceId,
+              envelope.acknowledgedMessageId ?? '',
+            );
+          }
         }
         _markSeen(envelope.messageId);
         continue;
@@ -3113,6 +3462,24 @@ class MessengerController extends ChangeNotifier {
 
       if (envelope.kind == 'lan_lobby_message') {
         await _handleLanLobbyMessage(envelope);
+        _markSeen(envelope.messageId);
+        continue;
+      }
+
+      if (envelope.kind == 'group_membership') {
+        await _handleGroupMembership(envelope);
+        _markSeen(envelope.messageId);
+        continue;
+      }
+
+      if (envelope.kind == 'group_leave') {
+        await _handleGroupLeave(envelope);
+        _markSeen(envelope.messageId);
+        continue;
+      }
+
+      if (envelope.kind == 'group_message') {
+        await _handleGroupMessage(envelope);
         _markSeen(envelope.messageId);
         continue;
       }
@@ -3217,6 +3584,9 @@ class MessengerController extends ChangeNotifier {
       case 'route_update':
         return 0;
       case 'lan_lobby_message':
+        return 0;
+      case 'group_membership':
+      case 'group_leave':
         return 0;
       case 'contact_remove':
         return 0;
@@ -3414,6 +3784,144 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  Future<void> _handleGroupMembership(RelayEnvelope envelope) async {
+    final sender = _contactByDeviceId(envelope.senderDeviceId);
+    if (sender == null) {
+      return;
+    }
+    final decoded = await _decryptMessage(contact: sender, envelope: envelope);
+    final payload = jsonDecode(decoded);
+    if (payload is! Map<String, dynamic>) {
+      return;
+    }
+    final groupPayload = payload['group'];
+    if (groupPayload is! Map<String, dynamic>) {
+      return;
+    }
+    final incoming = GroupRecord.fromJson(groupPayload);
+    final me = _snapshot.identity;
+    if (me == null) {
+      return;
+    }
+    if (!incoming.memberDeviceIds.contains(me.deviceId) &&
+        !incoming.removedDeviceIds.contains(me.deviceId)) {
+      return;
+    }
+    if (incoming.ownerDeviceId != envelope.senderDeviceId) {
+      return;
+    }
+    final existing = _groupById(incoming.groupId);
+    if (existing != null) {
+      if (incoming.membershipVersion <= existing.membershipVersion) {
+        return;
+      }
+      if (existing.ownerDeviceId != envelope.senderDeviceId) {
+        return;
+      }
+    }
+    _upsertGroup(incoming);
+    _ensureGroupConversation(incoming);
+    _noteAnySignal(sender.deviceId, at: envelope.createdAt);
+    await _persist('Updated group ${incoming.title}.');
+  }
+
+  Future<void> _handleGroupLeave(RelayEnvelope envelope) async {
+    final sender = _contactByDeviceId(envelope.senderDeviceId);
+    if (sender == null) {
+      return;
+    }
+    final decoded = await _decryptMessage(contact: sender, envelope: envelope);
+    final payload = jsonDecode(decoded);
+    if (payload is! Map<String, dynamic>) {
+      return;
+    }
+    final groupId = payload['groupId'] as String?;
+    if (groupId == null || groupId.isEmpty) {
+      return;
+    }
+    final existing = _groupById(groupId);
+    final me = _snapshot.identity;
+    if (existing == null || me == null) {
+      return;
+    }
+    if (!existing.activeMemberDeviceIds.contains(envelope.senderDeviceId)) {
+      return;
+    }
+    final updated = existing.copyWith(
+      memberDeviceIds: existing.memberDeviceIds
+          .where((deviceId) => deviceId != envelope.senderDeviceId)
+          .toList(growable: false),
+      removedDeviceIds: [...existing.removedDeviceIds, envelope.senderDeviceId],
+      membershipVersion: max(
+        existing.membershipVersion + 1,
+        payload['membershipVersion'] as int? ?? existing.membershipVersion + 1,
+      ),
+      updatedAt: envelope.createdAt,
+    );
+    _upsertGroup(updated);
+    _noteAnySignal(sender.deviceId, at: envelope.createdAt);
+    await _persist('${sender.alias} left ${updated.title}.');
+    if (updated.ownerDeviceId == me.deviceId) {
+      await _sendGroupMembershipUpdate(
+        updated,
+        targetDeviceIds: updated.activeMemberDeviceIds
+            .where((deviceId) => deviceId != me.deviceId)
+            .toList(growable: false),
+        reason: 'member_left',
+      );
+    }
+  }
+
+  Future<void> _handleGroupMessage(RelayEnvelope envelope) async {
+    final sender = _contactByDeviceId(envelope.senderDeviceId);
+    if (sender == null) {
+      return;
+    }
+    final group = _groupById(envelope.conversationId);
+    if (group == null ||
+        !group.hasActiveMember(envelope.senderDeviceId) ||
+        group.removedDeviceIds.contains(envelope.senderDeviceId)) {
+      return;
+    }
+    final decoded = await _decryptMessage(contact: sender, envelope: envelope);
+    final payload = _decodeGroupMessagePayload(decoded);
+    if (payload.groupId != group.groupId ||
+        payload.membershipVersion < group.membershipVersion) {
+      return;
+    }
+    final existingConversation = _groupConversation(group.groupId);
+    final alreadyKnown = existingConversation.messages.any(
+      (message) => message.id == envelope.messageId,
+    );
+    if (!alreadyKnown) {
+      _upsertGroupMessage(
+        group.groupId,
+        ChatMessage(
+          id: envelope.messageId,
+          conversationId: group.groupId,
+          senderDeviceId: envelope.senderDeviceId,
+          recipientDeviceId: envelope.recipientDeviceId,
+          body: payload.body,
+          outbound: false,
+          state: DeliveryState.delivered,
+          createdAt: envelope.createdAt,
+          senderDisplayName: payload.senderDisplayName ?? sender.alias,
+          replyToMessageId: payload.replyToMessageId,
+          replySnippet: payload.replySnippet,
+          replySenderDeviceId: payload.replySenderDeviceId,
+          replySenderDisplayName: payload.replySenderDisplayName,
+        ),
+      );
+      _showInboundGroupNotification(
+        group: group,
+        sender: sender,
+        body: payload.body,
+      );
+    }
+    _noteAnySignal(sender.deviceId, at: envelope.createdAt);
+    await _sendAck(contact: sender, envelope: envelope);
+  }
+
   Future<ContactRecord?> _updateExistingContactFromInvite(
     ContactInvite invite, {
     required String Function(ContactRecord contact) statusBuilder,
@@ -3522,6 +4030,24 @@ class MessengerController extends ChangeNotifier {
         title: contact.alias,
         body: body,
         conversationId: _conversationIdFor(contact.deviceId),
+      ),
+    );
+  }
+
+  void _showInboundGroupNotification({
+    required GroupRecord group,
+    required ContactRecord sender,
+    required String body,
+  }) {
+    final me = identity;
+    if (me == null || !me.notificationsEnabled) {
+      return;
+    }
+    unawaited(
+      _platformBridge.showMessageNotification(
+        title: group.title,
+        body: '${sender.alias}: $body',
+        conversationId: group.groupId,
       ),
     );
   }
@@ -4410,6 +4936,51 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  Future<bool> _tryDeliverExistingGroupMessage({
+    required GroupRecord group,
+    required ContactRecord contact,
+    required ChatMessage message,
+  }) async {
+    if (_locallyDeletedMessageIds.contains(message.id) ||
+        _groupMessageById(group.groupId, message.id) == null ||
+        !group.hasActiveMember(contact.deviceId)) {
+      return true;
+    }
+    _noteOutboundAttempt(contact.deviceId, message.id);
+    try {
+      final envelope = await _encryptGroupMessage(
+        group: group,
+        contact: contact,
+        message: message,
+      );
+      final route = await _deliverToContact(
+        contact: contact,
+        recipientDeviceId: contact.deviceId,
+        envelope: envelope,
+      );
+      _noteAvailablePath(contact.deviceId);
+      final state = route.kind == PeerRouteKind.lan
+          ? DeliveryState.local
+          : DeliveryState.relayed;
+      _updateGroupRecipientState(
+        group.groupId,
+        message.id,
+        contact.deviceId,
+        state,
+      );
+      _lastRelayStatus = route.kind == PeerRouteKind.lan
+          ? 'group LAN delivery via ${route.host}:${route.port}'
+          : 'group relay accepted via ${route.host}:${route.port}';
+      await _saveSnapshotSilently(debounce: true);
+      return true;
+    } catch (error) {
+      _lastRelayStatus = 'group delivery queued';
+      _statusMessage = 'Group delivery retry pending: $error';
+      notifyListeners();
+      return false;
+    }
+  }
+
   Future<void> _retryUnacknowledgedMessages({bool force = false}) async {
     for (final contact in contacts) {
       final retryable = messagesFor(contact.deviceId)
@@ -4431,10 +5002,45 @@ class MessengerController extends ChangeNotifier {
         }
       }
     }
+    for (final group in groups) {
+      final me = _snapshot.identity;
+      if (me == null || !group.hasActiveMember(me.deviceId)) {
+        continue;
+      }
+      final retryable = messagesForGroup(group.groupId)
+          .where(
+            (message) =>
+                message.outbound &&
+                message.recipientStates.values.any(
+                  (state) => state.awaitsRecipientAck,
+                ),
+          )
+          .toList();
+      for (final message in retryable) {
+        for (final entry in message.recipientStates.entries) {
+          if (!entry.value.awaitsRecipientAck) {
+            continue;
+          }
+          final contact = _contactByDeviceId(entry.key);
+          if (contact == null || !group.hasActiveMember(contact.deviceId)) {
+            continue;
+          }
+          if (!force &&
+              !_shouldRetryUnacknowledgedMessage(contact.deviceId, message)) {
+            continue;
+          }
+          await _tryDeliverExistingGroupMessage(
+            group: group,
+            contact: contact,
+            message: message,
+          );
+        }
+      }
+    }
   }
 
   Future<void> _replayAckForSeenEnvelope(RelayEnvelope envelope) async {
-    if (envelope.kind != 'direct_message') {
+    if (envelope.kind != 'direct_message' && envelope.kind != 'group_message') {
       return;
     }
     final contact = _contactByDeviceId(envelope.senderDeviceId);
@@ -5910,6 +6516,25 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  Future<RelayEnvelope> _encryptGroupMessage({
+    required GroupRecord group,
+    required ContactRecord contact,
+    required ChatMessage message,
+  }) async {
+    final me = _requireIdentity();
+    return _encryptPayloadEnvelope(
+      kind: 'group_message',
+      messageId: message.id,
+      conversationId: group.groupId,
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: contact.deviceId,
+      contact: contact,
+      plaintext: _encodeGroupMessagePayload(group: group, message: message),
+      createdAt: message.createdAt,
+    );
+  }
+
   Future<RelayEnvelope> _encryptPayloadEnvelope({
     required String kind,
     required String messageId,
@@ -6007,6 +6632,44 @@ class MessengerController extends ChangeNotifier {
     return _DecodedDirectMessage(body: payload);
   }
 
+  String _encodeGroupMessagePayload({
+    required GroupRecord group,
+    required ChatMessage message,
+  }) {
+    return jsonEncode({
+      'version': 1,
+      'groupId': group.groupId,
+      'groupTitle': group.title,
+      'membershipVersion': group.membershipVersion,
+      'body': message.body,
+      'senderDisplayName': message.senderDisplayName,
+      'replyToMessageId': message.replyToMessageId,
+      'replySnippet': message.replySnippet,
+      'replySenderDeviceId': message.replySenderDeviceId,
+      'replySenderDisplayName': message.replySenderDisplayName,
+    });
+  }
+
+  _DecodedGroupMessage _decodeGroupMessagePayload(String payload) {
+    final decoded = jsonDecode(payload);
+    if (decoded is! Map<String, dynamic> ||
+        decoded['version'] != 1 ||
+        decoded['groupId'] is! String ||
+        decoded['body'] is! String) {
+      throw FormatException('Invalid group message payload.');
+    }
+    return _DecodedGroupMessage(
+      groupId: decoded['groupId'] as String,
+      membershipVersion: decoded['membershipVersion'] as int? ?? 1,
+      body: decoded['body'] as String,
+      senderDisplayName: decoded['senderDisplayName'] as String?,
+      replyToMessageId: decoded['replyToMessageId'] as String?,
+      replySnippet: decoded['replySnippet'] as String?,
+      replySenderDeviceId: decoded['replySenderDeviceId'] as String?,
+      replySenderDisplayName: decoded['replySenderDisplayName'] as String?,
+    );
+  }
+
   String _replySnippetForMessage(ChatMessage message) {
     final normalized = message.bodyPreview.trim();
     if (normalized.length <= 72) {
@@ -6081,6 +6744,159 @@ class MessengerController extends ChangeNotifier {
       messages: const [],
       lastReadAt: _now(),
     );
+  }
+
+  GroupRecord? _groupById(String groupId) {
+    for (final group in _snapshot.groups) {
+      if (group.groupId == groupId) {
+        return group;
+      }
+    }
+    return null;
+  }
+
+  GroupRecord _requireGroup(String groupId) {
+    final group = _groupById(groupId);
+    if (group == null) {
+      throw ArgumentError('Group not found.');
+    }
+    return group;
+  }
+
+  ConversationRecord _groupConversation(String groupId) {
+    for (final conversation in _snapshot.conversations) {
+      if (conversation.kind == ConversationKind.group &&
+          conversation.id == groupId) {
+        return conversation;
+      }
+    }
+    return ConversationRecord(
+      id: groupId,
+      kind: ConversationKind.group,
+      peerDeviceId: groupId,
+      messages: const [],
+      lastReadAt: _now(),
+    );
+  }
+
+  void _ensureGroupConversation(GroupRecord group) {
+    final conversations = List<ConversationRecord>.from(
+      _snapshot.conversations,
+    );
+    if (conversations.any(
+      (conversation) =>
+          conversation.kind == ConversationKind.group &&
+          conversation.id == group.groupId,
+    )) {
+      return;
+    }
+    conversations.add(
+      ConversationRecord(
+        id: group.groupId,
+        kind: ConversationKind.group,
+        peerDeviceId: group.groupId,
+        messages: const [],
+        lastReadAt: _now(),
+      ),
+    );
+    _snapshot = _snapshot.copyWith(conversations: conversations);
+  }
+
+  void _upsertGroup(GroupRecord group) {
+    final groups = List<GroupRecord>.from(_snapshot.groups);
+    final index = groups.indexWhere(
+      (candidate) => candidate.groupId == group.groupId,
+    );
+    if (index == -1) {
+      groups.add(group);
+    } else {
+      groups[index] = group;
+    }
+    _snapshot = _snapshot.copyWith(groups: groups);
+  }
+
+  List<ContactRecord> _dedupeContacts(List<ContactRecord> contacts) {
+    final seen = <String>{};
+    final result = <ContactRecord>[];
+    for (final contact in contacts) {
+      if (seen.add(contact.deviceId)) {
+        result.add(contact);
+      }
+    }
+    return result;
+  }
+
+  List<ContactRecord> _knownGroupRecipientContacts(GroupRecord group) {
+    final me = _snapshot.identity;
+    if (me == null) {
+      return const <ContactRecord>[];
+    }
+    return group.activeMemberDeviceIds
+        .where((deviceId) => deviceId != me.deviceId)
+        .map(_contactByDeviceId)
+        .whereType<ContactRecord>()
+        .toList(growable: false);
+  }
+
+  String groupMemberLabel(String deviceId) {
+    final me = _snapshot.identity;
+    if (me != null && deviceId == me.deviceId) {
+      return 'You';
+    }
+    final contact = _contactByDeviceId(deviceId);
+    return contact?.alias ??
+        contact?.displayName ??
+        'Unknown ${_shortId(deviceId)}';
+  }
+
+  String _shortId(String value) {
+    if (value.length <= 8) {
+      return value;
+    }
+    return value.substring(value.length - 8);
+  }
+
+  String groupDeliverySummary(ChatMessage message) {
+    if (message.recipientStates.isEmpty) {
+      return message.state.label;
+    }
+    var read = 0;
+    var delivered = 0;
+    var accepted = 0;
+    var pending = 0;
+    for (final state in message.recipientStates.values) {
+      switch (state) {
+        case DeliveryState.read:
+          read++;
+          delivered++;
+          accepted++;
+        case DeliveryState.delivered:
+          delivered++;
+          accepted++;
+        case DeliveryState.local:
+        case DeliveryState.relayed:
+          accepted++;
+        case DeliveryState.pending:
+          pending++;
+        case DeliveryState.canceled:
+        case DeliveryState.failed:
+          pending++;
+      }
+    }
+    final total = message.recipientStates.length;
+    if (read == total) {
+      return 'Read by all $total';
+    }
+    if (delivered == total) {
+      return 'Delivered to all $total';
+    }
+    if (accepted > 0 && pending > 0) {
+      return 'Accepted by $accepted of $total';
+    }
+    if (accepted > 0) {
+      return 'Accepted by $accepted of $total';
+    }
+    return 'Waiting for $total member(s)';
   }
 
   int _unreadCountForConversation(ConversationRecord conversation) {
@@ -6195,6 +7011,37 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(conversations: conversations);
   }
 
+  void _upsertGroupMessage(String groupId, ChatMessage message) {
+    final conversations = List<ConversationRecord>.from(
+      _snapshot.conversations,
+    );
+    final index = conversations.indexWhere(
+      (conversation) =>
+          conversation.kind == ConversationKind.group &&
+          conversation.id == groupId,
+    );
+    if (index == -1) {
+      conversations.add(
+        ConversationRecord(
+          id: groupId,
+          kind: ConversationKind.group,
+          peerDeviceId: groupId,
+          messages: [message],
+          lastReadAt: message.outbound ? message.createdAt : null,
+        ),
+      );
+    } else {
+      final updatedMessages =
+          List<ChatMessage>.from(conversations[index].messages)
+            ..removeWhere((candidate) => candidate.id == message.id)
+            ..add(message);
+      conversations[index] = conversations[index].copyWith(
+        messages: updatedMessages,
+      );
+    }
+    _snapshot = _snapshot.copyWith(conversations: conversations);
+  }
+
   void _upsertLanLobbyMessage(ChatMessage message) {
     final conversations = List<ConversationRecord>.from(
       _snapshot.conversations,
@@ -6263,6 +7110,87 @@ class MessengerController extends ChangeNotifier {
     if (!state.awaitsRecipientAck) {
       _clearOutboundAttempt(peerDeviceId, messageId);
     }
+  }
+
+  void _updateGroupRecipientState(
+    String groupId,
+    String messageId,
+    String recipientDeviceId,
+    DeliveryState state,
+  ) {
+    if (messageId.isEmpty || recipientDeviceId.isEmpty) {
+      return;
+    }
+    final conversations = List<ConversationRecord>.from(
+      _snapshot.conversations,
+    );
+    final conversationIndex = conversations.indexWhere(
+      (conversation) =>
+          conversation.kind == ConversationKind.group &&
+          conversation.id == groupId,
+    );
+    if (conversationIndex == -1) {
+      return;
+    }
+    final updatedMessages = conversations[conversationIndex].messages.map((
+      message,
+    ) {
+      if (message.id != messageId || !message.outbound) {
+        return message;
+      }
+      final states = Map<String, DeliveryState>.from(message.recipientStates);
+      final current = states[recipientDeviceId];
+      if (current == null) {
+        return message;
+      }
+      if (current == DeliveryState.read) {
+        return message;
+      }
+      if (current == DeliveryState.delivered &&
+          state != DeliveryState.delivered &&
+          state != DeliveryState.read) {
+        return message;
+      }
+      states[recipientDeviceId] = state;
+      if (!state.awaitsRecipientAck) {
+        _clearOutboundAttempt(recipientDeviceId, messageId);
+      }
+      return message.copyWith(
+        state: _aggregateGroupDeliveryState(states),
+        recipientStates: states,
+      );
+    }).toList();
+    conversations[conversationIndex] = conversations[conversationIndex]
+        .copyWith(messages: updatedMessages);
+    _snapshot = _snapshot.copyWith(conversations: conversations);
+  }
+
+  DeliveryState _aggregateGroupDeliveryState(
+    Map<String, DeliveryState> recipientStates,
+  ) {
+    if (recipientStates.isEmpty) {
+      return DeliveryState.delivered;
+    }
+    final states = recipientStates.values.toList(growable: false);
+    if (states.every((state) => state == DeliveryState.read)) {
+      return DeliveryState.read;
+    }
+    if (states.every(
+      (state) =>
+          state == DeliveryState.delivered || state == DeliveryState.read,
+    )) {
+      return DeliveryState.delivered;
+    }
+    if (states.any((state) => state == DeliveryState.pending)) {
+      return DeliveryState.pending;
+    }
+    if (states.any((state) => state == DeliveryState.relayed)) {
+      return DeliveryState.relayed;
+    }
+    if (states.any((state) => state == DeliveryState.local)) {
+      return DeliveryState.local;
+    }
+    return DeliveryState.pending;
   }
 
   void _markMessagesReadThroughMessage(String peerDeviceId, String messageId) {
@@ -6663,6 +7591,28 @@ class _DecodedDirectMessage {
   });
 
   final String body;
+  final String? replyToMessageId;
+  final String? replySnippet;
+  final String? replySenderDeviceId;
+  final String? replySenderDisplayName;
+}
+
+class _DecodedGroupMessage {
+  const _DecodedGroupMessage({
+    required this.groupId,
+    required this.membershipVersion,
+    required this.body,
+    this.senderDisplayName,
+    this.replyToMessageId,
+    this.replySnippet,
+    this.replySenderDeviceId,
+    this.replySenderDisplayName,
+  });
+
+  final String groupId;
+  final int membershipVersion;
+  final String body;
+  final String? senderDisplayName;
   final String? replyToMessageId;
   final String? replySnippet;
   final String? replySenderDeviceId;

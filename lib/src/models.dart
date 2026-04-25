@@ -983,7 +983,10 @@ class ChatMessage {
     this.replySnippet,
     this.replySenderDeviceId,
     this.replySenderDisplayName,
-  });
+    Map<String, DeliveryState>? recipientStates,
+  }) : recipientStates = Map.unmodifiable(
+         recipientStates ?? const <String, DeliveryState>{},
+       );
 
   final String id;
   final String conversationId;
@@ -1000,9 +1003,11 @@ class ChatMessage {
   final String? replySnippet;
   final String? replySenderDeviceId;
   final String? replySenderDisplayName;
+  final Map<String, DeliveryState> recipientStates;
 
   String get bodyPreview => body.replaceAll('\n', ' ');
   bool get isEdited => editedAt != null;
+  bool get hasRecipientStates => recipientStates.isNotEmpty;
   bool get hasReplyPreview =>
       replyToMessageId != null &&
       replyToMessageId!.isNotEmpty &&
@@ -1017,6 +1022,7 @@ class ChatMessage {
     String? replySnippet,
     String? replySenderDeviceId,
     String? replySenderDisplayName,
+    Map<String, DeliveryState>? recipientStates,
   }) {
     return ChatMessage(
       id: id,
@@ -1035,6 +1041,7 @@ class ChatMessage {
       replySenderDeviceId: replySenderDeviceId ?? this.replySenderDeviceId,
       replySenderDisplayName:
           replySenderDisplayName ?? this.replySenderDisplayName,
+      recipientStates: recipientStates ?? this.recipientStates,
     );
   }
 
@@ -1055,10 +1062,15 @@ class ChatMessage {
       'replySnippet': replySnippet,
       'replySenderDeviceId': replySenderDeviceId,
       'replySenderDisplayName': replySenderDisplayName,
+      'recipientStates': recipientStates.map(
+        (deviceId, state) => MapEntry(deviceId, state.name),
+      ),
     };
   }
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
+    final rawRecipientStates =
+        json['recipientStates'] as Map<String, dynamic>? ?? const {};
     return ChatMessage(
       id: json['id'] as String,
       conversationId: json['conversationId'] as String,
@@ -1077,8 +1089,112 @@ class ChatMessage {
       replySnippet: json['replySnippet'] as String?,
       replySenderDeviceId: json['replySenderDeviceId'] as String?,
       replySenderDisplayName: json['replySenderDisplayName'] as String?,
+      recipientStates: rawRecipientStates.map(
+        (deviceId, value) =>
+            MapEntry(deviceId, DeliveryState.values.byName(value as String)),
+      ),
     );
   }
+}
+
+class GroupRecord {
+  GroupRecord({
+    required this.groupId,
+    required this.title,
+    required this.ownerDeviceId,
+    required List<String> adminDeviceIds,
+    required List<String> memberDeviceIds,
+    required List<String> removedDeviceIds,
+    required this.membershipVersion,
+    required this.createdAt,
+    required this.updatedAt,
+  }) : adminDeviceIds = _dedupeIds(adminDeviceIds),
+       memberDeviceIds = _dedupeIds(memberDeviceIds),
+       removedDeviceIds = _dedupeIds(removedDeviceIds);
+
+  final String groupId;
+  final String title;
+  final String ownerDeviceId;
+  final List<String> adminDeviceIds;
+  final List<String> memberDeviceIds;
+  final List<String> removedDeviceIds;
+  final int membershipVersion;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  List<String> get activeMemberDeviceIds => memberDeviceIds
+      .where((deviceId) => !removedDeviceIds.contains(deviceId))
+      .toList(growable: false);
+
+  bool hasActiveMember(String deviceId) =>
+      activeMemberDeviceIds.contains(deviceId);
+
+  GroupRecord copyWith({
+    String? title,
+    List<String>? adminDeviceIds,
+    List<String>? memberDeviceIds,
+    List<String>? removedDeviceIds,
+    int? membershipVersion,
+    DateTime? updatedAt,
+  }) {
+    return GroupRecord(
+      groupId: groupId,
+      title: title ?? this.title,
+      ownerDeviceId: ownerDeviceId,
+      adminDeviceIds: adminDeviceIds ?? this.adminDeviceIds,
+      memberDeviceIds: memberDeviceIds ?? this.memberDeviceIds,
+      removedDeviceIds: removedDeviceIds ?? this.removedDeviceIds,
+      membershipVersion: membershipVersion ?? this.membershipVersion,
+      createdAt: createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'groupId': groupId,
+      'title': title,
+      'ownerDeviceId': ownerDeviceId,
+      'adminDeviceIds': adminDeviceIds,
+      'memberDeviceIds': memberDeviceIds,
+      'removedDeviceIds': removedDeviceIds,
+      'membershipVersion': membershipVersion,
+      'createdAt': createdAt.toIso8601String(),
+      'updatedAt': updatedAt.toIso8601String(),
+    };
+  }
+
+  factory GroupRecord.fromJson(Map<String, dynamic> json) {
+    final createdAt = DateTime.parse(json['createdAt'] as String);
+    return GroupRecord(
+      groupId: json['groupId'] as String,
+      title: json['title'] as String,
+      ownerDeviceId: json['ownerDeviceId'] as String,
+      adminDeviceIds: (json['adminDeviceIds'] as List<dynamic>? ?? const [])
+          .cast<String>(),
+      memberDeviceIds: (json['memberDeviceIds'] as List<dynamic>? ?? const [])
+          .cast<String>(),
+      removedDeviceIds: (json['removedDeviceIds'] as List<dynamic>? ?? const [])
+          .cast<String>(),
+      membershipVersion: json['membershipVersion'] as int? ?? 1,
+      createdAt: createdAt,
+      updatedAt:
+          DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? createdAt,
+    );
+  }
+}
+
+List<String> _dedupeIds(Iterable<String> ids) {
+  final seen = <String>{};
+  final result = <String>[];
+  for (final id in ids) {
+    final trimmed = id.trim();
+    if (trimmed.isEmpty || !seen.add(trimmed)) {
+      continue;
+    }
+    result.add(trimmed);
+  }
+  return result;
 }
 
 class ConversationRecord {
@@ -1372,6 +1488,7 @@ class VaultSnapshot {
     required this.contacts,
     required this.reachabilityRecords,
     required this.conversations,
+    required this.groups,
     required this.seenEnvelopeIds,
   });
 
@@ -1379,6 +1496,7 @@ class VaultSnapshot {
   final List<ContactRecord> contacts;
   final List<ContactReachabilityRecord> reachabilityRecords;
   final List<ConversationRecord> conversations;
+  final List<GroupRecord> groups;
   final List<String> seenEnvelopeIds;
 
   factory VaultSnapshot.empty() {
@@ -1387,6 +1505,7 @@ class VaultSnapshot {
       contacts: const [],
       reachabilityRecords: const [],
       conversations: const [],
+      groups: const [],
       seenEnvelopeIds: const [],
     );
   }
@@ -1396,6 +1515,7 @@ class VaultSnapshot {
     List<ContactRecord>? contacts,
     List<ContactReachabilityRecord>? reachabilityRecords,
     List<ConversationRecord>? conversations,
+    List<GroupRecord>? groups,
     List<String>? seenEnvelopeIds,
     bool clearIdentity = false,
   }) {
@@ -1404,6 +1524,7 @@ class VaultSnapshot {
       contacts: contacts ?? this.contacts,
       reachabilityRecords: reachabilityRecords ?? this.reachabilityRecords,
       conversations: conversations ?? this.conversations,
+      groups: groups ?? this.groups,
       seenEnvelopeIds: seenEnvelopeIds ?? this.seenEnvelopeIds,
     );
   }
@@ -1418,6 +1539,7 @@ class VaultSnapshot {
       'conversations': conversations
           .map((conversation) => conversation.toJson())
           .toList(),
+      'groups': groups.map((group) => group.toJson()).toList(),
       'seenEnvelopeIds': seenEnvelopeIds,
     };
   }
@@ -1439,6 +1561,10 @@ class VaultSnapshot {
       conversations: (json['conversations'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>()
           .map(ConversationRecord.fromJson)
+          .toList(),
+      groups: (json['groups'] as List<dynamic>? ?? const [])
+          .cast<Map<String, dynamic>>()
+          .map(GroupRecord.fromJson)
           .toList(),
       seenEnvelopeIds: (json['seenEnvelopeIds'] as List<dynamic>? ?? const [])
           .cast<String>(),

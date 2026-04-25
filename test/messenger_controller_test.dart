@@ -71,12 +71,21 @@ class _FakeRelayClient extends RelayClient {
       RelayEnvelope envelope,
     )?
     shouldBlackholeStore,
+    bool Function(
+      String host,
+      int port,
+      PeerRouteProtocol protocol,
+      String recipientDeviceId,
+      RelayEnvelope envelope,
+    )?
+    shouldFailStore,
   }) : _healthFailingHosts = failingHosts ?? <String>{},
        _storeFailingHosts = storeFailingHosts ?? failingHosts ?? <String>{},
        _allowedHosts = allowedHosts,
        _storeAllowedHosts = storeAllowedHosts ?? allowedHosts,
        _relayInstanceIds = relayInstanceIds ?? const <String, String>{},
-       _shouldBlackholeStore = shouldBlackholeStore;
+       _shouldBlackholeStore = shouldBlackholeStore,
+       _shouldFailStore = shouldFailStore;
 
   final Set<String> _healthFailingHosts;
   final Set<String> _storeFailingHosts;
@@ -91,6 +100,14 @@ class _FakeRelayClient extends RelayClient {
     RelayEnvelope envelope,
   )?
   _shouldBlackholeStore;
+  final bool Function(
+    String host,
+    int port,
+    PeerRouteProtocol protocol,
+    String recipientDeviceId,
+    RelayEnvelope envelope,
+  )?
+  _shouldFailStore;
   final List<String> storeAttempts = <String>[];
   final List<String> fetchAttempts = <String>[];
   final List<String> inspectHealthAttempts = <String>[];
@@ -143,6 +160,16 @@ class _FakeRelayClient extends RelayClient {
       throw StateError('Route unavailable for $key');
     }
     if (_containsRoute(_storeFailingHosts, host, port, protocol)) {
+      throw StateError('Route unavailable for $key');
+    }
+    if (_shouldFailStore?.call(
+          host,
+          port,
+          protocol,
+          recipientDeviceId,
+          envelope,
+        ) ??
+        false) {
       throw StateError('Route unavailable for $key');
     }
     if (_shouldBlackholeStore?.call(
@@ -378,6 +405,24 @@ ContactInvite _bobInvite() {
         port: defaultRelayPort,
       ),
     ],
+  );
+}
+
+Future<void> _pairControllers(
+  MessengerController first,
+  MessengerController second,
+) async {
+  await first.addContactFromInvite(
+    alias: second.identity!.displayName,
+    payload: (await second.buildInvite()).encodePayload(),
+    codephrase: '',
+  );
+  await second.pollNow();
+  expect(
+    second.contacts.any(
+      (contact) => contact.deviceId == first.identity!.deviceId,
+    ),
+    isTrue,
   );
 }
 
@@ -684,6 +729,432 @@ void main() {
       );
     },
   );
+
+  test('group records round-trip and v0.1 vaults load without groups', () {
+    final createdAt = DateTime.utc(2026, 4, 25, 10);
+    final group = GroupRecord(
+      groupId: 'grp-test',
+      title: 'Core team',
+      ownerDeviceId: 'dev-alice',
+      adminDeviceIds: const <String>['dev-alice'],
+      memberDeviceIds: const <String>['dev-alice', 'dev-bob', 'dev-bob'],
+      removedDeviceIds: const <String>['dev-carol'],
+      membershipVersion: 3,
+      createdAt: createdAt,
+      updatedAt: createdAt.add(const Duration(minutes: 2)),
+    );
+
+    final decoded = GroupRecord.fromJson(group.toJson());
+    expect(decoded.groupId, group.groupId);
+    expect(decoded.adminDeviceIds, ['dev-alice']);
+    expect(decoded.memberDeviceIds, ['dev-alice', 'dev-bob']);
+    expect(decoded.removedDeviceIds, ['dev-carol']);
+    expect(decoded.membershipVersion, 3);
+
+    final migrated = VaultSnapshot.fromJson(const <String, dynamic>{
+      'identity': null,
+      'contacts': <dynamic>[],
+      'reachabilityRecords': <dynamic>[],
+      'conversations': <dynamic>[],
+      'seenEnvelopeIds': <dynamic>[],
+    });
+    expect(migrated.groups, isEmpty);
+  });
+
+  test(
+    'group create and send fans out encrypted messages to members',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      final carol = await _createController(
+        relayClient: relayClient,
+        displayName: 'Carol',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      addTearDown(carol.dispose);
+
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+
+      final group = await alice.createGroup(
+        title: 'Launch',
+        members: alice.contacts,
+      );
+      await bob.pollNow();
+      await carol.pollNow();
+
+      expect(bob.groups.single.groupId, group.groupId);
+      expect(carol.groups.single.groupId, group.groupId);
+
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'hello team');
+      await bob.pollNow();
+      await carol.pollNow();
+
+      expect(bob.messagesForGroup(group.groupId).single.body, 'hello team');
+      expect(carol.messagesForGroup(group.groupId).single.body, 'hello team');
+      final groupEnvelopes = relayClient.storedEnvelopes.where(
+        (envelope) => envelope.kind == 'group_message',
+      );
+      expect(groupEnvelopes, hasLength(2));
+      expect(
+        groupEnvelopes.every((envelope) => envelope.payloadBase64 == null),
+        isTrue,
+      );
+      expect(
+        groupEnvelopes.every((envelope) => envelope.ciphertextBase64 != null),
+        isTrue,
+      );
+    },
+  );
+
+  test('group offline member stays pending and retries later', () async {
+    late String carolDeviceId;
+    var failCarolGroupMessages = true;
+    var now = DateTime.utc(2026, 4, 25, 12);
+    final relayClient = _FakeRelayClient(
+      shouldFailStore: (_, _, _, recipientDeviceId, envelope) =>
+          failCarolGroupMessages &&
+          envelope.kind == 'group_message' &&
+          recipientDeviceId == carolDeviceId,
+    );
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+      nowProvider: () => now,
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    final carol = await _createController(
+      relayClient: relayClient,
+      displayName: 'Carol',
+    );
+    carolDeviceId = carol.identity!.deviceId;
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    addTearDown(carol.dispose);
+
+    await _pairControllers(alice, bob);
+    await _pairControllers(alice, carol);
+    final group = await alice.createGroup(
+      title: 'Launch',
+      members: alice.contacts,
+    );
+    await bob.pollNow();
+    await carol.pollNow();
+
+    await alice.sendGroupMessage(groupId: group.groupId, body: 'retry me');
+    final queued = alice.messagesForGroup(group.groupId).single;
+    expect(queued.recipientStates[carolDeviceId], DeliveryState.pending);
+    expect(
+      queued.recipientStates[bob.identity!.deviceId],
+      isNot(DeliveryState.pending),
+    );
+
+    failCarolGroupMessages = false;
+    now = now.add(const Duration(seconds: 16));
+    await alice.retryUnacknowledgedMessagesNow();
+    await carol.pollNow();
+
+    expect(carol.messagesForGroup(group.groupId).single.body, 'retry me');
+    final retried = alice.messagesForGroup(group.groupId).single;
+    expect(
+      retried.recipientStates[carolDeviceId],
+      isNot(DeliveryState.pending),
+    );
+  });
+
+  test('group read receipts update per-member recipient state', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+
+    await _pairControllers(alice, bob);
+    final group = await alice.createGroup(
+      title: 'Read receipts',
+      members: alice.contacts,
+    );
+    await bob.pollNow();
+
+    await alice.sendGroupMessage(groupId: group.groupId, body: 'seen?');
+    await bob.pollNow();
+    final inbound = bob.messagesForGroup(group.groupId).single;
+    await bob.markGroupReadThroughMessage(group.groupId, inbound);
+    await alice.pollNow();
+
+    final outbound = alice.messagesForGroup(group.groupId).single;
+    expect(
+      outbound.recipientStates[bob.identity!.deviceId],
+      DeliveryState.read,
+    );
+  });
+
+  test('group replies preserve quoted metadata', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+
+    await _pairControllers(alice, bob);
+    final group = await alice.createGroup(
+      title: 'Replies',
+      members: alice.contacts,
+    );
+    await bob.pollNow();
+
+    await alice.sendGroupMessage(groupId: group.groupId, body: 'first');
+    await bob.pollNow();
+    final first = bob.messagesForGroup(group.groupId).single;
+    await bob.sendGroupMessage(
+      groupId: group.groupId,
+      body: 'second',
+      replyTo: first,
+    );
+    await alice.pollNow();
+
+    final reply = alice.messagesForGroup(group.groupId).last;
+    expect(reply.body, 'second');
+    expect(reply.replyToMessageId, first.id);
+    expect(reply.replySnippet, 'first');
+    expect(reply.replySenderDeviceId, alice.identity!.deviceId);
+  });
+
+  test(
+    'owner can remove a group member and removed member cannot send',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Removal',
+        members: alice.contacts,
+      );
+      await bob.pollNow();
+
+      await alice.removeGroupMember(
+        groupId: group.groupId,
+        memberDeviceId: bob.identity!.deviceId,
+      );
+      await bob.pollNow();
+
+      expect(
+        bob.groups.single.activeMemberDeviceIds,
+        isNot(contains(bob.identity!.deviceId)),
+      );
+      expect(
+        bob.sendGroupMessage(groupId: group.groupId, body: 'nope'),
+        throwsArgumentError,
+      );
+    },
+  );
+
+  test('owner can add a member after group creation', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    final carol = await _createController(
+      relayClient: relayClient,
+      displayName: 'Carol',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    addTearDown(carol.dispose);
+
+    await _pairControllers(alice, bob);
+    await _pairControllers(alice, carol);
+    final bobContact = alice.contacts.firstWhere(
+      (contact) => contact.deviceId == bob.identity!.deviceId,
+    );
+    final carolContact = alice.contacts.firstWhere(
+      (contact) => contact.deviceId == carol.identity!.deviceId,
+    );
+    final group = await alice.createGroup(
+      title: 'Add later',
+      members: [bobContact],
+    );
+    await bob.pollNow();
+
+    await alice.addGroupMembers(
+      groupId: group.groupId,
+      members: [carolContact],
+    );
+    await bob.pollNow();
+    await carol.pollNow();
+
+    expect(
+      bob.groups.single.activeMemberDeviceIds,
+      contains(carol.identity!.deviceId),
+    );
+    expect(carol.groups.single.groupId, group.groupId);
+    expect(carol.groups.single.membershipVersion, 2);
+  });
+
+  test('non-owner member can leave a group', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+
+    await _pairControllers(alice, bob);
+    final group = await alice.createGroup(
+      title: 'Leave',
+      members: alice.contacts,
+    );
+    await bob.pollNow();
+
+    await bob.leaveGroup(group.groupId);
+    await alice.pollNow();
+
+    expect(
+      bob.groups.single.activeMemberDeviceIds,
+      isNot(contains(bob.identity!.deviceId)),
+    );
+    expect(
+      alice.groups.single.activeMemberDeviceIds,
+      isNot(contains(bob.identity!.deviceId)),
+    );
+  });
+
+  test('stale group membership updates are ignored', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    final carol = await _createController(
+      relayClient: relayClient,
+      displayName: 'Carol',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    addTearDown(carol.dispose);
+
+    await _pairControllers(alice, bob);
+    await _pairControllers(alice, carol);
+    final bobContact = alice.contacts.firstWhere(
+      (contact) => contact.deviceId == bob.identity!.deviceId,
+    );
+    final carolContact = alice.contacts.firstWhere(
+      (contact) => contact.deviceId == carol.identity!.deviceId,
+    );
+    final group = await alice.createGroup(
+      title: 'Stale',
+      members: [bobContact],
+    );
+    await alice.addGroupMembers(
+      groupId: group.groupId,
+      members: [carolContact],
+    );
+
+    final queue = relayClient._queues[bob.identity!.deviceId]!;
+    final memberships = queue
+        .where((envelope) => envelope.kind == 'group_membership')
+        .toList();
+    expect(memberships, hasLength(2));
+    queue
+      ..removeWhere((envelope) => envelope.kind == 'group_membership')
+      ..insertAll(0, memberships.reversed);
+
+    await bob.pollNow();
+
+    expect(bob.groups.single.membershipVersion, 2);
+    expect(
+      bob.groups.single.activeMemberDeviceIds,
+      contains(carol.identity!.deviceId),
+    );
+  });
+
+  test('unknown group sender is ignored', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+
+    await _pairControllers(alice, bob);
+    final group = await alice.createGroup(
+      title: 'Known group',
+      members: alice.contacts,
+    );
+    await bob.pollNow();
+
+    await relayClient.storeEnvelope(
+      host: 'relay.example',
+      port: defaultRelayPort,
+      recipientDeviceId: bob.identity!.deviceId,
+      envelope: RelayEnvelope(
+        kind: 'group_message',
+        messageId: 'unknown-message',
+        conversationId: group.groupId,
+        senderAccountId: 'acc-missing',
+        senderDeviceId: 'dev-missing',
+        recipientDeviceId: bob.identity!.deviceId,
+        createdAt: DateTime.now().toUtc(),
+        payloadBase64: base64Encode(utf8.encode('plaintext')),
+      ),
+    );
+
+    await bob.pollNow();
+
+    expect(bob.messagesForGroup(group.groupId), isEmpty);
+  });
 
   test(
     'checking paths exchanges refreshed route information both ways',
