@@ -1972,6 +1972,7 @@ void main() {
           home: app.HomeScreen(
             controller: alice,
             updateService: _createUpdateService(),
+            themeController: app.ConestThemeController.memory(),
             palette: app.ConestPalette(),
           ),
         ),
@@ -2040,6 +2041,7 @@ void main() {
         home: app.HomeScreen(
           controller: alice,
           updateService: _createUpdateService(),
+          themeController: app.ConestThemeController.memory(),
           palette: app.ConestPalette(),
         ),
       ),
@@ -2121,6 +2123,7 @@ void main() {
         home: app.HomeScreen(
           controller: alice,
           updateService: _createUpdateService(),
+          themeController: app.ConestThemeController.memory(),
           palette: app.ConestPalette(),
         ),
       ),
@@ -2211,6 +2214,7 @@ void main() {
           home: app.HomeScreen(
             controller: alice,
             updateService: _createUpdateService(),
+            themeController: app.ConestThemeController.memory(),
             palette: app.ConestPalette(),
           ),
         ),
@@ -2269,6 +2273,7 @@ void main() {
         home: app.HomeScreen(
           controller: alice,
           updateService: _createUpdateService(),
+          themeController: app.ConestThemeController.memory(),
           palette: app.ConestPalette(),
         ),
       ),

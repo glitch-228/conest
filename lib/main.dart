@@ -5,9 +5,11 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:dynamic_color/dynamic_color.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import 'src/build_info.dart';
+import 'src/conest_theme.dart';
 import 'src/messenger_controller.dart';
 import 'src/models.dart';
 import 'src/platform_bridge.dart';
@@ -16,11 +18,22 @@ import 'src/relay_client.dart';
 import 'src/storage.dart';
 import 'src/update_service.dart';
 
+export 'src/conest_theme.dart'
+    show
+        ConestPalette,
+        ConestThemeController,
+        ConestThemeMode,
+        ThemePreferenceStore;
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  final themeController = ConestThemeController(
+    store: ThemePreferenceStore.app(),
+  );
+  await themeController.initialize();
   final instanceLock = AppInstanceLock();
   if (!await instanceLock.acquire()) {
-    runApp(const ConestAlreadyRunningApp());
+    runApp(ConestAlreadyRunningApp(themeController: themeController));
     return;
   }
   final buildInfo = await ConestBuildInfo.load();
@@ -40,74 +53,76 @@ Future<void> main() async {
       controller: controller,
       updateService: updateService,
       instanceLock: instanceLock,
+      themeController: themeController,
     ),
   );
 }
 
 class ConestAlreadyRunningApp extends StatelessWidget {
-  const ConestAlreadyRunningApp({super.key});
+  const ConestAlreadyRunningApp({super.key, required this.themeController});
+
+  final ConestThemeController themeController;
 
   @override
   Widget build(BuildContext context) {
-    final palette = ConestPalette();
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Conest',
-      theme: ThemeData(
-        brightness: Brightness.light,
-        scaffoldBackgroundColor: palette.paper,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: palette.ember,
-          surface: palette.paper,
-        ),
-        fontFamily: 'monospace',
-        useMaterial3: true,
-      ),
-      home: Scaffold(
-        body: DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [palette.paperStrong, palette.paper, palette.paper],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
-          child: Center(
-            child: Card(
-              elevation: 0,
-              color: palette.paperStrong,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(28),
-                side: BorderSide(color: palette.stroke),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(28),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 420),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.lock_clock, color: palette.ember, size: 34),
-                      const SizedBox(height: 18),
-                      Text(
-                        'Conest is already running',
-                        style: Theme.of(context).textTheme.headlineSmall
-                            ?.copyWith(fontWeight: FontWeight.w800),
+    return DynamicColorBuilder(
+      builder: (lightDynamic, darkDynamic) {
+        return AnimatedBuilder(
+          animation: themeController,
+          builder: (context, _) {
+            final palette = themeController.resolve(
+              platformBrightness: _platformBrightness,
+              lightDynamic: lightDynamic,
+              darkDynamic: darkDynamic,
+            );
+            return MaterialApp(
+              debugShowCheckedModeBanner: false,
+              title: 'Conest',
+              theme: palette.themeData(),
+              home: Scaffold(
+                body: DecoratedBox(
+                  decoration: BoxDecoration(gradient: palette.appGradient),
+                  child: Center(
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(28),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 420),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                Icons.lock_clock,
+                                color: palette.secondary,
+                                size: 34,
+                              ),
+                              const SizedBox(height: 18),
+                              Text(
+                                'Conest is already running',
+                                style: Theme.of(context).textTheme.headlineSmall
+                                    ?.copyWith(fontWeight: FontWeight.w800),
+                              ),
+                              const SizedBox(height: 10),
+                              Text(
+                                'Close the existing Conest window first. A second instance would race the local relay port and encrypted vault.',
+                                style: TextStyle(
+                                  color: palette.inkSoft,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                      const SizedBox(height: 10),
-                      Text(
-                        'Close the existing Conest window first. A second instance would race the local relay port and encrypted vault.',
-                        style: TextStyle(color: palette.inkSoft, height: 1.35),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
-        ),
-      ),
+            );
+          },
+        );
+      },
     );
   }
 }
@@ -118,11 +133,13 @@ class ConestApp extends StatefulWidget {
     required this.controller,
     required this.updateService,
     required this.instanceLock,
+    required this.themeController,
   });
 
   final MessengerController controller;
   final UpdateService updateService;
   final AppInstanceLock instanceLock;
+  final ConestThemeController themeController;
 
   @override
   State<ConestApp> createState() => _ConestAppState();
@@ -160,6 +177,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     widget.updateService.removeListener(_handleUpdateServiceChanged);
     widget.updateService.dispose();
     widget.controller.dispose();
+    widget.themeController.dispose();
     unawaited(widget.instanceLock.release());
     super.dispose();
   }
@@ -200,52 +218,39 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final palette = ConestPalette();
-    return AnimatedBuilder(
-      animation: widget.controller,
-      builder: (context, _) {
-        return MaterialApp(
-          debugShowCheckedModeBanner: false,
-          title: 'Conest',
-          navigatorKey: _navigatorKey,
-          theme: ThemeData(
-            brightness: Brightness.light,
-            scaffoldBackgroundColor: palette.paper,
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: palette.ember,
-              surface: palette.paper,
-            ),
-            fontFamily: 'monospace',
-            useMaterial3: true,
-            inputDecorationTheme: InputDecorationTheme(
-              filled: true,
-              fillColor: palette.paperStrong,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(18),
-                borderSide: BorderSide(color: palette.stroke),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(18),
-                borderSide: BorderSide(color: palette.stroke),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(18),
-                borderSide: BorderSide(color: palette.ember, width: 1.4),
-              ),
-            ),
-          ),
-          home: widget.controller.isReady
-              ? widget.controller.hasIdentity
-                    ? HomeScreen(
-                        controller: widget.controller,
-                        updateService: widget.updateService,
-                        palette: palette,
-                      )
-                    : OnboardingScreen(
-                        controller: widget.controller,
-                        palette: palette,
-                      )
-              : SplashScreen(palette: palette),
+    return DynamicColorBuilder(
+      builder: (lightDynamic, darkDynamic) {
+        return AnimatedBuilder(
+          animation: Listenable.merge([
+            widget.controller,
+            widget.themeController,
+          ]),
+          builder: (context, _) {
+            final palette = widget.themeController.resolve(
+              platformBrightness: _platformBrightness,
+              lightDynamic: lightDynamic,
+              darkDynamic: darkDynamic,
+            );
+            return MaterialApp(
+              debugShowCheckedModeBanner: false,
+              title: 'Conest',
+              navigatorKey: _navigatorKey,
+              theme: palette.themeData(),
+              home: widget.controller.isReady
+                  ? widget.controller.hasIdentity
+                        ? HomeScreen(
+                            controller: widget.controller,
+                            updateService: widget.updateService,
+                            themeController: widget.themeController,
+                            palette: palette,
+                          )
+                        : OnboardingScreen(
+                            controller: widget.controller,
+                            palette: palette,
+                          )
+                  : SplashScreen(palette: palette),
+            );
+          },
         );
       },
     );
@@ -261,13 +266,7 @@ class SplashScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       body: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [palette.paperStrong, palette.paper, palette.paper],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
+        decoration: BoxDecoration(gradient: palette.appGradient),
         child: const Center(child: CircularProgressIndicator()),
       ),
     );
@@ -458,13 +457,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         : 'Relay mode can be enabled in Settings when this device should help carry traffic.';
     return Scaffold(
       body: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [palette.paperStrong, palette.paper, palette.paper],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
+        decoration: BoxDecoration(gradient: palette.appGradient),
         child: SafeArea(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(24),
@@ -485,7 +478,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                             'Conest',
                             style: Theme.of(context).textTheme.displaySmall
                                 ?.copyWith(
-                                  color: palette.ink,
+                                  color: palette.textPrimary,
                                   fontWeight: FontWeight.w700,
                                 ),
                           ),
@@ -614,11 +607,13 @@ class HomeScreen extends StatefulWidget {
     super.key,
     required this.controller,
     required this.updateService,
+    required this.themeController,
     required this.palette,
   });
 
   final MessengerController controller;
   final UpdateService updateService;
+  final ConestThemeController themeController;
   final ConestPalette palette;
 
   @override
@@ -702,6 +697,7 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (context) => SettingsDialog(
         controller: widget.controller,
         updateService: widget.updateService,
+        themeController: widget.themeController,
         palette: widget.palette,
       ),
     );
@@ -790,13 +786,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final lanLobbySelected = _lanLobbySelected && selectedContact == null;
     return Scaffold(
       body: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [palette.paperStrong, palette.paper, palette.paper],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
+        decoration: BoxDecoration(gradient: palette.appGradient),
         child: PopScope(
           canPop: selectedContact == null && !lanLobbySelected,
           onPopInvokedWithResult: (didPop, result) {
@@ -978,14 +968,14 @@ class _Sidebar extends StatelessWidget {
                       width: 42,
                       height: 42,
                       decoration: BoxDecoration(
-                        color: palette.ink,
+                        color: palette.outboundBubble,
                         borderRadius: BorderRadius.circular(14),
                       ),
                       alignment: Alignment.center,
                       child: Text(
                         identity.displayName.characters.first.toUpperCase(),
-                        style: const TextStyle(
-                          color: Colors.white,
+                        style: TextStyle(
+                          color: palette.outboundText,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -1093,12 +1083,10 @@ class _Sidebar extends StatelessWidget {
           child: Ink(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: lanLobbySelected
-                  ? palette.ink.withValues(alpha: 0.08)
-                  : palette.paperStrong,
+              color: lanLobbySelected ? palette.selection : palette.paperStrong,
               borderRadius: BorderRadius.circular(18),
               border: Border.all(
-                color: lanLobbySelected ? palette.ember : palette.stroke,
+                color: lanLobbySelected ? palette.primary : palette.stroke,
               ),
             ),
             child: Row(
@@ -1107,10 +1095,10 @@ class _Sidebar extends StatelessWidget {
                   width: 42,
                   height: 42,
                   decoration: BoxDecoration(
-                    color: palette.ember.withValues(alpha: 0.18),
+                    color: palette.primary.withValues(alpha: 0.16),
                     borderRadius: BorderRadius.circular(14),
                   ),
-                  child: Icon(Icons.forum_outlined, color: palette.ember),
+                  child: Icon(Icons.forum_outlined, color: palette.primary),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -1188,12 +1176,10 @@ class _Sidebar extends StatelessWidget {
                   child: Ink(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: selected
-                          ? palette.ink.withValues(alpha: 0.08)
-                          : palette.paperStrong,
+                      color: selected ? palette.selection : palette.paperStrong,
                       borderRadius: BorderRadius.circular(18),
                       border: Border.all(
-                        color: selected ? palette.ember : palette.stroke,
+                        color: selected ? palette.primary : palette.stroke,
                       ),
                     ),
                     child: Column(
@@ -1551,11 +1537,11 @@ class _ChatPanelState extends State<_ChatPanel> {
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: outbound ? palette.ink : palette.paper,
+            color: outbound ? palette.outboundBubble : palette.inboundBubble,
             borderRadius: BorderRadius.circular(18),
             border: outbound || !unread
                 ? null
-                : Border.all(color: palette.ember.withValues(alpha: 0.45)),
+                : Border.all(color: palette.unread.withValues(alpha: 0.55)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1576,7 +1562,9 @@ class _ChatPanelState extends State<_ChatPanel> {
                     Text(
                       message.body,
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: outbound ? Colors.white : palette.ink,
+                        color: outbound
+                            ? palette.outboundText
+                            : palette.inboundText,
                         height: 1.35,
                       ),
                     ),
@@ -1590,7 +1578,9 @@ class _ChatPanelState extends State<_ChatPanel> {
                   Text(
                     formatTimestamp(message.createdAt),
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: outbound ? Colors.white70 : palette.inkSoft,
+                      color: outbound
+                          ? palette.outboundMeta
+                          : palette.inboundMeta,
                     ),
                   ),
                   if (!outbound && unread) ...[
@@ -1598,7 +1588,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                     Text(
                       'new',
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: palette.ember,
+                        color: palette.unread,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -1608,7 +1598,9 @@ class _ChatPanelState extends State<_ChatPanel> {
                     Text(
                       'edited',
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: outbound ? Colors.white70 : palette.inkSoft,
+                        color: outbound
+                            ? palette.outboundMeta
+                            : palette.inboundMeta,
                       ),
                     ),
                   ],
@@ -1619,7 +1611,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                       child: Icon(
                         message.state.icon,
                         size: 16,
-                        color: Colors.white70,
+                        color: palette.outboundMeta,
                       ),
                     ),
                   ],
@@ -1628,7 +1620,9 @@ class _ChatPanelState extends State<_ChatPanel> {
                     icon: Icon(
                       Icons.more_horiz,
                       size: 18,
-                      color: outbound ? Colors.white70 : palette.inkSoft,
+                      color: outbound
+                          ? palette.outboundMeta
+                          : palette.inboundMeta,
                     ),
                     onSelected: (value) async {
                       try {
@@ -2012,13 +2006,15 @@ class _LanLobbyPanel extends StatelessWidget {
                             margin: const EdgeInsets.only(bottom: 12),
                             padding: const EdgeInsets.all(14),
                             decoration: BoxDecoration(
-                              color: outbound ? palette.ink : palette.paper,
+                              color: outbound
+                                  ? palette.outboundBubble
+                                  : palette.inboundBubble,
                               borderRadius: BorderRadius.circular(18),
                               border: Border.all(
                                 color: outbound
-                                    ? palette.ink
+                                    ? palette.outboundBubble
                                     : unread
-                                    ? palette.ember.withValues(alpha: 0.45)
+                                    ? palette.unread.withValues(alpha: 0.55)
                                     : palette.stroke,
                               ),
                             ),
@@ -2030,8 +2026,8 @@ class _LanLobbyPanel extends StatelessWidget {
                                   style: Theme.of(context).textTheme.labelSmall
                                       ?.copyWith(
                                         color: outbound
-                                            ? Colors.white70
-                                            : palette.inkSoft,
+                                            ? palette.outboundMeta
+                                            : palette.inboundMeta,
                                         fontWeight: FontWeight.w700,
                                       ),
                                 ),
@@ -2041,8 +2037,8 @@ class _LanLobbyPanel extends StatelessWidget {
                                   style: Theme.of(context).textTheme.bodyLarge
                                       ?.copyWith(
                                         color: outbound
-                                            ? Colors.white
-                                            : palette.ink,
+                                            ? palette.outboundText
+                                            : palette.inboundText,
                                         height: 1.35,
                                       ),
                                 ),
@@ -2052,8 +2048,8 @@ class _LanLobbyPanel extends StatelessWidget {
                                   style: Theme.of(context).textTheme.labelSmall
                                       ?.copyWith(
                                         color: outbound
-                                            ? Colors.white70
-                                            : palette.inkSoft,
+                                            ? palette.outboundMeta
+                                            : palette.inboundMeta,
                                       ),
                                 ),
                                 if (!outbound && unread) ...[
@@ -2064,7 +2060,7 @@ class _LanLobbyPanel extends StatelessWidget {
                                         .textTheme
                                         .labelSmall
                                         ?.copyWith(
-                                          color: palette.ember,
+                                          color: palette.unread,
                                           fontWeight: FontWeight.w700,
                                         ),
                                   ),
@@ -2746,13 +2742,7 @@ class _InviteScreenState extends State<InviteScreen> {
     final palette = widget.palette;
     return Scaffold(
       body: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [palette.paperStrong, palette.paper, palette.paper],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
+        decoration: BoxDecoration(gradient: palette.appGradient),
         child: SafeArea(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(24),
@@ -2810,9 +2800,9 @@ class _InviteScreenState extends State<InviteScreen> {
                                         error: error.toString(),
                                       );
                                     },
-                                    eyeStyle: QrEyeStyle(color: palette.ink),
+                                    eyeStyle: QrEyeStyle(color: palette.qrInk),
                                     dataModuleStyle: QrDataModuleStyle(
-                                      color: palette.ink,
+                                      color: palette.qrInk,
                                     ),
                                   ),
                                 ),
@@ -3010,8 +3000,8 @@ class FullscreenQrScreen extends StatelessWidget {
                           error: error.toString(),
                         );
                       },
-                      eyeStyle: QrEyeStyle(color: palette.ink),
-                      dataModuleStyle: QrDataModuleStyle(color: palette.ink),
+                      eyeStyle: QrEyeStyle(color: palette.qrInk),
+                      dataModuleStyle: QrDataModuleStyle(color: palette.qrInk),
                     ),
                     const SizedBox(height: 18),
                     Text(
@@ -3055,11 +3045,13 @@ class SettingsDialog extends StatefulWidget {
     super.key,
     required this.controller,
     required this.updateService,
+    required this.themeController,
     required this.palette,
   });
 
   final MessengerController controller;
   final UpdateService updateService;
+  final ConestThemeController themeController;
   final ConestPalette palette;
 
   @override
@@ -3174,39 +3166,349 @@ class _SettingsDialogState extends State<SettingsDialog> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      'Updates',
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
+                    _SettingsSection(
+                      title: 'Personal / Preferences',
+                      palette: widget.palette,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _ThemeModeSelector(
+                            controller: widget.themeController,
+                            palette: widget.palette,
+                          ),
+                          const SizedBox(height: 16),
+                          Wrap(
+                            spacing: 12,
+                            runSpacing: 12,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 280,
+                                child: TextField(
+                                  controller: _displayNameController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Display name',
+                                  ),
+                                ),
+                              ),
+                              FilledButton(
+                                onPressed: _busy
+                                    ? null
+                                    : () => _run(
+                                        () =>
+                                            widget.controller.updateDisplayName(
+                                              _displayNameController.text,
+                                            ),
+                                      ),
+                                child: const Text('Save Name'),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 12,
+                            runSpacing: 12,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 420,
+                                child: TextField(
+                                  controller: _bioController,
+                                  minLines: 1,
+                                  maxLines: 4,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Description / bio',
+                                  ),
+                                ),
+                              ),
+                              FilledButton(
+                                onPressed: _busy
+                                    ? null
+                                    : () => _run(
+                                        () => widget.controller.updateBio(
+                                          _bioController.text,
+                                        ),
+                                      ),
+                                child: const Text('Save Bio'),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          SwitchListTile.adaptive(
+                            value: identity.notificationsEnabled,
+                            contentPadding: EdgeInsets.zero,
+                            onChanged: _busy
+                                ? null
+                                : (value) => _run(
+                                    () => widget.controller
+                                        .updateNotificationsEnabled(value),
+                                  ),
+                            title: const Text('Message notifications'),
+                            subtitle: const Text(
+                              'Show a system notification when a direct message arrives.',
+                            ),
+                          ),
+                          if (!kIsWeb && Platform.isAndroid)
+                            SwitchListTile.adaptive(
+                              value: identity.androidBackgroundRuntimeEnabled,
+                              contentPadding: EdgeInsets.zero,
+                              onChanged: _busy
+                                  ? null
+                                  : (value) => _run(
+                                      () => widget.controller
+                                          .updateAndroidBackgroundRuntimeEnabled(
+                                            value,
+                                          ),
+                                    ),
+                              title: const Text('Android background runtime'),
+                              subtitle: const Text(
+                                'Keeps foreground runtime active. If Android blocks background access, notifications can be late or never arrive.',
+                              ),
+                            ),
+                          if (kDebugMode)
+                            SwitchListTile.adaptive(
+                              value: identity.suppressReadReceipts,
+                              contentPadding: EdgeInsets.zero,
+                              onChanged: _busy
+                                  ? null
+                                  : (value) => _run(
+                                      () => widget.controller
+                                          .updateSuppressReadReceipts(value),
+                                    ),
+                              title: const Text(
+                                "Don't send read confirmations",
+                              ),
+                              subtitle: const Text(
+                                'Debug-only. Delivery acknowledgements still send; incoming read confirmations are still processed.',
+                              ),
+                            ),
+                          const SizedBox(height: 12),
+                          SelectableText(
+                            'account ${identity.accountId}\ndevice ${identity.deviceId}\nsafety ${identity.safetyNumber}',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: widget.palette.inkSoft,
+                                  height: 1.5,
+                                ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    ListenableBuilder(
-                      listenable: widget.updateService,
-                      builder: (context, _) {
-                        final updateService = widget.updateService;
-                        final buildInfo = updateService.buildInfo;
-                        final available = updateService.availableUpdate;
-                        final actionLabel =
-                            updateService.targetPlatform ==
-                                UpdateTargetPlatform.android
-                            ? 'Download & Install'
-                            : 'Download & Restart';
-                        return Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: widget.palette.paper,
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(color: widget.palette.stroke),
+                    const SizedBox(height: 16),
+                    _SettingsSection(
+                      title: 'Network / Relay',
+                      palette: widget.palette,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (report != null)
+                            _InsetPanel(
+                              palette: widget.palette,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    report.summary,
+                                    style: Theme.of(context).textTheme.bodyLarge
+                                        ?.copyWith(fontWeight: FontWeight.w700),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  for (final note in report.notes)
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 6),
+                                      child: Text(
+                                        note,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(
+                                              color: widget.palette.inkSoft,
+                                            ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          const SizedBox(height: 12),
+                          OutlinedButton.icon(
+                            onPressed: _busy
+                                ? null
+                                : () => _run(
+                                    widget.controller.checkRelayAvailability,
+                                  ),
+                            icon: const Icon(Icons.network_check),
+                            label: const Text('Check Availability'),
                           ),
-                          child: Column(
+                          const SizedBox(height: 12),
+                          SwitchListTile.adaptive(
+                            value: identity.relayModeEnabled,
+                            contentPadding: EdgeInsets.zero,
+                            onChanged: _busy
+                                ? null
+                                : (value) => _run(
+                                    () => widget.controller
+                                        .updateRelayModeEnabled(value),
+                                  ),
+                            title: const Text('Run this device as a relay'),
+                            subtitle: const Text(
+                              'Allow trusted contacts to use this device as a relay.',
+                            ),
+                          ),
+                          SwitchListTile.adaptive(
+                            value: identity.autoUseContactRelays,
+                            contentPadding: EdgeInsets.zero,
+                            onChanged: _busy
+                                ? null
+                                : (value) => _run(
+                                    () => widget.controller
+                                        .updateAutoUseContactRelays(value),
+                                  ),
+                            title: const Text('Auto-use contacts as relays'),
+                            subtitle: Text(
+                              '${contactRelays.length} candidate route(s) are available right now.',
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 12,
+                            runSpacing: 12,
+                            children: [
+                              SizedBox(
+                                width: 220,
+                                child: TextField(
+                                  controller: _localRelayPortController,
+                                  keyboardType: TextInputType.number,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Local relay port',
+                                  ),
+                                ),
+                              ),
+                              FilledButton(
+                                onPressed: _busy
+                                    ? null
+                                    : () => _run(() async {
+                                        final port = int.tryParse(
+                                          _localRelayPortController.text.trim(),
+                                        );
+                                        if (port == null) {
+                                          throw ArgumentError(
+                                            'Enter a valid local relay port.',
+                                          );
+                                        }
+                                        await widget.controller
+                                            .updateLocalRelayPort(port);
+                                      }),
+                                child: const Text('Save Port'),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Configured relays',
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w800),
+                          ),
+                          const SizedBox(height: 8),
+                          if (configuredRelays.isEmpty)
+                            Text(
+                              'No relays added yet.',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: widget.palette.inkSoft),
+                            )
+                          else
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                for (final relay in configuredRelays)
+                                  InputChip(
+                                    label: Text(relay.label),
+                                    onDeleted: _busy
+                                        ? null
+                                        : () => _run(
+                                            () => widget.controller.removeRelay(
+                                              relay,
+                                            ),
+                                          ),
+                                  ),
+                              ],
+                            ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 12,
+                            runSpacing: 12,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 220,
+                                child: TextField(
+                                  controller: _relayHostController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Relay host / URL',
+                                    hintText: 'udp://host:port forces UDP',
+                                  ),
+                                ),
+                              ),
+                              SizedBox(
+                                width: 140,
+                                child: TextField(
+                                  controller: _relayPortController,
+                                  keyboardType: TextInputType.number,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Relay port',
+                                  ),
+                                ),
+                              ),
+                              FilledButton(
+                                onPressed: _busy
+                                    ? null
+                                    : () => _run(() async {
+                                        final port = int.tryParse(
+                                          _relayPortController.text.trim(),
+                                        );
+                                        if (port == null) {
+                                          throw ArgumentError(
+                                            'Enter a valid relay port.',
+                                          );
+                                        }
+                                        await widget.controller.addRelay(
+                                          host: _relayHostController.text
+                                              .trim(),
+                                          port: port,
+                                        );
+                                        _relayHostController.clear();
+                                        _relayPortController.text =
+                                            '$defaultRelayPort';
+                                      }),
+                                child: const Text('Detect & Add Relay'),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _SettingsSection(
+                      title: 'Updates',
+                      palette: widget.palette,
+                      child: ListenableBuilder(
+                        listenable: widget.updateService,
+                        builder: (context, _) {
+                          final updateService = widget.updateService;
+                          final buildInfo = updateService.buildInfo;
+                          final available = updateService.availableUpdate;
+                          final actionLabel =
+                              updateService.targetPlatform ==
+                                  UpdateTargetPlatform.android
+                              ? 'Download & Install'
+                              : 'Download & Restart';
+                          return Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
                                 'Current build: ${buildInfo.displayVersion} • ${buildInfo.channelLabel}',
                                 style: Theme.of(context).textTheme.bodyLarge
-                                    ?.copyWith(fontWeight: FontWeight.w600),
+                                    ?.copyWith(fontWeight: FontWeight.w700),
                               ),
                               if (buildInfo.commit != null &&
                                   buildInfo.commit!.isNotEmpty) ...[
@@ -3219,10 +3521,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               ],
                               if (available != null) ...[
                                 const SizedBox(height: 10),
-                                Text(
-                                  'Available: ${available.release.tagName}',
-                                  style: Theme.of(context).textTheme.bodyMedium,
-                                ),
+                                Text('Available: ${available.release.tagName}'),
                               ],
                               if (updateService.isDownloading) ...[
                                 const SizedBox(height: 12),
@@ -3284,322 +3583,19 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 ],
                               ),
                             ],
-                          ),
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 24),
-                    Text(
-                      'Relay',
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    if (report != null)
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: widget.palette.paper,
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(color: widget.palette.stroke),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              report.summary,
-                              style: Theme.of(context).textTheme.bodyLarge
-                                  ?.copyWith(fontWeight: FontWeight.w600),
-                            ),
-                            const SizedBox(height: 10),
-                            for (final note in report.notes)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 6),
-                                child: Text(
-                                  note,
-                                  style: Theme.of(context).textTheme.bodySmall
-                                      ?.copyWith(color: widget.palette.inkSoft),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    const SizedBox(height: 12),
-                    OutlinedButton.icon(
-                      onPressed: _busy
-                          ? null
-                          : () =>
-                                _run(widget.controller.checkRelayAvailability),
-                      icon: const Icon(Icons.network_check),
-                      label: const Text('Check Availability'),
-                    ),
-                    const SizedBox(height: 12),
-                    SwitchListTile.adaptive(
-                      value: identity.relayModeEnabled,
-                      onChanged: _busy
-                          ? null
-                          : (value) => _run(
-                              () => widget.controller.updateRelayModeEnabled(
-                                value,
-                              ),
-                            ),
-                      title: const Text('Run this device as a relay'),
-                      subtitle: const Text(
-                        'Allow trusted contacts to use this device as a relay. LAN pairing and direct receive stay available while the app is open.',
-                      ),
-                    ),
-                    SwitchListTile.adaptive(
-                      value: identity.autoUseContactRelays,
-                      onChanged: _busy
-                          ? null
-                          : (value) => _run(
-                              () => widget.controller
-                                  .updateAutoUseContactRelays(value),
-                            ),
-                      title: const Text('Auto-use contacts as relays'),
-                      subtitle: Text(
-                        'Use relay-capable routes learned from contacts automatically. ${contactRelays.length} candidate route(s) are available right now.',
-                      ),
-                    ),
-                    SwitchListTile.adaptive(
-                      value: identity.notificationsEnabled,
-                      onChanged: _busy
-                          ? null
-                          : (value) => _run(
-                              () => widget.controller
-                                  .updateNotificationsEnabled(value),
-                            ),
-                      title: const Text('Message notifications'),
-                      subtitle: const Text(
-                        'Show a system notification when a direct message arrives. Android may ask for notification permission.',
-                      ),
-                    ),
-                    if (!kIsWeb && Platform.isAndroid)
-                      SwitchListTile.adaptive(
-                        value: identity.androidBackgroundRuntimeEnabled,
-                        onChanged: _busy
-                            ? null
-                            : (value) => _run(
-                                () => widget.controller
-                                    .updateAndroidBackgroundRuntimeEnabled(
-                                      value,
-                                    ),
-                              ),
-                        title: const Text('Android background runtime'),
-                        subtitle: const Text(
-                          'Keeps a foreground notification so Conest can keep polling and receiving while backgrounded. If Android battery/background access is blocked, notifications can be late or never arrive.',
-                        ),
-                      ),
-                    if (kDebugMode)
-                      SwitchListTile.adaptive(
-                        value: identity.suppressReadReceipts,
-                        onChanged: _busy
-                            ? null
-                            : (value) => _run(
-                                () => widget.controller
-                                    .updateSuppressReadReceipts(value),
-                              ),
-                        title: const Text("Don't send read confirmations"),
-                        subtitle: const Text(
-                          'Debug-only. When enabled, this device still sends delivery acknowledgements but does not send read confirmations. Incoming read confirmations are still processed normally.',
-                        ),
-                      ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: [
-                        SizedBox(
-                          width: 220,
-                          child: TextField(
-                            controller: _localRelayPortController,
-                            keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(
-                              labelText: 'Local relay port',
-                            ),
-                          ),
-                        ),
-                        FilledButton(
-                          onPressed: _busy
-                              ? null
-                              : () => _run(() async {
-                                  final port = int.tryParse(
-                                    _localRelayPortController.text.trim(),
-                                  );
-                                  if (port == null) {
-                                    throw ArgumentError(
-                                      'Enter a valid local relay port.',
-                                    );
-                                  }
-                                  await widget.controller.updateLocalRelayPort(
-                                    port,
-                                  );
-                                }),
-                          child: const Text('Save Port'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Configured relays',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    if (configuredRelays.isEmpty)
-                      Text(
-                        'No relays added yet.',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: widget.palette.inkSoft,
-                        ),
-                      )
-                    else
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          for (final relay in configuredRelays)
-                            InputChip(
-                              label: Text(relay.label),
-                              onDeleted: _busy
-                                  ? null
-                                  : () => _run(
-                                      () =>
-                                          widget.controller.removeRelay(relay),
-                                    ),
-                            ),
-                        ],
-                      ),
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        SizedBox(
-                          width: 220,
-                          child: TextField(
-                            controller: _relayHostController,
-                            decoration: const InputDecoration(
-                              labelText: 'Relay host / URL',
-                              hintText:
-                                  'host auto-detects TCP/UDP; udp://host:port forces UDP',
-                            ),
-                          ),
-                        ),
-                        SizedBox(
-                          width: 140,
-                          child: TextField(
-                            controller: _relayPortController,
-                            keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(
-                              labelText: 'Relay port',
-                            ),
-                          ),
-                        ),
-                        FilledButton(
-                          onPressed: _busy
-                              ? null
-                              : () => _run(() async {
-                                  final port = int.tryParse(
-                                    _relayPortController.text.trim(),
-                                  );
-                                  if (port == null) {
-                                    throw ArgumentError(
-                                      'Enter a valid relay port.',
-                                    );
-                                  }
-                                  await widget.controller.addRelay(
-                                    host: _relayHostController.text.trim(),
-                                    port: port,
-                                  );
-                                  _relayHostController.clear();
-                                  _relayPortController.text =
-                                      '$defaultRelayPort';
-                                }),
-                          child: const Text('Detect & Add Relay'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-                    Text(
-                      'Identity',
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        SizedBox(
-                          width: 280,
-                          child: TextField(
-                            controller: _displayNameController,
-                            decoration: const InputDecoration(
-                              labelText: 'Display name',
-                            ),
-                          ),
-                        ),
-                        FilledButton(
-                          onPressed: _busy
-                              ? null
-                              : () => _run(
-                                  () => widget.controller.updateDisplayName(
-                                    _displayNameController.text,
-                                  ),
-                                ),
-                          child: const Text('Save Name'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        SizedBox(
-                          width: 420,
-                          child: TextField(
-                            controller: _bioController,
-                            minLines: 1,
-                            maxLines: 4,
-                            decoration: const InputDecoration(
-                              labelText: 'Description / bio',
-                            ),
-                          ),
-                        ),
-                        FilledButton(
-                          onPressed: _busy
-                              ? null
-                              : () => _run(
-                                  () => widget.controller.updateBio(
-                                    _bioController.text,
-                                  ),
-                                ),
-                          child: const Text('Save Bio'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    SelectableText(
-                      'account ${identity.accountId}\ndevice ${identity.deviceId}\nsafety ${identity.safetyNumber}',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: widget.palette.inkSoft,
-                        height: 1.5,
+                          );
+                        },
                       ),
                     ),
                     const SizedBox(height: 16),
-                    OutlinedButton.icon(
-                      onPressed: _busy ? null : _confirmReset,
-                      icon: const Icon(Icons.restart_alt),
-                      label: const Text('Reset App Identity'),
+                    _SettingsSection(
+                      title: 'Danger',
+                      palette: widget.palette,
+                      child: OutlinedButton.icon(
+                        onPressed: _busy ? null : _confirmReset,
+                        icon: const Icon(Icons.restart_alt),
+                        label: const Text('Reset App Identity'),
+                      ),
                     ),
                     if (_error != null) ...[
                       const SizedBox(height: 12),
@@ -3621,6 +3617,139 @@ class _SettingsDialogState extends State<SettingsDialog> {
         ),
       ],
     );
+  }
+}
+
+class _SettingsSection extends StatelessWidget {
+  const _SettingsSection({
+    required this.title,
+    required this.palette,
+    required this.child,
+  });
+
+  final String title;
+  final ConestPalette palette;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: palette.surfaceElevated.withValues(
+          alpha: palette.isDark ? 0.72 : 0.88,
+        ),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: palette.stroke),
+        boxShadow: [
+          BoxShadow(
+            color: palette.shadow,
+            blurRadius: 22,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 14),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _InsetPanel extends StatelessWidget {
+  const _InsetPanel({required this.palette, required this.child});
+
+  final ConestPalette palette;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: palette.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: palette.stroke),
+      ),
+      child: child,
+    );
+  }
+}
+
+class _ThemeModeSelector extends StatelessWidget {
+  const _ThemeModeSelector({required this.controller, required this.palette});
+
+  final ConestThemeController controller;
+  final ConestPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Theme',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SegmentedButton<ConestThemeMode>(
+                segments: [
+                  for (final mode in ConestThemeMode.values)
+                    ButtonSegment(
+                      value: mode,
+                      label: Text(mode.label),
+                      icon: Icon(_themeModeIcon(mode)),
+                    ),
+                ],
+                selected: {controller.mode},
+                onSelectionChanged: (selected) {
+                  final mode = selected.single;
+                  unawaited(controller.setMode(mode));
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              controller.mode == ConestThemeMode.adaptive &&
+                      palette.usingDynamicColor
+                  ? 'Adaptive is using system dynamic colors.'
+                  : 'Mint and pink remain the Conest fallback accents.',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  IconData _themeModeIcon(ConestThemeMode mode) {
+    return switch (mode) {
+      ConestThemeMode.system => Icons.brightness_auto_outlined,
+      ConestThemeMode.light => Icons.light_mode_outlined,
+      ConestThemeMode.dark => Icons.dark_mode_outlined,
+      ConestThemeMode.adaptive => Icons.palette_outlined,
+    };
   }
 }
 
@@ -3910,7 +4039,7 @@ class _DebugInfoBlock extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: palette.paper,
+        color: palette.chipBackground,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: palette.stroke),
       ),
@@ -4159,7 +4288,7 @@ class _RoutePill extends StatelessWidget {
       constraints: const BoxConstraints(maxWidth: 240),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: palette.paper,
+        color: palette.chipBackground,
         borderRadius: BorderRadius.circular(999),
         border: Border.all(color: palette.stroke),
       ),
@@ -4426,7 +4555,7 @@ class _StatusChip extends StatelessWidget {
       child: Row(
         mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
         children: [
-          Icon(icon, size: 16, color: palette.inkSoft),
+          Icon(icon, size: 16, color: palette.primary),
           const SizedBox(width: 8),
           if (expand) Expanded(child: labelWidget) else labelWidget,
         ],
@@ -4457,7 +4586,7 @@ class _UnreadBadge extends StatelessWidget {
         vertical: compact ? 3 : 4,
       ),
       decoration: BoxDecoration(
-        color: palette.ember,
+        color: palette.unread,
         borderRadius: BorderRadius.circular(999),
       ),
       alignment: Alignment.center,
@@ -4486,10 +4615,10 @@ class _ReachabilityChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = switch (state) {
-      ContactReachabilityState.online => const Color(0xFF2F8F5B),
-      ContactReachabilityState.seenRecently => palette.ember,
+      ContactReachabilityState.online => palette.success,
+      ContactReachabilityState.seenRecently => palette.warning,
       ContactReachabilityState.known => palette.inkSoft,
-      ContactReachabilityState.unknown => const Color(0xFF9A6A6A),
+      ContactReachabilityState.unknown => palette.danger,
     };
     final labelWidget = Text(
       state.label,
@@ -4531,15 +4660,17 @@ class _QuotedReference extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final baseColor = outbound ? Colors.white : palette.ink;
+    final baseColor = outbound ? palette.outboundText : palette.inboundText;
     final borderColor = outbound
-        ? Colors.white24
-        : palette.ember.withValues(alpha: 0.4);
+        ? palette.primary.withValues(alpha: 0.45)
+        : palette.secondary.withValues(alpha: 0.42);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: outbound ? Colors.white10 : palette.paperStrong,
+        color: outbound
+            ? palette.primary.withValues(alpha: 0.10)
+            : palette.selection,
         borderRadius: BorderRadius.circular(12),
         border: Border(left: BorderSide(color: borderColor, width: 3)),
       ),
@@ -4601,7 +4732,7 @@ class _ComposerReplyPreview extends StatelessWidget {
                 Text(
                   'Replying to $senderLabel',
                   style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: palette.ember,
+                    color: palette.primary,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -4629,15 +4760,6 @@ class _ComposerReplyPreview extends StatelessWidget {
   }
 }
 
-class ConestPalette {
-  final Color paper = const Color(0xFFF4EFE7);
-  final Color paperStrong = const Color(0xFFF9F5EF);
-  final Color ink = const Color(0xFF1E2430);
-  final Color inkSoft = const Color(0xFF5F6673);
-  final Color ember = const Color(0xFFB65C34);
-  final Color stroke = const Color(0xFFD8CEC1);
-}
-
 String formatTimestamp(DateTime value) {
   final local = value.toLocal();
   final hour = local.hour.toString().padLeft(2, '0');
@@ -4656,3 +4778,6 @@ bool get _isDesktopPlatform =>
     !kIsWeb && (Platform.isLinux || Platform.isWindows || Platform.isMacOS);
 
 bool get _isWindowsPlatform => !kIsWeb && Platform.isWindows;
+
+Brightness get _platformBrightness =>
+    WidgetsBinding.instance.platformDispatcher.platformBrightness;
