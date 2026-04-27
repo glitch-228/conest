@@ -1544,6 +1544,8 @@ class CreateGroupDialog extends StatefulWidget {
 class _CreateGroupDialogState extends State<CreateGroupDialog> {
   final _titleController = TextEditingController();
   final Set<String> _selectedDeviceIds = <String>{};
+  final Map<String, GroupMemberRole> _selectedRoles =
+      <String, GroupMemberRole>{};
   bool _creating = false;
 
   @override
@@ -1564,6 +1566,14 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
       final group = await widget.controller.createGroup(
         title: _titleController.text,
         members: members,
+        adminDeviceIds: _selectedRoles.entries
+            .where((entry) => entry.value == GroupMemberRole.admin)
+            .map((entry) => entry.key)
+            .toList(growable: false),
+        moderatorDeviceIds: _selectedRoles.entries
+            .where((entry) => entry.value == GroupMemberRole.moderator)
+            .map((entry) => entry.key)
+            .toList(growable: false),
       );
       if (mounted) {
         Navigator.of(context).pop(group);
@@ -1602,23 +1612,58 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
                 shrinkWrap: true,
                 children: [
                   for (final contact in contacts)
-                    CheckboxListTile(
-                      value: _selectedDeviceIds.contains(contact.deviceId),
-                      onChanged:
-                          _selectedDeviceIds.length >= 15 &&
-                              !_selectedDeviceIds.contains(contact.deviceId)
-                          ? null
-                          : (value) {
-                              setState(() {
-                                if (value == true) {
-                                  _selectedDeviceIds.add(contact.deviceId);
-                                } else {
-                                  _selectedDeviceIds.remove(contact.deviceId);
-                                }
-                              });
-                            },
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Checkbox(
+                        value: _selectedDeviceIds.contains(contact.deviceId),
+                        onChanged:
+                            _selectedDeviceIds.length >= 15 &&
+                                !_selectedDeviceIds.contains(contact.deviceId)
+                            ? null
+                            : (value) {
+                                setState(() {
+                                  if (value == true) {
+                                    _selectedDeviceIds.add(contact.deviceId);
+                                    _selectedRoles[contact.deviceId] =
+                                        GroupMemberRole.member;
+                                  } else {
+                                    _selectedDeviceIds.remove(contact.deviceId);
+                                    _selectedRoles.remove(contact.deviceId);
+                                  }
+                                });
+                              },
+                      ),
                       title: Text(contact.alias),
                       subtitle: Text(contact.shortSafetyNumber),
+                      trailing: _selectedDeviceIds.contains(contact.deviceId)
+                          ? DropdownButton<GroupMemberRole>(
+                              value:
+                                  _selectedRoles[contact.deviceId] ??
+                                  GroupMemberRole.member,
+                              onChanged: (role) {
+                                if (role == null) {
+                                  return;
+                                }
+                                setState(() {
+                                  _selectedRoles[contact.deviceId] = role;
+                                });
+                              },
+                              items: const [
+                                DropdownMenuItem(
+                                  value: GroupMemberRole.member,
+                                  child: Text('Member'),
+                                ),
+                                DropdownMenuItem(
+                                  value: GroupMemberRole.moderator,
+                                  child: Text('Moderator'),
+                                ),
+                                DropdownMenuItem(
+                                  value: GroupMemberRole.admin,
+                                  child: Text('Admin'),
+                                ),
+                              ],
+                            )
+                          : null,
                     ),
                 ],
               ),
@@ -1666,8 +1711,13 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
     return widget.group;
   }
 
-  bool get _isOwner =>
-      widget.controller.identity?.deviceId == group.ownerDeviceId;
+  String? get _currentDeviceId => widget.controller.identity?.deviceId;
+
+  bool get _canAssignRoles =>
+      widget.controller.canAssignGroupRoles(group.groupId);
+
+  bool get _canAddMembers =>
+      widget.controller.canAddGroupMembers(group.groupId);
 
   Future<void> _addMember(ContactRecord contact) async {
     try {
@@ -1697,6 +1747,21 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
     }
   }
 
+  Future<void> _setRole(String deviceId, GroupMemberRole role) async {
+    try {
+      await widget.controller.setGroupMemberRole(
+        groupId: group.groupId,
+        memberDeviceId: deviceId,
+        role: role,
+      );
+      if (mounted) {
+        setState(() {});
+      }
+    } catch (error) {
+      widget.controller.setStatus(error.toString());
+    }
+  }
+
   Future<void> _leave() async {
     try {
       await widget.controller.leaveGroup(group.groupId);
@@ -1706,6 +1771,55 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
     } catch (error) {
       widget.controller.setStatus(error.toString());
     }
+  }
+
+  IconData _roleIcon(GroupMemberRole? role) {
+    return switch (role) {
+      GroupMemberRole.owner => Icons.verified_user_outlined,
+      GroupMemberRole.admin => Icons.admin_panel_settings_outlined,
+      GroupMemberRole.moderator => Icons.shield_outlined,
+      GroupMemberRole.member || null => Icons.person_outline,
+    };
+  }
+
+  Widget? _memberTrailing(String deviceId, GroupMemberRole? role) {
+    final canChangeRole =
+        _canAssignRoles && role != null && role != GroupMemberRole.owner;
+    final canRemove =
+        deviceId != _currentDeviceId &&
+        widget.controller.canRemoveGroupMember(group.groupId, deviceId);
+    if (!canChangeRole && !canRemove) {
+      return null;
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (canChangeRole)
+          PopupMenuButton<GroupMemberRole>(
+            tooltip: 'Change role',
+            icon: const Icon(Icons.manage_accounts_outlined),
+            initialValue: role,
+            onSelected: (value) => _setRole(deviceId, value),
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: GroupMemberRole.member,
+                child: Text('Member'),
+              ),
+              PopupMenuItem(
+                value: GroupMemberRole.moderator,
+                child: Text('Moderator'),
+              ),
+              PopupMenuItem(value: GroupMemberRole.admin, child: Text('Admin')),
+            ],
+          ),
+        if (canRemove)
+          IconButton(
+            onPressed: () => _removeMember(deviceId),
+            icon: const Icon(Icons.person_remove_outlined),
+            tooltip: 'Remove member',
+          ),
+      ],
+    );
   }
 
   @override
@@ -1731,27 +1845,12 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
             for (final deviceId in activeIds)
               ListTile(
                 contentPadding: EdgeInsets.zero,
-                leading: Icon(
-                  deviceId == group.ownerDeviceId
-                      ? Icons.verified_user_outlined
-                      : Icons.person_outline,
-                ),
+                leading: Icon(_roleIcon(group.roleFor(deviceId))),
                 title: Text(widget.controller.groupMemberLabel(deviceId)),
-                subtitle: deviceId == group.ownerDeviceId
-                    ? const Text('Owner')
-                    : null,
-                trailing:
-                    _isOwner &&
-                        deviceId != widget.controller.identity?.deviceId &&
-                        deviceId != group.ownerDeviceId
-                    ? IconButton(
-                        onPressed: () => _removeMember(deviceId),
-                        icon: const Icon(Icons.person_remove_outlined),
-                        tooltip: 'Remove member',
-                      )
-                    : null,
+                subtitle: Text(group.roleFor(deviceId)?.label ?? 'Member'),
+                trailing: _memberTrailing(deviceId, group.roleFor(deviceId)),
               ),
-            if (_isOwner && addable.isNotEmpty) ...[
+            if (_canAddMembers && addable.isNotEmpty) ...[
               const Divider(),
               Text(
                 'Add trusted contact',
@@ -1776,8 +1875,8 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
         ),
       ),
       actions: [
-        if (!_isOwner &&
-            group.hasActiveMember(widget.controller.identity?.deviceId ?? ''))
+        if (group.roleFor(_currentDeviceId ?? '') != GroupMemberRole.owner &&
+            group.hasActiveMember(_currentDeviceId ?? ''))
           TextButton.icon(
             onPressed: _leave,
             icon: const Icon(Icons.logout),
@@ -3086,6 +3185,7 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
   late final TextEditingController _aliasController;
   late final TextEditingController _bioController;
   List<PeerRouteHealth>? _checks;
+  DateTime? _lastCheckStartedAt;
   bool _busy = false;
   String? _error;
 
@@ -3094,13 +3194,22 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
     super.initState();
     _aliasController = TextEditingController(text: widget.contact.alias);
     _bioController = TextEditingController(text: widget.contact.bio);
+    widget.controller.addListener(_handleControllerChanged);
   }
 
   @override
   void dispose() {
+    widget.controller.removeListener(_handleControllerChanged);
     _aliasController.dispose();
     _bioController.dispose();
     super.dispose();
+  }
+
+  void _handleControllerChanged() {
+    if (!mounted || _checks == null || !_twoWayConfirmedForLastCheck()) {
+      return;
+    }
+    setState(() {});
   }
 
   Future<void> _run(Future<void> Function() action) async {
@@ -3123,11 +3232,26 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
 
   Future<void> _checkPaths() async {
     await _run(() async {
+      final startedAt = DateTime.now().toUtc();
       final checks = await widget.controller.checkContactRoutes(widget.contact);
       if (mounted) {
-        setState(() => _checks = checks);
+        setState(() {
+          _lastCheckStartedAt = startedAt;
+          _checks = checks;
+        });
       }
     });
+  }
+
+  bool _twoWayConfirmedForLastCheck() {
+    final startedAt = _lastCheckStartedAt;
+    if (startedAt == null) {
+      return false;
+    }
+    final lastTwoWay = widget.controller
+        .reachabilityRecordFor(widget.contact.deviceId)
+        ?.lastTwoWaySuccessAt;
+    return lastTwoWay != null && !lastTwoWay.isBefore(startedAt);
   }
 
   Future<void> _copyPathState() async {
@@ -3153,6 +3277,7 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
       'contactAlias=$alias',
       'contactDevice=${widget.contact.deviceId}',
       'generatedAt=${DateTime.now().toUtc().toIso8601String()}',
+      'lastCheckTwoWayConfirmed=${_twoWayConfirmedForLastCheck()}',
       'reachability=${reachabilityState.name}',
       'lastTwoWaySuccessAt=${reachability?.lastTwoWaySuccessAt?.toIso8601String() ?? ''}',
       'lastHeartbeatAttemptAt=${reachability?.lastHeartbeatAttemptAt?.toIso8601String() ?? ''}',
@@ -3229,6 +3354,7 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
     final reachabilityState = widget.controller.reachabilityStateFor(
       currentContact.deviceId,
     );
+    final checkTwoWayConfirmed = _twoWayConfirmedForLastCheck();
     return AlertDialog(
       scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
@@ -3329,7 +3455,11 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
                 Column(
                   children: [
                     for (final check in checks)
-                      _RouteHealthTile(check: check, palette: widget.palette),
+                      _RouteHealthTile(
+                        check: check,
+                        palette: widget.palette,
+                        twoWayConfirmed: checkTwoWayConfirmed,
+                      ),
                   ],
                 ),
               if (_error != null) ...[
@@ -5317,14 +5447,20 @@ class _QrFallback extends StatelessWidget {
 }
 
 class _RouteHealthTile extends StatelessWidget {
-  const _RouteHealthTile({required this.check, required this.palette});
+  const _RouteHealthTile({
+    required this.check,
+    required this.palette,
+    required this.twoWayConfirmed,
+  });
 
   final PeerRouteHealth check;
   final ConestPalette palette;
+  final bool twoWayConfirmed;
 
   @override
   Widget build(BuildContext context) {
     final available = check.available;
+    final usable = available && twoWayConfirmed;
     final latency = check.latency;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -5337,8 +5473,12 @@ class _RouteHealthTile extends StatelessWidget {
       child: Row(
         children: [
           Icon(
-            available ? Icons.check_circle_outline : Icons.error_outline,
-            color: available ? Colors.green.shade700 : Colors.orange.shade800,
+            usable
+                ? Icons.check_circle_outline
+                : available
+                ? Icons.sync_problem_outlined
+                : Icons.error_outline,
+            color: usable ? Colors.green.shade700 : Colors.orange.shade800,
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -5352,8 +5492,10 @@ class _RouteHealthTile extends StatelessWidget {
                   ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 Text(
-                  available
-                      ? 'available${latency == null ? '' : ' • ${latency.inMilliseconds}ms'}'
+                  usable
+                      ? 'two-way confirmed${latency == null ? '' : ' • ${latency.inMilliseconds}ms'}'
+                      : available
+                      ? 'path accepts send; waiting for peer reply${latency == null ? '' : ' • ${latency.inMilliseconds}ms'}'
                       : check.error ?? 'unavailable',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
@@ -5365,7 +5507,11 @@ class _RouteHealthTile extends StatelessWidget {
             ),
           ),
           Text(
-            available ? 'usable' : 'skip',
+            usable
+                ? 'usable'
+                : available
+                ? 'one-way'
+                : 'skip',
             style: Theme.of(
               context,
             ).textTheme.labelSmall?.copyWith(color: palette.inkSoft),

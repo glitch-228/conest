@@ -4,6 +4,17 @@ import 'package:flutter/material.dart';
 
 enum ConversationKind { direct, group, lanLobby }
 
+enum GroupMemberRole {
+  owner('Owner'),
+  admin('Admin'),
+  moderator('Moderator'),
+  member('Member');
+
+  const GroupMemberRole(this.label);
+
+  final String label;
+}
+
 enum DeliveryState {
   pending(Icons.schedule, 'Waiting for a reachable path'),
   local(Icons.lan_outlined, 'Sent over LAN; waiting for delivery receipt'),
@@ -1097,27 +1108,115 @@ class ChatMessage {
   }
 }
 
+class GroupMemberProfile {
+  GroupMemberProfile({
+    required this.accountId,
+    required this.deviceId,
+    required this.displayName,
+    required this.bio,
+    required this.relayCapable,
+    required this.publicKeyBase64,
+    required List<PeerEndpoint> routeHints,
+  }) : routeHints = prunePeerEndpointsByKind(routeHints);
+
+  final String accountId;
+  final String deviceId;
+  final String displayName;
+  final String bio;
+  final bool relayCapable;
+  final String publicKeyBase64;
+  final List<PeerEndpoint> routeHints;
+
+  GroupMemberProfile copyWith({
+    String? displayName,
+    String? bio,
+    bool? relayCapable,
+    List<PeerEndpoint>? routeHints,
+  }) {
+    return GroupMemberProfile(
+      accountId: accountId,
+      deviceId: deviceId,
+      displayName: displayName ?? this.displayName,
+      bio: bio ?? this.bio,
+      relayCapable: relayCapable ?? this.relayCapable,
+      publicKeyBase64: publicKeyBase64,
+      routeHints: routeHints ?? this.routeHints,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'accountId': accountId,
+      'deviceId': deviceId,
+      'displayName': displayName,
+      'bio': bio,
+      'relayCapable': relayCapable,
+      'publicKeyBase64': publicKeyBase64,
+      'routeHints': routeHints.map((route) => route.toJson()).toList(),
+    };
+  }
+
+  factory GroupMemberProfile.fromJson(Map<String, dynamic> json) {
+    return GroupMemberProfile(
+      accountId: json['accountId'] as String,
+      deviceId: json['deviceId'] as String,
+      displayName: json['displayName'] as String,
+      bio: json['bio'] as String? ?? '',
+      relayCapable: json['relayCapable'] as bool? ?? true,
+      publicKeyBase64: json['publicKeyBase64'] as String,
+      routeHints: _peerEndpointsFromJsonList(
+        json['routeHints'] as List<dynamic>? ?? const [],
+        expandMissingProtocol: true,
+      ),
+    );
+  }
+}
+
 class GroupRecord {
   GroupRecord({
     required this.groupId,
     required this.title,
     required this.ownerDeviceId,
     required List<String> adminDeviceIds,
+    List<String> moderatorDeviceIds = const <String>[],
     required List<String> memberDeviceIds,
     required List<String> removedDeviceIds,
+    List<GroupMemberProfile> memberProfiles = const <GroupMemberProfile>[],
     required this.membershipVersion,
     required this.createdAt,
     required this.updatedAt,
-  }) : adminDeviceIds = _dedupeIds(adminDeviceIds),
-       memberDeviceIds = _dedupeIds(memberDeviceIds),
-       removedDeviceIds = _dedupeIds(removedDeviceIds);
+  }) : adminDeviceIds = _normalizedGroupRoleIds(
+         ownerDeviceId: ownerDeviceId,
+         memberDeviceIds: memberDeviceIds,
+         removedDeviceIds: removedDeviceIds,
+         roleDeviceIds: adminDeviceIds,
+       ),
+       moderatorDeviceIds = _normalizedGroupRoleIds(
+         ownerDeviceId: ownerDeviceId,
+         memberDeviceIds: memberDeviceIds,
+         removedDeviceIds: removedDeviceIds,
+         roleDeviceIds: moderatorDeviceIds,
+         excludedRoleDeviceIds: _normalizedGroupRoleIds(
+           ownerDeviceId: ownerDeviceId,
+           memberDeviceIds: memberDeviceIds,
+           removedDeviceIds: removedDeviceIds,
+           roleDeviceIds: adminDeviceIds,
+         ),
+       ),
+       memberDeviceIds = _dedupeIds([ownerDeviceId, ...memberDeviceIds]),
+       removedDeviceIds = _dedupeIds(
+         removedDeviceIds,
+       ).where((deviceId) => deviceId != ownerDeviceId).toList(),
+       memberProfiles = _dedupeMemberProfiles(memberProfiles);
 
   final String groupId;
   final String title;
   final String ownerDeviceId;
   final List<String> adminDeviceIds;
+  final List<String> moderatorDeviceIds;
   final List<String> memberDeviceIds;
   final List<String> removedDeviceIds;
+  final List<GroupMemberProfile> memberProfiles;
   final int membershipVersion;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -1129,11 +1228,68 @@ class GroupRecord {
   bool hasActiveMember(String deviceId) =>
       activeMemberDeviceIds.contains(deviceId);
 
+  GroupMemberRole? roleFor(String deviceId) {
+    if (!hasActiveMember(deviceId)) {
+      return null;
+    }
+    if (deviceId == ownerDeviceId) {
+      return GroupMemberRole.owner;
+    }
+    if (adminDeviceIds.contains(deviceId)) {
+      return GroupMemberRole.admin;
+    }
+    if (moderatorDeviceIds.contains(deviceId)) {
+      return GroupMemberRole.moderator;
+    }
+    return GroupMemberRole.member;
+  }
+
+  bool canAssignRoles(String actorDeviceId) =>
+      roleFor(actorDeviceId) == GroupMemberRole.owner;
+
+  bool canAddMembers(String actorDeviceId) {
+    final role = roleFor(actorDeviceId);
+    return role == GroupMemberRole.owner || role == GroupMemberRole.admin;
+  }
+
+  bool canRemoveMember({
+    required String actorDeviceId,
+    required String memberDeviceId,
+  }) {
+    final actorRole = roleFor(actorDeviceId);
+    final memberRole = roleFor(memberDeviceId);
+    if (actorRole == null || memberRole == null) {
+      return false;
+    }
+    if (memberRole == GroupMemberRole.owner) {
+      return false;
+    }
+    if (actorRole == GroupMemberRole.owner) {
+      return true;
+    }
+    if (actorRole == GroupMemberRole.admin) {
+      return memberRole == GroupMemberRole.member ||
+          memberRole == GroupMemberRole.moderator;
+    }
+    return false;
+  }
+
+  GroupMemberProfile? memberProfileFor(String deviceId) {
+    for (final profile in memberProfiles) {
+      if (profile.deviceId == deviceId) {
+        return profile;
+      }
+    }
+    return null;
+  }
+
   GroupRecord copyWith({
     String? title,
     List<String>? adminDeviceIds,
+    List<String>? moderatorDeviceIds,
     List<String>? memberDeviceIds,
     List<String>? removedDeviceIds,
+    List<GroupMemberProfile>? memberProfiles,
     int? membershipVersion,
     DateTime? updatedAt,
   }) {
@@ -1142,8 +1298,10 @@ class GroupRecord {
       title: title ?? this.title,
       ownerDeviceId: ownerDeviceId,
       adminDeviceIds: adminDeviceIds ?? this.adminDeviceIds,
+      moderatorDeviceIds: moderatorDeviceIds ?? this.moderatorDeviceIds,
       memberDeviceIds: memberDeviceIds ?? this.memberDeviceIds,
       removedDeviceIds: removedDeviceIds ?? this.removedDeviceIds,
+      memberProfiles: memberProfiles ?? this.memberProfiles,
       membershipVersion: membershipVersion ?? this.membershipVersion,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -1156,8 +1314,12 @@ class GroupRecord {
       'title': title,
       'ownerDeviceId': ownerDeviceId,
       'adminDeviceIds': adminDeviceIds,
+      'moderatorDeviceIds': moderatorDeviceIds,
       'memberDeviceIds': memberDeviceIds,
       'removedDeviceIds': removedDeviceIds,
+      'memberProfiles': memberProfiles
+          .map((profile) => profile.toJson())
+          .toList(),
       'membershipVersion': membershipVersion,
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
@@ -1172,16 +1334,61 @@ class GroupRecord {
       ownerDeviceId: json['ownerDeviceId'] as String,
       adminDeviceIds: (json['adminDeviceIds'] as List<dynamic>? ?? const [])
           .cast<String>(),
+      moderatorDeviceIds:
+          (json['moderatorDeviceIds'] as List<dynamic>? ?? const [])
+              .cast<String>(),
       memberDeviceIds: (json['memberDeviceIds'] as List<dynamic>? ?? const [])
           .cast<String>(),
       removedDeviceIds: (json['removedDeviceIds'] as List<dynamic>? ?? const [])
           .cast<String>(),
+      memberProfiles: (json['memberProfiles'] as List<dynamic>? ?? const [])
+          .cast<Map<String, dynamic>>()
+          .map(GroupMemberProfile.fromJson)
+          .toList(),
       membershipVersion: json['membershipVersion'] as int? ?? 1,
       createdAt: createdAt,
       updatedAt:
           DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? createdAt,
     );
   }
+}
+
+List<GroupMemberProfile> _dedupeMemberProfiles(
+  Iterable<GroupMemberProfile> profiles,
+) {
+  final seen = <String>{};
+  final result = <GroupMemberProfile>[];
+  for (final profile in profiles) {
+    if (profile.deviceId.trim().isEmpty || !seen.add(profile.deviceId)) {
+      continue;
+    }
+    result.add(profile);
+  }
+  return result;
+}
+
+List<String> _normalizedGroupRoleIds({
+  required String ownerDeviceId,
+  required Iterable<String> memberDeviceIds,
+  required Iterable<String> removedDeviceIds,
+  required Iterable<String> roleDeviceIds,
+  Iterable<String> excludedRoleDeviceIds = const <String>[],
+}) {
+  final removed = _dedupeIds(removedDeviceIds).toSet();
+  final activeMembers = _dedupeIds([
+    ownerDeviceId,
+    ...memberDeviceIds,
+  ]).where((deviceId) => !removed.contains(deviceId)).toSet();
+  final excluded = _dedupeIds(excludedRoleDeviceIds).toSet();
+  return _dedupeIds(roleDeviceIds)
+      .where(
+        (deviceId) =>
+            deviceId != ownerDeviceId &&
+            activeMembers.contains(deviceId) &&
+            !removed.contains(deviceId) &&
+            !excluded.contains(deviceId),
+      )
+      .toList(growable: false);
 }
 
 List<String> _dedupeIds(Iterable<String> ids) {

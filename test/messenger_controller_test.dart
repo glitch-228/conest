@@ -736,9 +736,32 @@ void main() {
       groupId: 'grp-test',
       title: 'Core team',
       ownerDeviceId: 'dev-alice',
-      adminDeviceIds: const <String>['dev-alice'],
-      memberDeviceIds: const <String>['dev-alice', 'dev-bob', 'dev-bob'],
-      removedDeviceIds: const <String>['dev-carol'],
+      adminDeviceIds: const <String>['dev-alice', 'dev-bob', 'dev-bob'],
+      moderatorDeviceIds: const <String>[
+        'dev-bob',
+        'dev-carol',
+        'dev-dana',
+        'dev-erin',
+      ],
+      memberDeviceIds: const <String>['dev-bob', 'dev-carol', 'dev-dana'],
+      removedDeviceIds: const <String>['dev-dana', 'dev-alice'],
+      memberProfiles: <GroupMemberProfile>[
+        GroupMemberProfile(
+          accountId: 'acc-bob',
+          deviceId: 'dev-bob',
+          displayName: 'Bob',
+          bio: 'group profile',
+          relayCapable: true,
+          publicKeyBase64: 'bob-key',
+          routeHints: const <PeerEndpoint>[
+            PeerEndpoint(
+              kind: PeerRouteKind.relay,
+              host: 'relay.example',
+              port: defaultRelayPort,
+            ),
+          ],
+        ),
+      ],
       membershipVersion: 3,
       createdAt: createdAt,
       updatedAt: createdAt.add(const Duration(minutes: 2)),
@@ -746,10 +769,32 @@ void main() {
 
     final decoded = GroupRecord.fromJson(group.toJson());
     expect(decoded.groupId, group.groupId);
-    expect(decoded.adminDeviceIds, ['dev-alice']);
-    expect(decoded.memberDeviceIds, ['dev-alice', 'dev-bob']);
-    expect(decoded.removedDeviceIds, ['dev-carol']);
+    expect(decoded.adminDeviceIds, ['dev-bob']);
+    expect(decoded.moderatorDeviceIds, ['dev-carol']);
+    expect(decoded.memberDeviceIds, [
+      'dev-alice',
+      'dev-bob',
+      'dev-carol',
+      'dev-dana',
+    ]);
+    expect(decoded.removedDeviceIds, ['dev-dana']);
+    expect(decoded.roleFor('dev-alice'), GroupMemberRole.owner);
+    expect(decoded.roleFor('dev-bob'), GroupMemberRole.admin);
+    expect(decoded.roleFor('dev-carol'), GroupMemberRole.moderator);
+    expect(decoded.roleFor('dev-dana'), isNull);
+    expect(decoded.memberProfileFor('dev-bob')?.displayName, 'Bob');
+    expect(
+      decoded.memberProfileFor('dev-bob')?.routeHints.single.host,
+      'relay.example',
+    );
     expect(decoded.membershipVersion, 3);
+
+    final legacyJson = Map<String, dynamic>.from(group.toJson())
+      ..remove('moderatorDeviceIds');
+    final legacy = GroupRecord.fromJson(legacyJson);
+    expect(legacy.moderatorDeviceIds, isEmpty);
+    expect(legacy.roleFor('dev-bob'), GroupMemberRole.admin);
+    expect(legacy.roleFor('dev-carol'), GroupMemberRole.member);
 
     final migrated = VaultSnapshot.fromJson(const <String, dynamic>{
       'identity': null,
@@ -943,6 +988,100 @@ void main() {
     expect(reply.replySenderDeviceId, alice.identity!.deviceId);
   });
 
+  test('group members can reach each other without being contacts', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    final carol = await _createController(
+      relayClient: relayClient,
+      displayName: 'Carol',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    addTearDown(carol.dispose);
+
+    await _pairControllers(alice, bob);
+    await _pairControllers(alice, carol);
+
+    final group = await alice.createGroup(
+      title: 'Non-contact members',
+      members: alice.contacts,
+    );
+    await bob.pollNow();
+    await carol.pollNow();
+
+    expect(
+      bob.contacts.any(
+        (contact) => contact.deviceId == carol.identity!.deviceId,
+      ),
+      isFalse,
+    );
+    expect(
+      carol.contacts.any(
+        (contact) => contact.deviceId == bob.identity!.deviceId,
+      ),
+      isFalse,
+    );
+    expect(
+      bob.groups.single.memberProfileFor(carol.identity!.deviceId),
+      isNotNull,
+    );
+    expect(
+      carol.groups.single.memberProfileFor(bob.identity!.deviceId),
+      isNotNull,
+    );
+
+    await bob.sendGroupMessage(groupId: group.groupId, body: 'from bob');
+    await alice.pollNow();
+    await carol.pollNow();
+    await bob.pollNow();
+
+    expect(alice.messagesForGroup(group.groupId).single.body, 'from bob');
+    expect(carol.messagesForGroup(group.groupId).single.body, 'from bob');
+    final bobOutbound = bob.messagesForGroup(group.groupId).single;
+    expect(
+      bobOutbound.recipientStates[carol.identity!.deviceId],
+      isNot(DeliveryState.pending),
+    );
+
+    await carol.sendGroupMessage(groupId: group.groupId, body: 'from carol');
+    await alice.pollNow();
+    await bob.pollNow();
+
+    expect(bob.messagesForGroup(group.groupId).last.body, 'from carol');
+    expect(alice.messagesForGroup(group.groupId).last.body, 'from carol');
+
+    await alice.removeContact(carol.identity!.deviceId, notifyPeer: false);
+    expect(
+      alice.contacts.any(
+        (contact) => contact.deviceId == carol.identity!.deviceId,
+      ),
+      isFalse,
+    );
+
+    await alice.sendGroupMessage(
+      groupId: group.groupId,
+      body: 'from creator after contact removal',
+    );
+    await bob.pollNow();
+    await carol.pollNow();
+
+    expect(
+      carol.messagesForGroup(group.groupId).last.body,
+      'from creator after contact removal',
+    );
+    expect(
+      bob.messagesForGroup(group.groupId).last.body,
+      'from creator after contact removal',
+    );
+  });
+
   test(
     'owner can remove a group member and removed member cannot send',
     () async {
@@ -1027,6 +1166,254 @@ void main() {
     );
     expect(carol.groups.single.groupId, group.groupId);
     expect(carol.groups.single.membershipVersion, 2);
+  });
+
+  test('owner can assign and demote group roles', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    final carol = await _createController(
+      relayClient: relayClient,
+      displayName: 'Carol',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    addTearDown(carol.dispose);
+
+    await _pairControllers(alice, bob);
+    await _pairControllers(alice, carol);
+    final bobContact = alice.contacts.firstWhere(
+      (contact) => contact.deviceId == bob.identity!.deviceId,
+    );
+    final carolContact = alice.contacts.firstWhere(
+      (contact) => contact.deviceId == carol.identity!.deviceId,
+    );
+
+    final group = await alice.createGroup(
+      title: 'Roles',
+      members: [bobContact, carolContact],
+      adminDeviceIds: [bob.identity!.deviceId],
+      moderatorDeviceIds: [carol.identity!.deviceId],
+    );
+    await bob.pollNow();
+    await carol.pollNow();
+
+    expect(group.roleFor(alice.identity!.deviceId), GroupMemberRole.owner);
+    expect(
+      bob.groups.single.roleFor(bob.identity!.deviceId),
+      GroupMemberRole.admin,
+    );
+    expect(
+      carol.groups.single.roleFor(carol.identity!.deviceId),
+      GroupMemberRole.moderator,
+    );
+
+    await alice.setGroupMemberRole(
+      groupId: group.groupId,
+      memberDeviceId: carol.identity!.deviceId,
+      role: GroupMemberRole.admin,
+    );
+    await alice.setGroupMemberRole(
+      groupId: group.groupId,
+      memberDeviceId: bob.identity!.deviceId,
+      role: GroupMemberRole.member,
+    );
+    await bob.pollNow();
+    await carol.pollNow();
+
+    expect(
+      alice.groups.single.roleFor(carol.identity!.deviceId),
+      GroupMemberRole.admin,
+    );
+    expect(
+      bob.groups.single.roleFor(bob.identity!.deviceId),
+      GroupMemberRole.member,
+    );
+    expect(
+      carol.groups.single.roleFor(bob.identity!.deviceId),
+      GroupMemberRole.member,
+    );
+    expect(carol.groups.single.membershipVersion, 3);
+  });
+
+  test(
+    'admin can add and remove ordinary members but cannot manage roles',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      final carol = await _createController(
+        relayClient: relayClient,
+        displayName: 'Carol',
+      );
+      final dave = await _createController(
+        relayClient: relayClient,
+        displayName: 'Dave',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      addTearDown(carol.dispose);
+      addTearDown(dave.dispose);
+
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      await _pairControllers(bob, dave);
+      final bobContact = alice.contacts.firstWhere(
+        (contact) => contact.deviceId == bob.identity!.deviceId,
+      );
+      final carolContact = alice.contacts.firstWhere(
+        (contact) => contact.deviceId == carol.identity!.deviceId,
+      );
+      final daveContact = bob.contacts.firstWhere(
+        (contact) => contact.deviceId == dave.identity!.deviceId,
+      );
+
+      final group = await alice.createGroup(
+        title: 'Admin managed',
+        members: [bobContact, carolContact],
+        adminDeviceIds: [bob.identity!.deviceId, carol.identity!.deviceId],
+      );
+      await bob.pollNow();
+      await carol.pollNow();
+
+      expect(
+        bob.setGroupMemberRole(
+          groupId: group.groupId,
+          memberDeviceId: carol.identity!.deviceId,
+          role: GroupMemberRole.member,
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        bob.removeGroupMember(
+          groupId: group.groupId,
+          memberDeviceId: alice.identity!.deviceId,
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        bob.removeGroupMember(
+          groupId: group.groupId,
+          memberDeviceId: carol.identity!.deviceId,
+        ),
+        throwsArgumentError,
+      );
+
+      await alice.setGroupMemberRole(
+        groupId: group.groupId,
+        memberDeviceId: carol.identity!.deviceId,
+        role: GroupMemberRole.moderator,
+      );
+      await bob.pollNow();
+      await carol.pollNow();
+
+      expect(
+        carol.contacts.any(
+          (contact) => contact.deviceId == bob.identity!.deviceId,
+        ),
+        isFalse,
+      );
+      await bob.addGroupMembers(groupId: group.groupId, members: [daveContact]);
+      await alice.pollNow();
+      await carol.pollNow();
+      await dave.pollNow();
+
+      expect(
+        carol.groups.single.activeMemberDeviceIds,
+        contains(dave.identity!.deviceId),
+      );
+      expect(
+        dave.groups.single.roleFor(dave.identity!.deviceId),
+        GroupMemberRole.member,
+      );
+
+      await bob.removeGroupMember(
+        groupId: group.groupId,
+        memberDeviceId: carol.identity!.deviceId,
+      );
+      await alice.pollNow();
+      await carol.pollNow();
+      await dave.pollNow();
+
+      expect(
+        alice.groups.single.activeMemberDeviceIds,
+        isNot(contains(carol.identity!.deviceId)),
+      );
+      expect(carol.canAddGroupMembers(group.groupId), isFalse);
+      expect(
+        carol.sendGroupMessage(groupId: group.groupId, body: 'nope'),
+        throwsArgumentError,
+      );
+    },
+  );
+
+  test('moderator cannot add or remove group members', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    final carol = await _createController(
+      relayClient: relayClient,
+      displayName: 'Carol',
+    );
+    final dave = await _createController(
+      relayClient: relayClient,
+      displayName: 'Dave',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    addTearDown(carol.dispose);
+    addTearDown(dave.dispose);
+
+    await _pairControllers(alice, bob);
+    await _pairControllers(alice, carol);
+    await _pairControllers(bob, dave);
+    final bobContact = alice.contacts.firstWhere(
+      (contact) => contact.deviceId == bob.identity!.deviceId,
+    );
+    final carolContact = alice.contacts.firstWhere(
+      (contact) => contact.deviceId == carol.identity!.deviceId,
+    );
+    final daveContact = bob.contacts.firstWhere(
+      (contact) => contact.deviceId == dave.identity!.deviceId,
+    );
+
+    final group = await alice.createGroup(
+      title: 'Moderated',
+      members: [bobContact, carolContact],
+      moderatorDeviceIds: [bob.identity!.deviceId],
+    );
+    await bob.pollNow();
+
+    expect(bob.canAddGroupMembers(group.groupId), isFalse);
+    expect(
+      bob.addGroupMembers(groupId: group.groupId, members: [daveContact]),
+      throwsArgumentError,
+    );
+    expect(
+      bob.removeGroupMember(
+        groupId: group.groupId,
+        memberDeviceId: carol.identity!.deviceId,
+      ),
+      throwsArgumentError,
+    );
   });
 
   test('non-owner member can leave a group', () async {
@@ -2186,6 +2573,87 @@ void main() {
       expect(received.replySnippet, isNull);
     },
   );
+
+  testWidgets('group details show role labels and scoped controls', (
+    tester,
+  ) async {
+    late MessengerController alice;
+    late MessengerController bob;
+    late MessengerController carol;
+    late GroupRecord group;
+
+    await tester.runAsync(() async {
+      final relayClient = _FakeRelayClient();
+      alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      carol = await _createController(
+        relayClient: relayClient,
+        displayName: 'Carol',
+      );
+
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      final bobContact = alice.contacts.firstWhere(
+        (contact) => contact.deviceId == bob.identity!.deviceId,
+      );
+      final carolContact = alice.contacts.firstWhere(
+        (contact) => contact.deviceId == carol.identity!.deviceId,
+      );
+      group = await alice.createGroup(
+        title: 'Role UI',
+        members: [bobContact, carolContact],
+        adminDeviceIds: [bob.identity!.deviceId],
+        moderatorDeviceIds: [carol.identity!.deviceId],
+      );
+      await bob.pollNow();
+    });
+
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    addTearDown(carol.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: app.GroupDetailsDialog(
+            controller: alice,
+            palette: app.ConestPalette(),
+            group: group,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Owner'), findsOneWidget);
+    expect(find.text('Admin'), findsOneWidget);
+    expect(find.text('Moderator'), findsOneWidget);
+    expect(find.byTooltip('Change role'), findsNWidgets(2));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: app.GroupDetailsDialog(
+            controller: bob,
+            palette: app.ConestPalette(),
+            group: bob.groups.single,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byTooltip('Change role'), findsNothing);
+    expect(find.byTooltip('Remove member'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   test('reply-capable direct messages preserve quoted metadata', () async {
     final relayClient = _FakeRelayClient();
