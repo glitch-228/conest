@@ -1296,7 +1296,7 @@ class _Sidebar extends StatelessWidget {
               tooltip: 'Create group',
             ),
             Text(
-              '${controller.groups.length}',
+              '${controller.visibleGroups.length}',
               style: Theme.of(
                 context,
               ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
@@ -1304,7 +1304,7 @@ class _Sidebar extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 12),
-        if (controller.groups.isEmpty)
+        if (controller.visibleGroups.isEmpty)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: Text(
@@ -1317,16 +1317,23 @@ class _Sidebar extends StatelessWidget {
             ),
           )
         else
-          for (var index = 0; index < controller.groups.length; index++) ...[
+          for (
+            var index = 0;
+            index < controller.visibleGroups.length;
+            index++
+          ) ...[
             if (index > 0) const SizedBox(height: 8),
             Builder(
               builder: (context) {
-                final group = controller.groups[index];
+                final group = controller.visibleGroups[index];
                 final preview = controller.lastGroupMessageFor(group.groupId);
                 final unreadCount = controller.unreadGroupCountFor(
                   group.groupId,
                 );
                 final selected = selectedGroupId == group.groupId;
+                final myDeviceId = controller.identity?.deviceId ?? '';
+                final hasLeft = myDeviceId.isNotEmpty &&
+                    !group.hasActiveMember(myDeviceId);
                 return InkWell(
                   borderRadius: BorderRadius.circular(18),
                   onTap: () => onGroupSelected(group),
@@ -1351,6 +1358,10 @@ class _Sidebar extends StatelessWidget {
                                     ?.copyWith(fontWeight: FontWeight.w700),
                               ),
                             ),
+                            if (hasLeft) ...[
+                              const SizedBox(width: 8),
+                              _GroupLeftBadge(palette: palette),
+                            ],
                             if (unreadCount > 0) ...[
                               const SizedBox(width: 8),
                               _UnreadBadge(
@@ -1773,6 +1784,45 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
     }
   }
 
+  Future<void> _removeFromList() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove this group?'),
+        content: const Text(
+          'Remove this group from your list? This deletes the local '
+          'message history. Other members will not be notified — they '
+          'already see you as having left.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.tonal(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.errorContainer,
+              foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      return;
+    }
+    try {
+      await widget.controller.removeGroupFromList(group.groupId);
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    } catch (error) {
+      widget.controller.setStatus(error.toString());
+    }
+  }
+
   IconData _roleIcon(GroupMemberRole? role) {
     return switch (role) {
       GroupMemberRole.owner => Icons.verified_user_outlined,
@@ -1875,12 +1925,24 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
         ),
       ),
       actions: [
-        if (group.roleFor(_currentDeviceId ?? '') != GroupMemberRole.owner &&
-            group.hasActiveMember(_currentDeviceId ?? ''))
+        if (_currentDeviceId != null &&
+            group.roleFor(_currentDeviceId!) != GroupMemberRole.owner &&
+            group.hasActiveMember(_currentDeviceId!))
           TextButton.icon(
             onPressed: _leave,
             icon: const Icon(Icons.logout),
             label: const Text('Leave'),
+          )
+        else if (_currentDeviceId != null &&
+            !group.hasActiveMember(_currentDeviceId!) &&
+            group.localRemovedAt == null)
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.error,
+            ),
+            onPressed: _removeFromList,
+            icon: const Icon(Icons.delete_outline),
+            label: const Text('Remove from list'),
           ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
@@ -5701,6 +5763,31 @@ class _UnreadBadge extends StatelessWidget {
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
           color: Colors.white,
           fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class _GroupLeftBadge extends StatelessWidget {
+  const _GroupLeftBadge({required this.palette});
+
+  final ConestPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const Key('group-left-badge'),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: palette.stroke,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        'You left',
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: palette.inkSoft,
+          fontWeight: FontWeight.w700,
         ),
       ),
     );

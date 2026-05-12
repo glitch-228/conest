@@ -1110,9 +1110,15 @@ void main() {
       );
       await bob.pollNow();
 
-      // Once Bob is no longer an active member the group must disappear from
-      // his sidebar/groups list (see groups getter).
-      expect(bob.groups, isEmpty);
+      // Bob keeps the group visible (he can still see history and the
+      // "you left" badge will render in the sidebar) until he explicitly
+      // calls removeGroupFromList.
+      expect(bob.visibleGroups, hasLength(1));
+      expect(
+        bob.visibleGroups.single.hasActiveMember(bob.identity!.deviceId),
+        isFalse,
+      );
+      expect(bob.visibleGroups.single.localRemovedAt, isNull);
       expect(
         bob.sendGroupMessage(groupId: group.groupId, body: 'nope'),
         throwsArgumentError,
@@ -1438,9 +1444,14 @@ void main() {
     await bob.leaveGroup(group.groupId);
     await alice.pollNow();
 
-    // Bug fix: the left group must disappear from the local user's groups
-    // list so the sidebar stops showing it.
-    expect(bob.groups, isEmpty);
+    // After leaving Bob still sees the group in his list (so he can decide
+    // when to remove it himself). The active membership has dropped.
+    expect(bob.visibleGroups, hasLength(1));
+    expect(
+      bob.visibleGroups.single.hasActiveMember(bob.identity!.deviceId),
+      isFalse,
+    );
+    expect(bob.visibleGroups.single.localRemovedAt, isNull);
     expect(
       alice.groups.single.activeMemberDeviceIds,
       isNot(contains(bob.identity!.deviceId)),
@@ -1448,7 +1459,7 @@ void main() {
   });
 
   test(
-    'a member removed by the owner sees the group leave their groups list',
+    'a member removed by the owner keeps the group visible until they remove it',
     () async {
       final relayClient = _FakeRelayClient();
       final alice = await _createController(
@@ -1468,7 +1479,7 @@ void main() {
         members: alice.contacts,
       );
       await bob.pollNow();
-      expect(bob.groups, hasLength(1));
+      expect(bob.visibleGroups, hasLength(1));
 
       await alice.removeGroupMember(
         groupId: group.groupId,
@@ -1476,10 +1487,78 @@ void main() {
       );
       await bob.pollNow();
 
-      expect(bob.groups, isEmpty);
+      // Bob still sees the group in his sidebar with hasActiveMember false.
+      expect(bob.visibleGroups, hasLength(1));
+      expect(
+        bob.visibleGroups.single.hasActiveMember(bob.identity!.deviceId),
+        isFalse,
+      );
       expect(
         alice.groups.single.activeMemberDeviceIds,
         isNot(contains(bob.identity!.deviceId)),
+      );
+    },
+  );
+
+  test(
+    'removeGroupFromList hides the group from visibleGroups and deletes its messages',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Goodbye',
+        members: alice.contacts,
+      );
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'hello');
+      await bob.pollNow();
+      expect(bob.messagesForGroup(group.groupId), hasLength(1));
+
+      await bob.leaveGroup(group.groupId);
+      await bob.removeGroupFromList(group.groupId);
+
+      expect(bob.visibleGroups, isEmpty);
+      expect(bob.groups, hasLength(1));
+      expect(bob.groups.single.localRemovedAt, isNotNull);
+      expect(bob.messagesForGroup(group.groupId), isEmpty);
+    },
+  );
+
+  test(
+    'removeGroupFromList throws while the user is still an active member',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Cannot remove while active',
+        members: alice.contacts,
+      );
+      await bob.pollNow();
+
+      expect(
+        bob.removeGroupFromList(group.groupId),
+        throwsArgumentError,
       );
     },
   );
@@ -3850,4 +3929,132 @@ void main() {
     expect(snapshot, contains('vaultSaveCount='));
     expect(snapshot, contains('routeBackoffSummary='));
   });
+
+  test(
+    'relay health score records success and failure samples',
+    () async {
+      final relayClient = _FakeRelayClient(
+        failingHosts: <String>{'relay.example:7667'},
+        storeFailingHosts: <String>{'relay.example:7667'},
+      );
+      final controller = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        internetRelayHost: 'relay.example',
+      );
+      addTearDown(controller.dispose);
+
+      final invite = ContactInvite(
+        version: 4,
+        accountId: 'acc-bob',
+        deviceId: 'dev-bob',
+        displayName: 'Bob',
+        bio: '',
+        pairingNonce: 'bob-nonce',
+        pairingEpochMs: 1760000000000,
+        relayCapable: true,
+        publicKeyBase64: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
+        routeHints: const <PeerEndpoint>[
+          PeerEndpoint(
+            kind: PeerRouteKind.relay,
+            host: 'relay.example',
+            port: 7667,
+            protocol: PeerRouteProtocol.tcp,
+          ),
+        ],
+      );
+      await controller.addContactFromInvite(
+        alias: 'Bob',
+        payload: invite.encodePayload(),
+        codephrase: '',
+      );
+
+      final contact = controller.contacts.single;
+      for (var index = 0; index < 4; index++) {
+        await controller.sendMessage(contact: contact, body: 'msg-$index');
+      }
+
+      final score = controller.relayHealthScores['relay.example:7667:tcp'];
+      expect(score, isNotNull);
+      // Every store call against the failing relay throws, so at least one
+      // failure sample must be recorded. We don't assert recentSuccesses==0
+      // because startup probes can interleave success samples we don't care
+      // about; the test's load-bearing claim is that failures land in the
+      // score map at all.
+      expect(score!.recentAttempts, greaterThanOrEqualTo(1));
+      expect(score.lastFailureAt, isNotNull);
+      expect(
+        score.recentSamples.any((sample) => !sample.succeeded),
+        isTrue,
+        reason: 'at least one failure sample must be present',
+      );
+    },
+  );
+
+  test(
+    'relay health scores survive a save/load round trip',
+    () async {
+      final vaultStore = _MemoryVaultStore();
+      final relayClient = _FakeRelayClient(
+        failingHosts: <String>{'relay.example:7667'},
+        storeFailingHosts: <String>{'relay.example:7667'},
+      );
+      final controller = MessengerController(
+        vaultStore: vaultStore,
+        relayClient: relayClient,
+        localRelayNode: _FakeLocalRelayNode(),
+        lanAddressProvider: () async => <String>['192.168.1.20'],
+      );
+      addTearDown(controller.dispose);
+
+      await controller.initialize();
+      await controller.createIdentity(
+        displayName: 'Alice',
+        internetRelayHost: 'relay.example',
+        internetRelayPort: defaultRelayPort,
+        localRelayPort: defaultRelayPort,
+      );
+
+      final invite = ContactInvite(
+        version: 4,
+        accountId: 'acc-bob',
+        deviceId: 'dev-bob',
+        displayName: 'Bob',
+        bio: '',
+        pairingNonce: 'bob-nonce',
+        pairingEpochMs: 1760000000000,
+        relayCapable: true,
+        publicKeyBase64: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
+        routeHints: const <PeerEndpoint>[
+          PeerEndpoint(
+            kind: PeerRouteKind.relay,
+            host: 'relay.example',
+            port: 7667,
+            protocol: PeerRouteProtocol.tcp,
+          ),
+        ],
+      );
+      await controller.addContactFromInvite(
+        alias: 'Bob',
+        payload: invite.encodePayload(),
+        codephrase: '',
+      );
+      final contact = controller.contacts.single;
+      await controller.sendMessage(contact: contact, body: 'force a score');
+
+      // Inspect the persisted vault directly: this avoids spinning up a
+      // second controller (which would compete with the first's poll loop)
+      // while still proving the score round-trips through JSON.
+      final reloadedSnapshot = await vaultStore.load();
+      final score =
+          reloadedSnapshot.relayHealthScores['relay.example:7667:tcp'];
+      expect(
+        score,
+        isNotNull,
+        reason: 'relay health score must survive the vault round trip',
+      );
+      expect(score!.recentAttempts, greaterThan(0));
+      expect(score.lastFailureAt, isNotNull);
+    },
+  );
 }

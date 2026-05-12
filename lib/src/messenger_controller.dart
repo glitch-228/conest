@@ -63,16 +63,20 @@ class MessengerController extends ChangeNotifier {
     Future<List<String>> Function()? lanAddressProvider,
     DateTime Function()? nowProvider,
   }) : _vaultStore = vaultStore,
-       _relayClient = relayClient,
        _localRelayNode = localRelayNode ?? LocalRelayNode(),
        _platformBridge = platformBridge ?? PlatformBridge(),
        _lanAddressProvider = lanAddressProvider ?? discoverLanAddresses,
        _nowProvider = nowProvider ?? DateTime.now {
+    _relayClient = _ScoringRelayClient(
+      inner: relayClient,
+      onAttempt: _recordRelayAttemptFromShim,
+      nowProvider: () => (nowProvider ?? DateTime.now)(),
+    );
     _localRelayNode.onEnvelopeStored = _handleLocalEnvelopeStored;
   }
 
   final VaultStore _vaultStore;
-  final RelayClient _relayClient;
+  late final RelayClient _relayClient;
   final LocalRelayNode _localRelayNode;
   final PlatformBridge _platformBridge;
   final Future<List<String>> Function() _lanAddressProvider;
@@ -116,21 +120,26 @@ class MessengerController extends ChangeNotifier {
   bool get hasIdentity => _snapshot.identity != null;
   IdentityRecord? get identity => _snapshot.identity;
   List<ContactRecord> get contacts => List.unmodifiable(_snapshot.contacts);
-  List<GroupRecord> get groups {
-    // Hide groups the local user is no longer an active member of (left, or
-    // removed by the owner). Storage retains the record so a future re-invite
-    // can restore the conversation; this getter is only what the UI iterates.
-    final me = _snapshot.identity;
-    if (me == null) {
-      return const <GroupRecord>[];
-    }
-    return List.unmodifiable(
-      _snapshot.groups.where((group) => group.hasActiveMember(me.deviceId)),
-    );
-  }
+  /// Every group the controller knows about, including ones the local user
+  /// has left and ones they have explicitly removed from their list. Sidebar
+  /// callers should use [visibleGroups] instead; this getter is for code that
+  /// needs the unfiltered set (tests, debug snapshots, internal lookups).
+  List<GroupRecord> get groups => List.unmodifiable(_snapshot.groups);
+
+  /// Groups that should appear in the UI sidebar: every group except the ones
+  /// the local user has explicitly removed via [removeGroupFromList]. A group
+  /// the user has left (but not yet removed) still appears here, with the UI
+  /// rendering a "you left" badge.
+  List<GroupRecord> get visibleGroups => List.unmodifiable(
+    _snapshot.groups.where((group) => group.localRemovedAt == null),
+  );
   List<PeerEndpoint> get configuredRelays => List.unmodifiable(
     _snapshot.identity?.configuredRelays ?? const <PeerEndpoint>[],
   );
+
+  /// Per-endpoint relay health, derived from recorded attempts. Read-only.
+  Map<String, RelayHealthScore> get relayHealthScores =>
+      Map.unmodifiable(_snapshot.relayHealthScores);
   String? get statusMessage => _statusMessage;
   String get lastRelayStatus => _lastRelayStatus;
   bool get isAppForeground => _appInForeground;
@@ -597,6 +606,37 @@ class MessengerController extends ChangeNotifier {
       deviceId,
       (current) => current.copyWith(lastFailureAt: timestamp),
     );
+  }
+
+  /// Sink invoked by [_ScoringRelayClient] after every relay call. Updates
+  /// the per-endpoint [RelayHealthScore] in the vault snapshot.
+  void _recordRelayAttemptFromShim({
+    required String host,
+    required int port,
+    required PeerRouteProtocol protocol,
+    required bool success,
+    Duration? latency,
+    required DateTime at,
+  }) {
+    final endpoint = PeerEndpoint(
+      kind: PeerRouteKind.relay,
+      host: host,
+      port: port,
+      protocol: protocol,
+    );
+    final key = relayHealthEndpointKey(endpoint);
+    final current = _snapshot.relayHealthScores[key] ??
+        RelayHealthScore(endpointKey: key);
+    final updated = current.recordAttempt(
+      success: success,
+      latency: latency,
+      at: at.toUtc(),
+    );
+    final scores = Map<String, RelayHealthScore>.from(
+      _snapshot.relayHealthScores,
+    );
+    scores[key] = updated;
+    _snapshot = _snapshot.copyWith(relayHealthScores: scores);
   }
 
   ContactReachabilityState _reachabilityStateFor(
@@ -2349,6 +2389,41 @@ class MessengerController extends ChangeNotifier {
     await _sendGroupLeave(updated);
   }
 
+  /// Hides a group the local user has already left from the sidebar and
+  /// purges the local conversation/message history. The local user must
+  /// not still be an active member; the UI should require [leaveGroup]
+  /// first. No wire envelope is sent — remote members already see the
+  /// local user as left from the prior membership update.
+  Future<void> removeGroupFromList(String groupId) async {
+    final group = _requireGroup(groupId);
+    final me = _requireIdentity();
+    if (group.hasActiveMember(me.deviceId)) {
+      throw ArgumentError(
+        'Leave the group before removing it from your list.',
+      );
+    }
+    if (group.localRemovedAt != null) {
+      return;
+    }
+    final updated = group.copyWith(localRemovedAt: _now());
+    final conversations = _snapshot.conversations
+        .where(
+          (conversation) => !(conversation.kind == ConversationKind.group &&
+              conversation.id == groupId),
+        )
+        .toList();
+    final groups = List<GroupRecord>.from(_snapshot.groups);
+    final index = groups.indexWhere((g) => g.groupId == groupId);
+    if (index != -1) {
+      groups[index] = updated;
+    }
+    _snapshot = _snapshot.copyWith(
+      groups: groups,
+      conversations: conversations,
+    );
+    await _persist('Removed group ${updated.title} from your list.');
+  }
+
   Future<void> setGroupMemberRole({
     required String groupId,
     required String memberDeviceId,
@@ -3946,8 +4021,20 @@ class MessengerController extends ChangeNotifier {
       incoming,
       trustedProfiles: [_groupProfileForContact(sender)],
     );
-    _upsertGroup(enriched);
-    _ensureGroupConversation(enriched);
+    // localRemovedAt is local-only state. The wire payload never carries it,
+    // so a routine inbound update would otherwise wipe a prior local removal.
+    // Preserve the existing flag, unless the update re-adds the local user
+    // as an active member — in that case let the group reappear in the UI.
+    final preserved = existing?.localRemovedAt;
+    final shouldClear =
+        preserved != null && enriched.hasActiveMember(me.deviceId);
+    final merged = preserved == null || shouldClear
+        ? enriched.copyWith(clearLocalRemovedAt: true)
+        : enriched.copyWith(localRemovedAt: preserved);
+    _upsertGroup(merged);
+    if (merged.localRemovedAt == null) {
+      _ensureGroupConversation(merged);
+    }
     _noteAnySignal(sender.deviceId, at: envelope.createdAt);
     await _persist('Updated group ${enriched.title}.');
   }
@@ -5900,10 +5987,52 @@ class MessengerController extends ChangeNotifier {
   }
 
   List<PeerEndpoint> _candidateRoutesForContact(ContactRecord contact) {
-    return dedupePeerEndpoints([
-      ...contact.prioritizedRouteHints,
-      ..._lanRediscoveryRoutesForContact(contact),
-    ]);
+    return _withRelayScoringTieBreak(
+      dedupePeerEndpoints([
+        ...contact.prioritizedRouteHints,
+        ..._lanRediscoveryRoutesForContact(contact),
+      ]),
+    );
+  }
+
+  /// Preserves the existing kind-based ordering (LAN → direct → relay) but
+  /// re-sorts the relay tier by [RelayHealthScore] so a relay that has been
+  /// consistently failing falls below a healthier sibling. Relays with fewer
+  /// than 5 recorded attempts are treated as unknown (optimistic). Relays
+  /// with recent successRate < 0.3 sink to the back of the relay tier.
+  List<PeerEndpoint> _withRelayScoringTieBreak(List<PeerEndpoint> routes) {
+    final nonRelay = <PeerEndpoint>[];
+    final relay = <PeerEndpoint>[];
+    for (final route in routes) {
+      if (route.kind == PeerRouteKind.relay) {
+        relay.add(route);
+      } else {
+        nonRelay.add(route);
+      }
+    }
+    if (relay.length <= 1) {
+      return routes;
+    }
+    bool isPoor(PeerEndpoint endpoint) {
+      final score = _snapshot.relayHealthScores[relayHealthEndpointKey(endpoint)];
+      return score != null && score.recentAttempts >= 5 && score.successRate < 0.3;
+    }
+    double rate(PeerEndpoint endpoint) {
+      final score = _snapshot.relayHealthScores[relayHealthEndpointKey(endpoint)];
+      if (score == null || score.recentAttempts == 0) {
+        return 1.0; // optimistic for fresh endpoints
+      }
+      return score.successRate;
+    }
+    relay.sort((a, b) {
+      final aPoor = isPoor(a);
+      final bPoor = isPoor(b);
+      if (aPoor != bPoor) {
+        return aPoor ? 1 : -1;
+      }
+      return rate(b).compareTo(rate(a));
+    });
+    return [...nonRelay, ...relay];
   }
 
   List<PeerEndpoint> _contactRelayRoutes() {
@@ -8052,4 +8181,162 @@ class _RelayProtocolRefreshResult {
   final int checkedRoutes;
   final int availableRoutes;
   final List<PeerEndpoint> addedRoutes;
+}
+
+typedef _RelayAttemptCallback =
+    void Function({
+      required String host,
+      required int port,
+      required PeerRouteProtocol protocol,
+      required bool success,
+      Duration? latency,
+      required DateTime at,
+    });
+
+/// Wraps a [RelayClient] and records the outcome of every call so the
+/// controller can maintain a [RelayHealthScore] per endpoint without
+/// touching the eight individual call sites.
+class _ScoringRelayClient implements RelayClient {
+  _ScoringRelayClient({
+    required this.inner,
+    required this.onAttempt,
+    required this.nowProvider,
+  });
+
+  final RelayClient inner;
+  final _RelayAttemptCallback onAttempt;
+  final DateTime Function() nowProvider;
+
+  Future<T> _track<T>({
+    required String host,
+    required int port,
+    required PeerRouteProtocol protocol,
+    required Future<T> Function() action,
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    try {
+      final result = await action();
+      stopwatch.stop();
+      onAttempt(
+        host: host,
+        port: port,
+        protocol: protocol,
+        success: true,
+        latency: stopwatch.elapsed,
+        at: nowProvider(),
+      );
+      return result;
+    } catch (_) {
+      stopwatch.stop();
+      onAttempt(
+        host: host,
+        port: port,
+        protocol: protocol,
+        success: false,
+        latency: null,
+        at: nowProvider(),
+      );
+      rethrow;
+    }
+  }
+
+  @override
+  Future<Duration> probe({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    Duration timeout = const Duration(seconds: 4),
+  }) {
+    return _track(
+      host: host,
+      port: port,
+      protocol: protocol,
+      action: () =>
+          inner.probe(host: host, port: port, protocol: protocol, timeout: timeout),
+    );
+  }
+
+  @override
+  Future<bool> storeEnvelope({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    required RelayEnvelope envelope,
+    Duration timeout = const Duration(seconds: 4),
+  }) {
+    return _track(
+      host: host,
+      port: port,
+      protocol: protocol,
+      action: () => inner.storeEnvelope(
+        host: host,
+        port: port,
+        protocol: protocol,
+        recipientDeviceId: recipientDeviceId,
+        envelope: envelope,
+        timeout: timeout,
+      ),
+    );
+  }
+
+  @override
+  Future<List<RelayEnvelope>> fetchEnvelopes({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    int limit = 64,
+    Duration timeout = const Duration(seconds: 4),
+  }) {
+    return _track(
+      host: host,
+      port: port,
+      protocol: protocol,
+      action: () => inner.fetchEnvelopes(
+        host: host,
+        port: port,
+        protocol: protocol,
+        recipientDeviceId: recipientDeviceId,
+        limit: limit,
+        timeout: timeout,
+      ),
+    );
+  }
+
+  @override
+  Future<bool> health({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    Duration timeout = const Duration(seconds: 4),
+  }) {
+    return _track(
+      host: host,
+      port: port,
+      protocol: protocol,
+      action: () =>
+          inner.health(host: host, port: port, protocol: protocol, timeout: timeout),
+    );
+  }
+
+  @override
+  Future<RelayHealthInfo> inspectHealth({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    Duration timeout = const Duration(seconds: 4),
+  }) {
+    return _track(
+      host: host,
+      port: port,
+      protocol: protocol,
+      action: () => inner.inspectHealth(
+        host: host,
+        port: port,
+        protocol: protocol,
+        timeout: timeout,
+      ),
+    );
+  }
 }

@@ -277,6 +277,132 @@ class PeerRouteHealth {
   }
 }
 
+/// Per-endpoint relay health summary, persisted into the vault. Tracks a
+/// sliding window of the most recent attempts (capped at [windowSize]) plus
+/// a rolling median of recent observed latencies, so route ranking can
+/// down-rank relays that fail consistently or have high tail latency.
+class RelayHealthScore {
+  RelayHealthScore({
+    required this.endpointKey,
+    List<RelayAttemptSample> recentSamples = const <RelayAttemptSample>[],
+    this.lastSuccessAt,
+    this.lastFailureAt,
+  }) : recentSamples = List<RelayAttemptSample>.unmodifiable(recentSamples);
+
+  /// Sliding window cap. Keep small so the score reacts to recent reality.
+  static const int windowSize = 50;
+
+  /// Number of samples used for the rolling median latency.
+  static const int latencyWindowSize = 11;
+
+  final String endpointKey;
+  final List<RelayAttemptSample> recentSamples;
+  final DateTime? lastSuccessAt;
+  final DateTime? lastFailureAt;
+
+  int get recentAttempts => recentSamples.length;
+  int get recentSuccesses =>
+      recentSamples.where((sample) => sample.succeeded).length;
+
+  double get successRate =>
+      recentAttempts == 0 ? 0.0 : recentSuccesses / recentAttempts;
+
+  Duration? get recentMedianLatency {
+    final latencies = recentSamples.reversed
+        .take(latencyWindowSize)
+        .map((sample) => sample.latency)
+        .whereType<Duration>()
+        .map((d) => d.inMicroseconds)
+        .toList()
+      ..sort();
+    if (latencies.isEmpty) {
+      return null;
+    }
+    final mid = latencies.length ~/ 2;
+    if (latencies.length.isOdd) {
+      return Duration(microseconds: latencies[mid]);
+    }
+    return Duration(microseconds: (latencies[mid - 1] + latencies[mid]) ~/ 2);
+  }
+
+  RelayHealthScore recordAttempt({
+    required bool success,
+    Duration? latency,
+    required DateTime at,
+  }) {
+    final next = <RelayAttemptSample>[
+      ...recentSamples,
+      RelayAttemptSample(at: at, succeeded: success, latency: latency),
+    ];
+    while (next.length > windowSize) {
+      next.removeAt(0);
+    }
+    return RelayHealthScore(
+      endpointKey: endpointKey,
+      recentSamples: next,
+      lastSuccessAt: success ? at : lastSuccessAt,
+      lastFailureAt: success ? lastFailureAt : at,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'endpointKey': endpointKey,
+      'recentSamples': recentSamples.map((sample) => sample.toJson()).toList(),
+      'lastSuccessAt': lastSuccessAt?.toIso8601String(),
+      'lastFailureAt': lastFailureAt?.toIso8601String(),
+    };
+  }
+
+  factory RelayHealthScore.fromJson(Map<String, dynamic> json) {
+    final samples = (json['recentSamples'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(RelayAttemptSample.fromJson)
+        .toList();
+    return RelayHealthScore(
+      endpointKey: json['endpointKey'] as String? ?? '',
+      recentSamples: samples,
+      lastSuccessAt: DateTime.tryParse(json['lastSuccessAt'] as String? ?? ''),
+      lastFailureAt: DateTime.tryParse(json['lastFailureAt'] as String? ?? ''),
+    );
+  }
+}
+
+class RelayAttemptSample {
+  const RelayAttemptSample({
+    required this.at,
+    required this.succeeded,
+    this.latency,
+  });
+
+  final DateTime at;
+  final bool succeeded;
+  final Duration? latency;
+
+  Map<String, dynamic> toJson() {
+    return {
+      'at': at.toIso8601String(),
+      'succeeded': succeeded,
+      if (latency != null) 'latencyMicros': latency!.inMicroseconds,
+    };
+  }
+
+  factory RelayAttemptSample.fromJson(Map<String, dynamic> json) {
+    final micros = json['latencyMicros'];
+    return RelayAttemptSample(
+      at: DateTime.tryParse(json['at'] as String? ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      succeeded: json['succeeded'] as bool? ?? false,
+      latency: micros is int ? Duration(microseconds: micros) : null,
+    );
+  }
+}
+
+/// Derives the stable key used to store a [RelayHealthScore] for a given
+/// endpoint. Host + port + protocol uniquely identifies a relay route.
+String relayHealthEndpointKey(PeerEndpoint endpoint) =>
+    '${endpoint.host}:${endpoint.port}:${endpoint.protocol.name}';
+
 List<PeerEndpoint> dedupePeerEndpoints(Iterable<PeerEndpoint> routes) {
   final seen = <String>{};
   final deduped = <PeerEndpoint>[];
@@ -1186,6 +1312,7 @@ class GroupRecord {
     required this.membershipVersion,
     required this.createdAt,
     required this.updatedAt,
+    this.localRemovedAt,
   }) : adminDeviceIds = _normalizedGroupRoleIds(
          ownerDeviceId: ownerDeviceId,
          memberDeviceIds: memberDeviceIds,
@@ -1221,6 +1348,12 @@ class GroupRecord {
   final int membershipVersion;
   final DateTime createdAt;
   final DateTime updatedAt;
+
+  /// Set when the local user explicitly removes a group they have already
+  /// left (or were removed from) from their visible groups list. Local-only:
+  /// never sent on the wire; never read by other devices' membership logic.
+  /// Null means the group should still appear in the UI.
+  final DateTime? localRemovedAt;
 
   List<String> get activeMemberDeviceIds => memberDeviceIds
       .where((deviceId) => !removedDeviceIds.contains(deviceId))
@@ -1293,6 +1426,8 @@ class GroupRecord {
     List<GroupMemberProfile>? memberProfiles,
     int? membershipVersion,
     DateTime? updatedAt,
+    DateTime? localRemovedAt,
+    bool clearLocalRemovedAt = false,
   }) {
     return GroupRecord(
       groupId: groupId,
@@ -1306,6 +1441,9 @@ class GroupRecord {
       membershipVersion: membershipVersion ?? this.membershipVersion,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      localRemovedAt: clearLocalRemovedAt
+          ? null
+          : (localRemovedAt ?? this.localRemovedAt),
     );
   }
 
@@ -1324,6 +1462,7 @@ class GroupRecord {
       'membershipVersion': membershipVersion,
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
+      'localRemovedAt': localRemovedAt?.toIso8601String(),
     };
   }
 
@@ -1350,6 +1489,9 @@ class GroupRecord {
       createdAt: createdAt,
       updatedAt:
           DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? createdAt,
+      localRemovedAt: DateTime.tryParse(
+        json['localRemovedAt'] as String? ?? '',
+      ),
     );
   }
 }
@@ -1698,6 +1840,7 @@ class VaultSnapshot {
     required this.conversations,
     required this.groups,
     required this.seenEnvelopeIds,
+    this.relayHealthScores = const <String, RelayHealthScore>{},
   });
 
   final IdentityRecord? identity;
@@ -1707,6 +1850,10 @@ class VaultSnapshot {
   final List<GroupRecord> groups;
   final List<String> seenEnvelopeIds;
 
+  /// Keyed by [relayHealthEndpointKey]. Legacy vaults load with an empty
+  /// map; the controller refills the map as new relay attempts complete.
+  final Map<String, RelayHealthScore> relayHealthScores;
+
   factory VaultSnapshot.empty() {
     return VaultSnapshot(
       identity: null,
@@ -1715,6 +1862,7 @@ class VaultSnapshot {
       conversations: const [],
       groups: const [],
       seenEnvelopeIds: const [],
+      relayHealthScores: const <String, RelayHealthScore>{},
     );
   }
 
@@ -1725,6 +1873,7 @@ class VaultSnapshot {
     List<ConversationRecord>? conversations,
     List<GroupRecord>? groups,
     List<String>? seenEnvelopeIds,
+    Map<String, RelayHealthScore>? relayHealthScores,
     bool clearIdentity = false,
   }) {
     return VaultSnapshot(
@@ -1734,6 +1883,7 @@ class VaultSnapshot {
       conversations: conversations ?? this.conversations,
       groups: groups ?? this.groups,
       seenEnvelopeIds: seenEnvelopeIds ?? this.seenEnvelopeIds,
+      relayHealthScores: relayHealthScores ?? this.relayHealthScores,
     );
   }
 
@@ -1749,10 +1899,21 @@ class VaultSnapshot {
           .toList(),
       'groups': groups.map((group) => group.toJson()).toList(),
       'seenEnvelopeIds': seenEnvelopeIds,
+      'relayHealthScores': relayHealthScores.map(
+        (key, score) => MapEntry(key, score.toJson()),
+      ),
     };
   }
 
   factory VaultSnapshot.fromJson(Map<String, dynamic> json) {
+    final relayHealthRaw =
+        json['relayHealthScores'] as Map<String, dynamic>? ?? const {};
+    final relayHealthScores = <String, RelayHealthScore>{};
+    relayHealthRaw.forEach((key, value) {
+      if (value is Map<String, dynamic>) {
+        relayHealthScores[key] = RelayHealthScore.fromJson(value);
+      }
+    });
     return VaultSnapshot(
       identity: json['identity'] == null
           ? null
@@ -1776,6 +1937,7 @@ class VaultSnapshot {
           .toList(),
       seenEnvelopeIds: (json['seenEnvelopeIds'] as List<dynamic>? ?? const [])
           .cast<String>(),
+      relayHealthScores: relayHealthScores,
     );
   }
 }
