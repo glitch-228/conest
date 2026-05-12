@@ -92,7 +92,7 @@ jobs:
           name: relay-${{ matrix.target.label }}
           path: |
             artifacts/conest_relay-*
-            target/${{ matrix.target.triple }}/release/conest_updater${{ matrix.target.ext }}
+            artifacts/conest_updater-*
           if-no-files-found: error
           retention-days: 7
 
