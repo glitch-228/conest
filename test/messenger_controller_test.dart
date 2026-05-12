@@ -1110,10 +1110,9 @@ void main() {
       );
       await bob.pollNow();
 
-      expect(
-        bob.groups.single.activeMemberDeviceIds,
-        isNot(contains(bob.identity!.deviceId)),
-      );
+      // Once Bob is no longer an active member the group must disappear from
+      // his sidebar/groups list (see groups getter).
+      expect(bob.groups, isEmpty);
       expect(
         bob.sendGroupMessage(groupId: group.groupId, body: 'nope'),
         throwsArgumentError,
@@ -1439,15 +1438,51 @@ void main() {
     await bob.leaveGroup(group.groupId);
     await alice.pollNow();
 
-    expect(
-      bob.groups.single.activeMemberDeviceIds,
-      isNot(contains(bob.identity!.deviceId)),
-    );
+    // Bug fix: the left group must disappear from the local user's groups
+    // list so the sidebar stops showing it.
+    expect(bob.groups, isEmpty);
     expect(
       alice.groups.single.activeMemberDeviceIds,
       isNot(contains(bob.identity!.deviceId)),
     );
   });
+
+  test(
+    'a member removed by the owner sees the group leave their groups list',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Boot',
+        members: alice.contacts,
+      );
+      await bob.pollNow();
+      expect(bob.groups, hasLength(1));
+
+      await alice.removeGroupMember(
+        groupId: group.groupId,
+        memberDeviceId: bob.identity!.deviceId,
+      );
+      await bob.pollNow();
+
+      expect(bob.groups, isEmpty);
+      expect(
+        alice.groups.single.activeMemberDeviceIds,
+        isNot(contains(bob.identity!.deviceId)),
+      );
+    },
+  );
 
   test('stale group membership updates are ignored', () async {
     final relayClient = _FakeRelayClient();
@@ -2388,52 +2423,57 @@ void main() {
     },
   );
 
-  test('checking paths upgrades an unknown contact to seen recently', () async {
-    var now = DateTime.utc(2026, 4, 18, 15);
-    final relayClient = _FakeRelayClient();
-    final alice = await _createController(
-      relayClient: relayClient,
-      displayName: 'Alice',
-      nowProvider: () => now,
-    );
-    final bob = await _createController(
-      relayClient: relayClient,
-      displayName: 'Bob',
-      nowProvider: () => now,
-    );
-    addTearDown(alice.dispose);
-    addTearDown(bob.dispose);
+  test(
+    'checking paths alone does not upgrade an unknown contact to seen recently',
+    () async {
+      var now = DateTime.utc(2026, 4, 18, 15);
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        nowProvider: () => now,
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        nowProvider: () => now,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
 
-    await alice.addContactFromInvite(
-      alias: 'Bob',
-      payload: (await bob.buildInvite()).encodePayload(),
-      codephrase: '',
-    );
-    await bob.pollNow();
-    final aliceContactForBob = alice.contacts.single;
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await bob.pollNow();
+      final aliceContactForBob = alice.contacts.single;
 
-    await alice.sendMessage(contact: aliceContactForBob, body: 'hello');
-    await bob.pollNow();
-    await alice.pollNow();
-    now = now.add(const Duration(hours: 24, minutes: 1));
+      await alice.sendMessage(contact: aliceContactForBob, body: 'hello');
+      await bob.pollNow();
+      await alice.pollNow();
+      now = now.add(const Duration(hours: 24, minutes: 1));
 
-    expect(
-      alice.reachabilityStateFor(aliceContactForBob.deviceId),
-      ContactReachabilityState.unknown,
-    );
+      expect(
+        alice.reachabilityStateFor(aliceContactForBob.deviceId),
+        ContactReachabilityState.unknown,
+      );
 
-    await alice.checkContactRoutes(
-      aliceContactForBob,
-      persist: false,
-      exchangeRouteUpdate: false,
-      fast: true,
-    );
+      await alice.checkContactRoutes(
+        aliceContactForBob,
+        persist: false,
+        exchangeRouteUpdate: false,
+        fast: true,
+      );
 
-    expect(
-      alice.reachabilityStateFor(aliceContactForBob.deviceId),
-      ContactReachabilityState.seenRecently,
-    );
-  });
+      // A successful route probe must NOT promote the chip to "seen recently"
+      // without a corresponding real-exchange signal.
+      expect(
+        alice.reachabilityStateFor(aliceContactForBob.deviceId),
+        ContactReachabilityState.unknown,
+      );
+    },
+  );
 
   test(
     'heartbeat failure does not falsely mark a known contact online',
@@ -2473,9 +2513,14 @@ void main() {
       failingRoutes.addAll(<String>{'192.168.1.25:7667', 'relay.example:7667'});
       await alice.runHeartbeatPassNow();
 
+      // The test name says "does not falsely mark online" — the load-bearing
+      // assertion is that the state did not get promoted to "online". Since
+      // the last real exchange was an hour ago (outside the 10 min seen-recently
+      // window) and the heartbeat failed (no fresh signal), the correct state
+      // is "known", not "seen recently" or "online".
       expect(
         alice.reachabilityStateFor(aliceContactForBob.deviceId),
-        ContactReachabilityState.seenRecently,
+        ContactReachabilityState.known,
       );
       expect(
         alice

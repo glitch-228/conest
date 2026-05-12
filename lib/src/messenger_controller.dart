@@ -116,7 +116,18 @@ class MessengerController extends ChangeNotifier {
   bool get hasIdentity => _snapshot.identity != null;
   IdentityRecord? get identity => _snapshot.identity;
   List<ContactRecord> get contacts => List.unmodifiable(_snapshot.contacts);
-  List<GroupRecord> get groups => List.unmodifiable(_snapshot.groups);
+  List<GroupRecord> get groups {
+    // Hide groups the local user is no longer an active member of (left, or
+    // removed by the owner). Storage retains the record so a future re-invite
+    // can restore the conversation; this getter is only what the UI iterates.
+    final me = _snapshot.identity;
+    if (me == null) {
+      return const <GroupRecord>[];
+    }
+    return List.unmodifiable(
+      _snapshot.groups.where((group) => group.hasActiveMember(me.deviceId)),
+    );
+  }
   List<PeerEndpoint> get configuredRelays => List.unmodifiable(
     _snapshot.identity?.configuredRelays ?? const <PeerEndpoint>[],
   );
@@ -603,10 +614,11 @@ class MessengerController extends ChangeNotifier {
             _onlineReachabilityWindow) {
       return ContactReachabilityState.online;
     }
-    final recentObservation = _latestTimestamp([
-      record.lastAvailablePathAt,
-      record.lastAnySignalAt,
-    ]);
+    // "Seen recently" must reflect a real encrypted exchange, not just a
+    // successful route probe. lastAvailablePathAt is still recorded for
+    // diagnostics and contributes to the "known" fallback below, but it does
+    // not by itself promote the visible chip.
+    final recentObservation = record.lastAnySignalAt;
     if (recentObservation != null &&
         currentTime.difference(recentObservation) <=
             _seenRecentlyReachabilityWindow) {
@@ -625,19 +637,6 @@ class MessengerController extends ChangeNotifier {
       return true;
     }
     return _appInForeground || me.androidBackgroundRuntimeEnabled;
-  }
-
-  DateTime? _latestTimestamp(Iterable<DateTime?> values) {
-    DateTime? latest;
-    for (final value in values) {
-      if (value == null) {
-        continue;
-      }
-      if (latest == null || value.isAfter(latest)) {
-        latest = value;
-      }
-    }
-    return latest;
   }
 
   Future<void> refreshPairingAdvertisement() async {
