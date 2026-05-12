@@ -9,7 +9,9 @@ permissions:
   contents: write
 
 env:
-  FLUTTER_VERSION: "3.27.0"
+  # Must ship Dart >= 3.11.4 to match pubspec.yaml. Bump together with the
+  # CI workflow when changing the toolchain.
+  FLUTTER_VERSION: "3.41.2"
 
 jobs:
   prepare:
