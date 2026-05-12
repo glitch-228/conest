@@ -1,7 +1,7 @@
 name: conest
 description: "Cross-platform secure text exchange prototype."
 publish_to: 'none'
-version: 0.3.0+3
+version: 0.3.0+4
 
 environment:
   sdk: ^3.11.4
@@ -28,3 +28,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/default_relays.json
+    - assets/default_relays.ed25519.sig

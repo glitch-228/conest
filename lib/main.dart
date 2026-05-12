@@ -1712,6 +1712,8 @@ class GroupDetailsDialog extends StatefulWidget {
   State<GroupDetailsDialog> createState() => _GroupDetailsDialogState();
 }
 
+enum _DeleteGroupChoice { cancel, transfer, delete }
+
 class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
   GroupRecord get group {
     for (final candidate in widget.controller.groups) {
@@ -1778,6 +1780,168 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
       await widget.controller.leaveGroup(group.groupId);
       if (mounted) {
         Navigator.of(context).pop();
+      }
+    } catch (error) {
+      widget.controller.setStatus(error.toString());
+    }
+  }
+
+  Future<void> _deleteGroup() async {
+    final choice = await showDialog<_DeleteGroupChoice>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Delete "${group.title}"'),
+        content: const Text(
+          'Choose how to wind down this group. Transferring ownership '
+          'keeps the group alive under a new owner and demotes you to '
+          'admin. Deleting for everyone removes the group from every '
+          "member's list and cannot be undone.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(_DeleteGroupChoice.cancel),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () =>
+                Navigator.of(context).pop(_DeleteGroupChoice.transfer),
+            child: const Text('Transfer ownership…'),
+          ),
+          FilledButton.tonal(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.errorContainer,
+              foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
+            ),
+            onPressed: () =>
+                Navigator.of(context).pop(_DeleteGroupChoice.delete),
+            child: const Text('Delete for everyone'),
+          ),
+        ],
+      ),
+    );
+    if (choice == null || choice == _DeleteGroupChoice.cancel) {
+      return;
+    }
+    if (choice == _DeleteGroupChoice.transfer) {
+      await _transferOwnership();
+      return;
+    }
+    await _dissolve();
+  }
+
+  Future<void> _transferOwnership() async {
+    final currentDeviceId = _currentDeviceId;
+    if (currentDeviceId == null) {
+      return;
+    }
+    final candidates = group.activeMemberDeviceIds
+        .where((deviceId) => deviceId != currentDeviceId)
+        .toList(growable: false);
+    if (candidates.isEmpty) {
+      widget.controller.setStatus(
+        'No other active members to transfer ownership to.',
+      );
+      return;
+    }
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        String? selected = candidates.first;
+        return StatefulBuilder(
+          builder: (context, setLocalState) => AlertDialog(
+            title: const Text('Transfer ownership'),
+            content: SizedBox(
+              width: 360,
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final deviceId in candidates)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(_roleIcon(group.roleFor(deviceId))),
+                      title: Text(widget.controller.groupMemberLabel(deviceId)),
+                      subtitle: Text(
+                        group.roleFor(deviceId)?.label ?? 'Member',
+                      ),
+                      trailing: Icon(
+                        selected == deviceId
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_unchecked,
+                      ),
+                      onTap: () => setLocalState(() => selected = deviceId),
+                    ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: selected == null
+                    ? null
+                    : () => Navigator.of(context).pop(selected),
+                child: const Text('Transfer'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (picked == null) {
+      return;
+    }
+    try {
+      await widget.controller.transferGroupOwnership(
+        groupId: group.groupId,
+        newOwnerDeviceId: picked,
+      );
+      widget.controller.setStatus(
+        'Ownership transferred to ${widget.controller.groupMemberLabel(picked)}.',
+      );
+      if (mounted) {
+        setState(() {});
+      }
+    } catch (error) {
+      widget.controller.setStatus(error.toString());
+    }
+  }
+
+  Future<void> _dissolve() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Delete "${group.title}" for everyone?'),
+        content: const Text(
+          'Every member will be removed from the group and the group '
+          "will be marked left in each member's list. Local message "
+          'history is not deleted automatically — each member can clear '
+          'it via Remove from list. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.tonal(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.errorContainer,
+              foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete for everyone'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      return;
+    }
+    try {
+      await widget.controller.dissolveGroup(group.groupId);
+      if (mounted) {
+        setState(() {});
       }
     } catch (error) {
       widget.controller.setStatus(error.toString());
@@ -1926,6 +2090,17 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
       ),
       actions: [
         if (_currentDeviceId != null &&
+            group.roleFor(_currentDeviceId!) == GroupMemberRole.owner &&
+            group.hasActiveMember(_currentDeviceId!))
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.error,
+            ),
+            onPressed: _deleteGroup,
+            icon: const Icon(Icons.delete_forever_outlined),
+            label: const Text('Delete group…'),
+          )
+        else if (_currentDeviceId != null &&
             group.roleFor(_currentDeviceId!) != GroupMemberRole.owner &&
             group.hasActiveMember(_currentDeviceId!))
           TextButton.icon(

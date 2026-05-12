@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,6 +12,7 @@ import 'package:conest/src/local_relay_node.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/relay_client.dart';
+import 'package:conest/src/relay_defaults.dart';
 import 'package:conest/src/storage.dart';
 import 'package:conest/src/update_service.dart';
 
@@ -364,21 +366,27 @@ Future<MessengerController> _createController({
   List<String> lanAddresses = const <String>['192.168.1.20'],
   String? internetRelayHost = 'relay.example',
   DateTime Function()? nowProvider,
+  Future<SignedRelayDefaults?> Function()? signedRelayDefaultsLoader,
+  VaultStore? vaultStore,
+  bool createIdentity = true,
 }) async {
   final controller = MessengerController(
-    vaultStore: _MemoryVaultStore(),
+    vaultStore: vaultStore ?? _MemoryVaultStore(),
     relayClient: relayClient,
     localRelayNode: _FakeLocalRelayNode(),
     lanAddressProvider: () async => lanAddresses,
     nowProvider: nowProvider,
+    signedRelayDefaultsLoader: signedRelayDefaultsLoader,
   );
   await controller.initialize();
-  await controller.createIdentity(
-    displayName: displayName,
-    internetRelayHost: internetRelayHost,
-    internetRelayPort: defaultRelayPort,
-    localRelayPort: defaultRelayPort,
-  );
+  if (createIdentity) {
+    await controller.createIdentity(
+      displayName: displayName,
+      internetRelayHost: internetRelayHost,
+      internetRelayPort: defaultRelayPort,
+      localRelayPort: defaultRelayPort,
+    );
+  }
   return controller;
 }
 
@@ -1562,6 +1570,178 @@ void main() {
       );
     },
   );
+
+  test(
+    'owner can transfer group ownership and is demoted to admin',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      final carol = await _createController(
+        relayClient: relayClient,
+        displayName: 'Carol',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      addTearDown(carol.dispose);
+
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      final group = await alice.createGroup(
+        title: 'Transfer',
+        members: alice.contacts,
+      );
+      await bob.pollNow();
+      await carol.pollNow();
+
+      await alice.transferGroupOwnership(
+        groupId: group.groupId,
+        newOwnerDeviceId: bob.identity!.deviceId,
+      );
+      await bob.pollNow();
+      await carol.pollNow();
+
+      expect(alice.groups.single.ownerDeviceId, bob.identity!.deviceId);
+      expect(
+        alice.groups.single.roleFor(alice.identity!.deviceId),
+        GroupMemberRole.admin,
+      );
+      expect(bob.groups.single.ownerDeviceId, bob.identity!.deviceId);
+      expect(
+        bob.groups.single.roleFor(bob.identity!.deviceId),
+        GroupMemberRole.owner,
+      );
+      expect(carol.groups.single.ownerDeviceId, bob.identity!.deviceId);
+      expect(
+        carol.groups.single.roleFor(alice.identity!.deviceId),
+        GroupMemberRole.admin,
+      );
+    },
+  );
+
+  test('transferGroupOwnership rejects non-owner caller', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+
+    await _pairControllers(alice, bob);
+    final group = await alice.createGroup(
+      title: 'Not yours',
+      members: alice.contacts,
+    );
+    await bob.pollNow();
+
+    expect(
+      bob.transferGroupOwnership(
+        groupId: group.groupId,
+        newOwnerDeviceId: alice.identity!.deviceId,
+      ),
+      throwsArgumentError,
+    );
+  });
+
+  test('transferGroupOwnership rejects an inactive target', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    addTearDown(alice.dispose);
+
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: _bobInvite().encodePayload(),
+      codephrase: '',
+    );
+    final group = await alice.createGroup(
+      title: 'Inactive transfer',
+      members: alice.contacts,
+    );
+    await alice.removeGroupMember(
+      groupId: group.groupId,
+      memberDeviceId: 'dev-bob',
+    );
+
+    expect(
+      alice.transferGroupOwnership(
+        groupId: group.groupId,
+        newOwnerDeviceId: 'dev-bob',
+      ),
+      throwsArgumentError,
+    );
+  });
+
+  test('owner can dissolve a group for everyone', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+
+    await _pairControllers(alice, bob);
+    final group = await alice.createGroup(
+      title: 'Dissolve me',
+      members: alice.contacts,
+    );
+    await bob.pollNow();
+
+    await alice.dissolveGroup(group.groupId);
+    await bob.pollNow();
+
+    expect(
+      alice.groups.single.hasActiveMember(alice.identity!.deviceId),
+      isFalse,
+    );
+    expect(alice.groups.single.activeMemberDeviceIds, isEmpty);
+    expect(
+      bob.groups.single.hasActiveMember(bob.identity!.deviceId),
+      isFalse,
+    );
+    expect(bob.groups.single.activeMemberDeviceIds, isEmpty);
+  });
+
+  test('dissolveGroup rejects non-owner caller', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+
+    await _pairControllers(alice, bob);
+    final group = await alice.createGroup(
+      title: 'You cannot dissolve',
+      members: alice.contacts,
+    );
+    await bob.pollNow();
+
+    expect(bob.dissolveGroup(group.groupId), throwsArgumentError);
+  });
 
   test('stale group membership updates are ignored', () async {
     final relayClient = _FakeRelayClient();
@@ -4057,4 +4237,106 @@ void main() {
       expect(score.lastFailureAt, isNotNull);
     },
   );
+
+  test('signed default relays ingest endpoints on first boot', () async {
+    final relayClient = _FakeRelayClient();
+    final endpoint = PeerEndpoint(
+      kind: PeerRouteKind.relay,
+      host: 'defaults.example',
+      port: defaultRelayPort,
+    );
+    final defaults = SignedRelayDefaults(
+      version: 7,
+      issuedAt: DateTime.utc(2026, 5, 12),
+      endpoints: [endpoint],
+    );
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+      signedRelayDefaultsLoader: () async => defaults,
+    );
+    addTearDown(alice.dispose);
+
+    final hosts = alice.identity!.configuredRelays
+        .map((relay) => relay.host)
+        .toSet();
+    expect(hosts, contains('defaults.example'));
+  });
+
+  test('signed default relays persist their version after ingestion', () async {
+    final relayClient = _FakeRelayClient();
+    final vaultStore = _MemoryVaultStore();
+    final defaults = SignedRelayDefaults(
+      version: 11,
+      issuedAt: DateTime.utc(2026, 5, 12),
+      endpoints: [
+        PeerEndpoint(
+          kind: PeerRouteKind.relay,
+          host: 'pinned.example',
+          port: defaultRelayPort,
+        ),
+      ],
+    );
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+      vaultStore: vaultStore,
+      signedRelayDefaultsLoader: () async => defaults,
+    );
+    addTearDown(alice.dispose);
+
+    expect(
+      alice.identity!.configuredRelays.any(
+        (relay) => relay.host == 'pinned.example',
+      ),
+      isTrue,
+    );
+    final persisted = await vaultStore.load();
+    expect(persisted.defaultRelayDefaultsVersion, 11);
+    expect(
+      persisted.identity!.configuredRelays.any(
+        (relay) => relay.host == 'pinned.example',
+      ),
+      isTrue,
+    );
+  });
+
+  test('signed default relay loader rejects a tampered manifest', () async {
+    final algorithm = Ed25519();
+    final keyPair = await algorithm.newKeyPair();
+    final publicKey = await keyPair.extractPublicKey();
+    final manifest = jsonEncode({
+      'version': 5,
+      'issuedAt': '2026-05-12T00:00:00Z',
+      'endpoints': const <Map<String, dynamic>>[],
+    });
+    final signature = await algorithm.sign(
+      utf8.encode(manifest),
+      keyPair: keyPair,
+    );
+    final goodPublicKeyBase64 = base64Encode(publicKey.bytes);
+
+    final clean = await loadSignedDefaultRelays(
+      manifestJson: manifest,
+      signatureBase64: base64Encode(signature.bytes),
+      publicKeyBase64: goodPublicKeyBase64,
+    );
+    expect(clean, isNotNull);
+
+    final tamperedManifest = manifest.replaceFirst('"version":5', '"version":6');
+    expect(tamperedManifest, isNot(equals(manifest)));
+    final tampered = await loadSignedDefaultRelays(
+      manifestJson: tamperedManifest,
+      signatureBase64: base64Encode(signature.bytes),
+      publicKeyBase64: goodPublicKeyBase64,
+    );
+    expect(tampered, isNull);
+
+    final empty = await loadSignedDefaultRelays(
+      manifestJson: manifest,
+      signatureBase64: base64Encode(signature.bytes),
+      publicKeyBase64: '',
+    );
+    expect(empty, isNull);
+  });
 }

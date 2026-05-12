@@ -1313,6 +1313,7 @@ class GroupRecord {
     required this.createdAt,
     required this.updatedAt,
     this.localRemovedAt,
+    this.dissolvedAt,
   }) : adminDeviceIds = _normalizedGroupRoleIds(
          ownerDeviceId: ownerDeviceId,
          memberDeviceIds: memberDeviceIds,
@@ -1355,9 +1356,19 @@ class GroupRecord {
   /// Null means the group should still appear in the UI.
   final DateTime? localRemovedAt;
 
-  List<String> get activeMemberDeviceIds => memberDeviceIds
-      .where((deviceId) => !removedDeviceIds.contains(deviceId))
-      .toList(growable: false);
+  /// Set when the owner has dissolved the group for everyone. Once a group
+  /// is dissolved it has no active members, no roles, and no future state
+  /// transitions — every recipient drops to the "you left" UX. Carried on
+  /// the wire so an inbound dissolve envelope propagates the state.
+  final DateTime? dissolvedAt;
+
+  bool get isDissolved => dissolvedAt != null;
+
+  List<String> get activeMemberDeviceIds => isDissolved
+      ? const <String>[]
+      : memberDeviceIds
+            .where((deviceId) => !removedDeviceIds.contains(deviceId))
+            .toList(growable: false);
 
   bool hasActiveMember(String deviceId) =>
       activeMemberDeviceIds.contains(deviceId);
@@ -1419,6 +1430,7 @@ class GroupRecord {
 
   GroupRecord copyWith({
     String? title,
+    String? ownerDeviceId,
     List<String>? adminDeviceIds,
     List<String>? moderatorDeviceIds,
     List<String>? memberDeviceIds,
@@ -1427,12 +1439,13 @@ class GroupRecord {
     int? membershipVersion,
     DateTime? updatedAt,
     DateTime? localRemovedAt,
+    DateTime? dissolvedAt,
     bool clearLocalRemovedAt = false,
   }) {
     return GroupRecord(
       groupId: groupId,
       title: title ?? this.title,
-      ownerDeviceId: ownerDeviceId,
+      ownerDeviceId: ownerDeviceId ?? this.ownerDeviceId,
       adminDeviceIds: adminDeviceIds ?? this.adminDeviceIds,
       moderatorDeviceIds: moderatorDeviceIds ?? this.moderatorDeviceIds,
       memberDeviceIds: memberDeviceIds ?? this.memberDeviceIds,
@@ -1444,6 +1457,7 @@ class GroupRecord {
       localRemovedAt: clearLocalRemovedAt
           ? null
           : (localRemovedAt ?? this.localRemovedAt),
+      dissolvedAt: dissolvedAt ?? this.dissolvedAt,
     );
   }
 
@@ -1463,6 +1477,7 @@ class GroupRecord {
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
       'localRemovedAt': localRemovedAt?.toIso8601String(),
+      'dissolvedAt': dissolvedAt?.toIso8601String(),
     };
   }
 
@@ -1492,6 +1507,7 @@ class GroupRecord {
       localRemovedAt: DateTime.tryParse(
         json['localRemovedAt'] as String? ?? '',
       ),
+      dissolvedAt: DateTime.tryParse(json['dissolvedAt'] as String? ?? ''),
     );
   }
 }
@@ -1841,6 +1857,7 @@ class VaultSnapshot {
     required this.groups,
     required this.seenEnvelopeIds,
     this.relayHealthScores = const <String, RelayHealthScore>{},
+    this.defaultRelayDefaultsVersion = 0,
   });
 
   final IdentityRecord? identity;
@@ -1854,6 +1871,11 @@ class VaultSnapshot {
   /// map; the controller refills the map as new relay attempts complete.
   final Map<String, RelayHealthScore> relayHealthScores;
 
+  /// Tracks the `version` of the most recently ingested signed default
+  /// relay manifest. The controller skips re-ingestion when the bundled
+  /// asset's version is `<=` this value. Legacy vaults load as 0.
+  final int defaultRelayDefaultsVersion;
+
   factory VaultSnapshot.empty() {
     return VaultSnapshot(
       identity: null,
@@ -1863,6 +1885,7 @@ class VaultSnapshot {
       groups: const [],
       seenEnvelopeIds: const [],
       relayHealthScores: const <String, RelayHealthScore>{},
+      defaultRelayDefaultsVersion: 0,
     );
   }
 
@@ -1874,6 +1897,7 @@ class VaultSnapshot {
     List<GroupRecord>? groups,
     List<String>? seenEnvelopeIds,
     Map<String, RelayHealthScore>? relayHealthScores,
+    int? defaultRelayDefaultsVersion,
     bool clearIdentity = false,
   }) {
     return VaultSnapshot(
@@ -1884,6 +1908,8 @@ class VaultSnapshot {
       groups: groups ?? this.groups,
       seenEnvelopeIds: seenEnvelopeIds ?? this.seenEnvelopeIds,
       relayHealthScores: relayHealthScores ?? this.relayHealthScores,
+      defaultRelayDefaultsVersion:
+          defaultRelayDefaultsVersion ?? this.defaultRelayDefaultsVersion,
     );
   }
 
@@ -1902,6 +1928,7 @@ class VaultSnapshot {
       'relayHealthScores': relayHealthScores.map(
         (key, score) => MapEntry(key, score.toJson()),
       ),
+      'defaultRelayDefaultsVersion': defaultRelayDefaultsVersion,
     };
   }
 
@@ -1938,6 +1965,8 @@ class VaultSnapshot {
       seenEnvelopeIds: (json['seenEnvelopeIds'] as List<dynamic>? ?? const [])
           .cast<String>(),
       relayHealthScores: relayHealthScores,
+      defaultRelayDefaultsVersion:
+          (json['defaultRelayDefaultsVersion'] as num?)?.toInt() ?? 0,
     );
   }
 }

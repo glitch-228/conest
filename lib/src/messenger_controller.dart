@@ -5,11 +5,13 @@ import 'dart:math';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show AssetBundle, rootBundle;
 
 import 'local_relay_node.dart';
 import 'models.dart';
 import 'platform_bridge.dart';
 import 'relay_client.dart';
+import 'relay_defaults.dart';
 import 'storage.dart';
 
 List<int> _secureRandomBytes(int length) {
@@ -62,11 +64,13 @@ class MessengerController extends ChangeNotifier {
     PlatformBridge? platformBridge,
     Future<List<String>> Function()? lanAddressProvider,
     DateTime Function()? nowProvider,
+    Future<SignedRelayDefaults?> Function()? signedRelayDefaultsLoader,
   }) : _vaultStore = vaultStore,
        _localRelayNode = localRelayNode ?? LocalRelayNode(),
        _platformBridge = platformBridge ?? PlatformBridge(),
        _lanAddressProvider = lanAddressProvider ?? discoverLanAddresses,
-       _nowProvider = nowProvider ?? DateTime.now {
+       _nowProvider = nowProvider ?? DateTime.now,
+       _signedRelayDefaultsLoader = signedRelayDefaultsLoader {
     _relayClient = _ScoringRelayClient(
       inner: relayClient,
       onAttempt: _recordRelayAttemptFromShim,
@@ -81,6 +85,7 @@ class MessengerController extends ChangeNotifier {
   final PlatformBridge _platformBridge;
   final Future<List<String>> Function() _lanAddressProvider;
   final DateTime Function() _nowProvider;
+  final Future<SignedRelayDefaults?> Function()? _signedRelayDefaultsLoader;
   VaultSnapshot _snapshot = VaultSnapshot.empty();
   Timer? _pollTimer;
   bool _ready = false;
@@ -495,6 +500,7 @@ class MessengerController extends ChangeNotifier {
       if (normalized) {
         await _saveSnapshotSilently(notify: false);
       }
+      await _ingestSignedDefaultRelaysIfNeeded();
       if (_snapshot.identity != null) {
         await _refreshLanAddresses(persist: false);
         await _ensureLocalRelayRunning();
@@ -515,6 +521,75 @@ class MessengerController extends ChangeNotifier {
   void setStatus(String? value) {
     _statusMessage = value;
     notifyListeners();
+  }
+
+  /// Loads the signed default-relay manifest bundled with the app and, if
+  /// its version is newer than what's already stored in the vault, appends
+  /// any new endpoints to the identity's configured relays. User-added
+  /// relays are never overwritten — `dedupePeerEndpoints` skips duplicates
+  /// by route key. Failures (missing public key, tampered manifest) are
+  /// silent — the path must never block startup.
+  Future<void> _ingestSignedDefaultRelaysIfNeeded() async {
+    final loader =
+        _signedRelayDefaultsLoader ?? _loadSignedDefaultRelaysFromBundle;
+    final SignedRelayDefaults? defaults;
+    try {
+      defaults = await loader();
+    } catch (_) {
+      return;
+    }
+    if (defaults == null) {
+      return;
+    }
+    if (defaults.version <= _snapshot.defaultRelayDefaultsVersion) {
+      return;
+    }
+    final me = _snapshot.identity;
+    if (defaults.endpoints.isNotEmpty && me == null) {
+      // Defer ingestion until identity exists; do not bump the version
+      // yet so the next initialize() retries once pairing is complete.
+      return;
+    }
+    if (me != null && defaults.endpoints.isNotEmpty) {
+      final updated = dedupePeerEndpoints([
+        ...me.configuredRelays,
+        ...defaults.endpoints,
+      ]);
+      _snapshot = _snapshot.copyWith(
+        identity: me.copyWith(configuredRelays: updated),
+        defaultRelayDefaultsVersion: defaults.version,
+      );
+    } else {
+      _snapshot = _snapshot.copyWith(
+        defaultRelayDefaultsVersion: defaults.version,
+      );
+    }
+    await _saveSnapshotSilently(notify: false);
+  }
+
+  static Future<SignedRelayDefaults?> _loadSignedDefaultRelaysFromBundle({
+    AssetBundle? bundle,
+  }) async {
+    const publicKey = String.fromEnvironment(
+      'CONEST_DEFAULT_RELAYS_PUBLIC_KEY',
+    );
+    if (publicKey.isEmpty) {
+      return null;
+    }
+    final assets = bundle ?? rootBundle;
+    try {
+      final manifest = await assets.loadString('assets/default_relays.json');
+      final signature = await assets.loadString(
+        'assets/default_relays.ed25519.sig',
+      );
+      return loadSignedDefaultRelays(
+        manifestJson: manifest,
+        signatureBase64: signature,
+        publicKeyBase64: publicKey,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   ContactReachabilityRecord? _reachabilityRecordByDeviceId(String deviceId) {
@@ -2058,6 +2133,7 @@ class MessengerController extends ChangeNotifier {
       createdAt: DateTime.now().toUtc(),
     );
     _snapshot = _snapshot.copyWith(identity: created);
+    await _ingestSignedDefaultRelaysIfNeeded();
     await _ensureLocalRelayRunning();
     await _ensurePairingBeaconRunning();
     _applyAndroidBackgroundPreference();
@@ -2422,6 +2498,101 @@ class MessengerController extends ChangeNotifier {
       conversations: conversations,
     );
     await _persist('Removed group ${updated.title} from your list.');
+  }
+
+  /// Owner-only. Hands ownership of [groupId] to [newOwnerDeviceId]; the
+  /// previous owner is demoted to admin and stays in the group. Throws
+  /// [ArgumentError] when the local user is not the current owner, when
+  /// the target equals the current owner, or when the target is not a
+  /// currently active member.
+  Future<void> transferGroupOwnership({
+    required String groupId,
+    required String newOwnerDeviceId,
+  }) async {
+    final me = _requireIdentity();
+    final group = _requireGroup(groupId);
+    if (group.ownerDeviceId != me.deviceId) {
+      throw ArgumentError('Only the group owner can transfer ownership.');
+    }
+    if (newOwnerDeviceId == me.deviceId ||
+        newOwnerDeviceId == group.ownerDeviceId) {
+      throw ArgumentError('Pick a different member to receive ownership.');
+    }
+    if (!group.hasActiveMember(newOwnerDeviceId)) {
+      throw ArgumentError(
+        'Ownership can only be transferred to an active member.',
+      );
+    }
+    final previousOwner = me.deviceId;
+    final adminIds = [
+      previousOwner,
+      ...group.adminDeviceIds.where(
+        (deviceId) =>
+            deviceId != previousOwner && deviceId != newOwnerDeviceId,
+      ),
+    ];
+    final moderatorIds = group.moderatorDeviceIds
+        .where((deviceId) => deviceId != newOwnerDeviceId)
+        .toList(growable: false);
+    final memberIds = group.memberDeviceIds
+        .where((deviceId) => deviceId != newOwnerDeviceId)
+        .toList(growable: false);
+    final updated = _refreshGroupMemberProfiles(
+      group.copyWith(
+        ownerDeviceId: newOwnerDeviceId,
+        adminDeviceIds: adminIds,
+        moderatorDeviceIds: moderatorIds,
+        memberDeviceIds: memberIds,
+        membershipVersion: group.membershipVersion + 1,
+        updatedAt: _now(),
+      ),
+    );
+    _upsertGroup(updated);
+    await _persist(
+      'Transferred ownership of ${updated.title} to ${groupMemberLabel(newOwnerDeviceId)}.',
+    );
+    await _sendGroupMembershipUpdate(
+      updated,
+      targetDeviceIds: updated.activeMemberDeviceIds
+          .where((deviceId) => deviceId != me.deviceId)
+          .toList(growable: false),
+      reason: 'transfer_ownership',
+    );
+  }
+
+  /// Owner-only. Dissolves [groupId] for every active member, including
+  /// the owner. The group's [GroupRecord.dissolvedAt] is set so that
+  /// `activeMemberDeviceIds` returns empty for every recipient, dropping
+  /// the (now-former) members into the existing "You left" / Remove-from-list
+  /// UX. Throws [ArgumentError] when the local user is not the current
+  /// owner.
+  Future<void> dissolveGroup(String groupId) async {
+    final me = _requireIdentity();
+    final group = _requireGroup(groupId);
+    if (group.ownerDeviceId != me.deviceId) {
+      throw ArgumentError('Only the group owner can delete the group.');
+    }
+    if (group.isDissolved) {
+      return;
+    }
+    final formerActive = group.activeMemberDeviceIds.toList(growable: false);
+    final now = _now();
+    final updated = _refreshGroupMemberProfiles(
+      group.copyWith(
+        dissolvedAt: now,
+        membershipVersion: group.membershipVersion + 1,
+        updatedAt: now,
+      ),
+    );
+    _upsertGroup(updated);
+    await _persist('Deleted group ${updated.title} for everyone.');
+    await _sendGroupMembershipUpdate(
+      updated,
+      targetDeviceIds: formerActive
+          .where((deviceId) => deviceId != me.deviceId)
+          .toList(growable: false),
+      reason: 'dissolved',
+    );
   }
 
   Future<void> setGroupMemberRole({
@@ -7294,7 +7465,17 @@ class MessengerController extends ChangeNotifier {
     required String senderDeviceId,
   }) {
     if (incoming.ownerDeviceId != existing.ownerDeviceId) {
-      return false;
+      // Only the current owner can hand off the gavel, and only to a
+      // device that was already an active member of the group. Anything
+      // else (an admin trying to claim ownership, a stranger asserting
+      // a new owner) is rejected.
+      if (senderDeviceId != existing.ownerDeviceId) {
+        return false;
+      }
+      if (!existing.activeMemberDeviceIds.contains(incoming.ownerDeviceId)) {
+        return false;
+      }
+      return true;
     }
     if (senderDeviceId == existing.ownerDeviceId) {
       return true;
