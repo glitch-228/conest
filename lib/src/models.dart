@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 
 enum ConversationKind { direct, group, lanLobby }
@@ -1954,21 +1955,23 @@ const List<String> codephraseWords = [
   'yonder',
 ];
 
+// HMAC-SHA-256 with a fixed domain-separation key. The key is intentionally
+// public; HMAC is used here for preimage resistance and avalanche, not as a
+// shared secret. Bumping the suffix invalidates all previously-derived
+// codephrases and pairing mailboxes, so old and new clients will no longer
+// discover each other through codephrases.
+final _codephraseHmac = Hmac(sha256, utf8.encode('conest.codephrase.v2'));
+
 String deriveCodephrase(String seed) {
-  var accumulator = 0x811C9DC5;
-  for (final codeUnit in seed.codeUnits) {
-    accumulator ^= codeUnit;
-    accumulator = (accumulator * 16777619) & 0xFFFFFFFF;
-  }
+  final digest = _codephraseHmac.convert(utf8.encode(seed)).bytes;
   final segments = <String>[];
   for (var index = 0; index < 3; index++) {
-    final word =
-        codephraseWords[(accumulator >> (index * 5)) % codephraseWords.length];
-    final number = (((accumulator >> (index * 7)) & 0xFF) + 11)
-        .toString()
-        .padLeft(3, '0');
+    final base = index * 3;
+    final wordIndex =
+        ((digest[base] << 8) | digest[base + 1]) % codephraseWords.length;
+    final number = (digest[base + 2] + 11).toString().padLeft(3, '0');
     segments
-      ..add(word)
+      ..add(codephraseWords[wordIndex])
       ..add(number);
   }
   return segments.join('-');

@@ -204,46 +204,64 @@ class RelayClient {
     if (requestBytes.length > 60 * 1024) {
       throw StateError('UDP relay request is too large for a single datagram.');
     }
-    final addresses = await InternetAddress.lookup(
-      host,
-      type: InternetAddressType.IPv4,
-    ).timeout(timeout);
+    final addresses = await InternetAddress.lookup(host).timeout(timeout);
     if (addresses.isEmpty) {
       throw StateError('No address found for UDP relay host $host.');
     }
-    final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-    final responses = StreamController<Datagram>.broadcast();
-    late final StreamSubscription<RawSocketEvent> subscription;
-    subscription = socket.listen((event) {
-      if (event != RawSocketEvent.read) {
-        return;
-      }
-      Datagram? datagram;
-      while ((datagram = socket.receive()) != null) {
-        responses.add(datagram!);
-      }
-    });
-
+    // Prefer IPv4 (still the LAN/relay common case today) but fall back to IPv6
+    // so dual-stack hosts and IPv6-only LANs (e.g. some mobile hotspots) keep
+    // working.
+    final orderedAddresses = <InternetAddress>[
+      ...addresses.where((a) => a.type == InternetAddressType.IPv4),
+      ...addresses.where((a) => a.type == InternetAddressType.IPv6),
+    ];
+    if (orderedAddresses.isEmpty) {
+      throw StateError('No usable address found for UDP relay host $host.');
+    }
     final perAttempt = _udpAttemptTimeout(timeout);
-    try {
-      for (final address in addresses.take(2)) {
+    Object? lastError;
+    for (final address in orderedAddresses.take(2)) {
+      final bindAddress = address.type == InternetAddressType.IPv6
+          ? InternetAddress.anyIPv6
+          : InternetAddress.anyIPv4;
+      final RawDatagramSocket socket;
+      try {
+        socket = await RawDatagramSocket.bind(bindAddress, 0);
+      } catch (error) {
+        lastError = error;
+        continue;
+      }
+      final responses = StreamController<Datagram>.broadcast();
+      final subscription = socket.listen((event) {
+        if (event != RawSocketEvent.read) {
+          return;
+        }
+        Datagram? datagram;
+        while ((datagram = socket.receive()) != null) {
+          responses.add(datagram!);
+        }
+      });
+      try {
         for (var attempt = 0; attempt < 3; attempt++) {
           final responseFuture = responses.stream.first.timeout(perAttempt);
           socket.send(requestBytes, address, port);
           try {
             final datagram = await responseFuture;
             return _decodeResponse(utf8.decode(datagram.data));
-          } catch (_) {
-            // Retry below.
+          } catch (error) {
+            lastError = error;
           }
         }
+      } finally {
+        await subscription.cancel();
+        await responses.close();
+        socket.close();
       }
-      throw TimeoutException('UDP relay did not answer.', timeout);
-    } finally {
-      await subscription.cancel();
-      await responses.close();
-      socket.close();
     }
+    if (lastError is Exception) {
+      throw lastError;
+    }
+    throw TimeoutException('UDP relay did not answer.', timeout);
   }
 
   Duration _udpAttemptTimeout(Duration timeout) {

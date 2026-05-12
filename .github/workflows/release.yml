@@ -1,0 +1,378 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: "3.27.0"
+
+jobs:
+  prepare:
+    name: Prepare release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      channel: ${{ steps.meta.outputs.channel }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+      sanitized: ${{ steps.meta.outputs.sanitized }}
+    steps:
+      - id: meta
+        shell: bash
+        run: |
+          tag="${GITHUB_REF##refs/tags/}"
+          version="${tag#v}"
+          channel="stable"
+          prerelease="false"
+          lowered="$(printf '%s' "$tag" | tr '[:upper:]' '[:lower:]')"
+          case "$lowered" in
+            *nightly*|*beta*|*rc*|*alpha*|*dev*|*pre*)
+              channel="nightly"
+              prerelease="true"
+              ;;
+          esac
+          sanitized="$(printf '%s' "$tag" | tr -c 'A-Za-z0-9._-' '_')"
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "channel=$channel"
+            echo "is_prerelease=$prerelease"
+            echo "sanitized=$sanitized"
+          } >> "$GITHUB_OUTPUT"
+          echo "Release tag: $tag (channel=$channel prerelease=$prerelease)"
+
+  build-relay:
+    name: Build relay (${{ matrix.target.label }})
+    needs: prepare
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - label: linux-x64
+            runner: ubuntu-latest
+            triple: x86_64-unknown-linux-gnu
+            ext: ""
+          - label: windows-x64
+            runner: windows-latest
+            triple: x86_64-pc-windows-msvc
+            ext: ".exe"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target.triple }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: relay-${{ matrix.target.label }}
+      - name: Build relay
+        run: cargo build --release -p conest_relay --target ${{ matrix.target.triple }} --locked
+      - name: Build updater
+        run: cargo build --release -p conest_updater --target ${{ matrix.target.triple }} --locked
+      - name: Stage binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          ext="${{ matrix.target.ext }}"
+          relay_src="target/${{ matrix.target.triple }}/release/conest_relay${ext}"
+          updater_src="target/${{ matrix.target.triple }}/release/conest_updater${ext}"
+          tag="${{ needs.prepare.outputs.tag }}"
+          cp "$relay_src" "artifacts/conest_relay-${{ matrix.target.label }}-${tag}${ext}"
+          cp "$updater_src" "artifacts/conest_updater-${{ matrix.target.label }}-${tag}${ext}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-${{ matrix.target.label }}
+          path: |
+            artifacts/conest_relay-*
+            target/${{ matrix.target.triple }}/release/conest_updater${{ matrix.target.ext }}
+          if-no-files-found: error
+          retention-days: 7
+
+  build-linux-app:
+    name: Build Linux desktop app
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      CONEST_RELEASE_MANIFEST_PUBLIC_KEY: ${{ secrets.CONEST_RELEASE_MANIFEST_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build \
+            cmake \
+            clang \
+            pkg-config \
+            libgtk-3-dev \
+            liblzma-dev \
+            libsecret-1-dev \
+            libjsoncpp-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-app
+      - name: Verify manifest public key is set
+        shell: bash
+        run: |
+          if [ -z "${CONEST_RELEASE_MANIFEST_PUBLIC_KEY}" ]; then
+            echo "::error::CONEST_RELEASE_MANIFEST_PUBLIC_KEY secret is required for release builds."
+            exit 1
+          fi
+      - name: Build conest_updater for Linux
+        run: cargo build --release -p conest_updater --locked
+      - name: Flutter pub get
+        run: flutter pub get
+      - name: Build Linux bundle
+        run: |
+          flutter config --enable-linux-desktop
+          flutter build linux --release \
+            --dart-define=CONEST_BUILD_TAG=${{ needs.prepare.outputs.tag }} \
+            --dart-define=CONEST_BUILD_CHANNEL=${{ needs.prepare.outputs.channel }} \
+            --dart-define=CONEST_BUILD_COMMIT=${{ github.sha }} \
+            --dart-define=CONEST_RELEASE_MANIFEST_PUBLIC_KEY=${CONEST_RELEASE_MANIFEST_PUBLIC_KEY}
+      - name: Stage Linux bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.prepare.outputs.tag }}"
+          stage="dist-stage/conest-linux-x64-${tag}"
+          mkdir -p "$stage"
+          cp -a build/linux/x64/release/bundle/. "$stage/"
+          cp target/release/conest_updater "$stage/conest_updater"
+          chmod 755 "$stage/conest_updater"
+          chmod 755 "$stage/conest"
+          mkdir -p dist
+          (cd dist-stage && zip -r "../dist/conest-linux-x64-${tag}.zip" "conest-linux-x64-${tag}")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-linux-x64
+          path: dist/conest-linux-x64-*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  build-windows-app:
+    name: Build Windows desktop app
+    needs: prepare
+    runs-on: windows-latest
+    env:
+      CONEST_RELEASE_MANIFEST_PUBLIC_KEY: ${{ secrets.CONEST_RELEASE_MANIFEST_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-app
+      - name: Verify manifest public key is set
+        shell: bash
+        run: |
+          if [ -z "${CONEST_RELEASE_MANIFEST_PUBLIC_KEY}" ]; then
+            echo "::error::CONEST_RELEASE_MANIFEST_PUBLIC_KEY secret is required for release builds."
+            exit 1
+          fi
+      - name: Build conest_updater for Windows
+        run: cargo build --release -p conest_updater --locked
+      - name: Flutter pub get
+        run: flutter pub get
+      - name: Build Windows bundle
+        shell: bash
+        run: |
+          flutter config --enable-windows-desktop
+          flutter build windows --release \
+            --dart-define=CONEST_BUILD_TAG=${{ needs.prepare.outputs.tag }} \
+            --dart-define=CONEST_BUILD_CHANNEL=${{ needs.prepare.outputs.channel }} \
+            --dart-define=CONEST_BUILD_COMMIT=${{ github.sha }} \
+            --dart-define=CONEST_RELEASE_MANIFEST_PUBLIC_KEY=${CONEST_RELEASE_MANIFEST_PUBLIC_KEY}
+      - name: Stage Windows bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.prepare.outputs.tag }}"
+          stage="dist-stage/conest-windows-x64-portable-${tag}"
+          mkdir -p "$stage"
+          cp -a build/windows/x64/runner/Release/. "$stage/"
+          cp target/release/conest_updater.exe "$stage/conest_updater.exe"
+          mkdir -p dist
+          powershell -Command "Compress-Archive -Path dist-stage/conest-windows-x64-portable-${tag} -DestinationPath dist/conest-windows-x64-portable-${tag}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-windows-x64
+          path: dist/conest-windows-x64-portable-*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  build-android-app:
+    name: Build Android APK
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      CONEST_RELEASE_MANIFEST_PUBLIC_KEY: ${{ secrets.CONEST_RELEASE_MANIFEST_PUBLIC_KEY }}
+      CONEST_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.CONEST_ANDROID_KEYSTORE_PASSWORD }}
+      CONEST_ANDROID_KEY_ALIAS: ${{ secrets.CONEST_ANDROID_KEY_ALIAS }}
+      CONEST_ANDROID_KEY_PASSWORD: ${{ secrets.CONEST_ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - name: Verify required secrets
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.CONEST_ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          missing=0
+          for var in CONEST_RELEASE_MANIFEST_PUBLIC_KEY KEYSTORE_BASE64 CONEST_ANDROID_KEYSTORE_PASSWORD CONEST_ANDROID_KEY_ALIAS CONEST_ANDROID_KEY_PASSWORD; do
+            if [ -z "${!var}" ]; then
+              echo "::error::Required secret $var is not set."
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ]
+      - name: Decode Android keystore
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.CONEST_ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p android/keystore
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > android/keystore/release.jks
+          echo "CONEST_ANDROID_KEYSTORE=$PWD/android/keystore/release.jks" >> "$GITHUB_ENV"
+      - name: Flutter pub get
+        run: flutter pub get
+      - name: Build APK
+        run: |
+          flutter build apk --release \
+            --dart-define=CONEST_BUILD_TAG=${{ needs.prepare.outputs.tag }} \
+            --dart-define=CONEST_BUILD_CHANNEL=${{ needs.prepare.outputs.channel }} \
+            --dart-define=CONEST_BUILD_COMMIT=${{ github.sha }} \
+            --dart-define=CONEST_RELEASE_MANIFEST_PUBLIC_KEY=${CONEST_RELEASE_MANIFEST_PUBLIC_KEY}
+      - name: Stage APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tag="${{ needs.prepare.outputs.tag }}"
+          cp build/app/outputs/flutter-apk/app-release.apk \
+            "dist/conest-android-arm64-${tag}.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-android
+          path: dist/conest-android-arm64-*.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Sign manifest and publish GitHub release
+    needs:
+      - prepare
+      - build-relay
+      - build-linux-app
+      - build-windows-app
+      - build-android-app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - name: Flutter pub get
+        run: flutter pub get
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloads
+      - name: Collect artifacts into dist/
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # Desktop / Android primary assets.
+          find downloads/app-linux-x64 -name "conest-linux-x64-*.zip" -exec cp -v {} dist/ \;
+          find downloads/app-windows-x64 -name "conest-windows-x64-portable-*.zip" -exec cp -v {} dist/ \;
+          find downloads/app-android -name "conest-android-arm64-*.apk" -exec cp -v {} dist/ \;
+          # Standalone relay binaries for each desktop target.
+          find downloads/relay-linux-x64 -name "conest_relay-linux-x64-*" -exec cp -v {} dist/ \;
+          find downloads/relay-windows-x64 -name "conest_relay-windows-x64-*" -exec cp -v {} dist/ \;
+          find downloads/relay-linux-x64 -name "conest_updater-linux-x64-*" -exec cp -v {} dist/ \;
+          find downloads/relay-windows-x64 -name "conest_updater-windows-x64-*" -exec cp -v {} dist/ \;
+          ls -la dist/
+      - name: Generate signed release manifest
+        env:
+          CONEST_RELEASE_MANIFEST_PRIVATE_KEY: ${{ secrets.CONEST_RELEASE_MANIFEST_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CONEST_RELEASE_MANIFEST_PRIVATE_KEY}" ]; then
+            echo "::error::CONEST_RELEASE_MANIFEST_PRIVATE_KEY secret is required to sign the manifest."
+            exit 1
+          fi
+          dart run tool/release_manifest.dart \
+            --dist dist \
+            "${{ needs.prepare.outputs.tag }}"
+          ls -la dist/
+      - name: Verify manifest signature with the configured public key
+        env:
+          CONEST_RELEASE_MANIFEST_PUBLIC_KEY: ${{ secrets.CONEST_RELEASE_MANIFEST_PUBLIC_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CONEST_RELEASE_MANIFEST_PUBLIC_KEY}" ]; then
+            echo "::error::CONEST_RELEASE_MANIFEST_PUBLIC_KEY secret is required to verify the signed manifest."
+            exit 1
+          fi
+          dart run tool/verify_release_manifest.dart \
+            --dist dist \
+            --public-key "$CONEST_RELEASE_MANIFEST_PUBLIC_KEY"
+      - name: Compose release notes
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.prepare.outputs.tag }}"
+          channel="${{ needs.prepare.outputs.channel }}"
+          {
+            echo "Conest $tag ($channel)"
+            echo
+            echo "Built from commit \`${GITHUB_SHA}\`."
+            echo
+            echo "Each desktop and mobile asset is covered by \`RELEASE-MANIFEST.json\` and its Ed25519 signature \`RELEASE-MANIFEST.ed25519.sig\`. The Conest desktop and Android updater both verify this signature before applying an update."
+          } > release-notes.md
+          echo "path=release-notes.md" >> "$GITHUB_OUTPUT"
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: Conest ${{ needs.prepare.outputs.tag }}
+          prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
+          body_path: ${{ steps.notes.outputs.path }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/conest-linux-x64-*.zip
+            dist/conest-windows-x64-portable-*.zip
+            dist/conest-android-arm64-*.apk
+            dist/conest_relay-linux-x64-*
+            dist/conest_relay-windows-x64-*
+            dist/conest_updater-linux-x64-*
+            dist/conest_updater-windows-x64-*
+            dist/RELEASE-MANIFEST.json
+            dist/RELEASE-MANIFEST.ed25519.sig
+            dist/SHA256SUMS.txt

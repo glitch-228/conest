@@ -2,6 +2,11 @@
 name = "conest_relay"
 version = "0.2.0"
 edition = "2024"
+description = "Standalone TCP/UDP/HTTP relay for the Conest secure text-exchange prototype."
+license = "MPL-2.0"
+repository = "https://github.com/glitch-228/conest"
+readme = "../../README.md"
+publish = false
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

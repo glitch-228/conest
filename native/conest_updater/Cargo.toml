@@ -2,3 +2,8 @@
 name = "conest_updater"
 version = "0.2.0"
 edition = "2024"
+description = "Desktop update helper that swaps a staged Conest bundle into place and relaunches the app."
+license = "MPL-2.0"
+repository = "https://github.com/glitch-228/conest"
+readme = "../../README.md"
+publish = false

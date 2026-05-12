@@ -8,7 +8,7 @@ Conest is a phased secure text-exchange app. This repository now contains the fi
 - Encrypted local vault for identity, contacts, and message history.
 - LAN-first direct text delivery with TCP/UDP route variants, relay fallback, and queued offline delivery.
 - Invite-only trusted groups with pairwise encrypted text fanout.
-- Rust workspace with protocol types, crypto helpers, and a standalone relay binary.
+- Rust workspace with a standalone relay binary and a desktop updater helper.
 
 ## What Is Implemented Now
 
@@ -54,6 +54,8 @@ cargo build --release -p conest_relay
 
 Open TCP and/or UDP port `7667` on the host firewall or provider security group. The same relay port also accepts HTTP requests, so HTTP tunnels such as LocalTunnel can forward to it. If the host is UDP-only, add it in the app as `udp://your-domain:7667`; for LocalTunnel-style URLs, add the relay as `https://your-subdomain.loca.lt`.
 
+LocalTunnel/ngrok caveat: tunneled relays only work while the tunnel client is alive on the host. When the tunnel process exits or the host reboots, clients pointed at the tunnel URL stop being able to reach that relay. Run the tunnel under a supervisor (systemd, pm2, etc.) for any deployment that must outlive a single shell session. When clients reach the relay through a shared tunnel, every request appears to originate from the tunnel's IP, so the relay's per-IP rate limit becomes shared across all tunneled clients unless the relay is configured to trust `X-Forwarded-For` (see below).
+
 The relay speaks the same JSON protocol as the app over TCP newline-delimited requests, UDP single-datagram requests, and HTTP/HTTPS POST requests:
 
 - `health` checks availability and returns basic queue stats.
@@ -76,7 +78,7 @@ curl -sS http://127.0.0.1:7667/health
 curl -sS -H 'bypass-tunnel-reminder: true' https://your-subdomain.loca.lt/health
 ```
 
-Useful environment variables mirror the CLI flags: `CONEST_RELAY_BIND`, `CONEST_RELAY_ID`, `CONEST_RELAY_TTL_SECONDS`, `CONEST_RELAY_MAX_QUEUE_PER_MAILBOX`, `CONEST_RELAY_MAX_FETCH_LIMIT`, `CONEST_RELAY_MAX_ENVELOPE_BYTES`, `CONEST_RELAY_MAX_LINE_BYTES`, and `CONEST_RELAY_MAX_REQUESTS_PER_MINUTE`.
+Useful environment variables mirror the CLI flags: `CONEST_RELAY_BIND`, `CONEST_RELAY_ID`, `CONEST_RELAY_TTL_SECONDS`, `CONEST_RELAY_MAX_QUEUE_PER_MAILBOX`, `CONEST_RELAY_MAX_FETCH_LIMIT`, `CONEST_RELAY_MAX_ENVELOPE_BYTES`, `CONEST_RELAY_MAX_LINE_BYTES`, and `CONEST_RELAY_MAX_REQUESTS_PER_MINUTE`. Set `CONEST_RELAY_TRUST_FORWARDED_FOR=1` (or pass `--trust-forwarded-for`) when the relay sits behind a trusted reverse proxy or HTTP tunnel so that the leftmost `X-Forwarded-For` address is used for per-IP rate limiting instead of the connecting peer. Do not enable this on a directly-reachable public relay.
 
 Use a stable `--relay-id` or `CONEST_RELAY_ID` on public relays. Clients use that id to recognize that a LAN IP and a public domain are different endpoints for the same relay, then keep both routes while preferring the fastest available endpoint.
 
@@ -96,8 +98,10 @@ On first launch:
 
 ## Rust Workspace
 
-- `native/conest_core`: shared protocol types plus bootstrap/invite/encryption helpers.
-- `native/conest_relay`: TCP/UDP JSON relay with queued offline delivery.
+- `native/conest_relay`: TCP/UDP/HTTP JSON relay with queued offline delivery.
+- `native/conest_updater`: desktop helper that swaps a staged update bundle into the running app's install directory and relaunches the app.
+
+The Flutter client implements all protocol and cryptography logic in Dart; there is no FFI back into Rust today.
 
 ## Tests
 

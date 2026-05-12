@@ -27,6 +27,7 @@ struct RelayConfig {
     max_envelope_bytes: usize,
     max_line_bytes: usize,
     max_requests_per_minute: u32,
+    trust_forwarded_for: bool,
 }
 
 impl RelayConfig {
@@ -49,6 +50,7 @@ impl RelayConfig {
                 "CONEST_RELAY_MAX_REQUESTS_PER_MINUTE",
                 DEFAULT_MAX_REQUESTS_PER_MINUTE,
             ),
+            trust_forwarded_for: env_bool("CONEST_RELAY_TRUST_FORWARDED_FOR", false),
         };
 
         let mut args = env::args().skip(1).peekable();
@@ -75,6 +77,9 @@ impl RelayConfig {
                 }
                 "--max-requests-per-minute" => {
                     config.max_requests_per_minute = parse_next_u32(&mut args, &arg)?;
+                }
+                "--trust-forwarded-for" => {
+                    config.trust_forwarded_for = true;
                 }
                 value if value.starts_with('-') => {
                     return Err(format!("unknown option: {value}\n\n{}", usage()));
@@ -387,6 +392,10 @@ fn handle_client(
 ) -> std::io::Result<()> {
     let reader_stream = stream.try_clone()?;
     reader_stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    // A slow or stuck client should not be able to wedge a relay worker thread
+    // by accepting writes byte-by-byte. The 10-second write timeout covers the
+    // worst-case response size with plenty of headroom.
+    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     let mut reader = BufReader::new(reader_stream);
     let mut writer = BufWriter::new(stream);
 
@@ -421,12 +430,20 @@ fn handle_http_request<R: BufRead>(
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or_default();
     let path = parts.next().unwrap_or("/");
-    if path != "/" && path != "/health" && path != "/relay" {
+    let path_without_query = match path.split_once('?') {
+        Some((head, _)) => head,
+        None => path,
+    };
+    if path_without_query != "/"
+        && path_without_query != "/health"
+        && path_without_query != "/relay"
+    {
         return (404, RelayResponse::error("unknown HTTP relay path"));
     }
 
     let mut headers = Vec::new();
     let mut content_length = 0_usize;
+    let mut forwarded_for: Option<String> = None;
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
@@ -438,10 +455,23 @@ fn handle_http_request<R: BufRead>(
                 if headers.len() + line.len() > state.config.max_line_bytes {
                     return (413, RelayResponse::error("HTTP headers too large"));
                 }
-                if let Some((name, value)) = line.split_once(':')
-                    && name.trim().eq_ignore_ascii_case("content-length")
-                {
-                    content_length = value.trim().parse::<usize>().unwrap_or(0);
+                if let Some((name, value)) = line.split_once(':') {
+                    let name = name.trim();
+                    if name.eq_ignore_ascii_case("content-length") {
+                        content_length = value.trim().parse::<usize>().unwrap_or(0);
+                    } else if state.config.trust_forwarded_for
+                        && forwarded_for.is_none()
+                        && name.eq_ignore_ascii_case("x-forwarded-for")
+                    {
+                        // Use the leftmost address: it is the original client
+                        // per the convention used by every common proxy.
+                        if let Some(first) = value.split(',').next() {
+                            let trimmed = first.trim();
+                            if !trimmed.is_empty() {
+                                forwarded_for = Some(trimmed.to_owned());
+                            }
+                        }
+                    }
                 }
                 headers.extend_from_slice(line.as_bytes());
             }
@@ -454,8 +484,15 @@ fn handle_http_request<R: BufRead>(
         }
     }
 
+    let effective_peer = forwarded_for.as_deref().unwrap_or(peer);
+
     match method {
-        "GET" | "OPTIONS" => (200, handle_request(RelayRequest::Health, state)),
+        "GET" | "OPTIONS" => {
+            if !state.allow_request(effective_peer) {
+                return (429, RelayResponse::error("rate limit exceeded"));
+            }
+            (200, handle_request(RelayRequest::Health, state))
+        }
         "POST" => {
             if content_length == 0 {
                 return (400, RelayResponse::error("HTTP relay POST body is empty"));
@@ -470,7 +507,10 @@ fn handle_http_request<R: BufRead>(
                     RelayResponse::error(format!("HTTP body read failed: {error}")),
                 );
             }
-            (200, handle_request_bytes(&body, body.len(), state, peer))
+            (
+                200,
+                handle_request_bytes(&body, body.len(), state, effective_peer),
+            )
         }
         _ => (405, RelayResponse::error("unsupported HTTP method")),
     }
@@ -621,6 +661,16 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+fn env_bool(name: &str, default: bool) -> bool {
+    match env::var(name).ok().as_deref() {
+        Some(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        None => default,
+    }
+}
+
 fn parse_next_u64<I>(args: &mut I, name: &str) -> Result<u64, String>
 where
     I: Iterator<Item = String>,
@@ -671,7 +721,10 @@ fn usage() -> String {
            --max-fetch-limit N\n\
            --max-envelope-bytes N\n\
            --max-line-bytes N\n\
-           --max-requests-per-minute N"
+           --max-requests-per-minute N\n\
+           --trust-forwarded-for  trust the leftmost X-Forwarded-For address\n\
+                                  for per-IP rate limiting (only safe behind a\n\
+                                  trusted proxy or HTTP tunnel)"
     )
 }
 
@@ -701,6 +754,7 @@ mod tests {
             max_envelope_bytes: DEFAULT_MAX_ENVELOPE_BYTES,
             max_line_bytes: DEFAULT_MAX_LINE_BYTES,
             max_requests_per_minute: DEFAULT_MAX_REQUESTS_PER_MINUTE,
+            trust_forwarded_for: false,
         }
     }
 
@@ -883,5 +937,55 @@ mod tests {
 
         assert!(response.ok);
         assert_eq!(stats.relay_id, "relay-test");
+    }
+
+    #[test]
+    fn http_path_with_query_string_is_accepted() {
+        let state = RelayState::new(test_config());
+        let mut reader = BufReader::new("Host: relay.test\r\n\r\n".as_bytes());
+        let (status, response) = handle_http_request(
+            "GET /health?cache=1 HTTP/1.1\r\n",
+            &mut reader,
+            &state,
+            "127.0.0.1",
+        );
+        assert_eq!(status, 200);
+        assert!(response.ok);
+    }
+
+    #[test]
+    fn http_trusts_forwarded_for_when_enabled() {
+        let mut config = test_config();
+        config.trust_forwarded_for = true;
+        config.max_requests_per_minute = 2;
+        let state = RelayState::new(config);
+
+        // Two requests from the same forwarded client succeed, the third gets
+        // rate-limited even though every connection looks like 127.0.0.1.
+        for expected_status in [200_u16, 200, 429] {
+            let mut reader = BufReader::new(
+                "Host: relay.test\r\nX-Forwarded-For: 198.51.100.7, 10.0.0.1\r\n\r\n".as_bytes(),
+            );
+            let (status, _) =
+                handle_http_request("GET /health HTTP/1.1\r\n", &mut reader, &state, "127.0.0.1");
+            assert_eq!(status, expected_status);
+        }
+    }
+
+    #[test]
+    fn http_ignores_forwarded_for_when_disabled() {
+        // Default config does NOT trust X-Forwarded-For; budget should be tied
+        // to the connection peer only.
+        let mut config = test_config();
+        config.max_requests_per_minute = 2;
+        let state = RelayState::new(config);
+        for expected_status in [200_u16, 200, 429] {
+            let mut reader = BufReader::new(
+                "Host: relay.test\r\nX-Forwarded-For: 198.51.100.7\r\n\r\n".as_bytes(),
+            );
+            let (status, _) =
+                handle_http_request("GET /health HTTP/1.1\r\n", &mut reader, &state, "127.0.0.1");
+            assert_eq!(status, expected_status);
+        }
     }
 }

@@ -23,15 +23,26 @@ class AppInstanceLock {
     final directory = _directory ?? await getApplicationSupportDirectory();
     await directory.create(recursive: true);
     final file = File('${directory.path}/conest.lock');
-    final lockFile = await file.open(mode: FileMode.write);
+    // Open in append mode so the existing pid recorded by another instance is
+    // preserved if we fail to acquire the lock. Only truncate and rewrite the
+    // file once we hold the exclusive lock ourselves.
+    final lockFile = await file.open(mode: FileMode.append);
     try {
       await lockFile.lock(FileLock.exclusive);
+    } catch (_) {
+      await lockFile.close();
+      return false;
+    }
+    try {
       await lockFile.setPosition(0);
       await lockFile.truncate(0);
       await lockFile.writeString('$pid\n');
       _lockFile = lockFile;
       return true;
     } catch (_) {
+      try {
+        await lockFile.unlock();
+      } catch (_) {}
       await lockFile.close();
       return false;
     }

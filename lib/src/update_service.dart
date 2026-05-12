@@ -261,8 +261,28 @@ class UpdateService extends ChangeNotifier {
   String? _lastError;
   String? _dismissedPromptTagForSession;
 
-  bool get supportsUpdates =>
-      _targetPlatform != UpdateTargetPlatform.unsupported;
+  bool get supportsUpdates {
+    if (_targetPlatform == UpdateTargetPlatform.unsupported) {
+      return false;
+    }
+    // A release build without a manifest verification key cannot safely apply
+    // updates. Treat updates as unsupported so the UI shows a single clear
+    // state instead of failing every poll with a generic error. Debug builds
+    // keep the previous behavior so tests and local development still work.
+    if (!buildInfo.isDebugBuild && _releaseManifestPublicKeyBase64.trim().isEmpty) {
+      return false;
+    }
+    return true;
+  }
+
+  /// True when this build is shipping-shaped (release mode, supported
+  /// platform) but is missing the manifest verification key. Surfaces a
+  /// dedicated "misconfigured build" state to the UI without falsely claiming
+  /// updates are available.
+  bool get isMissingReleaseManifestKey =>
+      !buildInfo.isDebugBuild &&
+      _targetPlatform != UpdateTargetPlatform.unsupported &&
+      _releaseManifestPublicKeyBase64.trim().isEmpty;
   UpdateTargetPlatform get targetPlatform => _targetPlatform;
   bool get isChecking => _checking;
   bool get isDownloading => _downloading;
@@ -697,12 +717,21 @@ class UpdateService extends ChangeNotifier {
 
   Future<void> _extractArchive(Archive archive, Directory outputDir) async {
     for (final entry in archive) {
-      final normalized = p.normalize(entry.name.replaceAll('\\', '/'));
+      final rawName = entry.name.replaceAll('\\', '/');
+      // Reject Windows-style drive letters or UNC roots even when running on
+      // a POSIX host where p.isAbsolute would otherwise miss them.
+      if (RegExp(r'^[A-Za-z]:[\\/]').hasMatch(rawName) ||
+          rawName.startsWith('//')) {
+        throw StateError('Unsafe archive entry: ${entry.name}');
+      }
+      final normalized = p.posix.normalize(rawName);
       if (normalized.isEmpty ||
           normalized == '.' ||
           normalized == '..' ||
+          p.posix.isAbsolute(normalized) ||
           p.isAbsolute(normalized) ||
-          normalized.startsWith('../')) {
+          normalized.startsWith('../') ||
+          normalized.contains('/../')) {
         throw StateError('Unsafe archive entry: ${entry.name}');
       }
       final outPath = p.join(outputDir.path, normalized);
@@ -710,8 +739,18 @@ class UpdateService extends ChangeNotifier {
         final outFile = File(outPath);
         await outFile.parent.create(recursive: true);
         await outFile.writeAsBytes(entry.content as List<int>, flush: true);
-      } else {
+      } else if (entry.isSymbolicLink) {
+        // The desktop updater bundles plain files only. Refuse symlinks so a
+        // malicious or malformed archive cannot smuggle one in.
+        throw StateError(
+          'Archive contains a symbolic link entry which is not allowed: ${entry.name}',
+        );
+      } else if (rawName.endsWith('/')) {
         await Directory(outPath).create(recursive: true);
+      } else {
+        throw StateError(
+          'Unsupported archive entry type: ${entry.name}',
+        );
       }
     }
   }
