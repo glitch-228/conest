@@ -13,7 +13,7 @@ concurrency:
 env:
   # Must ship Dart >= 3.11.4 to match pubspec.yaml. Bump together with the
   # release workflow when changing the toolchain.
-  FLUTTER_VERSION: "3.41.2"
+  FLUTTER_VERSION: "3.41.9"
 
 jobs:
   rust:
