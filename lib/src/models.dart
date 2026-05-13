@@ -1848,6 +1848,89 @@ class TransferSession {
   }
 }
 
+class PendingGroupMembershipDelivery {
+  const PendingGroupMembershipDelivery({
+    required this.groupId,
+    required this.targetDeviceId,
+    required this.membershipVersion,
+    required this.originalMessageId,
+    required this.reason,
+    required this.lastAttemptedAt,
+    required this.attempts,
+  });
+
+  /// Group whose membership snapshot is still pending delivery.
+  final String groupId;
+
+  /// Recipient device that hasn't acknowledged the latest membership update.
+  /// `(groupId, targetDeviceId)` is the natural key for the queue.
+  final String targetDeviceId;
+
+  /// `GroupRecord.membershipVersion` of the snapshot being delivered. A
+  /// newer pending version supersedes any older queued entry for the same
+  /// target — no need to keep retrying a stale state once a fresher one
+  /// has been computed.
+  final int membershipVersion;
+
+  /// `messageId` of the original `group_membership` envelope. Used to
+  /// correlate an inbound `group_membership_ack` with the queued entry.
+  final String originalMessageId;
+
+  /// Wire reason of the original envelope (`create`, `add_members`, etc.).
+  /// Captured for diagnostics; not used for delivery decisions.
+  final String reason;
+
+  /// Last time delivery was attempted. Drives the retry backoff window.
+  final DateTime lastAttemptedAt;
+
+  /// Number of completed retry passes. Capped at a sane upper bound by the
+  /// retry loop to avoid burning relay quota on a permanently unreachable
+  /// peer.
+  final int attempts;
+
+  PendingGroupMembershipDelivery copyWith({
+    int? membershipVersion,
+    String? originalMessageId,
+    String? reason,
+    DateTime? lastAttemptedAt,
+    int? attempts,
+  }) {
+    return PendingGroupMembershipDelivery(
+      groupId: groupId,
+      targetDeviceId: targetDeviceId,
+      membershipVersion: membershipVersion ?? this.membershipVersion,
+      originalMessageId: originalMessageId ?? this.originalMessageId,
+      reason: reason ?? this.reason,
+      lastAttemptedAt: lastAttemptedAt ?? this.lastAttemptedAt,
+      attempts: attempts ?? this.attempts,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'groupId': groupId,
+    'targetDeviceId': targetDeviceId,
+    'membershipVersion': membershipVersion,
+    'originalMessageId': originalMessageId,
+    'reason': reason,
+    'lastAttemptedAt': lastAttemptedAt.toIso8601String(),
+    'attempts': attempts,
+  };
+
+  factory PendingGroupMembershipDelivery.fromJson(Map<String, dynamic> json) {
+    return PendingGroupMembershipDelivery(
+      groupId: json['groupId'] as String,
+      targetDeviceId: json['targetDeviceId'] as String,
+      membershipVersion: (json['membershipVersion'] as num?)?.toInt() ?? 1,
+      originalMessageId: json['originalMessageId'] as String? ?? '',
+      reason: json['reason'] as String? ?? '',
+      lastAttemptedAt:
+          DateTime.tryParse(json['lastAttemptedAt'] as String? ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      attempts: (json['attempts'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
 class VaultSnapshot {
   VaultSnapshot({
     required this.identity,
@@ -1858,6 +1941,9 @@ class VaultSnapshot {
     required this.seenEnvelopeIds,
     this.relayHealthScores = const <String, RelayHealthScore>{},
     this.defaultRelayDefaultsVersion = 0,
+    this.pendingGroupMembershipDeliveries =
+        const <PendingGroupMembershipDelivery>[],
+    this.pinnedRelayIdentityKeys = const <String, String>{},
   });
 
   final IdentityRecord? identity;
@@ -1876,6 +1962,19 @@ class VaultSnapshot {
   /// asset's version is `<=` this value. Legacy vaults load as 0.
   final int defaultRelayDefaultsVersion;
 
+  /// Membership envelopes that left the sender but haven't been
+  /// acknowledged by the targeted recipient yet. The controller's retry
+  /// loop drains this queue with exponential-ish backoff; entries are
+  /// cleared when an inbound `group_membership_ack` from the matching
+  /// target arrives. Persisted so retries survive process restarts.
+  final List<PendingGroupMembershipDelivery> pendingGroupMembershipDeliveries;
+
+  /// First-use-pinned Ed25519 identity keys per `relay_id`. Once a relay
+  /// has been seen advertising a given pubkey, subsequent responses that
+  /// don't verify against the pin are flagged as mismatches. The user
+  /// (or the operator) decides whether to rotate via an explicit action.
+  final Map<String, String> pinnedRelayIdentityKeys;
+
   factory VaultSnapshot.empty() {
     return VaultSnapshot(
       identity: null,
@@ -1886,6 +1985,9 @@ class VaultSnapshot {
       seenEnvelopeIds: const [],
       relayHealthScores: const <String, RelayHealthScore>{},
       defaultRelayDefaultsVersion: 0,
+      pendingGroupMembershipDeliveries:
+          const <PendingGroupMembershipDelivery>[],
+      pinnedRelayIdentityKeys: const <String, String>{},
     );
   }
 
@@ -1898,6 +2000,8 @@ class VaultSnapshot {
     List<String>? seenEnvelopeIds,
     Map<String, RelayHealthScore>? relayHealthScores,
     int? defaultRelayDefaultsVersion,
+    List<PendingGroupMembershipDelivery>? pendingGroupMembershipDeliveries,
+    Map<String, String>? pinnedRelayIdentityKeys,
     bool clearIdentity = false,
   }) {
     return VaultSnapshot(
@@ -1910,6 +2014,11 @@ class VaultSnapshot {
       relayHealthScores: relayHealthScores ?? this.relayHealthScores,
       defaultRelayDefaultsVersion:
           defaultRelayDefaultsVersion ?? this.defaultRelayDefaultsVersion,
+      pendingGroupMembershipDeliveries:
+          pendingGroupMembershipDeliveries ??
+          this.pendingGroupMembershipDeliveries,
+      pinnedRelayIdentityKeys:
+          pinnedRelayIdentityKeys ?? this.pinnedRelayIdentityKeys,
     );
   }
 
@@ -1929,6 +2038,10 @@ class VaultSnapshot {
         (key, score) => MapEntry(key, score.toJson()),
       ),
       'defaultRelayDefaultsVersion': defaultRelayDefaultsVersion,
+      'pendingGroupMembershipDeliveries': pendingGroupMembershipDeliveries
+          .map((entry) => entry.toJson())
+          .toList(),
+      'pinnedRelayIdentityKeys': pinnedRelayIdentityKeys,
     };
   }
 
@@ -1967,6 +2080,19 @@ class VaultSnapshot {
       relayHealthScores: relayHealthScores,
       defaultRelayDefaultsVersion:
           (json['defaultRelayDefaultsVersion'] as num?)?.toInt() ?? 0,
+      pendingGroupMembershipDeliveries:
+          (json['pendingGroupMembershipDeliveries'] as List<dynamic>? ??
+                  const [])
+              .cast<Map<String, dynamic>>()
+              .map(PendingGroupMembershipDelivery.fromJson)
+              .toList(),
+      pinnedRelayIdentityKeys: <String, String>{
+        for (final entry
+            in (json['pinnedRelayIdentityKeys'] as Map<String, dynamic>? ??
+                    const <String, dynamic>{})
+                .entries)
+          if (entry.value is String) entry.key: entry.value as String,
+      },
     );
   }
 }

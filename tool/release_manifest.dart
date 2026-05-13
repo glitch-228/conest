@@ -11,15 +11,19 @@ const _checksumName = 'SHA256SUMS.txt';
 Future<void> main(List<String> args) async {
   if (args.isEmpty || args.contains('--help') || args.contains('-h')) {
     stderr.writeln(
-      'usage: dart run tool/release_manifest.dart [--dist <dir>] <tag> [asset ...]\n'
+      'usage: dart run tool/release_manifest.dart [--dist <dir>] '
+      '[--release-notes <path>] <tag> [asset ...]\n'
       '\n'
       'Set CONEST_RELEASE_MANIFEST_PRIVATE_KEY to a base64 Ed25519 seed.\n'
-      'If no assets are listed, every file in the dist dir except release metadata is included.',
+      'If no assets are listed, every file in the dist dir except release metadata is included.\n'
+      '--release-notes <path>: optional UTF-8 text file. When passed, the\n'
+      '  contents are embedded as the manifest\'s signed `releaseNotes` field.',
     );
     exit(args.isEmpty ? 2 : 0);
   }
 
   var distPath = 'dist';
+  String? releaseNotesPath;
   final positional = <String>[];
   for (var index = 0; index < args.length; index++) {
     final arg = args[index];
@@ -32,6 +36,15 @@ Future<void> main(List<String> args) async {
       distPath = args[index];
     } else if (arg.startsWith('--dist=')) {
       distPath = arg.substring('--dist='.length);
+    } else if (arg == '--release-notes') {
+      index++;
+      if (index >= args.length) {
+        stderr.writeln('--release-notes requires a path.');
+        exit(2);
+      }
+      releaseNotesPath = args[index];
+    } else if (arg.startsWith('--release-notes=')) {
+      releaseNotesPath = arg.substring('--release-notes='.length);
     } else {
       positional.add(arg);
     }
@@ -81,9 +94,23 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  final manifest = {
+  String? releaseNotesText;
+  if (releaseNotesPath != null) {
+    final notesFile = File(releaseNotesPath);
+    if (!await notesFile.exists()) {
+      stderr.writeln('Release notes file not found: ${notesFile.path}');
+      exit(2);
+    }
+    final raw = await notesFile.readAsString();
+    if (raw.trim().isNotEmpty) {
+      releaseNotesText = raw;
+    }
+  }
+
+  final manifest = <String, dynamic>{
     'version': 1,
     'tagName': tagName,
+    'releaseNotes': ?releaseNotesText,
     'assets': [
       for (final file in assetFiles)
         {

@@ -1,11 +1,16 @@
 use std::collections::{HashMap, VecDeque};
 use std::env;
+use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::{SocketAddr, TcpListener, UdpSocket};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -16,6 +21,7 @@ const DEFAULT_MAX_FETCH_LIMIT: usize = 128;
 const DEFAULT_MAX_ENVELOPE_BYTES: usize = 256 * 1024;
 const DEFAULT_MAX_LINE_BYTES: usize = 300 * 1024;
 const DEFAULT_MAX_REQUESTS_PER_MINUTE: u32 = 240;
+const DEFAULT_IDENTITY_SEED_FILE: &str = "conest_relay_identity.seed";
 
 #[derive(Debug, Clone)]
 struct RelayConfig {
@@ -28,6 +34,8 @@ struct RelayConfig {
     max_line_bytes: usize,
     max_requests_per_minute: u32,
     trust_forwarded_for: bool,
+    identity_seed_path: PathBuf,
+    identity_seed_inline: Option<String>,
 }
 
 impl RelayConfig {
@@ -51,6 +59,10 @@ impl RelayConfig {
                 DEFAULT_MAX_REQUESTS_PER_MINUTE,
             ),
             trust_forwarded_for: env_bool("CONEST_RELAY_TRUST_FORWARDED_FOR", false),
+            identity_seed_path: env::var("CONEST_RELAY_IDENTITY_SEED_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from(DEFAULT_IDENTITY_SEED_FILE)),
+            identity_seed_inline: env::var("CONEST_RELAY_IDENTITY_SEED").ok(),
         };
 
         let mut args = env::args().skip(1).peekable();
@@ -80,6 +92,9 @@ impl RelayConfig {
                 }
                 "--trust-forwarded-for" => {
                     config.trust_forwarded_for = true;
+                }
+                "--identity-seed-path" => {
+                    config.identity_seed_path = PathBuf::from(parse_next_string(&mut args, &arg)?);
                 }
                 value if value.starts_with('-') => {
                     return Err(format!("unknown option: {value}\n\n{}", usage()));
@@ -129,6 +144,102 @@ struct RelayStats {
     ttl_seconds: u64,
     max_queue_per_mailbox: usize,
     max_fetch_limit: usize,
+    identity_public_key: String,
+}
+
+#[derive(Clone)]
+struct RelayIdentity {
+    signing_key: SigningKey,
+    public_key_b64: String,
+}
+
+impl std::fmt::Debug for RelayIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RelayIdentity")
+            .field("public_key_b64", &self.public_key_b64)
+            .finish()
+    }
+}
+
+impl RelayIdentity {
+    fn from_seed_bytes(seed: [u8; 32]) -> Self {
+        let signing_key = SigningKey::from_bytes(&seed);
+        let public_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
+        Self {
+            signing_key,
+            public_key_b64,
+        }
+    }
+
+    /// Loads the relay's persistent Ed25519 identity. Resolution order:
+    ///   1. `identity_seed_inline` (base64) — for stateless deployments
+    ///      where the seed comes from a secrets manager.
+    ///   2. `identity_seed_path` — read 32 raw bytes if the file exists.
+    ///   3. Generate a fresh seed with `OsRng` and persist it to the path.
+    ///
+    /// On unix the freshly-written file is chmod'd 0600. Failures during
+    /// the read/write are propagated so the operator notices instead of
+    /// silently rotating the relay's identity.
+    fn load_or_generate(config: &RelayConfig) -> Result<Self, String> {
+        if let Some(inline) = &config.identity_seed_inline {
+            let trimmed = inline.trim();
+            if !trimmed.is_empty() {
+                let bytes = BASE64_STANDARD.decode(trimmed).map_err(|error| {
+                    format!("CONEST_RELAY_IDENTITY_SEED is not base64: {error}")
+                })?;
+                if bytes.len() != 32 {
+                    return Err(format!(
+                        "CONEST_RELAY_IDENTITY_SEED must decode to 32 bytes (got {})",
+                        bytes.len()
+                    ));
+                }
+                let mut seed = [0_u8; 32];
+                seed.copy_from_slice(&bytes);
+                return Ok(Self::from_seed_bytes(seed));
+            }
+        }
+        let path = &config.identity_seed_path;
+        if path.exists() {
+            let bytes = fs::read(path)
+                .map_err(|error| format!("reading identity seed at {}: {error}", path.display()))?;
+            if bytes.len() != 32 {
+                return Err(format!(
+                    "identity seed at {} must be exactly 32 bytes (got {})",
+                    path.display(),
+                    bytes.len()
+                ));
+            }
+            let mut seed = [0_u8; 32];
+            seed.copy_from_slice(&bytes);
+            return Ok(Self::from_seed_bytes(seed));
+        }
+        // Generate + persist a fresh seed.
+        use rand::RngCore;
+        let mut seed = [0_u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut seed);
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "creating identity seed directory {}: {error}",
+                    parent.display()
+                )
+            })?;
+        }
+        fs::write(path, seed)
+            .map_err(|error| format!("writing identity seed to {}: {error}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+        }
+        Ok(Self::from_seed_bytes(seed))
+    }
+
+    fn sign(&self, message: &[u8]) -> [u8; 64] {
+        self.signing_key.sign(message).to_bytes()
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -138,6 +249,10 @@ struct RelayResponse {
     messages: Vec<Value>,
     error: Option<String>,
     stats: Option<RelayStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nonce_echo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signature: Option<String>,
 }
 
 impl RelayResponse {
@@ -148,6 +263,8 @@ impl RelayResponse {
             messages: Vec::new(),
             error: None,
             stats,
+            nonce_echo: None,
+            signature: None,
         }
     }
 
@@ -158,6 +275,8 @@ impl RelayResponse {
             messages: Vec::new(),
             error: None,
             stats: None,
+            nonce_echo: None,
+            signature: None,
         }
     }
 
@@ -168,6 +287,8 @@ impl RelayResponse {
             messages,
             error: None,
             stats: None,
+            nonce_echo: None,
+            signature: None,
         }
     }
 
@@ -178,6 +299,8 @@ impl RelayResponse {
             messages: Vec::new(),
             error: Some(message.into()),
             stats: None,
+            nonce_echo: None,
+            signature: None,
         }
     }
 }
@@ -199,14 +322,16 @@ struct RelayState {
     config: RelayConfig,
     queues: Arc<Mutex<HashMap<String, VecDeque<QueueEntry>>>>,
     rate_buckets: Arc<Mutex<HashMap<String, RateBucket>>>,
+    identity: Arc<RelayIdentity>,
 }
 
 impl RelayState {
-    fn new(config: RelayConfig) -> Self {
+    fn new(config: RelayConfig, identity: RelayIdentity) -> Self {
         Self {
             config,
             queues: Arc::new(Mutex::new(HashMap::new())),
             rate_buckets: Arc::new(Mutex::new(HashMap::new())),
+            identity: Arc::new(identity),
         }
     }
 
@@ -318,6 +443,7 @@ impl RelayState {
             ttl_seconds: self.config.ttl.as_secs(),
             max_queue_per_mailbox: self.config.max_queue_per_mailbox,
             max_fetch_limit: self.config.max_fetch_limit,
+            identity_public_key: self.identity.public_key_b64.clone(),
         }
     }
 
@@ -344,18 +470,27 @@ fn main() -> std::io::Result<()> {
             std::process::exit(2);
         }
     };
+    let identity = match RelayIdentity::load_or_generate(&config) {
+        Ok(identity) => identity,
+        Err(message) => {
+            eprintln!("relay identity setup failed: {message}");
+            std::process::exit(2);
+        }
+    };
     let listener = TcpListener::bind(&config.bind)?;
     let udp_socket = UdpSocket::bind(&config.bind)?;
-    let state = RelayState::new(config.clone());
+    let identity_public_key = identity.public_key_b64.clone();
+    let state = RelayState::new(config.clone(), identity);
     println!(
-        "conest relay listening on tcp+udp {} id={} ttl={}s max_queue={} max_fetch={} max_envelope={}B max_rate={}/min",
+        "conest relay listening on tcp+udp {} id={} ttl={}s max_queue={} max_fetch={} max_envelope={}B max_rate={}/min identity_pub={}",
         config.bind,
         config.relay_id,
         config.ttl.as_secs(),
         config.max_queue_per_mailbox,
         config.max_fetch_limit,
         config.max_envelope_bytes,
-        config.max_requests_per_minute
+        config.max_requests_per_minute,
+        identity_public_key,
     );
 
     {
@@ -590,13 +725,45 @@ fn handle_request_bytes(
     if !state.allow_request(peer) {
         return RelayResponse::error("rate limit exceeded");
     }
-    match std::str::from_utf8(bytes) {
-        Ok(line) => match serde_json::from_str::<RelayRequest>(line.trim()) {
-            Ok(request) => handle_request(request, state),
-            Err(error) => RelayResponse::error(format!("invalid request: {error}")),
-        },
-        Err(error) => RelayResponse::error(format!("request is not utf-8: {error}")),
-    }
+    let line = match std::str::from_utf8(bytes) {
+        Ok(value) => value,
+        Err(error) => {
+            return RelayResponse::error(format!("request is not utf-8: {error}"));
+        }
+    };
+    let trimmed = line.trim();
+    // Parse once into a Value so we can extract optional out-of-band fields
+    // (like `nonce`) before deserializing into the typed request enum. New
+    // clients pass `"nonce": "<base64-16-bytes>"` alongside the action;
+    // legacy clients omit it and receive an unsigned response.
+    let parsed: Value = match serde_json::from_str(trimmed) {
+        Ok(value) => value,
+        Err(error) => {
+            return RelayResponse::error(format!("invalid request: {error}"));
+        }
+    };
+    let action = parsed
+        .get("action")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let nonce_bytes = parsed
+        .get("nonce")
+        .and_then(|value| value.as_str())
+        .and_then(|encoded| BASE64_STANDARD.decode(encoded).ok());
+    let request: RelayRequest = match serde_json::from_value(parsed) {
+        Ok(request) => request,
+        Err(error) => {
+            return finalize_response(
+                RelayResponse::error(format!("invalid request: {error}")),
+                &action,
+                nonce_bytes.as_deref(),
+                &state.identity,
+            );
+        }
+    };
+    let response = handle_request(request, state);
+    finalize_response(response, &action, nonce_bytes.as_deref(), &state.identity)
 }
 
 fn handle_request(request: RelayRequest, state: &RelayState) -> RelayResponse {
@@ -617,6 +784,42 @@ fn handle_request(request: RelayRequest, state: &RelayState) -> RelayResponse {
         },
         RelayRequest::Health => RelayResponse::ok(Some(state.stats())),
     }
+}
+
+/// Attaches `nonce_echo` + `signature` to a response when the request
+/// supplied a nonce. The signing input is `action || nonce || canonical_body`,
+/// where `canonical_body` is the JSON serialization of the response with
+/// both `nonce_echo` and `signature` set to `None` (and thus omitted by
+/// the `skip_serializing_if = "Option::is_none"` markers). Legacy clients
+/// that omit `nonce` receive the response unchanged — the signature is
+/// opt-in so old releases keep working.
+fn finalize_response(
+    mut response: RelayResponse,
+    action: &str,
+    nonce_bytes: Option<&[u8]>,
+    identity: &RelayIdentity,
+) -> RelayResponse {
+    let Some(nonce) = nonce_bytes else {
+        return response;
+    };
+    response.nonce_echo = None;
+    response.signature = None;
+    let body = match serde_json::to_vec(&response) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            // Should never fail given the response is a fixed shape, but
+            // don't crash the relay if it does.
+            return response;
+        }
+    };
+    let mut signing_input = Vec::with_capacity(action.len() + nonce.len() + body.len());
+    signing_input.extend_from_slice(action.as_bytes());
+    signing_input.extend_from_slice(nonce);
+    signing_input.extend_from_slice(&body);
+    let signature = identity.sign(&signing_input);
+    response.nonce_echo = Some(BASE64_STANDARD.encode(nonce));
+    response.signature = Some(BASE64_STANDARD.encode(signature));
+    response
 }
 
 fn envelope_kind(envelope: &Value) -> Option<&str> {
@@ -755,7 +958,18 @@ mod tests {
             max_line_bytes: DEFAULT_MAX_LINE_BYTES,
             max_requests_per_minute: DEFAULT_MAX_REQUESTS_PER_MINUTE,
             trust_forwarded_for: false,
+            identity_seed_path: PathBuf::from(""),
+            identity_seed_inline: None,
         }
+    }
+
+    fn test_identity() -> RelayIdentity {
+        // Fixed seed so signing input ↔ signature is deterministic across runs.
+        RelayIdentity::from_seed_bytes([7_u8; 32])
+    }
+
+    fn test_state() -> RelayState {
+        RelayState::new(test_config(), test_identity())
     }
 
     fn envelope(kind: &str, id: &str, sender: &str) -> Value {
@@ -773,7 +987,7 @@ mod tests {
 
     #[test]
     fn pairing_announcements_are_reusable_and_deduped_by_sender() {
-        let state = RelayState::new(test_config());
+        let state = RelayState::new(test_config(), test_identity());
         state
             .store(
                 "pair-mailbox".to_owned(),
@@ -802,7 +1016,7 @@ mod tests {
 
     #[test]
     fn non_pairing_envelopes_are_consumed_and_fetch_limit_is_clamped() {
-        let state = RelayState::new(test_config());
+        let state = RelayState::new(test_config(), test_identity());
         for index in 0..3 {
             state
                 .store(
@@ -821,7 +1035,7 @@ mod tests {
 
     #[test]
     fn queue_limit_drops_oldest_non_pairing_envelopes() {
-        let state = RelayState::new(test_config());
+        let state = RelayState::new(test_config(), test_identity());
         for index in 0..4 {
             state
                 .store(
@@ -849,7 +1063,7 @@ mod tests {
 
     #[test]
     fn udp_datagram_handler_uses_same_relay_protocol() {
-        let state = RelayState::new(test_config());
+        let state = RelayState::new(test_config(), test_identity());
         let peer = "127.0.0.1:49152".parse().expect("test socket addr");
         let store = json!({
             "action": "store",
@@ -875,7 +1089,7 @@ mod tests {
 
     #[test]
     fn http_post_handler_uses_same_relay_protocol() {
-        let state = RelayState::new(test_config());
+        let state = RelayState::new(test_config(), test_identity());
         let peer = "127.0.0.1";
         let store = json!({
             "action": "store",
@@ -918,7 +1132,7 @@ mod tests {
 
     #[test]
     fn http_get_health_reports_relay_instance_id() {
-        let state = RelayState::new(test_config());
+        let state = RelayState::new(test_config(), test_identity());
         let mut reader = BufReader::new("Host: relay.test\r\n\r\n".as_bytes());
         let (status, response) =
             handle_http_request("GET /health HTTP/1.1\r\n", &mut reader, &state, "127.0.0.1");
@@ -931,7 +1145,7 @@ mod tests {
 
     #[test]
     fn health_reports_relay_instance_id() {
-        let state = RelayState::new(test_config());
+        let state = RelayState::new(test_config(), test_identity());
         let response = handle_request(RelayRequest::Health, &state);
         let stats = response.stats.expect("health should include stats");
 
@@ -941,7 +1155,7 @@ mod tests {
 
     #[test]
     fn http_path_with_query_string_is_accepted() {
-        let state = RelayState::new(test_config());
+        let state = RelayState::new(test_config(), test_identity());
         let mut reader = BufReader::new("Host: relay.test\r\n\r\n".as_bytes());
         let (status, response) = handle_http_request(
             "GET /health?cache=1 HTTP/1.1\r\n",
@@ -958,7 +1172,7 @@ mod tests {
         let mut config = test_config();
         config.trust_forwarded_for = true;
         config.max_requests_per_minute = 2;
-        let state = RelayState::new(config);
+        let state = RelayState::new(config, test_identity());
 
         // Two requests from the same forwarded client succeed, the third gets
         // rate-limited even though every connection looks like 127.0.0.1.
@@ -972,13 +1186,159 @@ mod tests {
         }
     }
 
+    fn verify_signature(identity: &RelayIdentity, response: &RelayResponse, action: &str) -> bool {
+        use ed25519_dalek::{Signature, Verifier};
+        let nonce = match &response.nonce_echo {
+            Some(value) => match BASE64_STANDARD.decode(value) {
+                Ok(bytes) => bytes,
+                Err(_) => return false,
+            },
+            None => return false,
+        };
+        let signature_bytes = match &response.signature {
+            Some(value) => match BASE64_STANDARD.decode(value) {
+                Ok(bytes) => bytes,
+                Err(_) => return false,
+            },
+            None => return false,
+        };
+        if signature_bytes.len() != 64 {
+            return false;
+        }
+        let mut sig_array = [0_u8; 64];
+        sig_array.copy_from_slice(&signature_bytes);
+        let signature = Signature::from_bytes(&sig_array);
+
+        // Reproduce the canonical body the relay signed: response sans
+        // nonce_echo + signature, via the same skip-if-none JSON path.
+        let mut canonical = RelayResponse {
+            ok: response.ok,
+            stored: response.stored,
+            messages: response.messages.clone(),
+            error: response.error.clone(),
+            stats: response.stats.as_ref().map(|stats| RelayStats {
+                relay_id: stats.relay_id.clone(),
+                queue_count: stats.queue_count,
+                queued_envelope_count: stats.queued_envelope_count,
+                ttl_seconds: stats.ttl_seconds,
+                max_queue_per_mailbox: stats.max_queue_per_mailbox,
+                max_fetch_limit: stats.max_fetch_limit,
+                identity_public_key: stats.identity_public_key.clone(),
+            }),
+            nonce_echo: None,
+            signature: None,
+        };
+        // The two None fields are already cleared; assigning again is a no-op
+        // and reminds the reader why this clone exists.
+        canonical.nonce_echo = None;
+        canonical.signature = None;
+        let body = serde_json::to_vec(&canonical).expect("response is serializable");
+        let mut signing_input = Vec::with_capacity(action.len() + nonce.len() + body.len());
+        signing_input.extend_from_slice(action.as_bytes());
+        signing_input.extend_from_slice(&nonce);
+        signing_input.extend_from_slice(&body);
+        identity
+            .signing_key
+            .verifying_key()
+            .verify(&signing_input, &signature)
+            .is_ok()
+    }
+
+    #[test]
+    fn identity_seed_round_trips_through_load_or_generate() {
+        let tmp_dir = env::temp_dir().join(format!(
+            "conest_relay_id_test_{}_{}",
+            std::process::id(),
+            now_millis()
+        ));
+        fs::create_dir_all(&tmp_dir).expect("create tmp dir");
+        let seed_path = tmp_dir.join("seed");
+        let mut config = test_config();
+        config.identity_seed_path = seed_path.clone();
+        config.identity_seed_inline = None;
+
+        let first = RelayIdentity::load_or_generate(&config).expect("first load");
+        assert!(
+            seed_path.exists(),
+            "seed file should be created on first run"
+        );
+        let second = RelayIdentity::load_or_generate(&config).expect("second load");
+        assert_eq!(
+            first.public_key_b64, second.public_key_b64,
+            "subsequent loads must produce the same identity"
+        );
+
+        let _ = fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn health_response_exposes_identity_public_key() {
+        let state = test_state();
+        let response = handle_request(RelayRequest::Health, &state);
+        let stats = response.stats.expect("health response carries stats");
+        assert!(
+            !stats.identity_public_key.is_empty(),
+            "stats must include the relay's identity public key"
+        );
+        assert_eq!(stats.identity_public_key, state.identity.public_key_b64);
+    }
+
+    #[test]
+    fn request_with_nonce_receives_a_valid_signature() {
+        let state = test_state();
+        let request = json!({
+            "action": "health",
+            "nonce": BASE64_STANDARD.encode([1_u8; 16]),
+        })
+        .to_string();
+        let response = handle_request_bytes(request.as_bytes(), request.len(), &state, "127.0.0.1");
+        assert!(response.signature.is_some(), "signed responses required");
+        assert!(
+            verify_signature(&state.identity, &response, "health"),
+            "signature must verify against the relay's pinned key"
+        );
+    }
+
+    #[test]
+    fn request_without_nonce_returns_unsigned_response() {
+        let state = test_state();
+        let request = json!({ "action": "health" }).to_string();
+        let response = handle_request_bytes(request.as_bytes(), request.len(), &state, "127.0.0.1");
+        assert!(
+            response.signature.is_none(),
+            "legacy clients without a nonce keep getting unsigned responses"
+        );
+        assert!(response.nonce_echo.is_none());
+    }
+
+    #[test]
+    fn tampered_response_body_invalidates_the_signature() {
+        let state = test_state();
+        let request = json!({
+            "action": "health",
+            "nonce": BASE64_STANDARD.encode([9_u8; 16]),
+        })
+        .to_string();
+        let mut response =
+            handle_request_bytes(request.as_bytes(), request.len(), &state, "127.0.0.1");
+        // Flip a byte of the response that participates in the signing
+        // input. Verifier must reject it.
+        if let Some(stats) = response.stats.as_mut() {
+            stats.queue_count += 1;
+        }
+        assert!(
+            !verify_signature(&state.identity, &response, "health"),
+            "tampered body must fail signature verification"
+        );
+    }
+
     #[test]
     fn http_ignores_forwarded_for_when_disabled() {
         // Default config does NOT trust X-Forwarded-For; budget should be tied
         // to the connection peer only.
         let mut config = test_config();
         config.max_requests_per_minute = 2;
-        let state = RelayState::new(config);
+        let state = RelayState::new(config, test_identity());
         for expected_status in [200_u16, 200, 429] {
             let mut reader = BufReader::new(
                 "Host: relay.test\r\nX-Forwarded-For: 198.51.100.7\r\n\r\n".as_bytes(),

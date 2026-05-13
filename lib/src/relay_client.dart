@@ -1,14 +1,65 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
+
+import 'package:cryptography/cryptography.dart';
 
 import 'models.dart';
 
 class RelayHealthInfo {
-  const RelayHealthInfo({required this.ok, this.relayInstanceId});
+  const RelayHealthInfo({
+    required this.ok,
+    this.relayInstanceId,
+    this.identityPublicKeyBase64,
+    this.signatureVerified = false,
+    this.pinnedKeyMismatch = false,
+  });
 
   final bool ok;
   final String? relayInstanceId;
+
+  /// Ed25519 identity key announced by the relay in its health response.
+  /// Available from v0.3 relays; older relays leave this null. The client
+  /// pins this on first contact and warns on mismatch.
+  final String? identityPublicKeyBase64;
+
+  /// True when the response carried a signature that verified against
+  /// either the caller-supplied pinned key or the self-announced
+  /// `identity_public_key` (whichever applied). Useful for surfacing
+  /// "this relay is signing its responses" status in the UI.
+  final bool signatureVerified;
+
+  /// True when the caller supplied a pinned identity key and the response's
+  /// signature did not verify against it (or the announced key differs).
+  /// The controller surfaces a banner; we never auto-rotate the pin.
+  final bool pinnedKeyMismatch;
+}
+
+/// Thrown when a relay response carries a signature that does not verify
+/// against the pinned identity key supplied by the caller. The caller
+/// catches this to surface a security banner without aborting unrelated
+/// operations.
+class RelayIdentityMismatchException implements Exception {
+  RelayIdentityMismatchException(this.message);
+  final String message;
+
+  @override
+  String toString() => 'RelayIdentityMismatchException: $message';
+}
+
+class _RelayCallResult {
+  const _RelayCallResult({
+    required this.body,
+    this.announcedIdentityPublicKeyBase64,
+    this.signatureVerified = false,
+    this.pinnedKeyMismatch = false,
+  });
+
+  final Map<String, dynamic> body;
+  final String? announcedIdentityPublicKeyBase64;
+  final bool signatureVerified;
+  final bool pinnedKeyMismatch;
 }
 
 class RelayClient {
@@ -19,6 +70,7 @@ class RelayClient {
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) async {
     final stopwatch = Stopwatch()..start();
     final info = await inspectHealth(
@@ -26,6 +78,7 @@ class RelayClient {
       port: port,
       protocol: protocol,
       timeout: timeout,
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
     );
     stopwatch.stop();
     if (!info.ok) {
@@ -41,8 +94,9 @@ class RelayClient {
     required String recipientDeviceId,
     required RelayEnvelope envelope,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) async {
-    final response = await _sendRequest(
+    final result = await _sendRequest(
       host: host,
       port: port,
       protocol: protocol,
@@ -52,8 +106,9 @@ class RelayClient {
         'recipient_device_id': recipientDeviceId,
         'envelope': envelope.toJson(),
       },
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
     );
-    return response['stored'] == true;
+    return result.body['stored'] == true;
   }
 
   Future<List<RelayEnvelope>> fetchEnvelopes({
@@ -63,8 +118,9 @@ class RelayClient {
     required String recipientDeviceId,
     int limit = 64,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) async {
-    final response = await _sendRequest(
+    final result = await _sendRequest(
       host: host,
       port: port,
       protocol: protocol,
@@ -74,8 +130,9 @@ class RelayClient {
         'recipient_device_id': recipientDeviceId,
         'limit': limit,
       },
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
     );
-    final rawMessages = (response['messages'] as List<dynamic>? ?? const [])
+    final rawMessages = (result.body['messages'] as List<dynamic>? ?? const [])
         .cast<dynamic>();
     return rawMessages
         .map(
@@ -89,12 +146,14 @@ class RelayClient {
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) async {
     final info = await inspectHealth(
       host: host,
       port: port,
       protocol: protocol,
       timeout: timeout,
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
     );
     return info.ok;
   }
@@ -104,60 +163,207 @@ class RelayClient {
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) async {
-    final response = await _sendRequest(
+    final result = await _sendRequest(
       host: host,
       port: port,
       protocol: protocol,
       timeout: timeout,
       request: const {'action': 'health'},
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
     );
-    final stats = response['stats'];
+    final stats = result.body['stats'];
     final relayId = stats is Map<String, dynamic>
         ? stats['relay_id'] as String?
-        : response['relay_id'] as String?;
+        : result.body['relay_id'] as String?;
     return RelayHealthInfo(
-      ok: response['ok'] == true,
+      ok: result.body['ok'] == true,
       relayInstanceId: relayId,
+      identityPublicKeyBase64: result.announcedIdentityPublicKeyBase64,
+      signatureVerified: result.signatureVerified,
+      pinnedKeyMismatch: result.pinnedKeyMismatch,
     );
   }
 
-  Future<Map<String, dynamic>> _sendRequest({
+  Future<_RelayCallResult> _sendRequest({
     required String host,
     required int port,
     required PeerRouteProtocol protocol,
     required Duration timeout,
     required Map<String, dynamic> request,
+    String? expectedIdentityPublicKeyBase64,
   }) async {
     final endpoint = _validateEndpoint(host: host, port: port);
-    return switch (protocol) {
+    // Per-request nonce binds the signature to this exchange. 16 bytes is
+    // enough to make replay-with-different-body collisions infeasible.
+    final nonceBytes = _secureRandomBytes(16);
+    final nonceBase64 = base64Encode(nonceBytes);
+    final action = (request['action'] as String?) ?? '';
+    final signedRequest = <String, dynamic>{
+      ...request,
+      'nonce': nonceBase64,
+    };
+    final body = await switch (protocol) {
       PeerRouteProtocol.tcp => _sendTcpRequest(
         host: endpoint.host,
         port: endpoint.port,
         timeout: timeout,
-        request: request,
+        request: signedRequest,
       ),
       PeerRouteProtocol.udp => _sendUdpRequest(
         host: endpoint.host,
         port: endpoint.port,
         timeout: timeout,
-        request: request,
+        request: signedRequest,
       ),
       PeerRouteProtocol.http => _sendHttpRequest(
         scheme: 'http',
         host: endpoint.host,
         port: endpoint.port,
         timeout: timeout,
-        request: request,
+        request: signedRequest,
       ),
       PeerRouteProtocol.https => _sendHttpRequest(
         scheme: 'https',
         host: endpoint.host,
         port: endpoint.port,
         timeout: timeout,
-        request: request,
+        request: signedRequest,
       ),
     };
+    return _verifyResponseSignature(
+      body: body,
+      action: action,
+      nonceBase64: nonceBase64,
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    );
+  }
+
+  /// Validates the relay's signature over the response body. Resolution:
+  ///   - If the response carries no `signature`/`nonce_echo`, treat the
+  ///     relay as legacy/unsigned. Caller decides what to do.
+  ///   - If `nonce_echo` doesn't match the sent nonce, treat as unsigned.
+  ///   - If `expectedIdentityPublicKeyBase64` is supplied and verification
+  ///     against it fails, throw [RelayIdentityMismatchException] so the
+  ///     caller can surface a banner.
+  ///   - Otherwise, verify against the response's self-announced
+  ///     `identity_public_key` (TOFU). Sets `signatureVerified` to true
+  ///     iff verification succeeds.
+  Future<_RelayCallResult> _verifyResponseSignature({
+    required Map<String, dynamic> body,
+    required String action,
+    required String nonceBase64,
+    required String? expectedIdentityPublicKeyBase64,
+  }) async {
+    final stats = body['stats'];
+    final announcedKey = stats is Map<String, dynamic>
+        ? stats['identity_public_key'] as String?
+        : null;
+    final signatureBase64 = body['signature'] as String?;
+    final nonceEcho = body['nonce_echo'] as String?;
+    if (signatureBase64 == null || nonceEcho == null) {
+      return _RelayCallResult(
+        body: body,
+        announcedIdentityPublicKeyBase64: announcedKey,
+      );
+    }
+    if (nonceEcho != nonceBase64) {
+      // Replay / mismatch — refuse to credit the signature.
+      return _RelayCallResult(
+        body: body,
+        announcedIdentityPublicKeyBase64: announcedKey,
+      );
+    }
+    final signingInput = _signingInput(
+      action: action,
+      nonceBase64: nonceBase64,
+      body: body,
+    );
+    final algorithm = Ed25519();
+    Future<bool> verifyAgainst(String pubKeyBase64) async {
+      final List<int> sig;
+      final List<int> pub;
+      try {
+        sig = base64Decode(signatureBase64);
+        pub = base64Decode(pubKeyBase64);
+      } on FormatException {
+        return false;
+      }
+      if (sig.length != 64 || pub.length != 32) {
+        return false;
+      }
+      return algorithm.verify(
+        signingInput,
+        signature: Signature(
+          sig,
+          publicKey: SimplePublicKey(pub, type: KeyPairType.ed25519),
+        ),
+      );
+    }
+
+    if (expectedIdentityPublicKeyBase64 != null &&
+        expectedIdentityPublicKeyBase64.trim().isNotEmpty) {
+      final verified = await verifyAgainst(expectedIdentityPublicKeyBase64);
+      if (!verified) {
+        throw RelayIdentityMismatchException(
+          'Relay response signature did not verify against the pinned identity key.',
+        );
+      }
+      // If the relay also announced a key, it must match the pinned one
+      // (otherwise a malicious relay could swap keys mid-conversation).
+      if (announcedKey != null &&
+          announcedKey != expectedIdentityPublicKeyBase64) {
+        return _RelayCallResult(
+          body: body,
+          announcedIdentityPublicKeyBase64: announcedKey,
+          signatureVerified: true,
+          pinnedKeyMismatch: true,
+        );
+      }
+      return _RelayCallResult(
+        body: body,
+        announcedIdentityPublicKeyBase64: announcedKey ??
+            expectedIdentityPublicKeyBase64,
+        signatureVerified: true,
+      );
+    }
+    if (announcedKey != null && announcedKey.trim().isNotEmpty) {
+      final verified = await verifyAgainst(announcedKey);
+      return _RelayCallResult(
+        body: body,
+        announcedIdentityPublicKeyBase64: announcedKey,
+        signatureVerified: verified,
+      );
+    }
+    // Signature present but nothing to verify against.
+    return _RelayCallResult(
+      body: body,
+      announcedIdentityPublicKeyBase64: announcedKey,
+    );
+  }
+
+  /// Reproduces the relay's canonical signing input: `action || nonce ||
+  /// canonical_body`. The canonical body is the JSON-encoded response with
+  /// `nonce_echo` and `signature` removed (matching `skip_serializing_if`
+  /// behavior on the relay side).
+  List<int> _signingInput({
+    required String action,
+    required String nonceBase64,
+    required Map<String, dynamic> body,
+  }) {
+    final stripped = Map<String, dynamic>.from(body)
+      ..remove('nonce_echo')
+      ..remove('signature');
+    final canonical = utf8.encode(jsonEncode(stripped));
+    final actionBytes = utf8.encode(action);
+    final nonceBytes = base64Decode(nonceBase64);
+    return <int>[...actionBytes, ...nonceBytes, ...canonical];
+  }
+
+  List<int> _secureRandomBytes(int length) {
+    final random = Random.secure();
+    return List<int>.generate(length, (_) => random.nextInt(256));
   }
 
   _ValidatedRelayEndpoint _validateEndpoint({

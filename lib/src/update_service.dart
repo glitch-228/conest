@@ -60,6 +60,7 @@ class GithubReleaseInfo {
     required this.prerelease,
     required this.draft,
     required this.assets,
+    this.body,
   });
 
   final String tagName;
@@ -69,6 +70,7 @@ class GithubReleaseInfo {
   final bool prerelease;
   final bool draft;
   final List<GithubReleaseAsset> assets;
+  final String? body;
 }
 
 class UpdateAvailability {
@@ -76,11 +78,18 @@ class UpdateAvailability {
     required this.release,
     required this.asset,
     required this.sha256Hex,
+    this.releaseNotes,
   });
 
   final GithubReleaseInfo release;
   final GithubReleaseAsset asset;
   final String sha256Hex;
+
+  /// Resolved release notes text. Manifest-baked notes are preferred (signed,
+  /// tamper-proof); the GitHub release body is consulted as a fallback for
+  /// stable releases when the manifest does not embed notes. Null when the
+  /// channel skips notes (nightlies) or no source produced text.
+  final String? releaseNotes;
 }
 
 typedef DesktopUpdaterLauncher =
@@ -129,11 +138,17 @@ class ReleaseManifest {
     required this.version,
     required this.tagName,
     required this.assets,
+    this.releaseNotes,
   });
 
   final int version;
   final String tagName;
   final Map<String, ReleaseManifestAsset> assets;
+
+  /// Optional, signed release notes baked into the manifest at build time.
+  /// Empty or null on nightlies and on legacy manifests; renders as the
+  /// "What's new" section in the update prompt when present.
+  final String? releaseNotes;
 
   factory ReleaseManifest.fromJson(Map<String, dynamic> json) {
     final version = json['version'] as int? ?? 0;
@@ -163,7 +178,16 @@ class ReleaseManifest {
     if (assets.isEmpty) {
       throw const FormatException('Release manifest has no assets.');
     }
-    return ReleaseManifest(version: version, tagName: tagName, assets: assets);
+    final rawNotes = json['releaseNotes'];
+    final notes = rawNotes is String && rawNotes.trim().isNotEmpty
+        ? rawNotes
+        : null;
+    return ReleaseManifest(
+      version: version,
+      tagName: tagName,
+      assets: assets,
+      releaseNotes: notes,
+    );
   }
 
   ReleaseManifestAsset assetFor(GithubReleaseAsset asset) {
@@ -346,10 +370,15 @@ class UpdateService extends ChangeNotifier {
       }
       final manifest = await _fetchVerifiedReleaseManifest(selected);
       final manifestAsset = manifest.assetFor(asset);
+      final releaseNotes = _resolveReleaseNotes(
+        manifest: manifest,
+        release: selected,
+      );
       _availableUpdate = UpdateAvailability(
         release: selected,
         asset: asset,
         sha256Hex: manifestAsset.sha256Hex,
+        releaseNotes: releaseNotes,
       );
       _statusMessage =
           'Update ${selected.tagName} is available for ${_targetPlatform.label}.';
@@ -434,6 +463,10 @@ class UpdateService extends ChangeNotifier {
           ),
         )
         .toList();
+    final rawBody = json['body'];
+    final body = rawBody is String && rawBody.trim().isNotEmpty
+        ? rawBody
+        : null;
     return GithubReleaseInfo(
       tagName: json['tag_name'] as String? ?? '',
       name: json['name'] as String? ?? '',
@@ -447,6 +480,7 @@ class UpdateService extends ChangeNotifier {
       prerelease: json['prerelease'] as bool? ?? false,
       draft: json['draft'] as bool? ?? false,
       assets: assets,
+      body: body,
     );
   }
 
@@ -484,6 +518,31 @@ class UpdateService extends ChangeNotifier {
       };
     });
     return assets.isEmpty ? null : assets.first;
+  }
+
+  /// Returns the resolved release notes for an available update.
+  ///
+  /// Order of precedence:
+  ///   1. `manifest.releaseNotes` — signed, tamper-proof, baked in at build time.
+  ///   2. GitHub release `body` — present on the already-fetched
+  ///      [GithubReleaseInfo], no extra network call.
+  /// Nightly builds skip notes entirely so the dialog stays terse.
+  String? _resolveReleaseNotes({
+    required ReleaseManifest manifest,
+    required GithubReleaseInfo release,
+  }) {
+    if (buildInfo.channel != UpdateChannel.stable) {
+      return null;
+    }
+    final manifestNotes = manifest.releaseNotes;
+    if (manifestNotes != null && manifestNotes.trim().isNotEmpty) {
+      return manifestNotes;
+    }
+    final bodyNotes = release.body;
+    if (bodyNotes != null && bodyNotes.trim().isNotEmpty) {
+      return bodyNotes;
+    }
+    return null;
   }
 
   bool _matchesCurrentBuild(String releaseTag) {

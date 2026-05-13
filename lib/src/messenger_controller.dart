@@ -145,6 +145,18 @@ class MessengerController extends ChangeNotifier {
   /// Per-endpoint relay health, derived from recorded attempts. Read-only.
   Map<String, RelayHealthScore> get relayHealthScores =>
       Map.unmodifiable(_snapshot.relayHealthScores);
+
+  /// Group-membership envelopes still awaiting an ack from the targeted
+  /// recipient. Exposed for diagnostics and tests; the retry loop drains
+  /// this queue automatically.
+  List<PendingGroupMembershipDelivery> get pendingGroupMembershipDeliveries =>
+      List.unmodifiable(_snapshot.pendingGroupMembershipDeliveries);
+
+  /// First-use-pinned Ed25519 identity keys per relay instance id. Updated
+  /// by the route-health check when a v0.3 relay advertises its key with
+  /// a verifiable signature.
+  Map<String, String> get pinnedRelayIdentityKeys =>
+      Map.unmodifiable(_snapshot.pinnedRelayIdentityKeys);
   String? get statusMessage => _statusMessage;
   String get lastRelayStatus => _lastRelayStatus;
   bool get isAppForeground => _appInForeground;
@@ -2981,6 +2993,7 @@ class MessengerController extends ChangeNotifier {
       'reason': reason,
       'group': profiledGroup.toJson(),
     });
+    final now = _now();
     for (final deviceId in targetDeviceIds.toSet()) {
       if (deviceId == me.deviceId) {
         continue;
@@ -2999,6 +3012,20 @@ class MessengerController extends ChangeNotifier {
         contact: contact,
         plaintext: payload,
       );
+      // Enqueue BEFORE attempting delivery so a failure (or a crash mid-send)
+      // doesn't lose the obligation. The retry loop drains this queue
+      // independently. Inbound `group_membership_ack` clears the entry.
+      _enqueuePendingMembershipDelivery(
+        PendingGroupMembershipDelivery(
+          groupId: profiledGroup.groupId,
+          targetDeviceId: contact.deviceId,
+          membershipVersion: profiledGroup.membershipVersion,
+          originalMessageId: envelope.messageId,
+          reason: reason,
+          lastAttemptedAt: now,
+          attempts: 1,
+        ),
+      );
       try {
         await _deliverToContact(
           contact: contact,
@@ -3006,9 +3033,224 @@ class MessengerController extends ChangeNotifier {
           envelope: envelope,
         );
       } catch (_) {
-        // Membership updates are retried by later group activity and route polls.
+        // Stays in the pending queue; the retry loop will pick it up.
       }
     }
+    // Persist the freshly-enqueued pending deliveries so a crash before
+    // the next debounce flush doesn't lose them.
+    await _saveSnapshotSilently(notify: false);
+  }
+
+  /// Upserts a pending membership delivery into the persistent queue.
+  /// `(groupId, targetDeviceId)` is the natural key — only one entry per
+  /// recipient per group survives. Newer membership versions supersede
+  /// older queued entries for the same target.
+  void _enqueuePendingMembershipDelivery(
+    PendingGroupMembershipDelivery entry,
+  ) {
+    final updated = <PendingGroupMembershipDelivery>[];
+    var inserted = false;
+    for (final existing in _snapshot.pendingGroupMembershipDeliveries) {
+      final sameTarget =
+          existing.groupId == entry.groupId &&
+          existing.targetDeviceId == entry.targetDeviceId;
+      if (!sameTarget) {
+        updated.add(existing);
+        continue;
+      }
+      if (entry.membershipVersion >= existing.membershipVersion) {
+        updated.add(entry);
+      } else {
+        // Incoming entry is older than what's already queued — keep the
+        // queued one. (Should not happen in practice because membership
+        // versions only ever bump.)
+        updated.add(existing);
+      }
+      inserted = true;
+    }
+    if (!inserted) {
+      updated.add(entry);
+    }
+    _snapshot = _snapshot.copyWith(pendingGroupMembershipDeliveries: updated);
+  }
+
+  void _clearPendingMembershipDelivery({
+    required String groupId,
+    required String targetDeviceId,
+    int? acknowledgedMembershipVersion,
+  }) {
+    final filtered = _snapshot.pendingGroupMembershipDeliveries
+        .where((entry) {
+          if (entry.groupId != groupId ||
+              entry.targetDeviceId != targetDeviceId) {
+            return true;
+          }
+          if (acknowledgedMembershipVersion != null &&
+              entry.membershipVersion > acknowledgedMembershipVersion) {
+            // The peer ack'd an older version; a newer one is still owed.
+            return true;
+          }
+          return false;
+        })
+        .toList(growable: false);
+    if (filtered.length ==
+        _snapshot.pendingGroupMembershipDeliveries.length) {
+      return;
+    }
+    _snapshot = _snapshot.copyWith(pendingGroupMembershipDeliveries: filtered);
+  }
+
+  /// Walks the persistent queue and re-sends any membership envelope whose
+  /// last attempt is older than the standard retry delay. Re-encrypts the
+  /// **current** group snapshot under a fresh envelope each time so the
+  /// recipient always converges on the latest state. Caps `attempts` to
+  /// avoid burning relay quota on permanently unreachable peers.
+  Future<void> _retryPendingMembershipDeliveries({bool force = false}) async {
+    if (_snapshot.pendingGroupMembershipDeliveries.isEmpty) {
+      return;
+    }
+    final me = _snapshot.identity;
+    if (me == null) {
+      return;
+    }
+    const maxAttempts = 50;
+    final now = _now();
+    // Snapshot first; the queue is rebuilt as we go.
+    final pending = List<PendingGroupMembershipDelivery>.from(
+      _snapshot.pendingGroupMembershipDeliveries,
+    );
+    for (final entry in pending) {
+      if (entry.attempts >= maxAttempts) {
+        continue;
+      }
+      if (!force) {
+        final waited = now.difference(entry.lastAttemptedAt);
+        final delay = entry.attempts <= 1
+            ? _pendingMessageRetryDelay
+            : _acceptedMessageRetryDelay;
+        if (waited < delay) {
+          continue;
+        }
+      }
+      final group = _groupById(entry.groupId);
+      if (group == null) {
+        _clearPendingMembershipDelivery(
+          groupId: entry.groupId,
+          targetDeviceId: entry.targetDeviceId,
+        );
+        continue;
+      }
+      // If the recipient is no longer reachable as a group member (kicked
+      // long ago and forgotten, etc.), drop the obligation.
+      final contact = _groupMemberContact(group, entry.targetDeviceId);
+      if (contact == null) {
+        _clearPendingMembershipDelivery(
+          groupId: entry.groupId,
+          targetDeviceId: entry.targetDeviceId,
+        );
+        continue;
+      }
+      final profiledGroup = _refreshGroupMemberProfiles(group);
+      final payload = jsonEncode({
+        'version': 1,
+        'reason': entry.reason,
+        'group': profiledGroup.toJson(),
+      });
+      final envelope = await _encryptPayloadEnvelope(
+        kind: 'group_membership',
+        messageId: _randomId('grpctl'),
+        conversationId: profiledGroup.groupId,
+        senderAccountId: me.accountId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: contact.deviceId,
+        contact: contact,
+        plaintext: payload,
+      );
+      _enqueuePendingMembershipDelivery(
+        entry.copyWith(
+          membershipVersion: profiledGroup.membershipVersion,
+          originalMessageId: envelope.messageId,
+          lastAttemptedAt: now,
+          attempts: entry.attempts + 1,
+        ),
+      );
+      try {
+        await _deliverToContact(
+          contact: contact,
+          recipientDeviceId: contact.deviceId,
+          envelope: envelope,
+        );
+      } catch (_) {
+        // Stays queued; next pass will retry.
+      }
+    }
+  }
+
+  Future<void> _sendGroupMembershipAck(
+    RelayEnvelope original, {
+    required GroupRecord group,
+    required ContactRecord sender,
+  }) async {
+    final me = _requireIdentity();
+    final payload = jsonEncode({
+      'version': 1,
+      'groupId': group.groupId,
+      'membershipVersion': group.membershipVersion,
+      'acknowledgedMessageId': original.messageId,
+    });
+    final envelope = await _encryptPayloadEnvelope(
+      kind: 'group_membership_ack',
+      messageId: _randomId('grpctlack'),
+      conversationId: group.groupId,
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: original.senderDeviceId,
+      contact: sender,
+      plaintext: payload,
+      acknowledgedMessageId: original.messageId,
+    );
+    try {
+      await _deliverToContact(
+        contact: sender,
+        recipientDeviceId: sender.deviceId,
+        envelope: envelope,
+      );
+    } catch (_) {
+      // Best-effort ack. If it's lost the sender retries the membership
+      // update on its next cycle and we re-ack on receipt.
+    }
+  }
+
+  Future<void> _handleGroupMembershipAck(RelayEnvelope envelope) async {
+    final group = _groupById(envelope.conversationId);
+    if (group == null) {
+      return;
+    }
+    final sender =
+        _groupMemberContact(group, envelope.senderDeviceId) ??
+        _contactByDeviceId(envelope.senderDeviceId);
+    if (sender == null) {
+      return;
+    }
+    final decoded = await _decryptMessage(contact: sender, envelope: envelope);
+    final payload = jsonDecode(decoded);
+    if (payload is! Map<String, dynamic>) {
+      return;
+    }
+    final groupId = payload['groupId'] as String?;
+    if (groupId == null || groupId != group.groupId) {
+      return;
+    }
+    final acknowledgedVersion =
+        (payload['membershipVersion'] as num?)?.toInt() ??
+        group.membershipVersion;
+    _clearPendingMembershipDelivery(
+      groupId: group.groupId,
+      targetDeviceId: envelope.senderDeviceId,
+      acknowledgedMembershipVersion: acknowledgedVersion,
+    );
+    _noteAnySignal(envelope.senderDeviceId, at: envelope.createdAt);
+    await _persist('Group ${group.title} membership ack from ${sender.alias}.');
   }
 
   Future<void> _sendGroupLeave(GroupRecord group) async {
@@ -3827,6 +4069,12 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
 
+      if (envelope.kind == 'group_membership_ack') {
+        await _handleGroupMembershipAck(envelope);
+        _markSeen(envelope.messageId);
+        continue;
+      }
+
       if (envelope.kind == 'group_leave') {
         await _handleGroupLeave(envelope);
         _markSeen(envelope.messageId);
@@ -4208,6 +4456,9 @@ class MessengerController extends ChangeNotifier {
     }
     _noteAnySignal(sender.deviceId, at: envelope.createdAt);
     await _persist('Updated group ${enriched.title}.');
+    // Tell the sender we applied their version so they can drop the
+    // pending-retry entry. Best-effort; the sender will retry on miss.
+    await _sendGroupMembershipAck(envelope, group: merged, sender: sender);
   }
 
   Future<void> _handleGroupLeave(RelayEnvelope envelope) async {
@@ -5380,6 +5631,10 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _retryUnacknowledgedMessages({bool force = false}) async {
+    // Membership envelopes have their own queue (persisted in the vault)
+    // — drain it before regular messages so a freshly-arriving peer sees
+    // the latest group state before we try to send them chat lines.
+    await _retryPendingMembershipDeliveries(force: force);
     for (final contact in contacts) {
       final retryable = messagesFor(contact.deviceId)
           .where(
@@ -5972,15 +6227,44 @@ class MessengerController extends ChangeNotifier {
     };
     try {
       final stopwatch = Stopwatch()..start();
+      final cachedRelayId = _routeHealth[route.routeKey]?.relayInstanceId;
+      final expectedKey = cachedRelayId == null
+          ? null
+          : _snapshot.pinnedRelayIdentityKeys[cachedRelayId];
       final info = await _relayClient.inspectHealth(
         host: route.host,
         port: route.port,
         protocol: route.protocol,
         timeout: timeout,
+        expectedIdentityPublicKeyBase64: expectedKey,
       );
       stopwatch.stop();
       if (!info.ok) {
         throw StateError('Route health check failed.');
+      }
+      // TOFU: if this relay_id has no pin yet and the response carried a
+      // self-announced + signature-verified identity key, pin it. Mismatch
+      // surfaces a banner; we never auto-rotate a pin.
+      if (route.kind == PeerRouteKind.relay &&
+          info.relayInstanceId != null &&
+          info.identityPublicKeyBase64 != null) {
+        final relayId = info.relayInstanceId!;
+        final announced = info.identityPublicKeyBase64!;
+        final existing = _snapshot.pinnedRelayIdentityKeys[relayId];
+        if (existing == null) {
+          if (info.signatureVerified) {
+            final updated = Map<String, String>.from(
+              _snapshot.pinnedRelayIdentityKeys,
+            )..[relayId] = announced;
+            _snapshot = _snapshot.copyWith(pinnedRelayIdentityKeys: updated);
+          }
+        } else if (info.pinnedKeyMismatch ||
+            (info.signatureVerified == false && announced != existing)) {
+          _setTransientStatus(
+            'Relay $relayId identity changed — verify with the operator.',
+            notify: false,
+          );
+        }
       }
       final health = PeerRouteHealth(
         route: route,
@@ -5998,6 +6282,14 @@ class MessengerController extends ChangeNotifier {
         relayInstanceId: health.relayInstanceId,
         at: health.checkedAt,
       );
+      return health;
+    } on RelayIdentityMismatchException catch (error) {
+      _setTransientStatus(
+        'Relay ${route.host}:${route.port} identity mismatch — verify with the operator.',
+        notify: false,
+      );
+      _recordRouteFailure(route, error: error.toString());
+      final health = _routeHealth[route.routeKey]!;
       return health;
     } catch (error) {
       _recordRouteFailure(route, error: error.toString());
@@ -7030,6 +7322,7 @@ class MessengerController extends ChangeNotifier {
     required ContactRecord contact,
     required String plaintext,
     DateTime? createdAt,
+    String? acknowledgedMessageId,
   }) async {
     final secretKey = await _sessionKeyFor(contact);
     final cipher = Chacha20.poly1305Aead();
@@ -7051,6 +7344,7 @@ class MessengerController extends ChangeNotifier {
       nonceBase64: base64Encode(secretBox.nonce),
       ciphertextBase64: base64Encode(secretBox.cipherText),
       macBase64: base64Encode(secretBox.mac.bytes),
+      acknowledgedMessageId: acknowledgedMessageId,
     );
   }
 
@@ -8427,13 +8721,19 @@ class _ScoringRelayClient implements RelayClient {
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) {
     return _track(
       host: host,
       port: port,
       protocol: protocol,
-      action: () =>
-          inner.probe(host: host, port: port, protocol: protocol, timeout: timeout),
+      action: () => inner.probe(
+        host: host,
+        port: port,
+        protocol: protocol,
+        timeout: timeout,
+        expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+      ),
     );
   }
 
@@ -8445,6 +8745,7 @@ class _ScoringRelayClient implements RelayClient {
     required String recipientDeviceId,
     required RelayEnvelope envelope,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) {
     return _track(
       host: host,
@@ -8457,6 +8758,7 @@ class _ScoringRelayClient implements RelayClient {
         recipientDeviceId: recipientDeviceId,
         envelope: envelope,
         timeout: timeout,
+        expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
       ),
     );
   }
@@ -8469,6 +8771,7 @@ class _ScoringRelayClient implements RelayClient {
     required String recipientDeviceId,
     int limit = 64,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) {
     return _track(
       host: host,
@@ -8481,6 +8784,7 @@ class _ScoringRelayClient implements RelayClient {
         recipientDeviceId: recipientDeviceId,
         limit: limit,
         timeout: timeout,
+        expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
       ),
     );
   }
@@ -8491,13 +8795,19 @@ class _ScoringRelayClient implements RelayClient {
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) {
     return _track(
       host: host,
       port: port,
       protocol: protocol,
-      action: () =>
-          inner.health(host: host, port: port, protocol: protocol, timeout: timeout),
+      action: () => inner.health(
+        host: host,
+        port: port,
+        protocol: protocol,
+        timeout: timeout,
+        expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+      ),
     );
   }
 
@@ -8507,6 +8817,7 @@ class _ScoringRelayClient implements RelayClient {
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) {
     return _track(
       host: host,
@@ -8517,6 +8828,7 @@ class _ScoringRelayClient implements RelayClient {
         port: port,
         protocol: protocol,
         timeout: timeout,
+        expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
       ),
     );
   }

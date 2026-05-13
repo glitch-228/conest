@@ -327,8 +327,14 @@ jobs:
             echo "::error::CONEST_RELEASE_MANIFEST_PRIVATE_KEY secret is required to sign the manifest."
             exit 1
           fi
+          notes_args=()
+          if [ "${{ needs.prepare.outputs.channel }}" = "stable" ] && [ -f RELEASE_NOTES.md ]; then
+            notes_args+=(--release-notes RELEASE_NOTES.md)
+            echo "Embedding RELEASE_NOTES.md into the signed manifest."
+          fi
           dart run tool/release_manifest.dart \
             --dist dist \
+            "${notes_args[@]}" \
             "${{ needs.prepare.outputs.tag }}"
           ls -la dist/
       - name: Verify manifest signature with the configured public key

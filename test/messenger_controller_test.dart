@@ -11,7 +11,11 @@ import 'package:conest/src/build_info.dart';
 import 'package:conest/src/local_relay_node.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/models.dart';
-import 'package:conest/src/relay_client.dart';
+import 'package:conest/src/relay_client.dart'
+    show
+        RelayClient,
+        RelayHealthInfo,
+        RelayIdentityMismatchException;
 import 'package:conest/src/relay_defaults.dart';
 import 'package:conest/src/storage.dart';
 import 'package:conest/src/update_service.dart';
@@ -155,6 +159,7 @@ class _FakeRelayClient extends RelayClient {
     required String recipientDeviceId,
     required RelayEnvelope envelope,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) async {
     final key = _key(host, port, protocol);
     storeAttempts.add('$host:$port');
@@ -209,6 +214,7 @@ class _FakeRelayClient extends RelayClient {
     required String recipientDeviceId,
     int limit = 64,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) async {
     fetchAttempts.add('$host:$port');
     if (!_isRouteAllowed(_storeAllowedHosts, host, port, protocol)) {
@@ -229,6 +235,7 @@ class _FakeRelayClient extends RelayClient {
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) async {
     return _isRouteAllowed(_allowedHosts, host, port, protocol) &&
         !_containsRoute(_healthFailingHosts, host, port, protocol);
@@ -240,6 +247,7 @@ class _FakeRelayClient extends RelayClient {
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) async {
     inspectHealthAttempts.add('$host:$port');
     final ok = await health(
@@ -290,6 +298,7 @@ class _HostScopedFakeRelayClient extends RelayClient {
     required String recipientDeviceId,
     required RelayEnvelope envelope,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) async {
     final hostQueues = _queues.putIfAbsent(
       _key(host, port, protocol),
@@ -318,6 +327,7 @@ class _HostScopedFakeRelayClient extends RelayClient {
     required String recipientDeviceId,
     int limit = 64,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) async {
     final queue =
         _queues[_key(host, port, protocol)]?[recipientDeviceId] ??
@@ -336,6 +346,7 @@ class _HostScopedFakeRelayClient extends RelayClient {
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) async {
     return _queues.containsKey(_key(host, port, protocol));
   }
@@ -346,6 +357,7 @@ class _HostScopedFakeRelayClient extends RelayClient {
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
   }) async {
     final ok = await health(
       host: host,
@@ -1741,6 +1753,127 @@ void main() {
     await bob.pollNow();
 
     expect(bob.dissolveGroup(group.groupId), throwsArgumentError);
+  });
+
+  test(
+    'pending group membership delivery is cleared after the target acks',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Pending',
+        members: alice.contacts,
+      );
+      // After the synchronous send, Alice has at least one pending entry
+      // for Bob (the ack hasn't come back yet — Bob still has to poll).
+      expect(
+        alice.pendingGroupMembershipDeliveries.any(
+          (entry) =>
+              entry.groupId == group.groupId &&
+              entry.targetDeviceId == bob.identity!.deviceId,
+        ),
+        isTrue,
+      );
+
+      // Bob polls, applies the membership update, and acks. Alice polls
+      // to receive the ack.
+      await bob.pollNow();
+      await alice.pollNow();
+
+      expect(
+        alice.pendingGroupMembershipDeliveries.any(
+          (entry) => entry.targetDeviceId == bob.identity!.deviceId,
+        ),
+        isFalse,
+        reason:
+            'membership ack from Bob should clear the queued delivery on Alice',
+      );
+    },
+  );
+
+  test(
+    'pending membership delivery is upgraded when the version advances',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      addTearDown(alice.dispose);
+
+      // Add Bob (and Carol-shaped contact) as offline contacts so the
+      // sends queue but never ack — letting us observe the version-upgrade
+      // behavior without depending on a live peer.
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: _bobInvite().encodePayload(),
+        codephrase: '',
+      );
+      final group = await alice.createGroup(
+        title: 'Upgrade',
+        members: alice.contacts,
+      );
+      final firstVersion = group.membershipVersion;
+      final firstEntry = alice.pendingGroupMembershipDeliveries
+          .firstWhere((entry) => entry.targetDeviceId == 'dev-bob');
+      expect(firstEntry.membershipVersion, firstVersion);
+
+      await alice.removeGroupMember(
+        groupId: group.groupId,
+        memberDeviceId: 'dev-bob',
+      );
+      // After the remove, the queue should still hold a single entry for
+      // dev-bob (we re-queue the latest snapshot rather than accumulating).
+      final pendingForBob = alice.pendingGroupMembershipDeliveries
+          .where((entry) => entry.targetDeviceId == 'dev-bob')
+          .toList(growable: false);
+      expect(pendingForBob, hasLength(1));
+      expect(pendingForBob.single.membershipVersion, greaterThan(firstVersion));
+    },
+  );
+
+  test('pending membership deliveries survive a vault round-trip', () async {
+    final relayClient = _FakeRelayClient();
+    final vaultStore = _MemoryVaultStore();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+      vaultStore: vaultStore,
+    );
+    addTearDown(alice.dispose);
+
+    // Adding an offline contact + creating a group leaves Alice with a
+    // pending membership delivery that hasn't been ack'd yet.
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: _bobInvite().encodePayload(),
+      codephrase: '',
+    );
+    await alice.createGroup(title: 'Persistent', members: alice.contacts);
+    expect(
+      alice.pendingGroupMembershipDeliveries,
+      isNotEmpty,
+    );
+
+    final persisted = await vaultStore.load();
+    expect(
+      persisted.pendingGroupMembershipDeliveries.any(
+        (entry) => entry.targetDeviceId == 'dev-bob',
+      ),
+      isTrue,
+      reason: 'pending entries must round-trip through the vault store',
+    );
   });
 
   test('stale group membership updates are ignored', () async {
@@ -4300,6 +4433,33 @@ void main() {
       isTrue,
     );
   });
+
+  test(
+    'pinnedRelayIdentityKeys round-trip through the vault store',
+    () async {
+      final vaultStore = _MemoryVaultStore();
+      await vaultStore.save(
+        VaultSnapshot.empty().copyWith(
+          pinnedRelayIdentityKeys: const <String, String>{
+            'relay-alpha': 'pubkey-alpha-base64==',
+            'relay-beta': 'pubkey-beta-base64==',
+          },
+        ),
+      );
+      final loaded = await vaultStore.load();
+      expect(loaded.pinnedRelayIdentityKeys['relay-alpha'], isNotNull);
+      expect(loaded.pinnedRelayIdentityKeys['relay-beta'], isNotNull);
+    },
+  );
+
+  test(
+    'RelayIdentityMismatchException carries a descriptive message',
+    () async {
+      final exception = RelayIdentityMismatchException('pinned key mismatch');
+      expect(exception.message, contains('pinned key'));
+      expect(exception.toString(), contains('pinned key mismatch'));
+    },
+  );
 
   test('signed default relay loader rejects a tampered manifest', () async {
     final algorithm = Ed25519();

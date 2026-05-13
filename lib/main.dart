@@ -318,6 +318,30 @@ class UpdatePromptDialog extends StatelessWidget {
                 Text(
                   'Current build: ${updateService.buildInfo.displayVersion}',
                 ),
+                if ((available.releaseNotes ?? '').trim().isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  Text(
+                    "What's new",
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    constraints: const BoxConstraints(maxHeight: 220),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: SingleChildScrollView(
+                      child: Text(
+                        available.releaseNotes!.trim(),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 10),
                 if (updateService.isDownloading)
                   LinearProgressIndicator(
