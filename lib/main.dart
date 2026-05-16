@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import 'src/app_storage.dart';
 import 'src/build_info.dart';
 import 'src/conest_theme.dart';
 import 'src/messenger_controller.dart';
@@ -27,11 +28,40 @@ export 'src/conest_theme.dart'
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  final storageResolver = AppStorageResolver();
+  final storageResolution = await storageResolver.resolve();
+  if (storageResolution.status == AppStorageResolutionStatus.ready) {
+    await _runConestWithProfile(storageResolution.profile!);
+    return;
+  }
+
+  final bootstrapThemeController = ConestThemeController.memory();
+  await bootstrapThemeController.initialize();
+  runApp(
+    ConestBootstrapApp(
+      resolver: storageResolver,
+      initialResolution: storageResolution,
+      themeController: bootstrapThemeController,
+    ),
+  );
+}
+
+Future<void> _runConestWithProfile(
+  AppStorageProfile profile, {
+  String? passphrase,
+}) async {
+  final vaultStore = VaultStore(
+    vaultFileProvider: () async => profile.vaultFile,
+    keyProvider: _vaultKeyProviderFor(profile, passphrase: passphrase),
+  );
+  if (await profile.vaultFile.exists()) {
+    await vaultStore.load();
+  }
   final themeController = ConestThemeController(
-    store: ThemePreferenceStore.app(),
+    store: ThemePreferenceStore.forRoot(profile.dataRoot),
   );
   await themeController.initialize();
-  final instanceLock = AppInstanceLock();
+  final instanceLock = AppInstanceLock(directory: profile.dataRoot);
   if (!await instanceLock.acquire()) {
     runApp(ConestAlreadyRunningApp(themeController: themeController));
     return;
@@ -39,13 +69,16 @@ Future<void> main() async {
   final buildInfo = await ConestBuildInfo.load();
   final platformBridge = PlatformBridge();
   final controller = MessengerController(
-    vaultStore: VaultStore(),
+    vaultStore: vaultStore,
     relayClient: const RelayClient(),
     platformBridge: platformBridge,
   );
   final updateService = UpdateService(
     buildInfo: buildInfo,
     platformBridge: platformBridge,
+    applicationSupportDirectoryProvider: () async => profile.dataRoot,
+    tempDirectoryProvider: () async => profile.tempRoot,
+    automaticStartupChecksEnabled: profile.automaticStartupChecksEnabled,
   );
   await controller.initialize();
   runApp(
@@ -56,6 +89,23 @@ Future<void> main() async {
       themeController: themeController,
     ),
   );
+}
+
+VaultKeyProvider _vaultKeyProviderFor(
+  AppStorageProfile profile, {
+  String? passphrase,
+}) {
+  return switch (profile.unlockMode) {
+    VaultUnlockMode.secureStorage => SecureStorageVaultKeyProvider(),
+    VaultUnlockMode.keyFile => FileVaultKeyProvider(
+      fileProvider: () async => profile.keyFile,
+    ),
+    VaultUnlockMode.passphrase => PassphraseVaultKeyProvider(
+      passphrase:
+          passphrase ?? (throw ArgumentError('Passphrase is required.')),
+      config: profile.passphraseKdf!,
+    ),
+  };
 }
 
 class ConestAlreadyRunningApp extends StatelessWidget {
@@ -123,6 +173,485 @@ class ConestAlreadyRunningApp extends StatelessWidget {
           },
         );
       },
+    );
+  }
+}
+
+const firstLaunchPassphraseFieldKey = Key('first-launch-passphrase');
+const firstLaunchConfirmPassphraseFieldKey = Key(
+  'first-launch-confirm-passphrase',
+);
+const unlockPassphraseFieldKey = Key('unlock-passphrase');
+
+typedef CreateStorageProfile =
+    Future<AppStorageProfile> Function({
+      required AppStorageMode mode,
+      required VaultUnlockMode unlockMode,
+    });
+
+class BootstrapProfileSelection {
+  const BootstrapProfileSelection({required this.profile, this.passphrase});
+
+  final AppStorageProfile profile;
+  final String? passphrase;
+}
+
+class ConestBootstrapApp extends StatefulWidget {
+  const ConestBootstrapApp({
+    super.key,
+    required this.resolver,
+    required this.initialResolution,
+    required this.themeController,
+  });
+
+  final AppStorageResolver resolver;
+  final AppStorageResolution initialResolution;
+  final ConestThemeController themeController;
+
+  @override
+  State<ConestBootstrapApp> createState() => _ConestBootstrapAppState();
+}
+
+class _ConestBootstrapAppState extends State<ConestBootstrapApp> {
+  bool _starting = false;
+  String? _error;
+
+  Future<void> _start(BootstrapProfileSelection selection) async {
+    if (_starting) {
+      return;
+    }
+    setState(() {
+      _starting = true;
+      _error = null;
+    });
+    try {
+      await _runConestWithProfile(
+        selection.profile,
+        passphrase: selection.passphrase,
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _starting = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DynamicColorBuilder(
+      builder: (lightDynamic, darkDynamic) {
+        return AnimatedBuilder(
+          animation: widget.themeController,
+          builder: (context, _) {
+            final palette = widget.themeController.resolve(
+              platformBrightness: _platformBrightness,
+              lightDynamic: lightDynamic,
+              darkDynamic: darkDynamic,
+            );
+            final body =
+                widget.initialResolution.status ==
+                    AppStorageResolutionStatus.needsPassphrase
+                ? PassphraseUnlockScreen(
+                    palette: palette,
+                    profile: widget.initialResolution.profile!,
+                    onUnlock: (passphrase) => _start(
+                      BootstrapProfileSelection(
+                        profile: widget.initialResolution.profile!,
+                        passphrase: passphrase,
+                      ),
+                    ),
+                    busy: _starting,
+                    error: _error,
+                  )
+                : FirstLaunchStorageScreen(
+                    palette: palette,
+                    portableSupported: widget.resolver.portableSupported,
+                    createProfile: widget.resolver.createProfile,
+                    onProfileReady: _start,
+                    busy: _starting,
+                    startupError: _error,
+                  );
+            return MaterialApp(
+              debugShowCheckedModeBanner: false,
+              title: 'Conest',
+              theme: palette.themeData(),
+              home: body,
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class FirstLaunchStorageScreen extends StatefulWidget {
+  const FirstLaunchStorageScreen({
+    super.key,
+    required this.palette,
+    required this.portableSupported,
+    required this.createProfile,
+    required this.onProfileReady,
+    this.busy = false,
+    this.startupError,
+  });
+
+  final ConestPalette palette;
+  final bool portableSupported;
+  final CreateStorageProfile createProfile;
+  final ValueChanged<BootstrapProfileSelection> onProfileReady;
+  final bool busy;
+  final String? startupError;
+
+  @override
+  State<FirstLaunchStorageScreen> createState() =>
+      _FirstLaunchStorageScreenState();
+}
+
+class _FirstLaunchStorageScreenState extends State<FirstLaunchStorageScreen> {
+  final _passphraseController = TextEditingController();
+  final _confirmPassphraseController = TextEditingController();
+  AppStorageMode _mode = AppStorageMode.device;
+  VaultUnlockMode _unlockMode = VaultUnlockMode.secureStorage;
+  String? _error;
+
+  @override
+  void dispose() {
+    _passphraseController.dispose();
+    _confirmPassphraseController.dispose();
+    super.dispose();
+  }
+
+  void _setMode(AppStorageMode mode) {
+    setState(() {
+      _mode = mode;
+      if (mode == AppStorageMode.portable &&
+          _unlockMode == VaultUnlockMode.secureStorage) {
+        _unlockMode = VaultUnlockMode.keyFile;
+      }
+      if (mode == AppStorageMode.device &&
+          _unlockMode == VaultUnlockMode.keyFile) {
+        _unlockMode = VaultUnlockMode.secureStorage;
+      }
+      _error = null;
+    });
+  }
+
+  Future<void> _continue() async {
+    if (widget.busy) {
+      return;
+    }
+    final passphrase = _passphraseController.text;
+    if (_unlockMode == VaultUnlockMode.passphrase) {
+      if (passphrase.isEmpty) {
+        setState(() => _error = 'Enter a passphrase.');
+        return;
+      }
+      if (passphrase != _confirmPassphraseController.text) {
+        setState(() => _error = 'Passphrases do not match.');
+        return;
+      }
+    }
+    setState(() => _error = null);
+    try {
+      final profile = await widget.createProfile(
+        mode: _mode,
+        unlockMode: _unlockMode,
+      );
+      widget.onProfileReady(
+        BootstrapProfileSelection(
+          profile: profile,
+          passphrase: _unlockMode == VaultUnlockMode.passphrase
+              ? passphrase
+              : null,
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        setState(() => _error = error.toString());
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = widget.palette;
+    final selectedPortable = _mode == AppStorageMode.portable;
+    final error = _error ?? widget.startupError;
+    return Scaffold(
+      body: DecoratedBox(
+        decoration: BoxDecoration(gradient: palette.appGradient),
+        child: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 720),
+                child: Card(
+                  elevation: 0,
+                  color: palette.paperStrong,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(28),
+                    side: BorderSide(color: palette.stroke),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Choose where Conest stores data',
+                          style: Theme.of(context).textTheme.headlineSmall
+                              ?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Ghost mode is best-effort privacy: OS launch history, crash logs, network metadata, shell history, recent files, and platform caches are outside app control.',
+                          style: TextStyle(color: palette.inkSoft, height: 1.4),
+                        ),
+                        const SizedBox(height: 18),
+                        RadioGroup<AppStorageMode>(
+                          groupValue: _mode,
+                          onChanged: (value) {
+                            if (!widget.busy && value != null) {
+                              _setMode(value);
+                            }
+                          },
+                          child: Column(
+                            children: [
+                              const RadioListTile<AppStorageMode>(
+                                value: AppStorageMode.device,
+                                title: Text('Default on this device'),
+                                subtitle: Text(
+                                  'Use the normal app data folder and this device keychain when auto-unlock is selected.',
+                                ),
+                              ),
+                              if (widget.portableSupported)
+                                const RadioListTile<AppStorageMode>(
+                                  value: AppStorageMode.portable,
+                                  title: Text('Ghost/portable beside the app'),
+                                  subtitle: Text(
+                                    'Store Conest-controlled files in a conest_data folder next to the app.',
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        const Divider(height: 28),
+                        Text(
+                          'Vault unlock',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 8),
+                        RadioGroup<VaultUnlockMode>(
+                          groupValue: _unlockMode,
+                          onChanged: (value) {
+                            if (!widget.busy && value != null) {
+                              setState(() => _unlockMode = value);
+                            }
+                          },
+                          child: Column(
+                            children: [
+                              if (selectedPortable)
+                                const RadioListTile<VaultUnlockMode>(
+                                  value: VaultUnlockMode.keyFile,
+                                  title: Text('Key file auto-unlock'),
+                                  subtitle: Text(
+                                    'Keeps the key beside the vault. Anyone with the folder can open it.',
+                                  ),
+                                )
+                              else
+                                const RadioListTile<VaultUnlockMode>(
+                                  value: VaultUnlockMode.secureStorage,
+                                  title: Text('Auto-unlock with this device'),
+                                  subtitle: Text(
+                                    'Stores the vault key in the platform secure store.',
+                                  ),
+                                ),
+                              const RadioListTile<VaultUnlockMode>(
+                                value: VaultUnlockMode.passphrase,
+                                title: Text('Passphrase unlock'),
+                                subtitle: Text(
+                                  'Ask for a passphrase on each launch. Forgotten passphrases cannot be recovered.',
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (_unlockMode == VaultUnlockMode.passphrase) ...[
+                          const SizedBox(height: 10),
+                          TextField(
+                            key: firstLaunchPassphraseFieldKey,
+                            controller: _passphraseController,
+                            obscureText: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Passphrase',
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            key: firstLaunchConfirmPassphraseFieldKey,
+                            controller: _confirmPassphraseController,
+                            obscureText: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Confirm passphrase',
+                            ),
+                          ),
+                        ],
+                        if (error != null) ...[
+                          const SizedBox(height: 14),
+                          Text(
+                            error,
+                            style: TextStyle(color: palette.secondary),
+                          ),
+                        ],
+                        const SizedBox(height: 18),
+                        FilledButton(
+                          onPressed: widget.busy ? null : _continue,
+                          child: widget.busy
+                              ? const SizedBox.square(
+                                  dimension: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Text('Continue'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class PassphraseUnlockScreen extends StatefulWidget {
+  const PassphraseUnlockScreen({
+    super.key,
+    required this.palette,
+    required this.profile,
+    required this.onUnlock,
+    this.busy = false,
+    this.error,
+  });
+
+  final ConestPalette palette;
+  final AppStorageProfile profile;
+  final ValueChanged<String> onUnlock;
+  final bool busy;
+  final String? error;
+
+  @override
+  State<PassphraseUnlockScreen> createState() => _PassphraseUnlockScreenState();
+}
+
+class _PassphraseUnlockScreenState extends State<PassphraseUnlockScreen> {
+  final _passphraseController = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _passphraseController.dispose();
+    super.dispose();
+  }
+
+  void _unlock() {
+    if (widget.busy) {
+      return;
+    }
+    final passphrase = _passphraseController.text;
+    if (passphrase.isEmpty) {
+      setState(() => _error = 'Enter your passphrase.');
+      return;
+    }
+    setState(() => _error = null);
+    widget.onUnlock(passphrase);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = widget.palette;
+    final error = _error ?? widget.error;
+    return Scaffold(
+      body: DecoratedBox(
+        decoration: BoxDecoration(gradient: palette.appGradient),
+        child: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Card(
+                  elevation: 0,
+                  color: palette.paperStrong,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(28),
+                    side: BorderSide(color: palette.stroke),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          'Unlock Conest',
+                          style: Theme.of(context).textTheme.headlineSmall
+                              ?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Enter the passphrase for this vault.',
+                          style: TextStyle(color: palette.inkSoft),
+                        ),
+                        const SizedBox(height: 18),
+                        TextField(
+                          key: unlockPassphraseFieldKey,
+                          controller: _passphraseController,
+                          obscureText: true,
+                          onSubmitted: (_) => _unlock(),
+                          decoration: const InputDecoration(
+                            labelText: 'Passphrase',
+                          ),
+                        ),
+                        if (error != null) ...[
+                          const SizedBox(height: 14),
+                          Text(
+                            error,
+                            style: TextStyle(color: palette.secondary),
+                          ),
+                        ],
+                        const SizedBox(height: 18),
+                        FilledButton(
+                          onPressed: widget.busy ? null : _unlock,
+                          child: widget.busy
+                              ? const SizedBox.square(
+                                  dimension: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Text('Unlock'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1359,8 +1888,8 @@ class _Sidebar extends StatelessWidget {
                 );
                 final selected = selectedGroupId == group.groupId;
                 final myDeviceId = controller.identity?.deviceId ?? '';
-                final hasLeft = myDeviceId.isNotEmpty &&
-                    !group.hasActiveMember(myDeviceId);
+                final hasLeft =
+                    myDeviceId.isNotEmpty && !group.hasActiveMember(myDeviceId);
                 return InkWell(
                   borderRadius: BorderRadius.circular(18),
                   onTap: () => onGroupSelected(group),
@@ -1826,7 +2355,8 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(_DeleteGroupChoice.cancel),
+            onPressed: () =>
+                Navigator.of(context).pop(_DeleteGroupChoice.cancel),
             child: const Text('Cancel'),
           ),
           TextButton(

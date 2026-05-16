@@ -243,6 +243,7 @@ class UpdateService extends ChangeNotifier {
     String? releaseManifestPublicKeyBase64,
     DesktopUpdaterLauncher? desktopUpdaterLauncher,
     void Function(int code)? exitCallback,
+    bool automaticStartupChecksEnabled = true,
   }) : _platformBridge = platformBridge ?? PlatformBridge(),
        _httpClientFactory = httpClientFactory ?? HttpClient.new,
        _applicationSupportDirectoryProvider =
@@ -259,7 +260,8 @@ class UpdateService extends ChangeNotifier {
            _releaseManifestPublicKeyFromEnvironment,
        _desktopUpdaterLauncher =
            desktopUpdaterLauncher ?? _launchDetachedDesktopUpdater,
-       _exitCallback = exitCallback ?? exit;
+       _exitCallback = exitCallback ?? exit,
+       _automaticStartupChecksEnabled = automaticStartupChecksEnabled;
 
   final ConestBuildInfo buildInfo;
   final PlatformBridge _platformBridge;
@@ -274,6 +276,7 @@ class UpdateService extends ChangeNotifier {
   final String _releaseManifestPublicKeyBase64;
   final DesktopUpdaterLauncher _desktopUpdaterLauncher;
   final void Function(int code) _exitCallback;
+  final bool _automaticStartupChecksEnabled;
 
   bool _startupCheckStarted = false;
   bool _checking = false;
@@ -293,7 +296,8 @@ class UpdateService extends ChangeNotifier {
     // updates. Treat updates as unsupported so the UI shows a single clear
     // state instead of failing every poll with a generic error. Debug builds
     // keep the previous behavior so tests and local development still work.
-    if (!buildInfo.isDebugBuild && _releaseManifestPublicKeyBase64.trim().isEmpty) {
+    if (!buildInfo.isDebugBuild &&
+        _releaseManifestPublicKeyBase64.trim().isEmpty) {
       return false;
     }
     return true;
@@ -325,7 +329,9 @@ class UpdateService extends ChangeNotifier {
   }
 
   Future<void> ensureStartupCheck() async {
-    if (_startupCheckStarted || !supportsUpdates) {
+    if (!_automaticStartupChecksEnabled ||
+        _startupCheckStarted ||
+        !supportsUpdates) {
       return;
     }
     _startupCheckStarted = true;
@@ -807,9 +813,7 @@ class UpdateService extends ChangeNotifier {
       } else if (rawName.endsWith('/')) {
         await Directory(outPath).create(recursive: true);
       } else {
-        throw StateError(
-          'Unsupported archive entry type: ${entry.name}',
-        );
+        throw StateError('Unsupported archive entry type: ${entry.name}');
       }
     }
   }

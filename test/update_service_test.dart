@@ -126,6 +126,40 @@ List<Map<String, dynamic>> _releaseTrustAssets({
 }
 
 void main() {
+  test('automatic startup checks can be disabled for ghost mode', () async {
+    var requestCount = 0;
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(server.close);
+    unawaited(
+      server.listen((request) async {
+        requestCount++;
+        request.response.statusCode = HttpStatus.ok;
+        request.response.write('[]');
+        await request.response.close();
+      }).asFuture<void>(),
+    );
+
+    final service = UpdateService(
+      buildInfo: ConestBuildInfo(
+        appName: 'Conest',
+        packageName: 'dev.conest.conest',
+        version: '0.0.9',
+        buildNumber: '1',
+        channel: UpdateChannel.stable,
+        isDebugBuild: true,
+      ),
+      targetPlatform: UpdateTargetPlatform.linux,
+      apiBaseUri: Uri.parse('http://${server.address.host}:${server.port}'),
+      automaticStartupChecksEnabled: false,
+      exitCallback: (_) {},
+    );
+
+    await service.ensureStartupCheck();
+
+    expect(service.lastCheckedAt, isNull);
+    expect(requestCount, 0);
+  });
+
   test('stable channel selects the newest non-prerelease release', () async {
     final signer = await _ManifestSigner.create();
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

@@ -6,6 +6,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'app_storage.dart';
 import 'models.dart';
 
 List<int> _secureRandomBytes(int length) {
@@ -59,12 +60,126 @@ class AppInstanceLock {
   }
 }
 
-class VaultStore {
-  VaultStore({FlutterSecureStorage? secureStorage})
+abstract class VaultKeyProvider {
+  Future<List<int>> readOrCreateKey();
+
+  Future<void> clear();
+}
+
+class SecureStorageVaultKeyProvider implements VaultKeyProvider {
+  SecureStorageVaultKeyProvider({FlutterSecureStorage? secureStorage})
     : _secureStorage = secureStorage ?? const FlutterSecureStorage();
 
+  static const vaultKeyName = 'conest.vault_key';
+
   final FlutterSecureStorage _secureStorage;
-  static const _vaultKeyName = 'conest.vault_key';
+
+  @override
+  Future<List<int>> readOrCreateKey() async {
+    final existing = await _secureStorage.read(key: vaultKeyName);
+    if (existing != null) {
+      return base64Decode(existing);
+    }
+    final created = _secureRandomBytes(32);
+    await _secureStorage.write(key: vaultKeyName, value: base64Encode(created));
+    return created;
+  }
+
+  @override
+  Future<void> clear() => _secureStorage.delete(key: vaultKeyName);
+}
+
+class FileVaultKeyProvider implements VaultKeyProvider {
+  FileVaultKeyProvider({required Future<File> Function() fileProvider})
+    : _fileProvider = fileProvider;
+
+  final Future<File> Function() _fileProvider;
+
+  @override
+  Future<List<int>> readOrCreateKey() async {
+    final file = await _fileProvider();
+    if (await file.exists()) {
+      final decoded = jsonDecode(await file.readAsString());
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('Vault key file must be a JSON object.');
+      }
+      final key = base64Decode(decoded['keyBase64'] as String);
+      if (key.length != 32) {
+        throw const FormatException('Vault key file has an invalid key.');
+      }
+      return key;
+    }
+    final created = _secureRandomBytes(32);
+    await file.parent.create(recursive: true);
+    await file.writeAsString(
+      const JsonEncoder.withIndent(
+        '  ',
+      ).convert({'version': 1, 'keyBase64': base64Encode(created)}),
+      flush: true,
+    );
+    return created;
+  }
+
+  @override
+  Future<void> clear() async {
+    final file = await _fileProvider();
+    if (await file.exists()) {
+      await file.delete();
+    }
+  }
+}
+
+class PassphraseVaultKeyProvider implements VaultKeyProvider {
+  PassphraseVaultKeyProvider({required String passphrase, required this.config})
+    : _passphrase = passphrase {
+    if (passphrase.isEmpty) {
+      throw ArgumentError('Passphrase is required.');
+    }
+  }
+
+  final String _passphrase;
+  final PassphraseKdfConfig config;
+  List<int>? _cachedKey;
+
+  @override
+  Future<List<int>> readOrCreateKey() async {
+    final cached = _cachedKey;
+    if (cached != null) {
+      return cached;
+    }
+    final algorithm = Argon2id(
+      parallelism: config.parallelism,
+      memory: config.memory,
+      iterations: config.iterations,
+      hashLength: 32,
+    );
+    final key = await algorithm.deriveKey(
+      secretKey: SecretKey(utf8.encode(_passphrase)),
+      nonce: base64Decode(config.saltBase64),
+    );
+    final bytes = await key.extractBytes();
+    _cachedKey = bytes;
+    return bytes;
+  }
+
+  @override
+  Future<void> clear() async {
+    _cachedKey = null;
+  }
+}
+
+class VaultStore {
+  VaultStore({
+    FlutterSecureStorage? secureStorage,
+    Future<File> Function()? vaultFileProvider,
+    VaultKeyProvider? keyProvider,
+  }) : _vaultFileProvider = vaultFileProvider,
+       _keyProvider =
+           keyProvider ??
+           SecureStorageVaultKeyProvider(secureStorage: secureStorage);
+
+  final Future<File> Function()? _vaultFileProvider;
+  final VaultKeyProvider _keyProvider;
   static const _vaultFileName = 'conest.vault';
 
   Future<VaultSnapshot> load() async {
@@ -117,23 +232,18 @@ class VaultStore {
     if (await file.exists()) {
       await file.delete();
     }
-    await _secureStorage.delete(key: _vaultKeyName);
+    await _keyProvider.clear();
   }
 
   Future<List<int>> _readOrCreateVaultKey() async {
-    final existing = await _secureStorage.read(key: _vaultKeyName);
-    if (existing != null) {
-      return base64Decode(existing);
-    }
-    final created = _secureRandomBytes(32);
-    await _secureStorage.write(
-      key: _vaultKeyName,
-      value: base64Encode(created),
-    );
-    return created;
+    return _keyProvider.readOrCreateKey();
   }
 
   Future<File> _vaultFile() async {
+    final provider = _vaultFileProvider;
+    if (provider != null) {
+      return provider();
+    }
     final directory = await getApplicationSupportDirectory();
     return File('${directory.path}/$_vaultFileName');
   }

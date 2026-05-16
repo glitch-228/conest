@@ -33,9 +33,19 @@ class ThemePreferenceStore {
     : _fileProvider = fileProvider;
 
   factory ThemePreferenceStore.app() {
+    return ThemePreferenceStore.forRootProvider(getApplicationSupportDirectory);
+  }
+
+  factory ThemePreferenceStore.forRoot(Directory root) {
+    return ThemePreferenceStore.forRootProvider(() async => root);
+  }
+
+  factory ThemePreferenceStore.forRootProvider(
+    Future<Directory> Function() rootProvider,
+  ) {
     return ThemePreferenceStore(
       fileProvider: () async {
-        final directory = await getApplicationSupportDirectory();
+        final directory = await rootProvider();
         return File(p.join(directory.path, 'conest_theme.json'));
       },
     );
