@@ -108,6 +108,7 @@ class MessengerController extends ChangeNotifier {
   int _healthCallCount = 0;
   final Map<String, PeerRouteHealth> _routeHealth = {};
   final Map<String, _RouteRuntimeState> _routeRuntime = {};
+  final Map<String, String> _announcedRelayIdentityKeys = <String, String>{};
   final Set<String> _debugProbeAcknowledgements = <String>{};
   final Set<String> _debugTwoWayReplies = <String>{};
   final Set<String> _locallyDeletedMessageIds = <String>{};
@@ -145,6 +146,49 @@ class MessengerController extends ChangeNotifier {
   /// Per-endpoint relay health, derived from recorded attempts. Read-only.
   Map<String, RelayHealthScore> get relayHealthScores =>
       Map.unmodifiable(_snapshot.relayHealthScores);
+
+  /// In-memory record of the most recent relay-announced identity keys
+  /// that differ from the pinned key for the same relay_id. The UI uses
+  /// this to surface a "Trust new key" affordance: tapping it calls
+  /// [rotateRelayIdentityKey] with the announced value. Not persisted;
+  /// rebuilt opportunistically from health checks.
+  Map<String, String> get announcedRelayIdentityKeys =>
+      Map.unmodifiable(_announcedRelayIdentityKeys);
+
+  /// `routeKey`s of configured relays that were ingested from the signed
+  /// default-relay manifest. The UI renders these as `default relay N`
+  /// instead of host:port.
+  Set<String> get defaultRelayRouteKeys =>
+      Set.unmodifiable(_snapshot.defaultRelayRouteKeys);
+
+  /// Renders the user-visible label for a relay endpoint. Default relays
+  /// (ingested from the signed manifest) are shown as `default relay N`
+  /// where N is the 1-based index in the sorted set of default route
+  /// keys; user-added relays show their actual `relay.label`. The
+  /// numbering is stable across renders because the sort is on the
+  /// route-key string.
+  String relayDisplayLabel(PeerEndpoint relay) {
+    final keys = _snapshot.defaultRelayRouteKeys;
+    if (!keys.contains(relay.routeKey)) {
+      return relay.label;
+    }
+    final sorted = keys.toList()..sort();
+    final index = sorted.indexOf(relay.routeKey);
+    return 'default relay ${index + 1}';
+  }
+
+  /// Outbound delivery/read receipts that haven't yet landed on their
+  /// target without throwing. Exposed for tests and diagnostics; the
+  /// retry loop drains the queue automatically.
+  List<PendingAckDelivery> get pendingAckDeliveries =>
+      List.unmodifiable(_snapshot.pendingAckDeliveries);
+
+  /// Test-only: force the pending-ack retry loop to run immediately
+  /// regardless of the backoff window. Production code reaches this path
+  /// via the periodic `_retryUnacknowledgedMessages` poll.
+  @visibleForTesting
+  Future<void> debugRunPendingAckRetries() =>
+      _retryPendingAckDeliveries(force: true);
 
   /// Group-membership envelopes still awaiting an ack from the targeted
   /// recipient. Exposed for diagnostics and tests; the retry loop drains
@@ -567,9 +611,14 @@ class MessengerController extends ChangeNotifier {
         ...me.configuredRelays,
         ...defaults.endpoints,
       ]);
+      final newDefaultKeys = <String>{
+        ..._snapshot.defaultRelayRouteKeys,
+        ...defaults.endpoints.map((endpoint) => endpoint.routeKey),
+      };
       _snapshot = _snapshot.copyWith(
         identity: me.copyWith(configuredRelays: updated),
         defaultRelayDefaultsVersion: defaults.version,
+        defaultRelayRouteKeys: newDefaultKeys,
       );
     } else {
       _snapshot = _snapshot.copyWith(
@@ -577,6 +626,33 @@ class MessengerController extends ChangeNotifier {
       );
     }
     await _saveSnapshotSilently(notify: false);
+    // Pre-flight probe each new default endpoint so the routing layer's
+    // health-scoring sees a verdict before any real traffic chooses it.
+    // Fire-and-forget — we don't want to block startup on a flaky network.
+    if (defaults.endpoints.isNotEmpty) {
+      unawaited(
+        Future.wait([
+          for (final endpoint in defaults.endpoints)
+            _probeDefaultRelay(endpoint),
+        ]),
+      );
+    }
+  }
+
+  Future<void> _probeDefaultRelay(PeerEndpoint endpoint) async {
+    try {
+      await _relayClient.inspectHealth(
+        host: endpoint.host,
+        port: endpoint.port,
+        protocol: endpoint.protocol,
+        timeout: const Duration(seconds: 4),
+        expectedIdentityPublicKeyBase64:
+            _snapshot.pinnedRelayIdentityKeys[endpoint.routeKey],
+      );
+    } catch (_) {
+      // Failure surfaces via the scoring shim already; the relay falls
+      // out of the rotation until subsequent probes succeed.
+    }
   }
 
   static Future<SignedRelayDefaults?> _loadSignedDefaultRelaysFromBundle({
@@ -2026,6 +2102,36 @@ class MessengerController extends ChangeNotifier {
     await _announcePairingAvailabilityIfNeeded();
     _markRuntimeActivity();
     await _persist('Relay ${relay.label} removed.');
+  }
+
+  /// Replaces the pinned Ed25519 identity for [relayId] with
+  /// [newKeyBase64]. The caller (UI) must only invoke this after the
+  /// operator has confirmed out-of-band that the relay rotated its key.
+  /// Persists the new pin and clears any active "trust new key" surface
+  /// for that relay.
+  Future<void> rotateRelayIdentityKey({
+    required String relayId,
+    required String newKeyBase64,
+  }) async {
+    final id = relayId.trim();
+    final key = newKeyBase64.trim();
+    if (id.isEmpty || key.isEmpty) {
+      throw ArgumentError('relayId and newKeyBase64 are required.');
+    }
+    final List<int> decoded;
+    try {
+      decoded = base64Decode(key);
+    } on FormatException {
+      throw ArgumentError('newKeyBase64 is not valid base64.');
+    }
+    if (decoded.length != 32) {
+      throw ArgumentError('newKeyBase64 must decode to 32 bytes.');
+    }
+    final updated = Map<String, String>.from(_snapshot.pinnedRelayIdentityKeys)
+      ..[id] = key;
+    _snapshot = _snapshot.copyWith(pinnedRelayIdentityKeys: updated);
+    _announcedRelayIdentityKeys.remove(id);
+    await _persist('Trusted new identity for relay $id.');
   }
 
   Future<void> removeContact(String deviceId, {bool notifyPeer = true}) async {
@@ -4773,15 +4879,34 @@ class MessengerController extends ChangeNotifier {
       createdAt: DateTime.now().toUtc(),
       acknowledgedMessageId: envelope.messageId,
     );
+    // Enqueue first so a crash mid-send doesn't lose the obligation; the
+    // happy-path delivery clears the entry immediately. Retries are
+    // independent of the original message-retry pass.
+    _enqueuePendingAckDelivery(
+      PendingAckDelivery(
+        targetDeviceId: contact.deviceId,
+        acknowledgedMessageId: envelope.messageId,
+        conversationId: envelope.conversationId,
+        kind: PendingAckKind.delivered,
+        lastAttemptedAt: _now(),
+        attempts: 1,
+      ),
+    );
     try {
       await _deliverToContact(
         contact: contact,
         recipientDeviceId: contact.deviceId,
         envelope: ack,
       );
+      _clearPendingAckDelivery(
+        targetDeviceId: contact.deviceId,
+        acknowledgedMessageId: envelope.messageId,
+        kind: PendingAckKind.delivered,
+      );
     } catch (_) {
-      // Best effort acking. Missed acks only affect sender-side state display.
+      // Stays queued; the retry loop will pick it up.
     }
+    await _saveSnapshotSilently(notify: false);
   }
 
   Future<void> _sendReadReceipt({
@@ -4807,16 +4932,146 @@ class MessengerController extends ChangeNotifier {
       acknowledgedMessageId: acknowledgedMessageId,
       payloadBase64: base64Encode(utf8.encode(jsonEncode({'receipt': 'read'}))),
     );
+    _enqueuePendingAckDelivery(
+      PendingAckDelivery(
+        targetDeviceId: contact.deviceId,
+        acknowledgedMessageId: acknowledgedMessageId,
+        conversationId: conversationId,
+        kind: PendingAckKind.read,
+        lastAttemptedAt: _now(),
+        attempts: 1,
+      ),
+    );
     try {
       await _deliverToContact(
         contact: contact,
         recipientDeviceId: contact.deviceId,
         envelope: receipt,
       );
+      _clearPendingAckDelivery(
+        targetDeviceId: contact.deviceId,
+        acknowledgedMessageId: acknowledgedMessageId,
+        kind: PendingAckKind.read,
+      );
+      // A successful `read` ack implies `delivered` was effectively
+      // received too — clear any stale `delivered` queue entry for the
+      // same message so we don't pointlessly re-send it.
+      _clearPendingAckDelivery(
+        targetDeviceId: contact.deviceId,
+        acknowledgedMessageId: acknowledgedMessageId,
+        kind: PendingAckKind.delivered,
+      );
     } catch (_) {
-      // Best effort read receipts. Missing them only delays sender-side read
-      // state until the next read advancement.
+      // Stays queued; the retry loop will pick it up.
     }
+    await _saveSnapshotSilently(notify: false);
+  }
+
+  void _enqueuePendingAckDelivery(PendingAckDelivery entry) {
+    final filtered = _snapshot.pendingAckDeliveries
+        .where(
+          (existing) => !(existing.targetDeviceId == entry.targetDeviceId &&
+              existing.acknowledgedMessageId == entry.acknowledgedMessageId &&
+              existing.kind == entry.kind),
+        )
+        .toList(growable: true)
+      ..add(entry);
+    _snapshot = _snapshot.copyWith(pendingAckDeliveries: filtered);
+  }
+
+  void _clearPendingAckDelivery({
+    required String targetDeviceId,
+    required String acknowledgedMessageId,
+    required PendingAckKind kind,
+  }) {
+    final filtered = _snapshot.pendingAckDeliveries
+        .where(
+          (entry) => !(entry.targetDeviceId == targetDeviceId &&
+              entry.acknowledgedMessageId == acknowledgedMessageId &&
+              entry.kind == kind),
+        )
+        .toList(growable: false);
+    if (filtered.length == _snapshot.pendingAckDeliveries.length) {
+      return;
+    }
+    _snapshot = _snapshot.copyWith(pendingAckDeliveries: filtered);
+  }
+
+  /// Drains [VaultSnapshot.pendingAckDeliveries], re-sending each ack
+  /// envelope whose last attempt is older than the standard backoff
+  /// window. Successful re-delivery clears the entry; persistent failures
+  /// bump `attempts` and stay queued up to a cap (after which the
+  /// existing message-retry cascade will eventually re-trigger receipt
+  /// generation on the receiver side).
+  Future<void> _retryPendingAckDeliveries({bool force = false}) async {
+    if (_snapshot.pendingAckDeliveries.isEmpty) {
+      return;
+    }
+    final me = _snapshot.identity;
+    if (me == null) {
+      return;
+    }
+    const maxAttempts = 30;
+    final now = _now();
+    final pending = List<PendingAckDelivery>.from(
+      _snapshot.pendingAckDeliveries,
+    );
+    for (final entry in pending) {
+      if (entry.attempts >= maxAttempts) {
+        continue;
+      }
+      if (!force) {
+        final waited = now.difference(entry.lastAttemptedAt);
+        final delay = entry.attempts <= 1
+            ? _pendingMessageRetryDelay
+            : _acceptedMessageRetryDelay;
+        if (waited < delay) {
+          continue;
+        }
+      }
+      final contact = _contactByDeviceId(entry.targetDeviceId);
+      if (contact == null) {
+        _clearPendingAckDelivery(
+          targetDeviceId: entry.targetDeviceId,
+          acknowledgedMessageId: entry.acknowledgedMessageId,
+          kind: entry.kind,
+        );
+        continue;
+      }
+      final envelope = RelayEnvelope(
+        kind: 'ack',
+        messageId: _randomId(entry.kind == PendingAckKind.read ? 'read' : 'ack'),
+        conversationId: entry.conversationId,
+        senderAccountId: me.accountId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: contact.deviceId,
+        createdAt: DateTime.now().toUtc(),
+        acknowledgedMessageId: entry.acknowledgedMessageId,
+        payloadBase64: entry.kind == PendingAckKind.read
+            ? base64Encode(
+                utf8.encode(jsonEncode({'receipt': 'read'})),
+              )
+            : null,
+      );
+      _enqueuePendingAckDelivery(
+        entry.copyWith(lastAttemptedAt: now, attempts: entry.attempts + 1),
+      );
+      try {
+        await _deliverToContact(
+          contact: contact,
+          recipientDeviceId: contact.deviceId,
+          envelope: envelope,
+        );
+        _clearPendingAckDelivery(
+          targetDeviceId: entry.targetDeviceId,
+          acknowledgedMessageId: entry.acknowledgedMessageId,
+          kind: entry.kind,
+        );
+      } catch (_) {
+        // Stays queued.
+      }
+    }
+    await _saveSnapshotSilently(notify: false);
   }
 
   Future<String?> _sendDebugProbe({
@@ -5635,6 +5890,10 @@ class MessengerController extends ChangeNotifier {
     // — drain it before regular messages so a freshly-arriving peer sees
     // the latest group state before we try to send them chat lines.
     await _retryPendingMembershipDeliveries(force: force);
+    // Pending acks and read receipts have their own persistent queue
+    // too — drain them next so a peer who comes back online sees a fresh
+    // batch of receipts for already-delivered messages.
+    await _retryPendingAckDeliveries(force: force);
     for (final contact in contacts) {
       final retryable = messagesFor(contact.deviceId)
           .where(
@@ -6260,10 +6519,15 @@ class MessengerController extends ChangeNotifier {
           }
         } else if (info.pinnedKeyMismatch ||
             (info.signatureVerified == false && announced != existing)) {
+          _announcedRelayIdentityKeys[relayId] = announced;
           _setTransientStatus(
             'Relay $relayId identity changed — verify with the operator.',
             notify: false,
           );
+        } else if (announced == existing) {
+          // Pinned key still matches; clear any stale "trust new key"
+          // surface so the UI banner goes away.
+          _announcedRelayIdentityKeys.remove(relayId);
         }
       }
       final health = PeerRouteHealth(

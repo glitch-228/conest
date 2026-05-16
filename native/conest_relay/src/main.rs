@@ -22,6 +22,9 @@ const DEFAULT_MAX_ENVELOPE_BYTES: usize = 256 * 1024;
 const DEFAULT_MAX_LINE_BYTES: usize = 300 * 1024;
 const DEFAULT_MAX_REQUESTS_PER_MINUTE: u32 = 240;
 const DEFAULT_IDENTITY_SEED_FILE: &str = "conest_relay_identity.seed";
+const DEFAULT_MAX_BYTES_PER_MAILBOX_PER_MINUTE: u64 = 10 * 1024 * 1024;
+const DEFAULT_SOFT_BAN_THRESHOLD: u32 = 5;
+const DEFAULT_SOFT_BAN_SECONDS: u64 = 300;
 
 #[derive(Debug, Clone)]
 struct RelayConfig {
@@ -36,6 +39,9 @@ struct RelayConfig {
     trust_forwarded_for: bool,
     identity_seed_path: PathBuf,
     identity_seed_inline: Option<String>,
+    max_bytes_per_mailbox_per_minute: u64,
+    soft_ban_threshold: u32,
+    soft_ban_duration: Duration,
 }
 
 impl RelayConfig {
@@ -63,6 +69,18 @@ impl RelayConfig {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from(DEFAULT_IDENTITY_SEED_FILE)),
             identity_seed_inline: env::var("CONEST_RELAY_IDENTITY_SEED").ok(),
+            max_bytes_per_mailbox_per_minute: env_u64(
+                "CONEST_RELAY_MAX_BYTES_PER_MAILBOX_PER_MINUTE",
+                DEFAULT_MAX_BYTES_PER_MAILBOX_PER_MINUTE,
+            ),
+            soft_ban_threshold: env_u32(
+                "CONEST_RELAY_SOFT_BAN_THRESHOLD",
+                DEFAULT_SOFT_BAN_THRESHOLD,
+            ),
+            soft_ban_duration: Duration::from_secs(env_u64(
+                "CONEST_RELAY_SOFT_BAN_SECONDS",
+                DEFAULT_SOFT_BAN_SECONDS,
+            )),
         };
 
         let mut args = env::args().skip(1).peekable();
@@ -95,6 +113,16 @@ impl RelayConfig {
                 }
                 "--identity-seed-path" => {
                     config.identity_seed_path = PathBuf::from(parse_next_string(&mut args, &arg)?);
+                }
+                "--max-bytes-per-mailbox-per-minute" => {
+                    config.max_bytes_per_mailbox_per_minute = parse_next_u64(&mut args, &arg)?;
+                }
+                "--soft-ban-threshold" => {
+                    config.soft_ban_threshold = parse_next_u32(&mut args, &arg)?;
+                }
+                "--soft-ban-seconds" => {
+                    config.soft_ban_duration =
+                        Duration::from_secs(parse_next_u64(&mut args, &arg)?);
                 }
                 value if value.starts_with('-') => {
                     return Err(format!("unknown option: {value}\n\n{}", usage()));
@@ -318,10 +346,24 @@ struct RateBucket {
 }
 
 #[derive(Clone)]
+struct MailboxByteWindow {
+    window_started_millis: u64,
+    bytes_used: u64,
+}
+
+#[derive(Clone)]
+struct BanEntry {
+    banned_until_millis: u64,
+    consecutive_violations: u32,
+}
+
+#[derive(Clone)]
 struct RelayState {
     config: RelayConfig,
     queues: Arc<Mutex<HashMap<String, VecDeque<QueueEntry>>>>,
     rate_buckets: Arc<Mutex<HashMap<String, RateBucket>>>,
+    mailbox_bytes: Arc<Mutex<HashMap<String, MailboxByteWindow>>>,
+    banned_peers: Arc<Mutex<HashMap<String, BanEntry>>>,
     identity: Arc<RelayIdentity>,
 }
 
@@ -331,12 +373,46 @@ impl RelayState {
             config,
             queues: Arc::new(Mutex::new(HashMap::new())),
             rate_buckets: Arc::new(Mutex::new(HashMap::new())),
+            mailbox_bytes: Arc::new(Mutex::new(HashMap::new())),
+            banned_peers: Arc::new(Mutex::new(HashMap::new())),
             identity: Arc::new(identity),
         }
     }
 
     fn allow_request(&self, peer: &str) -> bool {
         let now = now_millis();
+        // Soft-ban check first — a banned peer is rejected outright until
+        // the timer expires, regardless of per-minute budget. Expired
+        // ban entries and stale violation tallies (no violation in the
+        // last two minutes) are dropped so the map stays bounded; an
+        // active violation tally below the threshold is kept so a peer
+        // can't reset its slate by sleeping through the rate-limit window.
+        {
+            let mut bans = self
+                .banned_peers
+                .lock()
+                .expect("ban lock should not poison");
+            bans.retain(|_, entry| {
+                if entry.banned_until_millis > now {
+                    return true;
+                }
+                if entry.banned_until_millis > 0 {
+                    // Ban expired and no longer in flight.
+                    return false;
+                }
+                // Pending tally (never banned): keep it as long as the
+                // tally is non-zero — the per-minute window already
+                // resets the bucket count, so the tally itself drives
+                // the soft-ban threshold across consecutive bursts.
+                entry.consecutive_violations > 0
+            });
+            if let Some(entry) = bans.get(peer)
+                && entry.banned_until_millis > now
+            {
+                return false;
+            }
+        }
+
         let mut buckets = self
             .rate_buckets
             .lock()
@@ -351,9 +427,76 @@ impl RelayState {
             bucket.count = 0;
         }
         if bucket.count >= self.config.max_requests_per_minute {
+            // Over the rate limit: tally a violation and, if it crosses
+            // the soft-ban threshold, install a temporary ban that even
+            // a fresh minute window cannot bypass.
+            drop(buckets);
+            self.note_rate_violation(peer, now);
             return false;
         }
         bucket.count += 1;
+        // A legit request resets the consecutive-violation counter so
+        // well-behaved clients don't accumulate slate after a brief burst.
+        drop(buckets);
+        self.note_rate_compliance(peer);
+        true
+    }
+
+    fn note_rate_violation(&self, peer: &str, now_millis_value: u64) {
+        let mut bans = self
+            .banned_peers
+            .lock()
+            .expect("ban lock should not poison");
+        let entry = bans.entry(peer.to_owned()).or_insert(BanEntry {
+            banned_until_millis: 0,
+            consecutive_violations: 0,
+        });
+        entry.consecutive_violations = entry.consecutive_violations.saturating_add(1);
+        if entry.consecutive_violations >= self.config.soft_ban_threshold {
+            entry.banned_until_millis =
+                now_millis_value.saturating_add(self.config.soft_ban_duration.as_millis() as u64);
+        }
+    }
+
+    fn note_rate_compliance(&self, peer: &str) {
+        let mut bans = self
+            .banned_peers
+            .lock()
+            .expect("ban lock should not poison");
+        if let Some(entry) = bans.get_mut(peer)
+            && entry.banned_until_millis == 0
+        {
+            // Only reset the counter if no active ban is in flight;
+            // otherwise we'd let banned peers wear down the counter
+            // mid-ban by piggybacking on others' compliance signals.
+            entry.consecutive_violations = 0;
+        }
+    }
+
+    fn allow_mailbox_bytes(&self, mailbox: &str, bytes: u64) -> bool {
+        if self.config.max_bytes_per_mailbox_per_minute == 0 {
+            return true;
+        }
+        let now = now_millis();
+        let mut windows = self
+            .mailbox_bytes
+            .lock()
+            .expect("mailbox bytes lock should not poison");
+        windows.retain(|_, w| now.saturating_sub(w.window_started_millis) < 120_000);
+        let window = windows
+            .entry(mailbox.to_owned())
+            .or_insert(MailboxByteWindow {
+                window_started_millis: now,
+                bytes_used: 0,
+            });
+        if now.saturating_sub(window.window_started_millis) >= 60_000 {
+            window.window_started_millis = now;
+            window.bytes_used = 0;
+        }
+        if window.bytes_used.saturating_add(bytes) > self.config.max_bytes_per_mailbox_per_minute {
+            return false;
+        }
+        window.bytes_used = window.bytes_used.saturating_add(bytes);
         true
     }
 
@@ -366,6 +509,15 @@ impl RelayState {
                 envelope_bytes.len(),
                 self.config.max_envelope_bytes
             ));
+        }
+        // Pairing-announcement envelopes bypass the per-mailbox throughput
+        // cap: they're tiny, dedup-by-sender already at the queue layer,
+        // and rate-limiting them would defeat codephrase discovery.
+        let counts_against_quota = envelope_kind(&envelope) != Some("pairing_announcement");
+        if counts_against_quota
+            && !self.allow_mailbox_bytes(&recipient_device_id, envelope_bytes.len() as u64)
+        {
+            return Err("mailbox throughput quota exceeded".to_owned());
         }
 
         let mut queues = self
@@ -960,6 +1112,9 @@ mod tests {
             trust_forwarded_for: false,
             identity_seed_path: PathBuf::from(""),
             identity_seed_inline: None,
+            max_bytes_per_mailbox_per_minute: DEFAULT_MAX_BYTES_PER_MAILBOX_PER_MINUTE,
+            soft_ban_threshold: DEFAULT_SOFT_BAN_THRESHOLD,
+            soft_ban_duration: Duration::from_secs(DEFAULT_SOFT_BAN_SECONDS),
         }
     }
 
@@ -1329,6 +1484,109 @@ mod tests {
         assert!(
             !verify_signature(&state.identity, &response, "health"),
             "tampered body must fail signature verification"
+        );
+    }
+
+    #[test]
+    fn mailbox_quota_rejects_oversized_throughput() {
+        let mut config = test_config();
+        config.max_bytes_per_mailbox_per_minute = 256;
+        let state = RelayState::new(config, test_identity());
+
+        // First small envelope fits well within the quota.
+        let small = envelope("direct_message", "msg-quota-1", "dev-a");
+        state
+            .store("dev-b".to_owned(), small)
+            .expect("first store fits within quota");
+
+        // Build an envelope whose serialized form exceeds the remaining
+        // budget — pad the payload base64 to push bytes over 256.
+        let padded_payload = "A".repeat(400);
+        let big = json!({
+            "kind": "direct_message",
+            "messageId": "msg-quota-2",
+            "conversationId": "conv",
+            "senderAccountId": "acc-a",
+            "senderDeviceId": "dev-a",
+            "recipientDeviceId": "dev-b",
+            "createdAt": "2026-05-13T00:00:00.000Z",
+            "payloadBase64": padded_payload,
+        });
+        let err = state
+            .store("dev-b".to_owned(), big)
+            .expect_err("oversized store should be rejected");
+        assert!(err.contains("quota"), "error should mention quota: {err}");
+    }
+
+    #[test]
+    fn pairing_announcement_envelopes_bypass_mailbox_quota() {
+        let mut config = test_config();
+        config.max_bytes_per_mailbox_per_minute = 1; // effectively impossible
+        let state = RelayState::new(config, test_identity());
+
+        let ann = envelope("pairing_announcement", "pair-1", "dev-a");
+        state
+            .store("pair-mailbox".to_owned(), ann)
+            .expect("pairing announcements bypass the throughput quota");
+    }
+
+    #[test]
+    fn soft_ban_triggers_after_threshold_violations() {
+        let mut config = test_config();
+        config.max_requests_per_minute = 1;
+        config.soft_ban_threshold = 3;
+        config.soft_ban_duration = Duration::from_secs(30);
+        let state = RelayState::new(config, test_identity());
+
+        assert!(state.allow_request("198.51.100.7"), "first request");
+        // Subsequent requests inside the same minute window are rate-limited
+        // and accumulate consecutive violations.
+        for _ in 0..3 {
+            assert!(
+                !state.allow_request("198.51.100.7"),
+                "rate-limited request rejected"
+            );
+        }
+        // The 5th (after 3 violations) is still rejected — soft-ban now
+        // takes over for the remainder of the duration.
+        assert!(
+            !state.allow_request("198.51.100.7"),
+            "soft-banned peer stays rejected"
+        );
+        let bans = state.banned_peers.lock().expect("ban lock");
+        let entry = bans.get("198.51.100.7").expect("banned peer recorded");
+        assert!(
+            entry.banned_until_millis > now_millis(),
+            "ban timer points to the future"
+        );
+    }
+
+    #[test]
+    fn soft_ban_expires_after_short_duration() {
+        let mut config = test_config();
+        config.max_requests_per_minute = 1;
+        config.soft_ban_threshold = 2;
+        config.soft_ban_duration = Duration::from_millis(100);
+        let state = RelayState::new(config, test_identity());
+
+        // Burn through to trigger a ban.
+        state.allow_request("203.0.113.4");
+        for _ in 0..3 {
+            state.allow_request("203.0.113.4");
+        }
+        // Still inside ban duration.
+        assert!(!state.allow_request("203.0.113.4"));
+        std::thread::sleep(Duration::from_millis(160));
+        // After the ban window passes the peer cycles back through the
+        // rate-limit path on its next request.
+        let _ = state.allow_request("203.0.113.4");
+        // And the ban entry should be drained or its `banned_until_millis`
+        // should be in the past, by the retain() pass.
+        let bans = state.banned_peers.lock().expect("ban lock");
+        assert!(
+            bans.get("203.0.113.4")
+                .is_none_or(|e| e.banned_until_millis <= now_millis()),
+            "expired ban must not remain active",
         );
     }
 

@@ -1109,10 +1109,13 @@ class _Sidebar extends StatelessWidget {
     final localRelayLabel = controller.localRelayRunning
         ? 'LAN node :${identity.localRelayPort}'
         : 'LAN node unavailable';
+    final primaryRelayLabel = identity.primaryRelayRoute == null
+        ? null
+        : controller.relayDisplayLabel(identity.primaryRelayRoute!);
     final internetRelayLabel = identity.hasInternetRelay
         ? identity.configuredRelays.length == 1
-              ? 'internet ${identity.primaryRelayRoute?.label}'
-              : 'internet ${identity.primaryRelayRoute?.label} +${identity.configuredRelays.length - 1}'
+              ? 'internet $primaryRelayLabel'
+              : 'internet $primaryRelayLabel +${identity.configuredRelays.length - 1}'
         : 'internet relay optional';
     final lanSummary = identity.lanAddresses.isEmpty
         ? 'no LAN address detected'
@@ -4754,6 +4757,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             ],
                           ),
                           const SizedBox(height: 16),
+                          _RelayIdentityMismatchBanner(
+                            controller: widget.controller,
+                            palette: widget.palette,
+                          ),
                           Text(
                             'Configured relays',
                             style: Theme.of(context).textTheme.titleMedium
@@ -4773,7 +4780,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               children: [
                                 for (final relay in configuredRelays)
                                   InputChip(
-                                    label: Text(relay.label),
+                                    label: Text(
+                                      widget.controller.relayDisplayLabel(
+                                        relay,
+                                      ),
+                                    ),
                                     onDeleted: _busy
                                         ? null
                                         : () => _run(
@@ -4967,6 +4978,146 @@ class _SettingsDialogState extends State<SettingsDialog> {
           child: const Text('Close'),
         ),
       ],
+    );
+  }
+}
+
+class _RelayIdentityMismatchBanner extends StatelessWidget {
+  const _RelayIdentityMismatchBanner({
+    required this.controller,
+    required this.palette,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+
+  String _shortFingerprint(String base64Key) {
+    final trimmed = base64Key.trim();
+    if (trimmed.length <= 12) {
+      return trimmed;
+    }
+    return '${trimmed.substring(0, 12)}…';
+  }
+
+  Future<void> _confirmTrust(
+    BuildContext context, {
+    required String relayId,
+    required String announcedKey,
+  }) async {
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Trust new identity for $relayId?'),
+        content: Text(
+          'The relay is now signing with a different Ed25519 public key '
+          '(${_shortFingerprint(announcedKey)}). Only continue if the '
+          'operator has confirmed they rotated the key — otherwise this '
+          'could be a man-in-the-middle.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.tonal(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(
+                dialogContext,
+              ).colorScheme.errorContainer,
+              foregroundColor: Theme.of(
+                dialogContext,
+              ).colorScheme.onErrorContainer,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Trust new key'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true) {
+      return;
+    }
+    try {
+      await controller.rotateRelayIdentityKey(
+        relayId: relayId,
+        newKeyBase64: announcedKey,
+      );
+    } catch (error) {
+      controller.setStatus(error.toString());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final announced = controller.announcedRelayIdentityKeys;
+        if (announced.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        final entries = announced.entries.toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
+        return Container(
+          margin: const EdgeInsets.only(bottom: 16),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.errorContainer,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Relay identity changed',
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onErrorContainer,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'A configured relay is signing with a new key. Verify with the '
+                'operator before trusting it.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onErrorContainer,
+                ),
+              ),
+              const SizedBox(height: 8),
+              for (final entry in entries)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${entry.key} → ${_shortFingerprint(entry.value)}',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                fontFamily: 'monospace',
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onErrorContainer,
+                              ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: () => _confirmTrust(
+                          context,
+                          relayId: entry.key,
+                          announcedKey: entry.value,
+                        ),
+                        child: const Text('Trust new key'),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -1931,6 +1931,82 @@ class PendingGroupMembershipDelivery {
   }
 }
 
+enum PendingAckKind {
+  delivered,
+  read;
+
+  String get wireValue => name;
+
+  static PendingAckKind? tryParse(String? value) {
+    if (value == null) return null;
+    for (final kind in PendingAckKind.values) {
+      if (kind.name == value) return kind;
+    }
+    return null;
+  }
+}
+
+/// An outgoing ack (delivery or read receipt) that hasn't been confirmed
+/// landed on its target yet. Unlike [PendingGroupMembershipDelivery],
+/// there's no second round-trip to confirm success; instead, the entry is
+/// cleared as soon as the first delivery attempt completes without
+/// throwing. Entries persist so transient route failures can be retried
+/// across restarts.
+class PendingAckDelivery {
+  const PendingAckDelivery({
+    required this.targetDeviceId,
+    required this.acknowledgedMessageId,
+    required this.conversationId,
+    required this.kind,
+    required this.lastAttemptedAt,
+    required this.attempts,
+  });
+
+  final String targetDeviceId;
+  final String acknowledgedMessageId;
+  final String conversationId;
+  final PendingAckKind kind;
+  final DateTime lastAttemptedAt;
+  final int attempts;
+
+  PendingAckDelivery copyWith({
+    DateTime? lastAttemptedAt,
+    int? attempts,
+  }) {
+    return PendingAckDelivery(
+      targetDeviceId: targetDeviceId,
+      acknowledgedMessageId: acknowledgedMessageId,
+      conversationId: conversationId,
+      kind: kind,
+      lastAttemptedAt: lastAttemptedAt ?? this.lastAttemptedAt,
+      attempts: attempts ?? this.attempts,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'targetDeviceId': targetDeviceId,
+    'acknowledgedMessageId': acknowledgedMessageId,
+    'conversationId': conversationId,
+    'kind': kind.wireValue,
+    'lastAttemptedAt': lastAttemptedAt.toIso8601String(),
+    'attempts': attempts,
+  };
+
+  factory PendingAckDelivery.fromJson(Map<String, dynamic> json) {
+    return PendingAckDelivery(
+      targetDeviceId: json['targetDeviceId'] as String,
+      acknowledgedMessageId: json['acknowledgedMessageId'] as String,
+      conversationId: json['conversationId'] as String? ?? '',
+      kind: PendingAckKind.tryParse(json['kind'] as String?) ??
+          PendingAckKind.delivered,
+      lastAttemptedAt:
+          DateTime.tryParse(json['lastAttemptedAt'] as String? ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      attempts: (json['attempts'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
 class VaultSnapshot {
   VaultSnapshot({
     required this.identity,
@@ -1944,6 +2020,8 @@ class VaultSnapshot {
     this.pendingGroupMembershipDeliveries =
         const <PendingGroupMembershipDelivery>[],
     this.pinnedRelayIdentityKeys = const <String, String>{},
+    this.pendingAckDeliveries = const <PendingAckDelivery>[],
+    this.defaultRelayRouteKeys = const <String>{},
   });
 
   final IdentityRecord? identity;
@@ -1975,6 +2053,18 @@ class VaultSnapshot {
   /// (or the operator) decides whether to rotate via an explicit action.
   final Map<String, String> pinnedRelayIdentityKeys;
 
+  /// Outgoing delivery/read receipts that haven't successfully landed on
+  /// their target yet. Drained by the controller's periodic retry loop
+  /// with backoff; persisted so retries survive process restarts.
+  final List<PendingAckDelivery> pendingAckDeliveries;
+
+  /// `PeerEndpoint.routeKey` values for relays that were ingested from
+  /// the signed default-relay manifest. The UI shows these as
+  /// "default relay N" instead of host:port so users aren't pinned to
+  /// operator addresses that may rotate. Manually-added relays are not
+  /// included and display normally.
+  final Set<String> defaultRelayRouteKeys;
+
   factory VaultSnapshot.empty() {
     return VaultSnapshot(
       identity: null,
@@ -1988,6 +2078,8 @@ class VaultSnapshot {
       pendingGroupMembershipDeliveries:
           const <PendingGroupMembershipDelivery>[],
       pinnedRelayIdentityKeys: const <String, String>{},
+      pendingAckDeliveries: const <PendingAckDelivery>[],
+      defaultRelayRouteKeys: const <String>{},
     );
   }
 
@@ -2002,6 +2094,8 @@ class VaultSnapshot {
     int? defaultRelayDefaultsVersion,
     List<PendingGroupMembershipDelivery>? pendingGroupMembershipDeliveries,
     Map<String, String>? pinnedRelayIdentityKeys,
+    List<PendingAckDelivery>? pendingAckDeliveries,
+    Set<String>? defaultRelayRouteKeys,
     bool clearIdentity = false,
   }) {
     return VaultSnapshot(
@@ -2019,6 +2113,10 @@ class VaultSnapshot {
           this.pendingGroupMembershipDeliveries,
       pinnedRelayIdentityKeys:
           pinnedRelayIdentityKeys ?? this.pinnedRelayIdentityKeys,
+      pendingAckDeliveries:
+          pendingAckDeliveries ?? this.pendingAckDeliveries,
+      defaultRelayRouteKeys:
+          defaultRelayRouteKeys ?? this.defaultRelayRouteKeys,
     );
   }
 
@@ -2041,6 +2139,9 @@ class VaultSnapshot {
       'pendingGroupMembershipDeliveries': pendingGroupMembershipDeliveries
           .map((entry) => entry.toJson())
           .toList(),
+      'pendingAckDeliveries':
+          pendingAckDeliveries.map((entry) => entry.toJson()).toList(),
+      'defaultRelayRouteKeys': defaultRelayRouteKeys.toList(),
       'pinnedRelayIdentityKeys': pinnedRelayIdentityKeys,
     };
   }
@@ -2092,6 +2193,16 @@ class VaultSnapshot {
                     const <String, dynamic>{})
                 .entries)
           if (entry.value is String) entry.key: entry.value as String,
+      },
+      pendingAckDeliveries:
+          (json['pendingAckDeliveries'] as List<dynamic>? ?? const [])
+              .cast<Map<String, dynamic>>()
+              .map(PendingAckDelivery.fromJson)
+              .toList(),
+      defaultRelayRouteKeys: <String>{
+        for (final value
+            in (json['defaultRelayRouteKeys'] as List<dynamic>? ?? const []))
+          if (value is String) value,
       },
     );
   }

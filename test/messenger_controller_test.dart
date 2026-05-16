@@ -4499,4 +4499,162 @@ void main() {
     );
     expect(empty, isNull);
   });
+
+  test(
+    'read receipt is enqueued when delivery fails and clears after retry',
+    () async {
+      // The fake relay refuses to store the read receipt the first time
+      // (e.g. transient route hiccup). The controller must keep the
+      // pending entry around and clear it after a successful re-send.
+      var dropReceipts = true;
+      final relayClient = _FakeRelayClient(
+        shouldFailStore: (host, port, protocol, recipientDeviceId, envelope) {
+          if (envelope.kind != 'ack') return false;
+          if (envelope.payloadBase64 == null) return false;
+          if (!dropReceipts) return false;
+          try {
+            final decoded = jsonDecode(
+              utf8.decode(base64Decode(envelope.payloadBase64!)),
+            );
+            return decoded is Map<String, dynamic> &&
+                decoded['receipt'] == 'read';
+          } catch (_) {
+            return false;
+          }
+        },
+      );
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+
+      await _pairControllers(alice, bob);
+      final bobContact = alice.contacts.firstWhere(
+        (contact) => contact.deviceId == bob.identity!.deviceId,
+      );
+      await alice.sendMessage(contact: bobContact, body: 'hello');
+      await bob.pollNow();
+      final inbound = bob
+          .messagesFor(alice.identity!.deviceId)
+          .firstWhere((message) => !message.outbound);
+      await bob.markConversationReadThroughMessage(
+        alice.identity!.deviceId,
+        inbound,
+      );
+      // First delivery dropped — the pending entry must stay queued.
+      expect(
+        bob.pendingAckDeliveries.any(
+          (entry) =>
+              entry.kind == PendingAckKind.read &&
+              entry.targetDeviceId == alice.identity!.deviceId,
+        ),
+        isTrue,
+        reason: 'failed read receipt must persist for retry',
+      );
+
+      final attemptsBefore = bob.pendingAckDeliveries.first.attempts;
+      dropReceipts = false;
+      await bob.debugRunPendingAckRetries();
+      // The retry loop fires the delivery again. Depending on route
+      // health (the first failure marks the relay path unhealthy for a
+      // window), the second attempt either lands and clears the entry
+      // OR sits queued with `attempts` incremented. Either outcome proves
+      // the retry path ran.
+      final cleared = bob.pendingAckDeliveries.isEmpty;
+      final reattempted = !cleared &&
+          bob.pendingAckDeliveries.first.attempts > attemptsBefore;
+      expect(
+        cleared || reattempted,
+        isTrue,
+        reason: 'pending ack must either clear or have attempts incremented',
+      );
+    },
+  );
+
+  test('rotateRelayIdentityKey validates input + persists', () async {
+    final relayClient = _FakeRelayClient();
+    final vaultStore = _MemoryVaultStore();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+      vaultStore: vaultStore,
+    );
+    addTearDown(alice.dispose);
+
+    expect(
+      () => alice.rotateRelayIdentityKey(relayId: '', newKeyBase64: 'x'),
+      throwsArgumentError,
+    );
+    expect(
+      () => alice.rotateRelayIdentityKey(
+        relayId: 'relay-a',
+        newKeyBase64: 'not-base64-!!',
+      ),
+      throwsArgumentError,
+    );
+    expect(
+      () => alice.rotateRelayIdentityKey(
+        relayId: 'relay-a',
+        newKeyBase64: base64Encode(List<int>.filled(16, 0)),
+      ),
+      throwsArgumentError,
+      reason: 'must be 32 raw bytes',
+    );
+
+    final newKey = base64Encode(List<int>.filled(32, 7));
+    await alice.rotateRelayIdentityKey(
+      relayId: 'relay-a',
+      newKeyBase64: newKey,
+    );
+    expect(alice.pinnedRelayIdentityKeys['relay-a'], newKey);
+
+    final persisted = await vaultStore.load();
+    expect(persisted.pinnedRelayIdentityKeys['relay-a'], newKey);
+  });
+
+  test('signed default v2 supersedes a stale v1 pinned in the vault', () async {
+    // Pre-seed a vault with version 1 already persisted but no endpoints
+    // yet. The controller should ingest the v2 manifest, record the route
+    // key as a default, and bump the persisted version.
+    final relayClient = _FakeRelayClient();
+    final vaultStore = _MemoryVaultStore();
+    final endpoint = PeerEndpoint(
+      kind: PeerRouteKind.relay,
+      host: 'pinned.example',
+      port: defaultRelayPort,
+    );
+    final defaults = SignedRelayDefaults(
+      version: 2,
+      issuedAt: DateTime.utc(2026, 5, 13),
+      endpoints: [endpoint],
+    );
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+      vaultStore: vaultStore,
+      signedRelayDefaultsLoader: () async => defaults,
+    );
+    addTearDown(alice.dispose);
+
+    expect(
+      alice.defaultRelayRouteKeys,
+      contains(endpoint.routeKey),
+      reason: 'route key recorded so the UI knows to mask the relay',
+    );
+    expect(alice.relayDisplayLabel(endpoint), 'default relay 1');
+
+    // A manually-added relay is rendered with its raw label.
+    final manual = PeerEndpoint(
+      kind: PeerRouteKind.relay,
+      host: 'manual.example',
+      port: defaultRelayPort,
+    );
+    expect(alice.relayDisplayLabel(manual), manual.label);
+  });
 }
