@@ -4752,21 +4752,80 @@ void main() {
       expect(newBob!.pendingVerification, isTrue);
       expect(newBob.replacesDeviceId, 'dev-bob');
       expect(newBob.canSendOutbound, isFalse);
+      // Crypto-level block: the active publicKeyBase64 is empty while
+      // pending so `_pairwiseDirectKey` literally cannot derive a shared
+      // secret. The real key is stashed in unverifiedPublicKeyBase64.
+      expect(newBob.publicKeyBase64, isEmpty);
+      expect(
+        newBob.unverifiedPublicKeyBase64,
+        'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
+      );
 
-      // sendMessage to the pending contact must throw — hard block.
+      // sendMessage to the pending contact must throw, AND nothing should
+      // reach the relay client — proves the block isn't a UI-only flag.
+      final storeAttemptsBefore = relayClient.storeAttempts.length;
       await expectLater(
         () => alice.sendMessage(contact: newBob, body: 'hi'),
         throwsStateError,
       );
+      expect(
+        relayClient.storeAttempts.length,
+        storeAttemptsBefore,
+        reason: 'No envelope must reach the relay for a pending contact.',
+      );
 
-      // Confirm replacement clears the block AND archives the predecessor.
+      // Confirm replacement promotes the unverified key, lifts the block,
+      // AND archives the predecessor.
       await alice.confirmContactReplacement('dev-bob-2');
       final refreshed = alice.contactByDeviceId('dev-bob-2');
       expect(refreshed!.pendingVerification, isFalse);
       expect(refreshed.canSendOutbound, isTrue);
+      expect(
+        refreshed.publicKeyBase64,
+        'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
+        reason: 'Unverified key was promoted to active.',
+      );
+      expect(refreshed.unverifiedPublicKeyBase64, isNull);
       final oldBob = alice.contactByDeviceId('dev-bob');
       expect(oldBob!.replacedByDeviceId, 'dev-bob-2');
       expect(oldBob.canSendOutbound, isFalse);
+    },
+  );
+
+  test(
+    'legacy nightly.2 vault with pending + populated key migrates to unverified slot',
+    () {
+      // v0.3.1-nightly.2 persisted the real key on publicKeyBase64 even
+      // while pending. The fromJson migration must move it to the
+      // unverified slot so the crypto layer can't use it pre-confirmation.
+      final legacyJson = <String, dynamic>{
+        'accountId': 'acc-bob',
+        'deviceId': 'dev-bob-2',
+        'alias': 'Bob',
+        'displayName': 'Bob',
+        'bio': '',
+        'relayCapable': true,
+        // Nightly.2 shape: pending=true AND publicKeyBase64 populated.
+        'publicKeyBase64':
+            'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
+        'routeHints': const <Map<String, dynamic>>[],
+        'safetyNumber': 'safe-1234',
+        'trustedAt': DateTime.utc(2026, 5, 16).toIso8601String(),
+        'pendingVerification': true,
+        'replacesDeviceId': 'dev-bob',
+      };
+      final migrated = ContactRecord.fromJson(legacyJson);
+      expect(migrated.pendingVerification, isTrue);
+      expect(
+        migrated.publicKeyBase64,
+        isEmpty,
+        reason: 'Migration must blank the active key while pending.',
+      );
+      expect(
+        migrated.unverifiedPublicKeyBase64,
+        'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
+        reason: 'Migration must stash the real key in the unverified slot.',
+      );
     },
   );
 

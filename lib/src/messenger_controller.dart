@@ -2648,8 +2648,10 @@ class MessengerController extends ChangeNotifier {
     // Identity-reset / impersonation guardrail: if the invite carries the
     // same display name as an existing trusted contact but a different
     // public key, the new contact lands in pendingVerification state. The
-    // user must explicitly confirm (legit reinstall) or reject
-    // (impersonation) before any envelopes flow either way.
+    // crypto layer becomes the actual block — `publicKeyBase64` is empty
+    // while pending so `_pairwiseDirectKey` cannot derive a shared secret
+    // for either direction. The user must explicitly confirm (legit
+    // reinstall) or reject (impersonation) before any envelopes flow.
     final predecessor = _findPossibleContactPredecessor(
       displayName: invite.displayName,
       publicKeyBase64: invite.publicKeyBase64,
@@ -2662,12 +2664,13 @@ class MessengerController extends ChangeNotifier {
       displayName: invite.displayName,
       bio: invite.bio,
       relayCapable: invite.relayCapable,
-      publicKeyBase64: invite.publicKeyBase64,
+      publicKeyBase64: isPending ? '' : invite.publicKeyBase64,
       routeHints: prunePeerEndpointsByKind(invite.routeHints),
       safetyNumber: safetyNumber,
       trustedAt: DateTime.now().toUtc(),
       pendingVerification: isPending,
       replacesDeviceId: predecessor?.deviceId,
+      unverifiedPublicKeyBase64: isPending ? invite.publicKeyBase64 : null,
     );
     final conversations = List<ConversationRecord>.from(_snapshot.conversations)
       ..add(
@@ -2756,12 +2759,20 @@ class MessengerController extends ChangeNotifier {
     if (!contact.pendingVerification) {
       return;
     }
+    final promotedKey = contact.unverifiedPublicKeyBase64;
+    if (promotedKey == null || promotedKey.isEmpty) {
+      throw StateError(
+        'Cannot confirm ${contact.alias}: no unverified public key on file.',
+      );
+    }
     final updatedContacts = <ContactRecord>[
       for (final existing in _snapshot.contacts)
         if (existing.deviceId == contact.deviceId)
           existing.copyWith(
+            publicKeyBase64: promotedKey,
             pendingVerification: false,
             clearReplacesDeviceId: true,
+            clearUnverifiedPublicKey: true,
           )
         else if (contact.replacesDeviceId != null &&
             existing.deviceId == contact.replacesDeviceId)
@@ -3732,11 +3743,15 @@ class MessengerController extends ChangeNotifier {
       // If the recipient is no longer reachable as a group member (kicked
       // long ago and forgotten, etc.), drop the obligation.
       final contact = _groupMemberContact(group, entry.targetDeviceId);
-      if (contact == null) {
+      if (contact == null || contact.isArchived) {
         _clearPendingMembershipDelivery(
           groupId: entry.groupId,
           targetDeviceId: entry.targetDeviceId,
         );
+        continue;
+      }
+      if (contact.pendingVerification) {
+        // Hold; confirm-replacement will drain on key promotion.
         continue;
       }
       final profiledGroup = _refreshGroupMemberProfiles(group);
@@ -4600,6 +4615,19 @@ class MessengerController extends ChangeNotifier {
         _markSeen(envelope.messageId);
         continue;
       }
+      // Identity-reset guardrail: if the sender is a known contact in
+      // `pendingVerification`, hold the raw envelope without decrypt /
+      // dispatch — applies to every kind (ack, route_update, group_*,
+      // message_*, etc.), not just direct text. The crypto layer already
+      // can't process these (the contact has no active publicKeyBase64
+      // while pending), but short-circuiting here keeps logs quiet and
+      // ensures inbound state stays consistent with confirm/reject.
+      final senderContact = _contactByDeviceId(envelope.senderDeviceId);
+      if (senderContact != null && senderContact.pendingVerification) {
+        _enqueueHeldEnvelope(senderContact.deviceId, envelope);
+        _markSeen(envelope.messageId);
+        continue;
+      }
       processed++;
       if (envelope.kind == 'ack') {
         _noteTwoWaySuccess(envelope.senderDeviceId);
@@ -4730,15 +4758,6 @@ class MessengerController extends ChangeNotifier {
         }
       }
       if (contact == null) {
-        continue;
-      }
-      if (contact.pendingVerification) {
-        // Identity-reset / impersonation guardrail: don't decrypt or
-        // surface the message until the user confirms the new identity.
-        // Hold the raw envelope in the vault so the inbound flow can
-        // resume on confirm.
-        _enqueueHeldEnvelope(contact.deviceId, envelope);
-        _markSeen(envelope.messageId);
         continue;
       }
 
@@ -5544,12 +5563,18 @@ class MessengerController extends ChangeNotifier {
         }
       }
       final contact = _contactByDeviceId(entry.targetDeviceId);
-      if (contact == null) {
+      if (contact == null || contact.isArchived) {
+        // Successor exists or contact removed — drop the stale entry.
         _clearPendingAckDelivery(
           targetDeviceId: entry.targetDeviceId,
           acknowledgedMessageId: entry.acknowledgedMessageId,
           kind: entry.kind,
         );
+        continue;
+      }
+      if (contact.pendingVerification) {
+        // Hold the entry; confirm-replacement will drain it once the
+        // unverified key is promoted and the crypto layer can encrypt.
         continue;
       }
       final envelope = RelayEnvelope(
@@ -6409,6 +6434,11 @@ class MessengerController extends ChangeNotifier {
     // batch of receipts for already-delivered messages.
     await _retryPendingAckDeliveries(force: force);
     for (final contact in contacts) {
+      if (!contact.canSendOutbound) {
+        // Pending verification or archived — skip silently. The crypto
+        // layer would refuse anyway; this keeps the retry loop quiet.
+        continue;
+      }
       final retryable = messagesFor(contact.deviceId)
           .where(
             (message) => message.outbound && message.state.awaitsRecipientAck,
@@ -6449,6 +6479,10 @@ class MessengerController extends ChangeNotifier {
           }
           final contact = _groupMemberContact(group, entry.key);
           if (contact == null || !group.hasActiveMember(contact.deviceId)) {
+            continue;
+          }
+          if (!contact.canSendOutbound) {
+            // Pending verification or archived — skip silently.
             continue;
           }
           if (!force &&
@@ -6520,6 +6554,21 @@ class MessengerController extends ChangeNotifier {
     required String recipientDeviceId,
     required RelayEnvelope envelope,
   }) async {
+    // Defense in depth: the crypto layer already can't derive a shared
+    // secret for a pending or archived contact (publicKeyBase64 is empty
+    // / superseded), so any encrypt would fail with a base64 decode
+    // error. Surface a useful message before the crypto throw, and keep
+    // retry loops quiet by failing fast.
+    if (contact.pendingVerification) {
+      throw StateError(
+        'Refusing to send to ${contact.alias}: identity is awaiting verification.',
+      );
+    }
+    if (contact.isArchived) {
+      throw StateError(
+        'Refusing to send to ${contact.alias}: this contact has been replaced.',
+      );
+    }
     final candidateRoutes = dedupePeerEndpoints(
       _candidateRoutesForContact(contact),
     );

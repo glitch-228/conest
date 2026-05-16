@@ -296,6 +296,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -361,11 +364,24 @@ jobs:
           tag="${{ needs.prepare.outputs.tag }}"
           channel="${{ needs.prepare.outputs.channel }}"
           {
-            echo "Conest $tag ($channel)"
+            echo "Conest $tag"
             echo
-            echo "Built from commit \`${GITHUB_SHA}\`."
+            if [ "$channel" = "stable" ] && [ -f RELEASE_NOTES.md ]; then
+              cat RELEASE_NOTES.md
+            else
+              prev_tag="$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)"
+              if [ -n "$prev_tag" ]; then
+                echo "Changes since \`$prev_tag\`:"
+                echo
+                git log --no-merges --format='- %s' "$prev_tag..$tag"
+              else
+                echo "Built from commit \`${GITHUB_SHA}\`."
+              fi
+            fi
             echo
-            echo "Each desktop and mobile asset is covered by \`RELEASE-MANIFEST.json\` and its Ed25519 signature \`RELEASE-MANIFEST.ed25519.sig\`. The Conest desktop and Android updater both verify this signature before applying an update."
+            echo "---"
+            echo
+            echo "Built from commit \`${GITHUB_SHA}\`. Each desktop and mobile asset is covered by \`RELEASE-MANIFEST.json\` and its Ed25519 signature \`RELEASE-MANIFEST.ed25519.sig\`. The Conest desktop and Android updater both verify this signature before applying an update."
           } > release-notes.md
           echo "path=release-notes.md" >> "$GITHUB_OUTPUT"
       - name: Create GitHub release

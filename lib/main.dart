@@ -1009,15 +1009,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         ? 'Android starts with relay mode off. Enable it in Settings only when you want this device to relay.'
         : 'Relay mode can be enabled in Settings when this device should help carry traffic.';
     return Scaffold(
-      body: DecoratedBox(
+      body: Container(
         decoration: BoxDecoration(gradient: palette.appGradient),
         child: SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: Center(
+          child: LayoutBuilder(
+            builder: (context, constraints) => SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 980),
-                child: Wrap(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 980),
+                    child: Wrap(
                   spacing: 24,
                   runSpacing: 24,
                   crossAxisAlignment: WrapCrossAlignment.center,
@@ -1144,8 +1147,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         ),
                       ),
                     ),
-                  ],
+                    ],
+                  ),
                 ),
+              ),
               ),
             ),
           ),

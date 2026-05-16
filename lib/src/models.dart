@@ -884,6 +884,7 @@ class ContactRecord {
     this.pendingVerification = false,
     this.replacesDeviceId,
     this.replacedByDeviceId,
+    this.unverifiedPublicKeyBase64,
   });
 
   final String accountId;
@@ -915,6 +916,17 @@ class ContactRecord {
   /// delivery is refused. History stays visible read-only.
   final String? replacedByDeviceId;
 
+  /// Public key carried by the inbound invite when this contact landed in
+  /// `pendingVerification`. Promoted to [publicKeyBase64] on
+  /// `confirmContactReplacement`; discarded on `rejectContactReplacement`.
+  /// While set, [publicKeyBase64] is empty so the pairwise key derivation in
+  /// the controller (X25519 + HKDF) literally cannot produce a shared secret
+  /// — outbound encrypts and inbound decrypts both fail at the crypto layer
+  /// regardless of which call site triggered them. The pending state IS the
+  /// absence of usable cryptographic material; no controller-level policy
+  /// check is required for correctness.
+  final String? unverifiedPublicKeyBase64;
+
   String get shortSafetyNumber => _truncateSafetyNumber(safetyNumber);
 
   bool get isArchived => replacedByDeviceId != null;
@@ -925,12 +937,15 @@ class ContactRecord {
     String? displayName,
     String? bio,
     bool? relayCapable,
+    String? publicKeyBase64,
     List<PeerEndpoint>? routeHints,
     bool? pendingVerification,
     String? replacesDeviceId,
     bool clearReplacesDeviceId = false,
     String? replacedByDeviceId,
     bool clearReplacedByDeviceId = false,
+    String? unverifiedPublicKeyBase64,
+    bool clearUnverifiedPublicKey = false,
   }) {
     return ContactRecord(
       accountId: accountId,
@@ -939,7 +954,7 @@ class ContactRecord {
       displayName: displayName ?? this.displayName,
       bio: bio ?? this.bio,
       relayCapable: relayCapable ?? this.relayCapable,
-      publicKeyBase64: publicKeyBase64,
+      publicKeyBase64: publicKeyBase64 ?? this.publicKeyBase64,
       routeHints: prunePeerEndpointsByKind(routeHints ?? this.routeHints),
       safetyNumber: safetyNumber,
       trustedAt: trustedAt,
@@ -950,6 +965,9 @@ class ContactRecord {
       replacedByDeviceId: clearReplacedByDeviceId
           ? null
           : (replacedByDeviceId ?? this.replacedByDeviceId),
+      unverifiedPublicKeyBase64: clearUnverifiedPublicKey
+          ? null
+          : (unverifiedPublicKeyBase64 ?? this.unverifiedPublicKeyBase64),
     );
   }
 
@@ -1026,6 +1044,8 @@ class ContactRecord {
       'pendingVerification': pendingVerification,
       if (replacesDeviceId != null) 'replacesDeviceId': replacesDeviceId,
       if (replacedByDeviceId != null) 'replacedByDeviceId': replacedByDeviceId,
+      if (unverifiedPublicKeyBase64 != null)
+        'unverifiedPublicKeyBase64': unverifiedPublicKeyBase64,
     };
   }
 
@@ -1056,6 +1076,17 @@ class ContactRecord {
         ),
       );
     }
+    final pending = json['pendingVerification'] as bool? ?? false;
+    var activePublicKey = json['publicKeyBase64'] as String;
+    var unverifiedKey = json['unverifiedPublicKeyBase64'] as String?;
+    // Legacy migration from v0.3.1-nightly.2: those vaults persisted the
+    // real key on `publicKeyBase64` even while pending. Move it to the
+    // unverified slot so the crypto layer can't derive a shared secret
+    // until the user confirms.
+    if (pending && activePublicKey.isNotEmpty && unverifiedKey == null) {
+      unverifiedKey = activePublicKey;
+      activePublicKey = '';
+    }
     return ContactRecord(
       accountId: json['accountId'] as String,
       deviceId: json['deviceId'] as String,
@@ -1063,13 +1094,14 @@ class ContactRecord {
       displayName: json['displayName'] as String,
       bio: json['bio'] as String? ?? '',
       relayCapable: json['relayCapable'] as bool? ?? true,
-      publicKeyBase64: json['publicKeyBase64'] as String,
+      publicKeyBase64: activePublicKey,
       routeHints: prunePeerEndpointsByKind(routeHints),
       safetyNumber: json['safetyNumber'] as String,
       trustedAt: DateTime.parse(json['trustedAt'] as String),
-      pendingVerification: json['pendingVerification'] as bool? ?? false,
+      pendingVerification: pending,
       replacesDeviceId: json['replacesDeviceId'] as String?,
       replacedByDeviceId: json['replacedByDeviceId'] as String?,
+      unverifiedPublicKeyBase64: unverifiedKey,
     );
   }
 }

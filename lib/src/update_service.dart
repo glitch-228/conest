@@ -529,20 +529,20 @@ class UpdateService extends ChangeNotifier {
   /// Returns the resolved release notes for an available update.
   ///
   /// Order of precedence:
-  ///   1. `manifest.releaseNotes` — signed, tamper-proof, baked in at build time.
-  ///   2. GitHub release `body` — present on the already-fetched
-  ///      [GithubReleaseInfo], no extra network call.
-  /// Nightly builds skip notes entirely so the dialog stays terse.
+  ///   1. Stable channels prefer `manifest.releaseNotes` — signed,
+  ///      tamper-proof, baked in at build time.
+  ///   2. Both channels fall back to the GitHub release `body`, which the
+  ///      release workflow populates with `RELEASE_NOTES.md` (stable) or
+  ///      `git log <prev-tag>..<tag>` (nightly / prerelease).
   String? _resolveReleaseNotes({
     required ReleaseManifest manifest,
     required GithubReleaseInfo release,
   }) {
-    if (buildInfo.channel != UpdateChannel.stable) {
-      return null;
-    }
-    final manifestNotes = manifest.releaseNotes;
-    if (manifestNotes != null && manifestNotes.trim().isNotEmpty) {
-      return manifestNotes;
+    if (buildInfo.channel == UpdateChannel.stable) {
+      final manifestNotes = manifest.releaseNotes;
+      if (manifestNotes != null && manifestNotes.trim().isNotEmpty) {
+        return manifestNotes;
+      }
     }
     final bodyNotes = release.body;
     if (bodyNotes != null && bodyNotes.trim().isNotEmpty) {
