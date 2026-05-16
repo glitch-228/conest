@@ -143,7 +143,7 @@ jobs:
             --dart-define=CONEST_BUILD_CHANNEL=${{ needs.prepare.outputs.channel }} \
             --dart-define=CONEST_BUILD_COMMIT=${{ github.sha }} \
             --dart-define=CONEST_RELEASE_MANIFEST_PUBLIC_KEY=${CONEST_RELEASE_MANIFEST_PUBLIC_KEY} \
-            --dart-define=CONEST_DEFAULT_RELAYS_PUBLIC_KEY=EkYsxiYzcDKCB+Sneu6gZK5VuOD3uXFnyjJR5vxAVX0=
+            --dart-define=CONEST_DEFAULT_RELAYS_PUBLIC_KEY=QRIER9rtUfH6ZAs5YhszMzrIg05XYhFmobf0TylSULc=
       - name: Stage Linux bundle
         shell: bash
         run: |
@@ -200,7 +200,7 @@ jobs:
             --dart-define=CONEST_BUILD_CHANNEL=${{ needs.prepare.outputs.channel }} \
             --dart-define=CONEST_BUILD_COMMIT=${{ github.sha }} \
             --dart-define=CONEST_RELEASE_MANIFEST_PUBLIC_KEY=${CONEST_RELEASE_MANIFEST_PUBLIC_KEY} \
-            --dart-define=CONEST_DEFAULT_RELAYS_PUBLIC_KEY=EkYsxiYzcDKCB+Sneu6gZK5VuOD3uXFnyjJR5vxAVX0=
+            --dart-define=CONEST_DEFAULT_RELAYS_PUBLIC_KEY=QRIER9rtUfH6ZAs5YhszMzrIg05XYhFmobf0TylSULc=
       - name: Stage Windows bundle
         shell: bash
         run: |
@@ -269,7 +269,7 @@ jobs:
             --dart-define=CONEST_BUILD_CHANNEL=${{ needs.prepare.outputs.channel }} \
             --dart-define=CONEST_BUILD_COMMIT=${{ github.sha }} \
             --dart-define=CONEST_RELEASE_MANIFEST_PUBLIC_KEY=${CONEST_RELEASE_MANIFEST_PUBLIC_KEY} \
-            --dart-define=CONEST_DEFAULT_RELAYS_PUBLIC_KEY=EkYsxiYzcDKCB+Sneu6gZK5VuOD3uXFnyjJR5vxAVX0=
+            --dart-define=CONEST_DEFAULT_RELAYS_PUBLIC_KEY=QRIER9rtUfH6ZAs5YhszMzrIg05XYhFmobf0TylSULc=
       - name: Stage APK
         shell: bash
         run: |

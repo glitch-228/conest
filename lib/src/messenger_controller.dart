@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
@@ -56,6 +57,47 @@ const Duration _internetHealthCacheTtl = Duration(seconds: 45);
 const Duration _lanRecentRouteSuccessTtl = Duration(seconds: 30);
 const Duration _internetRecentRouteSuccessTtl = Duration(minutes: 2);
 
+/// Base URL the "Update default relays" button pulls from. Points at the
+/// project's `main`-branch raw assets so a freshly-pushed signed manifest
+/// reaches users without an app release.
+const String kDefaultRelaysGitHubRawBase =
+    'https://raw.githubusercontent.com/glitch-228/conest/main/assets';
+
+/// Outcome of a [`MessengerController.refreshDefaultRelays`] call.
+class DefaultRelaysRefreshResult {
+  const DefaultRelaysRefreshResult._({
+    required this.status,
+    this.version,
+    this.addedRoutes = const <PeerEndpoint>[],
+    this.errorMessage,
+  });
+
+  const DefaultRelaysRefreshResult.upToDate({required int version})
+    : this._(status: DefaultRelaysRefreshStatus.upToDate, version: version);
+
+  const DefaultRelaysRefreshResult.updated({
+    required int version,
+    required List<PeerEndpoint> addedRoutes,
+  }) : this._(
+         status: DefaultRelaysRefreshStatus.updated,
+         version: version,
+         addedRoutes: addedRoutes,
+       );
+
+  const DefaultRelaysRefreshResult.error(String message)
+    : this._(
+        status: DefaultRelaysRefreshStatus.error,
+        errorMessage: message,
+      );
+
+  final DefaultRelaysRefreshStatus status;
+  final int? version;
+  final List<PeerEndpoint> addedRoutes;
+  final String? errorMessage;
+}
+
+enum DefaultRelaysRefreshStatus { upToDate, updated, error }
+
 class MessengerController extends ChangeNotifier {
   MessengerController({
     required VaultStore vaultStore,
@@ -109,6 +151,7 @@ class MessengerController extends ChangeNotifier {
   final Map<String, PeerRouteHealth> _routeHealth = {};
   final Map<String, _RouteRuntimeState> _routeRuntime = {};
   final Map<String, String> _announcedRelayIdentityKeys = <String, String>{};
+  Future<Uint8List> Function(String url)? _httpBytesFetcherOverride;
   final Set<String> _debugProbeAcknowledgements = <String>{};
   final Set<String> _debugTwoWayReplies = <String>{};
   final Set<String> _locallyDeletedMessageIds = <String>{};
@@ -161,20 +204,49 @@ class MessengerController extends ChangeNotifier {
   Set<String> get defaultRelayRouteKeys =>
       Set.unmodifiable(_snapshot.defaultRelayRouteKeys);
 
+  /// `host:port` strings for default-relay endpoints. Routes sharing one of
+  /// these host:port pairs collapse to a single "default relay N" label,
+  /// regardless of protocol — so multi-protocol fan-out (TCP+UDP+HTTP for
+  /// the same operator address) shows up as one entry.
+  Set<String> get defaultRelayHosts =>
+      Set.unmodifiable(_snapshot.defaultRelayHosts);
+
+  /// Imported relay-list sources (signed or unsigned URL imports). Exposed
+  /// for the settings UI; mutation goes through [`importRelaysFromUrl`] and
+  /// [`removeCustomRelaySource`].
+  List<CustomRelaySource> get customRelaySources =>
+      List.unmodifiable(_snapshot.customRelaySources);
+
+  /// Wall-clock time of the most recent successful default-relays fetch
+  /// from the GitHub `main`-branch raw URL. Null when only the bundled
+  /// asset has been ingested.
+  DateTime? get defaultRelaysLastFetchedAt =>
+      _snapshot.defaultRelaysLastFetchedAt;
+
+  /// Version of the most recently ingested signed default-relay manifest.
+  /// Exposed for the settings UI alongside the last-fetched timestamp.
+  int get defaultRelaysVersion => _snapshot.defaultRelayDefaultsVersion;
+
   /// Renders the user-visible label for a relay endpoint. Default relays
-  /// (ingested from the signed manifest) are shown as `default relay N`
-  /// where N is the 1-based index in the sorted set of default route
-  /// keys; user-added relays show their actual `relay.label`. The
-  /// numbering is stable across renders because the sort is on the
-  /// route-key string.
+  /// (any route whose `host:port` matches an ingested default endpoint)
+  /// are shown as `default relay N` where N is the 1-based index in the
+  /// sorted set of default host:port pairs. Manually-added and imported
+  /// relays show their actual `relay.label`. Sort-stable across renders.
   String relayDisplayLabel(PeerEndpoint relay) {
-    final keys = _snapshot.defaultRelayRouteKeys;
-    if (!keys.contains(relay.routeKey)) {
-      return relay.label;
+    final hostKey = '${relay.host}:${relay.port}';
+    final hosts = _snapshot.defaultRelayHosts;
+    if (hosts.contains(hostKey)) {
+      final sorted = hosts.toList()..sort();
+      return 'default relay ${sorted.indexOf(hostKey) + 1}';
     }
-    final sorted = keys.toList()..sort();
-    final index = sorted.indexOf(relay.routeKey);
-    return 'default relay ${index + 1}';
+    // Legacy fallback for vaults persisted before v0.3.1 — pre-3 schema
+    // recorded individual route keys without host grouping.
+    final keys = _snapshot.defaultRelayRouteKeys;
+    if (keys.contains(relay.routeKey)) {
+      final sorted = keys.toList()..sort();
+      return 'default relay ${sorted.indexOf(relay.routeKey) + 1}';
+    }
+    return relay.label;
   }
 
   /// Outbound delivery/read receipts that haven't yet landed on their
@@ -600,43 +672,100 @@ class MessengerController extends ChangeNotifier {
     if (defaults.version <= _snapshot.defaultRelayDefaultsVersion) {
       return;
     }
+    await _applyIngestedDefaults(defaults, recordFetchTimestamp: false);
+  }
+
+  /// Shared ingest path used by both the bundled-asset loader and the
+  /// "Update default relays" GitHub fetch. Bumps the version, fans out
+  /// multi-protocol endpoints, records host:port masking entries, and
+  /// fire-and-forget probes each derived route.
+  Future<List<PeerEndpoint>> _applyIngestedDefaults(
+    SignedRelayDefaults defaults, {
+    required bool recordFetchTimestamp,
+  }) async {
     final me = _snapshot.identity;
     if (defaults.endpoints.isNotEmpty && me == null) {
       // Defer ingestion until identity exists; do not bump the version
       // yet so the next initialize() retries once pairing is complete.
-      return;
+      return const <PeerEndpoint>[];
     }
-    if (me != null && defaults.endpoints.isNotEmpty) {
+    final derived = _expandDefaultRelaySpecs(defaults.endpoints);
+    if (me != null && derived.isNotEmpty) {
       final updated = dedupePeerEndpoints([
         ...me.configuredRelays,
-        ...defaults.endpoints,
+        ...derived,
       ]);
       final newDefaultKeys = <String>{
         ..._snapshot.defaultRelayRouteKeys,
-        ...defaults.endpoints.map((endpoint) => endpoint.routeKey),
+        ...derived.map((endpoint) => endpoint.routeKey),
+      };
+      final newDefaultHosts = <String>{
+        ..._snapshot.defaultRelayHosts,
+        ...defaults.endpoints.map((spec) => '${spec.host}:${spec.port}'),
       };
       _snapshot = _snapshot.copyWith(
         identity: me.copyWith(configuredRelays: updated),
         defaultRelayDefaultsVersion: defaults.version,
         defaultRelayRouteKeys: newDefaultKeys,
+        defaultRelayHosts: newDefaultHosts,
+        defaultRelaysLastFetchedAt: recordFetchTimestamp
+            ? DateTime.now().toUtc()
+            : null,
       );
     } else {
       _snapshot = _snapshot.copyWith(
         defaultRelayDefaultsVersion: defaults.version,
+        defaultRelaysLastFetchedAt: recordFetchTimestamp
+            ? DateTime.now().toUtc()
+            : null,
       );
     }
     await _saveSnapshotSilently(notify: false);
-    // Pre-flight probe each new default endpoint so the routing layer's
+    // Pre-flight probe each new derived endpoint so the routing layer's
     // health-scoring sees a verdict before any real traffic chooses it.
     // Fire-and-forget — we don't want to block startup on a flaky network.
-    if (defaults.endpoints.isNotEmpty) {
+    if (derived.isNotEmpty) {
       unawaited(
         Future.wait([
-          for (final endpoint in defaults.endpoints)
-            _probeDefaultRelay(endpoint),
+          for (final endpoint in derived) _probeDefaultRelay(endpoint),
         ]),
       );
     }
+    return derived;
+  }
+
+  /// Expands a list of [DefaultRelayEndpointSpec] into concrete
+  /// [PeerEndpoint]s. Specs with an explicit protocol stay 1:1; specs with
+  /// `protocol == null` fan out across TCP/UDP/HTTP/HTTPS — the pre-flight
+  /// probe + health scoring downranks anything that doesn't answer.
+  List<PeerEndpoint> _expandDefaultRelaySpecs(
+    List<DefaultRelayEndpointSpec> specs,
+  ) {
+    final result = <PeerEndpoint>[];
+    for (final spec in specs) {
+      if (spec.protocol != null) {
+        result.add(
+          PeerEndpoint(
+            kind: spec.kind,
+            host: spec.host,
+            port: spec.port,
+            protocol: spec.protocol!,
+          ),
+        );
+        continue;
+      }
+      for (final protocol in PeerRouteProtocol.values) {
+        result.add(
+          PeerEndpoint(
+            kind: spec.kind,
+            host: spec.host,
+            port: spec.port,
+            protocol: protocol,
+          ),
+        );
+      }
+    }
+    return dedupePeerEndpoints(result);
   }
 
   Future<void> _probeDefaultRelay(PeerEndpoint endpoint) async {
@@ -677,6 +806,201 @@ class MessengerController extends ChangeNotifier {
       );
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Source of truth for the in-app "Update default relays" button. Pulls
+  /// the latest signed manifest from the project's GitHub `main` branch,
+  /// verifies it against the build-time public key, and ingests it if the
+  /// `version` is newer than the one already persisted. Returns a result
+  /// describing what happened so the UI can surface a snackbar.
+  Future<DefaultRelaysRefreshResult> refreshDefaultRelays() async {
+    const publicKey = String.fromEnvironment(
+      'CONEST_DEFAULT_RELAYS_PUBLIC_KEY',
+    );
+    if (publicKey.isEmpty) {
+      return const DefaultRelaysRefreshResult.error(
+        'This build was packaged without a default-relays signing key.',
+      );
+    }
+    final fetcher = _httpBytesFetcher;
+    Uint8List manifestBytes;
+    String signatureBase64;
+    try {
+      manifestBytes = await fetcher(
+        '$kDefaultRelaysGitHubRawBase/default_relays.json',
+      );
+      final sigBytes = await fetcher(
+        '$kDefaultRelaysGitHubRawBase/default_relays.ed25519.sig',
+      );
+      signatureBase64 = utf8.decode(sigBytes).trim();
+    } catch (error) {
+      return DefaultRelaysRefreshResult.error('Fetch failed: $error');
+    }
+    final defaults = await loadSignedDefaultRelaysFromBytes(
+      manifestBytes: manifestBytes,
+      signatureBase64: signatureBase64,
+      publicKeyBase64: publicKey,
+    );
+    if (defaults == null) {
+      return const DefaultRelaysRefreshResult.error(
+        'Signature did not verify against the build key.',
+      );
+    }
+    if (defaults.version <= _snapshot.defaultRelayDefaultsVersion) {
+      _snapshot = _snapshot.copyWith(
+        defaultRelaysLastFetchedAt: DateTime.now().toUtc(),
+      );
+      await _saveSnapshotSilently(notify: true);
+      return DefaultRelaysRefreshResult.upToDate(
+        version: _snapshot.defaultRelayDefaultsVersion,
+      );
+    }
+    final added = await _applyIngestedDefaults(
+      defaults,
+      recordFetchTimestamp: true,
+    );
+    return DefaultRelaysRefreshResult.updated(
+      version: defaults.version,
+      addedRoutes: added,
+    );
+  }
+
+  /// Imports a relay list from a user-supplied URL. When [publicKeyBase64]
+  /// is non-null, the import follows the same signed-manifest verification
+  /// path as the bundled defaults (signature fetched from `<url>.ed25519.sig`).
+  /// When null, the list is parsed as plain JSON (untrusted import). Either
+  /// way, the imported endpoints land in `me.configuredRelays` but are NOT
+  /// recorded as defaults — the UI displays them with their actual
+  /// `host:port` label. Returns the recorded [`CustomRelaySource`].
+  Future<CustomRelaySource> importRelaysFromUrl({
+    required String url,
+    String? publicKeyBase64,
+    String? replaceSourceId,
+  }) async {
+    final trimmedUrl = url.trim();
+    if (trimmedUrl.isEmpty) {
+      throw ArgumentError('URL is required.');
+    }
+    final fetcher = _httpBytesFetcher;
+    final manifestBytes = await fetcher(trimmedUrl);
+    SignedRelayDefaults? parsed;
+    if (publicKeyBase64 != null && publicKeyBase64.trim().isNotEmpty) {
+      final sigBytes = await fetcher('$trimmedUrl.ed25519.sig');
+      parsed = await loadSignedDefaultRelaysFromBytes(
+        manifestBytes: manifestBytes,
+        signatureBase64: utf8.decode(sigBytes).trim(),
+        publicKeyBase64: publicKeyBase64.trim(),
+      );
+      if (parsed == null) {
+        throw ArgumentError(
+          'Signature failed to verify against the supplied public key.',
+        );
+      }
+    } else {
+      parsed = parseUnsignedRelayList(utf8.decode(manifestBytes));
+      if (parsed == null) {
+        throw ArgumentError('Could not parse relay list from $trimmedUrl.');
+      }
+    }
+    final me = _requireIdentity();
+    final derived = _expandDefaultRelaySpecs(parsed.endpoints);
+    final updated = dedupePeerEndpoints([...me.configuredRelays, ...derived]);
+    final source = CustomRelaySource(
+      id: replaceSourceId ?? _randomId('relay-source'),
+      url: trimmedUrl,
+      publicKeyBase64: publicKeyBase64?.trim().isEmpty ?? true
+          ? null
+          : publicKeyBase64!.trim(),
+      lastVersion: parsed.version,
+      lastFetchedAt: DateTime.now().toUtc(),
+      routeKeys: <String>{
+        for (final route in derived) route.routeKey,
+      },
+    );
+    final sources = List<CustomRelaySource>.from(_snapshot.customRelaySources);
+    final existingIndex =
+        sources.indexWhere((existing) => existing.id == source.id);
+    if (existingIndex >= 0) {
+      sources[existingIndex] = source;
+    } else {
+      sources.add(source);
+    }
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(configuredRelays: updated),
+      customRelaySources: sources,
+    );
+    await _persist('Imported ${derived.length} relay(s) from $trimmedUrl.');
+    if (derived.isNotEmpty) {
+      unawaited(
+        Future.wait([
+          for (final endpoint in derived) _probeDefaultRelay(endpoint),
+        ]),
+      );
+    }
+    return source;
+  }
+
+  /// Drops a previously-imported source plus every route it contributed.
+  /// Routes the user also added manually under the same `host:port` remain
+  /// only if they have an explicit non-imported origin — since the only
+  /// origin tracking is per-source, removing a source removes its routes.
+  Future<void> removeCustomRelaySource(String sourceId) async {
+    final me = _requireIdentity();
+    final source = _snapshot.customRelaySources.firstWhere(
+      (candidate) => candidate.id == sourceId,
+      orElse: () =>
+          throw ArgumentError('No imported relay source with id $sourceId.'),
+    );
+    final remainingSources = _snapshot.customRelaySources
+        .where((candidate) => candidate.id != sourceId)
+        .toList(growable: false);
+    final remainingRoutes = me.configuredRelays
+        .where((route) => !source.routeKeys.contains(route.routeKey))
+        .toList(growable: false);
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(configuredRelays: remainingRoutes),
+      customRelaySources: remainingSources,
+    );
+    await _persist('Removed imported relay source ${source.url}.');
+  }
+
+  /// Test seam — overrides the HTTP byte fetcher used by
+  /// [`refreshDefaultRelays`] / [`importRelaysFromUrl`] so unit tests can
+  /// drive a deterministic response without hitting the network.
+  @visibleForTesting
+  void setHttpBytesFetcherForTesting(
+    Future<Uint8List> Function(String url) fetcher,
+  ) {
+    _httpBytesFetcherOverride = fetcher;
+  }
+
+  Future<Uint8List> Function(String) get _httpBytesFetcher =>
+      _httpBytesFetcherOverride ?? _defaultHttpBytesFetcher;
+
+  static Future<Uint8List> _defaultHttpBytesFetcher(String url) async {
+    final uri = Uri.parse(url);
+    final client = HttpClient();
+    try {
+      client.connectionTimeout = const Duration(seconds: 15);
+      final request = await client.getUrl(uri);
+      request.followRedirects = true;
+      final response = await request.close().timeout(
+        const Duration(seconds: 30),
+      );
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HttpException(
+          'HTTP ${response.statusCode} fetching $url',
+          uri: uri,
+        );
+      }
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in response) {
+        builder.add(chunk);
+      }
+      return builder.takeBytes();
+    } finally {
+      client.close(force: true);
     }
   }
 
@@ -2321,6 +2645,16 @@ class MessengerController extends ChangeNotifier {
       base64Decode(me.publicKeyBase64),
       base64Decode(invite.publicKeyBase64),
     ]);
+    // Identity-reset / impersonation guardrail: if the invite carries the
+    // same display name as an existing trusted contact but a different
+    // public key, the new contact lands in pendingVerification state. The
+    // user must explicitly confirm (legit reinstall) or reject
+    // (impersonation) before any envelopes flow either way.
+    final predecessor = _findPossibleContactPredecessor(
+      displayName: invite.displayName,
+      publicKeyBase64: invite.publicKeyBase64,
+    );
+    final isPending = predecessor != null;
     final contact = ContactRecord(
       accountId: invite.accountId,
       deviceId: invite.deviceId,
@@ -2332,6 +2666,8 @@ class MessengerController extends ChangeNotifier {
       routeHints: prunePeerEndpointsByKind(invite.routeHints),
       safetyNumber: safetyNumber,
       trustedAt: DateTime.now().toUtc(),
+      pendingVerification: isPending,
+      replacesDeviceId: predecessor?.deviceId,
     );
     final conversations = List<ConversationRecord>.from(_snapshot.conversations)
       ..add(
@@ -2369,6 +2705,143 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  /// Scans existing contacts for one with the same display name (case- /
+  /// whitespace-insensitive) but a different identity public key. When such
+  /// a match exists, the inbound contact arrives in `pendingVerification`
+  /// state and the user must confirm or reject. Returns null when there's
+  /// no candidate.
+  ContactRecord? _findPossibleContactPredecessor({
+    required String displayName,
+    required String publicKeyBase64,
+  }) {
+    final needle = displayName.trim().toLowerCase();
+    if (needle.isEmpty) {
+      return null;
+    }
+    ContactRecord? best;
+    DateTime? bestTrustedAt;
+    for (final candidate in _snapshot.contacts) {
+      if (candidate.publicKeyBase64 == publicKeyBase64) {
+        continue;
+      }
+      if (candidate.isArchived) {
+        continue;
+      }
+      if (candidate.displayName.trim().toLowerCase() != needle) {
+        continue;
+      }
+      if (bestTrustedAt == null ||
+          candidate.trustedAt.isAfter(bestTrustedAt)) {
+        best = candidate;
+        bestTrustedAt = candidate.trustedAt;
+      }
+    }
+    return best;
+  }
+
+  /// Returns the contact identified by [deviceId] when it exists. Public
+  /// for the conversation UI which needs to look up the predecessor by id.
+  ContactRecord? contactByDeviceId(String deviceId) =>
+      _contactByDeviceId(deviceId);
+
+  /// Confirms that a `pendingVerification` contact is the legitimate
+  /// reinstall of its predecessor. Lifts the hard block, drains held
+  /// inbound envelopes into the conversation, and marks the predecessor
+  /// as archived (read-only history, no outbound).
+  Future<void> confirmContactReplacement(String newContactDeviceId) async {
+    final contact = _contactByDeviceId(newContactDeviceId);
+    if (contact == null) {
+      throw ArgumentError('No contact with id $newContactDeviceId.');
+    }
+    if (!contact.pendingVerification) {
+      return;
+    }
+    final updatedContacts = <ContactRecord>[
+      for (final existing in _snapshot.contacts)
+        if (existing.deviceId == contact.deviceId)
+          existing.copyWith(
+            pendingVerification: false,
+            clearReplacesDeviceId: true,
+          )
+        else if (contact.replacesDeviceId != null &&
+            existing.deviceId == contact.replacesDeviceId)
+          existing.copyWith(replacedByDeviceId: contact.deviceId)
+        else
+          existing,
+    ];
+    final remainingHeld = _snapshot.heldUnverifiedEnvelopes
+        .where((entry) => entry.senderDeviceId != contact.deviceId)
+        .toList(growable: false);
+    final toReplay = _snapshot.heldUnverifiedEnvelopes
+        .where((entry) => entry.senderDeviceId == contact.deviceId)
+        .toList(growable: false);
+    _snapshot = _snapshot.copyWith(
+      contacts: updatedContacts,
+      heldUnverifiedEnvelopes: remainingHeld,
+    );
+    await _persist('Confirmed identity replacement for ${contact.alias}.');
+    if (toReplay.isNotEmpty) {
+      final envelopes = <RelayEnvelope>[];
+      for (final entry in toReplay) {
+        try {
+          envelopes.add(
+            RelayEnvelope.fromJson(
+              jsonDecode(entry.envelopeJson) as Map<String, dynamic>,
+            ),
+          );
+        } catch (_) {
+          // Drop malformed entries; the original sender will retry.
+        }
+      }
+      if (envelopes.isNotEmpty) {
+        unawaited(_processEnvelopes(envelopes));
+      }
+    }
+  }
+
+  /// Rejects a `pendingVerification` contact — typically because it's an
+  /// impersonation attempt. Deletes the contact and any held inbound
+  /// envelopes from that sender.
+  Future<void> rejectContactReplacement(String newContactDeviceId) async {
+    final contact = _contactByDeviceId(newContactDeviceId);
+    if (contact == null) {
+      throw ArgumentError('No contact with id $newContactDeviceId.');
+    }
+    if (!contact.pendingVerification) {
+      throw ArgumentError(
+        'Contact ${contact.alias} is not awaiting verification.',
+      );
+    }
+    final remainingContacts = _snapshot.contacts
+        .where((existing) => existing.deviceId != contact.deviceId)
+        .toList(growable: false);
+    final remainingHeld = _snapshot.heldUnverifiedEnvelopes
+        .where((entry) => entry.senderDeviceId != contact.deviceId)
+        .toList(growable: false);
+    final remainingConversations = _snapshot.conversations
+        .where(
+          (conversation) =>
+              conversation.peerDeviceId != contact.deviceId,
+        )
+        .toList(growable: false);
+    final remainingReachability = _snapshot.reachabilityRecords
+        .where((record) => record.deviceId != contact.deviceId)
+        .toList(growable: false);
+    _snapshot = _snapshot.copyWith(
+      contacts: remainingContacts,
+      conversations: remainingConversations,
+      reachabilityRecords: remainingReachability,
+      heldUnverifiedEnvelopes: remainingHeld,
+    );
+    await _persist('Rejected identity replacement for ${contact.alias}.');
+  }
+
+  /// Held inbound envelopes from `pendingVerification` contacts. Exposed
+  /// for diagnostics + tests; the public confirm/reject API drains the
+  /// queue automatically.
+  List<HeldEnvelope> get heldUnverifiedEnvelopes =>
+      List.unmodifiable(_snapshot.heldUnverifiedEnvelopes);
+
   Future<void> sendMessage({
     required ContactRecord contact,
     required String body,
@@ -2378,6 +2851,16 @@ class MessengerController extends ChangeNotifier {
     final trimmed = body.trim();
     if (trimmed.isEmpty) {
       return;
+    }
+    if (contact.pendingVerification) {
+      throw StateError(
+        'Cannot send to ${contact.alias} until the identity is verified.',
+      );
+    }
+    if (contact.isArchived) {
+      throw StateError(
+        'Cannot send to ${contact.alias}: this contact has been replaced.',
+      );
     }
 
     final message = ChatMessage(
@@ -4249,6 +4732,15 @@ class MessengerController extends ChangeNotifier {
       if (contact == null) {
         continue;
       }
+      if (contact.pendingVerification) {
+        // Identity-reset / impersonation guardrail: don't decrypt or
+        // surface the message until the user confirms the new identity.
+        // Hold the raw envelope in the vault so the inbound flow can
+        // resume on confirm.
+        _enqueueHeldEnvelope(contact.deviceId, envelope);
+        _markSeen(envelope.messageId);
+        continue;
+      }
 
       final decodedMessage = await _decryptDirectMessage(
         contact: contact,
@@ -4965,6 +5457,28 @@ class MessengerController extends ChangeNotifier {
       // Stays queued; the retry loop will pick it up.
     }
     await _saveSnapshotSilently(notify: false);
+  }
+
+  /// Persists a raw inbound envelope under quarantine for a contact that's
+  /// still in `pendingVerification`. The user-facing confirm action drains
+  /// these back into the inbound pipeline; reject discards them.
+  void _enqueueHeldEnvelope(String senderDeviceId, RelayEnvelope envelope) {
+    final encoded = jsonEncode(envelope.toJson());
+    final existing = _snapshot.heldUnverifiedEnvelopes
+        .where((entry) =>
+            !(entry.senderDeviceId == senderDeviceId &&
+                entry.envelopeJson == encoded))
+        .toList(growable: true)
+      ..add(
+        HeldEnvelope(
+          senderDeviceId: senderDeviceId,
+          conversationId: envelope.conversationId,
+          envelopeJson: encoded,
+          receivedAt: DateTime.now().toUtc(),
+        ),
+      );
+    _snapshot = _snapshot.copyWith(heldUnverifiedEnvelopes: existing);
+    unawaited(_saveSnapshotSilently(notify: true));
   }
 
   void _enqueuePendingAckDelivery(PendingAckDelivery entry) {

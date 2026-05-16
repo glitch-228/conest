@@ -3638,6 +3638,12 @@ class _ChatPanelState extends State<_ChatPanel> {
               ),
             ),
             const Divider(height: 1),
+            if (contact.pendingVerification)
+              _PendingVerificationBanner(
+                controller: controller,
+                palette: palette,
+                contact: contact,
+              ),
             Expanded(
               child: ListView(
                 key: _messageListKey,
@@ -3673,17 +3679,21 @@ class _ChatPanelState extends State<_ChatPanel> {
                           controller: widget.composerController,
                           minLines: 1,
                           maxLines: 5,
+                          enabled: contact.canSendOutbound,
                           decoration: InputDecoration(
-                            hintText: activeReplyTarget == null
-                                ? 'Write an encrypted message'
-                                : 'Write a reply',
+                            hintText: !contact.canSendOutbound
+                                ? 'Verify the contact\'s identity to send.'
+                                : activeReplyTarget == null
+                                    ? 'Write an encrypted message'
+                                    : 'Write a reply',
                           ),
                           onSubmitted: (_) => widget.onSend(),
                         ),
                       ),
                       const SizedBox(width: 12),
                       FilledButton.icon(
-                        onPressed: widget.onSend,
+                        onPressed:
+                            contact.canSendOutbound ? widget.onSend : null,
                         icon: const Icon(Icons.north_east),
                         label: const Text('Send'),
                       ),
@@ -5291,6 +5301,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             controller: widget.controller,
                             palette: widget.palette,
                           ),
+                          _DefaultRelaysControlsCard(
+                            controller: widget.controller,
+                            palette: widget.palette,
+                          ),
+                          const SizedBox(height: 12),
                           Text(
                             'Configured relays',
                             style: Theme.of(context).textTheme.titleMedium
@@ -5648,6 +5663,450 @@ class _RelayIdentityMismatchBanner extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _PendingVerificationBanner extends StatelessWidget {
+  const _PendingVerificationBanner({
+    required this.controller,
+    required this.palette,
+    required this.contact,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+  final ContactRecord contact;
+
+  Future<void> _confirm(BuildContext context) async {
+    final predecessor = contact.replacesDeviceId != null
+        ? controller.contactByDeviceId(contact.replacesDeviceId!)
+        : null;
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Confirm identity replacement?'),
+        content: Text(
+          predecessor == null
+              ? 'Trust ${contact.alias} as a fresh contact? Verify the safety '
+                  'number out of band first — accepting now archives any '
+                  'previous "${contact.displayName}" entries as read-only.'
+              : 'Trust this as a reinstall of "${predecessor.alias}"? '
+                  'The previous contact will be archived (history kept '
+                  'read-only); the new contact takes over. This cannot be '
+                  'undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text("It's them"),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true) return;
+    try {
+      await controller.confirmContactReplacement(contact.deviceId);
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Confirm failed: $error')),
+      );
+    }
+  }
+
+  Future<void> _reject(BuildContext context) async {
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Reject this identity?'),
+        content: const Text(
+          'This deletes the new contact and any held inbound messages. '
+          'Use this if you believe this is impersonation.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.tonal(
+            style: FilledButton.styleFrom(
+              backgroundColor:
+                  Theme.of(dialogContext).colorScheme.errorContainer,
+              foregroundColor:
+                  Theme.of(dialogContext).colorScheme.onErrorContainer,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Reject'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true) return;
+    try {
+      await controller.rejectContactReplacement(contact.deviceId);
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Reject failed: $error')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final predecessor = contact.replacesDeviceId != null
+        ? controller.contactByDeviceId(contact.replacesDeviceId!)
+        : null;
+    final predecessorAlias = predecessor?.alias ?? contact.displayName;
+    return Container(
+      color: Theme.of(context).colorScheme.errorContainer,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          Icon(
+            Icons.warning_amber_outlined,
+            color: Theme.of(context).colorScheme.onErrorContainer,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'This contact may be a reset of "$predecessorAlias". Verify '
+              'their safety number out of band before exchanging messages.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onErrorContainer,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: () => _confirm(context),
+            child: const Text("It's them"),
+          ),
+          TextButton(
+            onPressed: () => _reject(context),
+            child: const Text('Not them'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DefaultRelaysControlsCard extends StatefulWidget {
+  const _DefaultRelaysControlsCard({
+    required this.controller,
+    required this.palette,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+
+  @override
+  State<_DefaultRelaysControlsCard> createState() =>
+      _DefaultRelaysControlsCardState();
+}
+
+class _DefaultRelaysControlsCardState
+    extends State<_DefaultRelaysControlsCard> {
+  bool _refreshing = false;
+  bool _importing = false;
+
+  Future<void> _runRefresh() async {
+    setState(() => _refreshing = true);
+    try {
+      final result = await widget.controller.refreshDefaultRelays();
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      switch (result.status) {
+        case DefaultRelaysRefreshStatus.upToDate:
+          messenger.showSnackBar(
+            const SnackBar(content: Text('Default relays are up to date.')),
+          );
+          break;
+        case DefaultRelaysRefreshStatus.updated:
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                'Updated to version ${result.version}: ${result.addedRoutes.length} route(s).',
+              ),
+            ),
+          );
+          break;
+        case DefaultRelaysRefreshStatus.error:
+          messenger.showSnackBar(
+            SnackBar(
+              backgroundColor: Theme.of(context).colorScheme.errorContainer,
+              content: Text(
+                'Update failed: ${result.errorMessage ?? "unknown error"}',
+              ),
+            ),
+          );
+          break;
+      }
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  Future<void> _runImport() async {
+    final result = await showDialog<_ImportRelaysDialogResult>(
+      context: context,
+      builder: (dialogContext) => const _ImportRelaysDialog(),
+    );
+    if (result == null) return;
+    setState(() => _importing = true);
+    try {
+      await widget.controller.importRelaysFromUrl(
+        url: result.url,
+        publicKeyBase64: result.publicKeyBase64,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Imported relays from ${result.url}.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: Theme.of(context).colorScheme.errorContainer,
+          content: Text('Import failed: $error'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
+  }
+
+  Future<void> _removeSource(CustomRelaySource source) async {
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Remove imported list?'),
+        content: Text(
+          'This will remove ${source.routeKeys.length} relay route(s) imported from ${source.url}.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.tonal(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true) return;
+    try {
+      await widget.controller.removeCustomRelaySource(source.id);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Remove failed: $error')),
+      );
+    }
+  }
+
+  String _relativeFetchedAt(DateTime? value) {
+    if (value == null) return 'from bundle';
+    final delta = DateTime.now().toUtc().difference(value);
+    if (delta.inMinutes < 1) return 'just now';
+    if (delta.inHours < 1) return '${delta.inMinutes} min ago';
+    if (delta.inDays < 1) return '${delta.inHours} h ago';
+    return '${delta.inDays} d ago';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: widget.controller,
+      builder: (context, _) {
+        final version = widget.controller.defaultRelaysVersion;
+        final fetched = widget.controller.defaultRelaysLastFetchedAt;
+        final sources = widget.controller.customRelaySources;
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Default relays · v$version · ${_relativeFetchedAt(fetched)}',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  FilledButton.tonal(
+                    onPressed: _refreshing ? null : _runRefresh,
+                    child: _refreshing
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Update'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Pulled from the project repository when you tap Update.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: widget.palette.inkSoft,
+                ),
+              ),
+              const Divider(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Imported relay lists',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  FilledButton.tonal(
+                    onPressed: _importing ? null : _runImport,
+                    child: _importing
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Import from URL…'),
+                  ),
+                ],
+              ),
+              if (sources.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'No imported lists.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: widget.palette.inkSoft,
+                    ),
+                  ),
+                )
+              else
+                for (final source in sources)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '${source.url} · ${source.isSigned ? "signed" : "unsigned"} · ${source.routeKeys.length} route(s)',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(fontFamily: 'monospace'),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        TextButton(
+                          onPressed: () => _removeSource(source),
+                          child: const Text('Remove'),
+                        ),
+                      ],
+                    ),
+                  ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ImportRelaysDialogResult {
+  const _ImportRelaysDialogResult({required this.url, this.publicKeyBase64});
+
+  final String url;
+  final String? publicKeyBase64;
+}
+
+class _ImportRelaysDialog extends StatefulWidget {
+  const _ImportRelaysDialog();
+
+  @override
+  State<_ImportRelaysDialog> createState() => _ImportRelaysDialogState();
+}
+
+class _ImportRelaysDialogState extends State<_ImportRelaysDialog> {
+  final _urlController = TextEditingController();
+  final _publicKeyController = TextEditingController();
+
+  @override
+  void dispose() {
+    _urlController.dispose();
+    _publicKeyController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Import relay list from URL'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _urlController,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'JSON URL',
+              hintText: 'https://example.com/relays.json',
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _publicKeyController,
+            decoration: const InputDecoration(
+              labelText: "Operator's public key (optional, base64)",
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Leave blank to import unsigned (untrusted; pre-flight probes still gate use). Provide the operator\'s key for cryptographically trusted imports — the signature is fetched from <URL>.ed25519.sig.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final url = _urlController.text.trim();
+            if (url.isEmpty) return;
+            final key = _publicKeyController.text.trim();
+            Navigator.of(context).pop(
+              _ImportRelaysDialogResult(
+                url: url,
+                publicKeyBase64: key.isEmpty ? null : key,
+              ),
+            );
+          },
+          child: const Text('Import'),
+        ),
+      ],
     );
   }
 }

@@ -881,6 +881,9 @@ class ContactRecord {
     required this.routeHints,
     required this.safetyNumber,
     required this.trustedAt,
+    this.pendingVerification = false,
+    this.replacesDeviceId,
+    this.replacedByDeviceId,
   });
 
   final String accountId;
@@ -894,7 +897,28 @@ class ContactRecord {
   final String safetyNumber;
   final DateTime trustedAt;
 
+  /// True when this contact arrived with a `displayName` matching an existing
+  /// trusted contact AND a different identity public key — i.e. possibly a
+  /// reinstall of an existing contact, but also possibly an impersonation
+  /// attempt against a leaked codephrase. The user must explicitly confirm
+  /// or reject via [`confirmContactReplacement`]/[`rejectContactReplacement`]
+  /// before any envelopes flow in either direction.
+  final bool pendingVerification;
+
+  /// When [pendingVerification] is true, the `deviceId` of the existing
+  /// trusted contact we believe this contact is replacing. Surfaces the
+  /// predecessor's display name in the verification banner.
+  final String? replacesDeviceId;
+
+  /// When the user has confirmed that some _other_ contact has replaced this
+  /// one, [`replacedByDeviceId`] points at that successor and outbound
+  /// delivery is refused. History stays visible read-only.
+  final String? replacedByDeviceId;
+
   String get shortSafetyNumber => _truncateSafetyNumber(safetyNumber);
+
+  bool get isArchived => replacedByDeviceId != null;
+  bool get canSendOutbound => !pendingVerification && !isArchived;
 
   ContactRecord copyWith({
     String? alias,
@@ -902,6 +926,11 @@ class ContactRecord {
     String? bio,
     bool? relayCapable,
     List<PeerEndpoint>? routeHints,
+    bool? pendingVerification,
+    String? replacesDeviceId,
+    bool clearReplacesDeviceId = false,
+    String? replacedByDeviceId,
+    bool clearReplacedByDeviceId = false,
   }) {
     return ContactRecord(
       accountId: accountId,
@@ -914,6 +943,13 @@ class ContactRecord {
       routeHints: prunePeerEndpointsByKind(routeHints ?? this.routeHints),
       safetyNumber: safetyNumber,
       trustedAt: trustedAt,
+      pendingVerification: pendingVerification ?? this.pendingVerification,
+      replacesDeviceId: clearReplacesDeviceId
+          ? null
+          : (replacesDeviceId ?? this.replacesDeviceId),
+      replacedByDeviceId: clearReplacedByDeviceId
+          ? null
+          : (replacedByDeviceId ?? this.replacedByDeviceId),
     );
   }
 
@@ -987,6 +1023,9 @@ class ContactRecord {
       'routeHints': routeHints.map((route) => route.toJson()).toList(),
       'safetyNumber': safetyNumber,
       'trustedAt': trustedAt.toIso8601String(),
+      'pendingVerification': pendingVerification,
+      if (replacesDeviceId != null) 'replacesDeviceId': replacesDeviceId,
+      if (replacedByDeviceId != null) 'replacedByDeviceId': replacedByDeviceId,
     };
   }
 
@@ -1028,6 +1067,9 @@ class ContactRecord {
       routeHints: prunePeerEndpointsByKind(routeHints),
       safetyNumber: json['safetyNumber'] as String,
       trustedAt: DateTime.parse(json['trustedAt'] as String),
+      pendingVerification: json['pendingVerification'] as bool? ?? false,
+      replacesDeviceId: json['replacesDeviceId'] as String?,
+      replacedByDeviceId: json['replacedByDeviceId'] as String?,
     );
   }
 }
@@ -2007,6 +2049,110 @@ class PendingAckDelivery {
   }
 }
 
+/// An inbound envelope held in quarantine because the sender is a contact in
+/// `pendingVerification` state. Drained into the matching conversation when
+/// the user confirms the contact replacement; deleted on reject.
+class HeldEnvelope {
+  const HeldEnvelope({
+    required this.senderDeviceId,
+    required this.conversationId,
+    required this.envelopeJson,
+    required this.receivedAt,
+  });
+
+  final String senderDeviceId;
+  final String conversationId;
+  final String envelopeJson;
+  final DateTime receivedAt;
+
+  Map<String, dynamic> toJson() => {
+    'senderDeviceId': senderDeviceId,
+    'conversationId': conversationId,
+    'envelopeJson': envelopeJson,
+    'receivedAt': receivedAt.toIso8601String(),
+  };
+
+  factory HeldEnvelope.fromJson(Map<String, dynamic> json) => HeldEnvelope(
+    senderDeviceId: json['senderDeviceId'] as String,
+    conversationId: json['conversationId'] as String? ?? '',
+    envelopeJson: json['envelopeJson'] as String,
+    receivedAt:
+        DateTime.tryParse(json['receivedAt'] as String? ?? '') ??
+        DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+  );
+}
+
+/// A user-imported relay list, fetched from an arbitrary URL. Unlike the
+/// signed default-relay manifest these are NOT marked as defaults in the UI;
+/// the UI still shows them by host:port. Imported endpoints can be removed
+/// as a group via [`removeCustomRelaySource`].
+class CustomRelaySource {
+  const CustomRelaySource({
+    required this.id,
+    required this.url,
+    required this.publicKeyBase64,
+    required this.lastVersion,
+    required this.lastFetchedAt,
+    required this.routeKeys,
+  });
+
+  final String id;
+  final String url;
+
+  /// Operator's Ed25519 verification key when the import was signed. When
+  /// null, the import was unsigned (untrusted); the pre-flight probe still
+  /// gates use but no cryptographic trust applies to the list itself.
+  final String? publicKeyBase64;
+
+  final int? lastVersion;
+  final DateTime lastFetchedAt;
+
+  /// `routeKey`s contributed by this source. Used by remove + refresh to
+  /// scope changes.
+  final Set<String> routeKeys;
+
+  bool get isSigned => publicKeyBase64 != null;
+
+  CustomRelaySource copyWith({
+    int? lastVersion,
+    DateTime? lastFetchedAt,
+    Set<String>? routeKeys,
+  }) {
+    return CustomRelaySource(
+      id: id,
+      url: url,
+      publicKeyBase64: publicKeyBase64,
+      lastVersion: lastVersion ?? this.lastVersion,
+      lastFetchedAt: lastFetchedAt ?? this.lastFetchedAt,
+      routeKeys: routeKeys ?? this.routeKeys,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'url': url,
+    if (publicKeyBase64 != null) 'publicKeyBase64': publicKeyBase64,
+    if (lastVersion != null) 'lastVersion': lastVersion,
+    'lastFetchedAt': lastFetchedAt.toIso8601String(),
+    'routeKeys': routeKeys.toList(),
+  };
+
+  factory CustomRelaySource.fromJson(Map<String, dynamic> json) =>
+      CustomRelaySource(
+        id: json['id'] as String,
+        url: json['url'] as String,
+        publicKeyBase64: json['publicKeyBase64'] as String?,
+        lastVersion: (json['lastVersion'] as num?)?.toInt(),
+        lastFetchedAt:
+            DateTime.tryParse(json['lastFetchedAt'] as String? ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+        routeKeys: <String>{
+          for (final value in (json['routeKeys'] as List<dynamic>? ?? const []))
+            if (value is String) value,
+        },
+      );
+}
+
 class VaultSnapshot {
   VaultSnapshot({
     required this.identity,
@@ -2022,6 +2168,10 @@ class VaultSnapshot {
     this.pinnedRelayIdentityKeys = const <String, String>{},
     this.pendingAckDeliveries = const <PendingAckDelivery>[],
     this.defaultRelayRouteKeys = const <String>{},
+    this.defaultRelayHosts = const <String>{},
+    this.defaultRelaysLastFetchedAt,
+    this.customRelaySources = const <CustomRelaySource>[],
+    this.heldUnverifiedEnvelopes = const <HeldEnvelope>[],
   });
 
   final IdentityRecord? identity;
@@ -2065,6 +2215,30 @@ class VaultSnapshot {
   /// included and display normally.
   final Set<String> defaultRelayRouteKeys;
 
+  /// `host:port` strings for default-relay endpoints. Any derived route
+  /// sharing one of these host:port pairs (regardless of protocol) is
+  /// rendered as "default relay N" so multi-protocol fan-out (TCP+UDP+HTTP)
+  /// collapses to a single user-facing label per operator address.
+  final Set<String> defaultRelayHosts;
+
+  /// Wall-clock time of the most recent successful default-relays fetch
+  /// from the GitHub `main`-branch raw URL. Null when the user has never
+  /// tapped the "Update default relays" button (or when only the bundled
+  /// asset has been ingested).
+  final DateTime? defaultRelaysLastFetchedAt;
+
+  /// Relay lists imported from arbitrary URLs (signed or unsigned).
+  /// Imported endpoints are added to `identity.configuredRelays` but are
+  /// NOT marked as defaults — the UI shows them with their actual
+  /// `host:port` label. Removing a source removes all of its routes.
+  final List<CustomRelaySource> customRelaySources;
+
+  /// Inbound envelopes from `pendingVerification` contacts held in
+  /// quarantine until the user confirms or rejects the contact
+  /// replacement. Drains into the conversation on confirm; deleted on
+  /// reject.
+  final List<HeldEnvelope> heldUnverifiedEnvelopes;
+
   factory VaultSnapshot.empty() {
     return VaultSnapshot(
       identity: null,
@@ -2080,6 +2254,10 @@ class VaultSnapshot {
       pinnedRelayIdentityKeys: const <String, String>{},
       pendingAckDeliveries: const <PendingAckDelivery>[],
       defaultRelayRouteKeys: const <String>{},
+      defaultRelayHosts: const <String>{},
+      defaultRelaysLastFetchedAt: null,
+      customRelaySources: const <CustomRelaySource>[],
+      heldUnverifiedEnvelopes: const <HeldEnvelope>[],
     );
   }
 
@@ -2096,6 +2274,11 @@ class VaultSnapshot {
     Map<String, String>? pinnedRelayIdentityKeys,
     List<PendingAckDelivery>? pendingAckDeliveries,
     Set<String>? defaultRelayRouteKeys,
+    Set<String>? defaultRelayHosts,
+    DateTime? defaultRelaysLastFetchedAt,
+    bool clearDefaultRelaysLastFetchedAt = false,
+    List<CustomRelaySource>? customRelaySources,
+    List<HeldEnvelope>? heldUnverifiedEnvelopes,
     bool clearIdentity = false,
   }) {
     return VaultSnapshot(
@@ -2117,6 +2300,13 @@ class VaultSnapshot {
           pendingAckDeliveries ?? this.pendingAckDeliveries,
       defaultRelayRouteKeys:
           defaultRelayRouteKeys ?? this.defaultRelayRouteKeys,
+      defaultRelayHosts: defaultRelayHosts ?? this.defaultRelayHosts,
+      defaultRelaysLastFetchedAt: clearDefaultRelaysLastFetchedAt
+          ? null
+          : (defaultRelaysLastFetchedAt ?? this.defaultRelaysLastFetchedAt),
+      customRelaySources: customRelaySources ?? this.customRelaySources,
+      heldUnverifiedEnvelopes:
+          heldUnverifiedEnvelopes ?? this.heldUnverifiedEnvelopes,
     );
   }
 
@@ -2142,6 +2332,14 @@ class VaultSnapshot {
       'pendingAckDeliveries':
           pendingAckDeliveries.map((entry) => entry.toJson()).toList(),
       'defaultRelayRouteKeys': defaultRelayRouteKeys.toList(),
+      'defaultRelayHosts': defaultRelayHosts.toList(),
+      if (defaultRelaysLastFetchedAt != null)
+        'defaultRelaysLastFetchedAt':
+            defaultRelaysLastFetchedAt!.toIso8601String(),
+      'customRelaySources':
+          customRelaySources.map((source) => source.toJson()).toList(),
+      'heldUnverifiedEnvelopes':
+          heldUnverifiedEnvelopes.map((entry) => entry.toJson()).toList(),
       'pinnedRelayIdentityKeys': pinnedRelayIdentityKeys,
     };
   }
@@ -2204,6 +2402,23 @@ class VaultSnapshot {
             in (json['defaultRelayRouteKeys'] as List<dynamic>? ?? const []))
           if (value is String) value,
       },
+      defaultRelayHosts: <String>{
+        for (final value
+            in (json['defaultRelayHosts'] as List<dynamic>? ?? const []))
+          if (value is String) value,
+      },
+      defaultRelaysLastFetchedAt:
+          DateTime.tryParse(json['defaultRelaysLastFetchedAt'] as String? ?? ''),
+      customRelaySources:
+          (json['customRelaySources'] as List<dynamic>? ?? const [])
+              .cast<Map<String, dynamic>>()
+              .map(CustomRelaySource.fromJson)
+              .toList(),
+      heldUnverifiedEnvelopes:
+          (json['heldUnverifiedEnvelopes'] as List<dynamic>? ?? const [])
+              .cast<Map<String, dynamic>>()
+              .map(HeldEnvelope.fromJson)
+              .toList(),
     );
   }
 }

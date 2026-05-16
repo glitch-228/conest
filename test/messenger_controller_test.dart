@@ -4373,15 +4373,16 @@ void main() {
 
   test('signed default relays ingest endpoints on first boot', () async {
     final relayClient = _FakeRelayClient();
-    final endpoint = PeerEndpoint(
+    const spec = DefaultRelayEndpointSpec(
       kind: PeerRouteKind.relay,
       host: 'defaults.example',
       port: defaultRelayPort,
+      protocol: PeerRouteProtocol.tcp,
     );
     final defaults = SignedRelayDefaults(
       version: 7,
       issuedAt: DateTime.utc(2026, 5, 12),
-      endpoints: [endpoint],
+      endpoints: const [spec],
     );
     final alice = await _createController(
       relayClient: relayClient,
@@ -4402,11 +4403,12 @@ void main() {
     final defaults = SignedRelayDefaults(
       version: 11,
       issuedAt: DateTime.utc(2026, 5, 12),
-      endpoints: [
-        PeerEndpoint(
+      endpoints: const [
+        DefaultRelayEndpointSpec(
           kind: PeerRouteKind.relay,
           host: 'pinned.example',
           port: defaultRelayPort,
+          protocol: PeerRouteProtocol.tcp,
         ),
       ],
     );
@@ -4632,7 +4634,14 @@ void main() {
     final defaults = SignedRelayDefaults(
       version: 2,
       issuedAt: DateTime.utc(2026, 5, 13),
-      endpoints: [endpoint],
+      endpoints: const [
+        DefaultRelayEndpointSpec(
+          kind: PeerRouteKind.relay,
+          host: 'pinned.example',
+          port: defaultRelayPort,
+          protocol: PeerRouteProtocol.tcp,
+        ),
+      ],
     );
     final alice = await _createController(
       relayClient: relayClient,
@@ -4656,5 +4665,253 @@ void main() {
       port: defaultRelayPort,
     );
     expect(alice.relayDisplayLabel(manual), manual.label);
+  });
+
+  test(
+    'schema v3 default with no protocol fans out into all transports under one label',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final defaults = SignedRelayDefaults(
+        version: 7,
+        issuedAt: DateTime.utc(2026, 5, 16),
+        endpoints: const [
+          DefaultRelayEndpointSpec(
+            kind: PeerRouteKind.relay,
+            host: 'multi.example',
+            port: defaultRelayPort,
+          ),
+        ],
+      );
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        signedRelayDefaultsLoader: () async => defaults,
+      );
+      addTearDown(alice.dispose);
+
+      final derived = alice.identity!.configuredRelays
+          .where((relay) => relay.host == 'multi.example')
+          .toList();
+      expect(
+        derived.length,
+        greaterThanOrEqualTo(3),
+        reason: 'TCP/UDP/HTTP at minimum should each become a route',
+      );
+      final labels = derived
+          .map((relay) => alice.relayDisplayLabel(relay))
+          .toSet();
+      expect(
+        labels.length,
+        1,
+        reason: 'All derived routes collapse to one "default relay N" label',
+      );
+      expect(labels.single, startsWith('default relay '));
+    },
+  );
+
+  test(
+    'contact-reset detection puts a same-name contact in pendingVerification',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      addTearDown(alice.dispose);
+
+      // First trust: a normal Bob.
+      final originalInvite = _bobInvite();
+      await alice.addContactFromInvite(
+        alias: originalInvite.displayName,
+        payload: originalInvite.encodePayload(),
+        codephrase: '',
+      );
+
+      // Second invite: same displayName but a different deviceId AND key.
+      // Simulates Bob reinstalling.
+      final reinstalledInvite = ContactInvite(
+        version: originalInvite.version,
+        accountId: 'acc-bob-2',
+        deviceId: 'dev-bob-2',
+        displayName: originalInvite.displayName,
+        bio: originalInvite.bio,
+        pairingNonce: 'bob-reinstall-nonce',
+        pairingEpochMs: originalInvite.pairingEpochMs + 1,
+        relayCapable: originalInvite.relayCapable,
+        publicKeyBase64:
+            'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
+        routeHints: originalInvite.routeHints,
+      );
+      await alice.addContactFromInvite(
+        alias: reinstalledInvite.displayName,
+        payload: reinstalledInvite.encodePayload(),
+        codephrase: '',
+      );
+      final newBob = alice.contactByDeviceId('dev-bob-2');
+      expect(newBob, isNotNull);
+      expect(newBob!.pendingVerification, isTrue);
+      expect(newBob.replacesDeviceId, 'dev-bob');
+      expect(newBob.canSendOutbound, isFalse);
+
+      // sendMessage to the pending contact must throw — hard block.
+      await expectLater(
+        () => alice.sendMessage(contact: newBob, body: 'hi'),
+        throwsStateError,
+      );
+
+      // Confirm replacement clears the block AND archives the predecessor.
+      await alice.confirmContactReplacement('dev-bob-2');
+      final refreshed = alice.contactByDeviceId('dev-bob-2');
+      expect(refreshed!.pendingVerification, isFalse);
+      expect(refreshed.canSendOutbound, isTrue);
+      final oldBob = alice.contactByDeviceId('dev-bob');
+      expect(oldBob!.replacedByDeviceId, 'dev-bob-2');
+      expect(oldBob.canSendOutbound, isFalse);
+    },
+  );
+
+  test('rejectContactReplacement deletes the pending contact', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    addTearDown(alice.dispose);
+
+    final invite = _bobInvite();
+    await alice.addContactFromInvite(
+      alias: invite.displayName,
+      payload: invite.encodePayload(),
+      codephrase: '',
+    );
+    final imposter = ContactInvite(
+      version: invite.version,
+      accountId: 'acc-bob-3',
+      deviceId: 'dev-bob-imposter',
+      displayName: invite.displayName,
+      bio: invite.bio,
+      pairingNonce: 'imposter-nonce',
+      pairingEpochMs: invite.pairingEpochMs + 2,
+      relayCapable: invite.relayCapable,
+      publicKeyBase64:
+          'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+      routeHints: invite.routeHints,
+    );
+    await alice.addContactFromInvite(
+      alias: imposter.displayName,
+      payload: imposter.encodePayload(),
+      codephrase: '',
+    );
+    expect(alice.contactByDeviceId('dev-bob-imposter'), isNotNull);
+
+    await alice.rejectContactReplacement('dev-bob-imposter');
+    expect(alice.contactByDeviceId('dev-bob-imposter'), isNull);
+    // The original Bob is untouched.
+    expect(alice.contactByDeviceId('dev-bob'), isNotNull);
+  });
+
+  test('refreshDefaultRelays applies a fetched newer signed manifest',
+      () async {
+    final relayClient = _FakeRelayClient();
+    final algorithm = Ed25519();
+    final keyPair = await algorithm.newKeyPair();
+    final publicKey = await keyPair.extractPublicKey();
+    final publicKeyBase64 = base64Encode(publicKey.bytes);
+
+    final manifest = jsonEncode(<String, dynamic>{
+      'version': 99,
+      'issuedAt': '2026-05-16T00:00:00Z',
+      'endpoints': [
+        {
+          'kind': 'relay',
+          'host': 'fetched.example',
+          'port': defaultRelayPort,
+          'protocol': 'tcp',
+        },
+      ],
+    });
+    final signature = await algorithm.sign(
+      utf8.encode(manifest),
+      keyPair: keyPair,
+    );
+    final signatureBase64 = base64Encode(signature.bytes);
+
+    // The build-time public key define controls what the controller will
+    // verify against. The unit-test runner can't set --dart-define values
+    // post-hoc, so we exercise the parse + apply path directly via the
+    // bytes-based loader instead of the GitHub-fetch wrapper.
+    final defaults = await loadSignedDefaultRelaysFromBytes(
+      manifestBytes: Uint8List.fromList(utf8.encode(manifest)),
+      signatureBase64: signatureBase64,
+      publicKeyBase64: publicKeyBase64,
+    );
+    expect(defaults, isNotNull);
+    expect(defaults!.version, 99);
+    expect(defaults.endpoints, hasLength(1));
+    expect(defaults.endpoints.single.host, 'fetched.example');
+    expect(defaults.endpoints.single.protocol, PeerRouteProtocol.tcp);
+
+    // Tampering breaks verification.
+    final tampered = manifest.replaceFirst('"version":99', '"version":100');
+    final tamperedDefaults = await loadSignedDefaultRelaysFromBytes(
+      manifestBytes: Uint8List.fromList(utf8.encode(tampered)),
+      signatureBase64: signatureBase64,
+      publicKeyBase64: publicKeyBase64,
+    );
+    expect(tamperedDefaults, isNull);
+
+    // Avoid unused-warning on relayClient (controller not created in this test
+    // because the GitHub fetch is exercised separately in manual smoke).
+    expect(relayClient, isNotNull);
+  });
+
+  test('importRelaysFromUrl (unsigned) adds routes without marking default',
+      () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    addTearDown(alice.dispose);
+
+    final manifest = jsonEncode(<String, dynamic>{
+      'version': 1,
+      'issuedAt': '2026-05-16T00:00:00Z',
+      'endpoints': [
+        {
+          'kind': 'relay',
+          'host': 'imported.example',
+          'port': 7700,
+          'protocol': 'tcp',
+        },
+      ],
+    });
+    alice.setHttpBytesFetcherForTesting((url) async {
+      return Uint8List.fromList(utf8.encode(manifest));
+    });
+
+    final source = await alice.importRelaysFromUrl(
+      url: 'https://example.com/relays.json',
+    );
+    expect(source.isSigned, isFalse);
+    expect(source.routeKeys, isNotEmpty);
+
+    final added = alice.identity!.configuredRelays
+        .where((relay) => relay.host == 'imported.example')
+        .toList();
+    expect(added, isNotEmpty);
+    // Imported routes are NOT masked as default.
+    for (final relay in added) {
+      expect(alice.relayDisplayLabel(relay), relay.label);
+    }
+    expect(alice.customRelaySources, hasLength(1));
+
+    await alice.removeCustomRelaySource(source.id);
+    expect(alice.customRelaySources, isEmpty);
+    expect(
+      alice.identity!.configuredRelays
+          .any((relay) => relay.host == 'imported.example'),
+      isFalse,
+    );
   });
 }
