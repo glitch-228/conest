@@ -8,17 +8,15 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show AssetBundle, rootBundle;
 
+import 'crypto_service.dart';
 import 'local_relay_node.dart';
 import 'models.dart';
 import 'platform_bridge.dart';
+import 'reachability_tracker.dart';
 import 'relay_client.dart';
 import 'relay_defaults.dart';
+import 'route_health_tracker.dart';
 import 'storage.dart';
-
-List<int> _secureRandomBytes(int length) {
-  final random = Random.secure();
-  return List<int>.generate(length, (_) => random.nextInt(256));
-}
 
 const int _maxInviteRouteHints = 4;
 const int _maxInviteLanHosts = 1;
@@ -47,15 +45,8 @@ const Duration _heartbeatInterval = Duration(seconds: 60);
 const Duration _foregroundIdleHeartbeatInterval = Duration(minutes: 3);
 const Duration _backgroundHeartbeatInterval = Duration(minutes: 10);
 const Duration _resumeHeartbeatThreshold = Duration(seconds: 90);
-const Duration _onlineReachabilityWindow = Duration(minutes: 2);
-const Duration _seenRecentlyReachabilityWindow = Duration(minutes: 10);
-const Duration _knownReachabilityWindow = Duration(hours: 24);
 const Duration _pendingMessageRetryDelay = Duration(seconds: 5);
 const Duration _acceptedMessageRetryDelay = Duration(seconds: 15);
-const Duration _lanHealthCacheTtl = Duration(seconds: 15);
-const Duration _internetHealthCacheTtl = Duration(seconds: 45);
-const Duration _lanRecentRouteSuccessTtl = Duration(seconds: 30);
-const Duration _internetRecentRouteSuccessTtl = Duration(minutes: 2);
 
 /// Base URL the "Update default relays" button pulls from. Points at the
 /// project's `main`-branch raw assets so a freshly-pushed signed manifest
@@ -115,11 +106,22 @@ class MessengerController extends ChangeNotifier {
       onAttempt: _recordRelayAttemptFromShim,
       nowProvider: () => (nowProvider ?? DateTime.now)(),
     );
+    _crypto = CryptoService(identityProvider: _requireIdentity);
+    _reachability = ReachabilityTracker(
+      recordsProvider: () => _snapshot.reachabilityRecords,
+      recordsUpdater: (records) =>
+          _snapshot = _snapshot.copyWith(reachabilityRecords: records),
+      nowProvider: _now,
+    );
+    _routeHealthTracker = RouteHealthTracker(nowProvider: _now);
     _localRelayNode.onEnvelopeStored = _handleLocalEnvelopeStored;
   }
 
   final VaultStore _vaultStore;
   late final RelayClient _relayClient;
+  late final CryptoService _crypto;
+  late final ReachabilityTracker _reachability;
+  late final RouteHealthTracker _routeHealthTracker;
   final LocalRelayNode _localRelayNode;
   final PlatformBridge _platformBridge;
   final Future<List<String>> Function() _lanAddressProvider;
@@ -145,8 +147,6 @@ class MessengerController extends ChangeNotifier {
   int _fetchCallCount = 0;
   int _storeCallCount = 0;
   int _healthCallCount = 0;
-  final Map<String, PeerRouteHealth> _routeHealth = {};
-  final Map<String, _RouteRuntimeState> _routeRuntime = {};
   final Map<String, String> _announcedRelayIdentityKeys = <String, String>{};
   Future<Uint8List> Function(String url)? _httpBytesFetcherOverride;
   final Set<String> _debugProbeAcknowledgements = <String>{};
@@ -351,11 +351,11 @@ class MessengerController extends ChangeNotifier {
 
   int get seenEnvelopeCount => _snapshot.seenEnvelopeIds.length;
   PeerRouteHealth? routeHealthFor(PeerEndpoint route) =>
-      _routeHealth[route.routeKey];
+      _routeHealthTracker.healthMap[route.routeKey];
   ContactReachabilityRecord? reachabilityRecordFor(String deviceId) =>
-      _reachabilityRecordByDeviceId(deviceId);
+      _reachability.recordByDeviceId(deviceId);
   ContactReachabilityState reachabilityStateFor(String deviceId) =>
-      _reachabilityStateFor(deviceId);
+      _reachability.stateFor(deviceId);
   @visibleForTesting
   void rememberPairingBeaconRouteForTesting(PeerEndpoint route) {
     _pairingBeaconRoutes[route.routeKey] = _PairingBeaconRoute(
@@ -409,7 +409,7 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final now = _now();
-    final record = _reachabilityRecordByDeviceId(deviceId);
+    final record = _reachability.recordByDeviceId(deviceId);
     final lastTwoWaySuccessAt = record?.lastTwoWaySuccessAt;
     if (lastTwoWaySuccessAt != null &&
         now.difference(lastTwoWaySuccessAt) <= _resumeHeartbeatThreshold) {
@@ -429,18 +429,18 @@ class MessengerController extends ChangeNotifier {
         _candidateRoutesForContact(contact),
       );
       for (final check in checks) {
-        if (check.available && _isRouteEligibleNow(check.route)) {
+        if (check.available && _routeHealthTracker.isEligibleNow(check.route)) {
           selectedRoute = check.route;
           break;
         }
       }
     }
     if (selectedRoute == null) {
-      _noteFailure(contact.deviceId, at: now);
+      _reachability.noteFailure(contact.deviceId, at: now);
       await _saveSnapshotSilently(debounce: true);
       return;
     }
-    _noteAvailablePath(contact.deviceId, at: now);
+    _reachability.noteAvailablePath(contact.deviceId, at: now);
     await _rememberLanRoutesForContact(
       deviceId: contact.deviceId,
       routes: selectedRoute.kind == PeerRouteKind.lan
@@ -563,7 +563,7 @@ class MessengerController extends ChangeNotifier {
           kind: PeerRouteKind.lan,
           host: address,
           port: me.localRelayPort,
-        ).map((route) => _routeHealth[route.routeKey]?.summary).nonNulls;
+        ).map((route) => _routeHealthTracker.healthMap[route.routeKey]?.summary).nonNulls;
         return summaries.isEmpty
             ? 'LAN reachability for $address not checked yet.'
             : summaries.join(' | ');
@@ -573,7 +573,7 @@ class MessengerController extends ChangeNotifier {
           : '${me.configuredRelays.length} configured relay(s).',
       ...me.configuredRelays.map(
         (route) =>
-            _routeHealth[route.routeKey]?.summary ??
+            _routeHealthTracker.healthMap[route.routeKey]?.summary ??
             'Relay ${route.label} not checked yet.',
       ),
       if (_relayInstanceDebugSummary(minEndpoints: 2).isNotEmpty)
@@ -601,7 +601,7 @@ class MessengerController extends ChangeNotifier {
             kind: PeerRouteKind.lan,
             host: address,
             port: me.localRelayPort,
-          ).any((route) => _routeHealth[route.routeKey]?.available ?? false);
+          ).any((route) => _routeHealthTracker.healthMap[route.routeKey]?.available ?? false);
         });
     final summary = !me.relayModeEnabled
         ? 'Relay mode is off.'
@@ -998,96 +998,6 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  ContactReachabilityRecord? _reachabilityRecordByDeviceId(String deviceId) {
-    for (final record in _snapshot.reachabilityRecords) {
-      if (record.deviceId == deviceId) {
-        return record;
-      }
-    }
-    return null;
-  }
-
-  ContactReachabilityRecord _ensureReachabilityRecord(String deviceId) {
-    return _reachabilityRecordByDeviceId(deviceId) ??
-        ContactReachabilityRecord(deviceId: deviceId);
-  }
-
-  void _upsertReachabilityRecord(
-    String deviceId,
-    ContactReachabilityRecord Function(ContactReachabilityRecord current)
-    update,
-  ) {
-    final current = _ensureReachabilityRecord(deviceId);
-    final updated = update(current);
-    final records = List<ContactReachabilityRecord>.from(
-      _snapshot.reachabilityRecords,
-    );
-    final index = records.indexWhere((record) => record.deviceId == deviceId);
-    if (index == -1) {
-      records.add(updated);
-    } else {
-      records[index] = updated;
-    }
-    _snapshot = _snapshot.copyWith(reachabilityRecords: records);
-  }
-
-  void _removeReachabilityRecord(String deviceId) {
-    final records = _snapshot.reachabilityRecords
-        .where((record) => record.deviceId != deviceId)
-        .toList(growable: false);
-    _snapshot = _snapshot.copyWith(reachabilityRecords: records);
-  }
-
-  void _noteAnySignal(String deviceId, {DateTime? at}) {
-    final timestamp = (at ?? _now()).toUtc();
-    _upsertReachabilityRecord(
-      deviceId,
-      (current) => current.copyWith(lastAnySignalAt: timestamp),
-    );
-  }
-
-  void _noteTwoWaySuccess(String deviceId, {DateTime? at}) {
-    final timestamp = (at ?? _now()).toUtc();
-    _upsertReachabilityRecord(
-      deviceId,
-      (current) => current.copyWith(
-        lastTwoWaySuccessAt: timestamp,
-        lastAnySignalAt: timestamp,
-      ),
-    );
-  }
-
-  void _noteHeartbeatAttempt(String deviceId, {DateTime? at}) {
-    final timestamp = (at ?? _now()).toUtc();
-    _upsertReachabilityRecord(
-      deviceId,
-      (current) => current.copyWith(lastHeartbeatAttemptAt: timestamp),
-    );
-  }
-
-  void _noteHeartbeatReply(String deviceId, {DateTime? at}) {
-    final timestamp = (at ?? _now()).toUtc();
-    _upsertReachabilityRecord(
-      deviceId,
-      (current) => current.copyWith(lastHeartbeatReplyAt: timestamp),
-    );
-  }
-
-  void _noteAvailablePath(String deviceId, {DateTime? at}) {
-    final timestamp = (at ?? _now()).toUtc();
-    _upsertReachabilityRecord(
-      deviceId,
-      (current) => current.copyWith(lastAvailablePathAt: timestamp),
-    );
-  }
-
-  void _noteFailure(String deviceId, {DateTime? at}) {
-    final timestamp = (at ?? _now()).toUtc();
-    _upsertReachabilityRecord(
-      deviceId,
-      (current) => current.copyWith(lastFailureAt: timestamp),
-    );
-  }
 
   /// Sink invoked by [_ScoringRelayClient] after every relay call. Updates
   /// the per-endpoint [RelayHealthScore] in the vault snapshot.
@@ -1118,39 +1028,6 @@ class MessengerController extends ChangeNotifier {
     );
     scores[key] = updated;
     _snapshot = _snapshot.copyWith(relayHealthScores: scores);
-  }
-
-  ContactReachabilityState _reachabilityStateFor(
-    String deviceId, {
-    DateTime? now,
-  }) {
-    final record = _reachabilityRecordByDeviceId(deviceId);
-    if (record == null) {
-      return ContactReachabilityState.unknown;
-    }
-    final currentTime = (now ?? _now()).toUtc();
-    final lastTwoWaySuccessAt = record.lastTwoWaySuccessAt;
-    if (lastTwoWaySuccessAt != null &&
-        currentTime.difference(lastTwoWaySuccessAt) <=
-            _onlineReachabilityWindow) {
-      return ContactReachabilityState.online;
-    }
-    // "Seen recently" must reflect a real encrypted exchange, not just a
-    // successful route probe. lastAvailablePathAt is still recorded for
-    // diagnostics and contributes to the "known" fallback below, but it does
-    // not by itself promote the visible chip.
-    final recentObservation = record.lastAnySignalAt;
-    if (recentObservation != null &&
-        currentTime.difference(recentObservation) <=
-            _seenRecentlyReachabilityWindow) {
-      return ContactReachabilityState.seenRecently;
-    }
-    if (lastTwoWaySuccessAt != null &&
-        currentTime.difference(lastTwoWaySuccessAt) <=
-            _knownReachabilityWindow) {
-      return ContactReachabilityState.known;
-    }
-    return ContactReachabilityState.unknown;
   }
 
   bool _shouldRunAutomaticHeartbeats(IdentityRecord me) {
@@ -1253,9 +1130,9 @@ class MessengerController extends ChangeNotifier {
     }
     buffer.writeln('contacts=${contacts.length}');
     for (final contact in contacts) {
-      final reachability = _reachabilityRecordByDeviceId(contact.deviceId);
+      final reachability = _reachability.recordByDeviceId(contact.deviceId);
       buffer.writeln(
-        'contact alias=${contact.alias} device=${contact.deviceId} relayCapable=${contact.relayCapable} reachability=${_reachabilityStateFor(contact.deviceId).name} lastTwoWaySuccessAt=${reachability?.lastTwoWaySuccessAt?.toIso8601String() ?? ''} lastHeartbeatAttemptAt=${reachability?.lastHeartbeatAttemptAt?.toIso8601String() ?? ''} lastHeartbeatReplyAt=${reachability?.lastHeartbeatReplyAt?.toIso8601String() ?? ''} lastAvailablePathAt=${reachability?.lastAvailablePathAt?.toIso8601String() ?? ''} lastAnySignalAt=${reachability?.lastAnySignalAt?.toIso8601String() ?? ''} lastFailureAt=${reachability?.lastFailureAt?.toIso8601String() ?? ''} routeBackoff=${_routeBackoffSummaryForRoutes(_candidateRoutesForContact(contact))} routes=${contact.prioritizedRouteHints.map((route) => '${route.kind.name}:${route.label}:${routeHealthFor(route)?.summary ?? 'not checked'}').join(' | ')}',
+        'contact alias=${contact.alias} device=${contact.deviceId} relayCapable=${contact.relayCapable} reachability=${_reachability.stateFor(contact.deviceId).name} lastTwoWaySuccessAt=${reachability?.lastTwoWaySuccessAt?.toIso8601String() ?? ''} lastHeartbeatAttemptAt=${reachability?.lastHeartbeatAttemptAt?.toIso8601String() ?? ''} lastHeartbeatReplyAt=${reachability?.lastHeartbeatReplyAt?.toIso8601String() ?? ''} lastAvailablePathAt=${reachability?.lastAvailablePathAt?.toIso8601String() ?? ''} lastAnySignalAt=${reachability?.lastAnySignalAt?.toIso8601String() ?? ''} lastFailureAt=${reachability?.lastFailureAt?.toIso8601String() ?? ''} routeBackoff=${_routeBackoffSummaryForRoutes(_candidateRoutesForContact(contact))} routes=${contact.prioritizedRouteHints.map((route) => '${route.kind.name}:${route.label}:${routeHealthFor(route)?.summary ?? 'not checked'}').join(' | ')}',
       );
     }
     buffer.writeln('totalMessages=$totalMessageCount');
@@ -1379,7 +1256,7 @@ class MessengerController extends ChangeNotifier {
         : await _rankRouteHealthForDelivery(candidateRoutes);
     final availableChecks = checks.where((check) => check.available).toList();
     if (availableChecks.isNotEmpty) {
-      _noteAvailablePath(current.deviceId);
+      _reachability.noteAvailablePath(current.deviceId);
       await _rememberLanRoutesForContact(
         deviceId: current.deviceId,
         routes: availableChecks
@@ -1400,7 +1277,7 @@ class MessengerController extends ChangeNotifier {
       _setTransientStatus(
         checks.isEmpty
             ? 'No paths are advertised for ${current.alias}.'
-            : 'Checked ${checks.length} path(s) for ${current.alias}; $available available. Reachability is ${_reachabilityStateFor(current.deviceId).label}. ${routeUpdateSent ? 'Route info exchange requested.' : 'Route info exchange could not be sent yet.'}',
+            : 'Checked ${checks.length} path(s) for ${current.alias}; $available available. Reachability is ${_reachability.stateFor(current.deviceId).label}. ${routeUpdateSent ? 'Route info exchange requested.' : 'Route info exchange could not be sent yet.'}',
       );
       await _saveSnapshotSilently(debounce: true);
     } else {
@@ -1698,7 +1575,7 @@ class MessengerController extends ChangeNotifier {
       final heartbeatAttemptBaseline = <String, DateTime?>{};
       final heartbeatReplyBaseline = <String, DateTime?>{};
       for (final contact in contacts) {
-        final record = _reachabilityRecordByDeviceId(contact.deviceId);
+        final record = _reachability.recordByDeviceId(contact.deviceId);
         heartbeatAttemptBaseline[contact.deviceId] =
             record?.lastHeartbeatAttemptAt;
         heartbeatReplyBaseline[contact.deviceId] = record?.lastHeartbeatReplyAt;
@@ -1706,7 +1583,7 @@ class MessengerController extends ChangeNotifier {
       await _runHeartbeatPass(force: true);
       final heartbeatAttemptedIds = <String>{};
       for (final contact in contacts) {
-        final record = _reachabilityRecordByDeviceId(contact.deviceId);
+        final record = _reachability.recordByDeviceId(contact.deviceId);
         final attemptAt = record?.lastHeartbeatAttemptAt;
         final baseline = heartbeatAttemptBaseline[contact.deviceId];
         if (attemptAt != null &&
@@ -1723,8 +1600,8 @@ class MessengerController extends ChangeNotifier {
         for (final state in ContactReachabilityState.values) state: 0,
       };
       for (final contact in contacts) {
-        stateCounts[_reachabilityStateFor(contact.deviceId)] =
-            (stateCounts[_reachabilityStateFor(contact.deviceId)] ?? 0) + 1;
+        stateCounts[_reachability.stateFor(contact.deviceId)] =
+            (stateCounts[_reachability.stateFor(contact.deviceId)] ?? 0) + 1;
       }
       final unknownReachability =
           stateCounts[ContactReachabilityState.unknown]!;
@@ -1824,7 +1701,7 @@ class MessengerController extends ChangeNotifier {
         final bestAvailableCheck = availableChecks.isNotEmpty
             ? availableChecks.first
             : null;
-        final reachability = _reachabilityRecordByDeviceId(contact.deviceId);
+        final reachability = _reachability.recordByDeviceId(contact.deviceId);
         final heartbeatAttemptAt = reachability?.lastHeartbeatAttemptAt;
         final heartbeatReplyAt = reachability?.lastHeartbeatReplyAt;
         final probeMessageId = probeMessageIds[contact.deviceId];
@@ -1834,7 +1711,7 @@ class MessengerController extends ChangeNotifier {
           DebugPeerReport(
             alias: contact.alias,
             deviceId: contact.deviceId,
-            reachability: _reachabilityStateFor(contact.deviceId),
+            reachability: _reachability.stateFor(contact.deviceId),
             availablePathCount: availableChecks.length,
             totalPathCount: checks.length,
             lanPathAvailable: availableChecks.any(
@@ -2474,8 +2351,8 @@ class MessengerController extends ChangeNotifier {
       contacts: contacts,
       conversations: conversations,
     );
-    _removeReachabilityRecord(deviceId);
-    _routeHealth.removeWhere((key, _) {
+    _reachability.remove(deviceId);
+    _routeHealthTracker.healthMap.removeWhere((key, _) {
       final contact = removed;
       if (contact == null) {
         return false;
@@ -2511,8 +2388,7 @@ class MessengerController extends ChangeNotifier {
     _lastPairingAnnouncementAt = null;
     _lastRelayStatus = 'relay not checked yet';
     _statusMessage = null;
-    _routeHealth.clear();
-    _routeRuntime.clear();
+    _routeHealthTracker.clear();
     _pendingRouteUpdateProbes.clear();
     _outboundAttemptedAt.clear();
     _debugProbeAcknowledgements.clear();
@@ -2536,7 +2412,7 @@ class MessengerController extends ChangeNotifier {
     final accountId = _randomId('acc');
     final deviceId = _randomId('dev');
     final lanAddresses = await _lanAddressProvider();
-    final safetyNumber = await _deriveSafetyNumber([publicKey.bytes]);
+    final safetyNumber = await _crypto.deriveSafetyNumber([publicKey.bytes]);
     final normalizedRelayHost = internetRelayHost?.trim().isEmpty ?? true
         ? null
         : internetRelayHost!.trim();
@@ -2635,7 +2511,7 @@ class MessengerController extends ChangeNotifier {
       throw ArgumentError('This contact is already trusted.');
     }
 
-    final safetyNumber = await _deriveSafetyNumber([
+    final safetyNumber = await _crypto.deriveSafetyNumber([
       base64Decode(me.publicKeyBase64),
       base64Decode(invite.publicKeyBase64),
     ]);
@@ -2669,7 +2545,7 @@ class MessengerController extends ChangeNotifier {
     final conversations = List<ConversationRecord>.from(_snapshot.conversations)
       ..add(
         ConversationRecord(
-          id: _conversationIdFor(contact.deviceId),
+          id: _crypto.conversationIdFor(contact.deviceId),
           kind: ConversationKind.direct,
           peerDeviceId: contact.deviceId,
           messages: const [],
@@ -2866,7 +2742,7 @@ class MessengerController extends ChangeNotifier {
 
     final message = ChatMessage(
       id: _randomId('msg'),
-      conversationId: _conversationIdFor(contact.deviceId),
+      conversationId: _crypto.conversationIdFor(contact.deviceId),
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
       body: trimmed,
@@ -3380,10 +3256,10 @@ class MessengerController extends ChangeNotifier {
       'body': trimmed,
       'editedAt': editedAt.toIso8601String(),
     });
-    final envelope = await _encryptPayloadEnvelope(
+    final envelope = await _crypto.encryptPayloadEnvelope(
       kind: 'message_edit',
       messageId: _randomId('edit'),
-      conversationId: _conversationIdFor(contact.deviceId),
+      conversationId: _crypto.conversationIdFor(contact.deviceId),
       senderAccountId: me.accountId,
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
@@ -3413,10 +3289,10 @@ class MessengerController extends ChangeNotifier {
       'targetMessageId': targetMessageId,
       'deletedAt': DateTime.now().toUtc().toIso8601String(),
     });
-    final envelope = await _encryptPayloadEnvelope(
+    final envelope = await _crypto.encryptPayloadEnvelope(
       kind: 'message_delete',
       messageId: _randomId('del'),
-      conversationId: _conversationIdFor(contact.deviceId),
+      conversationId: _crypto.conversationIdFor(contact.deviceId),
       senderAccountId: me.accountId,
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
@@ -3548,7 +3424,7 @@ class MessengerController extends ChangeNotifier {
     final removal = RelayEnvelope(
       kind: 'contact_remove',
       messageId: _randomId('rm'),
-      conversationId: _conversationIdFor(contact.deviceId),
+      conversationId: _crypto.conversationIdFor(contact.deviceId),
       senderAccountId: me.accountId,
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
@@ -3590,7 +3466,7 @@ class MessengerController extends ChangeNotifier {
       if (contact == null) {
         continue;
       }
-      final envelope = await _encryptPayloadEnvelope(
+      final envelope = await _crypto.encryptPayloadEnvelope(
         kind: 'group_membership',
         messageId: _randomId('grpctl'),
         conversationId: profiledGroup.groupId,
@@ -3745,7 +3621,7 @@ class MessengerController extends ChangeNotifier {
         'reason': entry.reason,
         'group': profiledGroup.toJson(),
       });
-      final envelope = await _encryptPayloadEnvelope(
+      final envelope = await _crypto.encryptPayloadEnvelope(
         kind: 'group_membership',
         messageId: _randomId('grpctl'),
         conversationId: profiledGroup.groupId,
@@ -3787,7 +3663,7 @@ class MessengerController extends ChangeNotifier {
       'membershipVersion': group.membershipVersion,
       'acknowledgedMessageId': original.messageId,
     });
-    final envelope = await _encryptPayloadEnvelope(
+    final envelope = await _crypto.encryptPayloadEnvelope(
       kind: 'group_membership_ack',
       messageId: _randomId('grpctlack'),
       conversationId: group.groupId,
@@ -3821,7 +3697,7 @@ class MessengerController extends ChangeNotifier {
     if (sender == null) {
       return;
     }
-    final decoded = await _decryptMessage(contact: sender, envelope: envelope);
+    final decoded = await _crypto.decryptMessage(contact: sender, envelope: envelope);
     final payload = jsonDecode(decoded);
     if (payload is! Map<String, dynamic>) {
       return;
@@ -3838,7 +3714,7 @@ class MessengerController extends ChangeNotifier {
       targetDeviceId: envelope.senderDeviceId,
       acknowledgedMembershipVersion: acknowledgedVersion,
     );
-    _noteAnySignal(envelope.senderDeviceId, at: envelope.createdAt);
+    _reachability.noteAnySignal(envelope.senderDeviceId, at: envelope.createdAt);
     await _persist('Group ${group.title} membership ack from ${sender.alias}.');
   }
 
@@ -3859,7 +3735,7 @@ class MessengerController extends ChangeNotifier {
       if (contact == null) {
         continue;
       }
-      final envelope = await _encryptPayloadEnvelope(
+      final envelope = await _crypto.encryptPayloadEnvelope(
         kind: 'group_leave',
         messageId: _randomId('grpleave'),
         conversationId: profiledGroup.groupId,
@@ -3938,7 +3814,7 @@ class MessengerController extends ChangeNotifier {
         );
       }
       if (reason == 'heartbeat' || reason == 'chat_resume') {
-        _noteHeartbeatAttempt(contact.deviceId, at: effectiveSentAt);
+        _reachability.noteHeartbeatAttempt(contact.deviceId, at: effectiveSentAt);
       }
       return true;
     } catch (_) {
@@ -3948,8 +3824,8 @@ class MessengerController extends ChangeNotifier {
         );
       }
       if (reason == 'heartbeat' || reason == 'chat_resume') {
-        _noteHeartbeatAttempt(contact.deviceId, at: effectiveSentAt);
-        _noteFailure(contact.deviceId);
+        _reachability.noteHeartbeatAttempt(contact.deviceId, at: effectiveSentAt);
+        _reachability.noteFailure(contact.deviceId);
       }
       return false;
     }
@@ -3970,7 +3846,7 @@ class MessengerController extends ChangeNotifier {
     var sent = 0;
     var changed = false;
     for (final contact in contacts) {
-      final record = _reachabilityRecordByDeviceId(contact.deviceId);
+      final record = _reachability.recordByDeviceId(contact.deviceId);
       final lastTwoWaySuccessAt = record?.lastTwoWaySuccessAt;
       final heartbeatInterval = _heartbeatIntervalForCurrentRuntime(me);
       if (!force &&
@@ -3993,18 +3869,18 @@ class MessengerController extends ChangeNotifier {
           _candidateRoutesForContact(contact),
         );
         for (final check in checks) {
-          if (check.available && _isRouteEligibleNow(check.route)) {
+          if (check.available && _routeHealthTracker.isEligibleNow(check.route)) {
             selectedRoute = check.route;
             break;
           }
         }
       }
       if (selectedRoute == null) {
-        _noteFailure(contact.deviceId);
+        _reachability.noteFailure(contact.deviceId);
         changed = true;
         continue;
       }
-      _noteAvailablePath(contact.deviceId);
+      _reachability.noteAvailablePath(contact.deviceId);
       await _rememberLanRoutesForContact(
         deviceId: contact.deviceId,
         routes: selectedRoute.kind == PeerRouteKind.lan
@@ -4064,7 +3940,7 @@ class MessengerController extends ChangeNotifier {
                 : const Duration(seconds: 4),
           );
           stopwatch.stop();
-          _recordRouteSuccess(route, fetch: true, latency: stopwatch.elapsed);
+          _routeHealthTracker.recordSuccess(route, fetch: true, latency: stopwatch.elapsed);
           if (route.kind == PeerRouteKind.relay) {
             relaySuccess = true;
           }
@@ -4073,7 +3949,7 @@ class MessengerController extends ChangeNotifier {
             routeNotes.add('${route.kind.name}:${route.host}');
           }
         } catch (error) {
-          _recordRouteFailure(route, error: error.toString());
+          _routeHealthTracker.recordFailure(route, error: error.toString());
           if (route.kind == PeerRouteKind.relay) {
             attemptedRelay = true;
           }
@@ -4109,7 +3985,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   bool _shouldSkipSlowPollRoute(PeerEndpoint route) {
-    return !_isRouteEligibleNow(route);
+    return !_routeHealthTracker.isEligibleNow(route);
   }
 
   List<ChatMessage> messagesFor(String peerDeviceId) {
@@ -4615,7 +4491,7 @@ class MessengerController extends ChangeNotifier {
       }
       processed++;
       if (envelope.kind == 'ack') {
-        _noteTwoWaySuccess(envelope.senderDeviceId);
+        _reachability.noteTwoWaySuccess(envelope.senderDeviceId);
         if (_groupById(envelope.conversationId) != null) {
           _updateGroupRecipientState(
             envelope.conversationId,
@@ -4746,7 +4622,7 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
 
-      final decodedMessage = await _decryptDirectMessage(
+      final decodedMessage = await _crypto.decryptDirectMessage(
         contact: contact,
         envelope: envelope,
       );
@@ -4775,7 +4651,7 @@ class MessengerController extends ChangeNotifier {
           body: decodedMessage.body,
         );
       }
-      _noteAnySignal(contact.deviceId, at: envelope.createdAt);
+      _reachability.noteAnySignal(contact.deviceId, at: envelope.createdAt);
       await _sendAck(contact: contact, envelope: envelope);
       _markSeen(envelope.messageId);
     }
@@ -4890,7 +4766,7 @@ class MessengerController extends ChangeNotifier {
     if (invite == null || invite.deviceId != envelope.senderDeviceId) {
       return;
     }
-    _noteAnySignal(sender.deviceId, at: sentAt ?? envelope.createdAt);
+    _reachability.noteAnySignal(sender.deviceId, at: sentAt ?? envelope.createdAt);
     final updated = await _updateExistingContactFromInvite(
       invite,
       statusBuilder: (contact) =>
@@ -4903,10 +4779,10 @@ class MessengerController extends ChangeNotifier {
       final pending = _pendingRouteUpdateProbes.remove(pendingKey);
       if (pending != null) {
         if (pending.reason == 'heartbeat' || pending.reason == 'chat_resume') {
-          _noteHeartbeatReply(sender.deviceId, at: envelope.createdAt);
+          _reachability.noteHeartbeatReply(sender.deviceId, at: envelope.createdAt);
           _markRuntimeActivity();
         }
-        _noteTwoWaySuccess(sender.deviceId, at: envelope.createdAt);
+        _reachability.noteTwoWaySuccess(sender.deviceId, at: envelope.createdAt);
       }
     }
     if (requestReply) {
@@ -4998,7 +4874,7 @@ class MessengerController extends ChangeNotifier {
     if (sender == null) {
       return;
     }
-    final decoded = await _decryptMessage(contact: sender, envelope: envelope);
+    final decoded = await _crypto.decryptMessage(contact: sender, envelope: envelope);
     final payload = jsonDecode(decoded);
     if (payload is! Map<String, dynamic>) {
       return;
@@ -5056,7 +4932,7 @@ class MessengerController extends ChangeNotifier {
     if (merged.localRemovedAt == null) {
       _ensureGroupConversation(merged);
     }
-    _noteAnySignal(sender.deviceId, at: envelope.createdAt);
+    _reachability.noteAnySignal(sender.deviceId, at: envelope.createdAt);
     await _persist('Updated group ${enriched.title}.');
     // Tell the sender we applied their version so they can drop the
     // pending-retry entry. Best-effort; the sender will retry on miss.
@@ -5073,7 +4949,7 @@ class MessengerController extends ChangeNotifier {
     if (sender == null || me == null) {
       return;
     }
-    final decoded = await _decryptMessage(contact: sender, envelope: envelope);
+    final decoded = await _crypto.decryptMessage(contact: sender, envelope: envelope);
     final payload = jsonDecode(decoded);
     if (payload is! Map<String, dynamic>) {
       return;
@@ -5103,7 +4979,7 @@ class MessengerController extends ChangeNotifier {
       updatedAt: envelope.createdAt,
     );
     _upsertGroup(updated);
-    _noteAnySignal(sender.deviceId, at: envelope.createdAt);
+    _reachability.noteAnySignal(sender.deviceId, at: envelope.createdAt);
     await _persist('${sender.alias} left ${updated.title}.');
     if (updated.ownerDeviceId == me.deviceId) {
       await _sendGroupMembershipUpdate(
@@ -5127,8 +5003,8 @@ class MessengerController extends ChangeNotifier {
     if (sender == null) {
       return;
     }
-    final decoded = await _decryptMessage(contact: sender, envelope: envelope);
-    final payload = _decodeGroupMessagePayload(decoded);
+    final decoded = await _crypto.decryptMessage(contact: sender, envelope: envelope);
+    final payload = _crypto.decodeGroupMessagePayload(decoded);
     if (payload.groupId != group.groupId ||
         payload.membershipVersion < group.membershipVersion) {
       return;
@@ -5162,7 +5038,7 @@ class MessengerController extends ChangeNotifier {
         body: payload.body,
       );
     }
-    _noteAnySignal(sender.deviceId, at: envelope.createdAt);
+    _reachability.noteAnySignal(sender.deviceId, at: envelope.createdAt);
     await _sendAck(contact: sender, envelope: envelope);
   }
 
@@ -5187,7 +5063,7 @@ class MessengerController extends ChangeNotifier {
     );
     contacts[existingIndex] = updated;
     _snapshot = _snapshot.copyWith(contacts: contacts);
-    _upsertReachabilityRecord(updated.deviceId, (current) => current);
+    _reachability.ensure(updated.deviceId);
     if (persistStatus) {
       await _persist(statusBuilder(updated));
     }
@@ -5208,7 +5084,7 @@ class MessengerController extends ChangeNotifier {
     if (contact == null) {
       return;
     }
-    final decoded = await _decryptMessage(contact: contact, envelope: envelope);
+    final decoded = await _crypto.decryptMessage(contact: contact, envelope: envelope);
     final payload = jsonDecode(decoded);
     if (payload is! Map<String, dynamic>) {
       return;
@@ -5239,7 +5115,7 @@ class MessengerController extends ChangeNotifier {
     if (contact == null) {
       return;
     }
-    final decoded = await _decryptMessage(contact: contact, envelope: envelope);
+    final decoded = await _crypto.decryptMessage(contact: contact, envelope: envelope);
     final payload = jsonDecode(decoded);
     if (payload is! Map<String, dynamic>) {
       return;
@@ -5273,7 +5149,7 @@ class MessengerController extends ChangeNotifier {
       _platformBridge.showMessageNotification(
         title: contact.alias,
         body: body,
-        conversationId: _conversationIdFor(contact.deviceId),
+        conversationId: _crypto.conversationIdFor(contact.deviceId),
       ),
     );
   }
@@ -5748,7 +5624,7 @@ class MessengerController extends ChangeNotifier {
       await Future<void>.delayed(const Duration(milliseconds: 750));
       await pollNow();
       final allAnswered = attemptedDeviceIds.every((deviceId) {
-        final record = _reachabilityRecordByDeviceId(deviceId);
+        final record = _reachability.recordByDeviceId(deviceId);
         final replyAt = record?.lastHeartbeatReplyAt;
         return replyAt != null && !replyAt.isBefore(startedAt);
       });
@@ -5985,7 +5861,7 @@ class MessengerController extends ChangeNotifier {
         detail: 'No relay routes are configured or learned.',
       );
     }
-    final knownRelayRoutes = _routeHealth.values
+    final knownRelayRoutes = _routeHealthTracker.healthMap.values
         .where(
           (health) =>
               health.available &&
@@ -6321,7 +6197,7 @@ class MessengerController extends ChangeNotifier {
     }
     _noteOutboundAttempt(contact.deviceId, message.id);
     try {
-      final envelope = await _encryptMessage(
+      final envelope = await _crypto.encryptDirectMessage(
         contact: contact,
         message: message,
       );
@@ -6334,7 +6210,7 @@ class MessengerController extends ChangeNotifier {
         recipientDeviceId: contact.deviceId,
         envelope: envelope,
       );
-      _noteAvailablePath(contact.deviceId);
+      _reachability.noteAvailablePath(contact.deviceId);
       if (_locallyDeletedMessageIds.contains(message.id) ||
           _messageById(contact.deviceId, message.id) == null) {
         await _sendMessageDeletion(
@@ -6376,7 +6252,7 @@ class MessengerController extends ChangeNotifier {
     }
     _noteOutboundAttempt(contact.deviceId, message.id);
     try {
-      final envelope = await _encryptGroupMessage(
+      final envelope = await _crypto.encryptGroupMessage(
         group: group,
         contact: contact,
         message: message,
@@ -6386,7 +6262,7 @@ class MessengerController extends ChangeNotifier {
         recipientDeviceId: contact.deviceId,
         envelope: envelope,
       );
-      _noteAvailablePath(contact.deviceId);
+      _reachability.noteAvailablePath(contact.deviceId);
       if (route.kind == PeerRouteKind.lan) {
         await _rememberLanRoutesForGroupMember(
           groupId: group.groupId,
@@ -6617,7 +6493,7 @@ class MessengerController extends ChangeNotifier {
     List<PeerEndpoint> routes,
   ) async {
     final eligibleRoutes = routes
-        .where(_isRouteEligibleNow)
+        .where(_routeHealthTracker.isEligibleNow)
         .toList(growable: false);
     final checks = await _rankRouteHealthForDelivery(eligibleRoutes);
     return checks.map((check) => check.route).toList(growable: false);
@@ -6674,7 +6550,7 @@ class MessengerController extends ChangeNotifier {
                   check.available && check.route.kind == PeerRouteKind.lan,
             )
             .toList()
-          ..sort(_compareRouteHealth);
+          ..sort(_routeHealthTracker.compareHealth);
     final healthyDirectInternet =
         checks
             .where(
@@ -6683,7 +6559,7 @@ class MessengerController extends ChangeNotifier {
                   check.route.kind == PeerRouteKind.directInternet,
             )
             .toList()
-          ..sort(_compareRouteHealth);
+          ..sort(_routeHealthTracker.compareHealth);
     final unhealthyLan =
         checks
             .where(
@@ -6691,7 +6567,7 @@ class MessengerController extends ChangeNotifier {
                   !check.available && check.route.kind == PeerRouteKind.lan,
             )
             .toList()
-          ..sort(_compareRouteHealth);
+          ..sort(_routeHealthTracker.compareHealth);
     final unhealthyDirectInternet =
         checks
             .where(
@@ -6700,7 +6576,7 @@ class MessengerController extends ChangeNotifier {
                   check.route.kind == PeerRouteKind.directInternet,
             )
             .toList()
-          ..sort(_compareRouteHealth);
+          ..sort(_routeHealthTracker.compareHealth);
     final healthyRelays =
         checks
             .where(
@@ -6708,7 +6584,7 @@ class MessengerController extends ChangeNotifier {
                   check.available && check.route.kind == PeerRouteKind.relay,
             )
             .toList()
-          ..sort(_compareRouteHealth);
+          ..sort(_routeHealthTracker.compareHealth);
     final unhealthyRelays =
         checks
             .where(
@@ -6716,7 +6592,7 @@ class MessengerController extends ChangeNotifier {
                   !check.available && check.route.kind == PeerRouteKind.relay,
             )
             .toList()
-          ..sort(_compareRouteHealth);
+          ..sort(_routeHealthTracker.compareHealth);
 
     return <PeerRouteHealth>[
       ...healthyLan,
@@ -6791,162 +6667,10 @@ class MessengerController extends ChangeNotifier {
         .toList(growable: false);
   }
 
-  int _compareRouteHealth(PeerRouteHealth left, PeerRouteHealth right) {
-    final leftLatency = left.latency?.inMicroseconds ?? 1 << 62;
-    final rightLatency = right.latency?.inMicroseconds ?? 1 << 62;
-    return leftLatency.compareTo(rightLatency);
-  }
-
-  int _routeKindDeliveryPriority(PeerEndpoint route) {
-    return switch (route.kind) {
-      PeerRouteKind.lan => 0,
-      PeerRouteKind.directInternet => 1,
-      PeerRouteKind.relay => 2,
-    };
-  }
-
-  _RouteRuntimeState _routeRuntimeState(String routeKey) {
-    return _routeRuntime.putIfAbsent(routeKey, _RouteRuntimeState.new);
-  }
-
-  DateTime? _routeLastSuccessAt(PeerEndpoint route) {
-    final state = _routeRuntime[route.routeKey];
-    if (state == null) {
-      return null;
-    }
-    final successes = <DateTime?>[
-      state.lastFetchSuccessAt,
-      state.lastStoreSuccessAt,
-    ];
-    DateTime? latest;
-    for (final success in successes) {
-      if (success == null) {
-        continue;
-      }
-      if (latest == null || success.isAfter(latest)) {
-        latest = success;
-      }
-    }
-    return latest;
-  }
-
-  Duration _healthCacheTtlFor(PeerEndpoint route) {
-    return route.kind == PeerRouteKind.lan
-        ? _lanHealthCacheTtl
-        : _internetHealthCacheTtl;
-  }
-
-  Duration _recentRouteSuccessTtlFor(PeerEndpoint route) {
-    return route.kind == PeerRouteKind.lan
-        ? _lanRecentRouteSuccessTtl
-        : _internetRecentRouteSuccessTtl;
-  }
-
-  bool _hasFreshHealthyCache(PeerEndpoint route) {
-    final health = _routeHealth[route.routeKey];
-    if (health == null || !health.available) {
-      return false;
-    }
-    return _now().difference(health.checkedAt) <= _healthCacheTtlFor(route);
-  }
-
-  bool _hasRecentRouteSuccess(PeerEndpoint route) {
-    final successAt = _routeLastSuccessAt(route);
-    if (successAt == null) {
-      return false;
-    }
-    return _now().difference(successAt) <= _recentRouteSuccessTtlFor(route);
-  }
-
-  bool _isRouteBackedOff(PeerEndpoint route) {
-    final backoffUntil = _routeRuntime[route.routeKey]?.backoffUntil;
-    return backoffUntil != null && backoffUntil.isAfter(_now());
-  }
-
-  bool _isRouteEligibleNow(PeerEndpoint route) {
-    return !_isRouteBackedOff(route);
-  }
-
-  void _recordRouteSuccess(
-    PeerEndpoint route, {
-    bool? fetch,
-    Duration? latency,
-    String? relayInstanceId,
-    DateTime? at,
-  }) {
-    final timestamp = (at ?? _now()).toUtc();
-    final state = _routeRuntimeState(route.routeKey);
-    if (fetch != null) {
-      if (fetch) {
-        state.lastFetchSuccessAt = timestamp;
-      } else {
-        state.lastStoreSuccessAt = timestamp;
-      }
-    }
-    state.lastFailureAt = null;
-    state.failureStreak = 0;
-    state.backoffUntil = null;
-    _routeHealth[route.routeKey] = PeerRouteHealth(
-      route: route,
-      available: true,
-      latency: latency ?? _routeHealth[route.routeKey]?.latency,
-      checkedAt: timestamp,
-      relayInstanceId:
-          relayInstanceId ?? _routeHealth[route.routeKey]?.relayInstanceId,
-    );
-  }
-
-  void _recordRouteFailure(PeerEndpoint route, {DateTime? at, String? error}) {
-    final timestamp = (at ?? _now()).toUtc();
-    final state = _routeRuntimeState(route.routeKey);
-    state.lastFailureAt = timestamp;
-    state.failureStreak += 1;
-    final backoff = _routeBackoffDurationFor(
-      route,
-      failureStreak: state.failureStreak,
-    );
-    state.backoffUntil = timestamp.add(backoff);
-    _routeHealth[route.routeKey] = PeerRouteHealth(
-      route: route,
-      available: false,
-      latency: null,
-      checkedAt: timestamp,
-      error: error,
-    );
-  }
-
-  Duration _routeBackoffDurationFor(
-    PeerEndpoint route, {
-    required int failureStreak,
-  }) {
-    if (route.kind == PeerRouteKind.lan) {
-      if (failureStreak <= 1) {
-        return const Duration(seconds: 5);
-      }
-      if (failureStreak == 2) {
-        return const Duration(seconds: 15);
-      }
-      if (failureStreak == 3) {
-        return const Duration(seconds: 30);
-      }
-      return const Duration(seconds: 60);
-    }
-    if (failureStreak <= 1) {
-      return const Duration(seconds: 15);
-    }
-    if (failureStreak == 2) {
-      return const Duration(seconds: 60);
-    }
-    if (failureStreak == 3) {
-      return const Duration(seconds: 300);
-    }
-    return const Duration(seconds: 600);
-  }
-
   List<PeerEndpoint> _preferredRoutesForContact(ContactRecord contact) {
     final candidateRoutes = dedupePeerEndpoints(
       _candidateRoutesForContact(contact),
-    ).where(_isRouteEligibleNow).toList(growable: false);
+    ).where(_routeHealthTracker.isEligibleNow).toList(growable: false);
     final hasNonRelayCandidate = candidateRoutes.any(
       (route) => route.kind != PeerRouteKind.relay,
     );
@@ -6954,13 +6678,13 @@ class MessengerController extends ChangeNotifier {
         candidateRoutes
             .where(
               (route) =>
-                  _hasRecentRouteSuccess(route) &&
+                  _routeHealthTracker.hasRecentRouteSuccess(route) &&
                   (!hasNonRelayCandidate || route.kind != PeerRouteKind.relay),
             )
             .toList(growable: false)
           ..sort((left, right) {
-            final leftAt = _routeLastSuccessAt(left);
-            final rightAt = _routeLastSuccessAt(right);
+            final leftAt = _routeHealthTracker.lastSuccessAt(left);
+            final rightAt = _routeHealthTracker.lastSuccessAt(right);
             if (leftAt == null && rightAt == null) {
               return 0;
             }
@@ -6975,14 +6699,14 @@ class MessengerController extends ChangeNotifier {
     final hasUntestedNonRelay = candidateRoutes.any(
       (route) =>
           route.kind != PeerRouteKind.relay &&
-          !_hasRecentRouteSuccess(route) &&
-          !_hasFreshHealthyCache(route),
+          !_routeHealthTracker.hasRecentRouteSuccess(route) &&
+          !_routeHealthTracker.hasFreshHealthyCache(route),
     );
     final cachedHealthyRoutes =
         candidateRoutes
             .where((route) {
-              if (_hasRecentRouteSuccess(route) ||
-                  !_hasFreshHealthyCache(route)) {
+              if (_routeHealthTracker.hasRecentRouteSuccess(route) ||
+                  !_routeHealthTracker.hasFreshHealthyCache(route)) {
                 return false;
               }
               if (hasUntestedNonRelay && route.kind == PeerRouteKind.relay) {
@@ -6992,15 +6716,15 @@ class MessengerController extends ChangeNotifier {
             })
             .toList(growable: false)
           ..sort((left, right) {
-            final kindCompare = _routeKindDeliveryPriority(
+            final kindCompare = _routeHealthTracker.kindDeliveryPriority(
               left,
-            ).compareTo(_routeKindDeliveryPriority(right));
+            ).compareTo(_routeHealthTracker.kindDeliveryPriority(right));
             if (kindCompare != 0) {
               return kindCompare;
             }
-            final leftHealth = _routeHealth[left.routeKey];
-            final rightHealth = _routeHealth[right.routeKey];
-            return _compareRouteHealth(
+            final leftHealth = _routeHealthTracker.healthMap[left.routeKey];
+            final rightHealth = _routeHealthTracker.healthMap[right.routeKey];
+            return _routeHealthTracker.compareHealth(
               leftHealth ??
                   PeerRouteHealth(
                     route: left,
@@ -7041,7 +6765,7 @@ class MessengerController extends ChangeNotifier {
     };
     try {
       final stopwatch = Stopwatch()..start();
-      final cachedRelayId = _routeHealth[route.routeKey]?.relayInstanceId;
+      final cachedRelayId = _routeHealthTracker.healthMap[route.routeKey]?.relayInstanceId;
       final expectedKey = cachedRelayId == null
           ? null
           : _snapshot.pinnedRelayIdentityKeys[cachedRelayId];
@@ -7094,8 +6818,8 @@ class MessengerController extends ChangeNotifier {
             ? info.relayInstanceId
             : null,
       );
-      _routeHealth[route.routeKey] = health;
-      _recordRouteSuccess(
+      _routeHealthTracker.healthMap[route.routeKey] = health;
+      _routeHealthTracker.recordSuccess(
         route,
         latency: stopwatch.elapsed,
         relayInstanceId: health.relayInstanceId,
@@ -7107,12 +6831,12 @@ class MessengerController extends ChangeNotifier {
         'Relay ${route.host}:${route.port} identity mismatch — verify with the operator.',
         notify: false,
       );
-      _recordRouteFailure(route, error: error.toString());
-      final health = _routeHealth[route.routeKey]!;
+      _routeHealthTracker.recordFailure(route, error: error.toString());
+      final health = _routeHealthTracker.healthMap[route.routeKey]!;
       return health;
     } catch (error) {
-      _recordRouteFailure(route, error: error.toString());
-      final health = _routeHealth[route.routeKey]!;
+      _routeHealthTracker.recordFailure(route, error: error.toString());
+      final health = _routeHealthTracker.healthMap[route.routeKey]!;
       return health;
     }
   }
@@ -7144,12 +6868,12 @@ class MessengerController extends ChangeNotifier {
         );
         stopwatch.stop();
         if (stored) {
-          _recordRouteSuccess(route, fetch: false, latency: stopwatch.elapsed);
+          _routeHealthTracker.recordSuccess(route, fetch: false, latency: stopwatch.elapsed);
           return route;
         }
-        _recordRouteFailure(route, error: 'Route did not accept store.');
+        _routeHealthTracker.recordFailure(route, error: 'Route did not accept store.');
       } catch (error) {
-        _recordRouteFailure(route, error: error.toString());
+        _routeHealthTracker.recordFailure(route, error: error.toString());
         lastError = error;
       }
     }
@@ -7362,7 +7086,7 @@ class MessengerController extends ChangeNotifier {
     return dedupePeerEndpoints([
       ...me.configuredRelays,
       ..._trustedContactRelayRoutes(),
-      ..._routeHealth.values
+      ..._routeHealthTracker.healthMap.values
           .where((health) => health.route.kind == PeerRouteKind.relay)
           .map((health) => health.route),
     ]);
@@ -7704,7 +7428,7 @@ class MessengerController extends ChangeNotifier {
       if (!seen.add(route.routeKey)) {
         continue;
       }
-      final state = _routeRuntime[route.routeKey];
+      final state = _routeHealthTracker.runtimeMap[route.routeKey];
       if (state == null) {
         continue;
       }
@@ -7727,7 +7451,7 @@ class MessengerController extends ChangeNotifier {
 
   String _globalRouteBackoffSummary() {
     final routes = <PeerEndpoint>{
-      ..._routeHealth.values.map((health) => health.route),
+      ..._routeHealthTracker.healthMap.values.map((health) => health.route),
       for (final contact in contacts) ..._candidateRoutesForContact(contact),
       ...configuredRelays,
     };
@@ -7862,8 +7586,8 @@ class MessengerController extends ChangeNotifier {
   List<PeerEndpoint> _rankInviteRoutes(Iterable<PeerEndpoint> routes) {
     final ranked = dedupePeerEndpoints(routes);
     ranked.sort((left, right) {
-      final leftHealth = _routeHealth[left.routeKey];
-      final rightHealth = _routeHealth[right.routeKey];
+      final leftHealth = _routeHealthTracker.healthMap[left.routeKey];
+      final rightHealth = _routeHealthTracker.healthMap[right.routeKey];
       final leftAvailable = leftHealth?.available ?? false;
       final rightAvailable = rightHealth?.available ?? false;
       if (leftAvailable != rightAvailable) {
@@ -7948,16 +7672,16 @@ class MessengerController extends ChangeNotifier {
               )
               .then((stored) {
                 if (stored) {
-                  _recordRouteSuccess(route, fetch: false);
+                  _routeHealthTracker.recordSuccess(route, fetch: false);
                 } else {
-                  _recordRouteFailure(
+                  _routeHealthTracker.recordFailure(
                     route,
                     error: 'Pairing announcement store was not accepted.',
                   );
                 }
               })
               .catchError((error) {
-                _recordRouteFailure(route, error: error.toString());
+                _routeHealthTracker.recordFailure(route, error: error.toString());
               })
               .then((_) {}),
         );
@@ -8021,7 +7745,7 @@ class MessengerController extends ChangeNotifier {
   Map<String, List<PeerEndpoint>> _relayInstanceGroups({int minEndpoints = 1}) {
     final groups = <String, List<PeerEndpoint>>{};
     final seen = <String, Set<String>>{};
-    for (final health in _routeHealth.values) {
+    for (final health in _routeHealthTracker.healthMap.values) {
       final relayId = health.relayInstanceId;
       if (!health.available ||
           health.route.kind != PeerRouteKind.relay ||
@@ -8100,180 +7824,6 @@ class MessengerController extends ChangeNotifier {
     return utf8.encode(jsonEncode(payload));
   }
 
-  Future<RelayEnvelope> _encryptMessage({
-    required ContactRecord contact,
-    required ChatMessage message,
-  }) async {
-    final me = _requireIdentity();
-    return _encryptPayloadEnvelope(
-      kind: 'direct_message',
-      messageId: message.id,
-      conversationId: message.conversationId,
-      senderAccountId: me.accountId,
-      senderDeviceId: me.deviceId,
-      recipientDeviceId: contact.deviceId,
-      contact: contact,
-      plaintext: _encodeDirectMessagePayload(message),
-      createdAt: message.createdAt,
-    );
-  }
-
-  Future<RelayEnvelope> _encryptGroupMessage({
-    required GroupRecord group,
-    required ContactRecord contact,
-    required ChatMessage message,
-  }) async {
-    final me = _requireIdentity();
-    return _encryptPayloadEnvelope(
-      kind: 'group_message',
-      messageId: message.id,
-      conversationId: group.groupId,
-      senderAccountId: me.accountId,
-      senderDeviceId: me.deviceId,
-      recipientDeviceId: contact.deviceId,
-      contact: contact,
-      plaintext: _encodeGroupMessagePayload(group: group, message: message),
-      createdAt: message.createdAt,
-    );
-  }
-
-  Future<RelayEnvelope> _encryptPayloadEnvelope({
-    required String kind,
-    required String messageId,
-    required String conversationId,
-    required String senderAccountId,
-    required String senderDeviceId,
-    required String recipientDeviceId,
-    required ContactRecord contact,
-    required String plaintext,
-    DateTime? createdAt,
-    String? acknowledgedMessageId,
-  }) async {
-    final secretKey = await _sessionKeyFor(contact);
-    final cipher = Chacha20.poly1305Aead();
-    final nonce = _secureRandomBytes(cipher.nonceLength);
-    final secretBox = await cipher.encrypt(
-      utf8.encode(plaintext),
-      secretKey: secretKey,
-      nonce: nonce,
-      aad: utf8.encode(messageId),
-    );
-    return RelayEnvelope(
-      kind: kind,
-      messageId: messageId,
-      conversationId: conversationId,
-      senderAccountId: senderAccountId,
-      senderDeviceId: senderDeviceId,
-      recipientDeviceId: recipientDeviceId,
-      createdAt: createdAt ?? DateTime.now().toUtc(),
-      nonceBase64: base64Encode(secretBox.nonce),
-      ciphertextBase64: base64Encode(secretBox.cipherText),
-      macBase64: base64Encode(secretBox.mac.bytes),
-      acknowledgedMessageId: acknowledgedMessageId,
-    );
-  }
-
-  Future<String> _decryptMessage({
-    required ContactRecord contact,
-    required RelayEnvelope envelope,
-  }) async {
-    final cipher = Chacha20.poly1305Aead();
-    final secretKey = await _sessionKeyFor(contact);
-    final cleartext = await cipher.decrypt(
-      SecretBox(
-        base64Decode(envelope.ciphertextBase64!),
-        nonce: base64Decode(envelope.nonceBase64!),
-        mac: Mac(base64Decode(envelope.macBase64!)),
-      ),
-      secretKey: secretKey,
-      aad: utf8.encode(envelope.messageId),
-    );
-    return utf8.decode(cleartext);
-  }
-
-  Future<_DecodedDirectMessage> _decryptDirectMessage({
-    required ContactRecord contact,
-    required RelayEnvelope envelope,
-  }) async {
-    final decrypted = await _decryptMessage(
-      contact: contact,
-      envelope: envelope,
-    );
-    return _decodeDirectMessagePayload(decrypted);
-  }
-
-  String _encodeDirectMessagePayload(ChatMessage message) {
-    if (!message.hasReplyPreview) {
-      return message.body;
-    }
-    return jsonEncode({
-      'version': 2,
-      'body': message.body,
-      'replyToMessageId': message.replyToMessageId,
-      'replySnippet': message.replySnippet,
-      'replySenderDeviceId': message.replySenderDeviceId,
-      'replySenderDisplayName': message.replySenderDisplayName,
-    });
-  }
-
-  _DecodedDirectMessage _decodeDirectMessagePayload(String payload) {
-    try {
-      final decoded = jsonDecode(payload);
-      if (decoded is Map<String, dynamic> &&
-          decoded['version'] == 2 &&
-          decoded['body'] is String) {
-        return _DecodedDirectMessage(
-          body: decoded['body'] as String,
-          replyToMessageId: decoded['replyToMessageId'] as String?,
-          replySnippet: decoded['replySnippet'] as String?,
-          replySenderDeviceId: decoded['replySenderDeviceId'] as String?,
-          replySenderDisplayName: decoded['replySenderDisplayName'] as String?,
-        );
-      }
-    } catch (_) {
-      // Legacy direct messages are plain-text bodies.
-    }
-    return _DecodedDirectMessage(body: payload);
-  }
-
-  String _encodeGroupMessagePayload({
-    required GroupRecord group,
-    required ChatMessage message,
-  }) {
-    return jsonEncode({
-      'version': 1,
-      'groupId': group.groupId,
-      'groupTitle': group.title,
-      'membershipVersion': group.membershipVersion,
-      'body': message.body,
-      'senderDisplayName': message.senderDisplayName,
-      'replyToMessageId': message.replyToMessageId,
-      'replySnippet': message.replySnippet,
-      'replySenderDeviceId': message.replySenderDeviceId,
-      'replySenderDisplayName': message.replySenderDisplayName,
-    });
-  }
-
-  _DecodedGroupMessage _decodeGroupMessagePayload(String payload) {
-    final decoded = jsonDecode(payload);
-    if (decoded is! Map<String, dynamic> ||
-        decoded['version'] != 1 ||
-        decoded['groupId'] is! String ||
-        decoded['body'] is! String) {
-      throw FormatException('Invalid group message payload.');
-    }
-    return _DecodedGroupMessage(
-      groupId: decoded['groupId'] as String,
-      membershipVersion: decoded['membershipVersion'] as int? ?? 1,
-      body: decoded['body'] as String,
-      senderDisplayName: decoded['senderDisplayName'] as String?,
-      replyToMessageId: decoded['replyToMessageId'] as String?,
-      replySnippet: decoded['replySnippet'] as String?,
-      replySenderDeviceId: decoded['replySenderDeviceId'] as String?,
-      replySenderDisplayName: decoded['replySenderDisplayName'] as String?,
-    );
-  }
-
   String _replySnippetForMessage(ChatMessage message) {
     final normalized = message.bodyPreview.trim();
     if (normalized.length <= 72) {
@@ -8298,32 +7848,6 @@ class MessengerController extends ChangeNotifier {
         message.senderDeviceId;
   }
 
-  Future<SecretKey> _sessionKeyFor(ContactRecord contact) async {
-    final me = _requireIdentity();
-    final algorithm = X25519();
-    final myKeyPair = SimpleKeyPairData(
-      base64Decode(me.privateKeyBase64),
-      publicKey: SimplePublicKey(
-        base64Decode(me.publicKeyBase64),
-        type: KeyPairType.x25519,
-      ),
-      type: KeyPairType.x25519,
-    );
-    final shared = await algorithm.sharedSecretKey(
-      keyPair: myKeyPair,
-      remotePublicKey: SimplePublicKey(
-        base64Decode(contact.publicKeyBase64),
-        type: KeyPairType.x25519,
-      ),
-    );
-    final hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
-    return hkdf.deriveKey(
-      secretKey: shared,
-      nonce: utf8.encode(_conversationIdFor(contact.deviceId)),
-      info: utf8.encode('conest.direct.v1'),
-    );
-  }
-
   ConversationRecord _conversationFor(String peerDeviceId) {
     for (final conversation in _snapshot.conversations) {
       if (conversation.peerDeviceId == peerDeviceId) {
@@ -8331,7 +7855,7 @@ class MessengerController extends ChangeNotifier {
       }
     }
     return ConversationRecord(
-      id: _conversationIdFor(peerDeviceId),
+      id: _crypto.conversationIdFor(peerDeviceId),
       kind: ConversationKind.direct,
       peerDeviceId: peerDeviceId,
       messages: const [],
@@ -8844,7 +8368,7 @@ class MessengerController extends ChangeNotifier {
     if (index == -1) {
       conversations.add(
         ConversationRecord(
-          id: _conversationIdFor(peerDeviceId),
+          id: _crypto.conversationIdFor(peerDeviceId),
           kind: ConversationKind.direct,
           peerDeviceId: peerDeviceId,
           messages: [message],
@@ -9233,7 +8757,7 @@ class MessengerController extends ChangeNotifier {
   void _prunePendingRouteUpdateProbes() {
     final now = _now();
     _pendingRouteUpdateProbes.removeWhere(
-      (_, probe) => now.difference(probe.sentAt) > _knownReachabilityWindow,
+      (_, probe) => now.difference(probe.sentAt) > kKnownReachabilityWindow,
     );
   }
 
@@ -9245,12 +8769,6 @@ class MessengerController extends ChangeNotifier {
     return me;
   }
 
-  String _conversationIdFor(String peerDeviceId) {
-    final me = _requireIdentity();
-    final ordered = [me.deviceId, peerDeviceId]..sort();
-    return 'conv-${ordered.join('-')}';
-  }
-
   String _randomId(String prefix) {
     final random = Random.secure();
     final bytes = List<int>.generate(10, (_) => random.nextInt(256));
@@ -9258,21 +8776,6 @@ class MessengerController extends ChangeNotifier {
         .map((value) => value.toRadixString(16).padLeft(2, '0'))
         .join();
     return '$prefix-$suffix';
-  }
-
-  Future<String> _deriveSafetyNumber(List<List<int>> values) async {
-    final sorted = values.map(base64Encode).toList()..sort();
-    final digest = await Sha256().hash(utf8.encode(sorted.join(':')));
-    final hex = digest.bytes
-        .take(18)
-        .map((value) => value.toRadixString(16).padLeft(2, '0'))
-        .join();
-    final groups = <String>[];
-    for (var index = 0; index < hex.length; index += 4) {
-      final next = index + 4 > hex.length ? hex.length : index + 4;
-      groups.add(hex.substring(index, next));
-    }
-    return groups.join(' ');
   }
 
   void _handleLocalEnvelopeStored(
@@ -9332,10 +8835,10 @@ class MessengerController extends ChangeNotifier {
             timeout: const Duration(milliseconds: 350),
           );
           stopwatch.stop();
-          _recordRouteSuccess(route, fetch: true, latency: stopwatch.elapsed);
+          _routeHealthTracker.recordSuccess(route, fetch: true, latency: stopwatch.elapsed);
           processed += await _processEnvelopes(envelopes);
         } catch (error) {
-          _recordRouteFailure(route, error: error.toString());
+          _routeHealthTracker.recordFailure(route, error: error.toString());
           // Full polling handles status reporting; this path only reduces LAN latency.
         }
       }
@@ -9423,52 +8926,6 @@ enum _RuntimeMode {
   foregroundIdle,
   backgroundEnabled,
   backgroundDisabledAndroid,
-}
-
-class _RouteRuntimeState {
-  DateTime? lastFetchSuccessAt;
-  DateTime? lastStoreSuccessAt;
-  DateTime? lastFailureAt;
-  int failureStreak = 0;
-  DateTime? backoffUntil;
-}
-
-class _DecodedDirectMessage {
-  const _DecodedDirectMessage({
-    required this.body,
-    this.replyToMessageId,
-    this.replySnippet,
-    this.replySenderDeviceId,
-    this.replySenderDisplayName,
-  });
-
-  final String body;
-  final String? replyToMessageId;
-  final String? replySnippet;
-  final String? replySenderDeviceId;
-  final String? replySenderDisplayName;
-}
-
-class _DecodedGroupMessage {
-  const _DecodedGroupMessage({
-    required this.groupId,
-    required this.membershipVersion,
-    required this.body,
-    this.senderDisplayName,
-    this.replyToMessageId,
-    this.replySnippet,
-    this.replySenderDeviceId,
-    this.replySenderDisplayName,
-  });
-
-  final String groupId;
-  final int membershipVersion;
-  final String body;
-  final String? senderDisplayName;
-  final String? replyToMessageId;
-  final String? replySnippet;
-  final String? replySenderDeviceId;
-  final String? replySenderDisplayName;
 }
 
 class _RelayProtocolRefreshResult {
