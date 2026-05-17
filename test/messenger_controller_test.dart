@@ -5059,4 +5059,38 @@ void main() {
       throwsArgumentError,
     );
   });
+
+  test(
+    'parallel _processEnvelopes calls return the notifier depth to 0 '
+    'and keep notify dispatch unblocked',
+    () async {
+      // Regression: a previous wasDeferred/restore implementation left the
+      // notifier gate permanently closed when two _processEnvelopes futures
+      // overlapped at an await boundary. The ref-count version must keep
+      // the depth invariant.
+      final relayClient = _FakeRelayClient();
+      final controller = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      addTearDown(controller.dispose);
+
+      await Future.wait([
+        controller.processEnvelopesForTesting(const []),
+        controller.processEnvelopesForTesting(const []),
+        controller.processEnvelopesForTesting(const []),
+      ]);
+      expect(controller.notificationsDeferredDepth, 0);
+
+      var fired = 0;
+      controller.addListener(() => fired++);
+      controller.setStatus('after parallel batches');
+      expect(
+        fired,
+        1,
+        reason:
+            'notify gate must reopen after every _processEnvelopes call exits',
+      );
+    },
+  );
 }

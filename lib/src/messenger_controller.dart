@@ -126,10 +126,15 @@ class MessengerController extends ChangeNotifier {
   late final RouteHealthTracker _routeHealthTracker;
   final bool _longPollEnabled;
   bool _longPollRunning = false;
-  // When true, `notifyListeners` queues a flag instead of dispatching. Used
-  // by `_processEnvelopes` so a long-poll batch of 10 envelopes triggers one
-  // UI rebuild at the end, not ten.
-  bool _notificationsDeferred = false;
+  // Reference count: while > 0, `notifyListeners` defers and sets the
+  // pending flag instead of dispatching. The last `_processEnvelopes` to
+  // exit (depth → 0) flushes one combined notify. Reference counting
+  // (rather than a capture/restore boolean) is safe for *parallel/over-
+  // lapping* calls — long-poll, pollNow, and _handleLocalEnvelopeStored
+  // all run concurrent _processEnvelopes futures, and the old capture/
+  // restore left the deferred flag permanently `true` whenever an outer
+  // call finished before its overlapping inner call (a5b93fe regression).
+  int _notificationsDeferredDepth = 0;
   bool _deferredNotificationPending = false;
   final LocalRelayNode _localRelayNode;
   final PlatformBridge _platformBridge;
@@ -394,6 +399,22 @@ class MessengerController extends ChangeNotifier {
       (await _runHeartbeatPass(force: true)).sentCount;
   @visibleForTesting
   Duration? get currentScheduledPollInterval => _currentPollInterval();
+
+  /// Wraps `_processEnvelopes` so the notifier-batching ref-count is
+  /// exercised in tests without needing to drive the long-poll loop.
+  @visibleForTesting
+  Future<int> processEnvelopesForTesting(List<RelayEnvelope> envelopes) =>
+      _processEnvelopes(envelopes);
+
+  /// Number of currently in-flight `_processEnvelopes` calls. Exposed so a
+  /// test can assert the depth returns to 0 after parallel calls finish.
+  @visibleForTesting
+  int get notificationsDeferredDepth => _notificationsDeferredDepth;
+
+  /// Whether a `notifyListeners` call was suppressed by the batching guard
+  /// since the last flush. Exposed so tests can verify the flush behavior.
+  @visibleForTesting
+  bool get deferredNotificationPending => _deferredNotificationPending;
 
   DateTime _now() => _nowProvider().toUtc();
 
@@ -4706,7 +4727,7 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void notifyListeners() {
-    if (_notificationsDeferred) {
+    if (_notificationsDeferredDepth > 0) {
       _deferredNotificationPending = true;
       return;
     }
@@ -4714,14 +4735,13 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<int> _processEnvelopes(List<RelayEnvelope> envelopes) async {
-    final wasDeferred = _notificationsDeferred;
-    _notificationsDeferred = true;
+    _notificationsDeferredDepth++;
     var processed = 0;
     try {
       processed = await _processEnvelopesInternal(envelopes);
     } finally {
-      _notificationsDeferred = wasDeferred;
-      if (!_notificationsDeferred && _deferredNotificationPending) {
+      _notificationsDeferredDepth--;
+      if (_notificationsDeferredDepth == 0 && _deferredNotificationPending) {
         _deferredNotificationPending = false;
         super.notifyListeners();
       }
