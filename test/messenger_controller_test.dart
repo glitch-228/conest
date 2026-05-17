@@ -5061,6 +5061,31 @@ void main() {
   });
 
   test(
+    'long-poll never picks the local-relay loopback route',
+    () async {
+      // Loopback fetches race with _handleLocalEnvelopeStored and add no
+      // latency benefit (the local relay already pushes synchronously).
+      final relayClient = _FakeRelayClient();
+      final controller = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        internetRelayHost: 'relay.example',
+      );
+      addTearDown(controller.dispose);
+
+      final me = controller.identity!;
+      final picked = controller.pickPrimaryRelayForLongPollForTesting(me);
+      expect(picked, isNotNull);
+      expect(
+        picked!.kind,
+        PeerRouteKind.relay,
+        reason: 'must pick a remote relay, not LAN loopback',
+      );
+      expect(picked.host, isNot('127.0.0.1'));
+    },
+  );
+
+  test(
     'parallel _processEnvelopes calls return the notifier depth to 0 '
     'and keep notify dispatch unblocked',
     () async {

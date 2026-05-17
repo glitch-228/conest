@@ -427,6 +427,12 @@ class MessengerController extends ChangeNotifier {
       _markRuntimeActivity();
       unawaited(_pollLocalInboxOnly());
       unawaited(pollNow());
+      // Resume the long-poll loop on foreground entry. Stopping on
+      // background avoids holding an open HTTP request while the OS
+      // (especially Android) tries to suspend the app.
+      unawaited(_startLongPollIfEnabled());
+    } else if (!value) {
+      _stopLongPoll();
     }
     _reschedulePolling();
   }
@@ -4161,22 +4167,21 @@ class MessengerController extends ChangeNotifier {
     return !_routeHealthTracker.isEligibleNow(route);
   }
 
-  /// Picks the highest-priority relay route for the long-poll loop. LAN
-  /// loopback (the embedded local relay) wins over remote relays because
-  /// it has zero latency and the inbox is the same anyway. Among remote
-  /// relays, the first eligible configured route wins; route health is
-  /// re-checked every iteration so a flapping relay is dropped quickly.
+  /// Picks the highest-priority remote relay route for the long-poll
+  /// loop. The local-relay loopback is deliberately excluded — the
+  /// embedded relay's `onEnvelopeStored` callback already delivers LAN
+  /// envelopes to `_handleLocalEnvelopeStored` synchronously, so long-
+  /// polling 127.0.0.1 adds no latency benefit and creates a concurrent
+  /// `_processEnvelopes` path that races with the callback (a primary
+  /// trigger for the v0.3.2-nightly.2 notifier-batching bug). Among
+  /// remote relays, the first eligible configured route wins; route
+  /// health is re-checked every iteration so a flapping relay is
+  /// dropped quickly.
+  @visibleForTesting
+  PeerEndpoint? pickPrimaryRelayForLongPollForTesting(IdentityRecord me) =>
+      _pickPrimaryRelayForLongPoll(me);
+
   PeerEndpoint? _pickPrimaryRelayForLongPoll(IdentityRecord me) {
-    if (_localRelayNode.isRunning) {
-      final loopback = PeerEndpoint(
-        kind: PeerRouteKind.lan,
-        host: '127.0.0.1',
-        port: me.localRelayPort,
-      );
-      if (_routeHealthTracker.isEligibleNow(loopback)) {
-        return loopback;
-      }
-    }
     for (final relay in me.configuredRelays) {
       if (relay.kind != PeerRouteKind.relay) {
         continue;
