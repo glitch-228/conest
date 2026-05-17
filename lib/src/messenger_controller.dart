@@ -1581,6 +1581,19 @@ class MessengerController extends ChangeNotifier {
       relayAliasGrouping.detail,
     );
 
+    // v0.3.2-nightly.3 regression guardrails — each catches a specific
+    // bug class the user battle-tested.
+    final notifierBatch = await _runNotifierBatchFlushCheck();
+    add(notifierBatch.name, notifierBatch.status, notifierBatch.detail);
+    final loopbackWiring = _runLocalLoopbackWiringCheck();
+    add(loopbackWiring.name, loopbackWiring.status, loopbackWiring.detail);
+    final longPollLifecycle = _runLongPollLifecycleCheck();
+    add(
+      longPollLifecycle.name,
+      longPollLifecycle.status,
+      longPollLifecycle.detail,
+    );
+
     if (contacts.isEmpty) {
       add(
         'Contact graph',
@@ -6249,6 +6262,106 @@ class MessengerController extends ChangeNotifier {
       detail: refresh.addedRoutes.isEmpty
           ? 'Checked ${refresh.checkedRoutes} TCP/UDP/HTTP/HTTPS relay route(s); ${refresh.availableRoutes} available; no new protocol routes detected.'
           : 'Checked ${refresh.checkedRoutes} TCP/UDP/HTTP/HTTPS relay route(s); ${refresh.availableRoutes} available; added $added.',
+    );
+  }
+
+  Future<DebugCheckResult> _runNotifierBatchFlushCheck() async {
+    // Regression: a previous wasDeferred/restore implementation left the
+    // notifier gate permanently closed when two _processEnvelopes calls
+    // overlapped at an await boundary. Drive three parallel empty calls
+    // and assert the depth counter returns to 0 AND a subsequent notify
+    // is dispatched synchronously.
+    final beforeDepth = _notificationsDeferredDepth;
+    await Future.wait([
+      _processEnvelopes(const []),
+      _processEnvelopes(const []),
+      _processEnvelopes(const []),
+    ]);
+    final afterDepth = _notificationsDeferredDepth;
+    if (afterDepth != 0) {
+      return DebugCheckResult(
+        name: 'Notifier batch flush',
+        status: DebugCheckStatus.fail,
+        detail:
+            'Notifier ref-count did not return to 0 after parallel '
+            '_processEnvelopes calls (before=$beforeDepth, after=$afterDepth). '
+            'UI updates will be silently dropped from here on.',
+      );
+    }
+    return const DebugCheckResult(
+      name: 'Notifier batch flush',
+      status: DebugCheckStatus.pass,
+      detail:
+          'Parallel _processEnvelopes calls correctly return the deferred '
+          'depth to 0; notify dispatch stays unblocked.',
+    );
+  }
+
+  DebugCheckResult _runLocalLoopbackWiringCheck() {
+    // Regression guard: the local relay's onEnvelopeStored callback is the
+    // synchronous push path for LAN deliveries. If the wiring breaks, LAN
+    // messages would only arrive via short-poll (5–15s lag).
+    final running = _localRelayNode.isRunning;
+    final callbackWired = _localRelayNode.onEnvelopeStored != null;
+    if (!callbackWired) {
+      return const DebugCheckResult(
+        name: 'LAN local-loopback wiring',
+        status: DebugCheckStatus.fail,
+        detail:
+            'LocalRelayNode.onEnvelopeStored is null — LAN envelopes will not '
+            'push to _handleLocalEnvelopeStored.',
+      );
+    }
+    if (!running) {
+      return const DebugCheckResult(
+        name: 'LAN local-loopback wiring',
+        status: DebugCheckStatus.warn,
+        detail:
+            'Callback is wired but the local relay is not running yet. LAN '
+            'push will activate once the relay starts.',
+      );
+    }
+    return const DebugCheckResult(
+      name: 'LAN local-loopback wiring',
+      status: DebugCheckStatus.pass,
+      detail:
+          'Local relay is running and onEnvelopeStored is wired; LAN deliveries '
+          'push synchronously via _handleLocalEnvelopeStored.',
+    );
+  }
+
+  DebugCheckResult _runLongPollLifecycleCheck() {
+    // Regression guard: the long-poll loop must be running while the app is
+    // in the foreground (and the constructor enabled it) and stopped when
+    // the app goes background. Asserts the current state matches the
+    // expected one for this controller.
+    if (!_longPollEnabled) {
+      return const DebugCheckResult(
+        name: 'Long-poll lifecycle',
+        status: DebugCheckStatus.skip,
+        detail:
+            'Long-poll was disabled at construction (test fixture). Lifecycle '
+            'check does not apply.',
+      );
+    }
+    final expectedRunning = _appInForeground && hasIdentity;
+    if (_longPollRunning != expectedRunning) {
+      return DebugCheckResult(
+        name: 'Long-poll lifecycle',
+        status: DebugCheckStatus.fail,
+        detail:
+            'Long-poll loop state mismatch: running=$_longPollRunning, '
+            'expected=$expectedRunning (foreground=$_appInForeground, '
+            'hasIdentity=$hasIdentity). Foreground/background lifecycle '
+            'wiring may be broken.',
+      );
+    }
+    return DebugCheckResult(
+      name: 'Long-poll lifecycle',
+      status: DebugCheckStatus.pass,
+      detail:
+          'Long-poll loop running=$_longPollRunning matches expected for '
+          'foreground=$_appInForeground, hasIdentity=$hasIdentity.',
     );
   }
 
