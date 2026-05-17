@@ -287,16 +287,20 @@ class _FakeRelayClient extends RelayClient {
   }
 }
 
+ConestBuildInfo _createBuildInfo() {
+  return ConestBuildInfo(
+    appName: 'Conest',
+    packageName: 'dev.conest.conest',
+    version: '0.1.0',
+    buildNumber: '1',
+    channel: UpdateChannel.nightly,
+    isDebugBuild: true,
+  );
+}
+
 UpdateService _createUpdateService() {
   return UpdateService(
-    buildInfo: ConestBuildInfo(
-      appName: 'Conest',
-      packageName: 'dev.conest.conest',
-      version: '0.1.0',
-      buildNumber: '1',
-      channel: UpdateChannel.nightly,
-      isDebugBuild: true,
-    ),
+    buildInfo: _createBuildInfo(),
     targetPlatform: UpdateTargetPlatform.unsupported,
     applicationSupportDirectoryProvider: () async => Directory.systemTemp,
     tempDirectoryProvider: () async => Directory.systemTemp,
@@ -3369,6 +3373,7 @@ void main() {
           home: app.HomeScreen(
             controller: alice,
             updateService: _createUpdateService(),
+            buildInfo: _createBuildInfo(),
             themeController: app.ConestThemeController.memory(),
             palette: app.ConestPalette(),
           ),
@@ -3439,6 +3444,7 @@ void main() {
         home: app.HomeScreen(
           controller: alice,
           updateService: _createUpdateService(),
+            buildInfo: _createBuildInfo(),
           themeController: app.ConestThemeController.memory(),
           palette: app.ConestPalette(),
         ),
@@ -3522,6 +3528,7 @@ void main() {
         home: app.HomeScreen(
           controller: alice,
           updateService: _createUpdateService(),
+            buildInfo: _createBuildInfo(),
           themeController: app.ConestThemeController.memory(),
           palette: app.ConestPalette(),
         ),
@@ -3613,6 +3620,7 @@ void main() {
           home: app.HomeScreen(
             controller: alice,
             updateService: _createUpdateService(),
+            buildInfo: _createBuildInfo(),
             themeController: app.ConestThemeController.memory(),
             palette: app.ConestPalette(),
           ),
@@ -3675,6 +3683,7 @@ void main() {
           builder: (context, _) => app.HomeScreen(
             controller: alice,
             updateService: _createUpdateService(),
+            buildInfo: _createBuildInfo(),
             themeController: app.ConestThemeController.memory(),
             palette: app.ConestPalette(),
           ),

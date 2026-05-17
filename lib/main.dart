@@ -88,6 +88,7 @@ Future<void> _runConestWithProfile(
       updateService: updateService,
       instanceLock: instanceLock,
       themeController: themeController,
+      buildInfo: buildInfo,
       onResetIdentity: () async {
         // Drop the existing instance lock so the relaunched bootstrap can
         // acquire its own. Best-effort — release errors don't block reset.
@@ -693,6 +694,7 @@ class ConestApp extends StatefulWidget {
     required this.updateService,
     required this.instanceLock,
     required this.themeController,
+    required this.buildInfo,
     this.onResetIdentity,
   });
 
@@ -700,6 +702,11 @@ class ConestApp extends StatefulWidget {
   final UpdateService updateService;
   final AppInstanceLock instanceLock;
   final ConestThemeController themeController;
+  /// Nightly / stable / debug — surfaced so the chrome can gate the
+  /// "Run Debug Tests" button on the nightly channel (the user installs
+  /// nightly builds on real devices for battle testing; stable users
+  /// don't see it).
+  final ConestBuildInfo buildInfo;
   /// Wired by `_runConestWithProfile` (in the bootstrap layer). Called by
   /// the Settings dialog AFTER `controller.resetIdentity` wipes the vault,
   /// so the storage-profile JSON can be deleted and `ConestBootstrapApp`
@@ -809,6 +816,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
                             updateService: widget.updateService,
                             themeController: widget.themeController,
                             palette: palette,
+                            buildInfo: widget.buildInfo,
                             onResetIdentity: widget.onResetIdentity,
                           )
                         : OnboardingScreen(
@@ -1222,6 +1230,7 @@ class HomeScreen extends StatefulWidget {
     required this.updateService,
     required this.themeController,
     required this.palette,
+    required this.buildInfo,
     this.onResetIdentity,
   });
 
@@ -1229,6 +1238,7 @@ class HomeScreen extends StatefulWidget {
   final UpdateService updateService;
   final ConestThemeController themeController;
   final ConestPalette palette;
+  final ConestBuildInfo buildInfo;
   final Future<void> Function()? onResetIdentity;
 
   @override
@@ -1666,7 +1676,17 @@ class _HomeScreenState extends State<HomeScreen> {
                           });
                         },
                         onContactProfile: _showContactProfile,
-                        onShowDebug: kDebugMode ? _showDebugMenu : null,
+                        // Surface the Run Debug Tests button on nightly
+                        // builds (and any debug build) so the user can
+                        // exercise runDebugSelfTest on real hardware
+                        // without rebuilding. Hidden on stable to avoid
+                        // confusing end users.
+                        onShowDebug:
+                            (widget.buildInfo.channel ==
+                                    UpdateChannel.nightly ||
+                                kDebugMode)
+                            ? _showDebugMenu
+                            : null,
                         onPoll: widget.controller.pollNow,
                         onShowSettings: _showSettings,
                         onShowInvite: _showInvite,

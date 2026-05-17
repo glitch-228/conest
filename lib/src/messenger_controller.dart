@@ -1354,22 +1354,12 @@ class MessengerController extends ChangeNotifier {
       return peerReports.where(predicate).length;
     }
 
-    if (!kDebugMode) {
-      add(
-        'Debug build gate',
-        DebugCheckStatus.skip,
-        'Debug diagnostics are disabled in release builds.',
-      );
-      return DebugRunReport(
-        startedAt: startedAt,
-        completedAt: DateTime.now().toUtc(),
-        deviceCount: 0,
-        results: results,
-        peerReports: peerReports,
-        notes: notes,
-      );
-    }
-
+    // The Debug Self Test ran only in `kDebugMode` historically. Nightly
+    // builds are not `kDebugMode` but still need the diagnostics for
+    // battle-testing, so the gate is dropped — runDebugSelfTest now runs
+    // in every build. The Run Debug Tests button itself is gated on the
+    // nightly channel by `HomeScreen` so end users on stable don't see
+    // it.
     final me = _snapshot.identity;
     if (me == null) {
       add(
@@ -1391,7 +1381,8 @@ class MessengerController extends ChangeNotifier {
     add(
       'Debug build gate',
       DebugCheckStatus.pass,
-      'Debug diagnostics are available on $platform.',
+      'Debug diagnostics available on $platform (build mode '
+      '${kDebugMode ? 'debug' : kReleaseMode ? 'release' : 'profile'}).',
     );
     add(
       'Identity',
