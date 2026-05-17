@@ -3309,25 +3309,32 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final relayClient = _FakeRelayClient();
-      final alice = await _createController(
-        relayClient: relayClient,
-        displayName: 'Alice',
-      );
-      final bob = await _createController(
-        relayClient: relayClient,
-        displayName: 'Bob',
-      );
+      late MessengerController alice;
+      late MessengerController bob;
+      await tester.runAsync(() async {
+        final relayClient = _FakeRelayClient();
+        alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+        );
+        bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+        );
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
-      final bobContactForAlice = bob.contacts.single;
-      await bob.sendMessage(contact: bobContactForAlice, body: 'incoming text');
-      await alice.pollNow();
+        await alice.addContactFromInvite(
+          alias: 'Bob',
+          payload: (await bob.buildInvite()).encodePayload(),
+          codephrase: '',
+        );
+        await bob.pollNow();
+        final bobContactForAlice = bob.contacts.single;
+        await bob.sendMessage(
+          contact: bobContactForAlice,
+          body: 'incoming text',
+        );
+        await alice.pollNow();
+      });
 
       await tester.pumpWidget(
         MaterialApp(
@@ -3340,34 +3347,28 @@ void main() {
         ),
       );
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
 
       await tester.ensureVisible(find.text('Bob').first);
       await tester.tap(find.text('Bob').first);
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
       await tester.ensureVisible(find.text('incoming text').last);
       await tester.tap(find.text('incoming text').last);
       await tester.pump(const Duration(milliseconds: 80));
       await tester.tap(find.text('incoming text').last);
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.text('Replying to Bob'), findsOneWidget);
 
       await tester.tap(find.byTooltip('Cancel reply'));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.text('Replying to Bob'), findsNothing);
 
       await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pump();
       alice.dispose();
       bob.dispose();
-      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
     },
-    skip: true,
   );
 
   testWidgets('double tap outgoing message opens the edit dialog', (
@@ -3377,26 +3378,33 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final relayClient = _FakeRelayClient();
-    final alice = await _createController(
-      relayClient: relayClient,
-      displayName: 'Alice',
-    );
-    final bob = await _createController(
-      relayClient: relayClient,
-      displayName: 'Bob',
-    );
+    late MessengerController alice;
+    late MessengerController bob;
+    await tester.runAsync(() async {
+      final relayClient = _FakeRelayClient();
+      alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
 
-    await alice.addContactFromInvite(
-      alias: 'Bob',
-      payload: (await bob.buildInvite()).encodePayload(),
-      codephrase: '',
-    );
-    await bob.pollNow();
-    final aliceContactForBob = alice.contacts.single;
-    await alice.sendMessage(contact: aliceContactForBob, body: 'outgoing text');
-    await bob.pollNow();
-    await alice.pollNow();
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await bob.pollNow();
+      final aliceContactForBob = alice.contacts.single;
+      await alice.sendMessage(
+        contact: aliceContactForBob,
+        body: 'outgoing text',
+      );
+      await bob.pollNow();
+      await alice.pollNow();
+    });
 
     await tester.pumpWidget(
       MaterialApp(
@@ -3409,12 +3417,10 @@ void main() {
       ),
     );
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
 
     await tester.ensureVisible(find.text('Bob').first);
     await tester.tap(find.text('Bob').first);
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
     await tester.ensureVisible(find.text('outgoing text').last);
     await tester.tap(find.text('outgoing text').last);
     await tester.pump(const Duration(milliseconds: 80));
@@ -3428,11 +3434,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
 
     await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
     alice.dispose();
     bob.dispose();
-    await tester.pump();
-  }, skip: true);
+    await tester.pump(const Duration(milliseconds: 100));
+  });
 
   testWidgets('message bubbles support selection and copy message actions', (
     tester,
@@ -3457,28 +3462,32 @@ void main() {
       () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(SystemChannels.platform, null),
     );
-    final alice = await _createController(
-      relayClient: relayClient,
-      displayName: 'Alice',
-    );
-    final bob = await _createController(
-      relayClient: relayClient,
-      displayName: 'Bob',
-    );
+    late MessengerController alice;
+    late MessengerController bob;
+    await tester.runAsync(() async {
+      alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
 
-    await alice.addContactFromInvite(
-      alias: 'Bob',
-      payload: (await bob.buildInvite()).encodePayload(),
-      codephrase: '',
-    );
-    await bob.pollNow();
-    final aliceContactForBob = alice.contacts.single;
-    await alice.sendMessage(
-      contact: aliceContactForBob,
-      body: 'copyable outgoing text',
-    );
-    await bob.pollNow();
-    await alice.pollNow();
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await bob.pollNow();
+      final aliceContactForBob = alice.contacts.single;
+      await alice.sendMessage(
+        contact: aliceContactForBob,
+        body: 'copyable outgoing text',
+      );
+      await bob.pollNow();
+      await alice.pollNow();
+    });
 
     await tester.pumpWidget(
       MaterialApp(
@@ -3491,12 +3500,10 @@ void main() {
       ),
     );
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
 
     await tester.ensureVisible(find.text('Bob').first);
     await tester.tap(find.text('Bob').first);
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
     await tester.ensureVisible(find.text('copyable outgoing text').last);
 
     expect(
@@ -3520,16 +3527,14 @@ void main() {
     expect(find.text('Copy message'), findsOneWidget);
     await tester.tap(find.text('Copy message'));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
 
     expect(copiedText, 'copyable outgoing text');
 
     await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
     alice.dispose();
     bob.dispose();
-    await tester.pump();
-  }, skip: true);
+    await tester.pump(const Duration(milliseconds: 100));
+  });
 
   testWidgets(
     'contact list and chat header show the current reachability chip',
@@ -3539,37 +3544,41 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       var now = DateTime.utc(2026, 4, 18, 18);
-      final relayClient = _FakeRelayClient();
-      final alice = await _createController(
-        relayClient: relayClient,
-        displayName: 'Alice',
-        nowProvider: () => now,
-      );
-      final bob = await _createController(
-        relayClient: relayClient,
-        displayName: 'Bob',
-        nowProvider: () => now,
-      );
+      late MessengerController alice;
+      late MessengerController bob;
+      await tester.runAsync(() async {
+        final relayClient = _FakeRelayClient();
+        alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+          nowProvider: () => now,
+        );
+        bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+          nowProvider: () => now,
+        );
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
-      final aliceContactForBob = alice.contacts.single;
+        await alice.addContactFromInvite(
+          alias: 'Bob',
+          payload: (await bob.buildInvite()).encodePayload(),
+          codephrase: '',
+        );
+        await bob.pollNow();
+        final aliceContactForBob = alice.contacts.single;
 
-      await alice.sendMessage(
-        contact: aliceContactForBob,
-        body: 'reachability',
-      );
-      await bob.pollNow();
-      await alice.pollNow();
+        await alice.sendMessage(
+          contact: aliceContactForBob,
+          body: 'reachability',
+        );
+        await bob.pollNow();
+        await alice.pollNow();
 
-      expect(
-        alice.reachabilityStateFor(aliceContactForBob.deviceId),
-        ContactReachabilityState.online,
-      );
+        expect(
+          alice.reachabilityStateFor(aliceContactForBob.deviceId),
+          ContactReachabilityState.online,
+        );
+      });
 
       await tester.pumpWidget(
         MaterialApp(
@@ -3582,24 +3591,20 @@ void main() {
         ),
       );
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.text('online'), findsWidgets);
 
       await tester.ensureVisible(find.text('Bob').first);
       await tester.tap(find.text('Bob').first);
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.text('online'), findsWidgets);
 
       await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pump();
       alice.dispose();
       bob.dispose();
-      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
     },
-    skip: true,
   );
 
   testWidgets('sidebar unread badge clears after opening a conversation', (
@@ -3609,39 +3614,46 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final relayClient = _FakeRelayClient();
-    final alice = await _createController(
-      relayClient: relayClient,
-      displayName: 'Alice',
-    );
-    final bob = await _createController(
-      relayClient: relayClient,
-      displayName: 'Bob',
-    );
+    late MessengerController alice;
+    late MessengerController bob;
+    late ContactRecord aliceContactForBob;
+    await tester.runAsync(() async {
+      final relayClient = _FakeRelayClient();
+      alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
 
-    await alice.addContactFromInvite(
-      alias: 'Bob',
-      payload: (await bob.buildInvite()).encodePayload(),
-      codephrase: '',
-    );
-    await bob.pollNow();
-    final bobContactForAlice = bob.contacts.single;
-    final aliceContactForBob = alice.contacts.single;
-    await bob.sendMessage(contact: bobContactForAlice, body: 'fresh unread');
-    await alice.pollNow();
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await bob.pollNow();
+      final bobContactForAlice = bob.contacts.single;
+      aliceContactForBob = alice.contacts.single;
+      await bob.sendMessage(contact: bobContactForAlice, body: 'fresh unread');
+      await alice.pollNow();
+    });
 
     await tester.pumpWidget(
       MaterialApp(
-        home: app.HomeScreen(
-          controller: alice,
-          updateService: _createUpdateService(),
-          themeController: app.ConestThemeController.memory(),
-          palette: app.ConestPalette(),
+        home: AnimatedBuilder(
+          animation: alice,
+          builder: (context, _) => app.HomeScreen(
+            controller: alice,
+            updateService: _createUpdateService(),
+            themeController: app.ConestThemeController.memory(),
+            palette: app.ConestPalette(),
+          ),
         ),
       ),
     );
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
 
     expect(alice.unreadCountFor(aliceContactForBob.deviceId), 1);
     expect(find.text('fresh unread'), findsOneWidget);
@@ -3650,18 +3662,22 @@ void main() {
     await tester.ensureVisible(find.text('Bob').first);
     await tester.tap(find.text('Bob').first);
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pump();
+    await tester.pump();
 
     expect(alice.unreadCountFor(aliceContactForBob.deviceId), 0);
     expect(find.byKey(const Key('unread-badge-1')), findsNothing);
     expect(find.text('new'), findsNothing);
 
     await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
     alice.dispose();
     bob.dispose();
-    await tester.pump();
-  }, skip: true);
+    await tester.pump(const Duration(milliseconds: 100));
+  });
 
   test('debug self test reports runnable checks', () async {
     final relayClient = _FakeRelayClient();
