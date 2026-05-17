@@ -88,6 +88,35 @@ Future<void> _runConestWithProfile(
       updateService: updateService,
       instanceLock: instanceLock,
       themeController: themeController,
+      onResetIdentity: () async {
+        // Drop the existing instance lock so the relaunched bootstrap can
+        // acquire its own. Best-effort — release errors don't block reset.
+        try {
+          await instanceLock.release();
+        } catch (_) {}
+        // Wipe the storage-profile JSON so AppStorageResolver.resolve()
+        // returns needsSetup and FirstLaunchStorageScreen reappears.
+        try {
+          await profile.profileFile.delete();
+        } on FileSystemException {
+          // Already gone — fine.
+        }
+        // Restart the bootstrap layer. The current widget tree is torn
+        // down by Flutter on the next frame. We re-resolve storage so
+        // the bootstrap correctly lands on `needsSetup` after the
+        // profile JSON delete above.
+        final resolver = AppStorageResolver();
+        final resolution = await resolver.resolve();
+        final bootstrapThemeController = ConestThemeController.memory();
+        await bootstrapThemeController.initialize();
+        runApp(
+          ConestBootstrapApp(
+            resolver: resolver,
+            initialResolution: resolution,
+            themeController: bootstrapThemeController,
+          ),
+        );
+      },
     ),
   );
 }
@@ -664,12 +693,19 @@ class ConestApp extends StatefulWidget {
     required this.updateService,
     required this.instanceLock,
     required this.themeController,
+    this.onResetIdentity,
   });
 
   final MessengerController controller;
   final UpdateService updateService;
   final AppInstanceLock instanceLock;
   final ConestThemeController themeController;
+  /// Wired by `_runConestWithProfile` (in the bootstrap layer). Called by
+  /// the Settings dialog AFTER `controller.resetIdentity` wipes the vault,
+  /// so the storage-profile JSON can be deleted and `ConestBootstrapApp`
+  /// re-mounted — restoring the "choose storage mode" wizard instead of
+  /// going straight back to the display-name onboarding screen.
+  final Future<void> Function()? onResetIdentity;
 
   @override
   State<ConestApp> createState() => _ConestAppState();
@@ -773,6 +809,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
                             updateService: widget.updateService,
                             themeController: widget.themeController,
                             palette: palette,
+                            onResetIdentity: widget.onResetIdentity,
                           )
                         : OnboardingScreen(
                             controller: widget.controller,
@@ -1185,12 +1222,14 @@ class HomeScreen extends StatefulWidget {
     required this.updateService,
     required this.themeController,
     required this.palette,
+    this.onResetIdentity,
   });
 
   final MessengerController controller;
   final UpdateService updateService;
   final ConestThemeController themeController;
   final ConestPalette palette;
+  final Future<void> Function()? onResetIdentity;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -1336,6 +1375,7 @@ class _HomeScreenState extends State<HomeScreen> {
         updateService: widget.updateService,
         themeController: widget.themeController,
         palette: widget.palette,
+        onResetIdentity: widget.onResetIdentity,
       ),
     );
     if (!mounted) {
@@ -5069,12 +5109,14 @@ class SettingsDialog extends StatefulWidget {
     required this.updateService,
     required this.themeController,
     required this.palette,
+    this.onResetIdentity,
   });
 
   final MessengerController controller;
   final UpdateService updateService;
   final ConestThemeController themeController;
   final ConestPalette palette;
+  final Future<void> Function()? onResetIdentity;
 
   @override
   State<SettingsDialog> createState() => _SettingsDialogState();
@@ -5163,7 +5205,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
     if (confirmed != true || !mounted) {
       return;
     }
-    await _run(widget.controller.resetIdentity);
+    await _run(
+      () => widget.controller.resetIdentity(
+        onPostReset: widget.onResetIdentity,
+      ),
+    );
     if (mounted) {
       Navigator.of(context).pop();
     }
