@@ -2931,15 +2931,25 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       ),
                       const SizedBox(height: 10),
                     ],
-                    Text(
-                      message.body,
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: outbound
-                            ? palette.outboundText
-                            : palette.inboundText,
-                        height: 1.35,
+                    if (message.hasAttachment) ...[
+                      _AttachmentRow(
+                        descriptor: message.attachment!,
+                        outbound: outbound,
+                        palette: palette,
                       ),
-                    ),
+                      if (message.body.isNotEmpty)
+                        const SizedBox(height: 8),
+                    ],
+                    if (message.body.isNotEmpty || !message.hasAttachment)
+                      Text(
+                        message.body,
+                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                          color: outbound
+                              ? palette.outboundText
+                              : palette.inboundText,
+                          height: 1.35,
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -3434,15 +3444,25 @@ class _ChatPanelState extends State<_ChatPanel> {
                       ),
                       const SizedBox(height: 10),
                     ],
-                    Text(
-                      message.body,
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: outbound
-                            ? palette.outboundText
-                            : palette.inboundText,
-                        height: 1.35,
+                    if (message.hasAttachment) ...[
+                      _AttachmentRow(
+                        descriptor: message.attachment!,
+                        outbound: outbound,
+                        palette: palette,
                       ),
-                    ),
+                      if (message.body.isNotEmpty)
+                        const SizedBox(height: 8),
+                    ],
+                    if (message.body.isNotEmpty || !message.hasAttachment)
+                      Text(
+                        message.body,
+                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                          color: outbound
+                              ? palette.outboundText
+                              : palette.inboundText,
+                          height: 1.35,
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -7090,6 +7110,72 @@ class _StatusChip extends StatelessWidget {
           Icon(icon, size: 16, color: palette.primary),
           const SizedBox(width: 8),
           if (expand) Expanded(child: labelWidget) else labelWidget,
+        ],
+      ),
+    );
+  }
+}
+
+class _AttachmentRow extends StatelessWidget {
+  const _AttachmentRow({
+    required this.descriptor,
+    required this.outbound,
+    required this.palette,
+  });
+
+  final AttachmentDescriptor descriptor;
+  final bool outbound;
+  final ConestPalette palette;
+
+  String _formatBytes(int size) {
+    if (size < 1024) return '$size B';
+    if (size < 1024 * 1024) return '${(size / 1024).toStringAsFixed(1)} KB';
+    return '${(size / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isImage = descriptor.mimeType.startsWith('image/');
+    final icon = isImage ? Icons.image_outlined : Icons.attach_file_outlined;
+    final textColor = outbound ? palette.outboundText : palette.inboundText;
+    final metaColor = outbound ? palette.outboundMeta : palette.inboundMeta;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: outbound
+            ? palette.primary.withValues(alpha: 0.10)
+            : palette.selection,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 20, color: textColor),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  descriptor.fileName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: textColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _formatBytes(descriptor.sizeBytes),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelSmall?.copyWith(color: metaColor),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );

@@ -4971,4 +4971,92 @@ void main() {
       );
     },
   );
+
+  test(
+    'sendAttachment round-trips a small file 1:1, hash-verified',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+
+      await _pairControllers(alice, bob);
+      final aliceContactForBob = alice.contacts.single;
+
+      // 192KB payload spans multiple 64KB chunks (3 chunks).
+      final original = Uint8List.fromList(
+        List<int>.generate(192 * 1024, (index) => index & 0xff),
+      );
+      await alice.sendAttachment(
+        contact: aliceContactForBob,
+        bytes: original,
+        fileName: 'sample.bin',
+        mimeType: 'application/octet-stream',
+        caption: 'here you go',
+      );
+
+      // Drive the offer → chunk_request → chunk → complete handshake.
+      // Each pollNow consumes one round of envelopes from the fake relay.
+      for (var round = 0; round < 8; round++) {
+        await bob.pollNow();
+        await alice.pollNow();
+      }
+
+      final bobContactForAlice = bob.contacts.single;
+      final received = bob
+          .messagesFor(bobContactForAlice.deviceId)
+          .firstWhere((message) => message.hasAttachment);
+      expect(received.attachment!.fileName, 'sample.bin');
+      expect(received.attachment!.sizeBytes, original.length);
+      expect(received.body, 'here you go');
+      expect(received.state, DeliveryState.delivered);
+
+      final assembled = bob.attachmentBytesFor(received.attachment!.id);
+      expect(assembled, isNotNull);
+      expect(assembled, equals(original));
+
+      // Sender side: the offer message should also be marked delivered now
+      // that the complete envelope flowed back.
+      final outbound = alice
+          .messagesFor(aliceContactForBob.deviceId)
+          .firstWhere((message) => message.hasAttachment);
+      expect(outbound.state, DeliveryState.delivered);
+    },
+  );
+
+  test('sendAttachment rejects a file above the 8 MB cap', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+
+    await _pairControllers(alice, bob);
+    final aliceContactForBob = alice.contacts.single;
+
+    final tooBig = Uint8List(
+      MessengerController.maxAttachmentSizeBytes + 1,
+    );
+    await expectLater(
+      alice.sendAttachment(
+        contact: aliceContactForBob,
+        bytes: tooBig,
+        fileName: 'huge.bin',
+      ),
+      throwsArgumentError,
+    );
+  });
 }

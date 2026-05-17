@@ -1197,6 +1197,7 @@ class ChatMessage {
     this.replySnippet,
     this.replySenderDeviceId,
     this.replySenderDisplayName,
+    this.attachment,
     Map<String, DeliveryState>? recipientStates,
   }) : recipientStates = Map.unmodifiable(
          recipientStates ?? const <String, DeliveryState>{},
@@ -1217,11 +1218,15 @@ class ChatMessage {
   final String? replySnippet;
   final String? replySenderDeviceId;
   final String? replySenderDisplayName;
+  /// Non-null on v0.3.2+ messages that carry a file or image attachment.
+  /// `body` may still hold a short caption alongside the attachment.
+  final AttachmentDescriptor? attachment;
   final Map<String, DeliveryState> recipientStates;
 
   String get bodyPreview => body.replaceAll('\n', ' ');
   bool get isEdited => editedAt != null;
   bool get hasRecipientStates => recipientStates.isNotEmpty;
+  bool get hasAttachment => attachment != null;
   bool get hasReplyPreview =>
       replyToMessageId != null &&
       replyToMessageId!.isNotEmpty &&
@@ -1236,6 +1241,7 @@ class ChatMessage {
     String? replySnippet,
     String? replySenderDeviceId,
     String? replySenderDisplayName,
+    AttachmentDescriptor? attachment,
     Map<String, DeliveryState>? recipientStates,
   }) {
     return ChatMessage(
@@ -1255,6 +1261,7 @@ class ChatMessage {
       replySenderDeviceId: replySenderDeviceId ?? this.replySenderDeviceId,
       replySenderDisplayName:
           replySenderDisplayName ?? this.replySenderDisplayName,
+      attachment: attachment ?? this.attachment,
       recipientStates: recipientStates ?? this.recipientStates,
     );
   }
@@ -1276,6 +1283,7 @@ class ChatMessage {
       'replySnippet': replySnippet,
       'replySenderDeviceId': replySenderDeviceId,
       'replySenderDisplayName': replySenderDisplayName,
+      if (attachment != null) 'attachment': attachment!.toJson(),
       'recipientStates': recipientStates.map(
         (deviceId, state) => MapEntry(deviceId, state.name),
       ),
@@ -1303,6 +1311,11 @@ class ChatMessage {
       replySnippet: json['replySnippet'] as String?,
       replySenderDeviceId: json['replySenderDeviceId'] as String?,
       replySenderDisplayName: json['replySenderDisplayName'] as String?,
+      attachment: json['attachment'] is Map<String, dynamic>
+          ? AttachmentDescriptor.fromJson(
+              json['attachment'] as Map<String, dynamic>,
+            )
+          : null,
       recipientStates: rawRecipientStates.map(
         (deviceId, value) =>
             MapEntry(deviceId, DeliveryState.values.byName(value as String)),

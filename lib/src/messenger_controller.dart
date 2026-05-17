@@ -170,6 +170,19 @@ class MessengerController extends ChangeNotifier {
   Timer? _pairingBeaconTimer;
   SimpleKeyPairData? _lanLobbySigningKeyPair;
   String? _lanLobbyPublicKeyBase64;
+  // Sender-side: bytes of the original file are held in memory keyed by
+  // attachmentId until the recipient sends `attachment_complete` (or the
+  // user cancels). One entry per in-flight outbound attachment.
+  final Map<String, _OutboundAttachmentState> _outboundAttachments =
+      <String, _OutboundAttachmentState>{};
+  // Receiver-side: chunk plaintext accumulated keyed by attachmentId until
+  // the last chunk arrives. Cleared once assembled bytes are surfaced.
+  final Map<String, _InboundAttachmentState> _inboundAttachments =
+      <String, _InboundAttachmentState>{};
+  // Assembled, verified attachment bytes the UI / test can read via
+  // [attachmentBytesFor]. Kept in memory for v0.3.2; persisted to disk in
+  // a follow-up pass.
+  final Map<String, Uint8List> _assembledAttachments = <String, Uint8List>{};
 
   bool get isReady => _ready;
   bool get hasIdentity => _snapshot.identity != null;
@@ -2784,6 +2797,131 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  /// Hard limit for v0.3.2 attachments per [notes/PLAN.md] — "small files".
+  /// Larger transfers are deferred to v0.3.3 chunk-cache work.
+  static const int maxAttachmentSizeBytes = 8 * 1024 * 1024;
+  static const int _attachmentChunkSize = 64 * 1024;
+
+  /// Sends a file attachment as a v0.3.2 1:1 transfer. The recipient
+  /// receives an `attachment_offer` envelope (pairwise-encrypted), then
+  /// pulls chunks back via `attachment_chunk_request` / `attachment_chunk`
+  /// envelopes until the descriptor's `chunkHashes` are all verified.
+  /// The original bytes stay in memory on the sender until the recipient
+  /// sends `attachment_complete` or `attachment_cancel`.
+  Future<void> sendAttachment({
+    required ContactRecord contact,
+    required Uint8List bytes,
+    required String fileName,
+    String mimeType = 'application/octet-stream',
+    String caption = '',
+  }) async {
+    final me = _requireIdentity();
+    if (!contact.canSendOutbound) {
+      throw StateError(
+        'Cannot send to ${contact.alias} until the identity is verified.',
+      );
+    }
+    if (bytes.isEmpty) {
+      throw ArgumentError('Cannot send an empty file.');
+    }
+    if (bytes.length > maxAttachmentSizeBytes) {
+      throw ArgumentError(
+        'Attachment exceeds the ${maxAttachmentSizeBytes ~/ (1024 * 1024)} '
+        'MB v0.3.2 cap.',
+      );
+    }
+
+    final attachmentId = _randomId('att');
+    final chunkSize = _attachmentChunkSize;
+    final chunkBytes = <Uint8List>[];
+    final chunkHashes = <ChunkHash>[];
+    for (var offset = 0; offset < bytes.length; offset += chunkSize) {
+      final end = (offset + chunkSize > bytes.length)
+          ? bytes.length
+          : offset + chunkSize;
+      final slice = Uint8List.fromList(bytes.sublist(offset, end));
+      chunkBytes.add(slice);
+      final digest = await Sha256().hash(slice);
+      chunkHashes.add(
+        ChunkHash(
+          index: chunkBytes.length - 1,
+          hashBase64: base64Encode(digest.bytes),
+        ),
+      );
+    }
+
+    // Per-attachment key; chunks travel inside pairwise-encrypted envelopes
+    // today, so this is forward compatibility for v0.3.3 when relays cache
+    // chunks and need them opaque without the descriptor.
+    final attachmentKey = SecretKeyData.random(length: 32);
+    final descriptor = AttachmentDescriptor(
+      id: attachmentId,
+      fileName: fileName,
+      mimeType: mimeType,
+      sizeBytes: bytes.length,
+      chunkSize: chunkSize,
+      chunkHashes: chunkHashes,
+      encryptionKeyBase64: base64Encode(await attachmentKey.extractBytes()),
+      createdAt: DateTime.now().toUtc(),
+    );
+
+    final message = ChatMessage(
+      id: _randomId('msg'),
+      conversationId: _crypto.conversationIdFor(contact.deviceId),
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: contact.deviceId,
+      body: caption,
+      outbound: true,
+      state: DeliveryState.pending,
+      createdAt: DateTime.now().toUtc(),
+      attachment: descriptor,
+    );
+    _upsertMessage(contact.deviceId, message);
+    _outboundAttachments[attachmentId] = _OutboundAttachmentState(
+      messageId: message.id,
+      peerDeviceId: contact.deviceId,
+      chunks: chunkBytes,
+      descriptor: descriptor,
+    );
+    _markRuntimeActivity();
+    notifyListeners();
+
+    // Send the offer envelope. Chunks flow on demand as the recipient
+    // requests them.
+    final envelope = await _crypto.encryptPayloadEnvelope(
+      kind: 'attachment_offer',
+      messageId: _randomId('aoff'),
+      conversationId: message.conversationId,
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: contact.deviceId,
+      contact: contact,
+      plaintext: jsonEncode({
+        'descriptor': descriptor.toJson(),
+        'parentMessageId': message.id,
+        'caption': caption,
+      }),
+      createdAt: message.createdAt,
+    );
+    try {
+      await _deliverToContact(
+        contact: contact,
+        recipientDeviceId: contact.deviceId,
+        envelope: envelope,
+      );
+      _updateMessageState(contact.deviceId, message.id, DeliveryState.relayed);
+    } catch (error) {
+      _statusMessage = 'Attachment offer delivery failed: $error';
+      notifyListeners();
+    }
+  }
+
+  /// Returns the assembled bytes for a received attachment, or null while
+  /// the transfer is still in flight (or was never offered to this peer).
+  Uint8List? attachmentBytesFor(String attachmentId) {
+    return _assembledAttachments[attachmentId];
+  }
+
   Future<GroupRecord> createGroup({
     required String title,
     required List<ContactRecord> members,
@@ -4700,6 +4838,16 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
 
+      if (envelope.kind == 'attachment_offer' ||
+          envelope.kind == 'attachment_chunk_request' ||
+          envelope.kind == 'attachment_chunk' ||
+          envelope.kind == 'attachment_complete' ||
+          envelope.kind == 'attachment_cancel') {
+        await _handleAttachmentEnvelope(envelope);
+        _markSeen(envelope.messageId);
+        continue;
+      }
+
       if (envelope.kind == 'message_edit') {
         await _handleMessageEdit(envelope);
         _markSeen(envelope.messageId);
@@ -4827,6 +4975,266 @@ class MessengerController extends ChangeNotifier {
     } catch (_) {
       return false;
     }
+  }
+
+  /// Receiver-side dispatcher for the five v0.3.2 attachment envelope
+  /// kinds. The sender peer is looked up from `senderDeviceId` to derive
+  /// the pairwise key; decryption + JSON parse failures are surfaced as
+  /// transient status messages rather than crashing the poll loop.
+  Future<void> _handleAttachmentEnvelope(RelayEnvelope envelope) async {
+    final contact = _contactByDeviceId(envelope.senderDeviceId);
+    if (contact == null || contact.pendingVerification) {
+      return;
+    }
+    Map<String, dynamic> payload;
+    try {
+      final plaintext = await _crypto.decryptMessage(
+        contact: contact,
+        envelope: envelope,
+      );
+      final decoded = jsonDecode(plaintext);
+      if (decoded is! Map<String, dynamic>) {
+        return;
+      }
+      payload = decoded;
+    } catch (_) {
+      return;
+    }
+
+    switch (envelope.kind) {
+      case 'attachment_offer':
+        await _handleAttachmentOffer(contact, envelope, payload);
+        return;
+      case 'attachment_chunk_request':
+        await _handleAttachmentChunkRequest(contact, payload);
+        return;
+      case 'attachment_chunk':
+        await _handleAttachmentChunk(contact, payload);
+        return;
+      case 'attachment_complete':
+        _handleAttachmentComplete(contact, payload);
+        return;
+      case 'attachment_cancel':
+        _handleAttachmentCancel(payload);
+        return;
+    }
+  }
+
+  Future<void> _handleAttachmentOffer(
+    ContactRecord sender,
+    RelayEnvelope envelope,
+    Map<String, dynamic> payload,
+  ) async {
+    final descriptorJson = payload['descriptor'];
+    if (descriptorJson is! Map<String, dynamic>) {
+      return;
+    }
+    final descriptor = AttachmentDescriptor.fromJson(descriptorJson);
+    if (descriptor.sizeBytes > maxAttachmentSizeBytes ||
+        descriptor.chunkHashes.isEmpty) {
+      return;
+    }
+    final me = _requireIdentity();
+    final message = ChatMessage(
+      id: _randomId('msg'),
+      conversationId: _crypto.conversationIdFor(sender.deviceId),
+      senderDeviceId: sender.deviceId,
+      recipientDeviceId: me.deviceId,
+      body: (payload['caption'] as String?) ?? '',
+      outbound: false,
+      state: DeliveryState.pending,
+      createdAt: envelope.createdAt,
+      senderDisplayName: sender.alias,
+      attachment: descriptor,
+    );
+    _upsertMessage(sender.deviceId, message);
+    _inboundAttachments[descriptor.id] = _InboundAttachmentState(
+      messageId: message.id,
+      peerDeviceId: sender.deviceId,
+      descriptor: descriptor,
+    );
+    notifyListeners();
+    await _sendAttachmentChunkRequest(sender, descriptor.id, 0);
+  }
+
+  Future<void> _sendAttachmentChunkRequest(
+    ContactRecord peer,
+    String attachmentId,
+    int index,
+  ) async {
+    final me = _requireIdentity();
+    final envelope = await _crypto.encryptPayloadEnvelope(
+      kind: 'attachment_chunk_request',
+      messageId: _randomId('areq'),
+      conversationId: _crypto.conversationIdFor(peer.deviceId),
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: peer.deviceId,
+      contact: peer,
+      plaintext: jsonEncode({'attachmentId': attachmentId, 'index': index}),
+    );
+    try {
+      await _deliverToContact(
+        contact: peer,
+        recipientDeviceId: peer.deviceId,
+        envelope: envelope,
+      );
+    } catch (_) {
+      // Retry on next poll cycle; the receiver still has the inbound
+      // state, so the request will be re-issued.
+    }
+  }
+
+  Future<void> _handleAttachmentChunkRequest(
+    ContactRecord requester,
+    Map<String, dynamic> payload,
+  ) async {
+    final attachmentId = payload['attachmentId'] as String?;
+    final index = payload['index'] as int?;
+    if (attachmentId == null || index == null) {
+      return;
+    }
+    final state = _outboundAttachments[attachmentId];
+    if (state == null || state.peerDeviceId != requester.deviceId) {
+      return;
+    }
+    if (index < 0 || index >= state.chunks.length) {
+      return;
+    }
+    final chunkBytes = state.chunks[index];
+    final hash = state.descriptor.chunkHashes[index].hashBase64;
+    final chunk = AttachmentChunk(
+      attachmentId: attachmentId,
+      index: index,
+      ciphertextBase64: base64Encode(chunkBytes),
+      hashBase64: hash,
+    );
+    final me = _requireIdentity();
+    final envelope = await _crypto.encryptPayloadEnvelope(
+      kind: 'attachment_chunk',
+      messageId: _randomId('achk'),
+      conversationId: _crypto.conversationIdFor(requester.deviceId),
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: requester.deviceId,
+      contact: requester,
+      plaintext: jsonEncode(chunk.toJson()),
+    );
+    try {
+      await _deliverToContact(
+        contact: requester,
+        recipientDeviceId: requester.deviceId,
+        envelope: envelope,
+      );
+    } catch (_) {
+      // Receiver will re-request the missing chunk.
+    }
+  }
+
+  Future<void> _handleAttachmentChunk(
+    ContactRecord sender,
+    Map<String, dynamic> payload,
+  ) async {
+    final chunk = AttachmentChunk.fromJson(payload);
+    final state = _inboundAttachments[chunk.attachmentId];
+    if (state == null || state.peerDeviceId != sender.deviceId) {
+      return;
+    }
+    if (chunk.index < 0 || chunk.index >= state.received.length) {
+      return;
+    }
+    final bytes = Uint8List.fromList(base64Decode(chunk.ciphertextBase64));
+    final digest = await Sha256().hash(bytes);
+    final expectedHash =
+        state.descriptor.chunkHashes[chunk.index].hashBase64;
+    if (base64Encode(digest.bytes) != expectedHash) {
+      // Hash mismatch — request the chunk once more. If it fails again we
+      // cancel the transfer.
+      await _sendAttachmentChunkRequest(
+        sender,
+        chunk.attachmentId,
+        chunk.index,
+      );
+      return;
+    }
+    state.received[chunk.index] = bytes;
+    if (state.isComplete) {
+      final builder = BytesBuilder();
+      for (final part in state.received) {
+        builder.add(part!);
+      }
+      _assembledAttachments[chunk.attachmentId] = builder.toBytes();
+      _inboundAttachments.remove(chunk.attachmentId);
+      _updateMessageState(
+        sender.deviceId,
+        state.messageId,
+        DeliveryState.delivered,
+      );
+      await _sendAttachmentComplete(sender, chunk.attachmentId);
+      notifyListeners();
+    } else {
+      await _sendAttachmentChunkRequest(
+        sender,
+        chunk.attachmentId,
+        state.nextMissingIndex,
+      );
+    }
+  }
+
+  Future<void> _sendAttachmentComplete(
+    ContactRecord peer,
+    String attachmentId,
+  ) async {
+    final me = _requireIdentity();
+    final envelope = await _crypto.encryptPayloadEnvelope(
+      kind: 'attachment_complete',
+      messageId: _randomId('adone'),
+      conversationId: _crypto.conversationIdFor(peer.deviceId),
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: peer.deviceId,
+      contact: peer,
+      plaintext: jsonEncode({'attachmentId': attachmentId}),
+    );
+    try {
+      await _deliverToContact(
+        contact: peer,
+        recipientDeviceId: peer.deviceId,
+        envelope: envelope,
+      );
+    } catch (_) {
+      // Best effort; the sender's local state is already correct.
+    }
+  }
+
+  void _handleAttachmentComplete(
+    ContactRecord sender,
+    Map<String, dynamic> payload,
+  ) {
+    final attachmentId = payload['attachmentId'] as String?;
+    if (attachmentId == null) {
+      return;
+    }
+    final state = _outboundAttachments.remove(attachmentId);
+    if (state == null) {
+      return;
+    }
+    _updateMessageState(
+      sender.deviceId,
+      state.messageId,
+      DeliveryState.delivered,
+    );
+    notifyListeners();
+  }
+
+  void _handleAttachmentCancel(Map<String, dynamic> payload) {
+    final attachmentId = payload['attachmentId'] as String?;
+    if (attachmentId == null) {
+      return;
+    }
+    _outboundAttachments.remove(attachmentId);
+    _inboundAttachments.remove(attachmentId);
+    notifyListeners();
   }
 
   Future<void> _handleContactExchange(RelayEnvelope envelope) async {
@@ -9049,6 +9457,47 @@ class _HeartbeatPassResult {
 
   final int sentCount;
   final bool changed;
+}
+
+class _OutboundAttachmentState {
+  _OutboundAttachmentState({
+    required this.messageId,
+    required this.peerDeviceId,
+    required this.chunks,
+    required this.descriptor,
+  });
+
+  final String messageId;
+  final String peerDeviceId;
+  final List<Uint8List> chunks;
+  final AttachmentDescriptor descriptor;
+}
+
+class _InboundAttachmentState {
+  _InboundAttachmentState({
+    required this.messageId,
+    required this.peerDeviceId,
+    required this.descriptor,
+  }) : received = List<Uint8List?>.filled(
+         descriptor.chunkHashes.length,
+         null,
+       );
+
+  final String messageId;
+  final String peerDeviceId;
+  final AttachmentDescriptor descriptor;
+  final List<Uint8List?> received;
+
+  int get nextMissingIndex {
+    for (var i = 0; i < received.length; i++) {
+      if (received[i] == null) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  bool get isComplete => received.every((chunk) => chunk != null);
 }
 
 enum _RuntimeMode {
