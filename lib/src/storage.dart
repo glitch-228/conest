@@ -14,6 +14,19 @@ List<int> _secureRandomBytes(int length) {
   return List<int>.generate(length, (_) => random.nextInt(256));
 }
 
+Future<void> _restrictOwnerOnly(File file) async {
+  if (!Platform.isLinux && !Platform.isMacOS) {
+    return;
+  }
+  final result = await Process.run('chmod', ['600', file.path]);
+  if (result.exitCode != 0) {
+    throw FileSystemException(
+      'Could not restrict vault key file permissions: ${result.stderr}',
+      file.path,
+    );
+  }
+}
+
 class AppInstanceLock {
   AppInstanceLock({Directory? directory}) : _directory = directory;
 
@@ -111,12 +124,15 @@ class FileVaultKeyProvider implements VaultKeyProvider {
     }
     final created = _secureRandomBytes(32);
     await file.parent.create(recursive: true);
+    await file.create();
+    await _restrictOwnerOnly(file);
     await file.writeAsString(
       const JsonEncoder.withIndent(
         '  ',
       ).convert({'version': 1, 'keyBase64': base64Encode(created)}),
       flush: true,
     );
+    await _restrictOwnerOnly(file);
     return created;
   }
 

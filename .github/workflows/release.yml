@@ -265,6 +265,7 @@ jobs:
       - name: Build APK
         run: |
           flutter build apk --release \
+            --target-platform android-arm64 \
             --dart-define=CONEST_BUILD_TAG=${{ needs.prepare.outputs.tag }} \
             --dart-define=CONEST_BUILD_CHANNEL=${{ needs.prepare.outputs.channel }} \
             --dart-define=CONEST_BUILD_COMMIT=${{ github.sha }} \

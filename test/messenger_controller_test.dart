@@ -12,10 +12,7 @@ import 'package:conest/src/local_relay_node.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/relay_client.dart'
-    show
-        RelayClient,
-        RelayHealthInfo,
-        RelayIdentityMismatchException;
+    show RelayClient, RelayHealthInfo, RelayIdentityMismatchException;
 import 'package:conest/src/relay_defaults.dart';
 import 'package:conest/src/storage.dart';
 import 'package:conest/src/update_service.dart';
@@ -1576,66 +1573,60 @@ void main() {
       );
       await bob.pollNow();
 
-      expect(
-        bob.removeGroupFromList(group.groupId),
-        throwsArgumentError,
-      );
+      expect(bob.removeGroupFromList(group.groupId), throwsArgumentError);
     },
   );
 
-  test(
-    'owner can transfer group ownership and is demoted to admin',
-    () async {
-      final relayClient = _FakeRelayClient();
-      final alice = await _createController(
-        relayClient: relayClient,
-        displayName: 'Alice',
-      );
-      final bob = await _createController(
-        relayClient: relayClient,
-        displayName: 'Bob',
-      );
-      final carol = await _createController(
-        relayClient: relayClient,
-        displayName: 'Carol',
-      );
-      addTearDown(alice.dispose);
-      addTearDown(bob.dispose);
-      addTearDown(carol.dispose);
+  test('owner can transfer group ownership and is demoted to admin', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    final carol = await _createController(
+      relayClient: relayClient,
+      displayName: 'Carol',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    addTearDown(carol.dispose);
 
-      await _pairControllers(alice, bob);
-      await _pairControllers(alice, carol);
-      final group = await alice.createGroup(
-        title: 'Transfer',
-        members: alice.contacts,
-      );
-      await bob.pollNow();
-      await carol.pollNow();
+    await _pairControllers(alice, bob);
+    await _pairControllers(alice, carol);
+    final group = await alice.createGroup(
+      title: 'Transfer',
+      members: alice.contacts,
+    );
+    await bob.pollNow();
+    await carol.pollNow();
 
-      await alice.transferGroupOwnership(
-        groupId: group.groupId,
-        newOwnerDeviceId: bob.identity!.deviceId,
-      );
-      await bob.pollNow();
-      await carol.pollNow();
+    await alice.transferGroupOwnership(
+      groupId: group.groupId,
+      newOwnerDeviceId: bob.identity!.deviceId,
+    );
+    await bob.pollNow();
+    await carol.pollNow();
 
-      expect(alice.groups.single.ownerDeviceId, bob.identity!.deviceId);
-      expect(
-        alice.groups.single.roleFor(alice.identity!.deviceId),
-        GroupMemberRole.admin,
-      );
-      expect(bob.groups.single.ownerDeviceId, bob.identity!.deviceId);
-      expect(
-        bob.groups.single.roleFor(bob.identity!.deviceId),
-        GroupMemberRole.owner,
-      );
-      expect(carol.groups.single.ownerDeviceId, bob.identity!.deviceId);
-      expect(
-        carol.groups.single.roleFor(alice.identity!.deviceId),
-        GroupMemberRole.admin,
-      );
-    },
-  );
+    expect(alice.groups.single.ownerDeviceId, bob.identity!.deviceId);
+    expect(
+      alice.groups.single.roleFor(alice.identity!.deviceId),
+      GroupMemberRole.admin,
+    );
+    expect(bob.groups.single.ownerDeviceId, bob.identity!.deviceId);
+    expect(
+      bob.groups.single.roleFor(bob.identity!.deviceId),
+      GroupMemberRole.owner,
+    );
+    expect(carol.groups.single.ownerDeviceId, bob.identity!.deviceId);
+    expect(
+      carol.groups.single.roleFor(alice.identity!.deviceId),
+      GroupMemberRole.admin,
+    );
+  });
 
   test('transferGroupOwnership rejects non-owner caller', () async {
     final relayClient = _FakeRelayClient();
@@ -1725,10 +1716,7 @@ void main() {
       isFalse,
     );
     expect(alice.groups.single.activeMemberDeviceIds, isEmpty);
-    expect(
-      bob.groups.single.hasActiveMember(bob.identity!.deviceId),
-      isFalse,
-    );
+    expect(bob.groups.single.hasActiveMember(bob.identity!.deviceId), isFalse);
     expect(bob.groups.single.activeMemberDeviceIds, isEmpty);
   });
 
@@ -1825,8 +1813,9 @@ void main() {
         members: alice.contacts,
       );
       final firstVersion = group.membershipVersion;
-      final firstEntry = alice.pendingGroupMembershipDeliveries
-          .firstWhere((entry) => entry.targetDeviceId == 'dev-bob');
+      final firstEntry = alice.pendingGroupMembershipDeliveries.firstWhere(
+        (entry) => entry.targetDeviceId == 'dev-bob',
+      );
       expect(firstEntry.membershipVersion, firstVersion);
 
       await alice.removeGroupMember(
@@ -1861,10 +1850,7 @@ void main() {
       codephrase: '',
     );
     await alice.createGroup(title: 'Persistent', members: alice.contacts);
-    expect(
-      alice.pendingGroupMembershipDeliveries,
-      isNotEmpty,
-    );
+    expect(alice.pendingGroupMembershipDeliveries, isNotEmpty);
 
     final persisted = await vaultStore.load();
     expect(
@@ -4243,133 +4229,126 @@ void main() {
     expect(snapshot, contains('routeBackoffSummary='));
   });
 
-  test(
-    'relay health score records success and failure samples',
-    () async {
-      final relayClient = _FakeRelayClient(
-        failingHosts: <String>{'relay.example:7667'},
-        storeFailingHosts: <String>{'relay.example:7667'},
-      );
-      final controller = await _createController(
-        relayClient: relayClient,
-        displayName: 'Alice',
-        internetRelayHost: 'relay.example',
-      );
-      addTearDown(controller.dispose);
+  test('relay health score records success and failure samples', () async {
+    final relayClient = _FakeRelayClient(
+      failingHosts: <String>{'relay.example:7667'},
+      storeFailingHosts: <String>{'relay.example:7667'},
+    );
+    final controller = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+      internetRelayHost: 'relay.example',
+    );
+    addTearDown(controller.dispose);
 
-      final invite = ContactInvite(
-        version: 4,
-        accountId: 'acc-bob',
-        deviceId: 'dev-bob',
-        displayName: 'Bob',
-        bio: '',
-        pairingNonce: 'bob-nonce',
-        pairingEpochMs: 1760000000000,
-        relayCapable: true,
-        publicKeyBase64: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
-        routeHints: const <PeerEndpoint>[
-          PeerEndpoint(
-            kind: PeerRouteKind.relay,
-            host: 'relay.example',
-            port: 7667,
-            protocol: PeerRouteProtocol.tcp,
-          ),
-        ],
-      );
-      await controller.addContactFromInvite(
-        alias: 'Bob',
-        payload: invite.encodePayload(),
-        codephrase: '',
-      );
+    final invite = ContactInvite(
+      version: 4,
+      accountId: 'acc-bob',
+      deviceId: 'dev-bob',
+      displayName: 'Bob',
+      bio: '',
+      pairingNonce: 'bob-nonce',
+      pairingEpochMs: 1760000000000,
+      relayCapable: true,
+      publicKeyBase64: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
+      routeHints: const <PeerEndpoint>[
+        PeerEndpoint(
+          kind: PeerRouteKind.relay,
+          host: 'relay.example',
+          port: 7667,
+          protocol: PeerRouteProtocol.tcp,
+        ),
+      ],
+    );
+    await controller.addContactFromInvite(
+      alias: 'Bob',
+      payload: invite.encodePayload(),
+      codephrase: '',
+    );
 
-      final contact = controller.contacts.single;
-      for (var index = 0; index < 4; index++) {
-        await controller.sendMessage(contact: contact, body: 'msg-$index');
-      }
+    final contact = controller.contacts.single;
+    for (var index = 0; index < 4; index++) {
+      await controller.sendMessage(contact: contact, body: 'msg-$index');
+    }
 
-      final score = controller.relayHealthScores['relay.example:7667:tcp'];
-      expect(score, isNotNull);
-      // Every store call against the failing relay throws, so at least one
-      // failure sample must be recorded. We don't assert recentSuccesses==0
-      // because startup probes can interleave success samples we don't care
-      // about; the test's load-bearing claim is that failures land in the
-      // score map at all.
-      expect(score!.recentAttempts, greaterThanOrEqualTo(1));
-      expect(score.lastFailureAt, isNotNull);
-      expect(
-        score.recentSamples.any((sample) => !sample.succeeded),
-        isTrue,
-        reason: 'at least one failure sample must be present',
-      );
-    },
-  );
+    final score = controller.relayHealthScores['relay.example:7667:tcp'];
+    expect(score, isNotNull);
+    // Every store call against the failing relay throws, so at least one
+    // failure sample must be recorded. We don't assert recentSuccesses==0
+    // because startup probes can interleave success samples we don't care
+    // about; the test's load-bearing claim is that failures land in the
+    // score map at all.
+    expect(score!.recentAttempts, greaterThanOrEqualTo(1));
+    expect(score.lastFailureAt, isNotNull);
+    expect(
+      score.recentSamples.any((sample) => !sample.succeeded),
+      isTrue,
+      reason: 'at least one failure sample must be present',
+    );
+  });
 
-  test(
-    'relay health scores survive a save/load round trip',
-    () async {
-      final vaultStore = _MemoryVaultStore();
-      final relayClient = _FakeRelayClient(
-        failingHosts: <String>{'relay.example:7667'},
-        storeFailingHosts: <String>{'relay.example:7667'},
-      );
-      final controller = MessengerController(
-        vaultStore: vaultStore,
-        relayClient: relayClient,
-        localRelayNode: _FakeLocalRelayNode(),
-        lanAddressProvider: () async => <String>['192.168.1.20'],
-      );
-      addTearDown(controller.dispose);
+  test('relay health scores survive a save/load round trip', () async {
+    final vaultStore = _MemoryVaultStore();
+    final relayClient = _FakeRelayClient(
+      failingHosts: <String>{'relay.example:7667'},
+      storeFailingHosts: <String>{'relay.example:7667'},
+    );
+    final controller = MessengerController(
+      vaultStore: vaultStore,
+      relayClient: relayClient,
+      localRelayNode: _FakeLocalRelayNode(),
+      lanAddressProvider: () async => <String>['192.168.1.20'],
+    );
+    addTearDown(controller.dispose);
 
-      await controller.initialize();
-      await controller.createIdentity(
-        displayName: 'Alice',
-        internetRelayHost: 'relay.example',
-        internetRelayPort: defaultRelayPort,
-        localRelayPort: defaultRelayPort,
-      );
+    await controller.initialize();
+    await controller.createIdentity(
+      displayName: 'Alice',
+      internetRelayHost: 'relay.example',
+      internetRelayPort: defaultRelayPort,
+      localRelayPort: defaultRelayPort,
+    );
 
-      final invite = ContactInvite(
-        version: 4,
-        accountId: 'acc-bob',
-        deviceId: 'dev-bob',
-        displayName: 'Bob',
-        bio: '',
-        pairingNonce: 'bob-nonce',
-        pairingEpochMs: 1760000000000,
-        relayCapable: true,
-        publicKeyBase64: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
-        routeHints: const <PeerEndpoint>[
-          PeerEndpoint(
-            kind: PeerRouteKind.relay,
-            host: 'relay.example',
-            port: 7667,
-            protocol: PeerRouteProtocol.tcp,
-          ),
-        ],
-      );
-      await controller.addContactFromInvite(
-        alias: 'Bob',
-        payload: invite.encodePayload(),
-        codephrase: '',
-      );
-      final contact = controller.contacts.single;
-      await controller.sendMessage(contact: contact, body: 'force a score');
+    final invite = ContactInvite(
+      version: 4,
+      accountId: 'acc-bob',
+      deviceId: 'dev-bob',
+      displayName: 'Bob',
+      bio: '',
+      pairingNonce: 'bob-nonce',
+      pairingEpochMs: 1760000000000,
+      relayCapable: true,
+      publicKeyBase64: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
+      routeHints: const <PeerEndpoint>[
+        PeerEndpoint(
+          kind: PeerRouteKind.relay,
+          host: 'relay.example',
+          port: 7667,
+          protocol: PeerRouteProtocol.tcp,
+        ),
+      ],
+    );
+    await controller.addContactFromInvite(
+      alias: 'Bob',
+      payload: invite.encodePayload(),
+      codephrase: '',
+    );
+    final contact = controller.contacts.single;
+    await controller.sendMessage(contact: contact, body: 'force a score');
 
-      // Inspect the persisted vault directly: this avoids spinning up a
-      // second controller (which would compete with the first's poll loop)
-      // while still proving the score round-trips through JSON.
-      final reloadedSnapshot = await vaultStore.load();
-      final score =
-          reloadedSnapshot.relayHealthScores['relay.example:7667:tcp'];
-      expect(
-        score,
-        isNotNull,
-        reason: 'relay health score must survive the vault round trip',
-      );
-      expect(score!.recentAttempts, greaterThan(0));
-      expect(score.lastFailureAt, isNotNull);
-    },
-  );
+    // Inspect the persisted vault directly: this avoids spinning up a
+    // second controller (which would compete with the first's poll loop)
+    // while still proving the score round-trips through JSON.
+    final reloadedSnapshot = await vaultStore.load();
+    final score = reloadedSnapshot.relayHealthScores['relay.example:7667:tcp'];
+    expect(
+      score,
+      isNotNull,
+      reason: 'relay health score must survive the vault round trip',
+    );
+    expect(score!.recentAttempts, greaterThan(0));
+    expect(score.lastFailureAt, isNotNull);
+  });
 
   test('signed default relays ingest endpoints on first boot', () async {
     final relayClient = _FakeRelayClient();
@@ -4436,23 +4415,20 @@ void main() {
     );
   });
 
-  test(
-    'pinnedRelayIdentityKeys round-trip through the vault store',
-    () async {
-      final vaultStore = _MemoryVaultStore();
-      await vaultStore.save(
-        VaultSnapshot.empty().copyWith(
-          pinnedRelayIdentityKeys: const <String, String>{
-            'relay-alpha': 'pubkey-alpha-base64==',
-            'relay-beta': 'pubkey-beta-base64==',
-          },
-        ),
-      );
-      final loaded = await vaultStore.load();
-      expect(loaded.pinnedRelayIdentityKeys['relay-alpha'], isNotNull);
-      expect(loaded.pinnedRelayIdentityKeys['relay-beta'], isNotNull);
-    },
-  );
+  test('pinnedRelayIdentityKeys round-trip through the vault store', () async {
+    final vaultStore = _MemoryVaultStore();
+    await vaultStore.save(
+      VaultSnapshot.empty().copyWith(
+        pinnedRelayIdentityKeys: const <String, String>{
+          'relay-alpha': 'pubkey-alpha-base64==',
+          'relay-beta': 'pubkey-beta-base64==',
+        },
+      ),
+    );
+    final loaded = await vaultStore.load();
+    expect(loaded.pinnedRelayIdentityKeys['relay-alpha'], isNotNull);
+    expect(loaded.pinnedRelayIdentityKeys['relay-beta'], isNotNull);
+  });
 
   test(
     'RelayIdentityMismatchException carries a descriptive message',
@@ -4485,7 +4461,10 @@ void main() {
     );
     expect(clean, isNotNull);
 
-    final tamperedManifest = manifest.replaceFirst('"version":5', '"version":6');
+    final tamperedManifest = manifest.replaceFirst(
+      '"version":5',
+      '"version":6',
+    );
     expect(tamperedManifest, isNot(equals(manifest)));
     final tampered = await loadSignedDefaultRelays(
       manifestJson: tamperedManifest,
@@ -4569,8 +4548,8 @@ void main() {
       // OR sits queued with `attempts` incremented. Either outcome proves
       // the retry path ran.
       final cleared = bob.pendingAckDeliveries.isEmpty;
-      final reattempted = !cleared &&
-          bob.pendingAckDeliveries.first.attempts > attemptsBefore;
+      final reattempted =
+          !cleared && bob.pendingAckDeliveries.first.attempts > attemptsBefore;
       expect(
         cleared || reattempted,
         isTrue,
@@ -4738,8 +4717,7 @@ void main() {
         pairingNonce: 'bob-reinstall-nonce',
         pairingEpochMs: originalInvite.pairingEpochMs + 1,
         relayCapable: originalInvite.relayCapable,
-        publicKeyBase64:
-            'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
+        publicKeyBase64: 'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
         routeHints: originalInvite.routeHints,
       );
       await alice.addContactFromInvite(
@@ -4806,8 +4784,7 @@ void main() {
         'bio': '',
         'relayCapable': true,
         // Nightly.2 shape: pending=true AND publicKeyBase64 populated.
-        'publicKeyBase64':
-            'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
+        'publicKeyBase64': 'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
         'routeHints': const <Map<String, dynamic>>[],
         'safetyNumber': 'safe-1234',
         'trustedAt': DateTime.utc(2026, 5, 16).toIso8601String(),
@@ -4852,8 +4829,7 @@ void main() {
       pairingNonce: 'imposter-nonce',
       pairingEpochMs: invite.pairingEpochMs + 2,
       relayCapable: invite.relayCapable,
-      publicKeyBase64:
-          'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+      publicKeyBase64: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
       routeHints: invite.routeHints,
     );
     await alice.addContactFromInvite(
@@ -4869,8 +4845,7 @@ void main() {
     expect(alice.contactByDeviceId('dev-bob'), isNotNull);
   });
 
-  test('refreshDefaultRelays applies a fetched newer signed manifest',
-      () async {
+  test('refreshDefaultRelays applies a fetched newer signed manifest', () async {
     final relayClient = _FakeRelayClient();
     final algorithm = Ed25519();
     final keyPair = await algorithm.newKeyPair();
@@ -4924,53 +4899,56 @@ void main() {
     expect(relayClient, isNotNull);
   });
 
-  test('importRelaysFromUrl (unsigned) adds routes without marking default',
-      () async {
-    final relayClient = _FakeRelayClient();
-    final alice = await _createController(
-      relayClient: relayClient,
-      displayName: 'Alice',
-    );
-    addTearDown(alice.dispose);
+  test(
+    'importRelaysFromUrl (unsigned) adds routes without marking default',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      addTearDown(alice.dispose);
 
-    final manifest = jsonEncode(<String, dynamic>{
-      'version': 1,
-      'issuedAt': '2026-05-16T00:00:00Z',
-      'endpoints': [
-        {
-          'kind': 'relay',
-          'host': 'imported.example',
-          'port': 7700,
-          'protocol': 'tcp',
-        },
-      ],
-    });
-    alice.setHttpBytesFetcherForTesting((url) async {
-      return Uint8List.fromList(utf8.encode(manifest));
-    });
+      final manifest = jsonEncode(<String, dynamic>{
+        'version': 1,
+        'issuedAt': '2026-05-16T00:00:00Z',
+        'endpoints': [
+          {
+            'kind': 'relay',
+            'host': 'imported.example',
+            'port': 7700,
+            'protocol': 'tcp',
+          },
+        ],
+      });
+      alice.setHttpBytesFetcherForTesting((url) async {
+        return Uint8List.fromList(utf8.encode(manifest));
+      });
 
-    final source = await alice.importRelaysFromUrl(
-      url: 'https://example.com/relays.json',
-    );
-    expect(source.isSigned, isFalse);
-    expect(source.routeKeys, isNotEmpty);
+      final source = await alice.importRelaysFromUrl(
+        url: 'https://example.com/relays.json',
+      );
+      expect(source.isSigned, isFalse);
+      expect(source.routeKeys, isNotEmpty);
 
-    final added = alice.identity!.configuredRelays
-        .where((relay) => relay.host == 'imported.example')
-        .toList();
-    expect(added, isNotEmpty);
-    // Imported routes are NOT masked as default.
-    for (final relay in added) {
-      expect(alice.relayDisplayLabel(relay), relay.label);
-    }
-    expect(alice.customRelaySources, hasLength(1));
+      final added = alice.identity!.configuredRelays
+          .where((relay) => relay.host == 'imported.example')
+          .toList();
+      expect(added, isNotEmpty);
+      // Imported routes are NOT masked as default.
+      for (final relay in added) {
+        expect(alice.relayDisplayLabel(relay), relay.label);
+      }
+      expect(alice.customRelaySources, hasLength(1));
 
-    await alice.removeCustomRelaySource(source.id);
-    expect(alice.customRelaySources, isEmpty);
-    expect(
-      alice.identity!.configuredRelays
-          .any((relay) => relay.host == 'imported.example'),
-      isFalse,
-    );
-  });
+      await alice.removeCustomRelaySource(source.id);
+      expect(alice.customRelaySources, isEmpty);
+      expect(
+        alice.identity!.configuredRelays.any(
+          (relay) => relay.host == 'imported.example',
+        ),
+        isFalse,
+      );
+    },
+  );
 }

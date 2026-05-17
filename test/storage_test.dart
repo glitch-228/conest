@@ -62,6 +62,23 @@ void main() {
   });
 
   test(
+    'file vault key provider creates POSIX key files with 0600 mode',
+    () async {
+      if (Platform.isWindows) {
+        return;
+      }
+      final root = await createTempRoot('conest_file_key_mode_');
+      final keyFile = File(p.join(root.path, 'conest_vault_key.json'));
+      final provider = FileVaultKeyProvider(fileProvider: () async => keyFile);
+
+      await provider.readOrCreateKey();
+
+      final mode = (await keyFile.stat()).mode & 0x1ff;
+      expect(mode, 0x180);
+    },
+  );
+
+  test(
     'passphrase vault provider decrypts only with the correct passphrase',
     () async {
       final root = await createTempRoot('conest_passphrase_vault_');

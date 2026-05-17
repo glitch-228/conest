@@ -85,10 +85,7 @@ class DefaultRelaysRefreshResult {
        );
 
   const DefaultRelaysRefreshResult.error(String message)
-    : this._(
-        status: DefaultRelaysRefreshStatus.error,
-        errorMessage: message,
-      );
+    : this._(status: DefaultRelaysRefreshStatus.error, errorMessage: message);
 
   final DefaultRelaysRefreshStatus status;
   final int? version;
@@ -169,6 +166,7 @@ class MessengerController extends ChangeNotifier {
   bool get hasIdentity => _snapshot.identity != null;
   IdentityRecord? get identity => _snapshot.identity;
   List<ContactRecord> get contacts => List.unmodifiable(_snapshot.contacts);
+
   /// Every group the controller knows about, including ones the local user
   /// has left and ones they have explicitly removed from their list. Sidebar
   /// callers should use [visibleGroups] instead; this getter is for code that
@@ -691,10 +689,7 @@ class MessengerController extends ChangeNotifier {
     }
     final derived = _expandDefaultRelaySpecs(defaults.endpoints);
     if (me != null && derived.isNotEmpty) {
-      final updated = dedupePeerEndpoints([
-        ...me.configuredRelays,
-        ...derived,
-      ]);
+      final updated = dedupePeerEndpoints([...me.configuredRelays, ...derived]);
       final newDefaultKeys = <String>{
         ..._snapshot.defaultRelayRouteKeys,
         ...derived.map((endpoint) => endpoint.routeKey),
@@ -914,13 +909,12 @@ class MessengerController extends ChangeNotifier {
           : publicKeyBase64!.trim(),
       lastVersion: parsed.version,
       lastFetchedAt: DateTime.now().toUtc(),
-      routeKeys: <String>{
-        for (final route in derived) route.routeKey,
-      },
+      routeKeys: <String>{for (final route in derived) route.routeKey},
     );
     final sources = List<CustomRelaySource>.from(_snapshot.customRelaySources);
-    final existingIndex =
-        sources.indexWhere((existing) => existing.id == source.id);
+    final existingIndex = sources.indexWhere(
+      (existing) => existing.id == source.id,
+    );
     if (existingIndex >= 0) {
       sources[existingIndex] = source;
     } else {
@@ -1112,8 +1106,8 @@ class MessengerController extends ChangeNotifier {
       protocol: protocol,
     );
     final key = relayHealthEndpointKey(endpoint);
-    final current = _snapshot.relayHealthScores[key] ??
-        RelayHealthScore(endpointKey: key);
+    final current =
+        _snapshot.relayHealthScores[key] ?? RelayHealthScore(endpointKey: key);
     final updated = current.recordAttempt(
       success: success,
       latency: latency,
@@ -2733,8 +2727,7 @@ class MessengerController extends ChangeNotifier {
       if (candidate.displayName.trim().toLowerCase() != needle) {
         continue;
       }
-      if (bestTrustedAt == null ||
-          candidate.trustedAt.isAfter(bestTrustedAt)) {
+      if (bestTrustedAt == null || candidate.trustedAt.isAfter(bestTrustedAt)) {
         best = candidate;
         bestTrustedAt = candidate.trustedAt;
       }
@@ -2830,10 +2823,7 @@ class MessengerController extends ChangeNotifier {
         .where((entry) => entry.senderDeviceId != contact.deviceId)
         .toList(growable: false);
     final remainingConversations = _snapshot.conversations
-        .where(
-          (conversation) =>
-              conversation.peerDeviceId != contact.deviceId,
-        )
+        .where((conversation) => conversation.peerDeviceId != contact.deviceId)
         .toList(growable: false);
     final remainingReachability = _snapshot.reachabilityRecords
         .where((record) => record.deviceId != contact.deviceId)
@@ -3086,9 +3076,7 @@ class MessengerController extends ChangeNotifier {
     final group = _requireGroup(groupId);
     final me = _requireIdentity();
     if (group.hasActiveMember(me.deviceId)) {
-      throw ArgumentError(
-        'Leave the group before removing it from your list.',
-      );
+      throw ArgumentError('Leave the group before removing it from your list.');
     }
     if (group.localRemovedAt != null) {
       return;
@@ -3096,8 +3084,9 @@ class MessengerController extends ChangeNotifier {
     final updated = group.copyWith(localRemovedAt: _now());
     final conversations = _snapshot.conversations
         .where(
-          (conversation) => !(conversation.kind == ConversationKind.group &&
-              conversation.id == groupId),
+          (conversation) =>
+              !(conversation.kind == ConversationKind.group &&
+                  conversation.id == groupId),
         )
         .toList();
     final groups = List<GroupRecord>.from(_snapshot.groups);
@@ -3139,8 +3128,7 @@ class MessengerController extends ChangeNotifier {
     final adminIds = [
       previousOwner,
       ...group.adminDeviceIds.where(
-        (deviceId) =>
-            deviceId != previousOwner && deviceId != newOwnerDeviceId,
+        (deviceId) => deviceId != previousOwner && deviceId != newOwnerDeviceId,
       ),
     ];
     final moderatorIds = group.moderatorDeviceIds
@@ -3645,9 +3633,7 @@ class MessengerController extends ChangeNotifier {
   /// `(groupId, targetDeviceId)` is the natural key — only one entry per
   /// recipient per group survives. Newer membership versions supersede
   /// older queued entries for the same target.
-  void _enqueuePendingMembershipDelivery(
-    PendingGroupMembershipDelivery entry,
-  ) {
+  void _enqueuePendingMembershipDelivery(PendingGroupMembershipDelivery entry) {
     final updated = <PendingGroupMembershipDelivery>[];
     var inserted = false;
     for (final existing in _snapshot.pendingGroupMembershipDeliveries) {
@@ -3693,8 +3679,7 @@ class MessengerController extends ChangeNotifier {
           return false;
         })
         .toList(growable: false);
-    if (filtered.length ==
-        _snapshot.pendingGroupMembershipDeliveries.length) {
+    if (filtered.length == _snapshot.pendingGroupMembershipDeliveries.length) {
       return;
     }
     _snapshot = _snapshot.copyWith(pendingGroupMembershipDeliveries: filtered);
@@ -5483,32 +5468,38 @@ class MessengerController extends ChangeNotifier {
   /// these back into the inbound pipeline; reject discards them.
   void _enqueueHeldEnvelope(String senderDeviceId, RelayEnvelope envelope) {
     final encoded = jsonEncode(envelope.toJson());
-    final existing = _snapshot.heldUnverifiedEnvelopes
-        .where((entry) =>
-            !(entry.senderDeviceId == senderDeviceId &&
-                entry.envelopeJson == encoded))
-        .toList(growable: true)
-      ..add(
-        HeldEnvelope(
-          senderDeviceId: senderDeviceId,
-          conversationId: envelope.conversationId,
-          envelopeJson: encoded,
-          receivedAt: DateTime.now().toUtc(),
-        ),
-      );
+    final existing =
+        _snapshot.heldUnverifiedEnvelopes
+            .where(
+              (entry) =>
+                  !(entry.senderDeviceId == senderDeviceId &&
+                      entry.envelopeJson == encoded),
+            )
+            .toList(growable: true)
+          ..add(
+            HeldEnvelope(
+              senderDeviceId: senderDeviceId,
+              conversationId: envelope.conversationId,
+              envelopeJson: encoded,
+              receivedAt: DateTime.now().toUtc(),
+            ),
+          );
     _snapshot = _snapshot.copyWith(heldUnverifiedEnvelopes: existing);
     unawaited(_saveSnapshotSilently(notify: true));
   }
 
   void _enqueuePendingAckDelivery(PendingAckDelivery entry) {
-    final filtered = _snapshot.pendingAckDeliveries
-        .where(
-          (existing) => !(existing.targetDeviceId == entry.targetDeviceId &&
-              existing.acknowledgedMessageId == entry.acknowledgedMessageId &&
-              existing.kind == entry.kind),
-        )
-        .toList(growable: true)
-      ..add(entry);
+    final filtered =
+        _snapshot.pendingAckDeliveries
+            .where(
+              (existing) =>
+                  !(existing.targetDeviceId == entry.targetDeviceId &&
+                      existing.acknowledgedMessageId ==
+                          entry.acknowledgedMessageId &&
+                      existing.kind == entry.kind),
+            )
+            .toList(growable: true)
+          ..add(entry);
     _snapshot = _snapshot.copyWith(pendingAckDeliveries: filtered);
   }
 
@@ -5519,9 +5510,10 @@ class MessengerController extends ChangeNotifier {
   }) {
     final filtered = _snapshot.pendingAckDeliveries
         .where(
-          (entry) => !(entry.targetDeviceId == targetDeviceId &&
-              entry.acknowledgedMessageId == acknowledgedMessageId &&
-              entry.kind == kind),
+          (entry) =>
+              !(entry.targetDeviceId == targetDeviceId &&
+                  entry.acknowledgedMessageId == acknowledgedMessageId &&
+                  entry.kind == kind),
         )
         .toList(growable: false);
     if (filtered.length == _snapshot.pendingAckDeliveries.length) {
@@ -5579,7 +5571,9 @@ class MessengerController extends ChangeNotifier {
       }
       final envelope = RelayEnvelope(
         kind: 'ack',
-        messageId: _randomId(entry.kind == PendingAckKind.read ? 'read' : 'ack'),
+        messageId: _randomId(
+          entry.kind == PendingAckKind.read ? 'read' : 'ack',
+        ),
         conversationId: entry.conversationId,
         senderAccountId: me.accountId,
         senderDeviceId: me.deviceId,
@@ -5587,9 +5581,7 @@ class MessengerController extends ChangeNotifier {
         createdAt: DateTime.now().toUtc(),
         acknowledgedMessageId: entry.acknowledgedMessageId,
         payloadBase64: entry.kind == PendingAckKind.read
-            ? base64Encode(
-                utf8.encode(jsonEncode({'receipt': 'read'})),
-              )
+            ? base64Encode(utf8.encode(jsonEncode({'receipt': 'read'})))
             : null,
       );
       _enqueuePendingAckDelivery(
@@ -7304,16 +7296,22 @@ class MessengerController extends ChangeNotifier {
       return routes;
     }
     bool isPoor(PeerEndpoint endpoint) {
-      final score = _snapshot.relayHealthScores[relayHealthEndpointKey(endpoint)];
-      return score != null && score.recentAttempts >= 5 && score.successRate < 0.3;
+      final score =
+          _snapshot.relayHealthScores[relayHealthEndpointKey(endpoint)];
+      return score != null &&
+          score.recentAttempts >= 5 &&
+          score.successRate < 0.3;
     }
+
     double rate(PeerEndpoint endpoint) {
-      final score = _snapshot.relayHealthScores[relayHealthEndpointKey(endpoint)];
+      final score =
+          _snapshot.relayHealthScores[relayHealthEndpointKey(endpoint)];
       if (score == null || score.recentAttempts == 0) {
         return 1.0; // optimistic for fresh endpoints
       }
       return score.successRate;
     }
+
     relay.sort((a, b) {
       final aPoor = isPoor(a);
       final bPoor = isPoor(b);

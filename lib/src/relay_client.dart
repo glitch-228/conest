@@ -200,10 +200,7 @@ class RelayClient {
     final nonceBytes = _secureRandomBytes(16);
     final nonceBase64 = base64Encode(nonceBytes);
     final action = (request['action'] as String?) ?? '';
-    final signedRequest = <String, dynamic>{
-      ...request,
-      'nonce': nonceBase64,
-    };
+    final signedRequest = <String, dynamic>{...request, 'nonce': nonceBase64};
     final body = await switch (protocol) {
       PeerRouteProtocol.tcp => _sendTcpRequest(
         host: endpoint.host,
@@ -323,8 +320,8 @@ class RelayClient {
       }
       return _RelayCallResult(
         body: body,
-        announcedIdentityPublicKeyBase64: announcedKey ??
-            expectedIdentityPublicKeyBase64,
+        announcedIdentityPublicKeyBase64:
+            announcedKey ?? expectedIdentityPublicKeyBase64,
         signatureVerified: true,
       );
     }

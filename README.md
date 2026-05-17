@@ -110,6 +110,12 @@ cargo test
 flutter test
 ```
 
+## Android Toolchain
+
+Use JDK 17 for local Android Gradle builds. This matches CI and avoids the
+current Gradle/Kotlin crash when the launcher JVM is OpenJDK 26. A repo-level
+`.java-version` is included for Java version managers.
+
 ## Release Signing
 
 Stable Android builds must be signed with a real release key. The Gradle release

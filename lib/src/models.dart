@@ -308,13 +308,14 @@ class RelayHealthScore {
       recentAttempts == 0 ? 0.0 : recentSuccesses / recentAttempts;
 
   Duration? get recentMedianLatency {
-    final latencies = recentSamples.reversed
-        .take(latencyWindowSize)
-        .map((sample) => sample.latency)
-        .whereType<Duration>()
-        .map((d) => d.inMicroseconds)
-        .toList()
-      ..sort();
+    final latencies =
+        recentSamples.reversed
+            .take(latencyWindowSize)
+            .map((sample) => sample.latency)
+            .whereType<Duration>()
+            .map((d) => d.inMicroseconds)
+            .toList()
+          ..sort();
     if (latencies.isEmpty) {
       return null;
     }
@@ -390,7 +391,8 @@ class RelayAttemptSample {
   factory RelayAttemptSample.fromJson(Map<String, dynamic> json) {
     final micros = json['latencyMicros'];
     return RelayAttemptSample(
-      at: DateTime.tryParse(json['at'] as String? ?? '') ??
+      at:
+          DateTime.tryParse(json['at'] as String? ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
       succeeded: json['succeeded'] as bool? ?? false,
       latency: micros is int ? Duration(microseconds: micros) : null,
@@ -2043,10 +2045,7 @@ class PendingAckDelivery {
   final DateTime lastAttemptedAt;
   final int attempts;
 
-  PendingAckDelivery copyWith({
-    DateTime? lastAttemptedAt,
-    int? attempts,
-  }) {
+  PendingAckDelivery copyWith({DateTime? lastAttemptedAt, int? attempts}) {
     return PendingAckDelivery(
       targetDeviceId: targetDeviceId,
       acknowledgedMessageId: acknowledgedMessageId,
@@ -2071,7 +2070,8 @@ class PendingAckDelivery {
       targetDeviceId: json['targetDeviceId'] as String,
       acknowledgedMessageId: json['acknowledgedMessageId'] as String,
       conversationId: json['conversationId'] as String? ?? '',
-      kind: PendingAckKind.tryParse(json['kind'] as String?) ??
+      kind:
+          PendingAckKind.tryParse(json['kind'] as String?) ??
           PendingAckKind.delivered,
       lastAttemptedAt:
           DateTime.tryParse(json['lastAttemptedAt'] as String? ?? '') ??
@@ -2328,8 +2328,7 @@ class VaultSnapshot {
           this.pendingGroupMembershipDeliveries,
       pinnedRelayIdentityKeys:
           pinnedRelayIdentityKeys ?? this.pinnedRelayIdentityKeys,
-      pendingAckDeliveries:
-          pendingAckDeliveries ?? this.pendingAckDeliveries,
+      pendingAckDeliveries: pendingAckDeliveries ?? this.pendingAckDeliveries,
       defaultRelayRouteKeys:
           defaultRelayRouteKeys ?? this.defaultRelayRouteKeys,
       defaultRelayHosts: defaultRelayHosts ?? this.defaultRelayHosts,
@@ -2361,17 +2360,20 @@ class VaultSnapshot {
       'pendingGroupMembershipDeliveries': pendingGroupMembershipDeliveries
           .map((entry) => entry.toJson())
           .toList(),
-      'pendingAckDeliveries':
-          pendingAckDeliveries.map((entry) => entry.toJson()).toList(),
+      'pendingAckDeliveries': pendingAckDeliveries
+          .map((entry) => entry.toJson())
+          .toList(),
       'defaultRelayRouteKeys': defaultRelayRouteKeys.toList(),
       'defaultRelayHosts': defaultRelayHosts.toList(),
       if (defaultRelaysLastFetchedAt != null)
-        'defaultRelaysLastFetchedAt':
-            defaultRelaysLastFetchedAt!.toIso8601String(),
-      'customRelaySources':
-          customRelaySources.map((source) => source.toJson()).toList(),
-      'heldUnverifiedEnvelopes':
-          heldUnverifiedEnvelopes.map((entry) => entry.toJson()).toList(),
+        'defaultRelaysLastFetchedAt': defaultRelaysLastFetchedAt!
+            .toIso8601String(),
+      'customRelaySources': customRelaySources
+          .map((source) => source.toJson())
+          .toList(),
+      'heldUnverifiedEnvelopes': heldUnverifiedEnvelopes
+          .map((entry) => entry.toJson())
+          .toList(),
       'pinnedRelayIdentityKeys': pinnedRelayIdentityKeys,
     };
   }
@@ -2439,8 +2441,9 @@ class VaultSnapshot {
             in (json['defaultRelayHosts'] as List<dynamic>? ?? const []))
           if (value is String) value,
       },
-      defaultRelaysLastFetchedAt:
-          DateTime.tryParse(json['defaultRelaysLastFetchedAt'] as String? ?? ''),
+      defaultRelaysLastFetchedAt: DateTime.tryParse(
+        json['defaultRelaysLastFetchedAt'] as String? ?? '',
+      ),
       customRelaySources:
           (json['customRelaySources'] as List<dynamic>? ?? const [])
               .cast<Map<String, dynamic>>()

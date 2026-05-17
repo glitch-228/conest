@@ -12,6 +12,7 @@
 .svn/
 .swiftpm/
 migrate_working_dir/
+.release-secrets/
 
 # IntelliJ related
 *.iml

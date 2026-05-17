@@ -1021,136 +1021,153 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 980),
                     child: Wrap(
-                  spacing: 24,
-                  runSpacing: 24,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    SizedBox(
-                      width: 380,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Conest',
-                            style: Theme.of(context).textTheme.displaySmall
-                                ?.copyWith(
-                                  color: palette.textPrimary,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Pair by scanning a QR invite or by sharing only the current codephrase, deliver over LAN first, and continue over the internet through relay routes when LAN disappears.',
-                            style: Theme.of(context).textTheme.titleMedium
-                                ?.copyWith(color: palette.inkSoft, height: 1.4),
-                          ),
-                          const SizedBox(height: 24),
-                          _FeatureStrip(
-                            palette: palette,
-                            items: const [
-                              'QR scan alone',
-                              'Codephrase-only add',
-                              'LAN-first delivery',
-                              'Internet relay fallback',
-                            ],
-                          ),
-                          const SizedBox(height: 18),
-                          Text(
-                            relayModeNote,
-                            style: Theme.of(context).textTheme.bodyLarge
-                                ?.copyWith(color: palette.inkSoft, height: 1.4),
-                          ),
-                        ],
-                      ),
-                    ),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 440),
-                      child: Card(
-                        elevation: 0,
-                        color: palette.paperStrong,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(28),
-                          side: BorderSide(color: palette.stroke),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
+                      spacing: 24,
+                      runSpacing: 24,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 380,
                           child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Create your first device',
-                                style: Theme.of(context).textTheme.headlineSmall
-                                    ?.copyWith(fontWeight: FontWeight.w700),
+                                'Conest',
+                                style: Theme.of(context).textTheme.displaySmall
+                                    ?.copyWith(
+                                      color: palette.textPrimary,
+                                      fontWeight: FontWeight.w700,
+                                    ),
                               ),
-                              const SizedBox(height: 8),
+                              const SizedBox(height: 16),
                               Text(
-                                'The local relay port is used for nearby LAN delivery, codephrase pairing, and desktop relay mode. The internet relay is optional but needed once peers leave the LAN.',
-                                style: Theme.of(context).textTheme.bodyMedium
-                                    ?.copyWith(color: palette.inkSoft),
+                                'Pair by scanning a QR invite or by sharing only the current codephrase, deliver over LAN first, and continue over the internet through relay routes when LAN disappears.',
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(
+                                      color: palette.inkSoft,
+                                      height: 1.4,
+                                    ),
+                              ),
+                              const SizedBox(height: 24),
+                              _FeatureStrip(
+                                palette: palette,
+                                items: const [
+                                  'QR scan alone',
+                                  'Codephrase-only add',
+                                  'LAN-first delivery',
+                                  'Internet relay fallback',
+                                ],
                               ),
                               const SizedBox(height: 18),
-                              TextField(
-                                controller: _displayNameController,
-                                decoration: const InputDecoration(
-                                  labelText: 'Display name',
-                                ),
+                              Text(
+                                relayModeNote,
+                                style: Theme.of(context).textTheme.bodyLarge
+                                    ?.copyWith(
+                                      color: palette.inkSoft,
+                                      height: 1.4,
+                                    ),
                               ),
-                              const SizedBox(height: 12),
-                              TextField(
-                                controller: _localRelayPortController,
-                                keyboardType: TextInputType.number,
-                                decoration: const InputDecoration(
-                                  labelText: 'Local relay / LAN port',
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              TextField(
-                                controller: _internetRelayHostController,
-                                decoration: const InputDecoration(
-                                  labelText:
-                                      'Internet relay host / URL (optional)',
-                                  hintText:
-                                      'host auto-detects TCP/UDP; udp://host:port forces UDP',
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              TextField(
-                                controller: _internetRelayPortController,
-                                keyboardType: TextInputType.number,
-                                decoration: const InputDecoration(
-                                  labelText: 'Internet relay port',
-                                ),
-                              ),
-                              const SizedBox(height: 18),
-                              FilledButton.icon(
-                                onPressed: _submitting ? null : _submit,
-                                icon: _submitting
-                                    ? const SizedBox.square(
-                                        dimension: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Icon(Icons.shield_moon_outlined),
-                                label: const Text('Create encrypted device'),
-                              ),
-                              if (widget.controller.statusMessage != null) ...[
-                                const SizedBox(height: 14),
-                                Text(
-                                  widget.controller.statusMessage!,
-                                  style: Theme.of(context).textTheme.bodySmall
-                                      ?.copyWith(color: palette.inkSoft),
-                                ),
-                              ],
                             ],
                           ),
                         ),
-                      ),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 440),
+                          child: Card(
+                            elevation: 0,
+                            color: palette.paperStrong,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(28),
+                              side: BorderSide(color: palette.stroke),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.all(24),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Text(
+                                    'Create your first device',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .headlineSmall
+                                        ?.copyWith(fontWeight: FontWeight.w700),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'The local relay port is used for nearby LAN delivery, codephrase pairing, and desktop relay mode. The internet relay is optional but needed once peers leave the LAN.',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
+                                        ?.copyWith(color: palette.inkSoft),
+                                  ),
+                                  const SizedBox(height: 18),
+                                  TextField(
+                                    controller: _displayNameController,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Display name',
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  TextField(
+                                    controller: _localRelayPortController,
+                                    keyboardType: TextInputType.number,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Local relay / LAN port',
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  TextField(
+                                    controller: _internetRelayHostController,
+                                    decoration: const InputDecoration(
+                                      labelText:
+                                          'Internet relay host / URL (optional)',
+                                      hintText:
+                                          'host auto-detects TCP/UDP; udp://host:port forces UDP',
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  TextField(
+                                    controller: _internetRelayPortController,
+                                    keyboardType: TextInputType.number,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Internet relay port',
+                                    ),
+                                  ),
+                                  const SizedBox(height: 18),
+                                  FilledButton.icon(
+                                    onPressed: _submitting ? null : _submit,
+                                    icon: _submitting
+                                        ? const SizedBox.square(
+                                            dimension: 16,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          )
+                                        : const Icon(
+                                            Icons.shield_moon_outlined,
+                                          ),
+                                    label: const Text(
+                                      'Create encrypted device',
+                                    ),
+                                  ),
+                                  if (widget.controller.statusMessage !=
+                                      null) ...[
+                                    const SizedBox(height: 14),
+                                    Text(
+                                      widget.controller.statusMessage!,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(color: palette.inkSoft),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                    ],
                   ),
                 ),
-              ),
               ),
             ),
           ),
@@ -3689,16 +3706,17 @@ class _ChatPanelState extends State<_ChatPanel> {
                             hintText: !contact.canSendOutbound
                                 ? 'Verify the contact\'s identity to send.'
                                 : activeReplyTarget == null
-                                    ? 'Write an encrypted message'
-                                    : 'Write a reply',
+                                ? 'Write an encrypted message'
+                                : 'Write a reply',
                           ),
                           onSubmitted: (_) => widget.onSend(),
                         ),
                       ),
                       const SizedBox(width: 12),
                       FilledButton.icon(
-                        onPressed:
-                            contact.canSendOutbound ? widget.onSend : null,
+                        onPressed: contact.canSendOutbound
+                            ? widget.onSend
+                            : null,
                         icon: const Icon(Icons.north_east),
                         label: const Text('Send'),
                       ),
@@ -5694,12 +5712,12 @@ class _PendingVerificationBanner extends StatelessWidget {
         content: Text(
           predecessor == null
               ? 'Trust ${contact.alias} as a fresh contact? Verify the safety '
-                  'number out of band first — accepting now archives any '
-                  'previous "${contact.displayName}" entries as read-only.'
+                    'number out of band first — accepting now archives any '
+                    'previous "${contact.displayName}" entries as read-only.'
               : 'Trust this as a reinstall of "${predecessor.alias}"? '
-                  'The previous contact will be archived (history kept '
-                  'read-only); the new contact takes over. This cannot be '
-                  'undone.',
+                    'The previous contact will be archived (history kept '
+                    'read-only); the new contact takes over. This cannot be '
+                    'undone.',
         ),
         actions: [
           TextButton(
@@ -5718,9 +5736,9 @@ class _PendingVerificationBanner extends StatelessWidget {
       await controller.confirmContactReplacement(contact.deviceId);
     } catch (error) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Confirm failed: $error')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Confirm failed: $error')));
     }
   }
 
@@ -5740,10 +5758,12 @@ class _PendingVerificationBanner extends StatelessWidget {
           ),
           FilledButton.tonal(
             style: FilledButton.styleFrom(
-              backgroundColor:
-                  Theme.of(dialogContext).colorScheme.errorContainer,
-              foregroundColor:
-                  Theme.of(dialogContext).colorScheme.onErrorContainer,
+              backgroundColor: Theme.of(
+                dialogContext,
+              ).colorScheme.errorContainer,
+              foregroundColor: Theme.of(
+                dialogContext,
+              ).colorScheme.onErrorContainer,
             ),
             onPressed: () => Navigator.of(dialogContext).pop(true),
             child: const Text('Reject'),
@@ -5756,9 +5776,9 @@ class _PendingVerificationBanner extends StatelessWidget {
       await controller.rejectContactReplacement(contact.deviceId);
     } catch (error) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Reject failed: $error')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Reject failed: $error')));
     }
   }
 
@@ -5912,9 +5932,9 @@ class _DefaultRelaysControlsCardState
       await widget.controller.removeCustomRelaySource(source.id);
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Remove failed: $error')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Remove failed: $error')));
     }
   }
 
@@ -5970,9 +5990,9 @@ class _DefaultRelaysControlsCardState
               const SizedBox(height: 4),
               Text(
                 'Pulled from the project repository when you tap Update.',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: widget.palette.inkSoft,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: widget.palette.inkSoft),
               ),
               const Divider(height: 24),
               Row(

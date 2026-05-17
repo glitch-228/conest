@@ -48,8 +48,8 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  publicKeyText ??=
-      Platform.environment['CONEST_RELEASE_MANIFEST_PUBLIC_KEY']?.trim();
+  publicKeyText ??= Platform.environment['CONEST_RELEASE_MANIFEST_PUBLIC_KEY']
+      ?.trim();
   if (publicKeyText == null || publicKeyText.isEmpty) {
     stderr.writeln(
       'Public key is required (pass --public-key or set '
