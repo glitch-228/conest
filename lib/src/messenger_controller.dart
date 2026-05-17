@@ -2883,6 +2883,9 @@ class MessengerController extends ChangeNotifier {
       chunks: chunkBytes,
       descriptor: descriptor,
     );
+    // Sender keeps a copy so the chat bubble can render the image / file
+    // preview without waiting for the recipient's complete envelope.
+    _assembledAttachments[attachmentId] = bytes;
     _markRuntimeActivity();
     notifyListeners();
 

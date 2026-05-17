@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1432,6 +1433,76 @@ class _HomeScreenState extends State<HomeScreen> {
     await widget.controller.sendLanLobbyMessage(body);
   }
 
+  Future<void> _pickAndSendAttachment() async {
+    final contact = _selectedContact;
+    if (contact == null) {
+      return;
+    }
+    FilePickerResult? picked;
+    try {
+      picked = await FilePicker.pickFiles(
+        type: FileType.any,
+        withData: true,
+      );
+    } catch (error) {
+      widget.controller.setStatus('Could not open file picker: $error');
+      return;
+    }
+    if (picked == null || picked.files.isEmpty) {
+      return;
+    }
+    final file = picked.files.first;
+    Uint8List? bytes = file.bytes;
+    // Desktop picker often returns a path instead of bytes.
+    if (bytes == null && file.path != null) {
+      try {
+        bytes = await File(file.path!).readAsBytes();
+      } catch (error) {
+        widget.controller.setStatus('Could not read $file: $error');
+        return;
+      }
+    }
+    if (bytes == null) {
+      widget.controller.setStatus('File picker returned no data.');
+      return;
+    }
+    final caption = _composerController.text.trim();
+    if (caption.isNotEmpty) {
+      _composerController.clear();
+    }
+    try {
+      await widget.controller.sendAttachment(
+        contact: contact,
+        bytes: bytes,
+        fileName: file.name,
+        mimeType: _guessMimeType(file.name),
+        caption: caption,
+      );
+    } catch (error) {
+      widget.controller.setStatus('Send failed: $error');
+    }
+  }
+
+  static String _guessMimeType(String fileName) {
+    final lowered = fileName.toLowerCase();
+    if (lowered.endsWith('.png')) return 'image/png';
+    if (lowered.endsWith('.jpg') || lowered.endsWith('.jpeg')) {
+      return 'image/jpeg';
+    }
+    if (lowered.endsWith('.gif')) return 'image/gif';
+    if (lowered.endsWith('.webp')) return 'image/webp';
+    if (lowered.endsWith('.bmp')) return 'image/bmp';
+    if (lowered.endsWith('.heic') || lowered.endsWith('.heif')) {
+      return 'image/heic';
+    }
+    if (lowered.endsWith('.pdf')) return 'application/pdf';
+    if (lowered.endsWith('.txt') || lowered.endsWith('.md')) {
+      return 'text/plain';
+    }
+    if (lowered.endsWith('.json')) return 'application/json';
+    return 'application/octet-stream';
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = widget.palette;
@@ -1481,6 +1552,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         setState(() => _replyTarget = message),
                     onShowProfile: () => _showContactProfile(selectedContact),
                     onSend: _sendCurrentMessage,
+                    onAttach: _pickAndSendAttachment,
                   );
                 }
                 if (!isWide && selectedGroup != null) {
@@ -1603,6 +1675,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 onShowProfile: () =>
                                     _showContactProfile(selectedContact),
                                 onSend: _sendCurrentMessage,
+                                onAttach: _pickAndSendAttachment,
                               ),
                       ),
                   ],
@@ -2936,6 +3009,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         descriptor: message.attachment!,
                         outbound: outbound,
                         palette: palette,
+                        controller: controller,
                       ),
                       if (message.body.isNotEmpty)
                         const SizedBox(height: 8),
@@ -3164,6 +3238,7 @@ class _ChatPanel extends StatefulWidget {
     required this.onReplyToMessage,
     required this.onSend,
     required this.onShowProfile,
+    required this.onAttach,
     this.onBack,
   });
 
@@ -3176,6 +3251,7 @@ class _ChatPanel extends StatefulWidget {
   final ValueChanged<ChatMessage> onReplyToMessage;
   final VoidCallback onSend;
   final VoidCallback onShowProfile;
+  final VoidCallback onAttach;
   final VoidCallback? onBack;
 
   @override
@@ -3449,6 +3525,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                         descriptor: message.attachment!,
                         outbound: outbound,
                         palette: palette,
+                        controller: controller,
                       ),
                       if (message.body.isNotEmpty)
                         const SizedBox(height: 8),
@@ -3716,6 +3793,13 @@ class _ChatPanelState extends State<_ChatPanel> {
                   ],
                   Row(
                     children: [
+                      IconButton(
+                        onPressed: contact.canSendOutbound
+                            ? widget.onAttach
+                            : null,
+                        icon: const Icon(Icons.attach_file_outlined),
+                        tooltip: 'Attach a file or image',
+                      ),
                       Expanded(
                         child: TextField(
                           controller: widget.composerController,
@@ -3727,7 +3811,8 @@ class _ChatPanelState extends State<_ChatPanel> {
                                 ? 'Verify the contact\'s identity to send.'
                                 : activeReplyTarget == null
                                 ? 'Write an encrypted message'
-                                : 'Write a reply',
+                                : 'Write a reply'
+                                      ' or add a caption',
                           ),
                           onSubmitted: (_) => widget.onSend(),
                         ),
@@ -7121,11 +7206,13 @@ class _AttachmentRow extends StatelessWidget {
     required this.descriptor,
     required this.outbound,
     required this.palette,
+    required this.controller,
   });
 
   final AttachmentDescriptor descriptor;
   final bool outbound;
   final ConestPalette palette;
+  final MessengerController controller;
 
   String _formatBytes(int size) {
     if (size < 1024) return '$size B';
@@ -7133,50 +7220,157 @@ class _AttachmentRow extends StatelessWidget {
     return '${(size / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 
+  bool get _isImage => descriptor.mimeType.startsWith('image/');
+
+  Future<void> _saveToDisk(BuildContext context, Uint8List bytes) async {
+    try {
+      final path = await FilePicker.saveFile(
+        dialogTitle: 'Save ${descriptor.fileName}',
+        fileName: descriptor.fileName,
+        bytes: bytes,
+      );
+      if (path == null) {
+        return;
+      }
+      // On desktop the file_picker writes the bytes automatically when
+      // `bytes:` is supplied. On other platforms we still need to write
+      // the file ourselves because the save dialog only returns a path.
+      if (!Platform.isLinux && !Platform.isMacOS && !Platform.isWindows) {
+        await File(path).writeAsBytes(bytes);
+      }
+      controller.setStatus('Saved ${descriptor.fileName} to $path.');
+    } catch (error) {
+      controller.setStatus('Save failed: $error');
+    }
+  }
+
+  void _openFullScreenImage(BuildContext context, Uint8List bytes) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => _ImageViewerScreen(
+          bytes: bytes,
+          title: descriptor.fileName,
+          palette: palette,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final isImage = descriptor.mimeType.startsWith('image/');
-    final icon = isImage ? Icons.image_outlined : Icons.attach_file_outlined;
+    final bytes = controller.attachmentBytesFor(descriptor.id);
     final textColor = outbound ? palette.outboundText : palette.inboundText;
     final metaColor = outbound ? palette.outboundMeta : palette.inboundMeta;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: outbound
-            ? palette.primary.withValues(alpha: 0.10)
-            : palette.selection,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 20, color: textColor),
-          const SizedBox(width: 10),
-          Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  descriptor.fileName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: textColor,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  _formatBytes(descriptor.sizeBytes),
-                  style: Theme.of(
-                    context,
-                  ).textTheme.labelSmall?.copyWith(color: metaColor),
-                ),
-              ],
+    final hasBytes = bytes != null;
+    final showImage = _isImage && hasBytes;
+
+    if (showImage) {
+      return ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 320, maxHeight: 320),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => _openFullScreenImage(context, bytes),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Image.memory(
+                bytes,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+              ),
             ),
           ),
-        ],
+        ),
+      );
+    }
+
+    final icon = _isImage
+        ? Icons.image_outlined
+        : Icons.insert_drive_file_outlined;
+    final statusLine = hasBytes
+        ? _formatBytes(descriptor.sizeBytes)
+        : 'Transferring · ${_formatBytes(descriptor.sizeBytes)}';
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: hasBytes ? () => _saveToDisk(context, bytes) : null,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: outbound
+                ? palette.primary.withValues(alpha: 0.10)
+                : palette.selection,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 20, color: textColor),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      descriptor.fileName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: textColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      statusLine,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.labelSmall?.copyWith(color: metaColor),
+                    ),
+                  ],
+                ),
+              ),
+              if (hasBytes) ...[
+                const SizedBox(width: 10),
+                Icon(Icons.download_outlined, size: 18, color: metaColor),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ImageViewerScreen extends StatelessWidget {
+  const _ImageViewerScreen({
+    required this.bytes,
+    required this.title,
+    required this.palette,
+  });
+
+  final Uint8List bytes;
+  final String title;
+  final ConestPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: Text(title),
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          minScale: 0.5,
+          maxScale: 6,
+          child: Image.memory(bytes, fit: BoxFit.contain),
+        ),
       ),
     );
   }
