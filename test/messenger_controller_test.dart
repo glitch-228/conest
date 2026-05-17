@@ -211,6 +211,7 @@ class _FakeRelayClient extends RelayClient {
     required String recipientDeviceId,
     int limit = 64,
     Duration timeout = const Duration(seconds: 4),
+    Duration waitFor = Duration.zero,
     String? expectedIdentityPublicKeyBase64,
   }) async {
     fetchAttempts.add('$host:$port');
@@ -324,6 +325,7 @@ class _HostScopedFakeRelayClient extends RelayClient {
     required String recipientDeviceId,
     int limit = 64,
     Duration timeout = const Duration(seconds: 4),
+    Duration waitFor = Duration.zero,
     String? expectedIdentityPublicKeyBase64,
   }) async {
     final queue =
@@ -378,6 +380,7 @@ Future<MessengerController> _createController({
   Future<SignedRelayDefaults?> Function()? signedRelayDefaultsLoader,
   VaultStore? vaultStore,
   bool createIdentity = true,
+  bool enableLongPoll = false,
 }) async {
   final controller = MessengerController(
     vaultStore: vaultStore ?? _MemoryVaultStore(),
@@ -386,6 +389,7 @@ Future<MessengerController> _createController({
     lanAddressProvider: () async => lanAddresses,
     nowProvider: nowProvider,
     signedRelayDefaultsLoader: signedRelayDefaultsLoader,
+    enableLongPoll: enableLongPoll,
   );
   await controller.initialize();
   if (createIdentity) {

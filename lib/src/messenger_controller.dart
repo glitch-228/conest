@@ -95,12 +95,14 @@ class MessengerController extends ChangeNotifier {
     Future<List<String>> Function()? lanAddressProvider,
     DateTime Function()? nowProvider,
     Future<SignedRelayDefaults?> Function()? signedRelayDefaultsLoader,
+    bool enableLongPoll = true,
   }) : _vaultStore = vaultStore,
        _localRelayNode = localRelayNode ?? LocalRelayNode(),
        _platformBridge = platformBridge ?? PlatformBridge(),
        _lanAddressProvider = lanAddressProvider ?? discoverLanAddresses,
        _nowProvider = nowProvider ?? DateTime.now,
-       _signedRelayDefaultsLoader = signedRelayDefaultsLoader {
+       _signedRelayDefaultsLoader = signedRelayDefaultsLoader,
+       _longPollEnabled = enableLongPoll {
     _relayClient = _ScoringRelayClient(
       inner: relayClient,
       onAttempt: _recordRelayAttemptFromShim,
@@ -122,6 +124,13 @@ class MessengerController extends ChangeNotifier {
   late final CryptoService _crypto;
   late final ReachabilityTracker _reachability;
   late final RouteHealthTracker _routeHealthTracker;
+  final bool _longPollEnabled;
+  bool _longPollRunning = false;
+  // When true, `notifyListeners` queues a flag instead of dispatching. Used
+  // by `_processEnvelopes` so a long-poll batch of 10 envelopes triggers one
+  // UI rebuild at the end, not ten.
+  bool _notificationsDeferred = false;
+  bool _deferredNotificationPending = false;
   final LocalRelayNode _localRelayNode;
   final PlatformBridge _platformBridge;
   final Future<List<String>> Function() _lanAddressProvider;
@@ -635,6 +644,7 @@ class MessengerController extends ChangeNotifier {
         _reschedulePolling();
         unawaited(_pollLocalInboxOnly());
         unawaited(pollNow());
+        unawaited(_startLongPollIfEnabled());
       }
     } catch (error) {
       _statusMessage = 'Vault unlock failed: $error';
@@ -2369,6 +2379,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> resetIdentity() async {
+    _stopLongPoll();
     _pollTimer?.cancel();
     _pollTimer = null;
     _nextScheduledPollAt = null;
@@ -3988,6 +3999,99 @@ class MessengerController extends ChangeNotifier {
     return !_routeHealthTracker.isEligibleNow(route);
   }
 
+  /// Picks the highest-priority relay route for the long-poll loop. LAN
+  /// loopback (the embedded local relay) wins over remote relays because
+  /// it has zero latency and the inbox is the same anyway. Among remote
+  /// relays, the first eligible configured route wins; route health is
+  /// re-checked every iteration so a flapping relay is dropped quickly.
+  PeerEndpoint? _pickPrimaryRelayForLongPoll(IdentityRecord me) {
+    if (_localRelayNode.isRunning) {
+      final loopback = PeerEndpoint(
+        kind: PeerRouteKind.lan,
+        host: '127.0.0.1',
+        port: me.localRelayPort,
+      );
+      if (_routeHealthTracker.isEligibleNow(loopback)) {
+        return loopback;
+      }
+    }
+    for (final relay in me.configuredRelays) {
+      if (relay.kind != PeerRouteKind.relay) {
+        continue;
+      }
+      if (_routeHealthTracker.isEligibleNow(relay)) {
+        return relay;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _startLongPollIfEnabled() async {
+    if (!_longPollEnabled || _longPollRunning) {
+      return;
+    }
+    _longPollRunning = true;
+    unawaited(_runLongPollLoop());
+  }
+
+  void _stopLongPoll() {
+    _longPollRunning = false;
+  }
+
+  /// Persistent fetch loop that holds an open request against the primary
+  /// relay with `wait_ms: 25s`. The relay wakes the request as soon as a
+  /// new envelope arrives (per the v0.3.2 long-poll path in the Rust
+  /// server), so delivery latency drops from the 5–30 s poll interval to
+  /// the network round-trip plus the relay's [Condvar] wake (~50–300 ms
+  /// in practice). Old relays that ignore `wait_ms` return immediately
+  /// empty; the elapsed-time guard at the bottom of the loop keeps that
+  /// case from busy-looping the CPU.
+  Future<void> _runLongPollLoop() async {
+    while (_longPollRunning && hasIdentity) {
+      final me = identity;
+      if (me == null) {
+        break;
+      }
+      final route = _pickPrimaryRelayForLongPoll(me);
+      if (route == null) {
+        await Future<void>.delayed(const Duration(seconds: 5));
+        continue;
+      }
+      final stopwatch = Stopwatch()..start();
+      List<RelayEnvelope> envelopes = const [];
+      try {
+        envelopes = await _relayClient.fetchEnvelopes(
+          host: route.host,
+          port: route.port,
+          protocol: route.protocol,
+          recipientDeviceId: me.deviceId,
+          waitFor: const Duration(seconds: 25),
+        );
+        stopwatch.stop();
+        _routeHealthTracker.recordSuccess(
+          route,
+          fetch: true,
+          latency: stopwatch.elapsed,
+        );
+      } catch (error) {
+        stopwatch.stop();
+        _routeHealthTracker.recordFailure(route, error: error.toString());
+        await Future<void>.delayed(const Duration(seconds: 2));
+        continue;
+      }
+      if (envelopes.isNotEmpty) {
+        await _processEnvelopes(envelopes);
+        _markRuntimeActivity();
+        notifyListeners();
+      } else if (stopwatch.elapsed < const Duration(seconds: 1)) {
+        // Relay returned empty almost instantly — either it doesn't speak
+        // `wait_ms` (older build) or there's nothing in the mailbox. Sleep
+        // so we don't busy-loop the request.
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+    }
+  }
+
   List<ChatMessage> messagesFor(String peerDeviceId) {
     final conversation = _conversationFor(peerDeviceId);
     return List<ChatMessage>.from(conversation.messages)
@@ -4459,7 +4563,32 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  @override
+  void notifyListeners() {
+    if (_notificationsDeferred) {
+      _deferredNotificationPending = true;
+      return;
+    }
+    super.notifyListeners();
+  }
+
   Future<int> _processEnvelopes(List<RelayEnvelope> envelopes) async {
+    final wasDeferred = _notificationsDeferred;
+    _notificationsDeferred = true;
+    var processed = 0;
+    try {
+      processed = await _processEnvelopesInternal(envelopes);
+    } finally {
+      _notificationsDeferred = wasDeferred;
+      if (!_notificationsDeferred && _deferredNotificationPending) {
+        _deferredNotificationPending = false;
+        super.notifyListeners();
+      }
+    }
+    return processed;
+  }
+
+  Future<int> _processEnvelopesInternal(List<RelayEnvelope> envelopes) async {
     var processed = 0;
     final orderedEnvelopes = List<RelayEnvelope>.from(envelopes)
       ..sort((left, right) {
@@ -8885,6 +9014,7 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _stopLongPoll();
     _pollTimer?.cancel();
     _pendingSaveTimer?.cancel();
     _localRelayNode.onEnvelopeStored = null;
@@ -9053,6 +9183,7 @@ class _ScoringRelayClient implements RelayClient {
     required String recipientDeviceId,
     int limit = 64,
     Duration timeout = const Duration(seconds: 4),
+    Duration waitFor = Duration.zero,
     String? expectedIdentityPublicKeyBase64,
   }) {
     return _track(
@@ -9066,6 +9197,7 @@ class _ScoringRelayClient implements RelayClient {
         recipientDeviceId: recipientDeviceId,
         limit: limit,
         timeout: timeout,
+        waitFor: waitFor,
         expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
       ),
     );

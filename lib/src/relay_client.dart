@@ -118,17 +118,24 @@ class RelayClient {
     required String recipientDeviceId,
     int limit = 64,
     Duration timeout = const Duration(seconds: 4),
+    Duration waitFor = Duration.zero,
     String? expectedIdentityPublicKeyBase64,
   }) async {
+    // When long-polling, allow the network timeout to outlast the relay's
+    // server-side wait window plus a small TCP slack.
+    final effectiveTimeout = waitFor > Duration.zero
+        ? waitFor + const Duration(seconds: 4)
+        : timeout;
     final result = await _sendRequest(
       host: host,
       port: port,
       protocol: protocol,
-      timeout: timeout,
+      timeout: effectiveTimeout,
       request: {
         'action': 'fetch',
         'recipient_device_id': recipientDeviceId,
         'limit': limit,
+        if (waitFor > Duration.zero) 'wait_ms': waitFor.inMilliseconds,
       },
       expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
     );

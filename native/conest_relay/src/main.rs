@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -160,9 +160,18 @@ enum RelayRequest {
     Fetch {
         recipient_device_id: String,
         limit: Option<usize>,
+        /// Long-poll duration in milliseconds. When non-zero and the
+        /// recipient mailbox is empty, the relay blocks the request thread
+        /// on a per-mailbox Condvar for up to `wait_ms` (capped at
+        /// `LONG_POLL_MAX_WAIT_MS`) and returns as soon as a new envelope
+        /// arrives via [`store`]. Older clients omit the field — the relay
+        /// behaves exactly like before for them.
+        wait_ms: Option<u64>,
     },
     Health,
 }
+
+const LONG_POLL_MAX_WAIT_MS: u64 = 25_000;
 
 #[derive(Debug, Serialize)]
 struct RelayStats {
@@ -357,10 +366,18 @@ struct BanEntry {
     consecutive_violations: u32,
 }
 
+/// Per-mailbox arrival notifier shared between [`RelayState::store`] (which
+/// signals on a successful enqueue) and [`RelayState::fetch`]'s long-poll
+/// path (which waits up to `LONG_POLL_MAX_WAIT_MS` on the condvar). The
+/// `Mutex<()>` is just the lock the condvar requires; the actual queue
+/// state lives on [`RelayState::queues`].
+type MailboxNotifier = Arc<(Mutex<()>, Condvar)>;
+
 #[derive(Clone)]
 struct RelayState {
     config: RelayConfig,
     queues: Arc<Mutex<HashMap<String, VecDeque<QueueEntry>>>>,
+    notifiers: Arc<Mutex<HashMap<String, MailboxNotifier>>>,
     rate_buckets: Arc<Mutex<HashMap<String, RateBucket>>>,
     mailbox_bytes: Arc<Mutex<HashMap<String, MailboxByteWindow>>>,
     banned_peers: Arc<Mutex<HashMap<String, BanEntry>>>,
@@ -372,11 +389,22 @@ impl RelayState {
         Self {
             config,
             queues: Arc::new(Mutex::new(HashMap::new())),
+            notifiers: Arc::new(Mutex::new(HashMap::new())),
             rate_buckets: Arc::new(Mutex::new(HashMap::new())),
             mailbox_bytes: Arc::new(Mutex::new(HashMap::new())),
             banned_peers: Arc::new(Mutex::new(HashMap::new())),
             identity: Arc::new(identity),
         }
+    }
+
+    fn notifier_for(&self, mailbox: &str) -> MailboxNotifier {
+        let mut map = self
+            .notifiers
+            .lock()
+            .expect("notifier lock should not poison");
+        map.entry(mailbox.to_owned())
+            .or_insert_with(|| Arc::new((Mutex::new(()), Condvar::new())))
+            .clone()
     }
 
     fn allow_request(&self, peer: &str) -> bool {
@@ -525,7 +553,7 @@ impl RelayState {
             .lock()
             .expect("relay queue lock should not poison");
         self.cleanup_locked(&mut queues);
-        let queue = queues.entry(recipient_device_id).or_default();
+        let queue = queues.entry(recipient_device_id.clone()).or_default();
 
         if envelope_kind(&envelope) == Some("pairing_announcement")
             && let Some(sender) = envelope_sender_device_id(&envelope)
@@ -551,14 +579,45 @@ impl RelayState {
             queued_at_millis: now_millis(),
             envelope,
         });
+        // Release the queue lock before notifying so a waiting fetch can
+        // immediately re-acquire it.
+        drop(queues);
+        let notifier = self.notifier_for(&recipient_device_id);
+        notifier.1.notify_all();
         Ok(())
     }
 
-    fn fetch(&self, recipient_device_id: &str, limit: Option<usize>) -> Result<Vec<Value>, String> {
+    fn fetch(
+        &self,
+        recipient_device_id: &str,
+        limit: Option<usize>,
+        wait_ms: Option<u64>,
+    ) -> Result<Vec<Value>, String> {
         validate_mailbox_id(recipient_device_id)?;
         let limit = limit
             .unwrap_or(self.config.max_fetch_limit)
             .clamp(1, self.config.max_fetch_limit);
+        let first = self.drain_queue(recipient_device_id, limit);
+        if !first.is_empty() {
+            return Ok(first);
+        }
+        let wait_ms = match wait_ms {
+            Some(value) if value > 0 => value.min(LONG_POLL_MAX_WAIT_MS),
+            _ => return Ok(first),
+        };
+        let notifier = self.notifier_for(recipient_device_id);
+        let guard = notifier.0.lock().expect("notifier mutex should not poison");
+        // wait_timeout returns a (guard, WaitTimeoutResult) tuple; we drop
+        // the guard before re-acquiring the queue lock.
+        let (dropped, _timeout) = notifier
+            .1
+            .wait_timeout(guard, Duration::from_millis(wait_ms))
+            .expect("notifier condvar should not poison");
+        drop(dropped);
+        Ok(self.drain_queue(recipient_device_id, limit))
+    }
+
+    fn drain_queue(&self, recipient_device_id: &str, limit: usize) -> Vec<Value> {
         let mut queues = self
             .queues
             .lock()
@@ -567,7 +626,6 @@ impl RelayState {
         let queue = queues.entry(recipient_device_id.to_owned()).or_default();
         let entries: Vec<QueueEntry> = queue.drain(..).collect();
         let mut messages = Vec::new();
-
         for entry in entries {
             if messages.len() < limit {
                 messages.push(entry.envelope.clone());
@@ -578,8 +636,7 @@ impl RelayState {
                 queue.push_back(entry);
             }
         }
-
-        Ok(messages)
+        messages
     }
 
     fn stats(&self) -> RelayStats {
@@ -930,7 +987,8 @@ fn handle_request(request: RelayRequest, state: &RelayState) -> RelayResponse {
         RelayRequest::Fetch {
             recipient_device_id,
             limit,
-        } => match state.fetch(&recipient_device_id, limit) {
+            wait_ms,
+        } => match state.fetch(&recipient_device_id, limit, wait_ms) {
             Ok(messages) => RelayResponse::messages(messages),
             Err(error) => RelayResponse::error(error),
         },
@@ -1157,10 +1215,10 @@ mod tests {
             .expect("store should work");
 
         let first = state
-            .fetch("pair-mailbox", Some(8))
+            .fetch("pair-mailbox", Some(8), None)
             .expect("fetch should work");
         let second = state
-            .fetch("pair-mailbox", Some(8))
+            .fetch("pair-mailbox", Some(8), None)
             .expect("fetch should work");
 
         assert_eq!(first.len(), 1);
@@ -1181,8 +1239,12 @@ mod tests {
                 .expect("store should work");
         }
 
-        let first = state.fetch("dev-b", Some(99)).expect("fetch should work");
-        let second = state.fetch("dev-b", Some(99)).expect("fetch should work");
+        let first = state
+            .fetch("dev-b", Some(99), None)
+            .expect("fetch should work");
+        let second = state
+            .fetch("dev-b", Some(99), None)
+            .expect("fetch should work");
 
         assert_eq!(first.len(), 2);
         assert_eq!(second.len(), 1);
@@ -1200,7 +1262,9 @@ mod tests {
                 .expect("store should work");
         }
 
-        let fetched = state.fetch("dev-b", Some(10)).expect("fetch should work");
+        let fetched = state
+            .fetch("dev-b", Some(10), None)
+            .expect("fetch should work");
         let ids: Vec<&str> = fetched
             .iter()
             .filter_map(|value| value["messageId"].as_str())
@@ -1605,5 +1669,66 @@ mod tests {
                 handle_http_request("GET /health HTTP/1.1\r\n", &mut reader, &state, "127.0.0.1");
             assert_eq!(status, expected_status);
         }
+    }
+
+    #[test]
+    fn long_poll_returns_immediately_when_envelope_already_queued() {
+        let state = RelayState::new(test_config(), test_identity());
+        state
+            .store(
+                "dev-bob".to_owned(),
+                envelope("direct_message", "msg-1", "dev-alice"),
+            )
+            .expect("store");
+        let start = std::time::Instant::now();
+        let messages = state
+            .fetch("dev-bob", Some(10), Some(5_000))
+            .expect("fetch");
+        // Fast path: envelope was already there, no waiting.
+        assert!(start.elapsed() < Duration::from_millis(200));
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn long_poll_wakes_on_store_within_wait_window() {
+        let state = Arc::new(RelayState::new(test_config(), test_identity()));
+        let storer = state.clone();
+        let waker = thread::spawn(move || {
+            // Give the fetch a head start so it parks on the condvar.
+            thread::sleep(Duration::from_millis(150));
+            storer
+                .store(
+                    "dev-bob".to_owned(),
+                    envelope("direct_message", "msg-late", "dev-alice"),
+                )
+                .expect("store");
+        });
+        let start = std::time::Instant::now();
+        let messages = state
+            .fetch("dev-bob", Some(10), Some(2_000))
+            .expect("fetch");
+        let elapsed = start.elapsed();
+        waker.join().expect("waker thread");
+        assert!(
+            elapsed >= Duration::from_millis(100) && elapsed < Duration::from_millis(1_000),
+            "fetch should wake within ~150ms, took {elapsed:?}"
+        );
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["messageId"], "msg-late");
+    }
+
+    #[test]
+    fn long_poll_returns_empty_after_timeout_when_no_store_arrives() {
+        let state = RelayState::new(test_config(), test_identity());
+        let start = std::time::Instant::now();
+        let messages = state
+            .fetch("dev-quiet", Some(10), Some(200))
+            .expect("fetch");
+        let elapsed = start.elapsed();
+        assert!(messages.is_empty());
+        assert!(
+            elapsed >= Duration::from_millis(150) && elapsed < Duration::from_millis(800),
+            "fetch should return after the wait window, took {elapsed:?}"
+        );
     }
 }
