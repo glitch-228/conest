@@ -2418,7 +2418,18 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
-  Future<void> resetIdentity() async {
+  /// Wipes the in-memory identity and the on-disk vault. Each potentially-
+  /// blocking platform call is wrapped in a 2-second timeout so a stuck
+  /// MethodChannel on Android can't freeze the reset dialog (the OS has
+  /// usually torn down the relevant resources on its own by app pause —
+  /// we don't need to wait indefinitely).
+  ///
+  /// [onPostReset] runs AFTER the vault is wiped and listeners notified.
+  /// It's the caller's hook to delete the storage profile and re-enter
+  /// the bootstrap layer so the storage-mode wizard shows again instead
+  /// of the display-name screen. Failures inside the hook are swallowed;
+  /// the user can manually restart the app if needed.
+  Future<void> resetIdentity({Future<void> Function()? onPostReset}) async {
     _stopLongPoll();
     _pollTimer?.cancel();
     _pollTimer = null;
@@ -2426,9 +2437,18 @@ class MessengerController extends ChangeNotifier {
     _pendingSaveTimer?.cancel();
     _pendingSaveTimer = null;
     _pendingSaveCompleter = null;
-    await _platformBridge.setAndroidBackgroundRuntimeEnabled(false);
-    await _stopPairingBeacon();
-    await _localRelayNode.stop();
+    const platformCallTimeout = Duration(seconds: 2);
+    await _platformBridge
+        .setAndroidBackgroundRuntimeEnabled(false)
+        .timeout(platformCallTimeout, onTimeout: () {});
+    await _stopPairingBeacon().timeout(
+      platformCallTimeout,
+      onTimeout: () {},
+    );
+    await _localRelayNode.stop().timeout(
+      platformCallTimeout,
+      onTimeout: () {},
+    );
     await _vaultStore.clear();
     _snapshot = VaultSnapshot.empty();
     _polling = false;
@@ -2446,6 +2466,14 @@ class MessengerController extends ChangeNotifier {
     _debugTwoWayReplies.clear();
     _locallyDeletedMessageIds.clear();
     notifyListeners();
+    if (onPostReset != null) {
+      try {
+        await onPostReset();
+      } catch (_) {
+        // Best-effort: caller's hook (delete profile + re-launch
+        // bootstrap) shouldn't fail loudly inside a reset flow.
+      }
+    }
   }
 
   Future<void> createIdentity({

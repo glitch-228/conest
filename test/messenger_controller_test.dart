@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -56,6 +57,28 @@ class _FakeLocalRelayNode extends LocalRelayNode {
   Future<void> stop() async {
     _running = false;
     _currentPort = null;
+  }
+}
+
+/// Simulates the Android symptom where a platform-side stop call hangs.
+/// `resetIdentity` must time out and proceed instead of blocking the UI.
+class _HangingLocalRelayNode extends LocalRelayNode {
+  bool _running = true;
+
+  @override
+  bool get isRunning => _running;
+
+  @override
+  int? get port => 0;
+
+  @override
+  Future<void> start(int port) async {}
+
+  @override
+  Future<void> stop() async {
+    // Never completes — mimics a wedged native call.
+    await Completer<void>().future;
+    _running = false;
   }
 }
 
@@ -381,11 +404,12 @@ Future<MessengerController> _createController({
   VaultStore? vaultStore,
   bool createIdentity = true,
   bool enableLongPoll = false,
+  LocalRelayNode? localRelayNode,
 }) async {
   final controller = MessengerController(
     vaultStore: vaultStore ?? _MemoryVaultStore(),
     relayClient: relayClient,
-    localRelayNode: _FakeLocalRelayNode(),
+    localRelayNode: localRelayNode ?? _FakeLocalRelayNode(),
     lanAddressProvider: () async => lanAddresses,
     nowProvider: nowProvider,
     signedRelayDefaultsLoader: signedRelayDefaultsLoader,
@@ -5059,6 +5083,42 @@ void main() {
       throwsArgumentError,
     );
   });
+
+  test(
+    'resetIdentity completes even when LocalRelayNode.stop hangs '
+    'and fires the post-reset hook',
+    () async {
+      // The Android symptom — "reset does nothing" — was the platform-
+      // bridge stop call hanging the await. The 2-second per-call
+      // timeout must let reset proceed.
+      final relayClient = _FakeRelayClient();
+      final controller = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        localRelayNode: _HangingLocalRelayNode(),
+      );
+      addTearDown(controller.dispose);
+
+      var hookFired = false;
+      final stopwatch = Stopwatch()..start();
+      await controller.resetIdentity(
+        onPostReset: () async {
+          hookFired = true;
+        },
+      );
+      stopwatch.stop();
+
+      expect(controller.hasIdentity, isFalse);
+      expect(hookFired, isTrue, reason: 'post-reset hook must run');
+      expect(
+        stopwatch.elapsed,
+        lessThan(const Duration(seconds: 5)),
+        reason:
+            'reset must not block longer than the 2s-per-call timeout '
+            'budget (×3 hung awaits, plus slack)',
+      );
+    },
+  );
 
   test(
     'long-poll never picks the local-relay loopback route',
