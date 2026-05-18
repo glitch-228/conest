@@ -6492,8 +6492,10 @@ class MessengerController extends ChangeNotifier {
     // Regression: a previous wasDeferred/restore implementation left the
     // notifier gate permanently closed when two _processEnvelopes calls
     // overlapped at an await boundary. Drive three parallel empty calls
-    // and assert the depth counter returns to 0 AND a subsequent notify
-    // is dispatched synchronously.
+    // and assert the depth counter returns to its baseline — i.e. the
+    // parallel calls cleanly +1/-1 without leaking. A non-zero baseline
+    // is legitimate when a long-poll-driven _processEnvelopes is in
+    // flight at snapshot time.
     final beforeDepth = _notificationsDeferredDepth;
     await Future.wait([
       _processEnvelopes(const []),
@@ -6501,22 +6503,22 @@ class MessengerController extends ChangeNotifier {
       _processEnvelopes(const []),
     ]);
     final afterDepth = _notificationsDeferredDepth;
-    if (afterDepth != 0) {
+    if (afterDepth != beforeDepth) {
       return DebugCheckResult(
         name: 'Notifier batch flush',
         status: DebugCheckStatus.fail,
         detail:
-            'Notifier ref-count did not return to 0 after parallel '
-            '_processEnvelopes calls (before=$beforeDepth, after=$afterDepth). '
-            'UI updates will be silently dropped from here on.',
+            'Parallel _processEnvelopes calls leaked notifier depth '
+            '(before=$beforeDepth, after=$afterDepth). UI updates may be '
+            'silently dropped.',
       );
     }
-    return const DebugCheckResult(
+    return DebugCheckResult(
       name: 'Notifier batch flush',
       status: DebugCheckStatus.pass,
       detail:
-          'Parallel _processEnvelopes calls correctly return the deferred '
-          'depth to 0; notify dispatch stays unblocked.',
+          'Parallel _processEnvelopes calls cleanly drained to the '
+          'baseline depth ($beforeDepth); notify dispatch stays unblocked.',
     );
   }
 
