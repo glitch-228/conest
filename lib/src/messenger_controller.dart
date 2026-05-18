@@ -7,6 +7,8 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show AssetBundle, rootBundle;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart' as path_provider;
 
 import 'crypto_service.dart';
 import 'local_relay_node.dart';
@@ -17,6 +19,15 @@ import 'relay_client.dart';
 import 'relay_defaults.dart';
 import 'route_health_tracker.dart';
 import 'storage.dart';
+
+/// Fallback attachment cache root used when the constructor caller
+/// doesn't supply one (i.e. production where the bootstrap profile
+/// chose a non-portable data root). Mirrors what `app_storage.dart`
+/// would have picked for the device profile.
+Future<Directory> _defaultAttachmentRootProvider() async {
+  final root = await path_provider.getApplicationSupportDirectory();
+  return Directory(p.join(root.path, 'attachments'));
+}
 
 const int _maxInviteRouteHints = 4;
 const int _maxInviteLanHosts = 1;
@@ -95,6 +106,7 @@ class MessengerController extends ChangeNotifier {
     Future<List<String>> Function()? lanAddressProvider,
     DateTime Function()? nowProvider,
     Future<SignedRelayDefaults?> Function()? signedRelayDefaultsLoader,
+    Future<Directory> Function()? attachmentRootProvider,
     bool enableLongPoll = true,
   }) : _vaultStore = vaultStore,
        _localRelayNode = localRelayNode ?? LocalRelayNode(),
@@ -102,6 +114,8 @@ class MessengerController extends ChangeNotifier {
        _lanAddressProvider = lanAddressProvider ?? discoverLanAddresses,
        _nowProvider = nowProvider ?? DateTime.now,
        _signedRelayDefaultsLoader = signedRelayDefaultsLoader,
+       _attachmentRootProvider =
+           attachmentRootProvider ?? _defaultAttachmentRootProvider,
        _longPollEnabled = enableLongPoll {
     _relayClient = _ScoringRelayClient(
       inner: relayClient,
@@ -146,6 +160,10 @@ class MessengerController extends ChangeNotifier {
   final Future<List<String>> Function() _lanAddressProvider;
   final DateTime Function() _nowProvider;
   final Future<SignedRelayDefaults?> Function()? _signedRelayDefaultsLoader;
+  /// Resolves the directory under which assembled attachment bytes are
+  /// persisted, so the bubble can keep rendering the file row / image
+  /// thumbnail after an app restart instead of regressing to "transferring".
+  final Future<Directory> Function() _attachmentRootProvider;
   VaultSnapshot _snapshot = VaultSnapshot.empty();
   Timer? _pollTimer;
   bool _ready = false;
@@ -2966,6 +2984,10 @@ class MessengerController extends ChangeNotifier {
     // Sender keeps a copy so the chat bubble can render the image / file
     // preview without waiting for the recipient's complete envelope.
     _assembledAttachments[attachmentId] = bytes;
+    // Persist asynchronously so the bubble survives an app restart on
+    // the sender side too — no point keeping a transfer-state bubble
+    // when we have the original right here.
+    unawaited(_persistAttachmentBytes(attachmentId, bytes));
     _markRuntimeActivity();
     notifyListeners();
 
@@ -2999,10 +3021,74 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  /// Returns the assembled bytes for a received attachment, or null while
-  /// the transfer is still in flight (or was never offered to this peer).
+  /// Returns the assembled bytes for an attachment, or null while the
+  /// transfer is still in flight (or was never offered to this peer).
+  /// Hits the on-disk cache as a fallback so a freshly-launched app
+  /// keeps rendering thumbnails / Save buttons for messages it
+  /// received in a previous session.
   Uint8List? attachmentBytesFor(String attachmentId) {
-    return _assembledAttachments[attachmentId];
+    final cached = _assembledAttachments[attachmentId];
+    if (cached != null) {
+      return cached;
+    }
+    // Fire-and-forget disk read; the lazy loader fires notifyListeners
+    // when it finishes so the bubble rebuilds with the bytes in memory.
+    unawaited(_loadAttachmentBytesFromDisk(attachmentId));
+    return null;
+  }
+
+  Future<Directory> _attachmentRoot() async {
+    final dir = await _attachmentRootProvider();
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    return dir;
+  }
+
+  Future<void> _persistAttachmentBytes(
+    String attachmentId,
+    Uint8List bytes,
+  ) async {
+    try {
+      final dir = await _attachmentRoot();
+      final file = File(p.join(dir.path, attachmentId));
+      await file.writeAsBytes(bytes, flush: true);
+    } catch (error) {
+      // Persisting is best-effort; the in-memory copy still renders.
+      _statusMessage = 'Could not cache attachment to disk: $error';
+    }
+  }
+
+  final Set<String> _attachmentDiskLoadInFlight = <String>{};
+
+  Future<void> _loadAttachmentBytesFromDisk(String attachmentId) async {
+    if (_assembledAttachments.containsKey(attachmentId) ||
+        _attachmentDiskLoadInFlight.contains(attachmentId)) {
+      return;
+    }
+    _attachmentDiskLoadInFlight.add(attachmentId);
+    try {
+      final dir = await _attachmentRoot();
+      final file = File(p.join(dir.path, attachmentId));
+      if (!await file.exists()) {
+        return;
+      }
+      final bytes = await file.readAsBytes();
+      _assembledAttachments[attachmentId] = bytes;
+      notifyListeners();
+    } catch (_) {
+      // Cache miss / read failure: UI keeps the transferring indicator.
+    } finally {
+      _attachmentDiskLoadInFlight.remove(attachmentId);
+    }
+  }
+
+  /// Test hook: drops the in-memory cache for [attachmentId] so a
+  /// subsequent `attachmentBytesFor` triggers the disk-load path. Used
+  /// by the regression test that asserts the bytes survive a relaunch.
+  @visibleForTesting
+  void evictAttachmentBytesForTesting(String attachmentId) {
+    _assembledAttachments.remove(attachmentId);
   }
 
   Future<GroupRecord> createGroup({
@@ -5247,7 +5333,12 @@ class MessengerController extends ChangeNotifier {
       for (final part in state.received) {
         builder.add(part!);
       }
-      _assembledAttachments[chunk.attachmentId] = builder.toBytes();
+      final assembled = builder.toBytes();
+      _assembledAttachments[chunk.attachmentId] = assembled;
+      // Persist so the receiver bubble survives an app restart instead
+      // of regressing to "transferring" once _assembledAttachments goes
+      // away with the controller.
+      unawaited(_persistAttachmentBytes(chunk.attachmentId, assembled));
       _inboundAttachments.remove(chunk.attachmentId);
       _updateMessageState(
         sender.deviceId,

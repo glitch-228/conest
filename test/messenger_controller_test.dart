@@ -409,6 +409,7 @@ Future<MessengerController> _createController({
   bool createIdentity = true,
   bool enableLongPoll = false,
   LocalRelayNode? localRelayNode,
+  Future<Directory> Function()? attachmentRootProvider,
 }) async {
   final controller = MessengerController(
     vaultStore: vaultStore ?? _MemoryVaultStore(),
@@ -418,6 +419,17 @@ Future<MessengerController> _createController({
     nowProvider: nowProvider,
     signedRelayDefaultsLoader: signedRelayDefaultsLoader,
     enableLongPoll: enableLongPoll,
+    attachmentRootProvider:
+        attachmentRootProvider ??
+        () async {
+          // Isolated per-test tmpdir so concurrent tests don't share an
+          // attachment cache and so a passed `path_provider` isn't
+          // required in the test runner.
+          final base = Directory.systemTemp.createTempSync(
+            'conest_test_attachments_',
+          );
+          return base;
+        },
   );
   await controller.initialize();
   if (createIdentity) {
@@ -5103,6 +5115,71 @@ void main() {
       throwsArgumentError,
     );
   });
+
+  test(
+    'attachment bytes survive an in-memory cache eviction via the disk cache',
+    () async {
+      final attachmentRoot = Directory.systemTemp.createTempSync(
+        'conest_attach_persist_',
+      );
+      addTearDown(() {
+        try {
+          attachmentRoot.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        attachmentRootProvider: () async => attachmentRoot,
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        attachmentRootProvider: () async => attachmentRoot,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+
+      await _pairControllers(alice, bob);
+      final aliceContactForBob = alice.contacts.single;
+
+      final original = Uint8List.fromList(
+        List<int>.generate(96 * 1024, (i) => i & 0xff),
+      );
+      await alice.sendAttachment(
+        contact: aliceContactForBob,
+        bytes: original,
+        fileName: 'persist.bin',
+      );
+      for (var round = 0; round < 16; round++) {
+        await bob.pollNow();
+        await alice.pollNow();
+      }
+
+      final bobContactForAlice = bob.contacts.single;
+      final received = bob
+          .messagesFor(bobContactForAlice.deviceId)
+          .firstWhere((message) => message.hasAttachment);
+      expect(bob.attachmentBytesFor(received.attachment!.id), equals(original));
+
+      // Evict the in-memory cache and confirm the lazy disk read
+      // refills it on the next bubble rebuild.
+      bob.evictAttachmentBytesForTesting(received.attachment!.id);
+      expect(
+        bob.attachmentBytesFor(received.attachment!.id),
+        isNull,
+        reason: 'first call returns null while disk read is in flight',
+      );
+      // Drain the disk-read microtasks.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(
+        bob.attachmentBytesFor(received.attachment!.id),
+        equals(original),
+        reason: 'second call sees the disk-cached bytes',
+      );
+    },
+  );
 
   test(
     'sendAttachment round-trips a 1 MB file with 32 KB chunks',
