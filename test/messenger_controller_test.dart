@@ -5069,7 +5069,7 @@ void main() {
     },
   );
 
-  test('sendAttachment rejects a file above the 8 MB cap', () async {
+  test('sendAttachment rejects a file above the 30 MB cap', () async {
     final relayClient = _FakeRelayClient();
     final alice = await _createController(
       relayClient: relayClient,
@@ -5085,6 +5085,12 @@ void main() {
     await _pairControllers(alice, bob);
     final aliceContactForBob = alice.contacts.single;
 
+    expect(
+      MessengerController.maxAttachmentSizeBytes,
+      30 * 1024 * 1024,
+      reason: 'v0.3.2 cap was bumped from 8 MB to 30 MB',
+    );
+
     final tooBig = Uint8List(
       MessengerController.maxAttachmentSizeBytes + 1,
     );
@@ -5097,6 +5103,65 @@ void main() {
       throwsArgumentError,
     );
   });
+
+  test(
+    'sendAttachment round-trips a 1 MB file with 32 KB chunks',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+
+      await _pairControllers(alice, bob);
+      final aliceContactForBob = alice.contacts.single;
+
+      // 1 MB at 32 KB chunks = 32 chunks, exercising the post-Phase-3
+      // chunk size + zero-copy slice path without overlong test time.
+      final original = Uint8List.fromList(
+        List<int>.generate(1024 * 1024, (index) => index & 0xff),
+      );
+      await alice.sendAttachment(
+        contact: aliceContactForBob,
+        bytes: original,
+        fileName: 'large.bin',
+        caption: 'big one',
+      );
+
+      // Drive the offer → chunk_request → chunk → complete handshake.
+      // Each chunk needs ~2 pollNow rounds (receiver requests, sender
+      // ships, receiver verifies, requests next). 32 chunks → ~80 rounds.
+      for (var round = 0; round < 120; round++) {
+        await bob.pollNow();
+        await alice.pollNow();
+        final received = bob.messagesFor(alice.identity!.deviceId).firstWhere(
+          (m) => m.hasAttachment,
+          orElse: () => alice
+              .messagesFor(aliceContactForBob.deviceId)
+              .firstWhere((m) => m.hasAttachment),
+        );
+        if (received.state == DeliveryState.delivered &&
+            bob.attachmentBytesFor(received.attachment!.id) != null) {
+          break;
+        }
+      }
+
+      final bobContactForAlice = bob.contacts.single;
+      final received = bob
+          .messagesFor(bobContactForAlice.deviceId)
+          .firstWhere((message) => message.hasAttachment);
+      expect(received.attachment!.sizeBytes, original.length);
+      expect(received.state, DeliveryState.delivered);
+      final assembled = bob.attachmentBytesFor(received.attachment!.id);
+      expect(assembled, equals(original));
+    },
+  );
 
   test(
     'resetIdentity completes even when LocalRelayNode.stop hangs '

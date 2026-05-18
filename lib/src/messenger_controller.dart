@@ -2863,8 +2863,16 @@ class MessengerController extends ChangeNotifier {
 
   /// Hard limit for v0.3.2 attachments per [notes/PLAN.md] — "small files".
   /// Larger transfers are deferred to v0.3.3 chunk-cache work.
-  static const int maxAttachmentSizeBytes = 8 * 1024 * 1024;
-  static const int _attachmentChunkSize = 64 * 1024;
+  /// Hard cap for a single v0.3.2 attachment. Bumped from 8 MB → 30 MB
+  /// alongside zero-copy slicing and a smaller 32 KB chunk size. Larger
+  /// transfers wait for v0.3.3 chunk-cache work per notes/PLAN.md.
+  static const int maxAttachmentSizeBytes = 30 * 1024 * 1024;
+  /// 32 KB chunks keep each pairwise-encrypted envelope well under the
+  /// relay's `DEFAULT_MAX_ENVELOPE_BYTES = 256 KB` cap (32 KB raw
+  /// + base64 chunk ciphertext + ChaCha20 overhead + JSON wrap ≈ 100 KB).
+  /// For a worst-case 30 MB file this means ~960 chunks; SHA-256 across
+  /// them is sub-second on modern devices.
+  static const int _attachmentChunkSize = 32 * 1024;
 
   /// Sends a file attachment as a v0.3.2 1:1 transfer. The recipient
   /// receives an `attachment_offer` envelope (pairwise-encrypted), then
@@ -2903,7 +2911,15 @@ class MessengerController extends ChangeNotifier {
       final end = (offset + chunkSize > bytes.length)
           ? bytes.length
           : offset + chunkSize;
-      final slice = Uint8List.fromList(bytes.sublist(offset, end));
+      // Zero-copy view into the original buffer. Previously
+      // `Uint8List.fromList(bytes.sublist(...))` allocated per-chunk
+      // copies — for a 30 MB file that's ~960 transient allocations and
+      // ~60 MB peak memory, enough to OOM low-RAM Android.
+      final slice = Uint8List.view(
+        bytes.buffer,
+        bytes.offsetInBytes + offset,
+        end - offset,
+      );
       chunkBytes.add(slice);
       final digest = await Sha256().hash(slice);
       chunkHashes.add(

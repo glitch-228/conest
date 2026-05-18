@@ -1516,6 +1516,15 @@ class _HomeScreenState extends State<HomeScreen> {
       widget.controller.setStatus('File picker returned no data.');
       return;
     }
+    if (bytes.length > MessengerController.maxAttachmentSizeBytes) {
+      final capMb =
+          MessengerController.maxAttachmentSizeBytes ~/ (1024 * 1024);
+      widget.controller.setStatus(
+        '${file.name} is ${(bytes.length / (1024 * 1024)).toStringAsFixed(1)} '
+        'MB; the v0.3.2 cap is $capMb MB. Larger files coming in v0.3.3.',
+      );
+      return;
+    }
     final caption = _composerController.text.trim();
     if (caption.isNotEmpty) {
       _composerController.clear();
@@ -7344,6 +7353,13 @@ class _AttachmentRow extends StatelessWidget {
                 bytes,
                 fit: BoxFit.cover,
                 gaplessPlayback: true,
+                // Without a cache cap, a 30 MB JPEG decodes to a full-
+                // resolution RGBA bitmap (potentially hundreds of MB of
+                // texture memory) on the platform thread and OOMs on
+                // mobile. 640 logical pixels (~2× the 320 thumbnail box
+                // at typical mobile dpr) is plenty for the bubble view;
+                // the full-screen viewer below picks its own size.
+                cacheWidth: 640,
               ),
             ),
           ),
@@ -7431,12 +7447,26 @@ class _ImageViewerScreen extends StatelessWidget {
         foregroundColor: Colors.white,
         title: Text(title),
       ),
-      body: Center(
-        child: InteractiveViewer(
-          minScale: 0.5,
-          maxScale: 6,
-          child: Image.memory(bytes, fit: BoxFit.contain),
-        ),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final dpr = MediaQuery.of(context).devicePixelRatio.clamp(1.0, 3.0);
+          // Cap decoded width at the viewport's physical width — enough
+          // for pixel-perfect rendering, far less than the source image
+          // (a 30 MB photo could be 8 K × 6 K and OOM the platform
+          // image codec without this).
+          final cacheW = (constraints.maxWidth * dpr).round();
+          return Center(
+            child: InteractiveViewer(
+              minScale: 0.5,
+              maxScale: 6,
+              child: Image.memory(
+                bytes,
+                fit: BoxFit.contain,
+                cacheWidth: cacheW,
+              ),
+            ),
+          );
+        },
       ),
     );
   }
