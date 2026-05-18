@@ -958,6 +958,11 @@ void main() {
     now = now.add(const Duration(seconds: 16));
     await alice.retryUnacknowledgedMessagesNow();
     await carol.pollNow();
+    // LAN-first preferred routes can leave a microtask of group-message
+    // snapshot work pending right after pollNow returns under specific
+    // test orderings; an empty delay drains it. In production every
+    // notifyListeners triggers a fresh UI read on the next frame anyway.
+    await Future<void>.delayed(Duration.zero);
 
     expect(carol.messagesForGroup(group.groupId).single.body, 'retry me');
     final retried = alice.messagesForGroup(group.groupId).single;

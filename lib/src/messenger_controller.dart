@@ -136,6 +136,11 @@ class MessengerController extends ChangeNotifier {
   // call finished before its overlapping inner call (a5b93fe regression).
   int _notificationsDeferredDepth = 0;
   bool _deferredNotificationPending = false;
+  // True after `dispose()` returns. Late-firing Timers and async
+  // continuations that try to call notifyListeners would otherwise hit
+  // ChangeNotifier's debug assertion ("used after being disposed");
+  // checking this flag in the override turns those into safe no-ops.
+  bool _disposed = false;
   final LocalRelayNode _localRelayNode;
   final PlatformBridge _platformBridge;
   final Future<List<String>> Function() _lanAddressProvider;
@@ -4764,6 +4769,9 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void notifyListeners() {
+    if (_disposed) {
+      return;
+    }
     if (_notificationsDeferredDepth > 0) {
       _deferredNotificationPending = true;
       return;
@@ -7444,7 +7452,30 @@ class MessengerController extends ChangeNotifier {
                   ),
             );
           });
-    return <PeerEndpoint>[...recentSuccessRoutes, ...cachedHealthyRoutes];
+    // Any eligible LAN route is unconditionally preferred, even when it
+    // hasn't been exercised inside the recent-success window or the
+    // fresh-cache TTL. LAN cost is zero, latency is sub-millisecond, and
+    // the user expects messages to flow over LAN when both peers are on
+    // the same network. The recent-success / cached-healthy gates above
+    // only matter for choosing among non-LAN tiers (direct internet,
+    // relay). Without this short-circuit, a >30s pause on LAN would
+    // route the next message through relay even though the LAN path is
+    // perfectly healthy.
+    final eligibleLanRoutes = candidateRoutes
+        .where((route) => route.kind == PeerRouteKind.lan)
+        .toList(growable: false);
+    final preferred = <PeerEndpoint>[];
+    final seenKeys = <String>{};
+    for (final route in [
+      ...eligibleLanRoutes,
+      ...recentSuccessRoutes,
+      ...cachedHealthyRoutes,
+    ]) {
+      if (seenKeys.add(route.routeKey)) {
+        preferred.add(route);
+      }
+    }
+    return preferred;
   }
 
   Future<PeerRouteHealth> _checkRouteHealth(
@@ -9582,6 +9613,7 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _stopLongPoll();
     _pollTimer?.cancel();
     _pendingSaveTimer?.cancel();
