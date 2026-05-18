@@ -31,8 +31,7 @@ class RouteHealthTracker {
 
   final DateTime Function() _nowProvider;
   final Map<String, PeerRouteHealth> _health = <String, PeerRouteHealth>{};
-  final Map<String, RouteRuntimeState> _runtime =
-      <String, RouteRuntimeState>{};
+  final Map<String, RouteRuntimeState> _runtime = <String, RouteRuntimeState>{};
 
   Map<String, PeerRouteHealth> get healthMap => _health;
   Map<String, RouteRuntimeState> get runtimeMap => _runtime;

@@ -57,33 +57,28 @@ void main() {
       },
     );
 
-    test(
-      'recordSuccess clears the backoff and seeds a healthy cache',
-      () {
-        tracker.recordFailure(lanRoute);
-        expect(tracker.isBackedOff(lanRoute), isTrue);
+    test('recordSuccess clears the backoff and seeds a healthy cache', () {
+      tracker.recordFailure(lanRoute);
+      expect(tracker.isBackedOff(lanRoute), isTrue);
 
-        tracker.recordSuccess(lanRoute, fetch: true);
-        expect(tracker.isBackedOff(lanRoute), isFalse);
-        expect(tracker.hasFreshHealthyCache(lanRoute), isTrue);
-        expect(tracker.hasRecentRouteSuccess(lanRoute), isTrue);
-      },
-    );
+      tracker.recordSuccess(lanRoute, fetch: true);
+      expect(tracker.isBackedOff(lanRoute), isFalse);
+      expect(tracker.hasFreshHealthyCache(lanRoute), isTrue);
+      expect(tracker.hasRecentRouteSuccess(lanRoute), isTrue);
+    });
 
-    test(
-      'health cache expires after the kind-specific TTL',
-      () {
-        tracker.recordSuccess(lanRoute);
-        // LAN cache TTL = 15s.
-        now = now.add(kLanHealthCacheTtl + const Duration(seconds: 1));
-        expect(tracker.hasFreshHealthyCache(lanRoute), isFalse);
-      },
-    );
+    test('health cache expires after the kind-specific TTL', () {
+      tracker.recordSuccess(lanRoute);
+      // LAN cache TTL = 15s.
+      now = now.add(kLanHealthCacheTtl + const Duration(seconds: 1));
+      expect(tracker.hasFreshHealthyCache(lanRoute), isFalse);
+    });
 
     test('kindDeliveryPriority puts LAN before direct before relay', () {
-      expect(tracker.kindDeliveryPriority(lanRoute), lessThan(
-        tracker.kindDeliveryPriority(relayRoute),
-      ));
+      expect(
+        tracker.kindDeliveryPriority(lanRoute),
+        lessThan(tracker.kindDeliveryPriority(relayRoute)),
+      );
     });
 
     test('clear drops both maps', () {

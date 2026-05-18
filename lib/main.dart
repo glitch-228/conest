@@ -703,11 +703,13 @@ class ConestApp extends StatefulWidget {
   final UpdateService updateService;
   final AppInstanceLock instanceLock;
   final ConestThemeController themeController;
+
   /// Nightly / stable / debug — surfaced so the chrome can gate the
   /// "Run Debug Tests" button on the nightly channel (the user installs
   /// nightly builds on real devices for battle testing; stable users
   /// don't see it).
   final ConestBuildInfo buildInfo;
+
   /// Wired by `_runConestWithProfile` (in the bootstrap layer). Called by
   /// the Settings dialog AFTER `controller.resetIdentity` wipes the vault,
   /// so the storage-profile JSON can be deleted and `ConestBootstrapApp`
@@ -1492,10 +1494,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     FilePickerResult? picked;
     try {
-      picked = await FilePicker.pickFiles(
-        type: FileType.any,
-        withData: true,
-      );
+      picked = await FilePicker.pickFiles(type: FileType.any, withData: true);
     } catch (error) {
       widget.controller.setStatus('Could not open file picker: $error');
       return;
@@ -1519,8 +1518,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     if (bytes.length > MessengerController.maxAttachmentSizeBytes) {
-      final capMb =
-          MessengerController.maxAttachmentSizeBytes ~/ (1024 * 1024);
+      final capMb = MessengerController.maxAttachmentSizeBytes ~/ (1024 * 1024);
       widget.controller.setStatus(
         '${file.name} is ${(bytes.length / (1024 * 1024)).toStringAsFixed(1)} '
         'MB; the v0.3.2 cap is $capMb MB. Larger files coming in v0.3.3.',
@@ -3082,8 +3080,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         palette: palette,
                         controller: controller,
                       ),
-                      if (message.body.isNotEmpty)
-                        const SizedBox(height: 8),
+                      if (message.body.isNotEmpty) const SizedBox(height: 8),
                     ],
                     if (message.body.isNotEmpty || !message.hasAttachment)
                       Text(
@@ -3598,8 +3595,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                         palette: palette,
                         controller: controller,
                       ),
-                      if (message.body.isNotEmpty)
-                        const SizedBox(height: 8),
+                      if (message.body.isNotEmpty) const SizedBox(height: 8),
                     ],
                     if (message.body.isNotEmpty || !message.hasAttachment)
                       Text(
@@ -5237,9 +5233,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
       return;
     }
     await _run(
-      () => widget.controller.resetIdentity(
-        onPostReset: widget.onResetIdentity,
-      ),
+      () =>
+          widget.controller.resetIdentity(onPostReset: widget.onResetIdentity),
     );
     if (mounted) {
       Navigator.of(context).pop();
@@ -7353,9 +7348,7 @@ class _AttachmentRow extends StatelessWidget {
   Future<void> _copyCachePath() async {
     final path = await controller.attachmentCachePathFor(descriptor.id);
     if (path == null) {
-      controller.setStatus(
-        'Cache path is not ready yet — still transferring.',
-      );
+      controller.setStatus('Cache path is not ready yet — still transferring.');
       return;
     }
     await Clipboard.setData(ClipboardData(text: path));

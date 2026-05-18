@@ -3461,7 +3461,7 @@ void main() {
         home: app.HomeScreen(
           controller: alice,
           updateService: _createUpdateService(),
-            buildInfo: _createBuildInfo(),
+          buildInfo: _createBuildInfo(),
           themeController: app.ConestThemeController.memory(),
           palette: app.ConestPalette(),
         ),
@@ -3545,7 +3545,7 @@ void main() {
         home: app.HomeScreen(
           controller: alice,
           updateService: _createUpdateService(),
-            buildInfo: _createBuildInfo(),
+          buildInfo: _createBuildInfo(),
           themeController: app.ConestThemeController.memory(),
           palette: app.ConestPalette(),
         ),
@@ -5022,64 +5022,61 @@ void main() {
     },
   );
 
-  test(
-    'sendAttachment round-trips a small file 1:1, hash-verified',
-    () async {
-      final relayClient = _FakeRelayClient();
-      final alice = await _createController(
-        relayClient: relayClient,
-        displayName: 'Alice',
-      );
-      final bob = await _createController(
-        relayClient: relayClient,
-        displayName: 'Bob',
-      );
-      addTearDown(alice.dispose);
-      addTearDown(bob.dispose);
+  test('sendAttachment round-trips a small file 1:1, hash-verified', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
 
-      await _pairControllers(alice, bob);
-      final aliceContactForBob = alice.contacts.single;
+    await _pairControllers(alice, bob);
+    final aliceContactForBob = alice.contacts.single;
 
-      // 192KB payload spans multiple 64KB chunks (3 chunks).
-      final original = Uint8List.fromList(
-        List<int>.generate(192 * 1024, (index) => index & 0xff),
-      );
-      await alice.sendAttachment(
-        contact: aliceContactForBob,
-        bytes: original,
-        fileName: 'sample.bin',
-        mimeType: 'application/octet-stream',
-        caption: 'here you go',
-      );
+    // 192KB payload spans multiple 64KB chunks (3 chunks).
+    final original = Uint8List.fromList(
+      List<int>.generate(192 * 1024, (index) => index & 0xff),
+    );
+    await alice.sendAttachment(
+      contact: aliceContactForBob,
+      bytes: original,
+      fileName: 'sample.bin',
+      mimeType: 'application/octet-stream',
+      caption: 'here you go',
+    );
 
-      // Drive the offer → chunk_request → chunk → complete handshake.
-      // Each pollNow consumes one round of envelopes from the fake relay.
-      for (var round = 0; round < 8; round++) {
-        await bob.pollNow();
-        await alice.pollNow();
-      }
+    // Drive the offer → chunk_request → chunk → complete handshake.
+    // Each pollNow consumes one round of envelopes from the fake relay.
+    for (var round = 0; round < 8; round++) {
+      await bob.pollNow();
+      await alice.pollNow();
+    }
 
-      final bobContactForAlice = bob.contacts.single;
-      final received = bob
-          .messagesFor(bobContactForAlice.deviceId)
-          .firstWhere((message) => message.hasAttachment);
-      expect(received.attachment!.fileName, 'sample.bin');
-      expect(received.attachment!.sizeBytes, original.length);
-      expect(received.body, 'here you go');
-      expect(received.state, DeliveryState.delivered);
+    final bobContactForAlice = bob.contacts.single;
+    final received = bob
+        .messagesFor(bobContactForAlice.deviceId)
+        .firstWhere((message) => message.hasAttachment);
+    expect(received.attachment!.fileName, 'sample.bin');
+    expect(received.attachment!.sizeBytes, original.length);
+    expect(received.body, 'here you go');
+    expect(received.state, DeliveryState.delivered);
 
-      final assembled = bob.attachmentBytesFor(received.attachment!.id);
-      expect(assembled, isNotNull);
-      expect(assembled, equals(original));
+    final assembled = bob.attachmentBytesFor(received.attachment!.id);
+    expect(assembled, isNotNull);
+    expect(assembled, equals(original));
 
-      // Sender side: the offer message should also be marked delivered now
-      // that the complete envelope flowed back.
-      final outbound = alice
-          .messagesFor(aliceContactForBob.deviceId)
-          .firstWhere((message) => message.hasAttachment);
-      expect(outbound.state, DeliveryState.delivered);
-    },
-  );
+    // Sender side: the offer message should also be marked delivered now
+    // that the complete envelope flowed back.
+    final outbound = alice
+        .messagesFor(aliceContactForBob.deviceId)
+        .firstWhere((message) => message.hasAttachment);
+    expect(outbound.state, DeliveryState.delivered);
+  });
 
   test('sendAttachment rejects a file above the 30 MB cap', () async {
     final relayClient = _FakeRelayClient();
@@ -5103,9 +5100,7 @@ void main() {
       reason: 'v0.3.2 cap was bumped from 8 MB to 30 MB',
     );
 
-    final tooBig = Uint8List(
-      MessengerController.maxAttachmentSizeBytes + 1,
-    );
+    final tooBig = Uint8List(MessengerController.maxAttachmentSizeBytes + 1);
     await expectLater(
       alice.sendAttachment(
         contact: aliceContactForBob,
@@ -5181,157 +5176,147 @@ void main() {
     },
   );
 
-  test(
-    'sendAttachment round-trips a 1 MB file with 32 KB chunks',
-    () async {
-      final relayClient = _FakeRelayClient();
-      final alice = await _createController(
-        relayClient: relayClient,
-        displayName: 'Alice',
-      );
-      final bob = await _createController(
-        relayClient: relayClient,
-        displayName: 'Bob',
-      );
-      addTearDown(alice.dispose);
-      addTearDown(bob.dispose);
+  test('sendAttachment round-trips a 1 MB file with 32 KB chunks', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
 
-      await _pairControllers(alice, bob);
-      final aliceContactForBob = alice.contacts.single;
+    await _pairControllers(alice, bob);
+    final aliceContactForBob = alice.contacts.single;
 
-      // 1 MB at 32 KB chunks = 32 chunks, exercising the post-Phase-3
-      // chunk size + zero-copy slice path without overlong test time.
-      final original = Uint8List.fromList(
-        List<int>.generate(1024 * 1024, (index) => index & 0xff),
-      );
-      await alice.sendAttachment(
-        contact: aliceContactForBob,
-        bytes: original,
-        fileName: 'large.bin',
-        caption: 'big one',
-      );
+    // 1 MB at 32 KB chunks = 32 chunks, exercising the post-Phase-3
+    // chunk size + zero-copy slice path without overlong test time.
+    final original = Uint8List.fromList(
+      List<int>.generate(1024 * 1024, (index) => index & 0xff),
+    );
+    await alice.sendAttachment(
+      contact: aliceContactForBob,
+      bytes: original,
+      fileName: 'large.bin',
+      caption: 'big one',
+    );
 
-      // Drive the offer → chunk_request → chunk → complete handshake.
-      // Each chunk needs ~2 pollNow rounds (receiver requests, sender
-      // ships, receiver verifies, requests next). 32 chunks → ~80 rounds.
-      for (var round = 0; round < 120; round++) {
-        await bob.pollNow();
-        await alice.pollNow();
-        final received = bob.messagesFor(alice.identity!.deviceId).firstWhere(
-          (m) => m.hasAttachment,
-          orElse: () => alice
-              .messagesFor(aliceContactForBob.deviceId)
-              .firstWhere((m) => m.hasAttachment),
-        );
-        if (received.state == DeliveryState.delivered &&
-            bob.attachmentBytesFor(received.attachment!.id) != null) {
-          break;
-        }
-      }
-
-      final bobContactForAlice = bob.contacts.single;
+    // Drive the offer → chunk_request → chunk → complete handshake.
+    // Each chunk needs ~2 pollNow rounds (receiver requests, sender
+    // ships, receiver verifies, requests next). 32 chunks → ~80 rounds.
+    for (var round = 0; round < 120; round++) {
+      await bob.pollNow();
+      await alice.pollNow();
       final received = bob
-          .messagesFor(bobContactForAlice.deviceId)
-          .firstWhere((message) => message.hasAttachment);
-      expect(received.attachment!.sizeBytes, original.length);
-      expect(received.state, DeliveryState.delivered);
-      final assembled = bob.attachmentBytesFor(received.attachment!.id);
-      expect(assembled, equals(original));
-    },
-  );
+          .messagesFor(alice.identity!.deviceId)
+          .firstWhere(
+            (m) => m.hasAttachment,
+            orElse: () => alice
+                .messagesFor(aliceContactForBob.deviceId)
+                .firstWhere((m) => m.hasAttachment),
+          );
+      if (received.state == DeliveryState.delivered &&
+          bob.attachmentBytesFor(received.attachment!.id) != null) {
+        break;
+      }
+    }
 
-  test(
-    'resetIdentity completes even when LocalRelayNode.stop hangs '
-    'and fires the post-reset hook',
-    () async {
-      // The Android symptom — "reset does nothing" — was the platform-
-      // bridge stop call hanging the await. The 2-second per-call
-      // timeout must let reset proceed.
-      final relayClient = _FakeRelayClient();
-      final controller = await _createController(
-        relayClient: relayClient,
-        displayName: 'Alice',
-        localRelayNode: _HangingLocalRelayNode(),
-      );
-      addTearDown(controller.dispose);
+    final bobContactForAlice = bob.contacts.single;
+    final received = bob
+        .messagesFor(bobContactForAlice.deviceId)
+        .firstWhere((message) => message.hasAttachment);
+    expect(received.attachment!.sizeBytes, original.length);
+    expect(received.state, DeliveryState.delivered);
+    final assembled = bob.attachmentBytesFor(received.attachment!.id);
+    expect(assembled, equals(original));
+  });
 
-      var hookFired = false;
-      final stopwatch = Stopwatch()..start();
-      await controller.resetIdentity(
-        onPostReset: () async {
-          hookFired = true;
-        },
-      );
-      stopwatch.stop();
+  test('resetIdentity completes even when LocalRelayNode.stop hangs '
+      'and fires the post-reset hook', () async {
+    // The Android symptom — "reset does nothing" — was the platform-
+    // bridge stop call hanging the await. The 2-second per-call
+    // timeout must let reset proceed.
+    final relayClient = _FakeRelayClient();
+    final controller = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+      localRelayNode: _HangingLocalRelayNode(),
+    );
+    addTearDown(controller.dispose);
 
-      expect(controller.hasIdentity, isFalse);
-      expect(hookFired, isTrue, reason: 'post-reset hook must run');
-      expect(
-        stopwatch.elapsed,
-        lessThan(const Duration(seconds: 5)),
-        reason:
-            'reset must not block longer than the 2s-per-call timeout '
-            'budget (×3 hung awaits, plus slack)',
-      );
-    },
-  );
+    var hookFired = false;
+    final stopwatch = Stopwatch()..start();
+    await controller.resetIdentity(
+      onPostReset: () async {
+        hookFired = true;
+      },
+    );
+    stopwatch.stop();
 
-  test(
-    'long-poll never picks the local-relay loopback route',
-    () async {
-      // Loopback fetches race with _handleLocalEnvelopeStored and add no
-      // latency benefit (the local relay already pushes synchronously).
-      final relayClient = _FakeRelayClient();
-      final controller = await _createController(
-        relayClient: relayClient,
-        displayName: 'Alice',
-        internetRelayHost: 'relay.example',
-      );
-      addTearDown(controller.dispose);
+    expect(controller.hasIdentity, isFalse);
+    expect(hookFired, isTrue, reason: 'post-reset hook must run');
+    expect(
+      stopwatch.elapsed,
+      lessThan(const Duration(seconds: 5)),
+      reason:
+          'reset must not block longer than the 2s-per-call timeout '
+          'budget (×3 hung awaits, plus slack)',
+    );
+  });
 
-      final me = controller.identity!;
-      final picked = controller.pickPrimaryRelayForLongPollForTesting(me);
-      expect(picked, isNotNull);
-      expect(
-        picked!.kind,
-        PeerRouteKind.relay,
-        reason: 'must pick a remote relay, not LAN loopback',
-      );
-      expect(picked.host, isNot('127.0.0.1'));
-    },
-  );
+  test('long-poll never picks the local-relay loopback route', () async {
+    // Loopback fetches race with _handleLocalEnvelopeStored and add no
+    // latency benefit (the local relay already pushes synchronously).
+    final relayClient = _FakeRelayClient();
+    final controller = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+      internetRelayHost: 'relay.example',
+    );
+    addTearDown(controller.dispose);
 
-  test(
-    'parallel _processEnvelopes calls return the notifier depth to 0 '
-    'and keep notify dispatch unblocked',
-    () async {
-      // Regression: a previous wasDeferred/restore implementation left the
-      // notifier gate permanently closed when two _processEnvelopes futures
-      // overlapped at an await boundary. The ref-count version must keep
-      // the depth invariant.
-      final relayClient = _FakeRelayClient();
-      final controller = await _createController(
-        relayClient: relayClient,
-        displayName: 'Alice',
-      );
-      addTearDown(controller.dispose);
+    final me = controller.identity!;
+    final picked = controller.pickPrimaryRelayForLongPollForTesting(me);
+    expect(picked, isNotNull);
+    expect(
+      picked!.kind,
+      PeerRouteKind.relay,
+      reason: 'must pick a remote relay, not LAN loopback',
+    );
+    expect(picked.host, isNot('127.0.0.1'));
+  });
 
-      await Future.wait([
-        controller.processEnvelopesForTesting(const []),
-        controller.processEnvelopesForTesting(const []),
-        controller.processEnvelopesForTesting(const []),
-      ]);
-      expect(controller.notificationsDeferredDepth, 0);
+  test('parallel _processEnvelopes calls return the notifier depth to 0 '
+      'and keep notify dispatch unblocked', () async {
+    // Regression: a previous wasDeferred/restore implementation left the
+    // notifier gate permanently closed when two _processEnvelopes futures
+    // overlapped at an await boundary. The ref-count version must keep
+    // the depth invariant.
+    final relayClient = _FakeRelayClient();
+    final controller = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    addTearDown(controller.dispose);
 
-      var fired = 0;
-      controller.addListener(() => fired++);
-      controller.setStatus('after parallel batches');
-      expect(
-        fired,
-        1,
-        reason:
-            'notify gate must reopen after every _processEnvelopes call exits',
-      );
-    },
-  );
+    await Future.wait([
+      controller.processEnvelopesForTesting(const []),
+      controller.processEnvelopesForTesting(const []),
+      controller.processEnvelopesForTesting(const []),
+    ]);
+    expect(controller.notificationsDeferredDepth, 0);
+
+    var fired = 0;
+    controller.addListener(() => fired++);
+    controller.setStatus('after parallel batches');
+    expect(
+      fired,
+      1,
+      reason:
+          'notify gate must reopen after every _processEnvelopes call exits',
+    );
+  });
 }

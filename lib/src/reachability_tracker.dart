@@ -112,10 +112,7 @@ class ReachabilityTracker {
 
   void noteFailure(String deviceId, {DateTime? at}) {
     final timestamp = (at ?? _nowProvider()).toUtc();
-    _upsert(
-      deviceId,
-      (current) => current.copyWith(lastFailureAt: timestamp),
-    );
+    _upsert(deviceId, (current) => current.copyWith(lastFailureAt: timestamp));
   }
 
   /// Ensures a record exists for [deviceId] without modifying any timestamps.

@@ -1218,6 +1218,7 @@ class ChatMessage {
   final String? replySnippet;
   final String? replySenderDeviceId;
   final String? replySenderDisplayName;
+
   /// Non-null on v0.3.2+ messages that carry a file or image attachment.
   /// `body` may still hold a short caption alongside the attachment.
   final AttachmentDescriptor? attachment;

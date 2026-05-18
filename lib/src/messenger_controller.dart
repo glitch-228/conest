@@ -160,6 +160,7 @@ class MessengerController extends ChangeNotifier {
   final Future<List<String>> Function() _lanAddressProvider;
   final DateTime Function() _nowProvider;
   final Future<SignedRelayDefaults?> Function()? _signedRelayDefaultsLoader;
+
   /// Resolves the directory under which assembled attachment bytes are
   /// persisted, so the bubble can keep rendering the file row / image
   /// thumbnail after an app restart instead of regressing to "transferring".
@@ -631,11 +632,17 @@ class MessengerController extends ChangeNotifier {
           ? 'No LAN address detected.'
           : 'LAN addresses: ${me.lanAddresses.join(', ')}.',
       ...me.lanAddresses.map((address) {
-        final summaries = _protocolRoutes(
-          kind: PeerRouteKind.lan,
-          host: address,
-          port: me.localRelayPort,
-        ).map((route) => _routeHealthTracker.healthMap[route.routeKey]?.summary).nonNulls;
+        final summaries =
+            _protocolRoutes(
+                  kind: PeerRouteKind.lan,
+                  host: address,
+                  port: me.localRelayPort,
+                )
+                .map(
+                  (route) =>
+                      _routeHealthTracker.healthMap[route.routeKey]?.summary,
+                )
+                .nonNulls;
         return summaries.isEmpty
             ? 'LAN reachability for $address not checked yet.'
             : summaries.join(' | ');
@@ -673,7 +680,11 @@ class MessengerController extends ChangeNotifier {
             kind: PeerRouteKind.lan,
             host: address,
             port: me.localRelayPort,
-          ).any((route) => _routeHealthTracker.healthMap[route.routeKey]?.available ?? false);
+          ).any(
+            (route) =>
+                _routeHealthTracker.healthMap[route.routeKey]?.available ??
+                false,
+          );
         });
     final summary = !me.relayModeEnabled
         ? 'Relay mode is off.'
@@ -1071,7 +1082,6 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-
   /// Sink invoked by [_ScoringRelayClient] after every relay call. Updates
   /// the per-endpoint [RelayHealthScore] in the vault snapshot.
   void _recordRelayAttemptFromShim({
@@ -1405,7 +1415,11 @@ class MessengerController extends ChangeNotifier {
       'Debug build gate',
       DebugCheckStatus.pass,
       'Debug diagnostics available on $platform (build mode '
-      '${kDebugMode ? 'debug' : kReleaseMode ? 'release' : 'profile'}).',
+          '${kDebugMode
+              ? 'debug'
+              : kReleaseMode
+              ? 'release'
+              : 'profile'}).',
     );
     add(
       'Identity',
@@ -2468,14 +2482,8 @@ class MessengerController extends ChangeNotifier {
     await _platformBridge
         .setAndroidBackgroundRuntimeEnabled(false)
         .timeout(platformCallTimeout, onTimeout: () {});
-    await _stopPairingBeacon().timeout(
-      platformCallTimeout,
-      onTimeout: () {},
-    );
-    await _localRelayNode.stop().timeout(
-      platformCallTimeout,
-      onTimeout: () {},
-    );
+    await _stopPairingBeacon().timeout(platformCallTimeout, onTimeout: () {});
+    await _localRelayNode.stop().timeout(platformCallTimeout, onTimeout: () {});
     await _vaultStore.clear();
     _snapshot = VaultSnapshot.empty();
     _polling = false;
@@ -2885,6 +2893,7 @@ class MessengerController extends ChangeNotifier {
   /// alongside zero-copy slicing and a smaller 32 KB chunk size. Larger
   /// transfers wait for v0.3.3 chunk-cache work per notes/PLAN.md.
   static const int maxAttachmentSizeBytes = 30 * 1024 * 1024;
+
   /// 32 KB chunks keep each pairwise-encrypted envelope well under the
   /// relay's `DEFAULT_MAX_ENVELOPE_BYTES = 256 KB` cap (32 KB raw
   /// + base64 chunk ciphertext + ChaCha20 overhead + JSON wrap ≈ 100 KB).
@@ -4112,7 +4121,10 @@ class MessengerController extends ChangeNotifier {
     if (sender == null) {
       return;
     }
-    final decoded = await _crypto.decryptMessage(contact: sender, envelope: envelope);
+    final decoded = await _crypto.decryptMessage(
+      contact: sender,
+      envelope: envelope,
+    );
     final payload = jsonDecode(decoded);
     if (payload is! Map<String, dynamic>) {
       return;
@@ -4129,7 +4141,10 @@ class MessengerController extends ChangeNotifier {
       targetDeviceId: envelope.senderDeviceId,
       acknowledgedMembershipVersion: acknowledgedVersion,
     );
-    _reachability.noteAnySignal(envelope.senderDeviceId, at: envelope.createdAt);
+    _reachability.noteAnySignal(
+      envelope.senderDeviceId,
+      at: envelope.createdAt,
+    );
     await _persist('Group ${group.title} membership ack from ${sender.alias}.');
   }
 
@@ -4239,7 +4254,10 @@ class MessengerController extends ChangeNotifier {
         );
       }
       if (reason == 'heartbeat' || reason == 'chat_resume') {
-        _reachability.noteHeartbeatAttempt(contact.deviceId, at: effectiveSentAt);
+        _reachability.noteHeartbeatAttempt(
+          contact.deviceId,
+          at: effectiveSentAt,
+        );
       }
       return true;
     } catch (_) {
@@ -4249,7 +4267,10 @@ class MessengerController extends ChangeNotifier {
         );
       }
       if (reason == 'heartbeat' || reason == 'chat_resume') {
-        _reachability.noteHeartbeatAttempt(contact.deviceId, at: effectiveSentAt);
+        _reachability.noteHeartbeatAttempt(
+          contact.deviceId,
+          at: effectiveSentAt,
+        );
         _reachability.noteFailure(contact.deviceId);
       }
       return false;
@@ -4294,7 +4315,8 @@ class MessengerController extends ChangeNotifier {
           _candidateRoutesForContact(contact),
         );
         for (final check in checks) {
-          if (check.available && _routeHealthTracker.isEligibleNow(check.route)) {
+          if (check.available &&
+              _routeHealthTracker.isEligibleNow(check.route)) {
             selectedRoute = check.route;
             break;
           }
@@ -4365,7 +4387,11 @@ class MessengerController extends ChangeNotifier {
                 : const Duration(seconds: 4),
           );
           stopwatch.stop();
-          _routeHealthTracker.recordSuccess(route, fetch: true, latency: stopwatch.elapsed);
+          _routeHealthTracker.recordSuccess(
+            route,
+            fetch: true,
+            latency: stopwatch.elapsed,
+          );
           if (route.kind == PeerRouteKind.relay) {
             relaySuccess = true;
           }
@@ -5432,8 +5458,7 @@ class MessengerController extends ChangeNotifier {
     }
     final bytes = Uint8List.fromList(base64Decode(chunk.ciphertextBase64));
     final digest = await Sha256().hash(bytes);
-    final expectedHash =
-        state.descriptor.chunkHashes[chunk.index].hashBase64;
+    final expectedHash = state.descriptor.chunkHashes[chunk.index].hashBase64;
     if (base64Encode(digest.bytes) != expectedHash) {
       // Hash mismatch — request the chunk once more. If it fails again we
       // cancel the transfer.
@@ -5595,7 +5620,10 @@ class MessengerController extends ChangeNotifier {
     if (invite == null || invite.deviceId != envelope.senderDeviceId) {
       return;
     }
-    _reachability.noteAnySignal(sender.deviceId, at: sentAt ?? envelope.createdAt);
+    _reachability.noteAnySignal(
+      sender.deviceId,
+      at: sentAt ?? envelope.createdAt,
+    );
     final updated = await _updateExistingContactFromInvite(
       invite,
       statusBuilder: (contact) =>
@@ -5608,10 +5636,16 @@ class MessengerController extends ChangeNotifier {
       final pending = _pendingRouteUpdateProbes.remove(pendingKey);
       if (pending != null) {
         if (pending.reason == 'heartbeat' || pending.reason == 'chat_resume') {
-          _reachability.noteHeartbeatReply(sender.deviceId, at: envelope.createdAt);
+          _reachability.noteHeartbeatReply(
+            sender.deviceId,
+            at: envelope.createdAt,
+          );
           _markRuntimeActivity();
         }
-        _reachability.noteTwoWaySuccess(sender.deviceId, at: envelope.createdAt);
+        _reachability.noteTwoWaySuccess(
+          sender.deviceId,
+          at: envelope.createdAt,
+        );
       }
     }
     if (requestReply) {
@@ -5703,7 +5737,10 @@ class MessengerController extends ChangeNotifier {
     if (sender == null) {
       return;
     }
-    final decoded = await _crypto.decryptMessage(contact: sender, envelope: envelope);
+    final decoded = await _crypto.decryptMessage(
+      contact: sender,
+      envelope: envelope,
+    );
     final payload = jsonDecode(decoded);
     if (payload is! Map<String, dynamic>) {
       return;
@@ -5778,7 +5815,10 @@ class MessengerController extends ChangeNotifier {
     if (sender == null || me == null) {
       return;
     }
-    final decoded = await _crypto.decryptMessage(contact: sender, envelope: envelope);
+    final decoded = await _crypto.decryptMessage(
+      contact: sender,
+      envelope: envelope,
+    );
     final payload = jsonDecode(decoded);
     if (payload is! Map<String, dynamic>) {
       return;
@@ -5832,7 +5872,10 @@ class MessengerController extends ChangeNotifier {
     if (sender == null) {
       return;
     }
-    final decoded = await _crypto.decryptMessage(contact: sender, envelope: envelope);
+    final decoded = await _crypto.decryptMessage(
+      contact: sender,
+      envelope: envelope,
+    );
     final payload = _crypto.decodeGroupMessagePayload(decoded);
     if (payload.groupId != group.groupId ||
         payload.membershipVersion < group.membershipVersion) {
@@ -5913,7 +5956,10 @@ class MessengerController extends ChangeNotifier {
     if (contact == null) {
       return;
     }
-    final decoded = await _crypto.decryptMessage(contact: contact, envelope: envelope);
+    final decoded = await _crypto.decryptMessage(
+      contact: contact,
+      envelope: envelope,
+    );
     final payload = jsonDecode(decoded);
     if (payload is! Map<String, dynamic>) {
       return;
@@ -5944,7 +5990,10 @@ class MessengerController extends ChangeNotifier {
     if (contact == null) {
       return;
     }
-    final decoded = await _crypto.decryptMessage(contact: contact, envelope: envelope);
+    final decoded = await _crypto.decryptMessage(
+      contact: contact,
+      envelope: envelope,
+    );
     final payload = jsonDecode(decoded);
     if (payload is! Map<String, dynamic>) {
       return;
@@ -7647,9 +7696,9 @@ class MessengerController extends ChangeNotifier {
             })
             .toList(growable: false)
           ..sort((left, right) {
-            final kindCompare = _routeHealthTracker.kindDeliveryPriority(
-              left,
-            ).compareTo(_routeHealthTracker.kindDeliveryPriority(right));
+            final kindCompare = _routeHealthTracker
+                .kindDeliveryPriority(left)
+                .compareTo(_routeHealthTracker.kindDeliveryPriority(right));
             if (kindCompare != 0) {
               return kindCompare;
             }
@@ -7719,7 +7768,8 @@ class MessengerController extends ChangeNotifier {
     };
     try {
       final stopwatch = Stopwatch()..start();
-      final cachedRelayId = _routeHealthTracker.healthMap[route.routeKey]?.relayInstanceId;
+      final cachedRelayId =
+          _routeHealthTracker.healthMap[route.routeKey]?.relayInstanceId;
       final expectedKey = cachedRelayId == null
           ? null
           : _snapshot.pinnedRelayIdentityKeys[cachedRelayId];
@@ -7822,10 +7872,17 @@ class MessengerController extends ChangeNotifier {
         );
         stopwatch.stop();
         if (stored) {
-          _routeHealthTracker.recordSuccess(route, fetch: false, latency: stopwatch.elapsed);
+          _routeHealthTracker.recordSuccess(
+            route,
+            fetch: false,
+            latency: stopwatch.elapsed,
+          );
           return route;
         }
-        _routeHealthTracker.recordFailure(route, error: 'Route did not accept store.');
+        _routeHealthTracker.recordFailure(
+          route,
+          error: 'Route did not accept store.',
+        );
       } catch (error) {
         _routeHealthTracker.recordFailure(route, error: error.toString());
         lastError = error;
@@ -8635,7 +8692,10 @@ class MessengerController extends ChangeNotifier {
                 }
               })
               .catchError((error) {
-                _routeHealthTracker.recordFailure(route, error: error.toString());
+                _routeHealthTracker.recordFailure(
+                  route,
+                  error: error.toString(),
+                );
               })
               .then((_) {}),
         );
@@ -9789,7 +9849,11 @@ class MessengerController extends ChangeNotifier {
             timeout: const Duration(milliseconds: 350),
           );
           stopwatch.stop();
-          _routeHealthTracker.recordSuccess(route, fetch: true, latency: stopwatch.elapsed);
+          _routeHealthTracker.recordSuccess(
+            route,
+            fetch: true,
+            latency: stopwatch.elapsed,
+          );
           processed += await _processEnvelopes(envelopes);
         } catch (error) {
           _routeHealthTracker.recordFailure(route, error: error.toString());
@@ -9896,10 +9960,7 @@ class _InboundAttachmentState {
     required this.messageId,
     required this.peerDeviceId,
     required this.descriptor,
-  }) : received = List<Uint8List?>.filled(
-         descriptor.chunkHashes.length,
-         null,
-       );
+  }) : received = List<Uint8List?>.filled(descriptor.chunkHashes.length, null);
 
   final String messageId;
   final String peerDeviceId;

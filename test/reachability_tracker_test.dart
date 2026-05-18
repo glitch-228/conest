@@ -43,14 +43,11 @@ void main() {
       expect(tracker.stateFor('dev-bob'), ContactReachabilityState.unknown);
     });
 
-    test(
-      'noteAvailablePath alone never lifts a contact above unknown',
-      () {
-        tracker.noteAvailablePath('dev-bob');
-        // No two-way success and no other signal — diagnostic only.
-        expect(tracker.stateFor('dev-bob'), ContactReachabilityState.unknown);
-      },
-    );
+    test('noteAvailablePath alone never lifts a contact above unknown', () {
+      tracker.noteAvailablePath('dev-bob');
+      // No two-way success and no other signal — diagnostic only.
+      expect(tracker.stateFor('dev-bob'), ContactReachabilityState.unknown);
+    });
 
     test('remove deletes the record', () {
       tracker.noteTwoWaySuccess('dev-bob');

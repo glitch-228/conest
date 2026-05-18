@@ -76,40 +76,31 @@ void main() {
     expect(plaintext, 'hello bob');
   });
 
-  test(
-    'sessionKeyFor throws when the contact has no active public key '
-    '(pending-verification crypto block)',
-    () async {
-      final alice = await _createIdentity(displayName: 'alice');
-      final bob = await _createIdentity(displayName: 'bob');
-      final crypto = CryptoService(identityProvider: () => alice);
-      final pendingBob = _contactFor(bob, overridePublicKey: '');
+  test('sessionKeyFor throws when the contact has no active public key '
+      '(pending-verification crypto block)', () async {
+    final alice = await _createIdentity(displayName: 'alice');
+    final bob = await _createIdentity(displayName: 'bob');
+    final crypto = CryptoService(identityProvider: () => alice);
+    final pendingBob = _contactFor(bob, overridePublicKey: '');
 
-      await expectLater(
-        crypto.sessionKeyFor(pendingBob),
-        throwsA(isA<Object>()),
-      );
-    },
-  );
+    await expectLater(crypto.sessionKeyFor(pendingBob), throwsA(isA<Object>()));
+  });
 
-  test(
-    'decodeDirectMessagePayload accepts version-2 reply envelope, '
-    'falls back to plain text for unknown shapes',
-    () async {
-      final alice = await _createIdentity(displayName: 'alice');
-      final crypto = CryptoService(identityProvider: () => alice);
+  test('decodeDirectMessagePayload accepts version-2 reply envelope, '
+      'falls back to plain text for unknown shapes', () async {
+    final alice = await _createIdentity(displayName: 'alice');
+    final crypto = CryptoService(identityProvider: () => alice);
 
-      final replyShape = crypto.decodeDirectMessagePayload(
-        '{"version":2,"body":"hi","replySnippet":"orig"}',
-      );
-      expect(replyShape.body, 'hi');
-      expect(replyShape.replySnippet, 'orig');
+    final replyShape = crypto.decodeDirectMessagePayload(
+      '{"version":2,"body":"hi","replySnippet":"orig"}',
+    );
+    expect(replyShape.body, 'hi');
+    expect(replyShape.replySnippet, 'orig');
 
-      final legacy = crypto.decodeDirectMessagePayload('plain text body');
-      expect(legacy.body, 'plain text body');
-      expect(legacy.replySnippet, isNull);
-    },
-  );
+    final legacy = crypto.decodeDirectMessagePayload('plain text body');
+    expect(legacy.body, 'plain text body');
+    expect(legacy.replySnippet, isNull);
+  });
 
   test('deriveSafetyNumber is deterministic and order-independent', () async {
     final alice = await _createIdentity(displayName: 'alice');
