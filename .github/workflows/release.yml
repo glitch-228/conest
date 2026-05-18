@@ -238,6 +238,17 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+      # super_clipboard's super_native_extensions builds an Android JNI
+      # shared library from Rust via cargokit. Without a local Rust
+      # toolchain, the build falls back to a download of precompiled
+      # binaries; that download silently no-ops on some CI runners,
+      # producing an APK with image-clipboard support stubbed out.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-app
       - name: Verify required secrets
         shell: bash
         env:

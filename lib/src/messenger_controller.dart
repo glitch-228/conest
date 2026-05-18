@@ -3771,6 +3771,69 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  /// In-memory rate-limit for orphan-removal notices. When we receive an
+  /// envelope from a sender we no longer know, we send one
+  /// `contact_remove` back so the peer (whose original contact_remove
+  /// got lost in transit, or who never thought we were a contact) can
+  /// drop us. Without this throttle, every retry from the peer would
+  /// echo back another notice and spam the relay.
+  final Map<String, DateTime> _orphanRemovalNoticesSentAt =
+      <String, DateTime>{};
+  static const Duration _orphanRemovalNoticeCooldown = Duration(minutes: 5);
+
+  Future<void> _maybeSendOrphanContactRemoval({
+    required String senderDeviceId,
+  }) async {
+    if (senderDeviceId.isEmpty || !hasIdentity) {
+      return;
+    }
+    // Already in contacts (or being verified) → not an orphan.
+    if (_contactByDeviceId(senderDeviceId) != null) {
+      return;
+    }
+    // Group member → handled by group flow.
+    for (final group in _snapshot.groups) {
+      if (group.activeMemberDeviceIds.contains(senderDeviceId)) {
+        return;
+      }
+    }
+    final me = _requireIdentity();
+    if (senderDeviceId == me.deviceId) {
+      return;
+    }
+    final now = _now();
+    final lastSent = _orphanRemovalNoticesSentAt[senderDeviceId];
+    if (lastSent != null &&
+        now.difference(lastSent) < _orphanRemovalNoticeCooldown) {
+      return;
+    }
+    _orphanRemovalNoticesSentAt[senderDeviceId] = now;
+    final removal = RelayEnvelope(
+      kind: 'contact_remove',
+      messageId: _randomId('rmorph'),
+      conversationId: 'contact-remove-$senderDeviceId',
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: senderDeviceId,
+      createdAt: DateTime.now().toUtc(),
+    );
+    final relayRoutes = me.configuredRelays
+        .where((r) => r.kind == PeerRouteKind.relay)
+        .toList(growable: false);
+    if (relayRoutes.isEmpty) {
+      return;
+    }
+    try {
+      await _deliverAcrossRoutes(
+        routes: relayRoutes,
+        recipientDeviceId: senderDeviceId,
+        envelope: removal,
+      );
+    } catch (_) {
+      // Best-effort; receiver may not share a relay with us.
+    }
+  }
+
   Future<bool> _sendContactRemoval(ContactRecord contact) async {
     final me = _requireIdentity();
     final removal = RelayEnvelope(
@@ -4117,6 +4180,16 @@ class MessengerController extends ChangeNotifier {
     String? probeId,
     DateTime? sentAt,
   }) async {
+    // Skip the send entirely for non-sendable contacts. _sendRouteUpdate
+    // historically bypassed _deliverToContact (which has the same
+    // guard) when `routes` was explicit — that's the heartbeat path —
+    // so route_updates were leaking out to pendingVerification /
+    // archived peers, hitting the relay one-sided and wasting
+    // bandwidth + confusing the UI ("we're still in touch" when in
+    // fact the peer reset identity).
+    if (!contact.canSendOutbound) {
+      return false;
+    }
     final me = _requireIdentity();
     final effectiveProbeId =
         probeId ?? (requestReply ? _randomId('probe') : null);
@@ -5100,6 +5173,16 @@ class MessengerController extends ChangeNotifier {
         }
       }
       if (contact == null) {
+        // The peer thinks we're a contact but we don't think they are.
+        // The likely cause is that our earlier contact_remove envelope
+        // never reached them (relay down / both peers offline at
+        // different times). Echo one contact_remove back so they can
+        // catch up. Rate-limited to once per cooldown per sender.
+        unawaited(
+          _maybeSendOrphanContactRemoval(
+            senderDeviceId: envelope.senderDeviceId,
+          ),
+        );
         continue;
       }
 

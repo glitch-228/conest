@@ -1406,9 +1406,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _showDebugMenu() async {
-    if (!kDebugMode) {
-      return;
-    }
+    // Channel gating happens at the button (HomeScreen.build), so
+    // _showDebugMenu trusts its caller. The old `if (!kDebugMode) return`
+    // here defeated the nightly-channel button gate added in the prior
+    // commit: button visible but tap did nothing.
     await showDialog<void>(
       context: context,
       builder: (context) => DebugMenuDialog(
