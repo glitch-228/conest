@@ -3091,6 +3091,40 @@ class MessengerController extends ChangeNotifier {
     _assembledAttachments.remove(attachmentId);
   }
 
+  /// Receiver-side progress for an inbound attachment, as a fraction
+  /// in `[0, 1]`. Returns null when the transfer has either not started
+  /// or has already completed (in which case [attachmentBytesFor] gives
+  /// the assembled bytes). The bubble uses this to render a thin
+  /// progress bar above the file row.
+  double? attachmentTransferProgress(String attachmentId) {
+    final state = _inboundAttachments[attachmentId];
+    if (state == null) {
+      return null;
+    }
+    if (state.descriptor.chunkHashes.isEmpty) {
+      return 0;
+    }
+    final received = state.received.where((chunk) => chunk != null).length;
+    return received / state.descriptor.chunkHashes.length;
+  }
+
+  /// Resolves the on-disk cache path for a completed attachment so the
+  /// Copy-path UI affordance can hand it off to the OS clipboard.
+  /// Returns null if the bytes haven't been persisted yet (transfer
+  /// still in flight or the disk write failed).
+  Future<String?> attachmentCachePathFor(String attachmentId) async {
+    try {
+      final dir = await _attachmentRoot();
+      final file = File(p.join(dir.path, attachmentId));
+      if (!await file.exists()) {
+        return null;
+      }
+      return file.path;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<GroupRecord> createGroup({
     required String title,
     required List<ContactRecord> members,

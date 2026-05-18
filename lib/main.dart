@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:super_clipboard/super_clipboard.dart';
 
 import 'src/app_storage.dart';
 import 'src/build_info.dart';
@@ -7319,6 +7320,47 @@ class _AttachmentRow extends StatelessWidget {
     }
   }
 
+  Future<void> _copyImageBytes(Uint8List bytes) async {
+    final clipboard = SystemClipboard.instance;
+    if (clipboard == null) {
+      controller.setStatus('Clipboard is not available on this platform.');
+      return;
+    }
+    try {
+      final item = DataWriterItem(suggestedName: descriptor.fileName);
+      final mime = descriptor.mimeType.toLowerCase();
+      if (mime == 'image/png') {
+        item.add(Formats.png(bytes));
+      } else if (mime == 'image/jpeg' || mime == 'image/jpg') {
+        item.add(Formats.jpeg(bytes));
+      } else if (mime == 'image/gif') {
+        item.add(Formats.gif(bytes));
+      } else if (mime == 'image/webp') {
+        item.add(Formats.webp(bytes));
+      } else {
+        // Fall back to PNG: most paste targets understand it and the
+        // browser/editor will re-encode anyway.
+        item.add(Formats.png(bytes));
+      }
+      await clipboard.write([item]);
+      controller.setStatus('Copied ${descriptor.fileName} to clipboard.');
+    } catch (error) {
+      controller.setStatus('Copy failed: $error');
+    }
+  }
+
+  Future<void> _copyCachePath() async {
+    final path = await controller.attachmentCachePathFor(descriptor.id);
+    if (path == null) {
+      controller.setStatus(
+        'Cache path is not ready yet — still transferring.',
+      );
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: path));
+    controller.setStatus('Cache path copied: $path');
+  }
+
   void _openFullScreenImage(BuildContext context, Uint8List bytes) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -7334,36 +7376,53 @@ class _AttachmentRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bytes = controller.attachmentBytesFor(descriptor.id);
+    final progress = controller.attachmentTransferProgress(descriptor.id);
     final textColor = outbound ? palette.outboundText : palette.inboundText;
     final metaColor = outbound ? palette.outboundMeta : palette.inboundMeta;
     final hasBytes = bytes != null;
     final showImage = _isImage && hasBytes;
 
     if (showImage) {
-      return ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 320, maxHeight: 320),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(14),
-            onTap: () => _openFullScreenImage(context, bytes),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(14),
-              child: Image.memory(
-                bytes,
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
-                // Without a cache cap, a 30 MB JPEG decodes to a full-
-                // resolution RGBA bitmap (potentially hundreds of MB of
-                // texture memory) on the platform thread and OOMs on
-                // mobile. 640 logical pixels (~2× the 320 thumbnail box
-                // at typical mobile dpr) is plenty for the bubble view;
-                // the full-screen viewer below picks its own size.
-                cacheWidth: 640,
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 320, maxHeight: 320),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () => _openFullScreenImage(context, bytes),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Image.memory(
+                    bytes,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                    cacheWidth: 640,
+                  ),
+                ),
               ),
             ),
           ),
-        ),
+          const SizedBox(height: 6),
+          _AttachmentActions(
+            metaColor: metaColor,
+            actions: [
+              _AttachmentAction(
+                icon: Icons.copy_outlined,
+                label: 'Copy',
+                onTap: () => _copyImageBytes(bytes),
+              ),
+              _AttachmentAction(
+                icon: Icons.download_outlined,
+                label: 'Save',
+                onTap: () => _saveToDisk(context, bytes),
+              ),
+            ],
+          ),
+        ],
       );
     }
 
@@ -7372,26 +7431,30 @@ class _AttachmentRow extends StatelessWidget {
         : Icons.insert_drive_file_outlined;
     final statusLine = hasBytes
         ? _formatBytes(descriptor.sizeBytes)
-        : 'Transferring · ${_formatBytes(descriptor.sizeBytes)}';
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
+        : (progress != null
+              ? 'Transferring · ${(progress * 100).toStringAsFixed(0)}% '
+                    '· ${_formatBytes(descriptor.sizeBytes)}'
+              : 'Transferring · ${_formatBytes(descriptor.sizeBytes)}');
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: outbound
+            ? palette.primary.withValues(alpha: 0.10)
+            : palette.selection,
         borderRadius: BorderRadius.circular(12),
-        onTap: hasBytes ? () => _saveToDisk(context, bytes) : null,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: BoxDecoration(
-            color: outbound
-                ? palette.primary.withValues(alpha: 0.10)
-                : palette.selection,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
+      ),
+      // mainAxisSize default (max) so Flexible inside gets real width.
+      // The earlier MainAxisSize.min collapsed Flexible to 0 → bubble
+      // looked empty for non-image attachments on the receiver.
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
             children: [
               Icon(icon, size: 20, color: textColor),
               const SizedBox(width: 10),
-              Flexible(
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
@@ -7415,14 +7478,84 @@ class _AttachmentRow extends StatelessWidget {
                   ],
                 ),
               ),
-              if (hasBytes) ...[
-                const SizedBox(width: 10),
-                Icon(Icons.download_outlined, size: 18, color: metaColor),
-              ],
             ],
           ),
-        ),
+          if (progress != null && progress < 1.0) ...[
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: progress,
+                minHeight: 4,
+                backgroundColor: metaColor.withValues(alpha: 0.18),
+                color: palette.primary,
+              ),
+            ),
+          ],
+          if (hasBytes) ...[
+            const SizedBox(height: 8),
+            _AttachmentActions(
+              metaColor: metaColor,
+              actions: [
+                _AttachmentAction(
+                  icon: Icons.copy_outlined,
+                  label: 'Copy path',
+                  onTap: _copyCachePath,
+                ),
+                _AttachmentAction(
+                  icon: Icons.download_outlined,
+                  label: 'Save',
+                  onTap: () => _saveToDisk(context, bytes),
+                ),
+              ],
+            ),
+          ],
+        ],
       ),
+    );
+  }
+}
+
+class _AttachmentAction {
+  const _AttachmentAction({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final Future<void> Function() onTap;
+}
+
+class _AttachmentActions extends StatelessWidget {
+  const _AttachmentActions({required this.metaColor, required this.actions});
+
+  final Color metaColor;
+  final List<_AttachmentAction> actions;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 4,
+      children: [
+        for (final action in actions)
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              foregroundColor: metaColor,
+              minimumSize: const Size(0, 32),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              textStyle: Theme.of(context).textTheme.labelSmall,
+            ),
+            onPressed: () {
+              action.onTap();
+            },
+            icon: Icon(action.icon, size: 16),
+            label: Text(action.label),
+          ),
+      ],
     );
   }
 }
