@@ -1556,29 +1556,54 @@ class _HomeScreenState extends State<HomeScreen> {
     required Uint8List bytes,
     required String fileName,
     required String mimeType,
+  }) {
+    return _sendMultipleAttachments(
+      contact: contact,
+      items: [(bytes: bytes, fileName: fileName, mimeType: mimeType)],
+    );
+  }
+
+  Future<void> _sendMultipleAttachments({
+    required ContactRecord contact,
+    required List<({Uint8List bytes, String fileName, String mimeType})> items,
   }) async {
-    if (bytes.length > MessengerController.maxAttachmentSizeBytes) {
-      final capMb = MessengerController.maxAttachmentSizeBytes ~/ (1024 * 1024);
-      widget.controller.setStatus(
-        '$fileName is ${(bytes.length / (1024 * 1024)).toStringAsFixed(1)} '
-        'MB; the cap is $capMb MB.',
-      );
+    if (items.isEmpty) {
       return;
+    }
+    final cap = MessengerController.maxAttachmentsPerSend;
+    final clamped = items.take(cap).toList(growable: false);
+    if (items.length > cap) {
+      widget.controller.setStatus(
+        'Only the first $cap files will be sent (got ${items.length}).',
+      );
     }
     final caption = _composerController.text.trim();
     if (caption.isNotEmpty) {
       _composerController.clear();
     }
-    try {
-      await widget.controller.sendAttachment(
-        contact: contact,
-        bytes: bytes,
-        fileName: fileName,
-        mimeType: mimeType,
-        caption: caption,
-      );
-    } catch (error) {
-      widget.controller.setStatus('Send failed: $error');
+    final capMb = MessengerController.maxAttachmentSizeBytes ~/ (1024 * 1024);
+    for (var i = 0; i < clamped.length; i++) {
+      final item = clamped[i];
+      if (item.bytes.length > MessengerController.maxAttachmentSizeBytes) {
+        widget.controller.setStatus(
+          '${item.fileName} skipped: ${(item.bytes.length / (1024 * 1024)).toStringAsFixed(1)} '
+          'MB exceeds the $capMb MB cap.',
+        );
+        continue;
+      }
+      try {
+        await widget.controller.sendAttachment(
+          contact: contact,
+          bytes: item.bytes,
+          fileName: item.fileName,
+          mimeType: item.mimeType,
+          caption: i == 0 ? caption : '',
+        );
+      } catch (error) {
+        widget.controller.setStatus(
+          'Send failed for ${item.fileName}: $error',
+        );
+      }
     }
   }
 

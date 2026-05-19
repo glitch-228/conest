@@ -2960,6 +2960,13 @@ class MessengerController extends ChangeNotifier {
   /// them is sub-second on modern devices.
   static const int _attachmentChunkSize = 32 * 1024;
 
+  /// Maximum number of attachments accepted in one user-triggered batch
+  /// (multi-file picker, drag-and-drop, mobile gallery multi-select). Each
+  /// file still has to clear `maxAttachmentSizeBytes` individually; the
+  /// batch cap caps the per-send fanout so a stray drag with 50+ files
+  /// doesn't drown the recipient.
+  static const int maxAttachmentsPerSend = 6;
+
   /// Sends a file attachment as a v0.3.2 1:1 transfer. The recipient
   /// receives an `attachment_offer` envelope (pairwise-encrypted), then
   /// pulls chunks back via `attachment_chunk_request` / `attachment_chunk`
