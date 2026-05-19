@@ -3771,10 +3771,10 @@ class _ChatPanelState extends State<_ChatPanel> {
                       state: reachabilityState,
                       palette: palette,
                     ),
-                    _StatusChip(
-                      label: 'LAN first',
+                    _ConnectivityChip(
+                      contact: contact,
+                      controller: controller,
                       palette: palette,
-                      icon: Icons.compare_arrows,
                     ),
                     IconButton(
                       onPressed: widget.onShowProfile,
@@ -7269,6 +7269,243 @@ class _StatusChip extends StatelessWidget {
           if (expand) Expanded(child: labelWidget) else labelWidget,
         ],
       ),
+    );
+  }
+}
+
+class _ConnectivityChip extends StatelessWidget {
+  const _ConnectivityChip({
+    required this.contact,
+    required this.controller,
+    required this.palette,
+  });
+
+  final ContactRecord contact;
+  final MessengerController controller;
+  final ConestPalette palette;
+
+  ({String label, IconData icon, Color color}) _labelFor(
+    EffectiveRoutingMode mode,
+  ) {
+    switch (mode) {
+      case EffectiveRoutingMode.lanFirst:
+        return (
+          label: 'LAN first',
+          icon: Icons.swap_horiz,
+          color: palette.primary,
+        );
+      case EffectiveRoutingMode.lanOnly:
+        return (
+          label: 'LAN only',
+          icon: Icons.wifi_tethering,
+          color: palette.primary,
+        );
+      case EffectiveRoutingMode.onlineFirst:
+        return (
+          label: 'Online first',
+          icon: Icons.public,
+          color: palette.primary,
+        );
+      case EffectiveRoutingMode.onlineOnly:
+        return (
+          label: 'Online only',
+          icon: Icons.cloud_outlined,
+          color: palette.primary,
+        );
+      case EffectiveRoutingMode.offline:
+        return (
+          label: 'Offline',
+          icon: Icons.cloud_off,
+          color: palette.danger,
+        );
+    }
+  }
+
+  Future<void> _open(BuildContext context) async {
+    final global =
+        controller.identity?.connectivity ??
+        const GlobalConnectivityPreferences();
+    if (!global.anyEnabled) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Connectivity is off. Enable LAN or Online in Settings.',
+          ),
+        ),
+      );
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _ConnectivityDialog(
+        title: 'Routing — ${contact.alias}',
+        initial: contact.routing,
+        global: global,
+        onSave: (next) {
+          unawaited(
+            controller.updateContactRoutingPreferences(
+              contact.deviceId,
+              next,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final global =
+        controller.identity?.connectivity ??
+        const GlobalConnectivityPreferences();
+    final mode = contact.routing.effectiveMode(global);
+    final info = _labelFor(mode);
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: () => _open(context),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: palette.paper,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: palette.stroke),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(info.icon, size: 16, color: info.color),
+            const SizedBox(width: 8),
+            Text(info.label),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ConnectivityDialog extends StatefulWidget {
+  const _ConnectivityDialog({
+    required this.title,
+    required this.initial,
+    required this.global,
+    required this.onSave,
+  });
+
+  final String title;
+  final ContactRoutingPreferences initial;
+  final GlobalConnectivityPreferences global;
+  final void Function(ContactRoutingPreferences) onSave;
+
+  @override
+  State<_ConnectivityDialog> createState() => _ConnectivityDialogState();
+}
+
+class _ConnectivityDialogState extends State<_ConnectivityDialog> {
+  late bool _lan = widget.initial.lanEnabled;
+  late bool _online = widget.initial.onlineEnabled;
+  late RoutingPreference _preferred = widget.initial.preferred;
+
+  String _resolvedLabel() {
+    final effective = ContactRoutingPreferences(
+      lanEnabled: _lan,
+      onlineEnabled: _online,
+      preferred: _preferred,
+    ).effectiveMode(widget.global);
+    switch (effective) {
+      case EffectiveRoutingMode.lanFirst:
+        return 'Uses LAN when available, falls back to Online.';
+      case EffectiveRoutingMode.lanOnly:
+        return 'Uses LAN only. No relay traffic for this contact.';
+      case EffectiveRoutingMode.onlineFirst:
+        return 'Uses Online when available, falls back to LAN.';
+      case EffectiveRoutingMode.onlineOnly:
+        return 'Uses Online only. No LAN traffic for this contact.';
+      case EffectiveRoutingMode.offline:
+        return widget.global.anyEnabled
+            ? 'No transport selected — this contact is unreachable.'
+            : 'Global connectivity is off — adjust Settings to send.';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canSave = _lan || _online;
+    return AlertDialog(
+      title: Text(widget.title),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CheckboxListTile(
+            value: _lan,
+            onChanged: widget.global.lanEnabled
+                ? (v) => setState(() => _lan = v ?? false)
+                : null,
+            title: const Text('LAN'),
+            subtitle: widget.global.lanEnabled
+                ? const Text('Same-network delivery')
+                : const Text('Disabled by global setting'),
+            contentPadding: EdgeInsets.zero,
+          ),
+          CheckboxListTile(
+            value: _online,
+            onChanged: widget.global.onlineEnabled
+                ? (v) => setState(() => _online = v ?? false)
+                : null,
+            title: const Text('Online'),
+            subtitle: widget.global.onlineEnabled
+                ? const Text('Relay / internet delivery')
+                : const Text('Disabled by global setting'),
+            contentPadding: EdgeInsets.zero,
+          ),
+          if (_lan && _online) ...[
+            const SizedBox(height: 8),
+            const Text('Prefer'),
+            const SizedBox(height: 4),
+            SegmentedButton<RoutingPreference>(
+              segments: const [
+                ButtonSegment(
+                  value: RoutingPreference.lan,
+                  label: Text('LAN'),
+                ),
+                ButtonSegment(
+                  value: RoutingPreference.online,
+                  label: Text('Online'),
+                ),
+              ],
+              selected: {_preferred},
+              onSelectionChanged: (sel) =>
+                  setState(() => _preferred = sel.first),
+            ),
+          ],
+          const SizedBox(height: 12),
+          Text(
+            _resolvedLabel(),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: canSave
+              ? () {
+                  widget.onSave(
+                    ContactRoutingPreferences(
+                      lanEnabled: _lan,
+                      onlineEnabled: _online,
+                      preferred: _preferred,
+                    ),
+                  );
+                  Navigator.of(context).pop();
+                }
+              : null,
+          child: const Text('Save'),
+        ),
+      ],
     );
   }
 }
