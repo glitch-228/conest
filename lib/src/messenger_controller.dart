@@ -6147,14 +6147,21 @@ class MessengerController extends ChangeNotifier {
 
   static const int _notificationRecentMessageCap = 5;
 
+  @visibleForTesting
+  List<({String sender, String body, int timestampMs})>
+  recentInboundLinesForContactForTesting(
+    ContactRecord contact, {
+    String defaultBody = '',
+  }) => _recentInboundLinesForContact(contact, defaultBody: defaultBody);
+
   List<({String sender, String body, int timestampMs})>
   _recentInboundLinesForContact(
     ContactRecord contact, {
     required String defaultBody,
   }) {
-    final messages = messagesFor(contact.deviceId)
-        .where((m) => !m.outbound)
-        .toList(growable: false);
+    final messages = messagesFor(
+      contact.deviceId,
+    ).where((m) => !m.outbound).toList(growable: false);
     final tail = messages.length > _notificationRecentMessageCap
         ? messages.sublist(messages.length - _notificationRecentMessageCap)
         : messages;
@@ -6179,9 +6186,9 @@ class MessengerController extends ChangeNotifier {
 
   List<({String sender, String body, int timestampMs})>
   _recentInboundLinesForGroup(GroupRecord group) {
-    final messages = messagesForGroup(group.groupId)
-        .where((m) => !m.outbound)
-        .toList(growable: false);
+    final messages = messagesForGroup(
+      group.groupId,
+    ).where((m) => !m.outbound).toList(growable: false);
     final tail = messages.length > _notificationRecentMessageCap
         ? messages.sublist(messages.length - _notificationRecentMessageCap)
         : messages;

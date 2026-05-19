@@ -182,8 +182,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
     if (_sending || _selectedIds.isEmpty) return;
     setState(() => _sending = true);
     final byId = {for (final a in _assets) a.id: a};
-    final items =
-        <({Uint8List bytes, String fileName, String mimeType})>[];
+    final items = <({Uint8List bytes, String fileName, String mimeType})>[];
     for (final id in _selectedIds) {
       final asset = byId[id];
       if (asset == null) continue;
@@ -192,13 +191,11 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
         if (file == null) continue;
         final bytes = await file.readAsBytes();
         final fileName = asset.title ?? 'media-${asset.id}';
-        items.add(
-          (
-            bytes: bytes,
-            fileName: fileName,
-            mimeType: _mimeForAsset(asset, fileName),
-          ),
-        );
+        items.add((
+          bytes: bytes,
+          fileName: fileName,
+          mimeType: _mimeForAsset(asset, fileName),
+        ));
       } catch (_) {
         // Skip unreadable assets; the rest of the batch still goes.
       }

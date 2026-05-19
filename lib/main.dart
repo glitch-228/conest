@@ -1495,22 +1495,17 @@ class _HomeScreenState extends State<HomeScreen> {
     if (contact == null || files.isEmpty) {
       return;
     }
-    final items =
-        <({Uint8List bytes, String fileName, String mimeType})>[];
+    final items = <({Uint8List bytes, String fileName, String mimeType})>[];
     for (final file in files) {
       try {
         final bytes = await file.readAsBytes();
-        items.add(
-          (
-            bytes: bytes,
-            fileName: file.name,
-            mimeType: _guessMimeType(file.name),
-          ),
-        );
+        items.add((
+          bytes: bytes,
+          fileName: file.name,
+          mimeType: _guessMimeType(file.name),
+        ));
       } catch (error) {
-        widget.controller.setStatus(
-          'Could not read ${file.name}: $error',
-        );
+        widget.controller.setStatus('Could not read ${file.name}: $error');
       }
     }
     await _sendMultipleAttachments(contact: contact, items: items);
@@ -1573,8 +1568,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (picked == null || picked.files.isEmpty) {
       return;
     }
-    final items =
-        <({Uint8List bytes, String fileName, String mimeType})>[];
+    final items = <({Uint8List bytes, String fileName, String mimeType})>[];
     for (final file in picked.files) {
       Uint8List? bytes = file.bytes;
       // Desktop picker often returns a path instead of bytes.
@@ -1582,25 +1576,19 @@ class _HomeScreenState extends State<HomeScreen> {
         try {
           bytes = await File(file.path!).readAsBytes();
         } catch (error) {
-          widget.controller.setStatus(
-            'Could not read ${file.name}: $error',
-          );
+          widget.controller.setStatus('Could not read ${file.name}: $error');
           continue;
         }
       }
       if (bytes == null) {
-        widget.controller.setStatus(
-          '${file.name}: picker returned no data.',
-        );
+        widget.controller.setStatus('${file.name}: picker returned no data.');
         continue;
       }
-      items.add(
-        (
-          bytes: bytes,
-          fileName: file.name,
-          mimeType: _guessMimeType(file.name),
-        ),
-      );
+      items.add((
+        bytes: bytes,
+        fileName: file.name,
+        mimeType: _guessMimeType(file.name),
+      ));
     }
     await _sendMultipleAttachments(contact: contact, items: items);
   }
@@ -1654,9 +1642,7 @@ class _HomeScreenState extends State<HomeScreen> {
           caption: i == 0 ? caption : '',
         );
       } catch (error) {
-        widget.controller.setStatus(
-          'Send failed for ${item.fileName}: $error',
-        );
+        widget.controller.setStatus('Send failed for ${item.fileName}: $error');
       }
     }
   }
@@ -1867,7 +1853,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     _showContactProfile(selectedContact),
                                 onSend: _sendCurrentMessage,
                                 onAttach: _openMediaPicker,
-                    onDropFiles: _handleDroppedFiles,
+                                onDropFiles: _handleDroppedFiles,
                               ),
                       ),
                   ],

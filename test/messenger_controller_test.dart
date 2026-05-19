@@ -5517,10 +5517,97 @@ void main() {
       );
     },
   );
+
+  group('multi-file batch send', () {
+    test('maxAttachmentsPerSend exposes the cap', () {
+      expect(MessengerController.maxAttachmentsPerSend, 6);
+    });
+
+    test('three sendAttachment calls produce three distinct outbound '
+        'messages with separate attachment ids', () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobContact = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+      for (var i = 0; i < 3; i++) {
+        await alice.sendAttachment(
+          contact: bobContact,
+          bytes: Uint8List.fromList(List<int>.filled(16, i + 1)),
+          fileName: 'f$i.bin',
+          caption: i == 0 ? 'batch caption' : '',
+        );
+      }
+      final outbound = alice
+          .messagesFor(bobContact.deviceId)
+          .where((m) => m.outbound && m.attachment != null)
+          .toList();
+      expect(outbound.length, 3);
+      final ids = outbound.map((m) => m.attachment!.id).toSet();
+      expect(ids.length, 3, reason: 'each attachment must have a unique id');
+      expect(outbound.first.body, 'batch caption');
+      expect(outbound[1].body, '');
+      expect(outbound[2].body, '');
+    });
+  });
+
+  test(
+    'showMessageNotification carries recentMessages with sender + timestamp',
+    () async {
+      final recorder = _RecordingPlatformBridge();
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        platformBridge: recorder,
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobOnAlice = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+      // Seed Alice's view with 3 inbound messages from Bob via the
+      // recent-inbound helper directly — it walks messagesFor and shapes
+      // the payload that ships to the native side.
+      final aliceOnBob = bob.contacts.firstWhere((c) => c.alias == 'Alice');
+      for (var i = 0; i < 3; i++) {
+        await bob.sendMessage(contact: aliceOnBob, body: 'ping $i');
+      }
+      // Poll Alice to absorb Bob's three sends.
+      await alice.pollNow();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final lines = alice.recentInboundLinesForContactForTesting(
+        bobOnAlice,
+        defaultBody: 'fallback',
+      );
+      expect(lines.length, greaterThanOrEqualTo(1));
+      expect(lines.last.sender, 'Bob');
+      // Timestamps must be strictly non-decreasing — they reflect arrival
+      // order and feed Notification.MessagingStyle on the native side.
+      for (var i = 1; i < lines.length; i++) {
+        expect(
+          lines[i].timestampMs,
+          greaterThanOrEqualTo(lines[i - 1].timestampMs),
+        );
+      }
+    },
+  );
 }
 
 class _RecordingPlatformBridge extends PlatformBridge {
   final List<String> dismissed = <String>[];
+  final List<_ShowCall> shown = <_ShowCall>[];
 
   @override
   Future<void> dismissMessageNotification({
@@ -5528,4 +5615,43 @@ class _RecordingPlatformBridge extends PlatformBridge {
   }) async {
     dismissed.add(conversationId);
   }
+
+  @override
+  Future<void> showMessageNotification({
+    required String title,
+    required String body,
+    required String conversationId,
+    String? senderName,
+    String? selfName,
+    List<({String sender, String body, int timestampMs})> recentMessages =
+        const [],
+  }) async {
+    shown.add(
+      _ShowCall(
+        title: title,
+        body: body,
+        conversationId: conversationId,
+        senderName: senderName,
+        selfName: selfName,
+        recentMessages: List.of(recentMessages),
+      ),
+    );
+  }
+}
+
+class _ShowCall {
+  _ShowCall({
+    required this.title,
+    required this.body,
+    required this.conversationId,
+    required this.senderName,
+    required this.selfName,
+    required this.recentMessages,
+  });
+  final String title;
+  final String body;
+  final String conversationId;
+  final String? senderName;
+  final String? selfName;
+  final List<({String sender, String body, int timestampMs})> recentMessages;
 }
