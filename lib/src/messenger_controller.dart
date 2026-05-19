@@ -5750,9 +5750,7 @@ class MessengerController extends ChangeNotifier {
     final conversations = List<ConversationRecord>.from(
       _snapshot.conversations,
     );
-    final idx = conversations.indexWhere(
-      (c) => c.peerDeviceId == peerDeviceId,
-    );
+    final idx = conversations.indexWhere((c) => c.peerDeviceId == peerDeviceId);
     if (idx < 0) return;
     final updated = <ChatMessage>[];
     var changed = false;

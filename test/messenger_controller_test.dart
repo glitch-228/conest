@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:conest/main.dart' as app;
+import 'package:conest/main.dart' show sniffImageMimeType;
 import 'package:conest/src/build_info.dart';
 import 'package:conest/src/local_relay_node.dart';
 import 'package:conest/src/messenger_controller.dart';
@@ -5603,6 +5604,96 @@ void main() {
       }
     },
   );
+
+  group('attachment lifecycle cleanup', () {
+    test(
+      'deleting an attachment-bearing message clears inbound + outbound '
+      'state and prevents the bubble from rendering stuck transfer',
+      () async {
+        final relayClient = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final bobOnAlice = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+        await alice.sendAttachment(
+          contact: bobOnAlice,
+          bytes: Uint8List.fromList(List<int>.filled(32, 7)),
+          fileName: 'a.bin',
+        );
+        final outbound = alice
+            .messagesFor(bobOnAlice.deviceId)
+            .firstWhere((m) => m.outbound && m.attachment != null);
+        final attachmentId = outbound.attachment!.id;
+        // Locally delete on Alice's side — should clear all attachment state.
+        await alice.deleteMessage(contact: bobOnAlice, messageId: outbound.id);
+        expect(
+          alice
+              .messagesFor(bobOnAlice.deviceId)
+              .any((m) => m.id == outbound.id),
+          isFalse,
+        );
+        expect(alice.attachmentTransferProgress(attachmentId), isNull);
+        expect(alice.attachmentBytesFor(attachmentId), isNull);
+      },
+    );
+  });
+
+  group('clipboard image sniff', () {
+    test('detects PNG header', () {
+      final bytes = Uint8List.fromList([
+        0x89,
+        0x50,
+        0x4E,
+        0x47,
+        0x0D,
+        0x0A,
+        0x1A,
+        0x0A,
+      ]);
+      expect(sniffImageMimeType(bytes), 'image/png');
+    });
+
+    test('detects JPEG header', () {
+      final bytes = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]);
+      expect(sniffImageMimeType(bytes), 'image/jpeg');
+    });
+
+    test('detects GIF89a header', () {
+      final bytes = Uint8List.fromList([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
+      expect(sniffImageMimeType(bytes), 'image/gif');
+    });
+
+    test('detects WebP header', () {
+      final bytes = Uint8List.fromList([
+        0x52,
+        0x49,
+        0x46,
+        0x46,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x57,
+        0x45,
+        0x42,
+        0x50,
+      ]);
+      expect(sniffImageMimeType(bytes), 'image/webp');
+    });
+
+    test('returns null for unknown bytes', () {
+      final bytes = Uint8List.fromList([0x00, 0x01, 0x02, 0x03]);
+      expect(sniffImageMimeType(bytes), isNull);
+    });
+  });
 }
 
 class _RecordingPlatformBridge extends PlatformBridge {

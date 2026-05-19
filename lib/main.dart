@@ -7883,8 +7883,10 @@ class _AttachmentRow extends StatelessWidget {
         ? env['USERPROFILE'] ?? env['HOMEPATH']
         : env['HOME'];
     if (base == null || base.isEmpty) return null;
-    final dir = Directory('$base${Platform.pathSeparator}Downloads'
-        '${Platform.pathSeparator}conest');
+    final dir = Directory(
+      '$base${Platform.pathSeparator}Downloads'
+      '${Platform.pathSeparator}conest',
+    );
     try {
       if (!await dir.exists()) {
         await dir.create(recursive: true);
@@ -7911,9 +7913,7 @@ class _AttachmentRow extends StatelessWidget {
             'video' => 'Movies/conest',
             _ => 'Download/conest',
           };
-          controller.setStatus(
-            'Saved ${descriptor.fileName} to $relPath.',
-          );
+          controller.setStatus('Saved ${descriptor.fileName} to $relPath.');
           return;
         }
       } catch (error) {
@@ -7959,7 +7959,8 @@ class _AttachmentRow extends StatelessWidget {
       // (e.g. a JPEG that arrived as application/octet-stream). Wrapping
       // a JPEG in Formats.png(bytes) silently corrupts paste targets on
       // Android, which was the visible regression.
-      final sniffed = sniffImageMimeType(bytes) ?? descriptor.mimeType.toLowerCase();
+      final sniffed =
+          sniffImageMimeType(bytes) ?? descriptor.mimeType.toLowerCase();
       switch (sniffed) {
         case 'image/png':
           item.add(Formats.png(bytes));

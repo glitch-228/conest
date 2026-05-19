@@ -579,9 +579,9 @@ class _MediaEditorScreenState extends State<MediaEditorScreen> {
     } catch (error) {
       debugPrint('Conest rotate failed: $error');
       if (mounted) {
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text('Rotation failed: $error')),
-        );
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(SnackBar(content: Text('Rotation failed: $error')));
         setState(() => _busy = false);
       }
     }
