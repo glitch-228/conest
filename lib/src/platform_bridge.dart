@@ -86,6 +86,33 @@ class PlatformBridge {
     }
   }
 
+  /// Save attachment bytes into the Android public media collections. `kind`
+  /// is one of 'image' (Pictures/conest), 'video' (Movies/conest), or 'other'
+  /// (Download/conest). Returns the saved URI/path on success, null when the
+  /// bridge is unavailable (non-Android, missing plugin), or throws on
+  /// underlying I/O failure.
+  Future<String?> saveMediaToGallery({
+    required Uint8List bytes,
+    required String fileName,
+    required String mimeType,
+    required String kind,
+  }) async {
+    if (!_supportsAndroidSystemCalls) {
+      return null;
+    }
+    try {
+      final result = await _channel.invokeMethod<String>('saveMediaToGallery', {
+        'bytes': bytes,
+        'fileName': fileName,
+        'mimeType': mimeType,
+        'kind': kind,
+      });
+      return result;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
   Future<void> installDownloadedApk(String path) async {
     if (!_supportsAndroidSystemCalls) {
       return;

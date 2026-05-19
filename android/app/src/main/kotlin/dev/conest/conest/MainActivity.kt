@@ -6,11 +6,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Person
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -54,6 +57,26 @@ class MainActivity : FlutterActivity() {
                         maybeCancelGroupSummary(manager)
                     }
                     result.success(null)
+                }
+                "saveMediaToGallery" -> {
+                    val bytes = call.argument<ByteArray>("bytes")
+                    val fileName = call.argument<String>("fileName") ?: "conest-attachment"
+                    val mimeType = call.argument<String>("mimeType") ?: "application/octet-stream"
+                    val kind = call.argument<String>("kind") ?: "other"
+                    if (bytes == null) {
+                        result.error("missing_bytes", "bytes argument is required.", null)
+                    } else {
+                        try {
+                            val saved = saveMediaToGallery(bytes, fileName, mimeType, kind)
+                            result.success(saved)
+                        } catch (error: Exception) {
+                            result.error(
+                                "save_failed",
+                                error.message ?: "Could not save the file.",
+                                null
+                            )
+                        }
+                    }
                 }
                 "installDownloadedApk" -> {
                     val path = call.argument<String>("path")
@@ -184,6 +207,71 @@ class MainActivity : FlutterActivity() {
         if (!anyChildRemains) {
             manager.cancel(SUMMARY_NOTIFICATION_ID)
         }
+    }
+
+    private fun saveMediaToGallery(
+        bytes: ByteArray,
+        fileName: String,
+        mimeType: String,
+        kind: String
+    ): String {
+        val safeName = if (fileName.isBlank()) "conest-attachment" else fileName
+        val resolvedKind = when {
+            kind == "image" || mimeType.startsWith("image/") -> "image"
+            kind == "video" || mimeType.startsWith("video/") -> "video"
+            else -> "other"
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val (collection, relativePath) = when (resolvedKind) {
+                "image" -> Pair(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    "${Environment.DIRECTORY_PICTURES}/conest"
+                )
+                "video" -> Pair(
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                    "${Environment.DIRECTORY_MOVIES}/conest"
+                )
+                else -> Pair(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    "${Environment.DIRECTORY_DOWNLOADS}/conest"
+                )
+            }
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val resolver = applicationContext.contentResolver
+            val uri = resolver.insert(collection, values)
+                ?: throw IllegalStateException("MediaStore.insert returned null")
+            try {
+                resolver.openOutputStream(uri)?.use { it.write(bytes) }
+                    ?: throw IllegalStateException("openOutputStream returned null")
+                values.clear()
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+                return uri.toString()
+            } catch (e: Exception) {
+                resolver.delete(uri, null, null)
+                throw e
+            }
+        }
+        // Pre-Q: write directly to the public directory (requires
+        // WRITE_EXTERNAL_STORAGE which the manifest declares for API ≤ 28).
+        val baseDirName = when (resolvedKind) {
+            "image" -> Environment.DIRECTORY_PICTURES
+            "video" -> Environment.DIRECTORY_MOVIES
+            else -> Environment.DIRECTORY_DOWNLOADS
+        }
+        val baseDir = Environment.getExternalStoragePublicDirectory(baseDirName)
+        val subDir = java.io.File(baseDir, "conest")
+        if (!subDir.exists() && !subDir.mkdirs()) {
+            throw IllegalStateException("Could not create ${subDir.path}")
+        }
+        val target = java.io.File(subDir, safeName)
+        target.writeBytes(bytes)
+        return target.absolutePath
     }
 
     private fun installDownloadedApk(path: String) {

@@ -157,6 +157,7 @@ class MessengerController extends ChangeNotifier {
   bool _disposed = false;
   final LocalRelayNode _localRelayNode;
   final PlatformBridge _platformBridge;
+  PlatformBridge get platformBridge => _platformBridge;
   final Future<List<String>> Function() _lanAddressProvider;
   final DateTime Function() _nowProvider;
   final Future<SignedRelayDefaults?> Function()? _signedRelayDefaultsLoader;

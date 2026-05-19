@@ -7839,12 +7839,68 @@ class _AttachmentRow extends StatelessWidget {
 
   bool get _isImage => descriptor.mimeType.startsWith('image/');
 
-  Future<void> _saveToDisk(BuildContext context, Uint8List bytes) async {
+  String _saveKindFor(String mimeType) {
+    if (mimeType.startsWith('image/')) return 'image';
+    if (mimeType.startsWith('video/')) return 'video';
+    return 'other';
+  }
+
+  /// Resolves `~/Downloads/conest/` (or `%USERPROFILE%\Downloads\conest` on
+  /// Windows) and ensures the directory exists. Returns null on web or when
+  /// HOME is undefined.
+  Future<Directory?> _conestDownloadsDir() async {
+    if (kIsWeb) return null;
+    final env = Platform.environment;
+    final base = Platform.isWindows
+        ? env['USERPROFILE'] ?? env['HOMEPATH']
+        : env['HOME'];
+    if (base == null || base.isEmpty) return null;
+    final dir = Directory('$base${Platform.pathSeparator}Downloads'
+        '${Platform.pathSeparator}conest');
     try {
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+    } catch (_) {
+      return null;
+    }
+    return dir;
+  }
+
+  Future<void> _saveToDisk(BuildContext context, Uint8List bytes) async {
+    final kind = _saveKindFor(descriptor.mimeType);
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        final saved = await controller.platformBridge.saveMediaToGallery(
+          bytes: bytes,
+          fileName: descriptor.fileName,
+          mimeType: descriptor.mimeType,
+          kind: kind,
+        );
+        if (saved != null) {
+          final relPath = switch (kind) {
+            'image' => 'Pictures/conest',
+            'video' => 'Movies/conest',
+            _ => 'Download/conest',
+          };
+          controller.setStatus(
+            'Saved ${descriptor.fileName} to $relPath.',
+          );
+          return;
+        }
+      } catch (error) {
+        controller.setStatus(
+          'Gallery save failed ($error); falling back to file dialog.',
+        );
+      }
+    }
+    try {
+      final defaultDir = await _conestDownloadsDir();
       final path = await FilePicker.saveFile(
         dialogTitle: 'Save ${descriptor.fileName}',
         fileName: descriptor.fileName,
         bytes: bytes,
+        initialDirectory: defaultDir?.path,
       );
       if (path == null) {
         return;
