@@ -3618,8 +3618,12 @@ class MessengerController extends ChangeNotifier {
     if (message.state != DeliveryState.pending) {
       throw ArgumentError('Only pending messages can be canceled.');
     }
+    final attachmentId = message.attachment?.id;
     _clearOutboundAttempt(contact.deviceId, messageId);
     _deleteMessage(contact.deviceId, messageId);
+    if (attachmentId != null) {
+      unawaited(_sendAttachmentCancel(contact, attachmentId));
+    }
     await _persist('Canceled and deleted pending message to ${contact.alias}.');
   }
 
@@ -3631,12 +3635,19 @@ class MessengerController extends ChangeNotifier {
     if (message == null) {
       throw ArgumentError('Message not found.');
     }
+    final attachmentId = message.attachment?.id;
     _clearOutboundAttempt(contact.deviceId, messageId);
     _deleteMessage(contact.deviceId, messageId);
     await _persist('Message deleted locally.');
 
     if (!message.outbound || message.state == DeliveryState.pending) {
+      if (attachmentId != null && message.outbound) {
+        unawaited(_sendAttachmentCancel(contact, attachmentId));
+      }
       return;
+    }
+    if (attachmentId != null) {
+      unawaited(_sendAttachmentCancel(contact, attachmentId));
     }
     final sent = await _sendMessageDeletion(
       contact: contact,
@@ -5496,6 +5507,17 @@ class MessengerController extends ChangeNotifier {
     }
     final state = _outboundAttachments[attachmentId];
     if (state == null || state.peerDeviceId != requester.deviceId) {
+      // Sender no longer has this attachment (deleted, canceled, or never
+      // existed across a reinstall) — proactively cancel so the receiver
+      // stops asking for chunks that will never arrive.
+      unawaited(_sendAttachmentCancel(requester, attachmentId));
+      return;
+    }
+    if (_messageById(state.peerDeviceId, state.messageId) == null) {
+      // Parent message was locally deleted; tear down outbound state and
+      // notify the receiver.
+      _outboundAttachments.remove(attachmentId);
+      unawaited(_sendAttachmentCancel(requester, attachmentId));
       return;
     }
     if (index < 0 || index >= state.chunks.length) {
@@ -5540,6 +5562,14 @@ class MessengerController extends ChangeNotifier {
     if (state == null || state.peerDeviceId != sender.deviceId) {
       return;
     }
+    // Janitor: if the parent ChatMessage is gone (locally deleted), drop
+    // the inbound state silently. The next chunk-request retry that the
+    // sender's `_handleAttachmentChunkRequest` sees will trigger the
+    // sender-side cancel echo too.
+    if (_messageById(state.peerDeviceId, state.messageId) == null) {
+      _inboundAttachments.remove(chunk.attachmentId);
+      return;
+    }
     if (chunk.index < 0 || chunk.index >= state.received.length) {
       return;
     }
@@ -5582,6 +5612,34 @@ class MessengerController extends ChangeNotifier {
         chunk.attachmentId,
         state.nextMissingIndex,
       );
+    }
+  }
+
+  Future<void> _sendAttachmentCancel(
+    ContactRecord peer,
+    String attachmentId,
+  ) async {
+    if (!hasIdentity) return;
+    final me = _requireIdentity();
+    final envelope = await _crypto.encryptPayloadEnvelope(
+      kind: 'attachment_cancel',
+      messageId: _randomId('acancel'),
+      conversationId: _crypto.conversationIdFor(peer.deviceId),
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: peer.deviceId,
+      contact: peer,
+      plaintext: jsonEncode({'attachmentId': attachmentId}),
+    );
+    try {
+      await _deliverToContact(
+        contact: peer,
+        recipientDeviceId: peer.deviceId,
+        envelope: envelope,
+      );
+    } catch (_) {
+      // Best-effort: receiver's parent message will be cleared on its own
+      // local delete; the explicit cancel is a fast-path notification.
     }
   }
 
@@ -5636,9 +5694,56 @@ class MessengerController extends ChangeNotifier {
     if (attachmentId == null) {
       return;
     }
+    // Find the inbound parent ChatMessage so the bubble can transition to a
+    // sensible end-state (text-only if there was a caption; removed entirely
+    // otherwise — leaving an empty "Transferring 0%" bubble is the bug we
+    // came here to fix).
+    final inboundState = _inboundAttachments.remove(attachmentId);
     _outboundAttachments.remove(attachmentId);
-    _inboundAttachments.remove(attachmentId);
+    _assembledAttachments.remove(attachmentId);
+    if (inboundState != null) {
+      final parent = _messageById(
+        inboundState.peerDeviceId,
+        inboundState.messageId,
+      );
+      if (parent != null) {
+        if (parent.body.isEmpty) {
+          _deleteMessage(inboundState.peerDeviceId, inboundState.messageId);
+        } else {
+          _clearAttachmentOnMessage(
+            inboundState.peerDeviceId,
+            inboundState.messageId,
+          );
+        }
+      }
+    }
     notifyListeners();
+  }
+
+  /// Replaces the attachment field on a specific message with null so its
+  /// bubble downgrades from "Transferring…" to a plain text row. Used when
+  /// the sender canceled the attachment but the caption remains visible.
+  void _clearAttachmentOnMessage(String peerDeviceId, String messageId) {
+    final conversations = List<ConversationRecord>.from(
+      _snapshot.conversations,
+    );
+    final idx = conversations.indexWhere(
+      (c) => c.peerDeviceId == peerDeviceId,
+    );
+    if (idx < 0) return;
+    final updated = <ChatMessage>[];
+    var changed = false;
+    for (final m in conversations[idx].messages) {
+      if (m.id == messageId && m.attachment != null) {
+        updated.add(m.copyWith(clearAttachment: true));
+        changed = true;
+      } else {
+        updated.add(m);
+      }
+    }
+    if (!changed) return;
+    conversations[idx] = conversations[idx].copyWith(messages: updated);
+    _snapshot = _snapshot.copyWith(conversations: conversations);
   }
 
   Future<void> _handleContactExchange(RelayEnvelope envelope) async {
@@ -9891,12 +9996,25 @@ class MessengerController extends ChangeNotifier {
     if (conversationIndex == -1) {
       return;
     }
+    // Capture the attachment id BEFORE pruning so the cleanup below has it.
+    String? attachmentId;
+    for (final m in conversations[conversationIndex].messages) {
+      if (m.id == messageId) {
+        attachmentId = m.attachment?.id;
+        break;
+      }
+    }
     final updatedMessages = conversations[conversationIndex].messages
         .where((message) => message.id != messageId)
         .toList();
     conversations[conversationIndex] = conversations[conversationIndex]
         .copyWith(messages: updatedMessages);
     _snapshot = _snapshot.copyWith(conversations: conversations);
+    if (attachmentId != null) {
+      _outboundAttachments.remove(attachmentId);
+      _inboundAttachments.remove(attachmentId);
+      _assembledAttachments.remove(attachmentId);
+    }
   }
 
   void _markSeen(String envelopeId) {

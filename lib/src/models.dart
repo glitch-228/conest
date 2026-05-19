@@ -1361,6 +1361,7 @@ class ChatMessage {
     String? replySenderDeviceId,
     String? replySenderDisplayName,
     AttachmentDescriptor? attachment,
+    bool clearAttachment = false,
     Map<String, DeliveryState>? recipientStates,
   }) {
     return ChatMessage(
@@ -1380,7 +1381,7 @@ class ChatMessage {
       replySenderDeviceId: replySenderDeviceId ?? this.replySenderDeviceId,
       replySenderDisplayName:
           replySenderDisplayName ?? this.replySenderDisplayName,
-      attachment: attachment ?? this.attachment,
+      attachment: clearAttachment ? null : (attachment ?? this.attachment),
       recipientStates: recipientStates ?? this.recipientStates,
     );
   }
