@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:io';
 
 import 'package:crop_your_image/crop_your_image.dart';
@@ -8,25 +9,35 @@ import 'package:photo_manager/photo_manager.dart';
 
 import 'conest_theme.dart';
 
-/// Outcome of the media picker sheet: either send these bytes directly, or
-/// caller should fall back to its general file-picker flow.
+/// Outcome of the media picker sheet: send a single asset, send a batch of
+/// already-resolved bytes (multi-select), or fall through to the general
+/// file-picker flow.
 class MediaPickerResult {
   MediaPickerResult.send({
     required this.bytes,
     required this.fileName,
     required this.mimeType,
-  }) : fallbackToFilePicker = false;
+  }) : fallbackToFilePicker = false,
+       items = null;
+
+  MediaPickerResult.sendMultiple({required this.items})
+    : bytes = null,
+      fileName = null,
+      mimeType = null,
+      fallbackToFilePicker = false;
 
   MediaPickerResult.fallback()
     : bytes = null,
       fileName = null,
       mimeType = null,
-      fallbackToFilePicker = true;
+      fallbackToFilePicker = true,
+      items = null;
 
   final Uint8List? bytes;
   final String? fileName;
   final String? mimeType;
   final bool fallbackToFilePicker;
+  final List<({Uint8List bytes, String fileName, String mimeType})>? items;
 }
 
 /// True on platforms where photo_manager actually has a backing implementation.
@@ -69,9 +80,15 @@ class _MediaPickerSheet extends StatefulWidget {
 }
 
 class _MediaPickerSheetState extends State<_MediaPickerSheet> {
+  static const int _maxBatch = 6;
+
   PermissionState? _permission;
   List<AssetEntity> _assets = const [];
   bool _loading = true;
+  final LinkedHashSet<String> _selectedIds = LinkedHashSet<String>();
+  bool _sending = false;
+
+  bool get _selectionMode => _selectedIds.isNotEmpty;
 
   @override
   void initState() {
@@ -132,7 +149,69 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
     return 'image/jpeg';
   }
 
+  void _toggleSelection(AssetEntity asset) {
+    setState(() {
+      if (_selectedIds.contains(asset.id)) {
+        _selectedIds.remove(asset.id);
+      } else if (_selectedIds.length < _maxBatch) {
+        _selectedIds.add(asset.id);
+      } else {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text('Max $_maxBatch items per send.')),
+        );
+      }
+    });
+  }
+
+  void _longPressAsset(AssetEntity asset) {
+    if (_selectedIds.contains(asset.id)) {
+      return;
+    }
+    setState(() {
+      if (_selectedIds.length < _maxBatch) {
+        _selectedIds.add(asset.id);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    setState(() => _selectedIds.clear());
+  }
+
+  Future<void> _sendSelected() async {
+    if (_sending || _selectedIds.isEmpty) return;
+    setState(() => _sending = true);
+    final byId = {for (final a in _assets) a.id: a};
+    final items =
+        <({Uint8List bytes, String fileName, String mimeType})>[];
+    for (final id in _selectedIds) {
+      final asset = byId[id];
+      if (asset == null) continue;
+      try {
+        final file = await asset.file;
+        if (file == null) continue;
+        final bytes = await file.readAsBytes();
+        final fileName = asset.title ?? 'media-${asset.id}';
+        items.add(
+          (
+            bytes: bytes,
+            fileName: fileName,
+            mimeType: _mimeForAsset(asset, fileName),
+          ),
+        );
+      } catch (_) {
+        // Skip unreadable assets; the rest of the batch still goes.
+      }
+    }
+    if (!mounted) return;
+    Navigator.of(context).pop(MediaPickerResult.sendMultiple(items: items));
+  }
+
   Future<void> _pickAsset(AssetEntity asset) async {
+    if (_selectionMode) {
+      _toggleSelection(asset);
+      return;
+    }
     final file = await asset.file;
     if (file == null || !mounted) return;
     final bytes = await file.readAsBytes();
@@ -205,7 +284,32 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
-            const SizedBox(height: 12),
+            if (_selectionMode)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+                child: Row(
+                  children: [
+                    IconButton(
+                      onPressed: _clearSelection,
+                      icon: const Icon(Icons.close),
+                      tooltip: 'Clear selection',
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${_selectedIds.length} selected',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const Spacer(),
+                    FilledButton.icon(
+                      onPressed: _sending ? null : _sendSelected,
+                      icon: const Icon(Icons.send),
+                      label: Text('Send ${_selectedIds.length}'),
+                    ),
+                  ],
+                ),
+              )
+            else
+              const SizedBox(height: 12),
             Expanded(child: _buildBody()),
             const Divider(height: 1),
             Padding(
@@ -278,12 +382,15 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
       itemCount: _assets.length,
       itemBuilder: (context, i) {
         final asset = _assets[i];
+        final selectionIndex = _selectedIds.toList().indexOf(asset.id);
         return _AssetTile(
           asset: asset,
           palette: widget.palette,
           humanSize: _humanSize,
           humanDuration: _humanDuration,
+          selectionIndex: selectionIndex >= 0 ? selectionIndex + 1 : null,
           onTap: () => _pickAsset(asset),
+          onLongPress: () => _longPressAsset(asset),
         );
       },
     );
@@ -297,6 +404,8 @@ class _AssetTile extends StatelessWidget {
     required this.humanSize,
     required this.humanDuration,
     required this.onTap,
+    required this.onLongPress,
+    this.selectionIndex,
   });
 
   final AssetEntity asset;
@@ -304,11 +413,15 @@ class _AssetTile extends StatelessWidget {
   final String Function(int) humanSize; // reserved for byte-size badge later
   final String Function(Duration) humanDuration;
   final VoidCallback onTap;
+  final VoidCallback onLongPress;
+  final int? selectionIndex;
 
   @override
   Widget build(BuildContext context) {
+    final selected = selectionIndex != null;
     return InkWell(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: FutureBuilder<Uint8List?>(
         future: asset.thumbnailDataWithSize(const ThumbnailSize.square(300)),
         builder: (context, snap) {
@@ -320,6 +433,8 @@ class _AssetTile extends StatelessWidget {
                 Image.memory(thumb, fit: BoxFit.cover, gaplessPlayback: true)
               else
                 Container(color: palette.stroke),
+              if (selected)
+                Container(color: palette.primary.withValues(alpha: 0.30)),
               if (asset.type == AssetType.video)
                 Positioned(
                   left: 4,
@@ -327,6 +442,23 @@ class _AssetTile extends StatelessWidget {
                   child: _BadgeChip(
                     icon: Icons.play_arrow,
                     text: humanDuration(asset.videoDuration),
+                  ),
+                ),
+              if (selected)
+                Positioned(
+                  top: 4,
+                  right: 4,
+                  child: CircleAvatar(
+                    radius: 12,
+                    backgroundColor: palette.primary,
+                    child: Text(
+                      '${selectionIndex!}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                   ),
                 ),
             ],

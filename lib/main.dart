@@ -1505,6 +1505,10 @@ class _HomeScreenState extends State<HomeScreen> {
       await _pickAndSendAttachment();
       return;
     }
+    if (result.items != null) {
+      await _sendMultipleAttachments(contact: contact, items: result.items!);
+      return;
+    }
     await _sendAttachmentBytes(
       contact: contact,
       bytes: result.bytes!,
@@ -1520,7 +1524,11 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     FilePickerResult? picked;
     try {
-      picked = await FilePicker.pickFiles(type: FileType.any, withData: true);
+      picked = await FilePicker.pickFiles(
+        type: FileType.any,
+        withData: true,
+        allowMultiple: true,
+      );
     } catch (error) {
       widget.controller.setStatus('Could not open file picker: $error');
       return;
@@ -1528,27 +1536,36 @@ class _HomeScreenState extends State<HomeScreen> {
     if (picked == null || picked.files.isEmpty) {
       return;
     }
-    final file = picked.files.first;
-    Uint8List? bytes = file.bytes;
-    // Desktop picker often returns a path instead of bytes.
-    if (bytes == null && file.path != null) {
-      try {
-        bytes = await File(file.path!).readAsBytes();
-      } catch (error) {
-        widget.controller.setStatus('Could not read $file: $error');
-        return;
+    final items =
+        <({Uint8List bytes, String fileName, String mimeType})>[];
+    for (final file in picked.files) {
+      Uint8List? bytes = file.bytes;
+      // Desktop picker often returns a path instead of bytes.
+      if (bytes == null && file.path != null) {
+        try {
+          bytes = await File(file.path!).readAsBytes();
+        } catch (error) {
+          widget.controller.setStatus(
+            'Could not read ${file.name}: $error',
+          );
+          continue;
+        }
       }
+      if (bytes == null) {
+        widget.controller.setStatus(
+          '${file.name}: picker returned no data.',
+        );
+        continue;
+      }
+      items.add(
+        (
+          bytes: bytes,
+          fileName: file.name,
+          mimeType: _guessMimeType(file.name),
+        ),
+      );
     }
-    if (bytes == null) {
-      widget.controller.setStatus('File picker returned no data.');
-      return;
-    }
-    await _sendAttachmentBytes(
-      contact: contact,
-      bytes: bytes,
-      fileName: file.name,
-      mimeType: _guessMimeType(file.name),
-    );
+    await _sendMultipleAttachments(contact: contact, items: items);
   }
 
   Future<void> _sendAttachmentBytes({
