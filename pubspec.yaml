@@ -25,6 +25,8 @@ dependencies:
   photo_manager: ^3.6.0
   image: ^4.5.0
   crop_your_image: ^2.0.0
+  desktop_drop: ^0.6.0
+  cross_file: ^0.3.4+1
 
 dev_dependencies:
   flutter_test:

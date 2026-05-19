@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:cross_file/cross_file.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -1488,6 +1490,41 @@ class _HomeScreenState extends State<HomeScreen> {
     await widget.controller.sendLanLobbyMessage(body);
   }
 
+  Future<void> _handleDroppedFiles(List<XFile> files) async {
+    final contact = _selectedContact;
+    if (contact == null || files.isEmpty) {
+      return;
+    }
+    final items =
+        <({Uint8List bytes, String fileName, String mimeType})>[];
+    for (final file in files) {
+      try {
+        final bytes = await file.readAsBytes();
+        items.add(
+          (
+            bytes: bytes,
+            fileName: file.name,
+            mimeType: _guessMimeType(file.name),
+          ),
+        );
+      } catch (error) {
+        widget.controller.setStatus(
+          'Could not read ${file.name}: $error',
+        );
+      }
+    }
+    await _sendMultipleAttachments(contact: contact, items: items);
+  }
+
+  void _handleDroppedFilesForGroup(List<XFile> files) {
+    if (files.isEmpty) {
+      return;
+    }
+    widget.controller.setStatus(
+      'Group file send arrives in v0.3.3+. Use a 1:1 chat for now.',
+    );
+  }
+
   Future<void> _openMediaPicker() async {
     final contact = _selectedContact;
     if (contact == null) {
@@ -1694,6 +1731,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     onShowProfile: () => _showContactProfile(selectedContact),
                     onSend: _sendCurrentMessage,
                     onAttach: _openMediaPicker,
+                    onDropFiles: _handleDroppedFiles,
                   );
                 }
                 if (!isWide && selectedGroup != null) {
@@ -1713,6 +1751,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         setState(() => _replyTarget = message),
                     onShowDetails: () => _showGroupDetails(selectedGroup),
                     onSend: _sendCurrentGroupMessage,
+                    onDropFiles: _handleDroppedFilesForGroup,
                   );
                 }
                 if (!isWide && lanLobbySelected) {
@@ -1807,6 +1846,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 onShowDetails: () =>
                                     _showGroupDetails(selectedGroup),
                                 onSend: _sendCurrentGroupMessage,
+                                onDropFiles: _handleDroppedFilesForGroup,
                               )
                             : selectedContact == null
                             ? _EmptyChatState(palette: palette)
@@ -1827,6 +1867,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     _showContactProfile(selectedContact),
                                 onSend: _sendCurrentMessage,
                                 onAttach: _openMediaPicker,
+                    onDropFiles: _handleDroppedFiles,
                               ),
                       ),
                   ],
@@ -2943,6 +2984,7 @@ class _GroupChatPanel extends StatefulWidget {
     required this.onReplyToMessage,
     required this.onSend,
     required this.onShowDetails,
+    required this.onDropFiles,
     this.onBack,
   });
 
@@ -2955,6 +2997,7 @@ class _GroupChatPanel extends StatefulWidget {
   final ValueChanged<ChatMessage> onReplyToMessage;
   final VoidCallback onSend;
   final VoidCallback onShowDetails;
+  final ValueChanged<List<XFile>> onDropFiles;
   final VoidCallback? onBack;
 
   @override
@@ -2967,6 +3010,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
   bool _didInitialPosition = false;
   bool _initialPositionScheduled = false;
+  bool _droppingFiles = false;
   bool _readSweepScheduled = false;
 
   MessengerController get controller => widget.controller;
@@ -3253,7 +3297,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
             widget.replyTarget!.conversationId == group.groupId
         ? widget.replyTarget
         : null;
-    return Padding(
+    final body = Padding(
       padding: const EdgeInsets.all(18),
       child: Card(
         elevation: 0,
@@ -3373,6 +3417,44 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
         ),
       ),
     );
+    if (!_isDesktopPlatform) {
+      return body;
+    }
+    return DropTarget(
+      onDragEntered: (_) => setState(() => _droppingFiles = true),
+      onDragExited: (_) => setState(() => _droppingFiles = false),
+      onDragDone: (details) {
+        setState(() => _droppingFiles = false);
+        widget.onDropFiles(details.files);
+      },
+      child: Stack(
+        fit: StackFit.passthrough,
+        children: [
+          body,
+          if (_droppingFiles)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Container(
+                  margin: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: palette.primary.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(28),
+                    border: Border.all(color: palette.primary, width: 2),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    'Group file send arrives in v0.3.3+',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: palette.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }
 
@@ -3389,6 +3471,7 @@ class _ChatPanel extends StatefulWidget {
     required this.onSend,
     required this.onShowProfile,
     required this.onAttach,
+    required this.onDropFiles,
     this.onBack,
   });
 
@@ -3402,6 +3485,7 @@ class _ChatPanel extends StatefulWidget {
   final VoidCallback onSend;
   final VoidCallback onShowProfile;
   final VoidCallback onAttach;
+  final ValueChanged<List<XFile>> onDropFiles;
   final VoidCallback? onBack;
 
   @override
@@ -3411,6 +3495,7 @@ class _ChatPanel extends StatefulWidget {
 class _ChatPanelState extends State<_ChatPanel> {
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _messageListKey = GlobalKey();
+  bool _droppingFiles = false;
   final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
   bool _didInitialPosition = false;
   bool _initialPositionScheduled = false;
@@ -3813,7 +3898,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                 widget.replyTarget!.recipientDeviceId == contact.deviceId)
         ? widget.replyTarget
         : null;
-    return Padding(
+    final body = Padding(
       padding: const EdgeInsets.all(18),
       child: Card(
         elevation: 0,
@@ -3981,6 +4066,48 @@ class _ChatPanelState extends State<_ChatPanel> {
             ),
           ],
         ),
+      ),
+    );
+    if (!_isDesktopPlatform) {
+      return body;
+    }
+    return DropTarget(
+      onDragEntered: (_) => setState(() => _droppingFiles = true),
+      onDragExited: (_) => setState(() => _droppingFiles = false),
+      onDragDone: (details) {
+        setState(() => _droppingFiles = false);
+        widget.onDropFiles(details.files);
+      },
+      child: Stack(
+        fit: StackFit.passthrough,
+        children: [
+          body,
+          if (_droppingFiles)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Container(
+                  margin: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: palette.primary.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(28),
+                    border: Border.all(
+                      color: palette.primary,
+                      width: 2,
+                      style: BorderStyle.solid,
+                    ),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    'Drop files to send (max ${MessengerController.maxAttachmentsPerSend})',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: palette.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
