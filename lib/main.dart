@@ -4628,6 +4628,12 @@ class _AddContactDialogState extends State<AddContactDialog> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              _ConnectivityOfflineBanner(
+                controller: widget.controller,
+                palette: widget.palette,
+                message:
+                    'Connectivity is off. Turn on LAN or Online to exchange this invite.',
+              ),
               TextField(
                 controller: _aliasController,
                 decoration: const InputDecoration(labelText: 'Alias'),
@@ -4867,6 +4873,12 @@ class _InviteScreenState extends State<InviteScreen> {
                           ],
                         ),
                         const SizedBox(height: 14),
+                        _ConnectivityOfflineBanner(
+                          controller: widget.controller,
+                          palette: palette,
+                          message:
+                              'Connectivity is off. Turn on LAN or Online before sharing this invite.',
+                        ),
                         if (_showQr)
                           Column(
                             children: [
@@ -5383,6 +5395,64 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 ?.copyWith(
                                   color: widget.palette.inkSoft,
                                   height: 1.5,
+                                ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _SettingsSection(
+                      title: 'Connectivity',
+                      palette: widget.palette,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SwitchListTile.adaptive(
+                            value: identity.connectivity.lanEnabled,
+                            contentPadding: EdgeInsets.zero,
+                            onChanged: _busy
+                                ? null
+                                : (value) => _run(
+                                    () => widget.controller
+                                        .updateGlobalConnectivity(
+                                          identity.connectivity.copyWith(
+                                            lanEnabled: value,
+                                          ),
+                                        ),
+                                  ),
+                            title: const Text('LAN'),
+                            subtitle: const Text(
+                              'Same-network listener, pairing beacons, LAN delivery.',
+                            ),
+                          ),
+                          SwitchListTile.adaptive(
+                            value: identity.connectivity.onlineEnabled,
+                            contentPadding: EdgeInsets.zero,
+                            onChanged: _busy
+                                ? null
+                                : (value) => _run(
+                                    () => widget.controller
+                                        .updateGlobalConnectivity(
+                                          identity.connectivity.copyWith(
+                                            onlineEnabled: value,
+                                          ),
+                                        ),
+                                  ),
+                            title: const Text('Online'),
+                            subtitle: const Text(
+                              'Relay polling, internet/relay delivery, auto-imported contact relays.',
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            identity.connectivity.anyEnabled
+                                ? 'Per-contact routing is intersected with these flags. Turning off either restricts traffic; turning off both makes the app idle.'
+                                : 'Connectivity is fully off — the app will not send or receive.',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: identity.connectivity.anyEnabled
+                                      ? widget.palette.inkSoft
+                                      : widget.palette.danger,
                                 ),
                           ),
                         ],
@@ -7269,6 +7339,62 @@ class _StatusChip extends StatelessWidget {
           if (expand) Expanded(child: labelWidget) else labelWidget,
         ],
       ),
+    );
+  }
+}
+
+/// Banner shown on invite-exchange surfaces when global connectivity is fully
+/// off — the user wouldn't get acks or pairing responses until they re-enable
+/// at least one transport. Renders nothing when LAN or Online is on. Listens
+/// to the controller so toggling Settings while the surface is open clears the
+/// banner without a manual refresh.
+class _ConnectivityOfflineBanner extends StatelessWidget {
+  const _ConnectivityOfflineBanner({
+    required this.controller,
+    required this.palette,
+    required this.message,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final global =
+            controller.identity?.connectivity ??
+            const GlobalConnectivityPreferences();
+        if (global.anyEnabled) {
+          return const SizedBox.shrink();
+        }
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: palette.danger.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: palette.danger),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.cloud_off, color: palette.danger, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  message,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: palette.danger,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
