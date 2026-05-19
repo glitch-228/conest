@@ -54,6 +54,23 @@ class PlatformBridge {
     }
   }
 
+  Future<void> dismissMessageNotification({
+    required String conversationId,
+  }) async {
+    if (!_supportsAndroidSystemCalls) {
+      return;
+    }
+    try {
+      await _channel.invokeMethod<void>('dismissMessageNotification', {
+        'conversationId': conversationId,
+      });
+    } on MissingPluginException {
+      return;
+    } catch (_) {
+      // Best-effort: never raise from a UI-event side-effect.
+    }
+  }
+
   Future<void> installDownloadedApk(String path) async {
     if (!_supportsAndroidSystemCalls) {
       return;

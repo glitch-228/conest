@@ -4696,6 +4696,11 @@ class MessengerController extends ChangeNotifier {
       readThroughAt: message.createdAt,
       readThroughMessageId: message.id,
     );
+    unawaited(
+      _platformBridge.dismissMessageNotification(
+        conversationId: _crypto.conversationIdFor(peerDeviceId),
+      ),
+    );
   }
 
   Future<void> markGroupReadThroughMessage(
@@ -4715,6 +4720,9 @@ class MessengerController extends ChangeNotifier {
           conversation.id == groupId,
       readThroughAt: message.createdAt,
       readThroughMessageId: message.id,
+    );
+    unawaited(
+      _platformBridge.dismissMessageNotification(conversationId: groupId),
     );
     final contact = _groupMemberContact(group, message.senderDeviceId);
     if (contact == null) {

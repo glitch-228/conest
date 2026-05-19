@@ -40,6 +40,14 @@ class MainActivity : FlutterActivity() {
                     showMessageNotification(title, body, conversationId)
                     result.success(null)
                 }
+                "dismissMessageNotification" -> {
+                    val conversationId = call.argument<String>("conversationId") ?: ""
+                    if (conversationId.isNotEmpty()) {
+                        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                        manager.cancel(conversationId.hashCode())
+                    }
+                    result.success(null)
+                }
                 "installDownloadedApk" -> {
                     val path = call.argument<String>("path")
                     if (path.isNullOrBlank()) {
