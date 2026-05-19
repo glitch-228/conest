@@ -12,6 +12,7 @@ import 'package:conest/src/build_info.dart';
 import 'package:conest/src/local_relay_node.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/models.dart';
+import 'package:conest/src/platform_bridge.dart';
 import 'package:conest/src/relay_client.dart'
     show RelayClient, RelayHealthInfo, RelayIdentityMismatchException;
 import 'package:conest/src/relay_defaults.dart';
@@ -410,6 +411,7 @@ Future<MessengerController> _createController({
   bool enableLongPoll = false,
   LocalRelayNode? localRelayNode,
   Future<Directory> Function()? attachmentRootProvider,
+  PlatformBridge? platformBridge,
 }) async {
   final controller = MessengerController(
     vaultStore: vaultStore ?? _MemoryVaultStore(),
@@ -419,6 +421,7 @@ Future<MessengerController> _createController({
     nowProvider: nowProvider,
     signedRelayDefaultsLoader: signedRelayDefaultsLoader,
     enableLongPoll: enableLongPoll,
+    platformBridge: platformBridge,
     attachmentRootProvider:
         attachmentRootProvider ??
         () async {
@@ -5319,4 +5322,210 @@ void main() {
           'notify gate must reopen after every _processEnvelopes call exits',
     );
   });
+
+  group('connectivity preferences', () {
+    test('ContactRoutingPreferences JSON round-trip with missing fields '
+        'defaults to LAN-first', () {
+      final defaults = ContactRoutingPreferences.fromJson(
+        const <String, dynamic>{},
+      );
+      expect(defaults.lanEnabled, isTrue);
+      expect(defaults.onlineEnabled, isTrue);
+      expect(defaults.preferred, RoutingPreference.lan);
+
+      final custom = ContactRoutingPreferences(
+        lanEnabled: false,
+        onlineEnabled: true,
+        preferred: RoutingPreference.online,
+      );
+      final round = ContactRoutingPreferences.fromJson(custom.toJson());
+      expect(round.lanEnabled, isFalse);
+      expect(round.onlineEnabled, isTrue);
+      expect(round.preferred, RoutingPreference.online);
+    });
+
+    test(
+      'GlobalConnectivityPreferences JSON round-trip + missing-field defaults',
+      () {
+        final defaults = GlobalConnectivityPreferences.fromJson(
+          const <String, dynamic>{},
+        );
+        expect(defaults.lanEnabled, isTrue);
+        expect(defaults.onlineEnabled, isTrue);
+        final round = GlobalConnectivityPreferences.fromJson(
+          const GlobalConnectivityPreferences(
+            lanEnabled: false,
+            onlineEnabled: true,
+          ).toJson(),
+        );
+        expect(round.lanEnabled, isFalse);
+        expect(round.onlineEnabled, isTrue);
+      },
+    );
+
+    test(
+      'per-contact lanEnabled=false drops LAN routes from preferred set',
+      () async {
+        final alice = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+        );
+        addTearDown(alice.dispose);
+        await alice.addContactFromInvite(
+          alias: 'Bob',
+          payload: _bobInvite().encodePayload(),
+          codephrase: '',
+        );
+        final bob = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+        await alice.updateContactRoutingPreferences(
+          bob.deviceId,
+          const ContactRoutingPreferences(
+            lanEnabled: false,
+            onlineEnabled: true,
+          ),
+        );
+        final refreshed = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+        final routes = alice.preferredRoutesForTesting(refreshed);
+        expect(routes.any((r) => r.kind == PeerRouteKind.lan), isFalse);
+        expect(routes.any((r) => r.kind == PeerRouteKind.relay), isTrue);
+      },
+    );
+
+    test(
+      'per-contact onlineEnabled=false drops relay + direct-internet routes',
+      () async {
+        final alice = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+        );
+        addTearDown(alice.dispose);
+        await alice.addContactFromInvite(
+          alias: 'Bob',
+          payload: _bobInvite().encodePayload(),
+          codephrase: '',
+        );
+        final bob = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+        await alice.updateContactRoutingPreferences(
+          bob.deviceId,
+          const ContactRoutingPreferences(
+            lanEnabled: true,
+            onlineEnabled: false,
+          ),
+        );
+        final refreshed = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+        final routes = alice.preferredRoutesForTesting(refreshed);
+        expect(routes.every((r) => r.kind == PeerRouteKind.lan), isTrue);
+      },
+    );
+
+    test('preferred=online lifts relay routes above LAN', () async {
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+      );
+      addTearDown(alice.dispose);
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: _bobInvite().encodePayload(),
+        codephrase: '',
+      );
+      final bob = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+      await alice.updateContactRoutingPreferences(
+        bob.deviceId,
+        const ContactRoutingPreferences(preferred: RoutingPreference.online),
+      );
+      final refreshed = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+      final routes = alice.preferredRoutesForTesting(refreshed);
+      // First non-LAN route appears before the first LAN route.
+      final firstLan = routes.indexWhere((r) => r.kind == PeerRouteKind.lan);
+      final firstRelay = routes.indexWhere(
+        (r) => r.kind == PeerRouteKind.relay,
+      );
+      expect(
+        firstRelay >= 0 && (firstLan < 0 || firstRelay < firstLan),
+        isTrue,
+        reason: 'relay should appear before LAN with preferred=online',
+      );
+    });
+
+    test('global lanEnabled=false is a kill-switch — contact override cannot '
+        're-enable LAN', () async {
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+      );
+      addTearDown(alice.dispose);
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: _bobInvite().encodePayload(),
+        codephrase: '',
+      );
+      final bob = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+      // Contact says lan=true, but global forbids LAN.
+      await alice.updateContactRoutingPreferences(
+        bob.deviceId,
+        const ContactRoutingPreferences(),
+      );
+      await alice.updateGlobalConnectivity(
+        const GlobalConnectivityPreferences(
+          lanEnabled: false,
+          onlineEnabled: true,
+        ),
+      );
+      final refreshed = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+      final routes = alice.preferredRoutesForTesting(refreshed);
+      expect(routes.any((r) => r.kind == PeerRouteKind.lan), isFalse);
+    });
+  });
+
+  test(
+    'mark-read dismisses the OS notification for that conversation',
+    () async {
+      final recorder = _RecordingPlatformBridge();
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        platformBridge: recorder,
+      );
+      addTearDown(alice.dispose);
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: _bobInvite().encodePayload(),
+        codephrase: '',
+      );
+      final bob = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+      // Synthesize an inbound message — the dismiss path fires whether or not
+      // the conversation actually contains this message yet.
+      final inbound = ChatMessage(
+        id: 'msg-test-inbound',
+        conversationId: bob.deviceId,
+        senderDeviceId: bob.deviceId,
+        recipientDeviceId: alice.identity!.deviceId,
+        body: 'hi',
+        createdAt: DateTime.now().toUtc(),
+        outbound: false,
+        state: DeliveryState.delivered,
+      );
+      recorder.dismissed.clear();
+      await alice.markConversationReadThroughMessage(bob.deviceId, inbound);
+      // Microtask: the unawaited dismiss call still runs synchronously.
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        recorder.dismissed.isNotEmpty,
+        isTrue,
+        reason: 'dismiss should fire for this conversation',
+      );
+    },
+  );
+}
+
+class _RecordingPlatformBridge extends PlatformBridge {
+  final List<String> dismissed = <String>[];
+
+  @override
+  Future<void> dismissMessageNotification({
+    required String conversationId,
+  }) async {
+    dismissed.add(conversationId);
+  }
 }

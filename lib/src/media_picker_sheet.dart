@@ -53,7 +53,8 @@ Future<MediaPickerResult?> showMediaPickerSheet({
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
     ),
-    builder: (sheetCtx) => _MediaPickerSheet(palette: palette, maxBytes: maxBytes),
+    builder: (sheetCtx) =>
+        _MediaPickerSheet(palette: palette, maxBytes: maxBytes),
   );
 }
 
@@ -142,17 +143,19 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
       // Open the editor; it pops with the final bytes.
       final edited = await Navigator.of(context).push<Uint8List>(
         MaterialPageRoute(
-          builder: (_) => MediaEditorScreen(
-            sourceBytes: bytes,
-            palette: widget.palette,
-          ),
+          builder: (_) =>
+              MediaEditorScreen(sourceBytes: bytes, palette: widget.palette),
         ),
       );
       if (!mounted) return;
       final finalBytes = edited ?? bytes;
       if (finalBytes.length > widget.maxBytes) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text('Image is larger than the ${widget.maxBytes ~/ (1024 * 1024)} MB cap.')),
+          SnackBar(
+            content: Text(
+              'Image is larger than the ${widget.maxBytes ~/ (1024 * 1024)} MB cap.',
+            ),
+          ),
         );
         return;
       }
@@ -166,7 +169,11 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
     } else {
       if (bytes.length > widget.maxBytes) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text('Video is larger than the ${widget.maxBytes ~/ (1024 * 1024)} MB cap.')),
+          SnackBar(
+            content: Text(
+              'Video is larger than the ${widget.maxBytes ~/ (1024 * 1024)} MB cap.',
+            ),
+          ),
         );
         return;
       }
@@ -206,9 +213,8 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
               child: SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
-                  onPressed: () => Navigator.of(context).pop(
-                    MediaPickerResult.fallback(),
-                  ),
+                  onPressed: () =>
+                      Navigator.of(context).pop(MediaPickerResult.fallback()),
                   icon: const Icon(Icons.folder_outlined),
                   label: const Text('Browse files…'),
                 ),
@@ -225,8 +231,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
       return const Center(child: CircularProgressIndicator());
     }
     final permission = _permission;
-    if (permission == null ||
-        (!permission.isAuth && !permission.hasAccess)) {
+    if (permission == null || (!permission.isAuth && !permission.hasAccess)) {
       return Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
@@ -237,9 +242,9 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
             Text(
               'Photos permission denied. Use "Browse files…" to send any file, or grant access in system settings.',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: widget.palette.inkSoft,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: widget.palette.inkSoft),
             ),
             const SizedBox(height: 12),
             OutlinedButton(
@@ -256,9 +261,9 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
         child: Center(
           child: Text(
             'No recent photos or videos.',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: widget.palette.inkSoft,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: widget.palette.inkSoft),
           ),
         ),
       );
@@ -353,10 +358,7 @@ class _BadgeChip extends StatelessWidget {
             Icon(icon, size: 12, color: Colors.white),
             const SizedBox(width: 2),
           ],
-          Text(
-            text,
-            style: const TextStyle(color: Colors.white, fontSize: 10),
-          ),
+          Text(text, style: const TextStyle(color: Colors.white, fontSize: 10)),
         ],
       ),
     );
@@ -391,10 +393,7 @@ class _MediaEditorScreenState extends State<MediaEditorScreen> {
       setState(() => _busy = false);
       return;
     }
-    final rotated = img.copyRotate(
-      decoded,
-      angle: quarterTurns * 90,
-    );
+    final rotated = img.copyRotate(decoded, angle: quarterTurns * 90);
     final encoded = Uint8List.fromList(img.encodeJpg(rotated, quality: 92));
     if (!mounted) return;
     setState(() {
@@ -424,7 +423,9 @@ class _MediaEditorScreenState extends State<MediaEditorScreen> {
             tooltip: 'Rotate right',
           ),
           IconButton(
-            onPressed: _busy ? null : () => setState(() => _cropMode = !_cropMode),
+            onPressed: _busy
+                ? null
+                : () => setState(() => _cropMode = !_cropMode),
             icon: Icon(_cropMode ? Icons.check : Icons.crop),
             tooltip: _cropMode ? 'Apply crop' : 'Crop',
           ),

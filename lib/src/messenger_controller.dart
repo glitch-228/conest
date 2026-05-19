@@ -430,6 +430,12 @@ class MessengerController extends ChangeNotifier {
   Future<int> processEnvelopesForTesting(List<RelayEnvelope> envelopes) =>
       _processEnvelopes(envelopes);
 
+  /// Resolves the preferred route list for a contact under the current
+  /// global + per-contact connectivity preferences. Used by routing tests.
+  @visibleForTesting
+  List<PeerEndpoint> preferredRoutesForTesting(ContactRecord contact) =>
+      _preferredRoutesForContact(contact);
+
   /// Number of currently in-flight `_processEnvelopes` calls. Exposed so a
   /// test can assert the depth returns to 0 after parallel calls finish.
   @visibleForTesting
@@ -2166,16 +2172,15 @@ class MessengerController extends ChangeNotifier {
     GlobalConnectivityPreferences prefs,
   ) async {
     final me = _requireIdentity();
-    _snapshot = _snapshot.copyWith(
-      identity: me.copyWith(connectivity: prefs),
-    );
+    _snapshot = _snapshot.copyWith(identity: me.copyWith(connectivity: prefs));
     await _applyGlobalConnectivityState();
     _markRuntimeActivity();
     final label = switch ((prefs.lanEnabled, prefs.onlineEnabled)) {
       (true, true) => 'Connectivity: LAN and Online enabled.',
       (true, false) => 'Connectivity: LAN only.',
       (false, true) => 'Connectivity: Online only.',
-      (false, false) => 'Connectivity is fully off. The app will not send or receive.',
+      (false, false) =>
+        'Connectivity is fully off. The app will not send or receive.',
     };
     await _persist(label);
   }
@@ -7493,11 +7498,10 @@ class MessengerController extends ChangeNotifier {
       );
     }
     final effective = _effectiveTransports(contact);
-    final candidateRoutes = dedupePeerEndpoints(
-      _candidateRoutesForContact(contact),
-    ).where((route) => _routeAllowedByTransports(route, effective)).toList(
-      growable: false,
-    );
+    final candidateRoutes =
+        dedupePeerEndpoints(_candidateRoutesForContact(contact))
+            .where((route) => _routeAllowedByTransports(route, effective))
+            .toList(growable: false);
     if (candidateRoutes.isEmpty) {
       throw StateError(
         'Connectivity is disabled for ${contact.alias} — no allowed routes.',
@@ -7738,7 +7742,8 @@ class MessengerController extends ChangeNotifier {
     ContactRecord contact,
   ) {
     final identity = _snapshot.identity;
-    final global = identity?.connectivity ?? const GlobalConnectivityPreferences();
+    final global =
+        identity?.connectivity ?? const GlobalConnectivityPreferences();
     final c = contact.routing;
     return (
       lan: global.lanEnabled && c.lanEnabled,
@@ -7762,12 +7767,11 @@ class MessengerController extends ChangeNotifier {
 
   List<PeerEndpoint> _preferredRoutesForContact(ContactRecord contact) {
     final effective = _effectiveTransports(contact);
-    final candidateRoutes = dedupePeerEndpoints(
-      _candidateRoutesForContact(contact),
-    )
-        .where((route) => _routeAllowedByTransports(route, effective))
-        .where(_routeHealthTracker.isEligibleNow)
-        .toList(growable: false);
+    final candidateRoutes =
+        dedupePeerEndpoints(_candidateRoutesForContact(contact))
+            .where((route) => _routeAllowedByTransports(route, effective))
+            .where(_routeHealthTracker.isEligibleNow)
+            .toList(growable: false);
     final hasNonRelayCandidate = candidateRoutes.any(
       (route) => route.kind != PeerRouteKind.relay,
     );
@@ -7856,20 +7860,23 @@ class MessengerController extends ChangeNotifier {
     final eligibleLanRoutes = candidateRoutes
         .where((route) => route.kind == PeerRouteKind.lan)
         .toList(growable: false);
+    final eligibleNonLanRoutes = candidateRoutes
+        .where((route) => route.kind != PeerRouteKind.lan)
+        .toList(growable: false);
     final preferred = <PeerEndpoint>[];
     final seenKeys = <String>{};
     // When the contact prefers online and both transports are allowed,
-    // non-LAN routes come first. Otherwise the LAN-first short-circuit
-    // above applies.
-    final order = effective.lan &&
+    // non-LAN routes come first — including not-yet-exercised ones, mirroring
+    // the LAN-first short-circuit. Otherwise the default LAN-first order.
+    final order =
+        effective.lan &&
             effective.online &&
             effective.preferred == RoutingPreference.online
         ? <PeerEndpoint>[
-            ...recentSuccessRoutes.where((r) => r.kind != PeerRouteKind.lan),
-            ...cachedHealthyRoutes.where((r) => r.kind != PeerRouteKind.lan),
+            ...eligibleNonLanRoutes,
             ...eligibleLanRoutes,
-            ...recentSuccessRoutes.where((r) => r.kind == PeerRouteKind.lan),
-            ...cachedHealthyRoutes.where((r) => r.kind == PeerRouteKind.lan),
+            ...recentSuccessRoutes,
+            ...cachedHealthyRoutes,
           ]
         : <PeerEndpoint>[
             ...eligibleLanRoutes,

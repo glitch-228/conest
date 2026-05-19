@@ -7479,11 +7479,7 @@ class _ConnectivityChip extends StatelessWidget {
           color: palette.primary,
         );
       case EffectiveRoutingMode.offline:
-        return (
-          label: 'Offline',
-          icon: Icons.cloud_off,
-          color: palette.danger,
-        );
+        return (label: 'Offline', icon: Icons.cloud_off, color: palette.danger);
     }
   }
 
@@ -7509,10 +7505,7 @@ class _ConnectivityChip extends StatelessWidget {
         global: global,
         onSave: (next) {
           unawaited(
-            controller.updateContactRoutingPreferences(
-              contact.deviceId,
-              next,
-            ),
+            controller.updateContactRoutingPreferences(contact.deviceId, next),
           );
         },
       ),
@@ -7630,10 +7623,7 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
             const SizedBox(height: 4),
             SegmentedButton<RoutingPreference>(
               segments: const [
-                ButtonSegment(
-                  value: RoutingPreference.lan,
-                  label: Text('LAN'),
-                ),
+                ButtonSegment(value: RoutingPreference.lan, label: Text('LAN')),
                 ButtonSegment(
                   value: RoutingPreference.online,
                   label: Text('Online'),
@@ -7645,10 +7635,7 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
             ),
           ],
           const SizedBox(height: 12),
-          Text(
-            _resolvedLabel(),
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
+          Text(_resolvedLabel(), style: Theme.of(context).textTheme.bodySmall),
         ],
       ),
       actions: [

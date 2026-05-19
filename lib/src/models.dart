@@ -482,7 +482,13 @@ List<PeerEndpoint> _peerEndpointsFromJsonList(
 
 enum RoutingPreference { lan, online }
 
-enum EffectiveRoutingMode { lanFirst, lanOnly, onlineFirst, onlineOnly, offline }
+enum EffectiveRoutingMode {
+  lanFirst,
+  lanOnly,
+  onlineFirst,
+  onlineOnly,
+  offline,
+}
 
 class GlobalConnectivityPreferences {
   const GlobalConnectivityPreferences({
@@ -495,7 +501,10 @@ class GlobalConnectivityPreferences {
 
   bool get anyEnabled => lanEnabled || onlineEnabled;
 
-  GlobalConnectivityPreferences copyWith({bool? lanEnabled, bool? onlineEnabled}) {
+  GlobalConnectivityPreferences copyWith({
+    bool? lanEnabled,
+    bool? onlineEnabled,
+  }) {
     return GlobalConnectivityPreferences(
       lanEnabled: lanEnabled ?? this.lanEnabled,
       onlineEnabled: onlineEnabled ?? this.onlineEnabled,
