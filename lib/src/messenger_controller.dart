@@ -5440,9 +5440,23 @@ class MessengerController extends ChangeNotifier {
     if (descriptorJson is! Map<String, dynamic>) {
       return;
     }
-    final descriptor = AttachmentDescriptor.fromJson(descriptorJson);
-    if (descriptor.sizeBytes > maxAttachmentSizeBytes ||
-        descriptor.chunkHashes.isEmpty) {
+    final AttachmentDescriptor descriptor;
+    try {
+      descriptor = AttachmentDescriptor.fromJson(descriptorJson);
+    } catch (_) {
+      return;
+    }
+    // Defensive validation — a malformed descriptor used to slip through and
+    // produce blank bubbles with a stuck "Transferring 0%" status. Reject
+    // the offer outright if any required field is missing or out-of-range.
+    if (descriptor.fileName.isEmpty ||
+        descriptor.chunkHashes.isEmpty ||
+        descriptor.sizeBytes <= 0 ||
+        descriptor.chunkSize <= 0 ||
+        descriptor.sizeBytes > maxAttachmentSizeBytes) {
+      _setTransientStatus(
+        'Rejected malformed attachment offer from ${sender.alias}.',
+      );
       return;
     }
     final me = _requireIdentity();
@@ -5465,7 +5479,15 @@ class MessengerController extends ChangeNotifier {
       descriptor: descriptor,
     );
     notifyListeners();
-    await _sendAttachmentChunkRequest(sender, descriptor.id, 0);
+    // Schedule the first chunk request as a microtask so it lands AFTER the
+    // current `_processEnvelopes` batch commits its state. Without this,
+    // back-to-back offers (multi-file send) could race: file 1's chunk
+    // request could fire before file 1's `_outboundAttachments` entry on the
+    // sender side was visible to the chunk-request handler that bounces
+    // through the local-relay loopback.
+    Future.microtask(
+      () => _sendAttachmentChunkRequest(sender, descriptor.id, 0),
+    );
   }
 
   Future<void> _sendAttachmentChunkRequest(

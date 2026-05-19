@@ -7914,6 +7914,30 @@ class _AttachmentRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Defensive guard: a malformed descriptor used to surface as a blank
+    // attachment bubble. Reject early so the user sees an explicit error
+    // rather than an empty card.
+    if (descriptor.fileName.isEmpty || descriptor.chunkHashes.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: palette.danger.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: palette.danger),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_outline, size: 18, color: palette.danger),
+            const SizedBox(width: 8),
+            Text(
+              'Attachment metadata unavailable',
+              style: TextStyle(color: palette.danger),
+            ),
+          ],
+        ),
+      );
+    }
     final bytes = controller.attachmentBytesFor(descriptor.id);
     final progress = controller.attachmentTransferProgress(descriptor.id);
     final textColor = outbound ? palette.outboundText : palette.inboundText;
