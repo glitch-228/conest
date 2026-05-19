@@ -13,6 +13,7 @@ import 'package:super_clipboard/super_clipboard.dart';
 import 'src/app_storage.dart';
 import 'src/build_info.dart';
 import 'src/conest_theme.dart';
+import 'src/media_picker_sheet.dart';
 import 'src/messenger_controller.dart';
 import 'src/models.dart';
 import 'src/platform_bridge.dart';
@@ -1487,6 +1488,31 @@ class _HomeScreenState extends State<HomeScreen> {
     await widget.controller.sendLanLobbyMessage(body);
   }
 
+  Future<void> _openMediaPicker() async {
+    final contact = _selectedContact;
+    if (contact == null) {
+      return;
+    }
+    final result = await showMediaPickerSheet(
+      context: context,
+      palette: widget.palette,
+      maxBytes: MessengerController.maxAttachmentSizeBytes,
+    );
+    if (!mounted || result == null) {
+      return;
+    }
+    if (result.fallbackToFilePicker) {
+      await _pickAndSendAttachment();
+      return;
+    }
+    await _sendAttachmentBytes(
+      contact: contact,
+      bytes: result.bytes!,
+      fileName: result.fileName!,
+      mimeType: result.mimeType ?? 'application/octet-stream',
+    );
+  }
+
   Future<void> _pickAndSendAttachment() async {
     final contact = _selectedContact;
     if (contact == null) {
@@ -1517,11 +1543,25 @@ class _HomeScreenState extends State<HomeScreen> {
       widget.controller.setStatus('File picker returned no data.');
       return;
     }
+    await _sendAttachmentBytes(
+      contact: contact,
+      bytes: bytes,
+      fileName: file.name,
+      mimeType: _guessMimeType(file.name),
+    );
+  }
+
+  Future<void> _sendAttachmentBytes({
+    required ContactRecord contact,
+    required Uint8List bytes,
+    required String fileName,
+    required String mimeType,
+  }) async {
     if (bytes.length > MessengerController.maxAttachmentSizeBytes) {
       final capMb = MessengerController.maxAttachmentSizeBytes ~/ (1024 * 1024);
       widget.controller.setStatus(
-        '${file.name} is ${(bytes.length / (1024 * 1024)).toStringAsFixed(1)} '
-        'MB; the v0.3.2 cap is $capMb MB. Larger files coming in v0.3.3.',
+        '$fileName is ${(bytes.length / (1024 * 1024)).toStringAsFixed(1)} '
+        'MB; the cap is $capMb MB.',
       );
       return;
     }
@@ -1533,8 +1573,8 @@ class _HomeScreenState extends State<HomeScreen> {
       await widget.controller.sendAttachment(
         contact: contact,
         bytes: bytes,
-        fileName: file.name,
-        mimeType: _guessMimeType(file.name),
+        fileName: fileName,
+        mimeType: mimeType,
         caption: caption,
       );
     } catch (error) {
@@ -1611,7 +1651,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         setState(() => _replyTarget = message),
                     onShowProfile: () => _showContactProfile(selectedContact),
                     onSend: _sendCurrentMessage,
-                    onAttach: _pickAndSendAttachment,
+                    onAttach: _openMediaPicker,
                   );
                 }
                 if (!isWide && selectedGroup != null) {
@@ -1744,7 +1784,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 onShowProfile: () =>
                                     _showContactProfile(selectedContact),
                                 onSend: _sendCurrentMessage,
-                                onAttach: _pickAndSendAttachment,
+                                onAttach: _openMediaPicker,
                               ),
                       ),
                   ],
