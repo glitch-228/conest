@@ -3045,21 +3045,14 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       return;
     }
     _initialPositionScheduled = true;
+    // reverse:true ListView opens at offset 0 = latest message. The flag
+    // still gates the read-sweep so we keep it; the post-frame callback is
+    // a single shot with no scroll work.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initialPositionScheduled = false;
       if (!mounted || _didInitialPosition) {
         return;
       }
-      final messages = controller.messagesForGroup(group.groupId);
-      if (messages.isEmpty) {
-        _didInitialPosition = true;
-        return;
-      }
-      if (!_scrollController.hasClients) {
-        _scheduleInitialPosition();
-        return;
-      }
-      _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
       _didInitialPosition = true;
       _scheduleReadSweep();
     });
@@ -3339,14 +3332,16 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
             ),
             const Divider(height: 1),
             Expanded(
-              child: ListView(
+              child: ListView.builder(
                 key: _messageListKey,
+                reverse: true,
                 controller: _scrollController,
                 padding: const EdgeInsets.all(18),
-                children: [
-                  for (final message in messages)
-                    _buildMessageBubble(context, message),
-                ],
+                itemCount: messages.length,
+                itemBuilder: (context, index) {
+                  final message = messages[messages.length - 1 - index];
+                  return _buildMessageBubble(context, message);
+                },
               ),
             ),
             Container(
@@ -3537,16 +3532,16 @@ class _ChatPanelState extends State<_ChatPanel> {
       return;
     }
     _initialPositionScheduled = true;
+    // With the reverse:true ListView, the default scroll position is offset
+    // 0 = latest message — no jumpTo needed. The only post-frame work is to
+    // surface the oldest unread message (if any) so the user can scroll up
+    // through history starting from there.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initialPositionScheduled = false;
       if (!mounted || _didInitialPosition) {
         return;
       }
       final messages = controller.messagesFor(contact.deviceId);
-      if (messages.isEmpty) {
-        _didInitialPosition = true;
-        return;
-      }
       ChatMessage? firstUnread;
       for (final message in messages) {
         if (!message.outbound &&
@@ -3557,21 +3552,13 @@ class _ChatPanelState extends State<_ChatPanel> {
       }
       if (firstUnread != null) {
         final unreadContext = _messageKeyFor(firstUnread.id).currentContext;
-        if (unreadContext == null) {
-          _scheduleInitialPosition();
-          return;
+        if (unreadContext != null) {
+          Scrollable.ensureVisible(
+            unreadContext,
+            alignment: 0.5,
+            duration: Duration.zero,
+          );
         }
-        Scrollable.ensureVisible(
-          unreadContext,
-          alignment: 0.08,
-          duration: Duration.zero,
-        );
-      } else {
-        if (!_scrollController.hasClients) {
-          _scheduleInitialPosition();
-          return;
-        }
-        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
       }
       _didInitialPosition = true;
       _scheduleReadSweep();
@@ -3984,14 +3971,16 @@ class _ChatPanelState extends State<_ChatPanel> {
                 contact: contact,
               ),
             Expanded(
-              child: ListView(
+              child: ListView.builder(
                 key: _messageListKey,
+                reverse: true,
                 controller: _scrollController,
                 padding: const EdgeInsets.all(18),
-                children: [
-                  for (final message in messages)
-                    _buildMessageBubble(context, message),
-                ],
+                itemCount: messages.length,
+                itemBuilder: (context, index) {
+                  final message = messages[messages.length - 1 - index];
+                  return _buildMessageBubble(context, message);
+                },
               ),
             ),
             Container(
