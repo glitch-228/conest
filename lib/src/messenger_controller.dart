@@ -2195,11 +2195,25 @@ class MessengerController extends ChangeNotifier {
   }
 
   /// Reconciles runtime listeners + loops with the current global connectivity
-  /// flags. Idempotent: no-op when the desired state already matches actual.
-  /// Filled in during Phase 2 — for now it persists the flag but doesn't
-  /// start/stop services.
+  /// flags. Idempotent — start/stop calls already short-circuit when desired
+  /// state matches actual.
   Future<void> _applyGlobalConnectivityState() async {
-    // Phase 2 wires the actual start/stop side-effects.
+    final identity = _snapshot.identity;
+    if (identity == null) return;
+    final global = identity.connectivity;
+    const stopTimeout = Duration(seconds: 2);
+    if (global.lanEnabled) {
+      await _ensureLocalRelayRunning();
+      await _ensurePairingBeaconRunning();
+    } else {
+      await _localRelayNode.stop().timeout(stopTimeout, onTimeout: () {});
+      await _stopPairingBeacon().timeout(stopTimeout, onTimeout: () {});
+    }
+    if (global.onlineEnabled) {
+      unawaited(_startLongPollIfEnabled());
+    } else {
+      _stopLongPoll();
+    }
   }
 
   Future<void> updateLocalRelayPort(int port) async {
@@ -3836,6 +3850,10 @@ class MessengerController extends ChangeNotifier {
     if (senderDeviceId.isEmpty || !hasIdentity) {
       return;
     }
+    // Global Online disabled → no relay traffic, including this echo.
+    if (!_snapshot.identity!.connectivity.onlineEnabled) {
+      return;
+    }
     // Already in contacts (or being verified) → not an orphan.
     if (_contactByDeviceId(senderDeviceId) != null) {
       return;
@@ -4509,6 +4527,9 @@ class MessengerController extends ChangeNotifier {
     if (!_longPollEnabled || _longPollRunning) {
       return;
     }
+    if (_snapshot.identity?.connectivity.onlineEnabled == false) {
+      return;
+    }
     _longPollRunning = true;
     unawaited(_runLongPollLoop());
   }
@@ -4746,6 +4767,9 @@ class MessengerController extends ChangeNotifier {
     if (me == null) {
       return;
     }
+    if (!me.connectivity.lanEnabled) {
+      return;
+    }
     if (_localRelayNode.isRunning &&
         _localRelayNode.port == me.localRelayPort) {
       return;
@@ -4755,6 +4779,9 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> _ensurePairingBeaconRunning() async {
     if (kIsWeb || _pairingBeaconSocket != null) {
+      return;
+    }
+    if (_snapshot.identity?.connectivity.lanEnabled == false) {
       return;
     }
     try {
@@ -7457,9 +7484,17 @@ class MessengerController extends ChangeNotifier {
         'Refusing to send to ${contact.alias}: this contact has been replaced.',
       );
     }
+    final effective = _effectiveTransports(contact);
     final candidateRoutes = dedupePeerEndpoints(
       _candidateRoutesForContact(contact),
+    ).where((route) => _routeAllowedByTransports(route, effective)).toList(
+      growable: false,
     );
+    if (candidateRoutes.isEmpty) {
+      throw StateError(
+        'Connectivity is disabled for ${contact.alias} — no allowed routes.',
+      );
+    }
     final preferredRoutes = _preferredRoutesForContact(contact);
     Object? lastError;
     PeerEndpoint? deliveredVia;
@@ -7687,10 +7722,44 @@ class MessengerController extends ChangeNotifier {
         .toList(growable: false);
   }
 
+  /// Resolves per-contact + global connectivity into the actually-allowed
+  /// transports for this delivery. The intersection makes the global flag a
+  /// hard kill-switch — a per-contact toggle cannot re-enable a transport the
+  /// global has disabled.
+  ({bool lan, bool online, RoutingPreference preferred}) _effectiveTransports(
+    ContactRecord contact,
+  ) {
+    final identity = _snapshot.identity;
+    final global = identity?.connectivity ?? const GlobalConnectivityPreferences();
+    final c = contact.routing;
+    return (
+      lan: global.lanEnabled && c.lanEnabled,
+      online: global.onlineEnabled && c.onlineEnabled,
+      preferred: c.preferred,
+    );
+  }
+
+  bool _routeAllowedByTransports(
+    PeerEndpoint route,
+    ({bool lan, bool online, RoutingPreference preferred}) effective,
+  ) {
+    switch (route.kind) {
+      case PeerRouteKind.lan:
+        return effective.lan;
+      case PeerRouteKind.relay:
+      case PeerRouteKind.directInternet:
+        return effective.online;
+    }
+  }
+
   List<PeerEndpoint> _preferredRoutesForContact(ContactRecord contact) {
+    final effective = _effectiveTransports(contact);
     final candidateRoutes = dedupePeerEndpoints(
       _candidateRoutesForContact(contact),
-    ).where(_routeHealthTracker.isEligibleNow).toList(growable: false);
+    )
+        .where((route) => _routeAllowedByTransports(route, effective))
+        .where(_routeHealthTracker.isEligibleNow)
+        .toList(growable: false);
     final hasNonRelayCandidate = candidateRoutes.any(
       (route) => route.kind != PeerRouteKind.relay,
     );
@@ -7781,11 +7850,25 @@ class MessengerController extends ChangeNotifier {
         .toList(growable: false);
     final preferred = <PeerEndpoint>[];
     final seenKeys = <String>{};
-    for (final route in [
-      ...eligibleLanRoutes,
-      ...recentSuccessRoutes,
-      ...cachedHealthyRoutes,
-    ]) {
+    // When the contact prefers online and both transports are allowed,
+    // non-LAN routes come first. Otherwise the LAN-first short-circuit
+    // above applies.
+    final order = effective.lan &&
+            effective.online &&
+            effective.preferred == RoutingPreference.online
+        ? <PeerEndpoint>[
+            ...recentSuccessRoutes.where((r) => r.kind != PeerRouteKind.lan),
+            ...cachedHealthyRoutes.where((r) => r.kind != PeerRouteKind.lan),
+            ...eligibleLanRoutes,
+            ...recentSuccessRoutes.where((r) => r.kind == PeerRouteKind.lan),
+            ...cachedHealthyRoutes.where((r) => r.kind == PeerRouteKind.lan),
+          ]
+        : <PeerEndpoint>[
+            ...eligibleLanRoutes,
+            ...recentSuccessRoutes,
+            ...cachedHealthyRoutes,
+          ];
+    for (final route in order) {
       if (seenKeys.add(route.routeKey)) {
         preferred.add(route);
       }
