@@ -39,6 +39,10 @@ class PlatformBridge {
     required String title,
     required String body,
     required String conversationId,
+    String? senderName,
+    String? selfName,
+    List<({String sender, String body, int timestampMs})> recentMessages =
+        const [],
   }) async {
     if (!_supportsAndroidSystemCalls) {
       return;
@@ -48,6 +52,17 @@ class PlatformBridge {
         'title': title,
         'body': body,
         'conversationId': conversationId,
+        'senderName': ?senderName,
+        'selfName': ?selfName,
+        'recentMessages': recentMessages
+            .map(
+              (m) => <String, Object?>{
+                'sender': m.sender,
+                'body': m.body,
+                'timestampMs': m.timestampMs,
+              },
+            )
+            .toList(growable: false),
       });
     } on MissingPluginException {
       return;

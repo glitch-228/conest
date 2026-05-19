@@ -5,6 +5,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.Person
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -37,7 +38,12 @@ class MainActivity : FlutterActivity() {
                     val title = call.argument<String>("title") ?: "Conest"
                     val body = call.argument<String>("body") ?: "New message"
                     val conversationId = call.argument<String>("conversationId") ?: title
-                    showMessageNotification(title, body, conversationId)
+                    val senderName = call.argument<String>("senderName") ?: title
+                    val selfName = call.argument<String>("selfName") ?: "me"
+                    @Suppress("UNCHECKED_CAST")
+                    val recent = call.argument<List<Map<String, Any?>>>("recentMessages")
+                        ?: emptyList()
+                    showMessageNotification(title, body, conversationId, senderName, selfName, recent)
                     result.success(null)
                 }
                 "dismissMessageNotification" -> {
@@ -45,6 +51,7 @@ class MainActivity : FlutterActivity() {
                     if (conversationId.isNotEmpty()) {
                         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                         manager.cancel(conversationId.hashCode())
+                        maybeCancelGroupSummary(manager)
                     }
                     result.success(null)
                 }
@@ -96,7 +103,14 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun showMessageNotification(title: String, body: String, conversationId: String) {
+    private fun showMessageNotification(
+        title: String,
+        body: String,
+        conversationId: String,
+        senderName: String,
+        selfName: String,
+        recentMessages: List<Map<String, Any?>>
+    ) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
@@ -114,15 +128,62 @@ class MainActivity : FlutterActivity() {
             launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val notification = notificationBuilder(MESSAGES_CHANNEL_ID)
+        val builder = notificationBuilder(MESSAGES_CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(body)
-            .setStyle(Notification.BigTextStyle().bigText(body))
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
-            .build()
+            .setGroup(GROUP_KEY_MESSAGES)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val self = Person.Builder().setName(selfName).build()
+            val style = Notification.MessagingStyle(self).setConversationTitle(title)
+            if (recentMessages.isEmpty()) {
+                val sender = Person.Builder().setName(senderName).build()
+                style.addMessage(
+                    Notification.MessagingStyle.Message(body, System.currentTimeMillis(), sender)
+                )
+            } else {
+                for (entry in recentMessages) {
+                    val text = entry["body"] as? String ?: ""
+                    val ts = (entry["timestampMs"] as? Number)?.toLong()
+                        ?: System.currentTimeMillis()
+                    val sender = Person.Builder()
+                        .setName(entry["sender"] as? String ?: senderName)
+                        .build()
+                    style.addMessage(Notification.MessagingStyle.Message(text, ts, sender))
+                }
+            }
+            builder.setStyle(style)
+        } else {
+            builder.setStyle(Notification.BigTextStyle().bigText(body))
+        }
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(conversationId.hashCode(), notification)
+        manager.notify(conversationId.hashCode(), builder.build())
+        postOrRefreshGroupSummary(manager)
+    }
+
+    private fun postOrRefreshGroupSummary(manager: NotificationManager) {
+        val summary = notificationBuilder(MESSAGES_CHANNEL_ID)
+            .setContentTitle("Conest")
+            .setContentText("New messages")
+            .setGroup(GROUP_KEY_MESSAGES)
+            .setGroupSummary(true)
+            .setAutoCancel(true)
+            .build()
+        manager.notify(SUMMARY_NOTIFICATION_ID, summary)
+    }
+
+    private fun maybeCancelGroupSummary(manager: NotificationManager) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return
+        }
+        val anyChildRemains = manager.activeNotifications.any { sbn ->
+            sbn.id != SUMMARY_NOTIFICATION_ID &&
+                sbn.notification.group == GROUP_KEY_MESSAGES
+        }
+        if (!anyChildRemains) {
+            manager.cancel(SUMMARY_NOTIFICATION_ID)
+        }
     }
 
     private fun installDownloadedApk(path: String) {
@@ -183,5 +244,7 @@ class MainActivity : FlutterActivity() {
         private const val MESSAGES_CHANNEL_ID = "conest_messages"
         const val BACKGROUND_CHANNEL_ID = "conest_background"
         private const val NOTIFICATION_PERMISSION_REQUEST = 6017
+        private const val GROUP_KEY_MESSAGES = "dev.conest.conest.messages"
+        private const val SUMMARY_NOTIFICATION_ID = 0x100b1ade
     }
 }

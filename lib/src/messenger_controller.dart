@@ -6110,11 +6110,15 @@ class MessengerController extends ChangeNotifier {
     if (me == null || !me.notificationsEnabled) {
       return;
     }
+    final recent = _recentInboundLinesForContact(contact, defaultBody: body);
     unawaited(
       _platformBridge.showMessageNotification(
         title: contact.alias,
         body: body,
         conversationId: _crypto.conversationIdFor(contact.deviceId),
+        senderName: contact.alias,
+        selfName: me.displayName,
+        recentMessages: recent,
       ),
     );
   }
@@ -6128,13 +6132,76 @@ class MessengerController extends ChangeNotifier {
     if (me == null || !me.notificationsEnabled) {
       return;
     }
+    final recent = _recentInboundLinesForGroup(group);
     unawaited(
       _platformBridge.showMessageNotification(
         title: group.title,
         body: '${sender.alias}: $body',
         conversationId: group.groupId,
+        senderName: sender.alias,
+        selfName: me.displayName,
+        recentMessages: recent,
       ),
     );
+  }
+
+  static const int _notificationRecentMessageCap = 5;
+
+  List<({String sender, String body, int timestampMs})>
+  _recentInboundLinesForContact(
+    ContactRecord contact, {
+    required String defaultBody,
+  }) {
+    final messages = messagesFor(contact.deviceId)
+        .where((m) => !m.outbound)
+        .toList(growable: false);
+    final tail = messages.length > _notificationRecentMessageCap
+        ? messages.sublist(messages.length - _notificationRecentMessageCap)
+        : messages;
+    if (tail.isEmpty) {
+      return [
+        (
+          sender: contact.alias,
+          body: defaultBody,
+          timestampMs: DateTime.now().toUtc().millisecondsSinceEpoch,
+        ),
+      ];
+    }
+    return [
+      for (final m in tail)
+        (
+          sender: contact.alias,
+          body: m.body,
+          timestampMs: m.createdAt.millisecondsSinceEpoch,
+        ),
+    ];
+  }
+
+  List<({String sender, String body, int timestampMs})>
+  _recentInboundLinesForGroup(GroupRecord group) {
+    final messages = messagesForGroup(group.groupId)
+        .where((m) => !m.outbound)
+        .toList(growable: false);
+    final tail = messages.length > _notificationRecentMessageCap
+        ? messages.sublist(messages.length - _notificationRecentMessageCap)
+        : messages;
+    return [
+      for (final m in tail)
+        (
+          sender: _groupSenderAliasFor(group, m.senderDeviceId),
+          body: m.body,
+          timestampMs: m.createdAt.millisecondsSinceEpoch,
+        ),
+    ];
+  }
+
+  String _groupSenderAliasFor(GroupRecord group, String deviceId) {
+    final contact = _contactByDeviceId(deviceId);
+    if (contact != null) return contact.alias;
+    if (deviceId == identity?.deviceId) {
+      return identity?.displayName ?? 'You';
+    }
+    return deviceId.length > 8 ? deviceId.substring(0, 8) : deviceId;
   }
 
   Future<void> _handleDebugProbe(RelayEnvelope envelope) async {
