@@ -480,6 +480,95 @@ List<PeerEndpoint> _peerEndpointsFromJsonList(
   return dedupePeerEndpoints(routes);
 }
 
+enum RoutingPreference { lan, online }
+
+enum EffectiveRoutingMode { lanFirst, lanOnly, onlineFirst, onlineOnly, offline }
+
+class GlobalConnectivityPreferences {
+  const GlobalConnectivityPreferences({
+    this.lanEnabled = true,
+    this.onlineEnabled = true,
+  });
+
+  final bool lanEnabled;
+  final bool onlineEnabled;
+
+  bool get anyEnabled => lanEnabled || onlineEnabled;
+
+  GlobalConnectivityPreferences copyWith({bool? lanEnabled, bool? onlineEnabled}) {
+    return GlobalConnectivityPreferences(
+      lanEnabled: lanEnabled ?? this.lanEnabled,
+      onlineEnabled: onlineEnabled ?? this.onlineEnabled,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'lanEnabled': lanEnabled,
+    'onlineEnabled': onlineEnabled,
+  };
+
+  factory GlobalConnectivityPreferences.fromJson(Map<String, dynamic> json) {
+    return GlobalConnectivityPreferences(
+      lanEnabled: json['lanEnabled'] as bool? ?? true,
+      onlineEnabled: json['onlineEnabled'] as bool? ?? true,
+    );
+  }
+}
+
+class ContactRoutingPreferences {
+  const ContactRoutingPreferences({
+    this.lanEnabled = true,
+    this.onlineEnabled = true,
+    this.preferred = RoutingPreference.lan,
+  });
+
+  final bool lanEnabled;
+  final bool onlineEnabled;
+  final RoutingPreference preferred;
+
+  ContactRoutingPreferences copyWith({
+    bool? lanEnabled,
+    bool? onlineEnabled,
+    RoutingPreference? preferred,
+  }) {
+    return ContactRoutingPreferences(
+      lanEnabled: lanEnabled ?? this.lanEnabled,
+      onlineEnabled: onlineEnabled ?? this.onlineEnabled,
+      preferred: preferred ?? this.preferred,
+    );
+  }
+
+  /// Resolved routing mode after intersecting with the global kill-switch.
+  EffectiveRoutingMode effectiveMode(GlobalConnectivityPreferences global) {
+    final lan = global.lanEnabled && lanEnabled;
+    final online = global.onlineEnabled && onlineEnabled;
+    if (!lan && !online) return EffectiveRoutingMode.offline;
+    if (lan && !online) return EffectiveRoutingMode.lanOnly;
+    if (!lan && online) return EffectiveRoutingMode.onlineOnly;
+    return preferred == RoutingPreference.online
+        ? EffectiveRoutingMode.onlineFirst
+        : EffectiveRoutingMode.lanFirst;
+  }
+
+  Map<String, dynamic> toJson() => {
+    'lanEnabled': lanEnabled,
+    'onlineEnabled': onlineEnabled,
+    'preferred': preferred.name,
+  };
+
+  factory ContactRoutingPreferences.fromJson(Map<String, dynamic> json) {
+    final preferredRaw = json['preferred'] as String?;
+    final preferred = RoutingPreference.values
+        .where((p) => p.name == preferredRaw)
+        .firstOrNull;
+    return ContactRoutingPreferences(
+      lanEnabled: json['lanEnabled'] as bool? ?? true,
+      onlineEnabled: json['onlineEnabled'] as bool? ?? true,
+      preferred: preferred ?? RoutingPreference.lan,
+    );
+  }
+}
+
 class IdentityRecord {
   IdentityRecord({
     required this.accountId,
@@ -497,6 +586,7 @@ class IdentityRecord {
     required this.notificationsEnabled,
     required this.androidBackgroundRuntimeEnabled,
     required this.suppressReadReceipts,
+    this.connectivity = const GlobalConnectivityPreferences(),
     required this.lanAddresses,
     required this.safetyNumber,
     required this.createdAt,
@@ -517,6 +607,7 @@ class IdentityRecord {
   final bool notificationsEnabled;
   final bool androidBackgroundRuntimeEnabled;
   final bool suppressReadReceipts;
+  final GlobalConnectivityPreferences connectivity;
   final List<String> lanAddresses;
   final String safetyNumber;
   final DateTime createdAt;
@@ -560,6 +651,7 @@ class IdentityRecord {
     bool? notificationsEnabled,
     bool? androidBackgroundRuntimeEnabled,
     bool? suppressReadReceipts,
+    GlobalConnectivityPreferences? connectivity,
     List<String>? lanAddresses,
   }) {
     return IdentityRecord(
@@ -580,6 +672,7 @@ class IdentityRecord {
           androidBackgroundRuntimeEnabled ??
           this.androidBackgroundRuntimeEnabled,
       suppressReadReceipts: suppressReadReceipts ?? this.suppressReadReceipts,
+      connectivity: connectivity ?? this.connectivity,
       lanAddresses: lanAddresses ?? this.lanAddresses,
       safetyNumber: safetyNumber,
       createdAt: createdAt,
@@ -605,6 +698,7 @@ class IdentityRecord {
       'notificationsEnabled': notificationsEnabled,
       'androidBackgroundRuntimeEnabled': androidBackgroundRuntimeEnabled,
       'suppressReadReceipts': suppressReadReceipts,
+      'connectivity': connectivity.toJson(),
       'lanAddresses': lanAddresses,
       'safetyNumber': safetyNumber,
       'createdAt': createdAt.toIso8601String(),
@@ -661,6 +755,11 @@ class IdentityRecord {
       androidBackgroundRuntimeEnabled:
           json['androidBackgroundRuntimeEnabled'] as bool? ?? false,
       suppressReadReceipts: json['suppressReadReceipts'] as bool? ?? false,
+      connectivity: json['connectivity'] is Map<String, dynamic>
+          ? GlobalConnectivityPreferences.fromJson(
+              json['connectivity'] as Map<String, dynamic>,
+            )
+          : const GlobalConnectivityPreferences(),
       lanAddresses: (json['lanAddresses'] as List<dynamic>? ?? const [])
           .cast<String>(),
       safetyNumber: json['safetyNumber'] as String,
@@ -887,6 +986,7 @@ class ContactRecord {
     this.replacesDeviceId,
     this.replacedByDeviceId,
     this.unverifiedPublicKeyBase64,
+    this.routing = const ContactRoutingPreferences(),
   });
 
   final String accountId;
@@ -899,6 +999,7 @@ class ContactRecord {
   final List<PeerEndpoint> routeHints;
   final String safetyNumber;
   final DateTime trustedAt;
+  final ContactRoutingPreferences routing;
 
   /// True when this contact arrived with a `displayName` matching an existing
   /// trusted contact AND a different identity public key — i.e. possibly a
@@ -948,6 +1049,7 @@ class ContactRecord {
     bool clearReplacedByDeviceId = false,
     String? unverifiedPublicKeyBase64,
     bool clearUnverifiedPublicKey = false,
+    ContactRoutingPreferences? routing,
   }) {
     return ContactRecord(
       accountId: accountId,
@@ -970,6 +1072,7 @@ class ContactRecord {
       unverifiedPublicKeyBase64: clearUnverifiedPublicKey
           ? null
           : (unverifiedPublicKeyBase64 ?? this.unverifiedPublicKeyBase64),
+      routing: routing ?? this.routing,
     );
   }
 
@@ -1048,6 +1151,7 @@ class ContactRecord {
       if (replacedByDeviceId != null) 'replacedByDeviceId': replacedByDeviceId,
       if (unverifiedPublicKeyBase64 != null)
         'unverifiedPublicKeyBase64': unverifiedPublicKeyBase64,
+      'routing': routing.toJson(),
     };
   }
 
@@ -1104,6 +1208,11 @@ class ContactRecord {
       replacesDeviceId: json['replacesDeviceId'] as String?,
       replacedByDeviceId: json['replacedByDeviceId'] as String?,
       unverifiedPublicKeyBase64: unverifiedKey,
+      routing: json['routing'] is Map<String, dynamic>
+          ? ContactRoutingPreferences.fromJson(
+              json['routing'] as Map<String, dynamic>,
+            )
+          : const ContactRoutingPreferences(),
     );
   }
 }

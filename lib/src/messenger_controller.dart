@@ -2162,6 +2162,46 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  Future<void> updateGlobalConnectivity(
+    GlobalConnectivityPreferences prefs,
+  ) async {
+    final me = _requireIdentity();
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(connectivity: prefs),
+    );
+    await _applyGlobalConnectivityState();
+    _markRuntimeActivity();
+    final label = switch ((prefs.lanEnabled, prefs.onlineEnabled)) {
+      (true, true) => 'Connectivity: LAN and Online enabled.',
+      (true, false) => 'Connectivity: LAN only.',
+      (false, true) => 'Connectivity: Online only.',
+      (false, false) => 'Connectivity is fully off. The app will not send or receive.',
+    };
+    await _persist(label);
+  }
+
+  Future<void> updateContactRoutingPreferences(
+    String deviceId,
+    ContactRoutingPreferences prefs,
+  ) async {
+    final index = _snapshot.contacts.indexWhere((c) => c.deviceId == deviceId);
+    if (index < 0) {
+      return;
+    }
+    final contacts = List<ContactRecord>.from(_snapshot.contacts);
+    contacts[index] = contacts[index].copyWith(routing: prefs);
+    _snapshot = _snapshot.copyWith(contacts: contacts);
+    await _persist('Routing preferences updated for ${contacts[index].alias}.');
+  }
+
+  /// Reconciles runtime listeners + loops with the current global connectivity
+  /// flags. Idempotent: no-op when the desired state already matches actual.
+  /// Filled in during Phase 2 — for now it persists the flag but doesn't
+  /// start/stop services.
+  Future<void> _applyGlobalConnectivityState() async {
+    // Phase 2 wires the actual start/stop side-effects.
+  }
+
   Future<void> updateLocalRelayPort(int port) async {
     if (port <= 0 || port > 65535) {
       throw ArgumentError('Relay port must be between 1 and 65535.');
