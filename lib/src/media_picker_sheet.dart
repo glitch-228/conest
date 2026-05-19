@@ -510,25 +510,81 @@ class MediaEditorScreen extends StatefulWidget {
 }
 
 class _MediaEditorScreenState extends State<MediaEditorScreen> {
+  /// Long-edge cap for decoded bitmaps. A 4032×3024 phone photo is ~37 MP /
+  /// ~50 MB RGBA decoded — chaining 2–3 rotations on a low-RAM Android device
+  /// OOMs the host. Capping at 2048 keeps peak decoded memory under 16 MB.
+  static const int _maxLongEdge = 2048;
+
   late Uint8List _current = widget.sourceBytes;
   final CropController _cropController = CropController();
   bool _cropMode = false;
   bool _busy = false;
+  bool _initializedDownscale = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Downscale once on entry so subsequent rotations operate on a smaller
+    // bitmap. Done in a microtask so the first frame renders the original
+    // bytes immediately.
+    Future<void>.microtask(_maybeDownscaleSource);
+  }
+
+  Future<void> _maybeDownscaleSource() async {
+    if (_initializedDownscale || !mounted) return;
+    _initializedDownscale = true;
+    try {
+      final decoded = img.decodeImage(_current);
+      if (decoded == null) return;
+      final longEdge = decoded.width > decoded.height
+          ? decoded.width
+          : decoded.height;
+      if (longEdge <= _maxLongEdge) return;
+      final scale = _maxLongEdge / longEdge;
+      final resized = img.copyResize(
+        decoded,
+        width: (decoded.width * scale).round(),
+        height: (decoded.height * scale).round(),
+      );
+      final encoded = Uint8List.fromList(img.encodeJpg(resized, quality: 92));
+      if (!mounted) return;
+      setState(() => _current = encoded);
+    } catch (error) {
+      debugPrint('Conest editor downscale failed: $error');
+    }
+  }
 
   Future<void> _rotate(int quarterTurns) async {
     setState(() => _busy = true);
-    final decoded = img.decodeImage(_current);
-    if (decoded == null) {
-      setState(() => _busy = false);
-      return;
+    try {
+      final decoded = img.decodeImage(_current);
+      if (decoded == null) {
+        if (mounted) {
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            const SnackBar(
+              content: Text('Could not decode the image to rotate it.'),
+            ),
+          );
+          setState(() => _busy = false);
+        }
+        return;
+      }
+      final rotated = img.copyRotate(decoded, angle: quarterTurns * 90);
+      final encoded = Uint8List.fromList(img.encodeJpg(rotated, quality: 92));
+      if (!mounted) return;
+      setState(() {
+        _current = encoded;
+        _busy = false;
+      });
+    } catch (error) {
+      debugPrint('Conest rotate failed: $error');
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text('Rotation failed: $error')),
+        );
+        setState(() => _busy = false);
+      }
     }
-    final rotated = img.copyRotate(decoded, angle: quarterTurns * 90);
-    final encoded = Uint8List.fromList(img.encodeJpg(rotated, quality: 92));
-    if (!mounted) return;
-    setState(() {
-      _current = encoded;
-      _busy = false;
-    });
   }
 
   @override
