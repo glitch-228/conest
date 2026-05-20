@@ -8201,6 +8201,12 @@ class _AttachmentRow extends StatelessWidget {
             _ => 'Download/conest',
           };
           controller.setStatus('Saved ${descriptor.fileName} to $relPath.');
+          unawaited(
+            controller.platformBridge.showToast(
+              'Saved ${descriptor.fileName} → $relPath',
+              long: true,
+            ),
+          );
           return;
         }
       } catch (error) {
@@ -8227,6 +8233,12 @@ class _AttachmentRow extends StatelessWidget {
         await File(path).writeAsBytes(bytes);
       }
       controller.setStatus('Saved ${descriptor.fileName} to $path.');
+      unawaited(
+        controller.platformBridge.showToast(
+          'Saved ${descriptor.fileName}',
+          long: true,
+        ),
+      );
     } catch (error) {
       controller.setStatus('Save failed: $error');
     }

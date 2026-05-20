@@ -14,6 +14,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.widget.Toast
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -55,6 +56,18 @@ class MainActivity : FlutterActivity() {
                         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                         manager.cancel(conversationId.hashCode())
                         maybeCancelGroupSummary(manager)
+                    }
+                    result.success(null)
+                }
+                "showToast" -> {
+                    val text = call.argument<String>("text") ?: ""
+                    val long = call.argument<Boolean>("long") ?: false
+                    if (text.isNotEmpty()) {
+                        Toast.makeText(
+                            this,
+                            text,
+                            if (long) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
+                        ).show()
                     }
                     result.success(null)
                 }

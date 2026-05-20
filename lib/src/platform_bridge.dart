@@ -113,6 +113,21 @@ class PlatformBridge {
     }
   }
 
+  /// Show a native toast on Android. Other platforms / missing-plugin
+  /// gracefully no-op so the call site doesn't need a platform guard.
+  Future<void> showToast(String text, {bool long = false}) async {
+    if (!_supportsAndroidSystemCalls) return;
+    if (text.isEmpty) return;
+    try {
+      await _channel.invokeMethod<void>('showToast', {
+        'text': text,
+        'long': long,
+      });
+    } on MissingPluginException {
+      return;
+    }
+  }
+
   Future<void> installDownloadedApk(String path) async {
     if (!_supportsAndroidSystemCalls) {
       return;
