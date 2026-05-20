@@ -2998,8 +2998,11 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   bool _didInitialPosition = false;
   bool _initialPositionScheduled = false;
   bool _droppingFiles = false;
-  bool _readSweepScheduled = false;
+  Timer? _readSweepDebounce;
+  String? _anchoredFirstUnreadId;
   final LinkedHashSet<String> _selectedMessageIds = LinkedHashSet<String>();
+
+  static const Duration _readSweepDelay = Duration(milliseconds: 800);
 
   bool get _selectionMode => _selectedMessageIds.isNotEmpty;
 
@@ -3106,6 +3109,8 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       _messageKeys.clear();
       _didInitialPosition = false;
       _initialPositionScheduled = false;
+      _anchoredFirstUnreadId = null;
+      _readSweepDebounce?.cancel();
     }
     _scheduleInitialPosition();
     _scheduleReadSweep();
@@ -3113,6 +3118,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
 
   @override
   void dispose() {
+    _readSweepDebounce?.cancel();
     _scrollController.removeListener(_scheduleReadSweep);
     _scrollController.dispose();
     super.dispose();
@@ -3143,6 +3149,19 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       if (!mounted || _didInitialPosition) {
         return;
       }
+      // Anchor the 'N new messages' divider on the first unread message
+      // visible at chat-open. Stays put as new messages arrive; clears
+      // when the chat is closed and re-opened.
+      if (_anchoredFirstUnreadId == null) {
+        final groupMessages = controller.messagesForGroup(group.groupId);
+        for (final m in groupMessages) {
+          if (!m.outbound &&
+              controller.isUnreadGroupMessage(group.groupId, m)) {
+            _anchoredFirstUnreadId = m.id;
+            break;
+          }
+        }
+      }
       _didInitialPosition = true;
       _scheduleReadSweep();
     });
@@ -3151,25 +3170,21 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   void _scheduleReadSweep() {
     if (!mounted ||
         !_didInitialPosition ||
-        _readSweepScheduled ||
         !controller.isAppForeground) {
       return;
     }
-    _readSweepScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      _readSweepScheduled = false;
-      if (!mounted || !controller.isAppForeground) {
-        return;
-      }
-      final latestVisibleUnread = _latestVisibleUnreadMessage();
-      if (latestVisibleUnread == null) {
-        return;
-      }
-      await controller.markGroupReadThroughMessage(
-        group.groupId,
-        latestVisibleUnread,
-      );
-    });
+    _readSweepDebounce?.cancel();
+    _readSweepDebounce = Timer(_readSweepDelay, _runReadSweep);
+  }
+
+  Future<void> _runReadSweep() async {
+    if (!mounted || !controller.isAppForeground) return;
+    final latestVisibleUnread = _latestVisibleUnreadMessage();
+    if (latestVisibleUnread == null) return;
+    await controller.markGroupReadThroughMessage(
+      group.groupId,
+      latestVisibleUnread,
+    );
   }
 
   ChatMessage? _latestVisibleUnreadMessage() {
@@ -3446,15 +3461,43 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     : null,
               ),
             Expanded(
-              child: ListView.builder(
-                key: _messageListKey,
-                reverse: true,
-                controller: _scrollController,
-                padding: const EdgeInsets.all(18),
-                itemCount: messages.length,
-                itemBuilder: (context, index) {
-                  final message = messages[messages.length - 1 - index];
-                  return _buildMessageBubble(context, message);
+              child: Builder(
+                builder: (context) {
+                  final anchor = _anchoredFirstUnreadId;
+                  final unreadCount = anchor == null
+                      ? 0
+                      : messages.where((m) {
+                          return !m.outbound &&
+                              controller.isUnreadGroupMessage(
+                                group.groupId,
+                                m,
+                              );
+                        }).length;
+                  return ListView.builder(
+                    key: _messageListKey,
+                    reverse: true,
+                    controller: _scrollController,
+                    padding: const EdgeInsets.all(18),
+                    itemCount: messages.length,
+                    itemBuilder: (context, index) {
+                      final message = messages[messages.length - 1 - index];
+                      final showDivider =
+                          anchor != null && message.id == anchor;
+                      if (!showDivider) {
+                        return _buildMessageBubble(context, message);
+                      }
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _NewMessagesDivider(
+                            palette: palette,
+                            count: unreadCount,
+                          ),
+                          _buildMessageBubble(context, message),
+                        ],
+                      );
+                    },
+                  );
                 },
               ),
             ),
@@ -3594,8 +3637,11 @@ class _ChatPanelState extends State<_ChatPanel> {
   final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
   bool _didInitialPosition = false;
   bool _initialPositionScheduled = false;
-  bool _readSweepScheduled = false;
+  Timer? _readSweepDebounce;
+  String? _anchoredFirstUnreadId;
   final LinkedHashSet<String> _selectedMessageIds = LinkedHashSet<String>();
+
+  static const Duration _readSweepDelay = Duration(milliseconds: 800);
 
   bool get _selectionMode => _selectedMessageIds.isNotEmpty;
 
@@ -3703,6 +3749,8 @@ class _ChatPanelState extends State<_ChatPanel> {
       _messageKeys.clear();
       _didInitialPosition = false;
       _initialPositionScheduled = false;
+      _anchoredFirstUnreadId = null;
+      _readSweepDebounce?.cancel();
     }
     _scheduleInitialPosition();
     _scheduleReadSweep();
@@ -3710,6 +3758,7 @@ class _ChatPanelState extends State<_ChatPanel> {
 
   @override
   void dispose() {
+    _readSweepDebounce?.cancel();
     _scrollController.removeListener(_handleScroll);
     _scrollController.dispose();
     super.dispose();
@@ -3755,6 +3804,7 @@ class _ChatPanelState extends State<_ChatPanel> {
         }
       }
       if (firstUnread != null) {
+        _anchoredFirstUnreadId ??= firstUnread.id;
         final unreadContext = _messageKeyFor(firstUnread.id).currentContext;
         if (unreadContext != null) {
           Scrollable.ensureVisible(
@@ -3772,25 +3822,25 @@ class _ChatPanelState extends State<_ChatPanel> {
   void _scheduleReadSweep() {
     if (!mounted ||
         !_didInitialPosition ||
-        _readSweepScheduled ||
         !controller.isAppForeground) {
       return;
     }
-    _readSweepScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      _readSweepScheduled = false;
-      if (!mounted || !controller.isAppForeground) {
-        return;
-      }
-      final latestVisibleUnread = _latestVisibleUnreadMessage();
-      if (latestVisibleUnread == null) {
-        return;
-      }
-      await controller.markConversationReadThroughMessage(
-        contact.deviceId,
-        latestVisibleUnread,
-      );
-    });
+    // Telegram-style: debounce the mark-read by 800 ms so the unread badge
+    // on the contact list has time to appear and a burst of inbound
+    // messages doesn't clear it instantly. The timer is reset on every
+    // call so successive scroll events keep pushing the sweep out.
+    _readSweepDebounce?.cancel();
+    _readSweepDebounce = Timer(_readSweepDelay, _runReadSweep);
+  }
+
+  Future<void> _runReadSweep() async {
+    if (!mounted || !controller.isAppForeground) return;
+    final latestVisibleUnread = _latestVisibleUnreadMessage();
+    if (latestVisibleUnread == null) return;
+    await controller.markConversationReadThroughMessage(
+      contact.deviceId,
+      latestVisibleUnread,
+    );
   }
 
   ChatMessage? _latestVisibleUnreadMessage() {
@@ -4199,15 +4249,43 @@ class _ChatPanelState extends State<_ChatPanel> {
                     : null,
               ),
             Expanded(
-              child: ListView.builder(
-                key: _messageListKey,
-                reverse: true,
-                controller: _scrollController,
-                padding: const EdgeInsets.all(18),
-                itemCount: messages.length,
-                itemBuilder: (context, index) {
-                  final message = messages[messages.length - 1 - index];
-                  return _buildMessageBubble(context, message);
+              child: Builder(
+                builder: (context) {
+                  final anchor = _anchoredFirstUnreadId;
+                  final unreadCount = anchor == null
+                      ? 0
+                      : messages.where((m) {
+                          return !m.outbound &&
+                              controller.isUnreadMessage(
+                                contact.deviceId,
+                                m,
+                              );
+                        }).length;
+                  return ListView.builder(
+                    key: _messageListKey,
+                    reverse: true,
+                    controller: _scrollController,
+                    padding: const EdgeInsets.all(18),
+                    itemCount: messages.length,
+                    itemBuilder: (context, index) {
+                      final message = messages[messages.length - 1 - index];
+                      final showDivider =
+                          anchor != null && message.id == anchor;
+                      if (!showDivider) {
+                        return _buildMessageBubble(context, message);
+                      }
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _NewMessagesDivider(
+                            palette: palette,
+                            count: unreadCount,
+                          ),
+                          _buildMessageBubble(context, message),
+                        ],
+                      );
+                    },
+                  );
                 },
               ),
             ),
@@ -8178,6 +8256,38 @@ Future<void> bulkSaveAttachments(
   controller.setStatus(summary);
   if (errors.isNotEmpty) {
     controller.appendDebugLog('Bulk save errors:\n${errors.join('\n')}');
+  }
+}
+
+class _NewMessagesDivider extends StatelessWidget {
+  const _NewMessagesDivider({required this.palette, required this.count});
+
+  final ConestPalette palette;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = count > 0
+        ? '$count new message${count == 1 ? "" : "s"}'
+        : 'New messages';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Expanded(child: Divider(color: palette.unread.withValues(alpha: 0.55))),
+          const SizedBox(width: 12),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: palette.unread,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(child: Divider(color: palette.unread.withValues(alpha: 0.55))),
+        ],
+      ),
+    );
   }
 }
 

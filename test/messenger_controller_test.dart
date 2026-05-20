@@ -3721,6 +3721,9 @@ void main() {
     await tester.tap(find.text('Bob').first);
     await tester.pump();
     await tester.pump();
+    // The Telegram-style read sweep is debounced by 800 ms; pump past
+    // it so the mark-read fires before we assert.
+    await tester.pump(const Duration(milliseconds: 900));
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 50)),
     );
