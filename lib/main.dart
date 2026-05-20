@@ -3047,16 +3047,19 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   Future<void> _copySelectedMessagesText(List<ChatMessage> all) async {
     final selected = _selectedMessagesInOrder(all);
     if (selected.isEmpty) return;
-    final text = selected.map((m) {
-      final att = m.attachment;
-      if (att != null && m.body.isEmpty) {
-        return '[${att.fileName}]';
-      }
-      if (att != null) {
-        return '${m.body}\n[${att.fileName}]';
-      }
-      return m.body;
-    }).where((s) => s.isNotEmpty).join('\n');
+    final text = selected
+        .map((m) {
+          final att = m.attachment;
+          if (att != null && m.body.isEmpty) {
+            return '[${att.fileName}]';
+          }
+          if (att != null) {
+            return '${m.body}\n[${att.fileName}]';
+          }
+          return m.body;
+        })
+        .where((s) => s.isNotEmpty)
+        .join('\n');
     if (text.isEmpty) {
       controller.setStatus('Nothing to copy from the selected messages.');
       return;
@@ -3078,9 +3081,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   bool get _supportsGroupDelete => false;
 
   Future<void> _bulkSaveSelected(List<ChatMessage> all) async {
-    final selected = _selectedMessagesInOrder(all)
-        .where((m) => m.attachment != null)
-        .toList();
+    final selected = _selectedMessagesInOrder(
+      all,
+    ).where((m) => m.attachment != null).toList();
     final ready = selected
         .where((m) => controller.attachmentBytesFor(m.attachment!.id) != null)
         .toList();
@@ -3168,9 +3171,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   }
 
   void _scheduleReadSweep() {
-    if (!mounted ||
-        !_didInitialPosition ||
-        !controller.isAppForeground) {
+    if (!mounted || !_didInitialPosition || !controller.isAppForeground) {
       return;
     }
     _readSweepDebounce?.cancel();
@@ -3248,9 +3249,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       key: _messageKeyFor(message.id),
       alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
-        onTap: _selectionMode
-            ? () => _toggleMessageSelection(message)
-            : null,
+        onTap: _selectionMode ? () => _toggleMessageSelection(message) : null,
         onLongPress: () => _toggleMessageSelection(message),
         onDoubleTap: _selectionMode
             ? null
@@ -3268,7 +3267,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                 ? Border.all(color: palette.primary, width: 2)
                 : (outbound || !unread
                       ? null
-                      : Border.all(color: palette.unread.withValues(alpha: 0.55))),
+                      : Border.all(
+                          color: palette.unread.withValues(alpha: 0.55),
+                        )),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -3468,10 +3469,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       ? 0
                       : messages.where((m) {
                           return !m.outbound &&
-                              controller.isUnreadGroupMessage(
-                                group.groupId,
-                                m,
-                              );
+                              controller.isUnreadGroupMessage(group.groupId, m);
                         }).length;
                   return ListView.builder(
                     key: _messageListKey,
@@ -3686,16 +3684,19 @@ class _ChatPanelState extends State<_ChatPanel> {
   Future<void> _copySelectedMessagesText(List<ChatMessage> all) async {
     final selected = _selectedMessagesInOrder(all);
     if (selected.isEmpty) return;
-    final text = selected.map((m) {
-      final att = m.attachment;
-      if (att != null && m.body.isEmpty) {
-        return '[${att.fileName}]';
-      }
-      if (att != null) {
-        return '${m.body}\n[${att.fileName}]';
-      }
-      return m.body;
-    }).where((s) => s.isNotEmpty).join('\n');
+    final text = selected
+        .map((m) {
+          final att = m.attachment;
+          if (att != null && m.body.isEmpty) {
+            return '[${att.fileName}]';
+          }
+          if (att != null) {
+            return '${m.body}\n[${att.fileName}]';
+          }
+          return m.body;
+        })
+        .where((s) => s.isNotEmpty)
+        .join('\n');
     if (text.isEmpty) {
       controller.setStatus('Nothing to copy from the selected messages.');
       return;
@@ -3719,12 +3720,12 @@ class _ChatPanelState extends State<_ChatPanel> {
   }
 
   Future<void> _bulkSaveSelected(List<ChatMessage> all) async {
-    final selected = _selectedMessagesInOrder(all)
-        .where((m) => m.attachment != null)
+    final selected = _selectedMessagesInOrder(
+      all,
+    ).where((m) => m.attachment != null).toList();
+    final ready = selected
+        .where((m) => controller.attachmentBytesFor(m.attachment!.id) != null)
         .toList();
-    final ready = selected.where(
-      (m) => controller.attachmentBytesFor(m.attachment!.id) != null,
-    ).toList();
     if (ready.isEmpty) {
       controller.setStatus(
         'No selected attachment is ready yet — still transferring.',
@@ -3820,9 +3821,7 @@ class _ChatPanelState extends State<_ChatPanel> {
   }
 
   void _scheduleReadSweep() {
-    if (!mounted ||
-        !_didInitialPosition ||
-        !controller.isAppForeground) {
+    if (!mounted || !_didInitialPosition || !controller.isAppForeground) {
       return;
     }
     // Telegram-style: debounce the mark-read by 800 ms so the unread badge
@@ -3949,9 +3948,7 @@ class _ChatPanelState extends State<_ChatPanel> {
       key: _messageKeyFor(message.id),
       alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
-        onTap: _selectionMode
-            ? () => _toggleMessageSelection(message)
-            : null,
+        onTap: _selectionMode ? () => _toggleMessageSelection(message) : null,
         onLongPress: () => _toggleMessageSelection(message),
         onDoubleTap: _selectionMode
             ? null
@@ -3975,7 +3972,9 @@ class _ChatPanelState extends State<_ChatPanel> {
                 ? Border.all(color: palette.primary, width: 2)
                 : (outbound || !unread
                       ? null
-                      : Border.all(color: palette.unread.withValues(alpha: 0.55))),
+                      : Border.all(
+                          color: palette.unread.withValues(alpha: 0.55),
+                        )),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -4256,10 +4255,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                       ? 0
                       : messages.where((m) {
                           return !m.outbound &&
-                              controller.isUnreadMessage(
-                                contact.deviceId,
-                                m,
-                              );
+                              controller.isUnreadMessage(contact.deviceId, m);
                         }).length;
                   return ListView.builder(
                     key: _messageListKey,
@@ -8241,7 +8237,9 @@ Future<void> bulkSaveAttachments(
   var saved = 0;
   final errors = <String>[];
   for (final item in items) {
-    final target = File('$picked${Platform.pathSeparator}${item.descriptor.fileName}');
+    final target = File(
+      '$picked${Platform.pathSeparator}${item.descriptor.fileName}',
+    );
     try {
       await target.writeAsBytes(item.bytes, flush: true);
       saved++;
@@ -8274,7 +8272,9 @@ class _NewMessagesDivider extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
-          Expanded(child: Divider(color: palette.unread.withValues(alpha: 0.55))),
+          Expanded(
+            child: Divider(color: palette.unread.withValues(alpha: 0.55)),
+          ),
           const SizedBox(width: 12),
           Text(
             label,
@@ -8284,7 +8284,9 @@ class _NewMessagesDivider extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          Expanded(child: Divider(color: palette.unread.withValues(alpha: 0.55))),
+          Expanded(
+            child: Divider(color: palette.unread.withValues(alpha: 0.55)),
+          ),
         ],
       ),
     );
@@ -8494,9 +8496,7 @@ class _AttachmentRow extends StatelessWidget {
     try {
       cachedFileUri = await _writeClipboardCacheFile(bytes);
     } catch (error) {
-      controller.appendDebugLog(
-        'Could not write clipboard cache file: $error',
-      );
+      controller.appendDebugLog('Could not write clipboard cache file: $error');
     }
 
     try {
@@ -8536,9 +8536,7 @@ class _AttachmentRow extends StatelessWidget {
       controller.setStatus('Copied $filename to clipboard.');
     } catch (error, stack) {
       debugPrint('Conest clipboard copy failed: $error\n$stack');
-      controller.appendDebugLog(
-        'super_clipboard.write threw: $error\n$stack',
-      );
+      controller.appendDebugLog('super_clipboard.write threw: $error\n$stack');
       controller.setStatus(
         'Copy failed: $error. Filename copied as text fallback.',
       );

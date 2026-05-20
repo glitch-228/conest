@@ -748,16 +748,14 @@ class MessengerController extends ChangeNotifier {
   final List<String> _debugLog = <String>[];
 
   void appendDebugLog(String line) {
-    final stamped =
-        '${DateTime.now().toUtc().toIso8601String()}  $line';
+    final stamped = '${DateTime.now().toUtc().toIso8601String()}  $line';
     _debugLog.add(stamped);
     if (_debugLog.length > _debugLogCapacity) {
       _debugLog.removeAt(0);
     }
   }
 
-  List<String> get recentDebugLog =>
-      List<String>.unmodifiable(_debugLog);
+  List<String> get recentDebugLog => List<String>.unmodifiable(_debugLog);
 
   /// Loads the signed default-relay manifest bundled with the app and, if
   /// its version is newer than what's already stored in the vault, appends

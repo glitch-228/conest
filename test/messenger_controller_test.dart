@@ -5649,6 +5649,23 @@ void main() {
     );
   });
 
+  group('debug log ring buffer', () {
+    test('appendDebugLog retains up to 50 most recent lines', () async {
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+      );
+      addTearDown(controller.dispose);
+      for (var i = 0; i < 60; i++) {
+        controller.appendDebugLog('line-$i');
+      }
+      final log = controller.recentDebugLog;
+      expect(log.length, 50);
+      expect(log.first.contains('line-10'), isTrue);
+      expect(log.last.contains('line-59'), isTrue);
+    });
+  });
+
   group('clipboard image sniff', () {
     test('detects PNG header', () {
       final bytes = Uint8List.fromList([
