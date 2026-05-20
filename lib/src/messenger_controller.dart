@@ -740,6 +740,25 @@ class MessengerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// In-memory ring buffer of recent diagnostic lines (clipboard, save,
+  /// rotation). Bounded to the last [_debugLogCapacity] entries so a long
+  /// session can't leak memory. Inspected from the Debug menu so the user
+  /// can read errors that the transient status line lost.
+  static const int _debugLogCapacity = 50;
+  final List<String> _debugLog = <String>[];
+
+  void appendDebugLog(String line) {
+    final stamped =
+        '${DateTime.now().toUtc().toIso8601String()}  $line';
+    _debugLog.add(stamped);
+    if (_debugLog.length > _debugLogCapacity) {
+      _debugLog.removeAt(0);
+    }
+  }
+
+  List<String> get recentDebugLog =>
+      List<String>.unmodifiable(_debugLog);
+
   /// Loads the signed default-relay manifest bundled with the app and, if
   /// its version is newer than what's already stored in the vault, appends
   /// any new endpoints to the identity's configured relays. User-added
@@ -3112,6 +3131,12 @@ class MessengerController extends ChangeNotifier {
     unawaited(_loadAttachmentBytesFromDisk(attachmentId));
     return null;
   }
+
+  /// Public accessor for the on-disk attachment root. Used by UI code that
+  /// needs to stage temp files alongside the assembled attachments — e.g.
+  /// the clipboard-cache directory the image-copy path writes a stable
+  /// file:// URI into.
+  Future<Directory> attachmentRoot() => _attachmentRoot();
 
   Future<Directory> _attachmentRoot() async {
     final dir = await _attachmentRootProvider();

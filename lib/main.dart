@@ -7946,19 +7946,45 @@ class _AttachmentRow extends StatelessWidget {
   }
 
   Future<void> _copyImageBytes(Uint8List bytes) async {
+    // Always put the filename on the OS text clipboard first as the
+    // guaranteed-working fallback. Paste targets that can't accept image
+    // data (text inputs, terminals) get something useful; if the binary
+    // clipboard succeeds afterwards, the image data overlays the text
+    // for image-accepting targets.
+    final filename = descriptor.fileName;
+    try {
+      await Clipboard.setData(ClipboardData(text: filename));
+    } catch (error) {
+      controller.appendDebugLog('Text clipboard fallback failed: $error');
+    }
+
     final clipboard = SystemClipboard.instance;
     if (clipboard == null) {
+      controller.appendDebugLog(
+        'super_clipboard unavailable; wrote filename "$filename" '
+        'to the text clipboard.',
+      );
       controller.setStatus(
-        'Clipboard not available on this platform / display server.',
+        'Copied "$filename" (text only — system clipboard binary surface '
+        'unavailable).',
       );
       return;
     }
+
+    Uri? cachedFileUri;
     try {
-      final item = DataWriterItem(suggestedName: descriptor.fileName);
+      cachedFileUri = await _writeClipboardCacheFile(bytes);
+    } catch (error) {
+      controller.appendDebugLog(
+        'Could not write clipboard cache file: $error',
+      );
+    }
+
+    try {
+      final item = DataWriterItem(suggestedName: filename);
       // Sniff the byte header first — the descriptor's mimeType can lie
       // (e.g. a JPEG that arrived as application/octet-stream). Wrapping
-      // a JPEG in Formats.png(bytes) silently corrupts paste targets on
-      // Android, which was the visible regression.
+      // a JPEG in Formats.png(bytes) silently corrupts paste targets.
       final sniffed =
           sniffImageMimeType(bytes) ?? descriptor.mimeType.toLowerCase();
       switch (sniffed) {
@@ -7975,12 +8001,54 @@ class _AttachmentRow extends StatelessWidget {
           // Fall back to PNG: most paste targets understand it.
           item.add(Formats.png(bytes));
       }
+      // Telegram-style: always include the filename so text-only paste
+      // targets are useful too.
+      item.add(Formats.plainText(filename));
+      // File URI lets file managers (Nautilus, Finder, Explorer) paste
+      // the image as a file.
+      if (cachedFileUri != null) {
+        item.add(Formats.fileUri(cachedFileUri));
+      }
       await clipboard.write([item]);
-      controller.setStatus('Copied ${descriptor.fileName} to clipboard.');
+      controller.appendDebugLog(
+        'Clipboard write OK: $filename ($sniffed, '
+        '${bytes.length} bytes, fileUri=${cachedFileUri?.toString() ?? "n/a"}).',
+      );
+      controller.setStatus('Copied $filename to clipboard.');
     } catch (error, stack) {
       debugPrint('Conest clipboard copy failed: $error\n$stack');
-      controller.setStatus('Copy failed: $error');
+      controller.appendDebugLog(
+        'super_clipboard.write threw: $error\n$stack',
+      );
+      controller.setStatus(
+        'Copy failed: $error. Filename copied as text fallback.',
+      );
     }
+  }
+
+  /// Writes the bytes to a stable on-disk cache so the file-URI format
+  /// remains valid until the OS releases the clipboard reference.
+  Future<Uri?> _writeClipboardCacheFile(Uint8List bytes) async {
+    try {
+      final supportDir = await controller.attachmentRoot();
+      final sep = Platform.pathSeparator;
+      final cacheDir = Directory('${supportDir.path}${sep}clipboard-cache');
+      if (!await cacheDir.exists()) {
+        await cacheDir.create(recursive: true);
+      }
+      final ext = _extensionFor(descriptor.fileName) ?? 'bin';
+      final target = File('${cacheDir.path}$sep${descriptor.id}.$ext');
+      await target.writeAsBytes(bytes, flush: true);
+      return target.uri;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? _extensionFor(String fileName) {
+    final dot = fileName.lastIndexOf('.');
+    if (dot <= 0 || dot == fileName.length - 1) return null;
+    return fileName.substring(dot + 1).toLowerCase();
   }
 
   Future<void> _copyCachePath() async {
