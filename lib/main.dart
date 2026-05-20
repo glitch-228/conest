@@ -3685,12 +3685,15 @@ class _ChatPanelState extends State<_ChatPanel> {
       );
       return;
     }
-    // Bulk save lands in Phase 4. For now, single-tap-save each one
-    // sequentially via the existing _AttachmentRow code path.
-    controller.setStatus(
-      'Bulk save coming next phase — saving ${ready.length} sequentially.',
-    );
+    final items = [
+      for (final m in ready)
+        (
+          descriptor: m.attachment!,
+          bytes: controller.attachmentBytesFor(m.attachment!.id)!,
+        ),
+    ];
     _clearMessageSelection();
+    await bulkSaveAttachments(controller, items);
   }
 
   @override
@@ -8069,6 +8072,113 @@ String? sniffImageMimeType(Uint8List bytes) {
     return 'image/webp';
   }
   return null;
+}
+
+/// Resolves `~/Downloads/conest/` (or `%USERPROFILE%\Downloads\conest` on
+/// Windows) and ensures the directory exists. Returns null on web or when
+/// HOME is undefined.
+Future<Directory?> _resolveConestDownloadsDir() async {
+  if (kIsWeb) return null;
+  final env = Platform.environment;
+  final base = Platform.isWindows
+      ? env['USERPROFILE'] ?? env['HOMEPATH']
+      : env['HOME'];
+  if (base == null || base.isEmpty) return null;
+  final dir = Directory(
+    '$base${Platform.pathSeparator}Downloads'
+    '${Platform.pathSeparator}conest',
+  );
+  try {
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+  } catch (_) {
+    return null;
+  }
+  return dir;
+}
+
+String _saveKindForMime(String mimeType) {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'video';
+  return 'other';
+}
+
+/// Bulk-save a batch of (descriptor, bytes) pairs.
+///
+/// Android: each file routes through `PlatformBridge.saveMediaToGallery` per
+/// its mime kind so images land in `Pictures/conest`, videos in
+/// `Movies/conest`, and everything else in `Download/conest`. One summary
+/// toast at the end.
+///
+/// Desktop: prompts the user for a target directory (default
+/// `~/Downloads/conest`) and writes each file into it with its original
+/// filename. The caller's selection should already have filtered to entries
+/// where `attachmentBytesFor != null`.
+Future<void> bulkSaveAttachments(
+  MessengerController controller,
+  List<({AttachmentDescriptor descriptor, Uint8List bytes})> items,
+) async {
+  if (items.isEmpty) return;
+  if (!kIsWeb && Platform.isAndroid) {
+    var saved = 0;
+    final errors = <String>[];
+    for (final item in items) {
+      final kind = _saveKindForMime(item.descriptor.mimeType);
+      try {
+        final uri = await controller.platformBridge.saveMediaToGallery(
+          bytes: item.bytes,
+          fileName: item.descriptor.fileName,
+          mimeType: item.descriptor.mimeType,
+          kind: kind,
+        );
+        if (uri != null) {
+          saved++;
+        }
+      } catch (error) {
+        errors.add('${item.descriptor.fileName}: $error');
+      }
+    }
+    final summary = errors.isEmpty
+        ? 'Saved $saved file(s) to gallery.'
+        : 'Saved $saved/${items.length} file(s); '
+              '${errors.length} failed.';
+    controller.setStatus(summary);
+    unawaited(controller.platformBridge.showToast(summary, long: true));
+    if (errors.isNotEmpty) {
+      controller.appendDebugLog('Bulk save errors:\n${errors.join('\n')}');
+    }
+    return;
+  }
+  // Desktop / web fallback: ask for a directory.
+  final defaultDir = await _resolveConestDownloadsDir();
+  final picked = await FilePicker.getDirectoryPath(
+    dialogTitle: 'Save ${items.length} file(s) to…',
+    initialDirectory: defaultDir?.path,
+  );
+  if (picked == null) {
+    controller.setStatus('Save canceled.');
+    return;
+  }
+  var saved = 0;
+  final errors = <String>[];
+  for (final item in items) {
+    final target = File('$picked${Platform.pathSeparator}${item.descriptor.fileName}');
+    try {
+      await target.writeAsBytes(item.bytes, flush: true);
+      saved++;
+    } catch (error) {
+      errors.add('${item.descriptor.fileName}: $error');
+    }
+  }
+  final summary = errors.isEmpty
+      ? 'Saved $saved file(s) to $picked.'
+      : 'Saved $saved/${items.length} file(s) to $picked; '
+            '${errors.length} failed.';
+  controller.setStatus(summary);
+  if (errors.isNotEmpty) {
+    controller.appendDebugLog('Bulk save errors:\n${errors.join('\n')}');
+  }
 }
 
 class _MessageSelectionBar extends StatelessWidget {
