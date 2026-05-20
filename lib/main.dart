@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -2998,10 +2999,99 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   bool _initialPositionScheduled = false;
   bool _droppingFiles = false;
   bool _readSweepScheduled = false;
+  final LinkedHashSet<String> _selectedMessageIds = LinkedHashSet<String>();
+
+  bool get _selectionMode => _selectedMessageIds.isNotEmpty;
 
   MessengerController get controller => widget.controller;
   ConestPalette get palette => widget.palette;
   GroupRecord get group => widget.group;
+
+  void _toggleMessageSelection(ChatMessage message) {
+    setState(() {
+      if (_selectedMessageIds.contains(message.id)) {
+        _selectedMessageIds.remove(message.id);
+      } else {
+        _selectedMessageIds.add(message.id);
+      }
+    });
+  }
+
+  void _clearMessageSelection() {
+    if (_selectedMessageIds.isEmpty) return;
+    setState(_selectedMessageIds.clear);
+  }
+
+  List<ChatMessage> _selectedMessagesInOrder(List<ChatMessage> all) {
+    return all.where((m) => _selectedMessageIds.contains(m.id)).toList();
+  }
+
+  bool _canDeleteSelected(List<ChatMessage> all) {
+    final selected = _selectedMessagesInOrder(all);
+    if (selected.isEmpty) return false;
+    return selected.every((m) => m.outbound);
+  }
+
+  bool _canSaveSelected(List<ChatMessage> all) {
+    final selected = _selectedMessagesInOrder(all);
+    return selected.any((m) {
+      final att = m.attachment;
+      if (att == null) return false;
+      return controller.attachmentBytesFor(att.id) != null;
+    });
+  }
+
+  Future<void> _copySelectedMessagesText(List<ChatMessage> all) async {
+    final selected = _selectedMessagesInOrder(all);
+    if (selected.isEmpty) return;
+    final text = selected.map((m) {
+      final att = m.attachment;
+      if (att != null && m.body.isEmpty) {
+        return '[${att.fileName}]';
+      }
+      if (att != null) {
+        return '${m.body}\n[${att.fileName}]';
+      }
+      return m.body;
+    }).where((s) => s.isNotEmpty).join('\n');
+    if (text.isEmpty) {
+      controller.setStatus('Nothing to copy from the selected messages.');
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: text));
+    controller.setStatus('Copied ${selected.length} message(s).');
+    _clearMessageSelection();
+  }
+
+  Future<void> _deleteSelected(List<ChatMessage> all) async {
+    // Group-message delete is not yet wired in the controller; surface a
+    // clear status rather than silently failing.
+    controller.setStatus(
+      'Deleting group messages is not yet supported — coming later.',
+    );
+    _clearMessageSelection();
+  }
+
+  bool get _supportsGroupDelete => false;
+
+  Future<void> _bulkSaveSelected(List<ChatMessage> all) async {
+    final selected = _selectedMessagesInOrder(all)
+        .where((m) => m.attachment != null)
+        .toList();
+    final ready = selected
+        .where((m) => controller.attachmentBytesFor(m.attachment!.id) != null)
+        .toList();
+    if (ready.isEmpty) {
+      controller.setStatus(
+        'No selected attachment is ready yet — still transferring.',
+      );
+      return;
+    }
+    controller.setStatus(
+      'Bulk save coming next phase — saving ${ready.length} sequentially.',
+    );
+    _clearMessageSelection();
+  }
 
   @override
   void initState() {
@@ -3138,21 +3228,32 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   Widget _buildMessageBubble(BuildContext context, ChatMessage message) {
     final outbound = message.outbound;
     final unread = controller.isUnreadGroupMessage(group.groupId, message);
+    final selected = _selectedMessageIds.contains(message.id);
     return Align(
       key: _messageKeyFor(message.id),
       alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
-        onDoubleTap: () => widget.onReplyToMessage(message),
+        onTap: _selectionMode
+            ? () => _toggleMessageSelection(message)
+            : null,
+        onLongPress: () => _toggleMessageSelection(message),
+        onDoubleTap: _selectionMode
+            ? null
+            : () => widget.onReplyToMessage(message),
         child: Container(
           constraints: const BoxConstraints(maxWidth: 560),
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: outbound ? palette.outboundBubble : palette.inboundBubble,
+            color: selected
+                ? palette.primary.withValues(alpha: 0.18)
+                : (outbound ? palette.outboundBubble : palette.inboundBubble),
             borderRadius: BorderRadius.circular(18),
-            border: outbound || !unread
-                ? null
-                : Border.all(color: palette.unread.withValues(alpha: 0.55)),
+            border: selected
+                ? Border.all(color: palette.primary, width: 2)
+                : (outbound || !unread
+                      ? null
+                      : Border.all(color: palette.unread.withValues(alpha: 0.55))),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -3331,6 +3432,19 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
               ),
             ),
             const Divider(height: 1),
+            if (_selectionMode)
+              _MessageSelectionBar(
+                palette: palette,
+                count: _selectedMessageIds.length,
+                onCancel: _clearMessageSelection,
+                onCopy: () => _copySelectedMessagesText(messages),
+                onSave: _canSaveSelected(messages)
+                    ? () => _bulkSaveSelected(messages)
+                    : null,
+                onDelete: _supportsGroupDelete && _canDeleteSelected(messages)
+                    ? () => _deleteSelected(messages)
+                    : null,
+              ),
             Expanded(
               child: ListView.builder(
                 key: _messageListKey,
@@ -3481,15 +3595,102 @@ class _ChatPanelState extends State<_ChatPanel> {
   bool _didInitialPosition = false;
   bool _initialPositionScheduled = false;
   bool _readSweepScheduled = false;
+  final LinkedHashSet<String> _selectedMessageIds = LinkedHashSet<String>();
+
+  bool get _selectionMode => _selectedMessageIds.isNotEmpty;
 
   MessengerController get controller => widget.controller;
   ConestPalette get palette => widget.palette;
   ContactRecord get contact => widget.contact;
 
-  @override
-  void initState() {
-    super.initState();
-    _scrollController.addListener(_handleScroll);
+  void _toggleMessageSelection(ChatMessage message) {
+    setState(() {
+      if (_selectedMessageIds.contains(message.id)) {
+        _selectedMessageIds.remove(message.id);
+      } else {
+        _selectedMessageIds.add(message.id);
+      }
+    });
+  }
+
+  void _clearMessageSelection() {
+    if (_selectedMessageIds.isEmpty) return;
+    setState(_selectedMessageIds.clear);
+  }
+
+  List<ChatMessage> _selectedMessagesInOrder(List<ChatMessage> all) {
+    return all.where((m) => _selectedMessageIds.contains(m.id)).toList();
+  }
+
+  bool _canDeleteSelected(List<ChatMessage> all) {
+    final selected = _selectedMessagesInOrder(all);
+    if (selected.isEmpty) return false;
+    return selected.every((m) => m.outbound);
+  }
+
+  bool _canSaveSelected(List<ChatMessage> all) {
+    final selected = _selectedMessagesInOrder(all);
+    return selected.any((m) {
+      final att = m.attachment;
+      if (att == null) return false;
+      return controller.attachmentBytesFor(att.id) != null;
+    });
+  }
+
+  Future<void> _copySelectedMessagesText(List<ChatMessage> all) async {
+    final selected = _selectedMessagesInOrder(all);
+    if (selected.isEmpty) return;
+    final text = selected.map((m) {
+      final att = m.attachment;
+      if (att != null && m.body.isEmpty) {
+        return '[${att.fileName}]';
+      }
+      if (att != null) {
+        return '${m.body}\n[${att.fileName}]';
+      }
+      return m.body;
+    }).where((s) => s.isNotEmpty).join('\n');
+    if (text.isEmpty) {
+      controller.setStatus('Nothing to copy from the selected messages.');
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: text));
+    controller.setStatus('Copied ${selected.length} message(s).');
+    _clearMessageSelection();
+  }
+
+  Future<void> _deleteSelected(List<ChatMessage> all) async {
+    final selected = _selectedMessagesInOrder(all);
+    if (selected.isEmpty) return;
+    for (final m in selected) {
+      try {
+        await controller.deleteMessage(contact: contact, messageId: m.id);
+      } catch (error) {
+        controller.setStatus('Delete failed for one message: $error');
+      }
+    }
+    _clearMessageSelection();
+  }
+
+  Future<void> _bulkSaveSelected(List<ChatMessage> all) async {
+    final selected = _selectedMessagesInOrder(all)
+        .where((m) => m.attachment != null)
+        .toList();
+    final ready = selected.where(
+      (m) => controller.attachmentBytesFor(m.attachment!.id) != null,
+    ).toList();
+    if (ready.isEmpty) {
+      controller.setStatus(
+        'No selected attachment is ready yet — still transferring.',
+      );
+      return;
+    }
+    // Bulk save lands in Phase 4. For now, single-tap-save each one
+    // sequentially via the existing _AttachmentRow code path.
+    controller.setStatus(
+      'Bulk save coming next phase — saving ${ready.length} sequentially.',
+    );
+    _clearMessageSelection();
   }
 
   @override
@@ -3690,27 +3891,38 @@ class _ChatPanelState extends State<_ChatPanel> {
   Widget _buildMessageBubble(BuildContext context, ChatMessage message) {
     final outbound = message.outbound;
     final unread = controller.isUnreadMessage(contact.deviceId, message);
+    final selected = _selectedMessageIds.contains(message.id);
     return Align(
       key: _messageKeyFor(message.id),
       alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
-        onDoubleTap: () async {
-          if (outbound) {
-            await _editMessage(context, message);
-          } else {
-            widget.onReplyToMessage(message);
-          }
-        },
+        onTap: _selectionMode
+            ? () => _toggleMessageSelection(message)
+            : null,
+        onLongPress: () => _toggleMessageSelection(message),
+        onDoubleTap: _selectionMode
+            ? null
+            : () async {
+                if (outbound) {
+                  await _editMessage(context, message);
+                } else {
+                  widget.onReplyToMessage(message);
+                }
+              },
         child: Container(
           constraints: const BoxConstraints(maxWidth: 520),
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: outbound ? palette.outboundBubble : palette.inboundBubble,
+            color: selected
+                ? palette.primary.withValues(alpha: 0.18)
+                : (outbound ? palette.outboundBubble : palette.inboundBubble),
             borderRadius: BorderRadius.circular(18),
-            border: outbound || !unread
-                ? null
-                : Border.all(color: palette.unread.withValues(alpha: 0.55)),
+            border: selected
+                ? Border.all(color: palette.primary, width: 2)
+                : (outbound || !unread
+                      ? null
+                      : Border.all(color: palette.unread.withValues(alpha: 0.55))),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -3969,6 +4181,19 @@ class _ChatPanelState extends State<_ChatPanel> {
                 controller: controller,
                 palette: palette,
                 contact: contact,
+              ),
+            if (_selectionMode)
+              _MessageSelectionBar(
+                palette: palette,
+                count: _selectedMessageIds.length,
+                onCancel: _clearMessageSelection,
+                onCopy: () => _copySelectedMessagesText(messages),
+                onSave: _canSaveSelected(messages)
+                    ? () => _bulkSaveSelected(messages)
+                    : null,
+                onDelete: _canDeleteSelected(messages)
+                    ? () => _deleteSelected(messages)
+                    : null,
               ),
             Expanded(
               child: ListView.builder(
@@ -7844,6 +8069,68 @@ String? sniffImageMimeType(Uint8List bytes) {
     return 'image/webp';
   }
   return null;
+}
+
+class _MessageSelectionBar extends StatelessWidget {
+  const _MessageSelectionBar({
+    required this.palette,
+    required this.count,
+    required this.onCancel,
+    required this.onCopy,
+    required this.onSave,
+    required this.onDelete,
+  });
+
+  final ConestPalette palette;
+  final int count;
+  final VoidCallback onCancel;
+  final VoidCallback onCopy;
+  final VoidCallback? onSave;
+  final VoidCallback? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: palette.primary.withValues(alpha: 0.12),
+        border: Border(bottom: BorderSide(color: palette.stroke)),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: onCancel,
+            icon: const Icon(Icons.close),
+            tooltip: 'Cancel selection',
+          ),
+          const SizedBox(width: 4),
+          Text(
+            '$count selected',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const Spacer(),
+          IconButton(
+            onPressed: onCopy,
+            icon: const Icon(Icons.copy_outlined),
+            tooltip: 'Copy',
+          ),
+          IconButton(
+            onPressed: onSave,
+            icon: const Icon(Icons.download_outlined),
+            tooltip: 'Save attachments',
+          ),
+          IconButton(
+            onPressed: onDelete,
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Delete',
+            color: onDelete != null
+                ? Theme.of(context).colorScheme.error
+                : null,
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _AttachmentRow extends StatelessWidget {
