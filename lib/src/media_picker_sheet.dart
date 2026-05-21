@@ -39,7 +39,9 @@ class MediaPickerResult {
   final String? fileName;
   final String? mimeType;
   final bool fallbackToFilePicker;
-  final List<({Uint8List bytes, String fileName, String mimeType, String caption})>?
+  final List<
+    ({Uint8List bytes, String fileName, String mimeType, String caption})
+  >?
   items;
 }
 
@@ -83,7 +85,9 @@ class _MediaPickerSheet extends StatefulWidget {
 }
 
 class _MediaPickerSheetState extends State<_MediaPickerSheet> {
-  static const int _maxBatch = 6;
+  // Picker cap matches MessengerController.maxAttachmentsPerSend; the sender
+  // splits larger batches into albums of 6 on the fly.
+  static const int _maxBatch = 30;
 
   PermissionState? _permission;
   List<AssetEntity> _assets = const [];
@@ -149,10 +153,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
           onlyAll: true,
           filterOption: FilterOptionGroup(
             orders: const [
-              OrderOption(
-                type: OrderOptionType.createDate,
-                asc: false,
-              ),
+              OrderOption(type: OrderOptionType.createDate, asc: false),
             ],
           ),
         );
@@ -233,7 +234,9 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
     setState(() => _sending = true);
     final byId = {for (final a in _assets) a.id: a};
     final items =
-        <({Uint8List bytes, String fileName, String mimeType, String caption})>[];
+        <
+          ({Uint8List bytes, String fileName, String mimeType, String caption})
+        >[];
     for (final id in _selectedIds) {
       final asset = byId[id];
       if (asset == null) continue;
@@ -573,14 +576,20 @@ class _AssetTile extends StatelessWidget {
               : onTap,
           onLongPress: overCap ? null : onLongPress,
           child: FutureBuilder<Uint8List?>(
-            future: asset.thumbnailDataWithSize(const ThumbnailSize.square(300)),
+            future: asset.thumbnailDataWithSize(
+              const ThumbnailSize.square(300),
+            ),
             builder: (context, snap) {
               final thumb = snap.data;
               return Stack(
                 fit: StackFit.expand,
                 children: [
                   if (thumb != null)
-                    Image.memory(thumb, fit: BoxFit.cover, gaplessPlayback: true)
+                    Image.memory(
+                      thumb,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                    )
                   else
                     Container(color: palette.stroke),
                   if (selected && !overCap)
@@ -601,9 +610,7 @@ class _AssetTile extends StatelessWidget {
                     right: 4,
                     bottom: 4,
                     child: _BadgeChip(
-                      text: size == null
-                          ? '…'
-                          : humanSize(size),
+                      text: size == null ? '…' : humanSize(size),
                       foreground: overCap ? errorColor : null,
                     ),
                   ),
@@ -808,72 +815,72 @@ class _MediaEditorScreenState extends State<MediaEditorScreen> {
         }
       },
       child: Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
         backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        title: const Text('Edit'),
-        actions: [
-          IconButton(
-            onPressed: _busy ? null : () => _rotate(-1),
-            icon: const Icon(Icons.rotate_left),
-            tooltip: 'Rotate left',
-          ),
-          IconButton(
-            onPressed: _busy ? null : () => _rotate(1),
-            icon: const Icon(Icons.rotate_right),
-            tooltip: 'Rotate right',
-          ),
-          IconButton(
-            onPressed: _busy
-                ? null
-                : () => setState(() => _cropMode = !_cropMode),
-            icon: Icon(_cropMode ? Icons.check : Icons.crop),
-            tooltip: _cropMode ? 'Apply crop' : 'Crop',
-          ),
-          IconButton(
-            onPressed: _busy
-                ? null
-                : () {
-                    if (_cropMode) {
-                      _cropController.crop();
-                    } else {
-                      Navigator.of(context).pop(_current);
-                    }
-                  },
-            icon: const Icon(Icons.send),
-            tooltip: 'Send',
-          ),
-        ],
-      ),
-      body: _cropMode
-          ? Crop(
-              controller: _cropController,
-              image: _current,
-              onCropped: (result) {
-                if (result is CropSuccess) {
-                  setState(() {
-                    _current = result.croppedImage;
-                    _cropMode = false;
-                    _isDirty = true;
-                  });
-                  Navigator.of(context).pop(_current);
-                } else {
-                  setState(() => _cropMode = false);
-                }
-              },
-              baseColor: Colors.black,
-              maskColor: Colors.black.withValues(alpha: 0.6),
-              progressIndicator: const CircularProgressIndicator(),
-            )
-          : Center(
-              child: InteractiveViewer(
-                child: Image.memory(_current, fit: BoxFit.contain),
-              ),
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          foregroundColor: Colors.white,
+          title: const Text('Edit'),
+          actions: [
+            IconButton(
+              onPressed: _busy ? null : () => _rotate(-1),
+              icon: const Icon(Icons.rotate_left),
+              tooltip: 'Rotate left',
             ),
-      bottomNavigationBar: _busy
-          ? LinearProgressIndicator(color: palette.primary)
-          : null,
+            IconButton(
+              onPressed: _busy ? null : () => _rotate(1),
+              icon: const Icon(Icons.rotate_right),
+              tooltip: 'Rotate right',
+            ),
+            IconButton(
+              onPressed: _busy
+                  ? null
+                  : () => setState(() => _cropMode = !_cropMode),
+              icon: Icon(_cropMode ? Icons.check : Icons.crop),
+              tooltip: _cropMode ? 'Apply crop' : 'Crop',
+            ),
+            IconButton(
+              onPressed: _busy
+                  ? null
+                  : () {
+                      if (_cropMode) {
+                        _cropController.crop();
+                      } else {
+                        Navigator.of(context).pop(_current);
+                      }
+                    },
+              icon: const Icon(Icons.send),
+              tooltip: 'Send',
+            ),
+          ],
+        ),
+        body: _cropMode
+            ? Crop(
+                controller: _cropController,
+                image: _current,
+                onCropped: (result) {
+                  if (result is CropSuccess) {
+                    setState(() {
+                      _current = result.croppedImage;
+                      _cropMode = false;
+                      _isDirty = true;
+                    });
+                    Navigator.of(context).pop(_current);
+                  } else {
+                    setState(() => _cropMode = false);
+                  }
+                },
+                baseColor: Colors.black,
+                maskColor: Colors.black.withValues(alpha: 0.6),
+                progressIndicator: const CircularProgressIndicator(),
+              )
+            : Center(
+                child: InteractiveViewer(
+                  child: Image.memory(_current, fit: BoxFit.contain),
+                ),
+              ),
+        bottomNavigationBar: _busy
+            ? LinearProgressIndicator(color: palette.primary)
+            : null,
       ),
     );
   }

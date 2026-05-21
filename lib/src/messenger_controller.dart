@@ -5767,11 +5767,7 @@ class MessengerController extends ChangeNotifier {
           'retries; abandoning.',
         );
         _inboundAttachments.remove(attachmentId);
-        _updateMessageState(
-          s.peerDeviceId,
-          s.messageId,
-          DeliveryState.failed,
-        );
+        _updateMessageState(s.peerDeviceId, s.messageId, DeliveryState.failed);
         notifyListeners();
         return;
       }
@@ -5780,7 +5776,9 @@ class MessengerController extends ChangeNotifier {
         'Re-requesting chunk ${s.nextMissingIndex} for $attachmentId '
         '(retry ${s.retryAttempts}/$_inboundRetryLimit).',
       );
-      unawaited(_sendAttachmentChunkRequest(peer, attachmentId, s.nextMissingIndex));
+      unawaited(
+        _sendAttachmentChunkRequest(peer, attachmentId, s.nextMissingIndex),
+      );
       _scheduleAttachmentRetry(attachmentId);
     });
   }

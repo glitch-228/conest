@@ -1497,7 +1497,9 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     final items =
-        <({Uint8List bytes, String fileName, String mimeType, String caption})>[];
+        <
+          ({Uint8List bytes, String fileName, String mimeType, String caption})
+        >[];
     for (final file in files) {
       try {
         final bytes = await file.readAsBytes();
@@ -1572,7 +1574,9 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     final items =
-        <({Uint8List bytes, String fileName, String mimeType, String caption})>[];
+        <
+          ({Uint8List bytes, String fileName, String mimeType, String caption})
+        >[];
     for (final file in picked.files) {
       Uint8List? bytes = file.bytes;
       // Desktop picker often returns a path instead of bytes.
@@ -1607,12 +1611,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return _sendMultipleAttachments(
       contact: contact,
       items: [
-        (
-          bytes: bytes,
-          fileName: fileName,
-          mimeType: mimeType,
-          caption: '',
-        ),
+        (bytes: bytes, fileName: fileName, mimeType: mimeType, caption: ''),
       ],
     );
   }
@@ -1643,7 +1642,9 @@ class _HomeScreenState extends State<HomeScreen> {
     // First drop oversize items so the album grouping below operates on
     // the items that will actually ship.
     final filtered =
-        <({Uint8List bytes, String fileName, String mimeType, String caption})>[];
+        <
+          ({Uint8List bytes, String fileName, String mimeType, String caption})
+        >[];
     for (final item in clamped) {
       if (item.bytes.length > MessengerController.maxAttachmentSizeBytes) {
         widget.controller.setStatus(
@@ -1659,12 +1660,19 @@ class _HomeScreenState extends State<HomeScreen> {
     // Album packing: captioned items go solo (single-item album, no
     // albumId so they render as a standalone bubble). Uncaptioned items
     // bundle into albums of `maxAttachmentsPerAlbum`.
-    final albums = <List<
-      ({Uint8List bytes, String fileName, String mimeType, String caption})
-    >>[];
+    final albums =
+        <
+          List<
+            ({
+              Uint8List bytes,
+              String fileName,
+              String mimeType,
+              String caption,
+            })
+          >
+        >[];
     List<({Uint8List bytes, String fileName, String mimeType, String caption})>
-    current =
-        [];
+    current = [];
     var composerCaptionUsed = false;
     for (final item in filtered) {
       // Promote composer caption to the first uncaptioned item.
@@ -1713,7 +1721,9 @@ class _HomeScreenState extends State<HomeScreen> {
             mimeType: entry.mimeType,
             // Caption only on the FIRST item of an uncaptioned-grouped
             // album; for solo (captioned) items the caption is theirs.
-            caption: album.length == 1 ? entry.caption : (i == 0 ? entry.caption : ''),
+            caption: album.length == 1
+                ? entry.caption
+                : (i == 0 ? entry.caption : ''),
             albumId: albumId,
           );
         } catch (error) {
@@ -8635,9 +8645,7 @@ class _AttachmentRow extends StatelessWidget {
             '${bytes.length} bytes).',
           );
           controller.setStatus('Copied $filename to clipboard.');
-          unawaited(
-            controller.platformBridge.showToast('Copied $filename'),
-          );
+          unawaited(controller.platformBridge.showToast('Copied $filename'));
           return;
         }
       } catch (error) {
