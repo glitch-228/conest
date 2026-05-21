@@ -3001,14 +3001,26 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   Timer? _readSweepDebounce;
   String? _anchoredFirstUnreadId;
   final LinkedHashSet<String> _selectedMessageIds = LinkedHashSet<String>();
+  String? _flashingMessageId;
+  Timer? _flashTimer;
 
   static const Duration _readSweepDelay = Duration(milliseconds: 800);
+  static const Duration _replyFlashDuration = Duration(milliseconds: 320);
 
   bool get _selectionMode => _selectedMessageIds.isNotEmpty;
 
   MessengerController get controller => widget.controller;
   ConestPalette get palette => widget.palette;
   GroupRecord get group => widget.group;
+
+  void _flashMessage(String messageId) {
+    _flashTimer?.cancel();
+    setState(() => _flashingMessageId = messageId);
+    _flashTimer = Timer(_replyFlashDuration, () {
+      if (!mounted) return;
+      setState(() => _flashingMessageId = null);
+    });
+  }
 
   void _toggleMessageSelection(ChatMessage message) {
     setState(() {
@@ -3122,6 +3134,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   @override
   void dispose() {
     _readSweepDebounce?.cancel();
+    _flashTimer?.cancel();
     _scrollController.removeListener(_scheduleReadSweep);
     _scrollController.dispose();
     super.dispose();
@@ -3245,6 +3258,10 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     final outbound = message.outbound;
     final unread = controller.isUnreadGroupMessage(group.groupId, message);
     final selected = _selectedMessageIds.contains(message.id);
+    final flashing = _flashingMessageId == message.id;
+    final baseColor = selected
+        ? palette.primary.withValues(alpha: 0.18)
+        : (outbound ? palette.outboundBubble : palette.inboundBubble);
     return Align(
       key: _messageKeyFor(message.id),
       alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
@@ -3253,15 +3270,23 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
         onLongPress: () => _toggleMessageSelection(message),
         onDoubleTap: _selectionMode
             ? null
-            : () => widget.onReplyToMessage(message),
-        child: Container(
+            : () {
+                _flashMessage(message.id);
+                widget.onReplyToMessage(message);
+              },
+        child: AnimatedContainer(
+          duration: _replyFlashDuration,
+          curve: Curves.easeOut,
           constraints: const BoxConstraints(maxWidth: 560),
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: selected
-                ? palette.primary.withValues(alpha: 0.18)
-                : (outbound ? palette.outboundBubble : palette.inboundBubble),
+            color: flashing
+                ? Color.alphaBlend(
+                    palette.primary.withValues(alpha: 0.28),
+                    baseColor,
+                  )
+                : baseColor,
             borderRadius: BorderRadius.circular(18),
             border: selected
                 ? Border.all(color: palette.primary, width: 2)
@@ -3638,14 +3663,26 @@ class _ChatPanelState extends State<_ChatPanel> {
   Timer? _readSweepDebounce;
   String? _anchoredFirstUnreadId;
   final LinkedHashSet<String> _selectedMessageIds = LinkedHashSet<String>();
+  String? _flashingMessageId;
+  Timer? _flashTimer;
 
   static const Duration _readSweepDelay = Duration(milliseconds: 800);
+  static const Duration _replyFlashDuration = Duration(milliseconds: 320);
 
   bool get _selectionMode => _selectedMessageIds.isNotEmpty;
 
   MessengerController get controller => widget.controller;
   ConestPalette get palette => widget.palette;
   ContactRecord get contact => widget.contact;
+
+  void _flashMessage(String messageId) {
+    _flashTimer?.cancel();
+    setState(() => _flashingMessageId = messageId);
+    _flashTimer = Timer(_replyFlashDuration, () {
+      if (!mounted) return;
+      setState(() => _flashingMessageId = null);
+    });
+  }
 
   void _toggleMessageSelection(ChatMessage message) {
     setState(() {
@@ -3760,6 +3797,7 @@ class _ChatPanelState extends State<_ChatPanel> {
   @override
   void dispose() {
     _readSweepDebounce?.cancel();
+    _flashTimer?.cancel();
     _scrollController.removeListener(_handleScroll);
     _scrollController.dispose();
     super.dispose();
@@ -3944,6 +3982,10 @@ class _ChatPanelState extends State<_ChatPanel> {
     final outbound = message.outbound;
     final unread = controller.isUnreadMessage(contact.deviceId, message);
     final selected = _selectedMessageIds.contains(message.id);
+    final flashing = _flashingMessageId == message.id;
+    final baseColor = selected
+        ? palette.primary.withValues(alpha: 0.18)
+        : (outbound ? palette.outboundBubble : palette.inboundBubble);
     return Align(
       key: _messageKeyFor(message.id),
       alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
@@ -3953,20 +3995,26 @@ class _ChatPanelState extends State<_ChatPanel> {
         onDoubleTap: _selectionMode
             ? null
             : () async {
+                _flashMessage(message.id);
                 if (outbound) {
                   await _editMessage(context, message);
                 } else {
                   widget.onReplyToMessage(message);
                 }
               },
-        child: Container(
+        child: AnimatedContainer(
+          duration: _replyFlashDuration,
+          curve: Curves.easeOut,
           constraints: const BoxConstraints(maxWidth: 520),
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: selected
-                ? palette.primary.withValues(alpha: 0.18)
-                : (outbound ? palette.outboundBubble : palette.inboundBubble),
+            color: flashing
+                ? Color.alphaBlend(
+                    palette.primary.withValues(alpha: 0.28),
+                    baseColor,
+                  )
+                : baseColor,
             borderRadius: BorderRadius.circular(18),
             border: selected
                 ? Border.all(color: palette.primary, width: 2)

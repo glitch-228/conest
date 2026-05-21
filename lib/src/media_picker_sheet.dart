@@ -105,6 +105,14 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
         final paths = await PhotoManager.getAssetPathList(
           type: RequestType.common,
           onlyAll: true,
+          filterOption: FilterOptionGroup(
+            orders: const [
+              OrderOption(
+                type: OrderOptionType.createDate,
+                asc: false,
+              ),
+            ],
+          ),
         );
         if (paths.isEmpty) {
           if (mounted) setState(() => _loading = false);
@@ -216,7 +224,10 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
     final fileName = asset.title ?? 'media-${asset.id}';
     final mime = _mimeForAsset(asset, fileName);
     if (asset.type == AssetType.image) {
-      // Open the editor; it pops with the final bytes.
+      // Editor pops with edited bytes ONLY on explicit Send. Back / cancel
+      // (with or without dirty edits) pops with null — never silently
+      // sends the unedited original. The previous `edited ?? bytes`
+      // fallback shipped the original on cancel, which the user reported.
       final edited = await Navigator.of(context).push<Uint8List>(
         MaterialPageRoute(
           builder: (_) =>
@@ -224,8 +235,11 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
         ),
       );
       if (!mounted) return;
-      final finalBytes = edited ?? bytes;
-      if (finalBytes.length > widget.maxBytes) {
+      if (edited == null) {
+        // User backed out — do not send.
+        return;
+      }
+      if (edited.length > widget.maxBytes) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
           SnackBar(
             content: Text(
@@ -237,9 +251,9 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
       }
       Navigator.of(context).pop(
         MediaPickerResult.send(
-          bytes: finalBytes,
+          bytes: edited,
           fileName: fileName,
-          mimeType: edited != null ? 'image/jpeg' : mime,
+          mimeType: 'image/jpeg',
         ),
       );
     } else {
@@ -520,6 +534,31 @@ class _MediaEditorScreenState extends State<MediaEditorScreen> {
   bool _cropMode = false;
   bool _busy = false;
   bool _initializedDownscale = false;
+  bool _isDirty = false;
+
+  Future<bool> _confirmDiscard() async {
+    if (!_isDirty) return true;
+    final discard = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Discard changes?'),
+        content: const Text(
+          'Your edits will be lost. The original image stays in your gallery.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Keep editing'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Discard'),
+          ),
+        ],
+      ),
+    );
+    return discard ?? false;
+  }
 
   @override
   void initState() {
@@ -575,6 +614,7 @@ class _MediaEditorScreenState extends State<MediaEditorScreen> {
       setState(() {
         _current = encoded;
         _busy = false;
+        _isDirty = true;
       });
     } catch (error) {
       debugPrint('Conest rotate failed: $error');
@@ -590,7 +630,18 @@ class _MediaEditorScreenState extends State<MediaEditorScreen> {
   @override
   Widget build(BuildContext context) {
     final palette = widget.palette;
-    return Scaffold(
+    return PopScope<Object?>(
+      canPop: !_isDirty,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final navigator = Navigator.of(context);
+        final ok = await _confirmDiscard();
+        if (!mounted) return;
+        if (ok) {
+          navigator.pop();
+        }
+      },
+      child: Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
@@ -638,6 +689,7 @@ class _MediaEditorScreenState extends State<MediaEditorScreen> {
                   setState(() {
                     _current = result.croppedImage;
                     _cropMode = false;
+                    _isDirty = true;
                   });
                   Navigator.of(context).pop(_current);
                 } else {
@@ -656,6 +708,7 @@ class _MediaEditorScreenState extends State<MediaEditorScreen> {
       bottomNavigationBar: _busy
           ? LinearProgressIndicator(color: palette.primary)
           : null,
+      ),
     );
   }
 }
