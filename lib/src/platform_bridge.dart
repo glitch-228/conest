@@ -113,6 +113,30 @@ class PlatformBridge {
     }
   }
 
+  /// Stages the image bytes into the Android cache directory's
+  /// `clipboard/` subdir via FileProvider and puts a content URI on the
+  /// system clipboard via `ClipboardManager.setPrimaryClip`. Returns the
+  /// resolved URI string on success, null when the bridge is unavailable
+  /// (non-Android / missing plugin). Throws a `PlatformException` on
+  /// underlying I/O or clipboard failure so the caller can fall back to
+  /// the cross-platform super_clipboard path.
+  Future<String?> copyImageToClipboard({
+    required Uint8List bytes,
+    required String fileName,
+    required String mimeType,
+  }) async {
+    if (!_supportsAndroidSystemCalls) return null;
+    try {
+      return await _channel.invokeMethod<String>('copyImageToClipboard', {
+        'bytes': bytes,
+        'fileName': fileName,
+        'mimeType': mimeType,
+      });
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
   /// Show a native toast on Android. Other platforms / missing-plugin
   /// gracefully no-op so the call site doesn't need a platform guard.
   Future<void> showToast(String text, {bool long = false}) async {

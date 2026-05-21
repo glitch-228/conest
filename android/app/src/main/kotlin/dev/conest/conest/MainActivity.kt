@@ -6,6 +6,8 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Person
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -58,6 +60,28 @@ class MainActivity : FlutterActivity() {
                         maybeCancelGroupSummary(manager)
                     }
                     result.success(null)
+                }
+                "copyImageToClipboard" -> {
+                    val bytes = call.argument<ByteArray>("bytes")
+                    val fileName = call.argument<String>("fileName") ?: "conest-image"
+                    val mimeType = call.argument<String>("mimeType") ?: "image/jpeg"
+                    if (bytes == null) {
+                        result.error("missing_bytes", "bytes argument is required.", null)
+                    } else {
+                        try {
+                            val uri = stageClipboardImage(bytes, fileName, mimeType)
+                            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            val clip = ClipData.newUri(contentResolver, fileName, uri)
+                            cm.setPrimaryClip(clip)
+                            result.success(uri.toString())
+                        } catch (error: Exception) {
+                            result.error(
+                                "clipboard_failed",
+                                error.message ?: "Could not write image to clipboard.",
+                                null
+                            )
+                        }
+                    }
                 }
                 "showToast" -> {
                     val text = call.argument<String>("text") ?: ""
@@ -285,6 +309,35 @@ class MainActivity : FlutterActivity() {
         val target = java.io.File(subDir, safeName)
         target.writeBytes(bytes)
         return target.absolutePath
+    }
+
+    private fun stageClipboardImage(
+        bytes: ByteArray,
+        fileName: String,
+        mimeType: String
+    ): android.net.Uri {
+        val cacheDir = java.io.File(applicationContext.cacheDir, "clipboard")
+        if (!cacheDir.exists() && !cacheDir.mkdirs()) {
+            throw IllegalStateException("Could not create ${cacheDir.path}")
+        }
+        // Strip any path components the caller might have passed.
+        val safeName = fileName.substringAfterLast('/').ifBlank { "conest-image" }
+        val ext = when (mimeType.lowercase()) {
+            "image/png" -> ".png"
+            "image/gif" -> ".gif"
+            "image/webp" -> ".webp"
+            else -> if (safeName.contains('.')) "" else ".jpg"
+        }
+        val target = java.io.File(
+            cacheDir,
+            if (ext.isEmpty()) safeName else "$safeName$ext"
+        )
+        target.writeBytes(bytes)
+        return FileProvider.getUriForFile(
+            this,
+            "${packageName}.fileprovider",
+            target
+        )
     }
 
     private fun installDownloadedApk(path: String) {

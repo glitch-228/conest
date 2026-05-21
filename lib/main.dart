@@ -8551,6 +8551,38 @@ class _AttachmentRow extends StatelessWidget {
       controller.appendDebugLog('Text clipboard fallback failed: $error');
     }
 
+    // Android: super_clipboard's binary surface doesn't surface to apps
+    // like Telegram or Signal that read images via ContentResolver. Stage
+    // the bytes via FileProvider + ClipData.newUri so paste targets can
+    // openInputStream the content URI. We try this first; on success we
+    // skip the super_clipboard fallback.
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        final mime = sniffImageMimeType(bytes) ?? descriptor.mimeType;
+        final uri = await controller.platformBridge.copyImageToClipboard(
+          bytes: bytes,
+          fileName: filename,
+          mimeType: mime,
+        );
+        if (uri != null) {
+          controller.appendDebugLog(
+            'Android ClipData.newUri OK: $filename -> $uri ($mime, '
+            '${bytes.length} bytes).',
+          );
+          controller.setStatus('Copied $filename to clipboard.');
+          unawaited(
+            controller.platformBridge.showToast('Copied $filename'),
+          );
+          return;
+        }
+      } catch (error) {
+        controller.appendDebugLog(
+          'Android ClipData.newUri threw: $error — falling back to '
+          'super_clipboard.',
+        );
+      }
+    }
+
     final clipboard = SystemClipboard.instance;
     if (clipboard == null) {
       controller.appendDebugLog(
