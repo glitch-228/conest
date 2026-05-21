@@ -1637,6 +1637,12 @@ class MessengerController extends ChangeNotifier {
     // bug class the user battle-tested.
     final notifierBatch = await _runNotifierBatchFlushCheck();
     add(notifierBatch.name, notifierBatch.status, notifierBatch.detail);
+    final attachmentSelfTest = await _runAttachmentSelfTest();
+    add(
+      attachmentSelfTest.name,
+      attachmentSelfTest.status,
+      attachmentSelfTest.detail,
+    );
     final loopbackWiring = _runLocalLoopbackWiringCheck();
     add(loopbackWiring.name, loopbackWiring.status, loopbackWiring.detail);
     final longPollLifecycle = _runLongPollLifecycleCheck();
@@ -3109,7 +3115,17 @@ class MessengerController extends ChangeNotifier {
       );
       _updateMessageState(contact.deviceId, message.id, DeliveryState.relayed);
     } catch (error) {
+      // The offer never made it — mark the local ChatMessage failed and
+      // drop the outbound state so the bubble doesn't sit on a phantom
+      // "Transferring" indicator forever, and so a later chunk request
+      // for this attachmentId (across reinstalls / replays) gets a
+      // proper cancel echo from the chunk-request handler.
       _statusMessage = 'Attachment offer delivery failed: $error';
+      _updateMessageState(contact.deviceId, message.id, DeliveryState.failed);
+      _outboundAttachments.remove(attachmentId);
+      appendDebugLog(
+        'sendAttachment offer failed for $attachmentId ($fileName): $error',
+      );
       notifyListeners();
     }
   }
@@ -4641,14 +4657,32 @@ class MessengerController extends ChangeNotifier {
 
   List<ChatMessage> messagesFor(String peerDeviceId) {
     final conversation = _conversationFor(peerDeviceId);
-    return List<ChatMessage>.from(conversation.messages)
+    return conversation.messages
+        .where(_isRenderableMessage)
+        .toList(growable: false)
       ..sort((left, right) => left.createdAt.compareTo(right.createdAt));
   }
 
   List<ChatMessage> messagesForGroup(String groupId) {
     final conversation = _groupConversation(groupId);
-    return List<ChatMessage>.from(conversation.messages)
+    return conversation.messages
+        .where(_isRenderableMessage)
+        .toList(growable: false)
       ..sort((left, right) => left.createdAt.compareTo(right.createdAt));
+  }
+
+  /// Belt-and-suspenders filter to keep ghost messages out of the rendered
+  /// list. A message with no body, no attachment, and no reply preview has
+  /// nothing to draw — past pipelines occasionally produced these via a
+  /// duplicate-offer or torn-state race, and they showed up as
+  /// "10:42 •••" stubs in the chat. Reject them at the public API.
+  static bool _isRenderableMessage(ChatMessage m) {
+    if (m.body.trim().isNotEmpty) return true;
+    if (m.attachment != null) return true;
+    if (m.replyToMessageId != null && m.replyToMessageId!.isNotEmpty) {
+      return true;
+    }
+    return false;
   }
 
   ChatMessage? _messageById(String peerDeviceId, String messageId) {
@@ -5483,6 +5517,29 @@ class MessengerController extends ChangeNotifier {
       );
       return;
     }
+    // Dedupe: if we already have an inbound ChatMessage with this exact
+    // descriptor id, skip — a stray duplicate offer envelope (envelope-seen
+    // cache miss, retry, double-poll) would otherwise create a second
+    // ghost bubble with the same attachment.
+    final existingInbound = _inboundAttachments[descriptor.id];
+    if (existingInbound != null) {
+      appendDebugLog(
+        'Dropping duplicate attachment_offer for ${descriptor.id} '
+        'from ${sender.alias}.',
+      );
+      return;
+    }
+    final conversation = _conversationFor(sender.deviceId);
+    final alreadyHave = conversation.messages.any(
+      (m) => m.attachment?.id == descriptor.id,
+    );
+    if (alreadyHave) {
+      appendDebugLog(
+        'Attachment ${descriptor.id} already in the conversation — ignoring '
+        'duplicate offer from ${sender.alias}.',
+      );
+      return;
+    }
     final me = _requireIdentity();
     final message = ChatMessage(
       id: _randomId('msg'),
@@ -5502,6 +5559,9 @@ class MessengerController extends ChangeNotifier {
       peerDeviceId: sender.deviceId,
       descriptor: descriptor,
     );
+    // Schedule a retry timer that re-requests the next missing chunk if no
+    // chunk arrives within 5 s. Caps at 5 retries before giving up.
+    _scheduleAttachmentRetry(descriptor.id);
     notifyListeners();
     // Schedule the first chunk request as a microtask so it lands AFTER the
     // current `_processEnvelopes` batch commits its state. Without this,
@@ -5613,6 +5673,7 @@ class MessengerController extends ChangeNotifier {
     // sender's `_handleAttachmentChunkRequest` sees will trigger the
     // sender-side cancel echo too.
     if (_messageById(state.peerDeviceId, state.messageId) == null) {
+      state.retryTimer?.cancel();
       _inboundAttachments.remove(chunk.attachmentId);
       return;
     }
@@ -5633,7 +5694,11 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     state.received[chunk.index] = bytes;
+    // Reset the retry budget on any successful chunk arrival; the transfer
+    // is making forward progress so we don't need to escalate.
+    state.retryAttempts = 0;
     if (state.isComplete) {
+      state.retryTimer?.cancel();
       final builder = BytesBuilder();
       for (final part in state.received) {
         builder.add(part!);
@@ -5653,12 +5718,52 @@ class MessengerController extends ChangeNotifier {
       await _sendAttachmentComplete(sender, chunk.attachmentId);
       notifyListeners();
     } else {
+      _scheduleAttachmentRetry(chunk.attachmentId);
       await _sendAttachmentChunkRequest(
         sender,
         chunk.attachmentId,
         state.nextMissingIndex,
       );
     }
+  }
+
+  /// Re-requests the next missing chunk after a 5 s silence. Bounded by
+  /// [_inboundRetryLimit]; after that the inbound state is dropped so the
+  /// bubble can transition out of the spinner via the existing UI guards.
+  static const Duration _inboundRetryDelay = Duration(seconds: 5);
+  static const int _inboundRetryLimit = 5;
+
+  void _scheduleAttachmentRetry(String attachmentId) {
+    final state = _inboundAttachments[attachmentId];
+    if (state == null) return;
+    state.retryTimer?.cancel();
+    state.retryTimer = Timer(_inboundRetryDelay, () {
+      final s = _inboundAttachments[attachmentId];
+      if (s == null) return;
+      final peer = _contactByDeviceId(s.peerDeviceId);
+      if (peer == null) return;
+      if (s.retryAttempts >= _inboundRetryLimit) {
+        appendDebugLog(
+          'Stuck transfer $attachmentId exceeded $_inboundRetryLimit '
+          'retries; abandoning.',
+        );
+        _inboundAttachments.remove(attachmentId);
+        _updateMessageState(
+          s.peerDeviceId,
+          s.messageId,
+          DeliveryState.failed,
+        );
+        notifyListeners();
+        return;
+      }
+      s.retryAttempts++;
+      appendDebugLog(
+        'Re-requesting chunk ${s.nextMissingIndex} for $attachmentId '
+        '(retry ${s.retryAttempts}/$_inboundRetryLimit).',
+      );
+      unawaited(_sendAttachmentChunkRequest(peer, attachmentId, s.nextMissingIndex));
+      _scheduleAttachmentRetry(attachmentId);
+    });
   }
 
   Future<void> _sendAttachmentCancel(
@@ -5745,6 +5850,7 @@ class MessengerController extends ChangeNotifier {
     // otherwise — leaving an empty "Transferring 0%" bubble is the bug we
     // came here to fix).
     final inboundState = _inboundAttachments.remove(attachmentId);
+    inboundState?.retryTimer?.cancel();
     _outboundAttachments.remove(attachmentId);
     _assembledAttachments.remove(attachmentId);
     if (inboundState != null) {
@@ -6879,6 +6985,84 @@ class MessengerController extends ChangeNotifier {
           'Parallel _processEnvelopes calls cleanly drained to the '
           'baseline depth ($beforeDepth); notify dispatch stays unblocked.',
     );
+  }
+
+  Future<DebugCheckResult> _runAttachmentSelfTest() async {
+    // Loopback exercise of the chunk pipeline — builds a descriptor over a
+    // small random buffer, splits + hashes + reassembles + verifies. Catches
+    // regressions in the chunk hash math AND a torn-state path where the
+    // descriptor's chunkHashes don't line up with the assembled bytes.
+    try {
+      final random = Random();
+      final source = Uint8List.fromList(
+        List<int>.generate(1024, (_) => random.nextInt(256)),
+      );
+      const chunkSize = 256;
+      final chunkBytes = <Uint8List>[];
+      final chunkHashes = <ChunkHash>[];
+      for (var offset = 0; offset < source.length; offset += chunkSize) {
+        final end = (offset + chunkSize > source.length)
+            ? source.length
+            : offset + chunkSize;
+        final slice = Uint8List.view(
+          source.buffer,
+          source.offsetInBytes + offset,
+          end - offset,
+        );
+        chunkBytes.add(slice);
+        final digest = await Sha256().hash(slice);
+        chunkHashes.add(
+          ChunkHash(
+            index: chunkBytes.length - 1,
+            hashBase64: base64Encode(digest.bytes),
+          ),
+        );
+      }
+      // Reassemble + verify hash per chunk.
+      final builder = BytesBuilder();
+      for (var i = 0; i < chunkBytes.length; i++) {
+        final digest = await Sha256().hash(chunkBytes[i]);
+        if (base64Encode(digest.bytes) != chunkHashes[i].hashBase64) {
+          return DebugCheckResult(
+            name: 'Attachment self-test',
+            status: DebugCheckStatus.fail,
+            detail: 'Chunk $i hash mismatch on local round-trip.',
+          );
+        }
+        builder.add(chunkBytes[i]);
+      }
+      final assembled = builder.toBytes();
+      if (assembled.length != source.length) {
+        return DebugCheckResult(
+          name: 'Attachment self-test',
+          status: DebugCheckStatus.fail,
+          detail:
+              'Assembled length ${assembled.length} != source ${source.length}.',
+        );
+      }
+      for (var i = 0; i < assembled.length; i++) {
+        if (assembled[i] != source[i]) {
+          return DebugCheckResult(
+            name: 'Attachment self-test',
+            status: DebugCheckStatus.fail,
+            detail: 'Byte mismatch at offset $i after reassembly.',
+          );
+        }
+      }
+      return DebugCheckResult(
+        name: 'Attachment self-test',
+        status: DebugCheckStatus.pass,
+        detail:
+            '${source.length}-byte buffer split into ${chunkBytes.length} '
+            'chunks, hashed, reassembled byte-equal.',
+      );
+    } catch (error) {
+      return DebugCheckResult(
+        name: 'Attachment self-test',
+        status: DebugCheckStatus.fail,
+        detail: 'Threw: $error',
+      );
+    }
   }
 
   DebugCheckResult _runLocalLoopbackWiringCheck() {
@@ -10056,7 +10240,8 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(conversations: conversations);
     if (attachmentId != null) {
       _outboundAttachments.remove(attachmentId);
-      _inboundAttachments.remove(attachmentId);
+      final inbound = _inboundAttachments.remove(attachmentId);
+      inbound?.retryTimer?.cancel();
       _assembledAttachments.remove(attachmentId);
     }
   }
@@ -10347,6 +10532,14 @@ class _InboundAttachmentState {
   final String peerDeviceId;
   final AttachmentDescriptor descriptor;
   final List<Uint8List?> received;
+
+  /// Re-request timer that fires if no chunk has arrived for ~5 s. Reset on
+  /// every received chunk; cancelled on completion or cancel/delete.
+  Timer? retryTimer;
+
+  /// Number of consecutive timer-triggered re-requests. Capped to avoid an
+  /// unbounded loop on a permanently-broken peer.
+  int retryAttempts = 0;
 
   int get nextMissingIndex {
     for (var i = 0; i < received.length; i++) {
