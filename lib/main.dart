@@ -1496,7 +1496,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (contact == null || files.isEmpty) {
       return;
     }
-    final items = <({Uint8List bytes, String fileName, String mimeType})>[];
+    final items =
+        <({Uint8List bytes, String fileName, String mimeType, String caption})>[];
     for (final file in files) {
       try {
         final bytes = await file.readAsBytes();
@@ -1504,6 +1505,7 @@ class _HomeScreenState extends State<HomeScreen> {
           bytes: bytes,
           fileName: file.name,
           mimeType: _guessMimeType(file.name),
+          caption: '',
         ));
       } catch (error) {
         widget.controller.setStatus('Could not read ${file.name}: $error');
@@ -1569,7 +1571,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (picked == null || picked.files.isEmpty) {
       return;
     }
-    final items = <({Uint8List bytes, String fileName, String mimeType})>[];
+    final items =
+        <({Uint8List bytes, String fileName, String mimeType, String caption})>[];
     for (final file in picked.files) {
       Uint8List? bytes = file.bytes;
       // Desktop picker often returns a path instead of bytes.
@@ -1589,6 +1592,7 @@ class _HomeScreenState extends State<HomeScreen> {
         bytes: bytes,
         fileName: file.name,
         mimeType: _guessMimeType(file.name),
+        caption: '',
       ));
     }
     await _sendMultipleAttachments(contact: contact, items: items);
@@ -1602,13 +1606,23 @@ class _HomeScreenState extends State<HomeScreen> {
   }) {
     return _sendMultipleAttachments(
       contact: contact,
-      items: [(bytes: bytes, fileName: fileName, mimeType: mimeType)],
+      items: [
+        (
+          bytes: bytes,
+          fileName: fileName,
+          mimeType: mimeType,
+          caption: '',
+        ),
+      ],
     );
   }
 
   Future<void> _sendMultipleAttachments({
     required ContactRecord contact,
-    required List<({Uint8List bytes, String fileName, String mimeType})> items,
+    required List<
+      ({Uint8List bytes, String fileName, String mimeType, String caption})
+    >
+    items,
   }) async {
     if (items.isEmpty) {
       return;
@@ -1620,13 +1634,14 @@ class _HomeScreenState extends State<HomeScreen> {
         'Only the first $cap files will be sent (got ${items.length}).',
       );
     }
-    final caption = _composerController.text.trim();
-    if (caption.isNotEmpty) {
+    // Composer-level caption is the fallback for the first uncaptioned item.
+    final composerCaption = _composerController.text.trim();
+    if (composerCaption.isNotEmpty) {
       _composerController.clear();
     }
     final capMb = MessengerController.maxAttachmentSizeBytes ~/ (1024 * 1024);
-    for (var i = 0; i < clamped.length; i++) {
-      final item = clamped[i];
+    var composerCaptionUsed = false;
+    for (final item in clamped) {
       if (item.bytes.length > MessengerController.maxAttachmentSizeBytes) {
         widget.controller.setStatus(
           '${item.fileName} skipped: ${(item.bytes.length / (1024 * 1024)).toStringAsFixed(1)} '
@@ -1634,13 +1649,22 @@ class _HomeScreenState extends State<HomeScreen> {
         );
         continue;
       }
+      String effectiveCaption;
+      if (item.caption.isNotEmpty) {
+        effectiveCaption = item.caption;
+      } else if (!composerCaptionUsed && composerCaption.isNotEmpty) {
+        effectiveCaption = composerCaption;
+        composerCaptionUsed = true;
+      } else {
+        effectiveCaption = '';
+      }
       try {
         await widget.controller.sendAttachment(
           contact: contact,
           bytes: item.bytes,
           fileName: item.fileName,
           mimeType: item.mimeType,
-          caption: i == 0 ? caption : '',
+          caption: effectiveCaption,
         );
       } catch (error) {
         widget.controller.setStatus('Send failed for ${item.fileName}: $error');

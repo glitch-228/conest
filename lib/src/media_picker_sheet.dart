@@ -26,6 +26,8 @@ class MediaPickerResult {
       mimeType = null,
       fallbackToFilePicker = false;
 
+  bool get hasItems => items != null && items!.isNotEmpty;
+
   MediaPickerResult.fallback()
     : bytes = null,
       fileName = null,
@@ -37,7 +39,8 @@ class MediaPickerResult {
   final String? fileName;
   final String? mimeType;
   final bool fallbackToFilePicker;
-  final List<({Uint8List bytes, String fileName, String mimeType})>? items;
+  final List<({Uint8List bytes, String fileName, String mimeType, String caption})>?
+  items;
 }
 
 /// True on platforms where photo_manager actually has a backing implementation.
@@ -86,9 +89,48 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
   List<AssetEntity> _assets = const [];
   bool _loading = true;
   final LinkedHashSet<String> _selectedIds = LinkedHashSet<String>();
+  final Map<String, String> _captionsById = <String, String>{};
+  final Map<String, TextEditingController> _captionControllers =
+      <String, TextEditingController>{};
+  final Map<String, int?> _sizeBytesById = <String, int?>{};
   bool _sending = false;
 
   bool get _selectionMode => _selectedIds.isNotEmpty;
+
+  TextEditingController _captionControllerFor(String id) {
+    return _captionControllers.putIfAbsent(id, () {
+      final c = TextEditingController(text: _captionsById[id] ?? '');
+      c.addListener(() {
+        _captionsById[id] = c.text;
+      });
+      return c;
+    });
+  }
+
+  Future<int?> _resolveAssetSize(AssetEntity asset) async {
+    if (_sizeBytesById.containsKey(asset.id)) return _sizeBytesById[asset.id];
+    try {
+      final file = await asset.file;
+      if (file == null) {
+        _sizeBytesById[asset.id] = null;
+        return null;
+      }
+      final length = await file.length();
+      _sizeBytesById[asset.id] = length;
+      return length;
+    } catch (_) {
+      _sizeBytesById[asset.id] = null;
+      return null;
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final c in _captionControllers.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -190,7 +232,8 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
     if (_sending || _selectedIds.isEmpty) return;
     setState(() => _sending = true);
     final byId = {for (final a in _assets) a.id: a};
-    final items = <({Uint8List bytes, String fileName, String mimeType})>[];
+    final items =
+        <({Uint8List bytes, String fileName, String mimeType, String caption})>[];
     for (final id in _selectedIds) {
       final asset = byId[id];
       if (asset == null) continue;
@@ -203,6 +246,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
           bytes: bytes,
           fileName: fileName,
           mimeType: _mimeForAsset(asset, fileName),
+          caption: _captionsById[id]?.trim() ?? '',
         ));
       } catch (_) {
         // Skip unreadable assets; the rest of the batch still goes.
@@ -322,6 +366,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
             else
               const SizedBox(height: 12),
             Expanded(child: _buildBody()),
+            if (_selectionMode) _buildCaptionStrip(),
             const Divider(height: 1),
             Padding(
               padding: const EdgeInsets.all(12),
@@ -337,6 +382,77 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildCaptionStrip() {
+    final byId = {for (final a in _assets) a.id: a};
+    final entries = _selectedIds
+        .map((id) => byId[id])
+        .whereType<AssetEntity>()
+        .toList();
+    if (entries.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: widget.palette.paperStrong,
+        border: Border(top: BorderSide(color: widget.palette.stroke)),
+      ),
+      constraints: const BoxConstraints(maxHeight: 140),
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: entries.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, i) {
+          final asset = entries[i];
+          return SizedBox(
+            width: 200,
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: FutureBuilder<Uint8List?>(
+                    future: asset.thumbnailDataWithSize(
+                      const ThumbnailSize.square(120),
+                    ),
+                    builder: (context, snap) {
+                      final thumb = snap.data;
+                      return thumb != null
+                          ? ClipRRect(
+                              borderRadius: BorderRadius.circular(6),
+                              child: Image.memory(thumb, fit: BoxFit.cover),
+                            )
+                          : Container(color: widget.palette.stroke);
+                    },
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _captionControllerFor(asset.id),
+                    style: const TextStyle(fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: 'Caption…',
+                      hintStyle: TextStyle(color: widget.palette.inkSoft),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 6,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    maxLines: 2,
+                    minLines: 1,
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
@@ -399,6 +515,8 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
           palette: widget.palette,
           humanSize: _humanSize,
           humanDuration: _humanDuration,
+          sizeBytesFuture: _resolveAssetSize(asset),
+          maxBytes: widget.maxBytes,
           selectionIndex: selectionIndex >= 0 ? selectionIndex + 1 : null,
           onTap: () => _pickAsset(asset),
           onLongPress: () => _longPressAsset(asset),
@@ -416,78 +534,126 @@ class _AssetTile extends StatelessWidget {
     required this.humanDuration,
     required this.onTap,
     required this.onLongPress,
+    required this.sizeBytesFuture,
+    required this.maxBytes,
     this.selectionIndex,
   });
 
   final AssetEntity asset;
   final ConestPalette palette;
-  final String Function(int) humanSize; // reserved for byte-size badge later
+  final String Function(int) humanSize;
   final String Function(Duration) humanDuration;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
+  final Future<int?> sizeBytesFuture;
+  final int maxBytes;
   final int? selectionIndex;
 
   @override
   Widget build(BuildContext context) {
     final selected = selectionIndex != null;
-    return InkWell(
-      onTap: onTap,
-      onLongPress: onLongPress,
-      child: FutureBuilder<Uint8List?>(
-        future: asset.thumbnailDataWithSize(const ThumbnailSize.square(300)),
-        builder: (context, snap) {
-          final thumb = snap.data;
-          return Stack(
-            fit: StackFit.expand,
-            children: [
-              if (thumb != null)
-                Image.memory(thumb, fit: BoxFit.cover, gaplessPlayback: true)
-              else
-                Container(color: palette.stroke),
-              if (selected)
-                Container(color: palette.primary.withValues(alpha: 0.30)),
-              if (asset.type == AssetType.video)
-                Positioned(
-                  left: 4,
-                  bottom: 4,
-                  child: _BadgeChip(
-                    icon: Icons.play_arrow,
-                    text: humanDuration(asset.videoDuration),
-                  ),
-                ),
-              if (selected)
-                Positioned(
-                  top: 4,
-                  right: 4,
-                  child: CircleAvatar(
-                    radius: 12,
-                    backgroundColor: palette.primary,
-                    child: Text(
-                      '${selectionIndex!}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
+    final errorColor = Theme.of(context).colorScheme.error;
+    return FutureBuilder<int?>(
+      future: sizeBytesFuture,
+      builder: (context, sizeSnap) {
+        final size = sizeSnap.data;
+        final overCap = size != null && size > maxBytes;
+        return InkWell(
+          onTap: overCap
+              ? () {
+                  ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'Skipped: ${humanSize(size)} is over the '
+                        '${maxBytes ~/ (1024 * 1024)} MB cap.',
                       ),
                     ),
+                  );
+                }
+              : onTap,
+          onLongPress: overCap ? null : onLongPress,
+          child: FutureBuilder<Uint8List?>(
+            future: asset.thumbnailDataWithSize(const ThumbnailSize.square(300)),
+            builder: (context, snap) {
+              final thumb = snap.data;
+              return Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (thumb != null)
+                    Image.memory(thumb, fit: BoxFit.cover, gaplessPlayback: true)
+                  else
+                    Container(color: palette.stroke),
+                  if (selected && !overCap)
+                    Container(color: palette.primary.withValues(alpha: 0.30)),
+                  if (overCap)
+                    Container(color: errorColor.withValues(alpha: 0.18)),
+                  if (asset.type == AssetType.video)
+                    Positioned(
+                      left: 4,
+                      bottom: 4,
+                      child: _BadgeChip(
+                        icon: Icons.play_arrow,
+                        text: humanDuration(asset.videoDuration),
+                      ),
+                    ),
+                  // Size badge (bottom-right). Loading… until resolved.
+                  Positioned(
+                    right: 4,
+                    bottom: 4,
+                    child: _BadgeChip(
+                      text: size == null
+                          ? '…'
+                          : humanSize(size),
+                      foreground: overCap ? errorColor : null,
+                    ),
                   ),
-                ),
-            ],
-          );
-        },
-      ),
+                  if (selected && !overCap)
+                    Positioned(
+                      top: 4,
+                      right: 4,
+                      child: CircleAvatar(
+                        radius: 12,
+                        backgroundColor: palette.primary,
+                        child: Text(
+                          '${selectionIndex!}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (overCap)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            border: Border.all(color: errorColor, width: 2),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+        );
+      },
     );
   }
 }
 
 class _BadgeChip extends StatelessWidget {
-  const _BadgeChip({this.icon, required this.text});
+  const _BadgeChip({this.icon, required this.text, this.foreground});
 
   final IconData? icon;
   final String text;
+  final Color? foreground;
 
   @override
   Widget build(BuildContext context) {
+    final color = foreground ?? Colors.white;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
@@ -498,10 +664,10 @@ class _BadgeChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (icon != null) ...[
-            Icon(icon, size: 12, color: Colors.white),
+            Icon(icon, size: 12, color: color),
             const SizedBox(width: 2),
           ],
-          Text(text, style: const TextStyle(color: Colors.white, fontSize: 10)),
+          Text(text, style: TextStyle(color: color, fontSize: 10)),
         ],
       ),
     );
