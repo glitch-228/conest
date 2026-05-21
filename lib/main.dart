@@ -1640,7 +1640,10 @@ class _HomeScreenState extends State<HomeScreen> {
       _composerController.clear();
     }
     final capMb = MessengerController.maxAttachmentSizeBytes ~/ (1024 * 1024);
-    var composerCaptionUsed = false;
+    // First drop oversize items so the album grouping below operates on
+    // the items that will actually ship.
+    final filtered =
+        <({Uint8List bytes, String fileName, String mimeType, String caption})>[];
     for (final item in clamped) {
       if (item.bytes.length > MessengerController.maxAttachmentSizeBytes) {
         widget.controller.setStatus(
@@ -1649,25 +1652,87 @@ class _HomeScreenState extends State<HomeScreen> {
         );
         continue;
       }
-      String effectiveCaption;
-      if (item.caption.isNotEmpty) {
-        effectiveCaption = item.caption;
-      } else if (!composerCaptionUsed && composerCaption.isNotEmpty) {
-        effectiveCaption = composerCaption;
-        composerCaptionUsed = true;
-      } else {
-        effectiveCaption = '';
-      }
-      try {
-        await widget.controller.sendAttachment(
-          contact: contact,
+      filtered.add(item);
+    }
+    if (filtered.isEmpty) return;
+
+    // Album packing: captioned items go solo (single-item album, no
+    // albumId so they render as a standalone bubble). Uncaptioned items
+    // bundle into albums of `maxAttachmentsPerAlbum`.
+    final albums = <List<
+      ({Uint8List bytes, String fileName, String mimeType, String caption})
+    >>[];
+    List<({Uint8List bytes, String fileName, String mimeType, String caption})>
+    current =
+        [];
+    var composerCaptionUsed = false;
+    for (final item in filtered) {
+      // Promote composer caption to the first uncaptioned item.
+      var effective = item;
+      if (item.caption.isEmpty &&
+          !composerCaptionUsed &&
+          composerCaption.isNotEmpty) {
+        effective = (
           bytes: item.bytes,
           fileName: item.fileName,
           mimeType: item.mimeType,
-          caption: effectiveCaption,
+          caption: composerCaption,
         );
-      } catch (error) {
-        widget.controller.setStatus('Send failed for ${item.fileName}: $error');
+        composerCaptionUsed = true;
+      }
+      if (effective.caption.isNotEmpty) {
+        if (current.isNotEmpty) {
+          albums.add(current);
+          current = [];
+        }
+        albums.add([effective]);
+        continue;
+      }
+      current.add(effective);
+      if (current.length == MessengerController.maxAttachmentsPerAlbum) {
+        albums.add(current);
+        current = [];
+      }
+    }
+    if (current.isNotEmpty) albums.add(current);
+
+    for (var a = 0; a < albums.length; a++) {
+      final album = albums[a];
+      // Single-item "albums" don't need an id — they render as a
+      // standalone bubble.
+      final albumId = album.length > 1
+          ? 'alb-${DateTime.now().microsecondsSinceEpoch}-$a'
+          : null;
+      for (var i = 0; i < album.length; i++) {
+        final entry = album[i];
+        try {
+          await widget.controller.sendAttachment(
+            contact: contact,
+            bytes: entry.bytes,
+            fileName: entry.fileName,
+            mimeType: entry.mimeType,
+            // Caption only on the FIRST item of an uncaptioned-grouped
+            // album; for solo (captioned) items the caption is theirs.
+            caption: album.length == 1 ? entry.caption : (i == 0 ? entry.caption : ''),
+            albumId: albumId,
+          );
+        } catch (error) {
+          widget.controller.setStatus(
+            'Send failed for ${entry.fileName}: $error',
+          );
+        }
+        if (i < album.length - 1) {
+          await Future<void>.delayed(
+            const Duration(
+              milliseconds: MessengerController.albumOfferIntervalMs,
+            ),
+          );
+        }
+      }
+      if (a < albums.length - 1) {
+        await Future<void>.delayed(
+          const Duration(milliseconds: MessengerController.albumGapIntervalMs),
+        );
       }
     }
   }

@@ -5524,7 +5524,8 @@ void main() {
 
   group('multi-file batch send', () {
     test('maxAttachmentsPerSend exposes the cap', () {
-      expect(MessengerController.maxAttachmentsPerSend, 6);
+      expect(MessengerController.maxAttachmentsPerSend, 30);
+      expect(MessengerController.maxAttachmentsPerAlbum, 6);
     });
 
     test('three sendAttachment calls produce three distinct outbound '

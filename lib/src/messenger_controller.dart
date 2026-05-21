@@ -2989,7 +2989,22 @@ class MessengerController extends ChangeNotifier {
   /// file still has to clear `maxAttachmentSizeBytes` individually; the
   /// batch cap caps the per-send fanout so a stray drag with 50+ files
   /// doesn't drown the recipient.
-  static const int maxAttachmentsPerSend = 6;
+  static const int maxAttachmentsPerSend = 30;
+
+  /// Telegram-style media-group cap: a group of uncaptioned images sent
+  /// together renders as one album bubble. Larger batches are split into
+  /// multiple albums of this size each.
+  static const int maxAttachmentsPerAlbum = 6;
+
+  /// Pause between attachment_offer envelopes WITHIN one album, in ms.
+  /// Spreads sender CPU + relay store-rate over the wire so a 6-photo
+  /// album doesn't slam the queue.
+  static const int albumOfferIntervalMs = 250;
+
+  /// Pause between albums in ms. Slightly longer than the intra-album
+  /// interval so the receiver's UI has time to settle before the next
+  /// album fans in.
+  static const int albumGapIntervalMs = 500;
 
   /// Sends a file attachment as a v0.3.2 1:1 transfer. The recipient
   /// receives an `attachment_offer` envelope (pairwise-encrypted), then
@@ -3003,6 +3018,7 @@ class MessengerController extends ChangeNotifier {
     required String fileName,
     String mimeType = 'application/octet-stream',
     String caption = '',
+    String? albumId,
   }) async {
     final me = _requireIdentity();
     if (!contact.canSendOutbound) {
@@ -3072,6 +3088,7 @@ class MessengerController extends ChangeNotifier {
       state: DeliveryState.pending,
       createdAt: DateTime.now().toUtc(),
       attachment: descriptor,
+      albumId: albumId,
     );
     _upsertMessage(contact.deviceId, message);
     _outboundAttachments[attachmentId] = _OutboundAttachmentState(
@@ -3104,6 +3121,7 @@ class MessengerController extends ChangeNotifier {
         'descriptor': descriptor.toJson(),
         'parentMessageId': message.id,
         'caption': caption,
+        if (albumId != null) 'albumId': albumId,
       }),
       createdAt: message.createdAt,
     );
@@ -5552,6 +5570,7 @@ class MessengerController extends ChangeNotifier {
       createdAt: envelope.createdAt,
       senderDisplayName: sender.alias,
       attachment: descriptor,
+      albumId: payload['albumId'] as String?,
     );
     _upsertMessage(sender.deviceId, message);
     _inboundAttachments[descriptor.id] = _InboundAttachmentState(

@@ -1316,6 +1316,7 @@ class ChatMessage {
     this.replySenderDeviceId,
     this.replySenderDisplayName,
     this.attachment,
+    this.albumId,
     Map<String, DeliveryState>? recipientStates,
   }) : recipientStates = Map.unmodifiable(
          recipientStates ?? const <String, DeliveryState>{},
@@ -1340,6 +1341,12 @@ class ChatMessage {
   /// Non-null on v0.3.2+ messages that carry a file or image attachment.
   /// `body` may still hold a short caption alongside the attachment.
   final AttachmentDescriptor? attachment;
+
+  /// Telegram-style media-group id. Consecutive same-sender messages that
+  /// share an `albumId` render as a single album bubble in the UI; null
+  /// for standalone messages (text-only OR singleton captioned image).
+  final String? albumId;
+
   final Map<String, DeliveryState> recipientStates;
 
   String get bodyPreview => body.replaceAll('\n', ' ');
@@ -1362,6 +1369,7 @@ class ChatMessage {
     String? replySenderDisplayName,
     AttachmentDescriptor? attachment,
     bool clearAttachment = false,
+    String? albumId,
     Map<String, DeliveryState>? recipientStates,
   }) {
     return ChatMessage(
@@ -1382,6 +1390,7 @@ class ChatMessage {
       replySenderDisplayName:
           replySenderDisplayName ?? this.replySenderDisplayName,
       attachment: clearAttachment ? null : (attachment ?? this.attachment),
+      albumId: albumId ?? this.albumId,
       recipientStates: recipientStates ?? this.recipientStates,
     );
   }
@@ -1404,6 +1413,7 @@ class ChatMessage {
       'replySenderDeviceId': replySenderDeviceId,
       'replySenderDisplayName': replySenderDisplayName,
       if (attachment != null) 'attachment': attachment!.toJson(),
+      if (albumId != null) 'albumId': albumId,
       'recipientStates': recipientStates.map(
         (deviceId, state) => MapEntry(deviceId, state.name),
       ),
@@ -1436,6 +1446,7 @@ class ChatMessage {
               json['attachment'] as Map<String, dynamic>,
             )
           : null,
+      albumId: json['albumId'] as String?,
       recipientStates: rawRecipientStates.map(
         (deviceId, value) =>
             MapEntry(deviceId, DeliveryState.values.byName(value as String)),
