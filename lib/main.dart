@@ -1516,6 +1516,87 @@ class _HomeScreenState extends State<HomeScreen> {
     await _sendMultipleAttachments(contact: contact, items: items);
   }
 
+  /// Pastes an image / file from the OS clipboard into the active chat.
+  /// Returns true when something was sent so caller-side Shortcuts can
+  /// consume the event; returns false for plain-text-only clipboard.
+  Future<bool> _pasteFromClipboard() async {
+    final contact = _selectedContact;
+    if (contact == null) return false;
+    final clipboard = SystemClipboard.instance;
+    if (clipboard == null) return false;
+    final DataReader reader;
+    try {
+      reader = await clipboard.read();
+    } catch (error) {
+      widget.controller.appendDebugLog('Clipboard read failed: $error');
+      return false;
+    }
+    // Try image formats first.
+    final imageFormats = [
+      Formats.png,
+      Formats.jpeg,
+      Formats.gif,
+      Formats.webp,
+    ];
+    for (final fmt in imageFormats) {
+      if (reader.canProvide(fmt)) {
+        final completer = Completer<Uint8List?>();
+        reader.getFile(fmt, (file) async {
+          try {
+            final stream = file.getStream();
+            final chunks = <int>[];
+            await for (final chunk in stream) {
+              chunks.addAll(chunk);
+            }
+            completer.complete(Uint8List.fromList(chunks));
+          } catch (_) {
+            completer.complete(null);
+          }
+        });
+        final bytes = await completer.future;
+        if (bytes == null || bytes.isEmpty) continue;
+        final mime = sniffImageMimeType(bytes) ?? 'image/png';
+        final ext = mime == 'image/jpeg'
+            ? 'jpg'
+            : mime.split('/').last;
+        await _sendAttachmentBytes(
+          contact: contact,
+          bytes: bytes,
+          fileName: 'pasted-${DateTime.now().millisecondsSinceEpoch}.$ext',
+          mimeType: mime,
+        );
+        return true;
+      }
+    }
+    // Fall through to file URI (Linux file managers / Windows Explorer).
+    if (reader.canProvide(Formats.fileUri)) {
+      final completer = Completer<Uri?>();
+      reader.getValue(Formats.fileUri, (value) {
+        completer.complete(value);
+      });
+      final uri = await completer.future;
+      if (uri != null) {
+        try {
+          final file = File.fromUri(uri);
+          final bytes = await file.readAsBytes();
+          final name = file.uri.pathSegments.isNotEmpty
+              ? file.uri.pathSegments.last
+              : 'pasted';
+          await _sendAttachmentBytes(
+            contact: contact,
+            bytes: bytes,
+            fileName: name,
+            mimeType: _guessMimeType(name),
+          );
+          return true;
+        } catch (error) {
+          widget.controller.appendDebugLog('Paste file read failed: $error');
+        }
+      }
+    }
+    return false;
+  }
+
   void _handleDroppedFilesForGroup(List<XFile> files) {
     if (files.isEmpty) {
       return;
@@ -1818,6 +1899,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     onSend: _sendCurrentMessage,
                     onAttach: _openMediaPicker,
                     onDropFiles: _handleDroppedFiles,
+                    onPasteMedia: _pasteFromClipboard,
                   );
                 }
                 if (!isWide && selectedGroup != null) {
@@ -1838,6 +1920,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     onShowDetails: () => _showGroupDetails(selectedGroup),
                     onSend: _sendCurrentGroupMessage,
                     onDropFiles: _handleDroppedFilesForGroup,
+                    onPasteMedia: _pasteFromClipboard,
                   );
                 }
                 if (!isWide && lanLobbySelected) {
@@ -1933,6 +2016,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     _showGroupDetails(selectedGroup),
                                 onSend: _sendCurrentGroupMessage,
                                 onDropFiles: _handleDroppedFilesForGroup,
+                                onPasteMedia: _pasteFromClipboard,
                               )
                             : selectedContact == null
                             ? _EmptyChatState(palette: palette)
@@ -1954,6 +2038,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 onSend: _sendCurrentMessage,
                                 onAttach: _openMediaPicker,
                                 onDropFiles: _handleDroppedFiles,
+                                onPasteMedia: _pasteFromClipboard,
                               ),
                       ),
                   ],
@@ -3072,6 +3157,7 @@ class _GroupChatPanel extends StatefulWidget {
     required this.onShowDetails,
     required this.onDropFiles,
     this.onBack,
+    this.onPasteMedia,
   });
 
   final MessengerController controller;
@@ -3085,6 +3171,7 @@ class _GroupChatPanel extends StatefulWidget {
   final VoidCallback onShowDetails;
   final ValueChanged<List<XFile>> onDropFiles;
   final VoidCallback? onBack;
+  final Future<bool> Function()? onPasteMedia;
 
   @override
   State<_GroupChatPanel> createState() => _GroupChatPanelState();
@@ -3683,6 +3770,26 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                               widget.onSend();
                             }
                           },
+                          contextMenuBuilder: (context, editableTextState) {
+                            final items = List<ContextMenuButtonItem>.from(
+                              editableTextState.contextMenuButtonItems,
+                            );
+                            if (widget.onPasteMedia != null) {
+                              items.add(
+                                ContextMenuButtonItem(
+                                  label: 'Paste media',
+                                  onPressed: () {
+                                    ContextMenuController.removeAny();
+                                    unawaited(widget.onPasteMedia!());
+                                  },
+                                ),
+                              );
+                            }
+                            return AdaptiveTextSelectionToolbar.buttonItems(
+                              anchors: editableTextState.contextMenuAnchors,
+                              buttonItems: items,
+                            );
+                          },
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -3756,6 +3863,7 @@ class _ChatPanel extends StatefulWidget {
     required this.onAttach,
     required this.onDropFiles,
     this.onBack,
+    this.onPasteMedia,
   });
 
   final MessengerController controller;
@@ -3770,6 +3878,7 @@ class _ChatPanel extends StatefulWidget {
   final VoidCallback onAttach;
   final ValueChanged<List<XFile>> onDropFiles;
   final VoidCallback? onBack;
+  final Future<bool> Function()? onPasteMedia;
 
   @override
   State<_ChatPanel> createState() => _ChatPanelState();
@@ -4519,6 +4628,26 @@ class _ChatPanelState extends State<_ChatPanel> {
                                       ' or add a caption',
                           ),
                           onSubmitted: (_) => widget.onSend(),
+                          contextMenuBuilder: (context, editableTextState) {
+                            final items = List<ContextMenuButtonItem>.from(
+                              editableTextState.contextMenuButtonItems,
+                            );
+                            if (widget.onPasteMedia != null) {
+                              items.add(
+                                ContextMenuButtonItem(
+                                  label: 'Paste media',
+                                  onPressed: () {
+                                    ContextMenuController.removeAny();
+                                    unawaited(widget.onPasteMedia!());
+                                  },
+                                ),
+                              );
+                            }
+                            return AdaptiveTextSelectionToolbar.buttonItems(
+                              anchors: editableTextState.contextMenuAnchors,
+                              buttonItems: items,
+                            );
+                          },
                         ),
                       ),
                       const SizedBox(width: 12),
