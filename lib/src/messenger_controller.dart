@@ -5328,11 +5328,14 @@ class MessengerController extends ChangeNotifier {
     super.notifyListeners();
   }
 
-  Future<int> _processEnvelopes(List<RelayEnvelope> envelopes) async {
+  Future<int> _processEnvelopes(
+    List<RelayEnvelope> envelopes, {
+    PeerRouteKind ingressKind = PeerRouteKind.relay,
+  }) async {
     _notificationsDeferredDepth++;
     var processed = 0;
     try {
-      processed = await _processEnvelopesInternal(envelopes);
+      processed = await _processEnvelopesInternal(envelopes, ingressKind);
     } finally {
       _notificationsDeferredDepth--;
       if (_notificationsDeferredDepth == 0 && _deferredNotificationPending) {
@@ -5343,7 +5346,10 @@ class MessengerController extends ChangeNotifier {
     return processed;
   }
 
-  Future<int> _processEnvelopesInternal(List<RelayEnvelope> envelopes) async {
+  Future<int> _processEnvelopesInternal(
+    List<RelayEnvelope> envelopes,
+    PeerRouteKind ingressKind,
+  ) async {
     var processed = 0;
     final orderedEnvelopes = List<RelayEnvelope>.from(envelopes)
       ..sort((left, right) {
@@ -5371,6 +5377,21 @@ class MessengerController extends ChangeNotifier {
       if (senderContact != null && senderContact.pendingVerification) {
         _enqueueHeldEnvelope(senderContact.deviceId, envelope);
         _markSeen(envelope.messageId);
+        continue;
+      }
+      // Connectivity mode is bidirectional: if the sender contact's
+      // effective prefs forbid the ingress transport, drop the envelope
+      // silently. No ack is emitted, so the sender's queue stall timer
+      // eventually marks the message Failed. Pairing / contact_exchange
+      // envelopes (sender unknown locally) are not gated — they need to
+      // land for the contact to be created in the first place.
+      if (senderContact != null &&
+          _droppedByIngressMode(senderContact, ingressKind)) {
+        _markSeen(envelope.messageId);
+        appendDebugLog(
+          'Dropped inbound from ${senderContact.alias}: ingress '
+          '${ingressKind.name} disabled per effective connectivity prefs.',
+        );
         continue;
       }
       processed++;
@@ -8541,6 +8562,24 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  /// Connectivity mode is bidirectional: when the user (or contact override)
+  /// disables LAN or online, the matching transport is rejected for INBOUND
+  /// envelopes too. Returns true when the current effective prefs would
+  /// reject the ingress kind for [contact].
+  bool _droppedByIngressMode(
+    ContactRecord contact,
+    PeerRouteKind ingressKind,
+  ) {
+    final effective = _effectiveTransports(contact);
+    switch (ingressKind) {
+      case PeerRouteKind.lan:
+        return !effective.lan;
+      case PeerRouteKind.relay:
+      case PeerRouteKind.directInternet:
+        return !effective.online;
+    }
+  }
+
   List<PeerEndpoint> _preferredRoutesForContact(ContactRecord contact) {
     final effective = _effectiveTransports(contact);
     final candidateRoutes =
@@ -10746,7 +10785,10 @@ class MessengerController extends ChangeNotifier {
     if (!hasIdentity) {
       return;
     }
-    final processed = await _processEnvelopes([envelope]);
+    final processed = await _processEnvelopes(
+      [envelope],
+      ingressKind: PeerRouteKind.lan,
+    );
     if (processed > 0) {
       _markRuntimeActivity();
       _setTransientStatus(
