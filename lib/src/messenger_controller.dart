@@ -214,6 +214,17 @@ class MessengerController extends ChangeNotifier {
   // a follow-up pass.
   final Map<String, Uint8List> _assembledAttachments = <String, Uint8List>{};
 
+  // v0.3.3-nightly.6 per-contact serial transfer queue. Each contact gets
+  // a FIFO of pending attachment ids; the worker dispatches one offer at
+  // a time and only advances when `attachment_complete` lands (or a
+  // stall timeout fires). Multi-contact sends still run in parallel.
+  final Map<String, List<String>> _outboundQueueByContact =
+      <String, List<String>>{};
+  final Map<String, String> _activeOutboundByContact = <String, String>{};
+  final Map<String, Timer> _outboundStallTimers = <String, Timer>{};
+
+  static const Duration _outboundStallTimeout = Duration(seconds: 60);
+
   bool get isReady => _ready;
   bool get hasIdentity => _snapshot.identity != null;
   IdentityRecord? get identity => _snapshot.identity;
@@ -3107,8 +3118,66 @@ class MessengerController extends ChangeNotifier {
     _markRuntimeActivity();
     notifyListeners();
 
-    // Send the offer envelope. Chunks flow on demand as the recipient
-    // requests them.
+    // Enqueue for this contact's serial transfer worker. The worker
+    // dispatches the offer envelope when the previous outbound for the
+    // same contact finishes — or immediately if the queue was empty.
+    _enqueueOutbound(contact, attachmentId);
+    _pumpOutboundQueue(contact);
+  }
+
+  /// Pushes an attachmentId onto the contact's serial-send queue. Idempotent
+  /// guard against duplicate enqueues.
+  void _enqueueOutbound(ContactRecord contact, String attachmentId) {
+    final queue = _outboundQueueByContact.putIfAbsent(
+      contact.deviceId,
+      () => <String>[],
+    );
+    if (!queue.contains(attachmentId) &&
+        _activeOutboundByContact[contact.deviceId] != attachmentId) {
+      queue.add(attachmentId);
+    }
+  }
+
+  /// If no transfer is currently active for [contact], pops the head of the
+  /// queue and dispatches its offer envelope. Called from sendAttachment
+  /// after enqueue + from attachment_complete / cancel / delete cleanup.
+  void _pumpOutboundQueue(ContactRecord contact) {
+    if (_activeOutboundByContact.containsKey(contact.deviceId)) return;
+    final queue = _outboundQueueByContact[contact.deviceId];
+    if (queue == null || queue.isEmpty) return;
+    final next = queue.removeAt(0);
+    final state = _outboundAttachments[next];
+    if (state == null) {
+      // Sender-side cancel happened between enqueue + pump. Move on.
+      _pumpOutboundQueue(contact);
+      return;
+    }
+    _activeOutboundByContact[contact.deviceId] = next;
+    state.activatedAt = DateTime.now().toUtc();
+    state.lastChunkAt = state.activatedAt;
+    _armOutboundStallTimer(contact);
+    unawaited(_dispatchAttachmentOffer(contact, state));
+    notifyListeners();
+  }
+
+  /// Encrypts + delivers the attachment_offer envelope for [state]. On
+  /// failure the active slot is freed and the local message flips to
+  /// Failed; the next queued item gets a chance to dispatch.
+  Future<void> _dispatchAttachmentOffer(
+    ContactRecord contact,
+    _OutboundAttachmentState state,
+  ) async {
+    if (!hasIdentity) return;
+    final me = _requireIdentity();
+    final descriptor = state.descriptor;
+    final message = _messageById(contact.deviceId, state.messageId);
+    if (message == null) {
+      // Parent ChatMessage was deleted between enqueue + dispatch.
+      _outboundAttachments.remove(descriptor.id);
+      _clearActiveOutbound(contact.deviceId, descriptor.id);
+      _pumpOutboundQueue(contact);
+      return;
+    }
     final envelope = await _crypto.encryptPayloadEnvelope(
       kind: 'attachment_offer',
       messageId: _randomId('aoff'),
@@ -3120,8 +3189,8 @@ class MessengerController extends ChangeNotifier {
       plaintext: jsonEncode({
         'descriptor': descriptor.toJson(),
         'parentMessageId': message.id,
-        'caption': caption,
-        if (albumId != null) 'albumId': albumId,
+        'caption': message.body,
+        if (message.albumId != null) 'albumId': message.albumId,
       }),
       createdAt: message.createdAt,
     );
@@ -3133,19 +3202,90 @@ class MessengerController extends ChangeNotifier {
       );
       _updateMessageState(contact.deviceId, message.id, DeliveryState.relayed);
     } catch (error) {
-      // The offer never made it — mark the local ChatMessage failed and
-      // drop the outbound state so the bubble doesn't sit on a phantom
-      // "Transferring" indicator forever, and so a later chunk request
-      // for this attachmentId (across reinstalls / replays) gets a
-      // proper cancel echo from the chunk-request handler.
       _statusMessage = 'Attachment offer delivery failed: $error';
       _updateMessageState(contact.deviceId, message.id, DeliveryState.failed);
-      _outboundAttachments.remove(attachmentId);
+      _outboundAttachments.remove(descriptor.id);
+      _clearActiveOutbound(contact.deviceId, descriptor.id);
       appendDebugLog(
-        'sendAttachment offer failed for $attachmentId ($fileName): $error',
+        'sendAttachment offer failed for ${descriptor.id} '
+        '(${descriptor.fileName}): $error',
       );
       notifyListeners();
+      _pumpOutboundQueue(contact);
     }
+  }
+
+  void _armOutboundStallTimer(ContactRecord contact) {
+    _outboundStallTimers[contact.deviceId]?.cancel();
+    _outboundStallTimers[contact.deviceId] = Timer(
+      _outboundStallTimeout,
+      () => _onOutboundStall(contact),
+    );
+  }
+
+  void _onOutboundStall(ContactRecord contact) {
+    final activeId = _activeOutboundByContact[contact.deviceId];
+    if (activeId == null) return;
+    final state = _outboundAttachments[activeId];
+    if (state == null) {
+      _clearActiveOutbound(contact.deviceId, activeId);
+      _pumpOutboundQueue(contact);
+      return;
+    }
+    // If the transfer is paused, keep waiting — pause is explicit, not a
+    // stall. The timer rearms on resume so we don't lose the escape hatch.
+    if (state.paused) {
+      _armOutboundStallTimer(contact);
+      return;
+    }
+    appendDebugLog(
+      'Outbound stall for ${state.descriptor.id} '
+      '(${state.descriptor.fileName}) after ${_outboundStallTimeout.inSeconds}s; '
+      'marking failed and advancing queue.',
+    );
+    _updateMessageState(
+      contact.deviceId,
+      state.messageId,
+      DeliveryState.failed,
+    );
+    _outboundAttachments.remove(activeId);
+    _clearActiveOutbound(contact.deviceId, activeId);
+    notifyListeners();
+    _pumpOutboundQueue(contact);
+  }
+
+  void _clearActiveOutbound(String peerDeviceId, String attachmentId) {
+    if (_activeOutboundByContact[peerDeviceId] == attachmentId) {
+      _activeOutboundByContact.remove(peerDeviceId);
+      _outboundStallTimers.remove(peerDeviceId)?.cancel();
+    }
+  }
+
+  /// Returns the queue position of [attachmentId] for its contact. Returns
+  /// 0 when not queued (either active or unknown), positive integer for
+  /// queued items (1 = next to dispatch).
+  int outboundQueuePositionFor(String attachmentId) {
+    for (final entry in _outboundQueueByContact.entries) {
+      final idx = entry.value.indexOf(attachmentId);
+      if (idx >= 0) return idx + 1;
+    }
+    return 0;
+  }
+
+  /// Returns the sender-side transfer progress (0..1) for an active outbound
+  /// attachment, or null if the attachment isn't currently active (queued,
+  /// finished, or unknown). UI uses null to mean "show queued/idle status
+  /// instead of a progress bar".
+  double? outboundAttachmentProgress(String attachmentId) {
+    final state = _outboundAttachments[attachmentId];
+    if (state == null) return null;
+    // Only show progress for the active item per contact.
+    if (_activeOutboundByContact[state.peerDeviceId] != attachmentId) {
+      return null;
+    }
+    final total = state.descriptor.chunkHashes.length;
+    if (total <= 0) return null;
+    return (state.highestChunkSent + 1) / total;
   }
 
   /// Returns the assembled bytes for an attachment, or null while the
@@ -5642,7 +5782,16 @@ class MessengerController extends ChangeNotifier {
       // Parent message was locally deleted; tear down outbound state and
       // notify the receiver.
       _outboundAttachments.remove(attachmentId);
+      _clearActiveOutbound(state.peerDeviceId, attachmentId);
+      final peerContact = _contactByDeviceId(state.peerDeviceId);
+      if (peerContact != null) _pumpOutboundQueue(peerContact);
       unawaited(_sendAttachmentCancel(requester, attachmentId));
+      return;
+    }
+    // Honor the bilateral pause: silently drop the chunk request so the
+    // receiver's retry timer just keeps idling. When the paused side
+    // resumes, the next chunk request flows through here normally.
+    if (state.paused) {
       return;
     }
     if (index < 0 || index >= state.chunks.length) {
@@ -5673,6 +5822,17 @@ class MessengerController extends ChangeNotifier {
         recipientDeviceId: requester.deviceId,
         envelope: envelope,
       );
+      // Sender progress + stall-timer activity refresh. Only advance if
+      // this is the active outbound for this contact (the receiver could
+      // be re-requesting after a stale state).
+      if (_activeOutboundByContact[state.peerDeviceId] == attachmentId) {
+        if (index > state.highestChunkSent) {
+          state.highestChunkSent = index;
+        }
+        state.lastChunkAt = DateTime.now().toUtc();
+        _armOutboundStallTimer(requester);
+        notifyListeners();
+      }
     } catch (_) {
       // Receiver will re-request the missing chunk.
     }
@@ -5847,6 +6007,11 @@ class MessengerController extends ChangeNotifier {
     }
     final state = _outboundAttachments.remove(attachmentId);
     if (state == null) {
+      // Receiver completed an attachment whose state we already cleared
+      // (cancel, delete, stall). Still advance the queue so a later
+      // queued item can dispatch.
+      _clearActiveOutbound(sender.deviceId, attachmentId);
+      _pumpOutboundQueue(sender);
       return;
     }
     _updateMessageState(
@@ -5854,7 +6019,9 @@ class MessengerController extends ChangeNotifier {
       state.messageId,
       DeliveryState.delivered,
     );
+    _clearActiveOutbound(sender.deviceId, attachmentId);
     notifyListeners();
+    _pumpOutboundQueue(sender);
   }
 
   void _handleAttachmentCancel(Map<String, dynamic> payload) {
@@ -5868,8 +6035,16 @@ class MessengerController extends ChangeNotifier {
     // came here to fix).
     final inboundState = _inboundAttachments.remove(attachmentId);
     inboundState?.retryTimer?.cancel();
-    _outboundAttachments.remove(attachmentId);
+    final outboundState = _outboundAttachments.remove(attachmentId);
     _assembledAttachments.remove(attachmentId);
+    // If the peer canceled an attachment we were actively shipping, free
+    // the queue slot so the next item dispatches.
+    if (outboundState != null) {
+      _clearActiveOutbound(outboundState.peerDeviceId, attachmentId);
+      _outboundQueueByContact[outboundState.peerDeviceId]?.remove(attachmentId);
+      final peerContact = _contactByDeviceId(outboundState.peerDeviceId);
+      if (peerContact != null) _pumpOutboundQueue(peerContact);
+    }
     if (inboundState != null) {
       final parent = _messageById(
         inboundState.peerDeviceId,
@@ -10260,6 +10435,13 @@ class MessengerController extends ChangeNotifier {
       final inbound = _inboundAttachments.remove(attachmentId);
       inbound?.retryTimer?.cancel();
       _assembledAttachments.remove(attachmentId);
+      // If this was the active outbound for the peer, free the slot and
+      // pump the queue so the next pending attachment can dispatch.
+      _clearActiveOutbound(peerDeviceId, attachmentId);
+      // Drop the id from any queue snapshots as well.
+      _outboundQueueByContact[peerDeviceId]?.remove(attachmentId);
+      final peerContact = _contactByDeviceId(peerDeviceId);
+      if (peerContact != null) _pumpOutboundQueue(peerContact);
     }
   }
 
@@ -10536,6 +10718,27 @@ class _OutboundAttachmentState {
   final String peerDeviceId;
   final List<Uint8List> chunks;
   final AttachmentDescriptor descriptor;
+
+  /// Highest chunk index the receiver has successfully pulled. Drives the
+  /// sender-side progress bar. Reset to -1 on entry, advanced by every
+  /// `_handleAttachmentChunkRequest` that we honour.
+  int highestChunkSent = -1;
+
+  /// Bilateral pause state. Either side may pause; only the side that set
+  /// pausedByMe can clear it. The other side sees pausedByPeer and can
+  /// cancel/delete but not silently un-pause.
+  bool pausedByMe = false;
+  bool pausedByPeer = false;
+  bool get paused => pausedByMe || pausedByPeer;
+
+  /// When this transfer became "active" — i.e. its offer envelope shipped
+  /// and the queue worker is now watching for chunk activity. Used by the
+  /// stall escape hatch to decide when to declare the transfer dead.
+  DateTime? activatedAt;
+
+  /// Last time the chunk-request handler advanced `highestChunkSent`.
+  /// Refreshed on every chunk we successfully shipped.
+  DateTime? lastChunkAt;
 }
 
 class _InboundAttachmentState {
@@ -10557,6 +10760,11 @@ class _InboundAttachmentState {
   /// Number of consecutive timer-triggered re-requests. Capped to avoid an
   /// unbounded loop on a permanently-broken peer.
   int retryAttempts = 0;
+
+  /// Bilateral pause state mirrors the outbound side.
+  bool pausedByMe = false;
+  bool pausedByPeer = false;
+  bool get paused => pausedByMe || pausedByPeer;
 
   int get nextMissingIndex {
     for (var i = 0; i < received.length; i++) {

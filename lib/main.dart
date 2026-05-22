@@ -8794,7 +8794,14 @@ class _AttachmentRow extends StatelessWidget {
       );
     }
     final bytes = controller.attachmentBytesFor(descriptor.id);
-    final progress = controller.attachmentTransferProgress(descriptor.id);
+    final inboundProgress = controller.attachmentTransferProgress(descriptor.id);
+    final outboundProgress = outbound
+        ? controller.outboundAttachmentProgress(descriptor.id)
+        : null;
+    final queuePosition = outbound
+        ? controller.outboundQueuePositionFor(descriptor.id)
+        : 0;
+    final progress = outboundProgress ?? inboundProgress;
     final textColor = outbound ? palette.outboundText : palette.inboundText;
     final metaColor = outbound ? palette.outboundMeta : palette.inboundMeta;
     final hasBytes = bytes != null;
@@ -8847,12 +8854,25 @@ class _AttachmentRow extends StatelessWidget {
     final icon = _isImage
         ? Icons.image_outlined
         : Icons.insert_drive_file_outlined;
-    final statusLine = hasBytes
-        ? _formatBytes(descriptor.sizeBytes)
-        : (progress != null
-              ? 'Transferring · ${(progress * 100).toStringAsFixed(0)}% '
-                    '· ${_formatBytes(descriptor.sizeBytes)}'
-              : 'Transferring · ${_formatBytes(descriptor.sizeBytes)}');
+    final String statusLine;
+    if (hasBytes && !outbound) {
+      statusLine = _formatBytes(descriptor.sizeBytes);
+    } else if (outbound && outboundProgress != null) {
+      statusLine =
+          'Sending · ${(outboundProgress * 100).toStringAsFixed(0)}% · '
+          '${_formatBytes(descriptor.sizeBytes)}';
+    } else if (outbound && queuePosition > 0) {
+      statusLine =
+          'Queued · #$queuePosition · ${_formatBytes(descriptor.sizeBytes)}';
+    } else if (hasBytes) {
+      statusLine = _formatBytes(descriptor.sizeBytes);
+    } else if (progress != null) {
+      statusLine =
+          'Transferring · ${(progress * 100).toStringAsFixed(0)}% · '
+          '${_formatBytes(descriptor.sizeBytes)}';
+    } else {
+      statusLine = 'Transferring · ${_formatBytes(descriptor.sizeBytes)}';
+    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
