@@ -3353,6 +3353,19 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
         controller.groupMemberLabel(senderId);
   }
 
+  Widget _buildAlbumBubble(
+    BuildContext context,
+    List<ChatMessage> members,
+  ) {
+    if (members.isEmpty) return const SizedBox.shrink();
+    return _AlbumBubble(
+      members: members,
+      controller: controller,
+      palette: palette,
+      outbound: members.first.outbound,
+    );
+  }
+
   Widget _buildMessageBubble(BuildContext context, ChatMessage message) {
     final outbound = message.outbound;
     final unread = controller.isUnreadGroupMessage(group.groupId, message);
@@ -3602,11 +3615,21 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     padding: const EdgeInsets.all(18),
                     itemCount: messages.length,
                     itemBuilder: (context, index) {
-                      final message = messages[messages.length - 1 - index];
+                      final chronoIndex = messages.length - 1 - index;
+                      final message = messages[chronoIndex];
+                      if (_isAlbumContinuation(messages, chronoIndex)) {
+                        return const SizedBox.shrink();
+                      }
+                      final bubble = _isAlbumAnchor(messages, chronoIndex)
+                          ? _buildAlbumBubble(
+                              context,
+                              _collectAlbumFrom(messages, chronoIndex),
+                            )
+                          : _buildMessageBubble(context, message);
                       final showDivider =
                           anchor != null && message.id == anchor;
                       if (!showDivider) {
-                        return _buildMessageBubble(context, message);
+                        return bubble;
                       }
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3615,7 +3638,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                             palette: palette,
                             count: unreadCount,
                           ),
-                          _buildMessageBubble(context, message),
+                          bubble,
                         ],
                       );
                     },
@@ -4077,6 +4100,19 @@ class _ChatPanelState extends State<_ChatPanel> {
     return message.replySenderDisplayName ?? 'Message';
   }
 
+  Widget _buildAlbumBubble(
+    BuildContext context,
+    List<ChatMessage> members,
+  ) {
+    if (members.isEmpty) return const SizedBox.shrink();
+    return _AlbumBubble(
+      members: members,
+      controller: controller,
+      palette: palette,
+      outbound: members.first.outbound,
+    );
+  }
+
   Widget _buildMessageBubble(BuildContext context, ChatMessage message) {
     final outbound = message.outbound;
     final unread = controller.isUnreadMessage(contact.deviceId, message);
@@ -4411,11 +4447,21 @@ class _ChatPanelState extends State<_ChatPanel> {
                     padding: const EdgeInsets.all(18),
                     itemCount: messages.length,
                     itemBuilder: (context, index) {
-                      final message = messages[messages.length - 1 - index];
+                      final chronoIndex = messages.length - 1 - index;
+                      final message = messages[chronoIndex];
+                      if (_isAlbumContinuation(messages, chronoIndex)) {
+                        return const SizedBox.shrink();
+                      }
+                      final bubble = _isAlbumAnchor(messages, chronoIndex)
+                          ? _buildAlbumBubble(
+                              context,
+                              _collectAlbumFrom(messages, chronoIndex),
+                            )
+                          : _buildMessageBubble(context, message);
                       final showDivider =
                           anchor != null && message.id == anchor;
                       if (!showDivider) {
-                        return _buildMessageBubble(context, message);
+                        return bubble;
                       }
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -4424,7 +4470,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                             palette: palette,
                             count: unreadCount,
                           ),
-                          _buildMessageBubble(context, message),
+                          bubble,
                         ],
                       );
                     },
@@ -8256,6 +8302,52 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
   }
 }
 
+/// Returns true when `messages[chronoIndex]` is the second-or-later member
+/// of an album (same sender + non-null albumId as the previous chronological
+/// message). The chat list builder skips these — the chronological-first
+/// album member renders one combined `_AlbumBubble`.
+bool _isAlbumContinuation(List<ChatMessage> messages, int chronoIndex) {
+  if (chronoIndex <= 0) return false;
+  final cur = messages[chronoIndex];
+  if (cur.albumId == null) return false;
+  final prev = messages[chronoIndex - 1];
+  return prev.albumId == cur.albumId &&
+      prev.senderDeviceId == cur.senderDeviceId;
+}
+
+/// Returns true when `messages[chronoIndex]` is the chronologically-first
+/// member of an album with at least two consecutive same-sender same-id
+/// members.
+bool _isAlbumAnchor(List<ChatMessage> messages, int chronoIndex) {
+  final cur = messages[chronoIndex];
+  if (cur.albumId == null) return false;
+  if (_isAlbumContinuation(messages, chronoIndex)) return false;
+  // Need at least one continuation for it to be a real album.
+  if (chronoIndex + 1 >= messages.length) return false;
+  final next = messages[chronoIndex + 1];
+  return next.albumId == cur.albumId &&
+      next.senderDeviceId == cur.senderDeviceId;
+}
+
+/// Collects the contiguous album members starting at the given anchor.
+List<ChatMessage> _collectAlbumFrom(
+  List<ChatMessage> messages,
+  int chronoIndex,
+) {
+  final anchor = messages[chronoIndex];
+  final group = <ChatMessage>[anchor];
+  for (var j = chronoIndex + 1; j < messages.length; j++) {
+    final next = messages[j];
+    if (next.albumId == anchor.albumId &&
+        next.senderDeviceId == anchor.senderDeviceId) {
+      group.add(next);
+    } else {
+      break;
+    }
+  }
+  return group;
+}
+
 /// Sniffs the first few bytes for a known image magic number. Returns the
 /// MIME type string for matched formats, or null if no match. Used by the
 /// clipboard-copy path to avoid wrapping JPEG bytes in Formats.png when the
@@ -8404,6 +8496,79 @@ Future<void> bulkSaveAttachments(
   }
 }
 
+/// Telegram-style album bubble: shows N attachment tiles in a 2- or 3-column
+/// grid, sharing one outer container + the shared caption (carried on the
+/// first member). Each tile reuses `_AttachmentRow` so the existing Pause /
+/// Save / Copy actions stay one-tile-deep.
+class _AlbumBubble extends StatelessWidget {
+  const _AlbumBubble({
+    required this.members,
+    required this.controller,
+    required this.palette,
+    required this.outbound,
+  });
+
+  final List<ChatMessage> members;
+  final MessengerController controller;
+  final ConestPalette palette;
+  final bool outbound;
+
+  @override
+  Widget build(BuildContext context) {
+    final caption = members.isNotEmpty ? members.first.body : '';
+    final cols = members.length <= 2
+        ? 2
+        : (members.length <= 4 ? 2 : 3);
+    return Align(
+      alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 520),
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: outbound ? palette.outboundBubble : palette.inboundBubble,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            GridView.count(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisCount: cols,
+              mainAxisSpacing: 4,
+              crossAxisSpacing: 4,
+              childAspectRatio: 1.0,
+              children: [
+                for (final m in members)
+                  if (m.attachment != null)
+                    _AttachmentRow(
+                      descriptor: m.attachment!,
+                      outbound: outbound,
+                      controller: controller,
+                      palette: palette,
+                    ),
+              ],
+            ),
+            if (caption.trim().isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                caption,
+                style: TextStyle(
+                  color: outbound
+                      ? palette.outboundText
+                      : palette.inboundText,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _NewMessagesDivider extends StatelessWidget {
   const _NewMessagesDivider({required this.palette, required this.count});
 
@@ -8522,6 +8687,7 @@ class _AttachmentRow extends StatelessWidget {
   }
 
   bool get _isImage => descriptor.mimeType.startsWith('image/');
+  bool get _isVideo => descriptor.mimeType.startsWith('video/');
 
   String _saveKindFor(String mimeType) {
     if (mimeType.startsWith('image/')) return 'image';
@@ -8762,6 +8928,8 @@ class _AttachmentRow extends StatelessWidget {
           bytes: bytes,
           title: descriptor.fileName,
           palette: palette,
+          onCopy: () => _copyImageBytes(bytes),
+          onSave: () => _saveToDisk(context, bytes),
         ),
       ),
     );
@@ -8853,9 +9021,11 @@ class _AttachmentRow extends StatelessWidget {
       );
     }
 
-    final icon = _isImage
-        ? Icons.image_outlined
-        : Icons.insert_drive_file_outlined;
+    final icon = _isVideo
+        ? Icons.play_circle_outline
+        : (_isImage
+              ? Icons.image_outlined
+              : Icons.insert_drive_file_outlined);
     final String pauseSuffix;
     if (pauseState != null && pauseState.pausedByMe) {
       pauseSuffix = ' · Paused';
@@ -9056,11 +9226,15 @@ class _ImageViewerScreen extends StatelessWidget {
     required this.bytes,
     required this.title,
     required this.palette,
+    this.onCopy,
+    this.onSave,
   });
 
   final Uint8List bytes;
   final String title;
   final ConestPalette palette;
+  final Future<void> Function()? onCopy;
+  final Future<void> Function()? onSave;
 
   @override
   Widget build(BuildContext context) {
@@ -9070,6 +9244,20 @@ class _ImageViewerScreen extends StatelessWidget {
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         title: Text(title),
+        actions: [
+          if (onCopy != null)
+            IconButton(
+              icon: const Icon(Icons.copy_outlined),
+              tooltip: 'Copy',
+              onPressed: () => onCopy!(),
+            ),
+          if (onSave != null)
+            IconButton(
+              icon: const Icon(Icons.download_outlined),
+              tooltip: 'Save',
+              onPressed: () => onSave!(),
+            ),
+        ],
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
