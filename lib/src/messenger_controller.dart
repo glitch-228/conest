@@ -5644,6 +5644,9 @@ class MessengerController extends ChangeNotifier {
       case 'attachment_cancel':
         _handleAttachmentCancel(payload);
         return;
+      case 'attachment_pause_control':
+        _handleAttachmentPauseControl(contact, payload);
+        return;
     }
   }
 
@@ -5896,6 +5899,9 @@ class MessengerController extends ChangeNotifier {
       );
       await _sendAttachmentComplete(sender, chunk.attachmentId);
       notifyListeners();
+    } else if (state.paused) {
+      // Paused mid-transfer — sit on the chunks we have. The owner-only
+      // resume re-arms the retry timer and re-issues the next request.
     } else {
       _scheduleAttachmentRetry(chunk.attachmentId);
       await _sendAttachmentChunkRequest(
@@ -5910,15 +5916,28 @@ class MessengerController extends ChangeNotifier {
   /// [_inboundRetryLimit]; after that the inbound state is dropped so the
   /// bubble can transition out of the spinner via the existing UI guards.
   static const Duration _inboundRetryDelay = Duration(seconds: 5);
-  static const int _inboundRetryLimit = 5;
+  // Bumped from 5 to 12 in nightly.6 — large files over flaky LAN often
+  // need more than 5 stalls before the network steadies. 12 retries × 5 s
+  // = 60 s of glitching tolerated before the receiver abandons.
+  static const int _inboundRetryLimit = 12;
 
   void _scheduleAttachmentRetry(String attachmentId) {
     final state = _inboundAttachments[attachmentId];
     if (state == null) return;
+    // Don't burn retry budget while the transfer is paused — the owner
+    // will rearm explicitly on resume.
+    if (state.paused) {
+      state.retryTimer?.cancel();
+      return;
+    }
     state.retryTimer?.cancel();
     state.retryTimer = Timer(_inboundRetryDelay, () {
       final s = _inboundAttachments[attachmentId];
       if (s == null) return;
+      if (s.paused) {
+        // Became paused during the wait — drop without escalating.
+        return;
+      }
       final peer = _contactByDeviceId(s.peerDeviceId);
       if (peer == null) return;
       if (s.retryAttempts >= _inboundRetryLimit) {
@@ -5969,6 +5988,157 @@ class MessengerController extends ChangeNotifier {
       // Best-effort: receiver's parent message will be cleared on its own
       // local delete; the explicit cancel is a fast-path notification.
     }
+  }
+
+  /// Broadcasts the local pause/resume decision to the peer so they can
+  /// mirror the state. `pausedByMe = true` on this side translates to
+  /// `pausedByPeer = true` on the peer's mirror.
+  Future<void> _sendAttachmentPauseControl({
+    required ContactRecord peer,
+    required String attachmentId,
+    required bool paused,
+  }) async {
+    if (!hasIdentity) return;
+    final me = _requireIdentity();
+    final envelope = await _crypto.encryptPayloadEnvelope(
+      kind: 'attachment_pause_control',
+      messageId: _randomId('apause'),
+      conversationId: _crypto.conversationIdFor(peer.deviceId),
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: peer.deviceId,
+      contact: peer,
+      plaintext: jsonEncode({
+        'attachmentId': attachmentId,
+        'paused': paused,
+      }),
+    );
+    try {
+      await _deliverToContact(
+        contact: peer,
+        recipientDeviceId: peer.deviceId,
+        envelope: envelope,
+      );
+    } catch (error) {
+      appendDebugLog(
+        'Pause-control envelope to ${peer.alias} for $attachmentId '
+        '(paused=$paused) failed: $error',
+      );
+    }
+  }
+
+  void _handleAttachmentPauseControl(
+    ContactRecord sender,
+    Map<String, dynamic> payload,
+  ) {
+    final attachmentId = payload['attachmentId'] as String?;
+    final paused = payload['paused'] as bool?;
+    if (attachmentId == null || paused == null) return;
+    // Mirror on whichever side(s) hold state for this attachment.
+    final outbound = _outboundAttachments[attachmentId];
+    if (outbound != null && outbound.peerDeviceId == sender.deviceId) {
+      outbound.pausedByPeer = paused;
+    }
+    final inbound = _inboundAttachments[attachmentId];
+    if (inbound != null && inbound.peerDeviceId == sender.deviceId) {
+      inbound.pausedByPeer = paused;
+      if (paused) {
+        inbound.retryTimer?.cancel();
+      } else if (!inbound.pausedByMe) {
+        _scheduleAttachmentRetry(attachmentId);
+        unawaited(
+          _sendAttachmentChunkRequest(
+            sender,
+            attachmentId,
+            inbound.nextMissingIndex,
+          ),
+        );
+      }
+    }
+    appendDebugLog(
+      'Peer ${sender.alias} ${paused ? "paused" : "resumed"} '
+      'attachment $attachmentId.',
+    );
+    notifyListeners();
+  }
+
+  /// Pauses an in-flight attachment from this side. The peer is notified so
+  /// their UI can render "Paused by ${me.displayName}" with a disabled
+  /// resume button. Only the side that initiated the pause may resume; the
+  /// other side can still cancel/delete to terminate.
+  Future<void> pauseAttachment(String attachmentId) async {
+    final outbound = _outboundAttachments[attachmentId];
+    final inbound = _inboundAttachments[attachmentId];
+    final peerDeviceId = outbound?.peerDeviceId ?? inbound?.peerDeviceId;
+    if (peerDeviceId == null) return;
+    final peer = _contactByDeviceId(peerDeviceId);
+    if (peer == null) return;
+    if (outbound != null) outbound.pausedByMe = true;
+    if (inbound != null) {
+      inbound.pausedByMe = true;
+      inbound.retryTimer?.cancel();
+    }
+    notifyListeners();
+    await _sendAttachmentPauseControl(
+      peer: peer,
+      attachmentId: attachmentId,
+      paused: true,
+    );
+  }
+
+  /// Resumes a paused attachment — only meaningful when this side is the
+  /// one who paused it. If the peer paused, this call is a no-op.
+  Future<void> resumeAttachment(String attachmentId) async {
+    final outbound = _outboundAttachments[attachmentId];
+    final inbound = _inboundAttachments[attachmentId];
+    final peerDeviceId = outbound?.peerDeviceId ?? inbound?.peerDeviceId;
+    if (peerDeviceId == null) return;
+    final peer = _contactByDeviceId(peerDeviceId);
+    if (peer == null) return;
+    if ((outbound?.pausedByMe ?? false) == false &&
+        (inbound?.pausedByMe ?? false) == false) {
+      return;
+    }
+    if (outbound != null) outbound.pausedByMe = false;
+    if (inbound != null) {
+      inbound.pausedByMe = false;
+      if (!inbound.pausedByPeer) {
+        _scheduleAttachmentRetry(attachmentId);
+        unawaited(
+          _sendAttachmentChunkRequest(
+            peer,
+            attachmentId,
+            inbound.nextMissingIndex,
+          ),
+        );
+      }
+    }
+    notifyListeners();
+    await _sendAttachmentPauseControl(
+      peer: peer,
+      attachmentId: attachmentId,
+      paused: false,
+    );
+  }
+
+  /// Pause-state for the UI. Returns (pausedByMe, pausedByPeer) — null
+  /// when no in-flight transfer exists for [attachmentId].
+  ({bool pausedByMe, bool pausedByPeer})? pauseStateFor(String attachmentId) {
+    final outbound = _outboundAttachments[attachmentId];
+    if (outbound != null) {
+      return (
+        pausedByMe: outbound.pausedByMe,
+        pausedByPeer: outbound.pausedByPeer,
+      );
+    }
+    final inbound = _inboundAttachments[attachmentId];
+    if (inbound != null) {
+      return (
+        pausedByMe: inbound.pausedByMe,
+        pausedByPeer: inbound.pausedByPeer,
+      );
+    }
+    return null;
   }
 
   Future<void> _sendAttachmentComplete(

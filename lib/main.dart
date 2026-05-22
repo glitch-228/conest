@@ -8802,10 +8802,12 @@ class _AttachmentRow extends StatelessWidget {
         ? controller.outboundQueuePositionFor(descriptor.id)
         : 0;
     final progress = outboundProgress ?? inboundProgress;
+    final pauseState = controller.pauseStateFor(descriptor.id);
     final textColor = outbound ? palette.outboundText : palette.inboundText;
     final metaColor = outbound ? palette.outboundMeta : palette.inboundMeta;
     final hasBytes = bytes != null;
     final showImage = _isImage && hasBytes;
+    final transferInFlight = outboundProgress != null || inboundProgress != null;
 
     if (showImage) {
       return Column(
@@ -8854,13 +8856,21 @@ class _AttachmentRow extends StatelessWidget {
     final icon = _isImage
         ? Icons.image_outlined
         : Icons.insert_drive_file_outlined;
+    final String pauseSuffix;
+    if (pauseState != null && pauseState.pausedByMe) {
+      pauseSuffix = ' · Paused';
+    } else if (pauseState != null && pauseState.pausedByPeer) {
+      pauseSuffix = ' · Paused by peer';
+    } else {
+      pauseSuffix = '';
+    }
     final String statusLine;
     if (hasBytes && !outbound) {
       statusLine = _formatBytes(descriptor.sizeBytes);
     } else if (outbound && outboundProgress != null) {
       statusLine =
           'Sending · ${(outboundProgress * 100).toStringAsFixed(0)}% · '
-          '${_formatBytes(descriptor.sizeBytes)}';
+          '${_formatBytes(descriptor.sizeBytes)}$pauseSuffix';
     } else if (outbound && queuePosition > 0) {
       statusLine =
           'Queued · #$queuePosition · ${_formatBytes(descriptor.sizeBytes)}';
@@ -8869,7 +8879,7 @@ class _AttachmentRow extends StatelessWidget {
     } else if (progress != null) {
       statusLine =
           'Transferring · ${(progress * 100).toStringAsFixed(0)}% · '
-          '${_formatBytes(descriptor.sizeBytes)}';
+          '${_formatBytes(descriptor.sizeBytes)}$pauseSuffix';
     } else {
       statusLine = 'Transferring · ${_formatBytes(descriptor.sizeBytes)}';
     }
@@ -8930,7 +8940,13 @@ class _AttachmentRow extends StatelessWidget {
               ),
             ),
           ],
-          if (hasBytes) ...[
+          if (transferInFlight) ...[
+            const SizedBox(height: 8),
+            _AttachmentActions(
+              metaColor: metaColor,
+              actions: _pauseActionsFor(pauseState),
+            ),
+          ] else if (hasBytes) ...[
             const SizedBox(height: 8),
             _AttachmentActions(
               metaColor: metaColor,
@@ -8951,6 +8967,43 @@ class _AttachmentRow extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// Action row shown while a transfer is in flight. Bilateral pause:
+  /// only the side that paused can resume; the other side sees a disabled
+  /// resume affordance.
+  List<_AttachmentAction> _pauseActionsFor(
+    ({bool pausedByMe, bool pausedByPeer})? state,
+  ) {
+    final pausedByMe = state?.pausedByMe ?? false;
+    final pausedByPeer = state?.pausedByPeer ?? false;
+    if (pausedByMe) {
+      return [
+        _AttachmentAction(
+          icon: Icons.play_arrow_outlined,
+          label: 'Resume',
+          onTap: () => controller.resumeAttachment(descriptor.id),
+        ),
+      ];
+    }
+    if (pausedByPeer) {
+      return [
+        _AttachmentAction(
+          icon: Icons.pause_circle_outline,
+          label: 'Paused by peer',
+          onTap: () async => controller.setStatus(
+            'Only the peer who paused can resume the transfer.',
+          ),
+        ),
+      ];
+    }
+    return [
+      _AttachmentAction(
+        icon: Icons.pause_outlined,
+        label: 'Pause',
+        onTap: () => controller.pauseAttachment(descriptor.id),
+      ),
+    ];
   }
 }
 
