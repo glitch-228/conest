@@ -2995,6 +2995,23 @@ class MessengerController extends ChangeNotifier {
   /// them is sub-second on modern devices.
   static const int _attachmentChunkSize = 32 * 1024;
 
+  /// When the only route to a contact is LAN, the size cap lifts to this
+  /// value — LAN bandwidth + chunk size aren't constrained by the relay's
+  /// envelope cap, and the user explicitly opted into LAN-only mode.
+  static const int _lanUnlimitedAttachmentCap = 2 * 1024 * 1024 * 1024;
+
+  /// Returns the cap that applies to attachments destined for [contact]
+  /// given its current effective routes. If LAN is the ONLY transport in
+  /// the candidate set (either because the user disabled online for the
+  /// contact or because no relay/direct-internet route is healthy), the
+  /// LAN-unlimited cap applies. Otherwise the standard 30 MB cap holds.
+  int effectiveMaxAttachmentSizeFor(ContactRecord contact) {
+    final effective = _effectiveTransports(contact);
+    if (!effective.lan) return maxAttachmentSizeBytes;
+    if (effective.online) return maxAttachmentSizeBytes;
+    return _lanUnlimitedAttachmentCap;
+  }
+
   /// Maximum number of attachments accepted in one user-triggered batch
   /// (multi-file picker, drag-and-drop, mobile gallery multi-select). Each
   /// file still has to clear `maxAttachmentSizeBytes` individually; the
@@ -3040,10 +3057,11 @@ class MessengerController extends ChangeNotifier {
     if (bytes.isEmpty) {
       throw ArgumentError('Cannot send an empty file.');
     }
-    if (bytes.length > maxAttachmentSizeBytes) {
+    final perContactCap = effectiveMaxAttachmentSizeFor(contact);
+    if (bytes.length > perContactCap) {
+      final mb = perContactCap ~/ (1024 * 1024);
       throw ArgumentError(
-        'Attachment exceeds the ${maxAttachmentSizeBytes ~/ (1024 * 1024)} '
-        'MB v0.3.2 cap.',
+        'Attachment exceeds the $mb MB cap for this contact.',
       );
     }
 
