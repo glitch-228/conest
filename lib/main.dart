@@ -1532,12 +1532,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return false;
     }
     // Try image formats first.
-    final imageFormats = [
-      Formats.png,
-      Formats.jpeg,
-      Formats.gif,
-      Formats.webp,
-    ];
+    final imageFormats = [Formats.png, Formats.jpeg, Formats.gif, Formats.webp];
     for (final fmt in imageFormats) {
       if (reader.canProvide(fmt)) {
         final completer = Completer<Uint8List?>();
@@ -1556,9 +1551,7 @@ class _HomeScreenState extends State<HomeScreen> {
         final bytes = await completer.future;
         if (bytes == null || bytes.isEmpty) continue;
         final mime = sniffImageMimeType(bytes) ?? 'image/png';
-        final ext = mime == 'image/jpeg'
-            ? 'jpg'
-            : mime.split('/').last;
+        final ext = mime == 'image/jpeg' ? 'jpg' : mime.split('/').last;
         await _sendAttachmentBytes(
           contact: contact,
           bytes: bytes,
@@ -3440,10 +3433,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
         controller.groupMemberLabel(senderId);
   }
 
-  Widget _buildAlbumBubble(
-    BuildContext context,
-    List<ChatMessage> members,
-  ) {
+  Widget _buildAlbumBubble(BuildContext context, List<ChatMessage> members) {
     if (members.isEmpty) return const SizedBox.shrink();
     return _AlbumBubble(
       members: members,
@@ -4209,10 +4199,7 @@ class _ChatPanelState extends State<_ChatPanel> {
     return message.replySenderDisplayName ?? 'Message';
   }
 
-  Widget _buildAlbumBubble(
-    BuildContext context,
-    List<ChatMessage> members,
-  ) {
+  Widget _buildAlbumBubble(BuildContext context, List<ChatMessage> members) {
     if (members.isEmpty) return const SizedBox.shrink();
     return _AlbumBubble(
       members: members,
@@ -8645,9 +8632,7 @@ class _AlbumBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final caption = members.isNotEmpty ? members.first.body : '';
-    final cols = members.length <= 2
-        ? 2
-        : (members.length <= 4 ? 2 : 3);
+    final cols = members.length <= 2 ? 2 : (members.length <= 4 ? 2 : 3);
     return Align(
       alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -8685,9 +8670,7 @@ class _AlbumBubble extends StatelessWidget {
               Text(
                 caption,
                 style: TextStyle(
-                  color: outbound
-                      ? palette.outboundText
-                      : palette.inboundText,
+                  color: outbound ? palette.outboundText : palette.inboundText,
                 ),
               ),
             ],
@@ -9091,7 +9074,9 @@ class _AttachmentRow extends StatelessWidget {
       );
     }
     final bytes = controller.attachmentBytesFor(descriptor.id);
-    final inboundProgress = controller.attachmentTransferProgress(descriptor.id);
+    final inboundProgress = controller.attachmentTransferProgress(
+      descriptor.id,
+    );
     final outboundProgress = outbound
         ? controller.outboundAttachmentProgress(descriptor.id)
         : null;
@@ -9104,7 +9089,8 @@ class _AttachmentRow extends StatelessWidget {
     final metaColor = outbound ? palette.outboundMeta : palette.inboundMeta;
     final hasBytes = bytes != null;
     final showImage = _isImage && hasBytes;
-    final transferInFlight = outboundProgress != null || inboundProgress != null;
+    final transferInFlight =
+        outboundProgress != null || inboundProgress != null;
 
     if (showImage) {
       return Column(
@@ -9152,9 +9138,7 @@ class _AttachmentRow extends StatelessWidget {
 
     final icon = _isVideo
         ? Icons.play_circle_outline
-        : (_isImage
-              ? Icons.image_outlined
-              : Icons.insert_drive_file_outlined);
+        : (_isImage ? Icons.image_outlined : Icons.insert_drive_file_outlined);
     final String pauseSuffix;
     if (pauseState != null && pauseState.pausedByMe) {
       pauseSuffix = ' · Paused';

@@ -6047,10 +6047,7 @@ class MessengerController extends ChangeNotifier {
       senderDeviceId: me.deviceId,
       recipientDeviceId: peer.deviceId,
       contact: peer,
-      plaintext: jsonEncode({
-        'attachmentId': attachmentId,
-        'paused': paused,
-      }),
+      plaintext: jsonEncode({'attachmentId': attachmentId, 'paused': paused}),
     );
     try {
       await _deliverToContact(
@@ -8584,10 +8581,7 @@ class MessengerController extends ChangeNotifier {
   /// disables LAN or online, the matching transport is rejected for INBOUND
   /// envelopes too. Returns true when the current effective prefs would
   /// reject the ingress kind for [contact].
-  bool _droppedByIngressMode(
-    ContactRecord contact,
-    PeerRouteKind ingressKind,
-  ) {
+  bool _droppedByIngressMode(ContactRecord contact, PeerRouteKind ingressKind) {
     final effective = _effectiveTransports(contact);
     switch (ingressKind) {
       case PeerRouteKind.lan:
@@ -10803,10 +10797,9 @@ class MessengerController extends ChangeNotifier {
     if (!hasIdentity) {
       return;
     }
-    final processed = await _processEnvelopes(
-      [envelope],
-      ingressKind: PeerRouteKind.lan,
-    );
+    final processed = await _processEnvelopes([
+      envelope,
+    ], ingressKind: PeerRouteKind.lan);
     if (processed > 0) {
       _markRuntimeActivity();
       _setTransientStatus(

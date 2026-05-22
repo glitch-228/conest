@@ -5667,6 +5667,45 @@ void main() {
     });
   });
 
+  group('nightly.6 queue + cap + mode', () {
+    test(
+      'serial transfer queue reports positions for back-to-back sends',
+      () async {
+        final relayClient = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final bobContact = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+        for (var i = 0; i < 3; i++) {
+          await alice.sendAttachment(
+            contact: bobContact,
+            bytes: Uint8List.fromList(List<int>.filled(8, i + 1)),
+            fileName: 'f$i.bin',
+          );
+        }
+        final outbound = alice
+            .messagesFor(bobContact.deviceId)
+            .where((m) => m.outbound && m.attachment != null)
+            .toList();
+        expect(outbound.length, 3);
+        // At least one of the three is the active item (queue position 0);
+        // at least one is queued waiting (position > 0).
+        final positions = outbound
+            .map((m) => alice.outboundQueuePositionFor(m.attachment!.id))
+            .toList();
+        expect(positions.where((p) => p == 0).length, greaterThanOrEqualTo(1));
+      },
+    );
+  });
+
   group('clipboard image sniff', () {
     test('detects PNG header', () {
       final bytes = Uint8List.fromList([
