@@ -46,6 +46,7 @@ const String _lanLobbyMailboxId = 'lan-lobby-v1';
 const String _lanLobbyConversationId = 'conv-lan-lobby';
 const Duration _foregroundActivePollInterval = Duration(seconds: 5);
 const Duration _foregroundIdlePollInterval = Duration(seconds: 15);
+
 /// Cadence used while at least one attachment transfer is in flight. The
 /// idle 15 s cadence killed file transfers that fell back to relay polling
 /// (each chunk RTT stretched into 15 s of wait). 1 s strikes a balance
@@ -610,8 +611,7 @@ class MessengerController extends ChangeNotifier {
   /// poll cadence so chunk envelopes don't queue behind the idle 15 s
   /// poll interval. Public so the Debug bundle can surface the boost.
   bool get hasActiveTransfer =>
-      _inboundAttachments.isNotEmpty ||
-      _activeOutboundByContact.isNotEmpty;
+      _inboundAttachments.isNotEmpty || _activeOutboundByContact.isNotEmpty;
 
   Duration _heartbeatIntervalForCurrentRuntime(IdentityRecord me) {
     if (!_appInForeground) {
@@ -6034,9 +6034,7 @@ class MessengerController extends ChangeNotifier {
         'chunk_req tx → ${sender.alias} idx=$next '
         'attachmentId=${state.descriptor.id}',
       );
-      unawaited(
-        _sendAttachmentChunkRequest(sender, state.descriptor.id, next),
-      );
+      unawaited(_sendAttachmentChunkRequest(sender, state.descriptor.id, next));
     }
   }
 

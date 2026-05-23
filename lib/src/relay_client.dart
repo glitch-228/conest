@@ -510,11 +510,7 @@ class RelayClient {
             port,
             timeout: timeout,
           ).timeout(timeout)
-        : await Socket.connect(
-            host,
-            port,
-            timeout: timeout,
-          ).timeout(timeout);
+        : await Socket.connect(host, port, timeout: timeout).timeout(timeout);
     try {
       final requestBody = utf8.encode(jsonEncode(request));
       final hostHeader = _httpHostHeader(host, port);

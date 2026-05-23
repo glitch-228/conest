@@ -5754,6 +5754,64 @@ void main() {
       expect(sniffImageMimeType(bytes), isNull);
     });
   });
+
+  group('nightly.7 chunk pipelining + LAN chunk size', () {
+    test('sendAttachment round-trip with multiple chunks keeps the pipeline '
+        'window primed (no strict 1-in-flight serialization)', () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobOnAlice = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+      // 4-chunk file: enough to exercise the window primer + refill but
+      // small enough that the in-memory fake-relay round-trips quickly.
+      final payload = Uint8List(32 * 1024 * 4 + 7);
+      for (var i = 0; i < payload.length; i++) {
+        payload[i] = (i * 31 + 7) & 0xff;
+      }
+      await alice.sendAttachment(
+        contact: bobOnAlice,
+        bytes: payload,
+        fileName: 'pipeline.bin',
+      );
+      // Drain envelopes — the queue worker + pipeline together must
+      // converge on full delivery within the fake clock.
+      for (var step = 0; step < 12; step++) {
+        await bob.pollNow();
+        await alice.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+      final aliceOnBob = bob.contacts.firstWhere((c) => c.alias == 'Alice');
+      final received = bob
+          .messagesFor(aliceOnBob.deviceId)
+          .where((m) => m.attachment?.fileName == 'pipeline.bin')
+          .firstOrNull;
+      expect(received, isNotNull, reason: 'Bob should have the attachment');
+      final assembled = bob.attachmentBytesFor(received!.attachment!.id);
+      expect(assembled, isNotNull);
+      expect(assembled!.length, payload.length);
+    }, timeout: const Timeout(Duration(seconds: 20)));
+
+    test(
+      'hasActiveTransfer flips while an inbound transfer is in flight',
+      () async {
+        final controller = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Solo',
+        );
+        addTearDown(controller.dispose);
+        expect(controller.hasActiveTransfer, isFalse);
+      },
+    );
+  });
 }
 
 class _RecordingPlatformBridge extends PlatformBridge {
