@@ -5755,24 +5755,23 @@ class MessengerController extends ChangeNotifier {
       albumId: payload['albumId'] as String?,
     );
     _upsertMessage(sender.deviceId, message);
-    _inboundAttachments[descriptor.id] = _InboundAttachmentState(
+    final inboundState = _InboundAttachmentState(
       messageId: message.id,
       peerDeviceId: sender.deviceId,
       descriptor: descriptor,
     );
+    _inboundAttachments[descriptor.id] = inboundState;
     // Schedule a retry timer that re-requests the next missing chunk if no
-    // chunk arrives within 5 s. Caps at 5 retries before giving up.
+    // chunk arrives within 5 s. Caps at 12 retries before giving up.
     _scheduleAttachmentRetry(descriptor.id);
     notifyListeners();
-    // Schedule the first chunk request as a microtask so it lands AFTER the
+    // Prime the chunk-request window as a microtask so it lands AFTER the
     // current `_processEnvelopes` batch commits its state. Without this,
     // back-to-back offers (multi-file send) could race: file 1's chunk
-    // request could fire before file 1's `_outboundAttachments` entry on the
-    // sender side was visible to the chunk-request handler that bounces
-    // through the local-relay loopback.
-    Future.microtask(
-      () => _sendAttachmentChunkRequest(sender, descriptor.id, 0),
-    );
+    // request could fire before file 1's `_outboundAttachments` entry on
+    // the sender side was visible to the chunk-request handler that
+    // bounces through the local-relay loopback.
+    Future.microtask(() => _topUpInboundWindow(inboundState, sender));
   }
 
   Future<void> _sendAttachmentChunkRequest(
@@ -5905,8 +5904,8 @@ class MessengerController extends ChangeNotifier {
     final digest = await Sha256().hash(bytes);
     final expectedHash = state.descriptor.chunkHashes[chunk.index].hashBase64;
     if (base64Encode(digest.bytes) != expectedHash) {
-      // Hash mismatch — request the chunk once more. If it fails again we
-      // cancel the transfer.
+      // Hash mismatch — re-request this specific index. Leave it on the
+      // requestedInFlight set so the window doesn't double-request.
       await _sendAttachmentChunkRequest(
         sender,
         chunk.attachmentId,
@@ -5915,9 +5914,15 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     state.received[chunk.index] = bytes;
+    // Whatever the path was, this index is no longer outstanding.
+    state.requestedInFlight.remove(chunk.index);
     // Reset the retry budget on any successful chunk arrival; the transfer
     // is making forward progress so we don't need to escalate.
     state.retryAttempts = 0;
+    appendDebugLog(
+      'chunk_resp rx ← ${sender.alias} idx=${chunk.index} '
+      '${bytes.length}B attachmentId=${chunk.attachmentId}',
+    );
     if (state.isComplete) {
       state.retryTimer?.cancel();
       final builder = BytesBuilder();
@@ -5943,11 +5948,9 @@ class MessengerController extends ChangeNotifier {
       // resume re-arms the retry timer and re-issues the next request.
     } else {
       _scheduleAttachmentRetry(chunk.attachmentId);
-      await _sendAttachmentChunkRequest(
-        sender,
-        chunk.attachmentId,
-        state.nextMissingIndex,
-      );
+      // Pipelined refill: keep up to _inboundChunkWindow requests in
+      // flight so a slow path doesn't serialize on per-chunk RTT.
+      _topUpInboundWindow(state, sender);
     }
   }
 
@@ -5959,6 +5962,34 @@ class MessengerController extends ChangeNotifier {
   // need more than 5 stalls before the network steadies. 12 retries × 5 s
   // = 60 s of glitching tolerated before the receiver abandons.
   static const int _inboundRetryLimit = 12;
+
+  /// How many chunk requests the receiver keeps outstanding at any one
+  /// time. Strict request-response (window = 1) made every chunk wait for
+  /// a full RTT; window = 4 cuts the wall-clock time roughly 4× on LAN
+  /// and amortizes relay-poll cadence for the fallback path.
+  static const int _inboundChunkWindow = 4;
+
+  /// Tops up the inbound chunk-request window for [state] so up to
+  /// [_inboundChunkWindow] requests are in flight. Idempotent — call after
+  /// every chunk arrival, on offer accept, and on resume.
+  void _topUpInboundWindow(
+    _InboundAttachmentState state,
+    ContactRecord sender,
+  ) {
+    if (state.paused) return;
+    while (state.requestedInFlight.length < _inboundChunkWindow) {
+      final next = state.nextUnrequestedIndex();
+      if (next < 0) break;
+      state.requestedInFlight.add(next);
+      appendDebugLog(
+        'chunk_req tx → ${sender.alias} idx=$next '
+        'attachmentId=${state.descriptor.id}',
+      );
+      unawaited(
+        _sendAttachmentChunkRequest(sender, state.descriptor.id, next),
+      );
+    }
+  }
 
   void _scheduleAttachmentRetry(String attachmentId) {
     final state = _inboundAttachments[attachmentId];
@@ -6082,13 +6113,10 @@ class MessengerController extends ChangeNotifier {
         inbound.retryTimer?.cancel();
       } else if (!inbound.pausedByMe) {
         _scheduleAttachmentRetry(attachmentId);
-        unawaited(
-          _sendAttachmentChunkRequest(
-            sender,
-            attachmentId,
-            inbound.nextMissingIndex,
-          ),
-        );
+        // Resume fans out a fresh window of requests so the transfer
+        // doesn't single-step its way back up to the pipeline depth.
+        inbound.requestedInFlight.clear();
+        _topUpInboundWindow(inbound, sender);
       }
     }
     appendDebugLog(
@@ -6140,13 +6168,9 @@ class MessengerController extends ChangeNotifier {
       inbound.pausedByMe = false;
       if (!inbound.pausedByPeer) {
         _scheduleAttachmentRetry(attachmentId);
-        unawaited(
-          _sendAttachmentChunkRequest(
-            peer,
-            attachmentId,
-            inbound.nextMissingIndex,
-          ),
-        );
+        // Resume fans out a fresh window so we don't single-step back.
+        inbound.requestedInFlight.clear();
+        _topUpInboundWindow(inbound, peer);
       }
     }
     notifyListeners();
@@ -10989,9 +11013,26 @@ class _InboundAttachmentState {
   bool pausedByPeer = false;
   bool get paused => pausedByMe || pausedByPeer;
 
+  /// Indices we've asked the sender for and not yet received. Used to keep
+  /// up to `MessengerController._inboundChunkWindow` requests outstanding
+  /// so a slow path doesn't serialize on per-chunk RTT.
+  final Set<int> requestedInFlight = <int>{};
+
   int get nextMissingIndex {
     for (var i = 0; i < received.length; i++) {
       if (received[i] == null) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /// Like [nextMissingIndex] but also skips chunks we already have a
+  /// request out for. Used by the windowed top-up loop to avoid asking
+  /// for the same chunk twice.
+  int nextUnrequestedIndex() {
+    for (var i = 0; i < received.length; i++) {
+      if (received[i] == null && !requestedInFlight.contains(i)) {
         return i;
       }
     }
