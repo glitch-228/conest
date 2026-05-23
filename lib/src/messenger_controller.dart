@@ -3015,6 +3015,13 @@ class MessengerController extends ChangeNotifier {
   /// them is sub-second on modern devices.
   static const int _attachmentChunkSize = 32 * 1024;
 
+  /// LAN-friendly chunk size used when the only route to a contact is
+  /// LAN. The relay's 256 KB envelope cap doesn't apply to LAN-loopback
+  /// envelopes (they aren't store-and-forwarded by the public relay), so
+  /// we can ship 8× larger chunks per RTT — cuts a 30 MB transfer from
+  /// ~960 round-trips to ~120.
+  static const int _lanAttachmentChunkSize = 256 * 1024;
+
   /// When the only route to a contact is LAN, the size cap lifts to this
   /// value — LAN bandwidth + chunk size aren't constrained by the relay's
   /// envelope cap, and the user explicitly opted into LAN-only mode.
@@ -3030,6 +3037,17 @@ class MessengerController extends ChangeNotifier {
     if (!effective.lan) return maxAttachmentSizeBytes;
     if (effective.online) return maxAttachmentSizeBytes;
     return _lanUnlimitedAttachmentCap;
+  }
+
+  /// Picks the chunk size to use when slicing a new outbound attachment.
+  /// LAN-only contacts get the larger LAN chunk size since their chunk
+  /// envelopes never traverse the relay's 256 KB envelope cap.
+  int _effectiveChunkSizeFor(ContactRecord contact) {
+    final effective = _effectiveTransports(contact);
+    if (effective.lan && !effective.online) {
+      return _lanAttachmentChunkSize;
+    }
+    return _attachmentChunkSize;
   }
 
   /// Maximum number of attachments accepted in one user-triggered batch
@@ -3086,7 +3104,7 @@ class MessengerController extends ChangeNotifier {
     }
 
     final attachmentId = _randomId('att');
-    final chunkSize = _attachmentChunkSize;
+    final chunkSize = _effectiveChunkSizeFor(contact);
     final chunkBytes = <Uint8List>[];
     final chunkHashes = <ChunkHash>[];
     for (var offset = 0; offset < bytes.length; offset += chunkSize) {
