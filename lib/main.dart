@@ -3515,6 +3515,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         outbound: outbound,
                         palette: palette,
                         controller: controller,
+                        messageState: message.state,
                       ),
                       if (message.body.isNotEmpty) const SizedBox(height: 8),
                     ],
@@ -4277,6 +4278,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                         outbound: outbound,
                         palette: palette,
                         controller: controller,
+                        messageState: message.state,
                       ),
                       if (message.body.isNotEmpty) const SizedBox(height: 8),
                     ],
@@ -8662,6 +8664,7 @@ class _AlbumBubble extends StatelessWidget {
                       outbound: outbound,
                       controller: controller,
                       palette: palette,
+                      messageState: m.state,
                     ),
               ],
             ),
@@ -8785,12 +8788,14 @@ class _AttachmentRow extends StatelessWidget {
     required this.outbound,
     required this.palette,
     required this.controller,
+    required this.messageState,
   });
 
   final AttachmentDescriptor descriptor;
   final bool outbound;
   final ConestPalette palette;
   final MessengerController controller;
+  final DeliveryState messageState;
 
   String _formatBytes(int size) {
     if (size < 1024) return '$size B';
@@ -9148,7 +9153,15 @@ class _AttachmentRow extends StatelessWidget {
       pauseSuffix = '';
     }
     final String statusLine;
-    if (hasBytes && !outbound) {
+    // A Failed message must never show "Transferring …" — the retry cap
+    // or the sender's 60 s stall flipped the state and the bubble should
+    // surface that instead of the indefinite spinner that battle tests
+    // surfaced in nightly.6.
+    if (messageState == DeliveryState.failed) {
+      statusLine =
+          'Failed · ${_formatBytes(descriptor.sizeBytes)}'
+          '${outbound ? " · tap to retry" : ""}';
+    } else if (hasBytes && !outbound) {
       statusLine = _formatBytes(descriptor.sizeBytes);
     } else if (outbound && outboundProgress != null) {
       statusLine =
