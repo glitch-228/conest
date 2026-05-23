@@ -388,7 +388,17 @@ class RelayClient {
     required Duration timeout,
     required Map<String, dynamic> request,
   }) async {
-    final socket = await Socket.connect(host, port, timeout: timeout);
+    // Socket.connect's `timeout:` parameter governs the TCP handshake,
+    // but Dart's implementation has historically been flaky on Android +
+    // some Linux distros — connects to black-hole hosts can sit for
+    // 25 s+ (observed in nightly.6 battle tests). Wrap the connect call
+    // itself with a hard `.timeout()` so we never sit longer than the
+    // caller asked.
+    final socket = await Socket.connect(
+      host,
+      port,
+      timeout: timeout,
+    ).timeout(timeout);
     try {
       socket.writeln(jsonEncode(request));
       await socket.flush();
@@ -491,9 +501,20 @@ class RelayClient {
     required Duration timeout,
     required Map<String, dynamic> request,
   }) async {
+    // Belt-and-suspenders timeout wrap mirrors _sendTcpRequest above —
+    // see the comment there for the nightly.6 25 s observation that
+    // prompted this hard cap.
     final socket = scheme == 'https'
-        ? await SecureSocket.connect(host, port, timeout: timeout)
-        : await Socket.connect(host, port, timeout: timeout);
+        ? await SecureSocket.connect(
+            host,
+            port,
+            timeout: timeout,
+          ).timeout(timeout)
+        : await Socket.connect(
+            host,
+            port,
+            timeout: timeout,
+          ).timeout(timeout);
     try {
       final requestBody = utf8.encode(jsonEncode(request));
       final hostHeader = _httpHostHeader(host, port);
