@@ -46,6 +46,11 @@ const String _lanLobbyMailboxId = 'lan-lobby-v1';
 const String _lanLobbyConversationId = 'conv-lan-lobby';
 const Duration _foregroundActivePollInterval = Duration(seconds: 5);
 const Duration _foregroundIdlePollInterval = Duration(seconds: 15);
+/// Cadence used while at least one attachment transfer is in flight. The
+/// idle 15 s cadence killed file transfers that fell back to relay polling
+/// (each chunk RTT stretched into 15 s of wait). 1 s strikes a balance
+/// between battery cost and getting chunks through quickly.
+const Duration _activeTransferPollInterval = Duration(seconds: 1);
 const Duration _backgroundEnabledPollInterval = Duration(seconds: 30);
 const Duration _desktopBackgroundPollInterval = Duration(seconds: 15);
 const Duration _runtimeActiveWindow = Duration(seconds: 20);
@@ -580,6 +585,13 @@ class MessengerController extends ChangeNotifier {
     if (me == null) {
       return null;
     }
+    // Boost while any attachment transfer is in flight (sending or
+    // receiving). Without this the idle 15 s cadence stretched every
+    // chunk that fell back to relay polling into a 15 s wait — see the
+    // 95 KB-at-33% / 238 KB-at-25% reports from nightly.6 battle tests.
+    if (hasActiveTransfer) {
+      return _activeTransferPollInterval;
+    }
     return switch (_runtimeMode) {
       _RuntimeMode.foregroundActive => _foregroundActivePollInterval,
       _RuntimeMode.foregroundIdle => _foregroundIdlePollInterval,
@@ -592,6 +604,14 @@ class MessengerController extends ChangeNotifier {
       _RuntimeMode.backgroundDisabledAndroid => null,
     };
   }
+
+  /// True when at least one inbound or outbound attachment transfer is
+  /// currently in flight. Used by [_currentPollInterval] to boost the
+  /// poll cadence so chunk envelopes don't queue behind the idle 15 s
+  /// poll interval. Public so the Debug bundle can surface the boost.
+  bool get hasActiveTransfer =>
+      _inboundAttachments.isNotEmpty ||
+      _activeOutboundByContact.isNotEmpty;
 
   Duration _heartbeatIntervalForCurrentRuntime(IdentityRecord me) {
     if (!_appInForeground) {
@@ -3170,10 +3190,12 @@ class MessengerController extends ChangeNotifier {
       _pumpOutboundQueue(contact);
       return;
     }
+    final wasIdle = !hasActiveTransfer;
     _activeOutboundByContact[contact.deviceId] = next;
     state.activatedAt = DateTime.now().toUtc();
     state.lastChunkAt = state.activatedAt;
     _armOutboundStallTimer(contact);
+    if (wasIdle) _reschedulePolling();
     unawaited(_dispatchAttachmentOffer(contact, state));
     notifyListeners();
   }
@@ -3276,6 +3298,8 @@ class MessengerController extends ChangeNotifier {
     if (_activeOutboundByContact[peerDeviceId] == attachmentId) {
       _activeOutboundByContact.remove(peerDeviceId);
       _outboundStallTimers.remove(peerDeviceId)?.cancel();
+      // Drop back to idle cadence if no transfer is in flight anywhere.
+      if (!hasActiveTransfer) _reschedulePolling();
     }
   }
 
@@ -5755,12 +5779,17 @@ class MessengerController extends ChangeNotifier {
       albumId: payload['albumId'] as String?,
     );
     _upsertMessage(sender.deviceId, message);
+    final wasIdle = !hasActiveTransfer;
     final inboundState = _InboundAttachmentState(
       messageId: message.id,
       peerDeviceId: sender.deviceId,
       descriptor: descriptor,
     );
     _inboundAttachments[descriptor.id] = inboundState;
+    // Active transfer just started — boost the poll cadence so chunk
+    // envelopes that fall back to relay polling get picked up in 1 s
+    // instead of the idle 15 s.
+    if (wasIdle) _reschedulePolling();
     // Schedule a retry timer that re-requests the next missing chunk if no
     // chunk arrives within 5 s. Caps at 12 retries before giving up.
     _scheduleAttachmentRetry(descriptor.id);
@@ -5895,6 +5924,7 @@ class MessengerController extends ChangeNotifier {
     if (_messageById(state.peerDeviceId, state.messageId) == null) {
       state.retryTimer?.cancel();
       _inboundAttachments.remove(chunk.attachmentId);
+      if (!hasActiveTransfer) _reschedulePolling();
       return;
     }
     if (chunk.index < 0 || chunk.index >= state.received.length) {
@@ -5936,6 +5966,7 @@ class MessengerController extends ChangeNotifier {
       // away with the controller.
       unawaited(_persistAttachmentBytes(chunk.attachmentId, assembled));
       _inboundAttachments.remove(chunk.attachmentId);
+      if (!hasActiveTransfer) _reschedulePolling();
       _updateMessageState(
         sender.deviceId,
         state.messageId,
@@ -6016,6 +6047,7 @@ class MessengerController extends ChangeNotifier {
           'retries; abandoning.',
         );
         _inboundAttachments.remove(attachmentId);
+        if (!hasActiveTransfer) _reschedulePolling();
         _updateMessageState(s.peerDeviceId, s.messageId, DeliveryState.failed);
         notifyListeners();
         return;
@@ -10681,8 +10713,11 @@ class MessengerController extends ChangeNotifier {
       inbound?.retryTimer?.cancel();
       _assembledAttachments.remove(attachmentId);
       // If this was the active outbound for the peer, free the slot and
-      // pump the queue so the next pending attachment can dispatch.
+      // pump the queue so the next pending attachment can dispatch. The
+      // helper also drops poll cadence back to idle when the last
+      // transfer ends; cover the inbound-removed case here too.
       _clearActiveOutbound(peerDeviceId, attachmentId);
+      if (inbound != null && !hasActiveTransfer) _reschedulePolling();
       // Drop the id from any queue snapshots as well.
       _outboundQueueByContact[peerDeviceId]?.remove(attachmentId);
       final peerContact = _contactByDeviceId(peerDeviceId);
