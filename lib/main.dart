@@ -1499,7 +1499,13 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     final items =
         <
-          ({Uint8List bytes, String fileName, String mimeType, String caption, Uint8List? poster})
+          ({
+            Uint8List bytes,
+            String fileName,
+            String mimeType,
+            String caption,
+            Uint8List? poster,
+          })
         >[];
     for (final file in files) {
       try {
@@ -1679,7 +1685,13 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     final items =
         <
-          ({Uint8List bytes, String fileName, String mimeType, String caption, Uint8List? poster})
+          ({
+            Uint8List bytes,
+            String fileName,
+            String mimeType,
+            String caption,
+            Uint8List? poster,
+          })
         >[];
     for (final file in picked.files) {
       Uint8List? bytes = file.bytes;
@@ -1730,7 +1742,13 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _sendMultipleAttachments({
     required ContactRecord contact,
     required List<
-      ({Uint8List bytes, String fileName, String mimeType, String caption, Uint8List? poster})
+      ({
+        Uint8List bytes,
+        String fileName,
+        String mimeType,
+        String caption,
+        Uint8List? poster,
+      })
     >
     items,
   }) async {
@@ -1754,7 +1772,13 @@ class _HomeScreenState extends State<HomeScreen> {
     // the items that will actually ship.
     final filtered =
         <
-          ({Uint8List bytes, String fileName, String mimeType, String caption, Uint8List? poster})
+          ({
+            Uint8List bytes,
+            String fileName,
+            String mimeType,
+            String caption,
+            Uint8List? poster,
+          })
         >[];
     for (final item in clamped) {
       if (item.bytes.length > MessengerController.maxAttachmentSizeBytes) {
@@ -1831,9 +1855,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // standalone bubble. The previous timestamp-based id collided
       // when two batches landed in the same microsecond, merging
       // distinct albums into one bubble — see nightly.8 plan.
-      final albumId = album.length > 1
-          ? widget.controller.newAlbumId()
-          : null;
+      final albumId = album.length > 1 ? widget.controller.newAlbumId() : null;
       for (var i = 0; i < album.length; i++) {
         final entry = album[i];
         try {
@@ -2059,7 +2081,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                     _showGroupDetails(selectedGroup),
                                 onSend: _sendCurrentGroupMessage,
                                 onDropFiles: _handleDroppedFilesForGroup,
-                                onSmartPaste: () => unawaited(_handleSmartPaste()),
+                                onSmartPaste: () =>
+                                    unawaited(_handleSmartPaste()),
                               )
                             : selectedContact == null
                             ? _EmptyChatState(palette: palette)
@@ -2081,7 +2104,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                 onSend: _sendCurrentMessage,
                                 onAttach: _openMediaPicker,
                                 onDropFiles: _handleDroppedFiles,
-                                onSmartPaste: () => unawaited(_handleSmartPaste()),
+                                onSmartPaste: () =>
+                                    unawaited(_handleSmartPaste()),
                               ),
                       ),
                   ],
@@ -3816,51 +3840,52 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           },
                           child: Actions(
                             actions: <Type, Action<Intent>>{
-                              _PasteMediaIntent: CallbackAction<_PasteMediaIntent>(
-                                onInvoke: (_) {
-                                  widget.onSmartPaste?.call();
-                                  return null;
-                                },
-                              ),
+                              _PasteMediaIntent:
+                                  CallbackAction<_PasteMediaIntent>(
+                                    onInvoke: (_) {
+                                      widget.onSmartPaste?.call();
+                                      return null;
+                                    },
+                                  ),
                             },
                             child: TextField(
-                          controller: widget.composerController,
-                          minLines: 1,
-                          maxLines: 5,
-                          enabled: canSend,
-                          decoration: InputDecoration(
-                            hintText: canSend
-                                ? activeReplyTarget == null
-                                      ? 'Write to group'
-                                      : 'Write a reply'
-                                : 'You are no longer in this group',
-                          ),
-                          onSubmitted: (_) {
-                            if (canSend) {
-                              widget.onSend();
-                            }
-                          },
-                          contextMenuBuilder: (context, editableTextState) {
-                            final items = List<ContextMenuButtonItem>.from(
-                              editableTextState.contextMenuButtonItems,
-                            );
-                            if (widget.onSmartPaste != null) {
-                              items.add(
-                                ContextMenuButtonItem(
-                                  label: 'Paste media',
-                                  onPressed: () {
-                                    ContextMenuController.removeAny();
-                                    widget.onSmartPaste!();
-                                  },
-                                ),
-                              );
-                            }
-                            return AdaptiveTextSelectionToolbar.buttonItems(
-                              anchors: editableTextState.contextMenuAnchors,
-                              buttonItems: items,
-                            );
-                          },
-                        ),
+                              controller: widget.composerController,
+                              minLines: 1,
+                              maxLines: 5,
+                              enabled: canSend,
+                              decoration: InputDecoration(
+                                hintText: canSend
+                                    ? activeReplyTarget == null
+                                          ? 'Write to group'
+                                          : 'Write a reply'
+                                    : 'You are no longer in this group',
+                              ),
+                              onSubmitted: (_) {
+                                if (canSend) {
+                                  widget.onSend();
+                                }
+                              },
+                              contextMenuBuilder: (context, editableTextState) {
+                                final items = List<ContextMenuButtonItem>.from(
+                                  editableTextState.contextMenuButtonItems,
+                                );
+                                if (widget.onSmartPaste != null) {
+                                  items.add(
+                                    ContextMenuButtonItem(
+                                      label: 'Paste media',
+                                      onPressed: () {
+                                        ContextMenuController.removeAny();
+                                        widget.onSmartPaste!();
+                                      },
+                                    ),
+                                  );
+                                }
+                                return AdaptiveTextSelectionToolbar.buttonItems(
+                                  anchors: editableTextState.contextMenuAnchors,
+                                  buttonItems: items,
+                                );
+                              },
+                            ),
                           ),
                         ),
                       ),
@@ -4698,12 +4723,13 @@ class _ChatPanelState extends State<_ChatPanel> {
                           },
                           child: Actions(
                             actions: <Type, Action<Intent>>{
-                              _PasteMediaIntent: CallbackAction<_PasteMediaIntent>(
-                                onInvoke: (_) {
-                                  widget.onSmartPaste?.call();
-                                  return null;
-                                },
-                              ),
+                              _PasteMediaIntent:
+                                  CallbackAction<_PasteMediaIntent>(
+                                    onInvoke: (_) {
+                                      widget.onSmartPaste?.call();
+                                      return null;
+                                    },
+                                  ),
                             },
                             child: TextField(
                               controller: widget.composerController,
@@ -9190,21 +9216,25 @@ class _AttachmentRow extends StatelessWidget {
         final pageBytes = controller.attachmentBytesFor(att.id);
         if (pageBytes == null) continue;
         if (att.id == descriptor.id) initialIndex = siblings.length;
-        siblings.add(_ViewerPage(
-          bytes: pageBytes,
-          fileName: att.fileName,
-          descriptorId: att.id,
-          mimeType: att.mimeType,
-        ));
+        siblings.add(
+          _ViewerPage(
+            bytes: pageBytes,
+            fileName: att.fileName,
+            descriptorId: att.id,
+            mimeType: att.mimeType,
+          ),
+        );
       }
     }
     if (siblings.isEmpty) {
-      siblings.add(_ViewerPage(
-        bytes: bytes,
-        fileName: descriptor.fileName,
-        descriptorId: descriptor.id,
-        mimeType: descriptor.mimeType,
-      ));
+      siblings.add(
+        _ViewerPage(
+          bytes: bytes,
+          fileName: descriptor.fileName,
+          descriptorId: descriptor.id,
+          mimeType: descriptor.mimeType,
+        ),
+      );
     }
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -9314,9 +9344,7 @@ class _AttachmentRow extends StatelessWidget {
     // player if the bytes are cached; otherwise show a brief "still
     // transferring" status. Falls through to the generic file row when
     // no poster is present.
-    final poster = _isVideo
-        ? controller.videoPosterFor(descriptor.id)
-        : null;
+    final poster = _isVideo ? controller.videoPosterFor(descriptor.id) : null;
     if (_isVideo && poster != null) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,

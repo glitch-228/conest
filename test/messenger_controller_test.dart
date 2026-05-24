@@ -5812,6 +5812,22 @@ void main() {
       },
     );
   });
+
+  group('nightly.8 album-id uniqueness', () {
+    test('newAlbumId returns 1000 distinct cryptographic ids', () async {
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'AlbumGen',
+      );
+      addTearDown(controller.dispose);
+      final ids = <String>{};
+      for (var i = 0; i < 1000; i++) {
+        ids.add(controller.newAlbumId());
+      }
+      expect(ids.length, 1000);
+      expect(ids.first.startsWith('alb-'), isTrue);
+    });
+  });
 }
 
 class _RecordingPlatformBridge extends PlatformBridge {

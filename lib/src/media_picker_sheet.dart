@@ -40,7 +40,13 @@ class MediaPickerResult {
   final String? mimeType;
   final bool fallbackToFilePicker;
   final List<
-    ({Uint8List bytes, String fileName, String mimeType, String caption, Uint8List? poster})
+    ({
+      Uint8List bytes,
+      String fileName,
+      String mimeType,
+      String caption,
+      Uint8List? poster,
+    })
   >?
   items;
 }
@@ -235,7 +241,13 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
     final byId = {for (final a in _assets) a.id: a};
     final items =
         <
-          ({Uint8List bytes, String fileName, String mimeType, String caption, Uint8List? poster})
+          ({
+            Uint8List bytes,
+            String fileName,
+            String mimeType,
+            String caption,
+            Uint8List? poster,
+          })
         >[];
     for (final id in _selectedIds) {
       final asset = byId[id];

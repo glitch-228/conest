@@ -228,8 +228,7 @@ class MessengerController extends ChangeNotifier {
 
   /// Returns the video poster bytes for an attachment, or null if no
   /// poster shipped with the offer.
-  Uint8List? videoPosterFor(String attachmentId) =>
-      _videoPosters[attachmentId];
+  Uint8List? videoPosterFor(String attachmentId) => _videoPosters[attachmentId];
 
   // v0.3.3-nightly.6 per-contact serial transfer queue. Each contact gets
   // a FIFO of pending attachment ids; the worker dispatches one offer at
@@ -3272,7 +3271,7 @@ class MessengerController extends ChangeNotifier {
         // Capped at ~32 KB at the sender to keep the offer envelope
         // under the relay's 256 KB cap.
         if (_videoPosters[descriptor.id] != null &&
-                _videoPosters[descriptor.id]!.length <= 32 * 1024)
+            _videoPosters[descriptor.id]!.length <= 32 * 1024)
           'posterBase64': base64Encode(_videoPosters[descriptor.id]!),
       }),
       createdAt: message.createdAt,
@@ -4955,12 +4954,14 @@ class MessengerController extends ChangeNotifier {
   /// chronologically so the full-screen viewer's PageView can swipe
   /// forward = later, backward = earlier.
   List<ChatMessage> imageAttachmentsFor(String peerDeviceId) {
-    return messagesFor(peerDeviceId).where((m) {
-      final att = m.attachment;
-      if (att == null) return false;
-      if (!att.mimeType.startsWith('image/')) return false;
-      return attachmentBytesFor(att.id) != null;
-    }).toList(growable: false);
+    return messagesFor(peerDeviceId)
+        .where((m) {
+          final att = m.attachment;
+          if (att == null) return false;
+          if (!att.mimeType.startsWith('image/')) return false;
+          return attachmentBytesFor(att.id) != null;
+        })
+        .toList(growable: false);
   }
 
   /// Belt-and-suspenders filter to keep ghost messages out of the rendered
