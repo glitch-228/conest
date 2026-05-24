@@ -40,7 +40,7 @@ class MediaPickerResult {
   final String? mimeType;
   final bool fallbackToFilePicker;
   final List<
-    ({Uint8List bytes, String fileName, String mimeType, String caption})
+    ({Uint8List bytes, String fileName, String mimeType, String caption, Uint8List? poster})
   >?
   items;
 }
@@ -235,7 +235,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
     final byId = {for (final a in _assets) a.id: a};
     final items =
         <
-          ({Uint8List bytes, String fileName, String mimeType, String caption})
+          ({Uint8List bytes, String fileName, String mimeType, String caption, Uint8List? poster})
         >[];
     for (final id in _selectedIds) {
       final asset = byId[id];
@@ -245,11 +245,29 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
         if (file == null) continue;
         final bytes = await file.readAsBytes();
         final fileName = asset.title ?? 'media-${asset.id}';
+        // For videos, photo_manager already generates a thumbnail —
+        // reuse it as the offer-envelope poster so the receiver sees a
+        // preview before the full bytes finish transferring.
+        Uint8List? poster;
+        if (asset.type == AssetType.video) {
+          try {
+            poster = await asset.thumbnailDataWithSize(
+              const ThumbnailSize.square(320),
+            );
+            // Cap at ~32 KB to fit in the relay envelope.
+            if (poster != null && poster.length > 32 * 1024) {
+              poster = null;
+            }
+          } catch (_) {
+            poster = null;
+          }
+        }
         items.add((
           bytes: bytes,
           fileName: fileName,
           mimeType: _mimeForAsset(asset, fileName),
           caption: _captionsById[id]?.trim() ?? '',
+          poster: poster,
         ));
       } catch (_) {
         // Skip unreadable assets; the rest of the batch still goes.

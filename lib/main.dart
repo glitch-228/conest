@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:super_clipboard/super_clipboard.dart';
+import 'package:video_player/video_player.dart';
 
 import 'src/app_storage.dart';
 import 'src/build_info.dart';
@@ -1498,7 +1499,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     final items =
         <
-          ({Uint8List bytes, String fileName, String mimeType, String caption})
+          ({Uint8List bytes, String fileName, String mimeType, String caption, Uint8List? poster})
         >[];
     for (final file in files) {
       try {
@@ -1508,6 +1509,7 @@ class _HomeScreenState extends State<HomeScreen> {
           fileName: file.name,
           mimeType: _guessMimeType(file.name),
           caption: '',
+          poster: null,
         ));
       } catch (error) {
         widget.controller.setStatus('Could not read ${file.name}: $error');
@@ -1677,7 +1679,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     final items =
         <
-          ({Uint8List bytes, String fileName, String mimeType, String caption})
+          ({Uint8List bytes, String fileName, String mimeType, String caption, Uint8List? poster})
         >[];
     for (final file in picked.files) {
       Uint8List? bytes = file.bytes;
@@ -1699,6 +1701,7 @@ class _HomeScreenState extends State<HomeScreen> {
         fileName: file.name,
         mimeType: _guessMimeType(file.name),
         caption: '',
+        poster: null,
       ));
     }
     await _sendMultipleAttachments(contact: contact, items: items);
@@ -1713,7 +1716,13 @@ class _HomeScreenState extends State<HomeScreen> {
     return _sendMultipleAttachments(
       contact: contact,
       items: [
-        (bytes: bytes, fileName: fileName, mimeType: mimeType, caption: ''),
+        (
+          bytes: bytes,
+          fileName: fileName,
+          mimeType: mimeType,
+          caption: '',
+          poster: null,
+        ),
       ],
     );
   }
@@ -1721,7 +1730,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _sendMultipleAttachments({
     required ContactRecord contact,
     required List<
-      ({Uint8List bytes, String fileName, String mimeType, String caption})
+      ({Uint8List bytes, String fileName, String mimeType, String caption, Uint8List? poster})
     >
     items,
   }) async {
@@ -1745,7 +1754,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // the items that will actually ship.
     final filtered =
         <
-          ({Uint8List bytes, String fileName, String mimeType, String caption})
+          ({Uint8List bytes, String fileName, String mimeType, String caption, Uint8List? poster})
         >[];
     for (final item in clamped) {
       if (item.bytes.length > MessengerController.maxAttachmentSizeBytes) {
@@ -1770,10 +1779,19 @@ class _HomeScreenState extends State<HomeScreen> {
               String fileName,
               String mimeType,
               String caption,
+              Uint8List? poster,
             })
           >
         >[];
-    List<({Uint8List bytes, String fileName, String mimeType, String caption})>
+    List<
+      ({
+        Uint8List bytes,
+        String fileName,
+        String mimeType,
+        String caption,
+        Uint8List? poster,
+      })
+    >
     current = [];
     var composerCaptionUsed = false;
     for (final item in filtered) {
@@ -1787,6 +1805,7 @@ class _HomeScreenState extends State<HomeScreen> {
           fileName: item.fileName,
           mimeType: item.mimeType,
           caption: composerCaption,
+          poster: item.poster,
         );
         composerCaptionUsed = true;
       }
@@ -1829,6 +1848,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ? entry.caption
                 : (i == 0 ? entry.caption : ''),
             albumId: albumId,
+            poster: entry.poster,
           );
         } catch (error) {
           widget.controller.setStatus(
@@ -9134,6 +9154,28 @@ class _AttachmentRow extends StatelessWidget {
     controller.setStatus('Cache path copied: $path');
   }
 
+  Future<void> _openVideoPlayer(BuildContext context) async {
+    final navigator = Navigator.of(context);
+    final path = await controller.attachmentCachePathFor(descriptor.id);
+    if (path == null) {
+      controller.setStatus(
+        'Video isn\'t cached locally yet — wait for the transfer to finish.',
+      );
+      return;
+    }
+    final bytes = controller.attachmentBytesFor(descriptor.id);
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (context) => _VideoPlayerScreen(
+          cachePath: path,
+          title: descriptor.fileName,
+          palette: palette,
+          onSave: bytes == null ? null : () => _saveToDisk(context, bytes),
+        ),
+      ),
+    );
+  }
+
   void _openFullScreenImage(BuildContext context, Uint8List bytes) {
     // Gather every other image in this 1:1 conversation so the viewer's
     // PageView can swipe forward/backward across album boundaries. Falls
@@ -9263,6 +9305,87 @@ class _AttachmentRow extends StatelessWidget {
               ),
             ],
           ),
+        ],
+      );
+    }
+
+    // Video bubble: render the poster (shipped in the offer envelope) as
+    // a thumbnail with a play-circle overlay. Tap → open the full-screen
+    // player if the bytes are cached; otherwise show a brief "still
+    // transferring" status. Falls through to the generic file row when
+    // no poster is present.
+    final poster = _isVideo
+        ? controller.videoPosterFor(descriptor.id)
+        : null;
+    if (_isVideo && poster != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 320, maxHeight: 320),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: hasBytes
+                    ? () => unawaited(_openVideoPlayer(context))
+                    : () => controller.setStatus(
+                        'Video still transferring (${(progress ?? 0) * 100 ~/ 1}%).',
+                      ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Image.memory(
+                        poster,
+                        fit: BoxFit.cover,
+                        gaplessPlayback: true,
+                        cacheWidth: 640,
+                      ),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.35),
+                          shape: BoxShape.circle,
+                        ),
+                        padding: const EdgeInsets.all(10),
+                        child: const Icon(
+                          Icons.play_arrow,
+                          color: Colors.white,
+                          size: 38,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (hasBytes) ...[
+            const SizedBox(height: 6),
+            _AttachmentActions(
+              metaColor: metaColor,
+              actions: [
+                _AttachmentAction(
+                  icon: Icons.download_outlined,
+                  label: 'Save',
+                  onTap: () => _saveToDisk(context, bytes),
+                ),
+              ],
+            ),
+          ] else ...[
+            const SizedBox(height: 6),
+            Text(
+              progress != null
+                  ? 'Transferring · ${(progress * 100).toStringAsFixed(0)}% · '
+                        '${_formatBytes(descriptor.sizeBytes)}'
+                  : 'Transferring · ${_formatBytes(descriptor.sizeBytes)}',
+              style: Theme.of(
+                context,
+              ).textTheme.labelSmall?.copyWith(color: metaColor),
+            ),
+          ],
         ],
       );
     }
@@ -9579,6 +9702,107 @@ class _ImageViewerScreenState extends State<_ImageViewerScreen> {
           );
         },
       ),
+    );
+  }
+}
+
+class _VideoPlayerScreen extends StatefulWidget {
+  const _VideoPlayerScreen({
+    required this.cachePath,
+    required this.title,
+    required this.palette,
+    this.onSave,
+  });
+
+  final String cachePath;
+  final String title;
+  final ConestPalette palette;
+  final Future<void> Function()? onSave;
+
+  @override
+  State<_VideoPlayerScreen> createState() => _VideoPlayerScreenState();
+}
+
+class _VideoPlayerScreenState extends State<_VideoPlayerScreen> {
+  VideoPlayerController? _controller;
+  Object? _initError;
+
+  @override
+  void initState() {
+    super.initState();
+    final controller = VideoPlayerController.file(File(widget.cachePath));
+    _controller = controller;
+    controller
+        .initialize()
+        .then((_) {
+          if (!mounted) return;
+          setState(() {});
+          controller.play();
+        })
+        .catchError((Object error) {
+          if (!mounted) return;
+          setState(() => _initError = error);
+        });
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = _controller;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: Text(widget.title),
+        actions: [
+          if (widget.onSave != null)
+            IconButton(
+              icon: const Icon(Icons.download_outlined),
+              tooltip: 'Save',
+              onPressed: () => widget.onSave!(),
+            ),
+        ],
+      ),
+      body: Center(
+        child: _initError != null
+            ? Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  'Could not play this video: $_initError\n\n'
+                  'Try Save to open it in your system video player.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70),
+                ),
+              )
+            : (c != null && c.value.isInitialized)
+            ? AspectRatio(
+                aspectRatio: c.value.aspectRatio,
+                child: Stack(
+                  alignment: Alignment.bottomCenter,
+                  children: [
+                    VideoPlayer(c),
+                    VideoProgressIndicator(c, allowScrubbing: true),
+                  ],
+                ),
+              )
+            : const CircularProgressIndicator(),
+      ),
+      floatingActionButton: (c != null && c.value.isInitialized)
+          ? FloatingActionButton(
+              onPressed: () {
+                setState(() {
+                  c.value.isPlaying ? c.pause() : c.play();
+                });
+              },
+              child: Icon(c.value.isPlaying ? Icons.pause : Icons.play_arrow),
+            )
+          : null,
     );
   }
 }

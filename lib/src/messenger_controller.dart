@@ -220,6 +220,17 @@ class MessengerController extends ChangeNotifier {
   // a follow-up pass.
   final Map<String, Uint8List> _assembledAttachments = <String, Uint8List>{};
 
+  // Small JPEG posters shipped alongside video offers so the receiver
+  // can render a thumbnail BEFORE the full bytes finish transferring.
+  // Keyed by attachment id; capped at the offer envelope's `posterBase64`
+  // size (~32 KB per asset).
+  final Map<String, Uint8List> _videoPosters = <String, Uint8List>{};
+
+  /// Returns the video poster bytes for an attachment, or null if no
+  /// poster shipped with the offer.
+  Uint8List? videoPosterFor(String attachmentId) =>
+      _videoPosters[attachmentId];
+
   // v0.3.3-nightly.6 per-contact serial transfer queue. Each contact gets
   // a FIFO of pending attachment ids; the worker dispatches one offer at
   // a time and only advances when `attachment_complete` lands (or a
@@ -3086,6 +3097,7 @@ class MessengerController extends ChangeNotifier {
     String mimeType = 'application/octet-stream',
     String caption = '',
     String? albumId,
+    Uint8List? poster,
   }) async {
     final me = _requireIdentity();
     if (!contact.canSendOutbound) {
@@ -3168,6 +3180,11 @@ class MessengerController extends ChangeNotifier {
     // Sender keeps a copy so the chat bubble can render the image / file
     // preview without waiting for the recipient's complete envelope.
     _assembledAttachments[attachmentId] = bytes;
+    // Stash the video poster (if any) so the sender's own bubble can
+    // render the same thumbnail the receiver sees.
+    if (poster != null && poster.isNotEmpty) {
+      _videoPosters[attachmentId] = poster;
+    }
     // Persist asynchronously so the bubble survives an app restart on
     // the sender side too — no point keeping a transfer-state bubble
     // when we have the original right here.
@@ -3250,6 +3267,13 @@ class MessengerController extends ChangeNotifier {
         'parentMessageId': message.id,
         'caption': message.body,
         if (message.albumId != null) 'albumId': message.albumId,
+        // Video poster (small JPEG thumbnail) so the receiver can render
+        // a preview before the full video bytes finish transferring.
+        // Capped at ~32 KB at the sender to keep the offer envelope
+        // under the relay's 256 KB cap.
+        if (_videoPosters[descriptor.id] != null &&
+                _videoPosters[descriptor.id]!.length <= 32 * 1024)
+          'posterBase64': base64Encode(_videoPosters[descriptor.id]!),
       }),
       createdAt: message.createdAt,
     );
@@ -5850,6 +5874,19 @@ class MessengerController extends ChangeNotifier {
       albumId: payload['albumId'] as String?,
     );
     _upsertMessage(sender.deviceId, message);
+    // Decode + cache the video poster (if any) so the bubble can render
+    // a thumbnail before the full bytes finish transferring.
+    final posterBase64 = payload['posterBase64'] as String?;
+    if (posterBase64 != null && posterBase64.isNotEmpty) {
+      try {
+        final posterBytes = base64Decode(posterBase64);
+        if (posterBytes.length <= 64 * 1024) {
+          _videoPosters[descriptor.id] = posterBytes;
+        }
+      } catch (_) {
+        // Bad poster bytes — non-fatal; just skip the preview.
+      }
+    }
     final wasIdle = !hasActiveTransfer;
     final inboundState = _InboundAttachmentState(
       messageId: message.id,
