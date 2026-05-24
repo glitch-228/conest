@@ -3017,10 +3017,11 @@ class MessengerController extends ChangeNotifier {
 
   /// LAN-friendly chunk size used when the only route to a contact is
   /// LAN. The relay's 256 KB envelope cap doesn't apply to LAN-loopback
-  /// envelopes (they aren't store-and-forwarded by the public relay), so
-  /// we can ship 8× larger chunks per RTT — cuts a 30 MB transfer from
-  /// ~960 round-trips to ~120.
-  static const int _lanAttachmentChunkSize = 256 * 1024;
+  /// envelopes (they aren't store-and-forwarded by the public relay).
+  /// Bumped from 256 KB → 512 KB in nightly.8: with the window=8
+  /// pipeline a 10 MB transfer is now ~20 chunks ÷ 8 in flight ≈ 3
+  /// LAN round-trips.
+  static const int _lanAttachmentChunkSize = 512 * 1024;
 
   /// When the only route to a contact is LAN, the size cap lifts to this
   /// value — LAN bandwidth + chunk size aren't constrained by the relay's
@@ -3281,6 +3282,11 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  /// How many times the stall escape hatch will silently re-enqueue a
+  /// failed outbound while the contact is still reachable. After the cap
+  /// the bubble flips to Failed and waits for a manual tap-to-retry.
+  static const int _outboundAutoRetryLimit = 3;
+
   void _onOutboundStall(ContactRecord contact) {
     final activeId = _activeOutboundByContact[contact.deviceId];
     if (activeId == null) return;
@@ -3295,6 +3301,30 @@ class MessengerController extends ChangeNotifier {
     if (state.paused) {
       _armOutboundStallTimer(contact);
       return;
+    }
+    // Auto-retry while the contact remains reachable: re-enqueue silently
+    // up to [_outboundAutoRetryLimit] times before surfacing a Failed
+    // bubble. Reset on a future successful complete.
+    if (state.autoRetries < _outboundAutoRetryLimit) {
+      final reach = reachabilityStateFor(contact.deviceId);
+      if (reach == ContactReachabilityState.online ||
+          reach == ContactReachabilityState.seenRecently) {
+        state.autoRetries++;
+        appendDebugLog(
+          'Auto-retrying ${state.descriptor.id} '
+          '(${state.descriptor.fileName}) attempt '
+          '${state.autoRetries}/$_outboundAutoRetryLimit — contact reachable.',
+        );
+        _clearActiveOutbound(contact.deviceId, activeId);
+        // Reset transient progress markers so the next pump starts fresh.
+        state.activatedAt = null;
+        state.lastChunkAt = null;
+        state.highestChunkSent = -1;
+        state.peerReceivedCount = null;
+        _enqueueOutbound(contact, activeId);
+        _pumpOutboundQueue(contact);
+        return;
+      }
     }
     appendDebugLog(
       'Outbound stall for ${state.descriptor.id} '
@@ -6043,9 +6073,9 @@ class MessengerController extends ChangeNotifier {
 
   /// How many chunk requests the receiver keeps outstanding at any one
   /// time. Strict request-response (window = 1) made every chunk wait for
-  /// a full RTT; window = 4 cuts the wall-clock time roughly 4× on LAN
-  /// and amortizes relay-poll cadence for the fallback path.
-  static const int _inboundChunkWindow = 4;
+  /// a full RTT; window = 4 cut wall-clock 4×. Bumped to 8 in nightly.8
+  /// — 10 MB transfers on LAN now run in ~3 round-trips end-to-end.
+  static const int _inboundChunkWindow = 8;
 
   /// Tops up the inbound chunk-request window for [state] so up to
   /// [_inboundChunkWindow] requests are in flight. Idempotent — call after
@@ -11162,6 +11192,12 @@ class _OutboundAttachmentState {
   /// own value (LocalSend-style).
   int? peerReceivedCount;
   DateTime? peerProgressAt;
+
+  /// Number of automatic re-enqueues fired by the stall escape hatch
+  /// while the contact stayed reachable. Capped at
+  /// [MessengerController._outboundAutoRetryLimit]; after that the
+  /// bubble flips to Failed and waits for a manual tap.
+  int autoRetries = 0;
 }
 
 class _InboundAttachmentState {
