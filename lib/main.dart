@@ -1516,6 +1516,34 @@ class _HomeScreenState extends State<HomeScreen> {
     await _sendMultipleAttachments(contact: contact, items: items);
   }
 
+  /// Ctrl/Cmd+V handler that prefers binary paste. Tries the
+  /// image-or-file path first; on no-binary-content, falls back to a
+  /// manual text paste into the composer TextField so the keystroke
+  /// still feels natural for plain-text content.
+  Future<void> _handleSmartPaste() async {
+    final didBinary = await _pasteFromClipboard();
+    if (didBinary) return;
+    // Fall back to text paste. The Shortcuts override consumed Ctrl+V
+    // before the TextField could handle it, so we replay it ourselves.
+    try {
+      final data = await Clipboard.getData('text/plain');
+      final text = data?.text;
+      if (text == null || text.isEmpty) return;
+      final tc = _composerController;
+      final selection = tc.selection;
+      final start = selection.start >= 0 ? selection.start : tc.text.length;
+      final end = selection.end >= 0 ? selection.end : tc.text.length;
+      final before = tc.text.substring(0, start);
+      final after = tc.text.substring(end);
+      tc.value = TextEditingValue(
+        text: '$before$text$after',
+        selection: TextSelection.collapsed(offset: start + text.length),
+      );
+    } catch (error) {
+      widget.controller.appendDebugLog('Text-paste fallback failed: $error');
+    }
+  }
+
   /// Pastes an image / file from the OS clipboard into the active chat.
   /// Returns true when something was sent so caller-side Shortcuts can
   /// consume the event; returns false for plain-text-only clipboard.
@@ -1894,7 +1922,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     onSend: _sendCurrentMessage,
                     onAttach: _openMediaPicker,
                     onDropFiles: _handleDroppedFiles,
-                    onPasteMedia: _pasteFromClipboard,
+                    onSmartPaste: () => unawaited(_handleSmartPaste()),
                   );
                 }
                 if (!isWide && selectedGroup != null) {
@@ -1915,7 +1943,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     onShowDetails: () => _showGroupDetails(selectedGroup),
                     onSend: _sendCurrentGroupMessage,
                     onDropFiles: _handleDroppedFilesForGroup,
-                    onPasteMedia: _pasteFromClipboard,
+                    onSmartPaste: () => unawaited(_handleSmartPaste()),
                   );
                 }
                 if (!isWide && lanLobbySelected) {
@@ -2011,7 +2039,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     _showGroupDetails(selectedGroup),
                                 onSend: _sendCurrentGroupMessage,
                                 onDropFiles: _handleDroppedFilesForGroup,
-                                onPasteMedia: _pasteFromClipboard,
+                                onSmartPaste: () => unawaited(_handleSmartPaste()),
                               )
                             : selectedContact == null
                             ? _EmptyChatState(palette: palette)
@@ -2033,7 +2061,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 onSend: _sendCurrentMessage,
                                 onAttach: _openMediaPicker,
                                 onDropFiles: _handleDroppedFiles,
-                                onPasteMedia: _pasteFromClipboard,
+                                onSmartPaste: () => unawaited(_handleSmartPaste()),
                               ),
                       ),
                   ],
@@ -2045,6 +2073,15 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+}
+
+/// Intent dispatched by the composer's `Ctrl+V` / `Cmd+V` Shortcuts
+/// override. The matching Action fires the active chat panel's
+/// `onSmartPaste` callback, which first tries a binary clipboard paste
+/// (image / file URI) and falls back to plain-text paste if no binary
+/// content is present.
+class _PasteMediaIntent extends Intent {
+  const _PasteMediaIntent();
 }
 
 class _Sidebar extends StatelessWidget {
@@ -3152,7 +3189,7 @@ class _GroupChatPanel extends StatefulWidget {
     required this.onShowDetails,
     required this.onDropFiles,
     this.onBack,
-    this.onPasteMedia,
+    this.onSmartPaste,
   });
 
   final MessengerController controller;
@@ -3166,7 +3203,7 @@ class _GroupChatPanel extends StatefulWidget {
   final VoidCallback onShowDetails;
   final ValueChanged<List<XFile>> onDropFiles;
   final VoidCallback? onBack;
-  final Future<bool> Function()? onPasteMedia;
+  final VoidCallback? onSmartPaste;
 
   @override
   State<_GroupChatPanel> createState() => _GroupChatPanelState();
@@ -3746,7 +3783,27 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                   Row(
                     children: [
                       Expanded(
-                        child: TextField(
+                        child: Shortcuts(
+                          shortcuts: <ShortcutActivator, Intent>{
+                            const SingleActivator(
+                              LogicalKeyboardKey.keyV,
+                              control: true,
+                            ): const _PasteMediaIntent(),
+                            const SingleActivator(
+                              LogicalKeyboardKey.keyV,
+                              meta: true,
+                            ): const _PasteMediaIntent(),
+                          },
+                          child: Actions(
+                            actions: <Type, Action<Intent>>{
+                              _PasteMediaIntent: CallbackAction<_PasteMediaIntent>(
+                                onInvoke: (_) {
+                                  widget.onSmartPaste?.call();
+                                  return null;
+                                },
+                              ),
+                            },
+                            child: TextField(
                           controller: widget.composerController,
                           minLines: 1,
                           maxLines: 5,
@@ -3767,13 +3824,13 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                             final items = List<ContextMenuButtonItem>.from(
                               editableTextState.contextMenuButtonItems,
                             );
-                            if (widget.onPasteMedia != null) {
+                            if (widget.onSmartPaste != null) {
                               items.add(
                                 ContextMenuButtonItem(
                                   label: 'Paste media',
                                   onPressed: () {
                                     ContextMenuController.removeAny();
-                                    unawaited(widget.onPasteMedia!());
+                                    widget.onSmartPaste!();
                                   },
                                 ),
                               );
@@ -3783,6 +3840,8 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                               buttonItems: items,
                             );
                           },
+                        ),
+                          ),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -3856,7 +3915,7 @@ class _ChatPanel extends StatefulWidget {
     required this.onAttach,
     required this.onDropFiles,
     this.onBack,
-    this.onPasteMedia,
+    this.onSmartPaste,
   });
 
   final MessengerController controller;
@@ -3871,7 +3930,7 @@ class _ChatPanel extends StatefulWidget {
   final VoidCallback onAttach;
   final ValueChanged<List<XFile>> onDropFiles;
   final VoidCallback? onBack;
-  final Future<bool> Function()? onPasteMedia;
+  final VoidCallback? onSmartPaste;
 
   @override
   State<_ChatPanel> createState() => _ChatPanelState();
@@ -4606,40 +4665,62 @@ class _ChatPanelState extends State<_ChatPanel> {
                         tooltip: 'Attach a file or image',
                       ),
                       Expanded(
-                        child: TextField(
-                          controller: widget.composerController,
-                          minLines: 1,
-                          maxLines: 5,
-                          enabled: contact.canSendOutbound,
-                          decoration: InputDecoration(
-                            hintText: !contact.canSendOutbound
-                                ? 'Verify the contact\'s identity to send.'
-                                : activeReplyTarget == null
-                                ? 'Write an encrypted message'
-                                : 'Write a reply'
-                                      ' or add a caption',
-                          ),
-                          onSubmitted: (_) => widget.onSend(),
-                          contextMenuBuilder: (context, editableTextState) {
-                            final items = List<ContextMenuButtonItem>.from(
-                              editableTextState.contextMenuButtonItems,
-                            );
-                            if (widget.onPasteMedia != null) {
-                              items.add(
-                                ContextMenuButtonItem(
-                                  label: 'Paste media',
-                                  onPressed: () {
-                                    ContextMenuController.removeAny();
-                                    unawaited(widget.onPasteMedia!());
-                                  },
-                                ),
-                              );
-                            }
-                            return AdaptiveTextSelectionToolbar.buttonItems(
-                              anchors: editableTextState.contextMenuAnchors,
-                              buttonItems: items,
-                            );
+                        child: Shortcuts(
+                          shortcuts: <ShortcutActivator, Intent>{
+                            const SingleActivator(
+                              LogicalKeyboardKey.keyV,
+                              control: true,
+                            ): const _PasteMediaIntent(),
+                            const SingleActivator(
+                              LogicalKeyboardKey.keyV,
+                              meta: true,
+                            ): const _PasteMediaIntent(),
                           },
+                          child: Actions(
+                            actions: <Type, Action<Intent>>{
+                              _PasteMediaIntent: CallbackAction<_PasteMediaIntent>(
+                                onInvoke: (_) {
+                                  widget.onSmartPaste?.call();
+                                  return null;
+                                },
+                              ),
+                            },
+                            child: TextField(
+                              controller: widget.composerController,
+                              minLines: 1,
+                              maxLines: 5,
+                              enabled: contact.canSendOutbound,
+                              decoration: InputDecoration(
+                                hintText: !contact.canSendOutbound
+                                    ? 'Verify the contact\'s identity to send.'
+                                    : activeReplyTarget == null
+                                    ? 'Write an encrypted message'
+                                    : 'Write a reply'
+                                          ' or add a caption',
+                              ),
+                              onSubmitted: (_) => widget.onSend(),
+                              contextMenuBuilder: (context, editableTextState) {
+                                final items = List<ContextMenuButtonItem>.from(
+                                  editableTextState.contextMenuButtonItems,
+                                );
+                                if (widget.onSmartPaste != null) {
+                                  items.add(
+                                    ContextMenuButtonItem(
+                                      label: 'Paste media',
+                                      onPressed: () {
+                                        ContextMenuController.removeAny();
+                                        widget.onSmartPaste!();
+                                      },
+                                    ),
+                                  );
+                                }
+                                return AdaptiveTextSelectionToolbar.buttonItems(
+                                  anchors: editableTextState.contextMenuAnchors,
+                                  buttonItems: items,
+                                );
+                              },
+                            ),
+                          ),
                         ),
                       ),
                       const SizedBox(width: 12),
