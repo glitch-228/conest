@@ -3345,6 +3345,12 @@ class MessengerController extends ChangeNotifier {
     }
     final total = state.descriptor.chunkHashes.length;
     if (total <= 0) return null;
+    // Prefer the receiver-reported count (`peerReceivedCount`) so the
+    // sender's bubble shows the SAME percentage as the receiver's — fixes
+    // the nightly.7 desync. Fall back to our own ship-count for very
+    // small transfers that finish before the first progress envelope.
+    final peer = state.peerReceivedCount;
+    if (peer != null) return peer / total;
     return (state.highestChunkSent + 1) / total;
   }
 
@@ -5728,6 +5734,9 @@ class MessengerController extends ChangeNotifier {
       case 'attachment_pause_control':
         _handleAttachmentPauseControl(contact, payload);
         return;
+      case 'attachment_progress':
+        _handleAttachmentProgress(contact, payload);
+        return;
     }
   }
 
@@ -5971,6 +5980,12 @@ class MessengerController extends ChangeNotifier {
       'chunk_resp rx ← ${sender.alias} idx=${chunk.index} '
       '${bytes.length}B attachmentId=${chunk.attachmentId}',
     );
+    // Tell the sender how many chunks we now have so its bubble can show
+    // the same percentage we do (nightly.8 LocalSend-style sync). The
+    // debounce inside the helper caps to one envelope per 250 ms; the
+    // completion path below forces a final emit so the sender flips to
+    // 100% in lockstep with us.
+    _maybeSendAttachmentProgress(state, sender, force: state.isComplete);
     if (state.isComplete) {
       state.retryTimer?.cancel();
       final builder = BytesBuilder();
@@ -6273,6 +6288,87 @@ class MessengerController extends ChangeNotifier {
     } catch (_) {
       // Best effort; the sender's local state is already correct.
     }
+  }
+
+  /// Debounce window for outgoing `attachment_progress` envelopes. Cap to
+  /// at most one progress envelope per 250 ms per attachment so a 1000-chunk
+  /// flood doesn't generate 1000 tiny envelopes that drown the relay queue.
+  static const Duration _progressDebounce = Duration(milliseconds: 250);
+
+  /// Emits an `attachment_progress` envelope to the sender if the debounce
+  /// window has elapsed (or `force == true`, used on completion). The
+  /// payload carries the receiver's current chunk count so the sender's UI
+  /// can render the same percentage the receiver sees.
+  void _maybeSendAttachmentProgress(
+    _InboundAttachmentState state,
+    ContactRecord sender, {
+    bool force = false,
+  }) {
+    final now = DateTime.now().toUtc();
+    if (!force &&
+        state.lastProgressSentAt != null &&
+        now.difference(state.lastProgressSentAt!) < _progressDebounce) {
+      return;
+    }
+    state.lastProgressSentAt = now;
+    final received = state.received.where((c) => c != null).length;
+    unawaited(
+      _sendAttachmentProgress(
+        sender,
+        attachmentId: state.descriptor.id,
+        received: received,
+        total: state.descriptor.chunkHashes.length,
+      ),
+    );
+  }
+
+  Future<void> _sendAttachmentProgress(
+    ContactRecord peer, {
+    required String attachmentId,
+    required int received,
+    required int total,
+  }) async {
+    if (!hasIdentity) return;
+    final me = _requireIdentity();
+    try {
+      final envelope = await _crypto.encryptPayloadEnvelope(
+        kind: 'attachment_progress',
+        messageId: _randomId('aprog'),
+        conversationId: _crypto.conversationIdFor(peer.deviceId),
+        senderAccountId: me.accountId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: peer.deviceId,
+        contact: peer,
+        plaintext: jsonEncode({
+          'attachmentId': attachmentId,
+          'received': received,
+          'total': total,
+        }),
+      );
+      await _deliverToContact(
+        contact: peer,
+        recipientDeviceId: peer.deviceId,
+        envelope: envelope,
+      );
+    } catch (_) {
+      // Progress envelopes are advisory — losing one just means the
+      // sender's UI lags briefly. The next chunk arrival will trigger
+      // another emit.
+    }
+  }
+
+  void _handleAttachmentProgress(
+    ContactRecord sender,
+    Map<String, dynamic> payload,
+  ) {
+    final attachmentId = payload['attachmentId'] as String?;
+    final received = payload['received'] as int?;
+    if (attachmentId == null || received == null) return;
+    final state = _outboundAttachments[attachmentId];
+    if (state == null || state.peerDeviceId != sender.deviceId) return;
+    state.peerReceivedCount = received;
+    state.peerProgressAt = DateTime.now().toUtc();
+    notifyListeners();
   }
 
   void _handleAttachmentComplete(
@@ -11044,6 +11140,14 @@ class _OutboundAttachmentState {
   /// Last time the chunk-request handler advanced `highestChunkSent`.
   /// Refreshed on every chunk we successfully shipped.
   DateTime? lastChunkAt;
+
+  /// Receiver's reported received-chunk count from the most recent
+  /// `attachment_progress` envelope. Used by `outboundAttachmentProgress`
+  /// to render the SAME percentage on the sender side as the receiver
+  /// shows — fixes the nightly.7 desync where each side computed its
+  /// own value (LocalSend-style).
+  int? peerReceivedCount;
+  DateTime? peerProgressAt;
 }
 
 class _InboundAttachmentState {
@@ -11075,6 +11179,12 @@ class _InboundAttachmentState {
   /// up to `MessengerController._inboundChunkWindow` requests outstanding
   /// so a slow path doesn't serialize on per-chunk RTT.
   final Set<int> requestedInFlight = <int>{};
+
+  /// Debounce gate for `attachment_progress` envelopes the receiver sends
+  /// back to the sender. We emit at most one per [_progressDebounce]
+  /// window to keep big transfers from drowning the relay in tiny
+  /// progress envelopes.
+  DateTime? lastProgressSentAt;
 
   int get nextMissingIndex {
     for (var i = 0; i < received.length; i++) {

@@ -9167,7 +9167,7 @@ class _AttachmentRow extends StatelessWidget {
       statusLine = _formatBytes(descriptor.sizeBytes);
     } else if (outbound && outboundProgress != null) {
       statusLine =
-          'Sending · ${(outboundProgress * 100).toStringAsFixed(0)}% · '
+          'Transferring · ${(outboundProgress * 100).toStringAsFixed(0)}% · '
           '${_formatBytes(descriptor.sizeBytes)}$pauseSuffix';
     } else if (outbound && queuePosition > 0) {
       statusLine =
