@@ -10853,6 +10853,13 @@ class MessengerController extends ChangeNotifier {
     return '$prefix-$suffix';
   }
 
+  /// Public helper for fresh, collision-resistant album ids. Previously
+  /// `_sendMultipleAttachments` minted ids from `DateTime.now().micros…`,
+  /// which collided when two consecutive batches dispatched within the
+  /// same microsecond and merged distinct albums into one bubble. Use
+  /// this helper instead so the cryptographic randomness avoids that.
+  String newAlbumId() => _randomId('alb');
+
   void _handleLocalEnvelopeStored(
     String recipientDeviceId,
     RelayEnvelope envelope,

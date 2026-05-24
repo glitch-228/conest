@@ -1781,9 +1781,11 @@ class _HomeScreenState extends State<HomeScreen> {
     for (var a = 0; a < albums.length; a++) {
       final album = albums[a];
       // Single-item "albums" don't need an id — they render as a
-      // standalone bubble.
+      // standalone bubble. The previous timestamp-based id collided
+      // when two batches landed in the same microsecond, merging
+      // distinct albums into one bubble — see nightly.8 plan.
       final albumId = album.length > 1
-          ? 'alb-${DateTime.now().microsecondsSinceEpoch}-$a'
+          ? widget.controller.newAlbumId()
           : null;
       for (var i = 0; i < album.length; i++) {
         final entry = album[i];
