@@ -4895,6 +4895,20 @@ class MessengerController extends ChangeNotifier {
       ..sort((left, right) => left.createdAt.compareTo(right.createdAt));
   }
 
+  /// Every renderable inbound + outbound message in the 1:1 conversation
+  /// with [peerDeviceId] that carries an `image/*` attachment whose bytes
+  /// are already in memory (`attachmentBytesFor` returns non-null). Sorted
+  /// chronologically so the full-screen viewer's PageView can swipe
+  /// forward = later, backward = earlier.
+  List<ChatMessage> imageAttachmentsFor(String peerDeviceId) {
+    return messagesFor(peerDeviceId).where((m) {
+      final att = m.attachment;
+      if (att == null) return false;
+      if (!att.mimeType.startsWith('image/')) return false;
+      return attachmentBytesFor(att.id) != null;
+    }).toList(growable: false);
+  }
+
   /// Belt-and-suspenders filter to keep ghost messages out of the rendered
   /// list. A message with no body, no attachment, and no reply preview has
   /// nothing to draw — past pipelines occasionally produced these via a

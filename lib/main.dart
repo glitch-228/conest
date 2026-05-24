@@ -4281,6 +4281,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                         palette: palette,
                         controller: controller,
                         messageState: message.state,
+                        conversationPeerDeviceId: contact.deviceId,
                       ),
                       if (message.body.isNotEmpty) const SizedBox(height: 8),
                     ],
@@ -8791,6 +8792,7 @@ class _AttachmentRow extends StatelessWidget {
     required this.palette,
     required this.controller,
     required this.messageState,
+    this.conversationPeerDeviceId,
   });
 
   final AttachmentDescriptor descriptor;
@@ -8798,6 +8800,11 @@ class _AttachmentRow extends StatelessWidget {
   final ConestPalette palette;
   final MessengerController controller;
   final DeliveryState messageState;
+
+  /// Set on 1:1 chat bubbles so the full-screen viewer can list every
+  /// other image in the same conversation for swipe navigation. Null
+  /// for group bubbles (group-wide swipe is a future enhancement).
+  final String? conversationPeerDeviceId;
 
   String _formatBytes(int size) {
     if (size < 1024) return '$size B';
@@ -8838,14 +8845,23 @@ class _AttachmentRow extends StatelessWidget {
     return dir;
   }
 
-  Future<void> _saveToDisk(BuildContext context, Uint8List bytes) async {
-    final kind = _saveKindFor(descriptor.mimeType);
+  /// Save variant that takes explicit file metadata — used by the
+  /// full-screen viewer's PageView so each swiped page can save with its
+  /// OWN filename / mime even though we don't have a per-page
+  /// `_AttachmentRow` for each sibling.
+  Future<void> _saveToDiskFor(
+    BuildContext context,
+    Uint8List bytes,
+    String fileName,
+    String mimeType,
+  ) async {
+    final kind = _saveKindFor(mimeType);
     if (!kIsWeb && Platform.isAndroid) {
       try {
         final saved = await controller.platformBridge.saveMediaToGallery(
           bytes: bytes,
-          fileName: descriptor.fileName,
-          mimeType: descriptor.mimeType,
+          fileName: fileName,
+          mimeType: mimeType,
           kind: kind,
         );
         if (saved != null) {
@@ -8854,10 +8870,10 @@ class _AttachmentRow extends StatelessWidget {
             'video' => 'Movies/conest',
             _ => 'Download/conest',
           };
-          controller.setStatus('Saved ${descriptor.fileName} to $relPath.');
+          controller.setStatus('Saved $fileName to $relPath.');
           unawaited(
             controller.platformBridge.showToast(
-              'Saved ${descriptor.fileName} → $relPath',
+              'Saved $fileName → $relPath',
               long: true,
             ),
           );
@@ -8872,39 +8888,36 @@ class _AttachmentRow extends StatelessWidget {
     try {
       final defaultDir = await _conestDownloadsDir();
       final path = await FilePicker.saveFile(
-        dialogTitle: 'Save ${descriptor.fileName}',
-        fileName: descriptor.fileName,
+        dialogTitle: 'Save $fileName',
+        fileName: fileName,
         bytes: bytes,
         initialDirectory: defaultDir?.path,
       );
-      if (path == null) {
-        return;
-      }
-      // On desktop the file_picker writes the bytes automatically when
-      // `bytes:` is supplied. On other platforms we still need to write
-      // the file ourselves because the save dialog only returns a path.
+      if (path == null) return;
       if (!Platform.isLinux && !Platform.isMacOS && !Platform.isWindows) {
         await File(path).writeAsBytes(bytes);
       }
-      controller.setStatus('Saved ${descriptor.fileName} to $path.');
+      controller.setStatus('Saved $fileName to $path.');
       unawaited(
-        controller.platformBridge.showToast(
-          'Saved ${descriptor.fileName}',
-          long: true,
-        ),
+        controller.platformBridge.showToast('Saved $fileName', long: true),
       );
     } catch (error) {
       controller.setStatus('Save failed: $error');
     }
   }
 
-  Future<void> _copyImageBytes(Uint8List bytes) async {
+  Future<void> _saveToDisk(BuildContext context, Uint8List bytes) =>
+      _saveToDiskFor(context, bytes, descriptor.fileName, descriptor.mimeType);
+
+  Future<void> _copyImageBytes(Uint8List bytes) =>
+      _copyImageBytesFor(bytes, descriptor.fileName);
+
+  Future<void> _copyImageBytesFor(Uint8List bytes, String filename) async {
     // Always put the filename on the OS text clipboard first as the
     // guaranteed-working fallback. Paste targets that can't accept image
     // data (text inputs, terminals) get something useful; if the binary
     // clipboard succeeds afterwards, the image data overlays the text
     // for image-accepting targets.
-    final filename = descriptor.fileName;
     try {
       await Clipboard.setData(ClipboardData(text: filename));
     } catch (error) {
@@ -9041,14 +9054,44 @@ class _AttachmentRow extends StatelessWidget {
   }
 
   void _openFullScreenImage(BuildContext context, Uint8List bytes) {
+    // Gather every other image in this 1:1 conversation so the viewer's
+    // PageView can swipe forward/backward across album boundaries. Falls
+    // back to the single-page case for group bubbles (peer id not set).
+    final peer = conversationPeerDeviceId;
+    final siblings = <_ViewerPage>[];
+    var initialIndex = 0;
+    if (peer != null) {
+      final messages = controller.imageAttachmentsFor(peer);
+      for (final m in messages) {
+        final att = m.attachment!;
+        final pageBytes = controller.attachmentBytesFor(att.id);
+        if (pageBytes == null) continue;
+        if (att.id == descriptor.id) initialIndex = siblings.length;
+        siblings.add(_ViewerPage(
+          bytes: pageBytes,
+          fileName: att.fileName,
+          descriptorId: att.id,
+          mimeType: att.mimeType,
+        ));
+      }
+    }
+    if (siblings.isEmpty) {
+      siblings.add(_ViewerPage(
+        bytes: bytes,
+        fileName: descriptor.fileName,
+        descriptorId: descriptor.id,
+        mimeType: descriptor.mimeType,
+      ));
+    }
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) => _ImageViewerScreen(
-          bytes: bytes,
-          title: descriptor.fileName,
+          pages: siblings,
+          initialIndex: initialIndex,
           palette: palette,
-          onCopy: () => _copyImageBytes(bytes),
-          onSave: () => _saveToDisk(context, bytes),
+          onCopy: (page) => _copyImageBytesFor(page.bytes, page.fileName),
+          onSave: (page) =>
+              _saveToDiskFor(context, page.bytes, page.fileName, page.mimeType),
         ),
       ),
     );
@@ -9349,41 +9392,80 @@ class _AttachmentActions extends StatelessWidget {
   }
 }
 
-class _ImageViewerScreen extends StatelessWidget {
-  const _ImageViewerScreen({
+class _ViewerPage {
+  const _ViewerPage({
     required this.bytes,
-    required this.title,
+    required this.fileName,
+    required this.descriptorId,
+    this.mimeType = 'image/jpeg',
+  });
+  final Uint8List bytes;
+  final String fileName;
+  final String descriptorId;
+  final String mimeType;
+}
+
+class _ImageViewerScreen extends StatefulWidget {
+  const _ImageViewerScreen({
+    required this.pages,
+    required this.initialIndex,
     required this.palette,
     this.onCopy,
     this.onSave,
-  });
+  }) : assert(pages.length > 0);
 
-  final Uint8List bytes;
-  final String title;
+  final List<_ViewerPage> pages;
+  final int initialIndex;
   final ConestPalette palette;
-  final Future<void> Function()? onCopy;
-  final Future<void> Function()? onSave;
+  final Future<void> Function(_ViewerPage page)? onCopy;
+  final Future<void> Function(_ViewerPage page)? onSave;
+
+  @override
+  State<_ImageViewerScreen> createState() => _ImageViewerScreenState();
+}
+
+class _ImageViewerScreenState extends State<_ImageViewerScreen> {
+  late final PageController _controller;
+  late int _index;
+
+  @override
+  void initState() {
+    super.initState();
+    _index = widget.initialIndex.clamp(0, widget.pages.length - 1);
+    _controller = PageController(initialPage: _index);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final activePage = widget.pages[_index];
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        title: Text(title),
+        title: Text(
+          widget.pages.length > 1
+              ? '${activePage.fileName}  ·  ${_index + 1}/${widget.pages.length}'
+              : activePage.fileName,
+        ),
         actions: [
-          if (onCopy != null)
+          if (widget.onCopy != null)
             IconButton(
               icon: const Icon(Icons.copy_outlined),
               tooltip: 'Copy',
-              onPressed: () => onCopy!(),
+              onPressed: () => widget.onCopy!(activePage),
             ),
-          if (onSave != null)
+          if (widget.onSave != null)
             IconButton(
               icon: const Icon(Icons.download_outlined),
               tooltip: 'Save',
-              onPressed: () => onSave!(),
+              onPressed: () => widget.onSave!(activePage),
             ),
         ],
       ),
@@ -9395,16 +9477,24 @@ class _ImageViewerScreen extends StatelessWidget {
           // (a 30 MB photo could be 8 K × 6 K and OOM the platform
           // image codec without this).
           final cacheW = (constraints.maxWidth * dpr).round();
-          return Center(
-            child: InteractiveViewer(
-              minScale: 0.5,
-              maxScale: 6,
-              child: Image.memory(
-                bytes,
-                fit: BoxFit.contain,
-                cacheWidth: cacheW,
-              ),
-            ),
+          return PageView.builder(
+            controller: _controller,
+            itemCount: widget.pages.length,
+            onPageChanged: (i) => setState(() => _index = i),
+            itemBuilder: (context, i) {
+              final page = widget.pages[i];
+              return Center(
+                child: InteractiveViewer(
+                  minScale: 0.5,
+                  maxScale: 6,
+                  child: Image.memory(
+                    page.bytes,
+                    fit: BoxFit.contain,
+                    cacheWidth: cacheW,
+                  ),
+                ),
+              );
+            },
           );
         },
       ),
