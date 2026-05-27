@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
@@ -17,6 +18,7 @@ import 'package:video_player/video_player.dart';
 import 'src/app_storage.dart';
 import 'src/build_info.dart';
 import 'src/conest_theme.dart';
+import 'src/lan_direct.dart';
 import 'src/media_picker_sheet.dart';
 import 'src/messenger_controller.dart';
 import 'src/models.dart';
@@ -79,6 +81,10 @@ Future<void> _runConestWithProfile(
     vaultStore: vaultStore,
     relayClient: const RelayClient(),
     platformBridge: platformBridge,
+    // nightly.9: enable the LocalSend-style direct PUT fast-path for LAN
+    // chunk delivery. Falls back to relay automatically if the platform
+    // can't bind a port or peers don't advertise their endpoint.
+    lanDirectChannel: HttpLanDirectChannel(),
   );
   final updateService = UpdateService(
     buildInfo: buildInfo,
@@ -88,6 +94,20 @@ Future<void> _runConestWithProfile(
     automaticStartupChecksEnabled: profile.automaticStartupChecksEnabled,
   );
   await controller.initialize();
+  // nightly.9: forward platform connectivity changes (Wi-Fi ↔ VPN ↔
+  // cellular) so the controller can re-probe in-flight transfers
+  // immediately instead of waiting out the 60 s stall timer against a
+  // stale interface. Best-effort: on platforms where connectivity_plus
+  // refuses to bind we just skip the listener and the existing retry
+  // path still recovers, just more slowly.
+  try {
+    Connectivity().onConnectivityChanged.listen((results) {
+      final label = results.map((r) => r.name).join(',');
+      controller.onConnectivityChanged(interfaceLabel: label);
+    });
+  } catch (error) {
+    controller.appendDebugLog('connectivity_plus listener unavailable: $error');
+  }
   runApp(
     ConestApp(
       controller: controller,
@@ -8765,6 +8785,17 @@ class _AlbumBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final caption = members.isNotEmpty ? members.first.body : '';
     final cols = members.length <= 2 ? 2 : (members.length <= 4 ? 2 : 3);
+    final albumId = members.isNotEmpty ? members.first.albumId : null;
+    final bool anyInFlight = members.any(
+      (m) =>
+          m.outbound &&
+          (m.state == DeliveryState.pending ||
+              m.state == DeliveryState.local ||
+              m.state == DeliveryState.relayed),
+    );
+    final bool anyFailed = members.any(
+      (m) => m.outbound && m.state == DeliveryState.failed,
+    );
     return Align(
       alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -8775,38 +8806,104 @@ class _AlbumBubble extends StatelessWidget {
           color: outbound ? palette.outboundBubble : palette.inboundBubble,
           borderRadius: BorderRadius.circular(18),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Stack(
           children: [
-            GridView.count(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisCount: cols,
-              mainAxisSpacing: 4,
-              crossAxisSpacing: 4,
-              childAspectRatio: 1.0,
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                for (final m in members)
-                  if (m.attachment != null)
-                    _AttachmentRow(
-                      descriptor: m.attachment!,
-                      outbound: outbound,
-                      controller: controller,
-                      palette: palette,
-                      messageState: m.state,
+                GridView.count(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  crossAxisCount: cols,
+                  mainAxisSpacing: 4,
+                  crossAxisSpacing: 4,
+                  childAspectRatio: 1.0,
+                  children: [
+                    for (final m in members)
+                      if (m.attachment != null)
+                        _AttachmentRow(
+                          descriptor: m.attachment!,
+                          outbound: outbound,
+                          controller: controller,
+                          palette: palette,
+                          messageState: m.state,
+                        ),
+                  ],
+                ),
+                if (caption.trim().isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    caption,
+                    style: TextStyle(
+                      color: outbound
+                          ? palette.outboundText
+                          : palette.inboundText,
                     ),
+                  ),
+                ],
+                if (anyFailed) ...[
+                  const SizedBox(height: 6),
+                  InkWell(
+                    onTap: () {
+                      for (final m in members) {
+                        if (m.outbound &&
+                            m.state == DeliveryState.failed &&
+                            m.attachment != null) {
+                          controller.retryAttachment(m.attachment!.id);
+                        }
+                      }
+                    },
+                    child: Text(
+                      'Retry failed',
+                      style: TextStyle(
+                        color: outbound
+                            ? palette.outboundText
+                            : palette.inboundText,
+                        decoration: TextDecoration.underline,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
-            if (caption.trim().isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(
-                caption,
-                style: TextStyle(
-                  color: outbound ? palette.outboundText : palette.inboundText,
+            if (albumId != null && albumId.isNotEmpty)
+              Positioned(
+                right: -8,
+                top: -8,
+                child: PopupMenuButton<String>(
+                  tooltip: 'Album actions',
+                  icon: Icon(
+                    Icons.more_horiz,
+                    size: 18,
+                    color: outbound
+                        ? palette.outboundMeta
+                        : palette.inboundMeta,
+                  ),
+                  onSelected: (value) async {
+                    switch (value) {
+                      case 'cancel':
+                        await controller.cancelAlbum(albumId);
+                        break;
+                      case 'delete':
+                        await controller.deleteAlbum(albumId);
+                        break;
+                    }
+                  },
+                  itemBuilder: (_) => [
+                    if (anyInFlight)
+                      const PopupMenuItem(
+                        value: 'cancel',
+                        child: Text('Cancel album'),
+                      ),
+                    const PopupMenuItem(
+                      value: 'delete',
+                      child: Text('Delete album'),
+                    ),
+                  ],
                 ),
               ),
-            ],
           ],
         ),
       ),
@@ -9441,8 +9538,11 @@ class _AttachmentRow extends StatelessWidget {
     } else if (hasBytes && !outbound) {
       statusLine = _formatBytes(descriptor.sizeBytes);
     } else if (outbound && outboundProgress != null) {
+      final reroutePrefix = controller.isOutboundReroutingFor(descriptor.id)
+          ? 'Rerouting · '
+          : '';
       statusLine =
-          'Transferring · ${(outboundProgress * 100).toStringAsFixed(0)}% · '
+          '${reroutePrefix}Transferring · ${(outboundProgress * 100).toStringAsFixed(0)}% · '
           '${_formatBytes(descriptor.sizeBytes)}$pauseSuffix';
     } else if (outbound && queuePosition > 0) {
       statusLine =
@@ -9490,12 +9590,27 @@ class _AttachmentRow extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 2),
-                    Text(
-                      statusLine,
-                      style: Theme.of(
-                        context,
-                      ).textTheme.labelSmall?.copyWith(color: metaColor),
-                    ),
+                    if (messageState == DeliveryState.failed && outbound)
+                      InkWell(
+                        onTap: () {
+                          controller.retryAttachment(descriptor.id);
+                        },
+                        child: Text(
+                          statusLine,
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(
+                                color: metaColor,
+                                decoration: TextDecoration.underline,
+                              ),
+                        ),
+                      )
+                    else
+                      Text(
+                        statusLine,
+                        style: Theme.of(
+                          context,
+                        ).textTheme.labelSmall?.copyWith(color: metaColor),
+                      ),
                   ],
                 ),
               ),

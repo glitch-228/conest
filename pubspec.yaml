@@ -1,7 +1,7 @@
 name: conest
 description: "Cross-platform secure text exchange prototype."
 publish_to: 'none'
-version: 0.3.3+24
+version: 0.3.3+25
 
 environment:
   sdk: ^3.11.4
@@ -28,6 +28,7 @@ dependencies:
   desktop_drop: ^0.6.0
   cross_file: ^0.3.4+1
   video_player: ^2.9.2
+  connectivity_plus: ^6.0.5
 
 dev_dependencies:
   flutter_test:

@@ -11,6 +11,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart' as path_provider;
 
 import 'crypto_service.dart';
+import 'lan_direct.dart';
 import 'local_relay_node.dart';
 import 'models.dart';
 import 'platform_bridge.dart';
@@ -114,6 +115,7 @@ class MessengerController extends ChangeNotifier {
     Future<SignedRelayDefaults?> Function()? signedRelayDefaultsLoader,
     Future<Directory> Function()? attachmentRootProvider,
     bool enableLongPoll = true,
+    LanDirectChannel? lanDirectChannel,
   }) : _vaultStore = vaultStore,
        _localRelayNode = localRelayNode ?? LocalRelayNode(),
        _platformBridge = platformBridge ?? PlatformBridge(),
@@ -122,7 +124,8 @@ class MessengerController extends ChangeNotifier {
        _signedRelayDefaultsLoader = signedRelayDefaultsLoader,
        _attachmentRootProvider =
            attachmentRootProvider ?? _defaultAttachmentRootProvider,
-       _longPollEnabled = enableLongPoll {
+       _longPollEnabled = enableLongPoll,
+       _lanDirectChannel = lanDirectChannel {
     _relayClient = _ScoringRelayClient(
       inner: relayClient,
       onAttempt: _recordRelayAttemptFromShim,
@@ -172,6 +175,27 @@ class MessengerController extends ChangeNotifier {
   /// persisted, so the bubble can keep rendering the file row / image
   /// thumbnail after an app restart instead of regressing to "transferring".
   final Future<Directory> Function() _attachmentRootProvider;
+
+  /// nightly.9 LocalSend-style direct PUT channel. Null → fast-path is
+  /// disabled and every chunk goes through the relay envelope shape (the
+  /// existing path). When non-null and `start()` returns a port, peers
+  /// can advertise their endpoint via the chunk_request payload and the
+  /// sender PUTs chunks directly instead of round-tripping via the relay.
+  final LanDirectChannel? _lanDirectChannel;
+
+  /// Cache: peer deviceId → endpoint where the peer's `LanDirectChannel`
+  /// is listening. Populated when an `attachment_chunk_request` payload
+  /// carries the peer's port hint. Evicted on repeated PUT failures.
+  final Map<String, LanDirectEndpoint> _peerLanDirect = {};
+
+  /// Current LAN addresses for embedding in our own outbound payload
+  /// hints. Refreshed during initialize() and on connectivity changes.
+  List<String> _localLanAddressesCache = const <String>[];
+
+  /// Per-recipient LAN-direct failure cooldown. After two consecutive
+  /// PUT failures we demote a peer to relay-only for this window before
+  /// re-probing.
+  static const Duration _lanDirectCooldown = Duration(seconds: 30);
   VaultSnapshot _snapshot = VaultSnapshot.empty();
   Timer? _pollTimer;
   bool _ready = false;
@@ -757,6 +781,16 @@ class MessengerController extends ChangeNotifier {
       if (normalized) {
         await _saveSnapshotSilently(notify: false);
       }
+      // nightly.9 scrubber: users who ran nightly.8 had attachment_progress
+      // and attachment_pause_control envelopes leak into chat history as
+      // JSON-shaped text bodies (the outer gate at L5614 was missing those
+      // kinds). Clean them up on boot so the regression doesn't linger in
+      // the UI after the user updates.
+      final scrubbed = _scrubLeakedAttachmentEnvelopeMessages();
+      if (scrubbed) {
+        await _saveSnapshotSilently(notify: false);
+      }
+      await _startLanDirectChannel();
       await _ingestSignedDefaultRelaysIfNeeded();
       if (_snapshot.identity != null) {
         await _refreshLanAddresses(persist: false);
@@ -3407,6 +3441,19 @@ class MessengerController extends ChangeNotifier {
     return (state.highestChunkSent + 1) / total;
   }
 
+  /// True when [attachmentId] recently delivered a chunk via a non-primary
+  /// route (LAN failed, relay succeeded — or both consecutive failures).
+  /// The bubble's status line prepends "Rerouting · " while this is set.
+  /// Window: 5 s after the most recent fallback so a brief flap doesn't
+  /// leave the label stuck.
+  bool isOutboundReroutingFor(String attachmentId) {
+    final state = _outboundAttachments[attachmentId];
+    if (state == null) return false;
+    final at = state.lastRouteFallbackAt;
+    if (at == null) return false;
+    return DateTime.now().toUtc().difference(at) < const Duration(seconds: 5);
+  }
+
   /// Returns the assembled bytes for an attachment, or null while the
   /// transfer is still in flight (or was never offered to this peer).
   /// Hits the on-disk cache as a fallback so a freshly-launched app
@@ -3942,6 +3989,137 @@ class MessengerController extends ChangeNotifier {
       unawaited(_sendAttachmentCancel(contact, attachmentId));
     }
     await _persist('Canceled and deleted pending message to ${contact.alias}.');
+  }
+
+  /// Removes every member of [albumId] from this device. For outbound
+  /// members that still need a remote-deletion envelope, [deleteMessage]
+  /// handles that. Mirrors the user's mental model that the popup menu
+  /// applies to the album as a unit, not one tile at a time.
+  Future<void> deleteAlbum(String albumId) async {
+    if (albumId.isEmpty) return;
+    final targets = <({String peerDeviceId, String messageId})>[];
+    for (final conversation in _snapshot.conversations) {
+      for (final message in conversation.messages) {
+        if (message.albumId == albumId) {
+          targets.add((
+            peerDeviceId: conversation.peerDeviceId,
+            messageId: message.id,
+          ));
+        }
+      }
+    }
+    if (targets.isEmpty) return;
+    for (final target in targets) {
+      final contact = _contactByDeviceId(target.peerDeviceId);
+      try {
+        if (contact != null) {
+          await deleteMessage(contact: contact, messageId: target.messageId);
+        } else {
+          _deleteMessage(target.peerDeviceId, target.messageId);
+        }
+      } catch (_) {
+        _deleteMessage(target.peerDeviceId, target.messageId);
+      }
+    }
+  }
+
+  /// Cancels every in-flight outbound transfer in [albumId]. Each member
+  /// uses the existing per-attachment cancel path so the receiver still
+  /// gets `attachment_cancel` envelopes.
+  Future<void> cancelAlbum(String albumId) async {
+    if (albumId.isEmpty) return;
+    final outboundMembers = <({ContactRecord contact, ChatMessage message})>[];
+    for (final conversation in _snapshot.conversations) {
+      for (final message in conversation.messages) {
+        if (message.albumId != albumId || !message.outbound) continue;
+        final contact = _contactByDeviceId(conversation.peerDeviceId);
+        if (contact == null) continue;
+        outboundMembers.add((contact: contact, message: message));
+      }
+    }
+    for (final entry in outboundMembers) {
+      final attachmentId = entry.message.attachment?.id;
+      if (attachmentId == null) continue;
+      try {
+        if (entry.message.state == DeliveryState.pending) {
+          await cancelPendingMessage(
+            contact: entry.contact,
+            messageId: entry.message.id,
+          );
+        } else {
+          unawaited(_sendAttachmentCancel(entry.contact, attachmentId));
+          _clearOutboundAttempt(entry.contact.deviceId, entry.message.id);
+          _outboundAttachments.remove(attachmentId);
+          _activeOutboundByContact.remove(entry.contact.deviceId);
+          _outboundQueueByContact[entry.contact.deviceId]?.remove(attachmentId);
+          _updateMessageState(
+            entry.contact.deviceId,
+            entry.message.id,
+            DeliveryState.canceled,
+          );
+        }
+      } catch (_) {
+        // Best-effort; per-member failure should not block the rest.
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Called when the host platform reports a connectivity-interface change
+  /// (Wi-Fi ↔ VPN ↔ cellular). The host wires `connectivity_plus`'s stream
+  /// in `main.dart` and calls this method on every event so the controller
+  /// stays platform-agnostic and testable (just call the method directly).
+  ///
+  /// Re-probes every active transfer so a stale-socket `_deliverToContact`
+  /// future doesn't hold the queue hostage waiting for the 60 s stall
+  /// timer (the symptom the user reported when toggling VPN mid-transfer).
+  void onConnectivityChanged({String? interfaceLabel}) {
+    final label = interfaceLabel ?? 'unknown';
+    appendDebugLog(
+      'Connectivity changed ($label) — kicking active transfers + polling.',
+    );
+    // Cancel inbound retry timers so the next re-request fires immediately
+    // through the (possibly different) route instead of waiting out the
+    // original interval against a stale interface.
+    for (final state in _inboundAttachments.values) {
+      state.retryTimer?.cancel();
+      final peer = _contactByDeviceId(state.peerDeviceId);
+      if (peer == null) continue;
+      _topUpInboundWindow(state, peer);
+    }
+    // Kick every outbound queue — the new interface may have a viable
+    // route the old one didn't, and the queue might be parked behind a
+    // stalled active outbound.
+    for (final contactId in _activeOutboundByContact.keys.toList()) {
+      final contact = _contactByDeviceId(contactId);
+      if (contact != null) _pumpOutboundQueue(contact);
+    }
+    // Drain whatever queued at the relay during the interface flap.
+    unawaited(pollNow());
+  }
+
+  /// User-initiated retry of a Failed attachment. Resets the auto-retry
+  /// counter, clears in-flight chunk progress so the queue worker starts
+  /// fresh, flips the parent message back to `sending`, and re-enqueues.
+  /// Invoked by the bubble's "tap to retry" InkWell (nightly.9).
+  void retryAttachment(String attachmentId) {
+    final state = _outboundAttachments[attachmentId];
+    if (state == null) return;
+    final contact = _contactByDeviceId(state.peerDeviceId);
+    if (contact == null) return;
+    state.autoRetries = 0;
+    state.highestChunkSent = -1;
+    state.peerReceivedCount = null;
+    state.peerProgressAt = null;
+    _updateMessageState(
+      state.peerDeviceId,
+      state.messageId,
+      DeliveryState.pending,
+    );
+    appendDebugLog('User tapped retry for $attachmentId — re-enqueueing.');
+    _enqueueOutbound(contact, attachmentId);
+    _pumpOutboundQueue(contact);
+    notifyListeners();
   }
 
   Future<void> deleteMessage({
@@ -5615,7 +5793,9 @@ class MessengerController extends ChangeNotifier {
           envelope.kind == 'attachment_chunk_request' ||
           envelope.kind == 'attachment_chunk' ||
           envelope.kind == 'attachment_complete' ||
-          envelope.kind == 'attachment_cancel') {
+          envelope.kind == 'attachment_cancel' ||
+          envelope.kind == 'attachment_pause_control' ||
+          envelope.kind == 'attachment_progress') {
         await _handleAttachmentEnvelope(envelope);
         _markSeen(envelope.messageId);
         continue;
@@ -5918,6 +6098,10 @@ class MessengerController extends ChangeNotifier {
     int index,
   ) async {
     final me = _requireIdentity();
+    // nightly.9: piggy-back our LAN-direct endpoint hint so the sender
+    // can PUT subsequent chunks directly to our HTTP server instead of
+    // round-tripping through the relay envelope shape.
+    final hint = _localLanDirectHintPayload();
     final envelope = await _crypto.encryptPayloadEnvelope(
       kind: 'attachment_chunk_request',
       messageId: _randomId('areq'),
@@ -5926,7 +6110,11 @@ class MessengerController extends ChangeNotifier {
       senderDeviceId: me.deviceId,
       recipientDeviceId: peer.deviceId,
       contact: peer,
-      plaintext: jsonEncode({'attachmentId': attachmentId, 'index': index}),
+      plaintext: jsonEncode({
+        'attachmentId': attachmentId,
+        'index': index,
+        ...hint,
+      }),
     );
     try {
       await _deliverToContact(
@@ -5949,6 +6137,10 @@ class MessengerController extends ChangeNotifier {
     if (attachmentId == null || index == null) {
       return;
     }
+    // nightly.9: cache the requester's LAN-direct endpoint if they
+    // advertised one. Subsequent chunk responses can PUT directly to
+    // their HTTP server instead of round-tripping the relay.
+    _cachePeerLanDirectFromPayload(requester.deviceId, payload);
     final state = _outboundAttachments[attachmentId];
     if (state == null || state.peerDeviceId != requester.deviceId) {
       // Sender no longer has this attachment (deleted, canceled, or never
@@ -5995,8 +6187,44 @@ class MessengerController extends ChangeNotifier {
       contact: requester,
       plaintext: jsonEncode(chunk.toJson()),
     );
+    final preferredPrimaryKey = _preferredRoutesForContact(
+      requester,
+    ).firstOrNull?.routeKey;
+    // nightly.9 LAN-direct fast-path: if the requester recently advertised
+    // a LAN-direct endpoint and we have a channel to PUT through, try it
+    // before the relay-shaped delivery. Success skips ALL relay round-trips.
+    final lanDirectChannel = _lanDirectChannel;
+    final lanDirectEndpoint = _peerLanDirect[requester.deviceId];
+    if (lanDirectChannel != null &&
+        lanDirectChannel.isRunning &&
+        lanDirectEndpoint != null &&
+        _lanDirectEndpointUsable(lanDirectEndpoint)) {
+      final ok = await lanDirectChannel.putEnvelope(
+        host: lanDirectEndpoint.host,
+        port: lanDirectEndpoint.port,
+        envelope: envelope,
+        timeout: const Duration(seconds: 5),
+      );
+      if (ok) {
+        _onLanDirectPutSuccess(requester.deviceId);
+        if (_activeOutboundByContact[state.peerDeviceId] == attachmentId) {
+          if (index > state.highestChunkSent) {
+            state.highestChunkSent = index;
+          }
+          state.lastChunkAt = DateTime.now().toUtc();
+          state.consecutiveChunkFailures = 0;
+          _armOutboundStallTimer(requester);
+          notifyListeners();
+        }
+        return;
+      }
+      _onLanDirectPutFailure(requester.deviceId);
+      appendDebugLog(
+        'LAN-direct PUT to ${requester.alias} failed; falling back to relay.',
+      );
+    }
     try {
-      await _deliverToContact(
+      final deliveredVia = await _deliverToContact(
         contact: requester,
         recipientDeviceId: requester.deviceId,
         envelope: envelope,
@@ -6009,11 +6237,29 @@ class MessengerController extends ChangeNotifier {
           state.highestChunkSent = index;
         }
         state.lastChunkAt = DateTime.now().toUtc();
+        state.consecutiveChunkFailures = 0;
+        // If the delivered route is NOT the preferred primary, surface
+        // "Rerouting · X%" on the bubble for the next few seconds so the
+        // user sees the fallback is working.
+        if (preferredPrimaryKey != null &&
+            deliveredVia.routeKey != preferredPrimaryKey) {
+          state.lastRouteFallbackAt = DateTime.now().toUtc();
+        }
         _armOutboundStallTimer(requester);
         notifyListeners();
       }
-    } catch (_) {
-      // Receiver will re-request the missing chunk.
+    } catch (error) {
+      state.consecutiveChunkFailures++;
+      appendDebugLog(
+        'Chunk $index for $attachmentId: all routes failed '
+        '(streak ${state.consecutiveChunkFailures}) — $error',
+      );
+      // Bump the rerouting hint even on a hard failure so the bubble
+      // does not look frozen while the receiver retries.
+      if (state.consecutiveChunkFailures >= 2) {
+        state.lastRouteFallbackAt = DateTime.now().toUtc();
+        notifyListeners();
+      }
     }
   }
 
@@ -9646,6 +9892,192 @@ class MessengerController extends ChangeNotifier {
     return changed;
   }
 
+  /// Best-effort start for the LAN-direct HTTP server. Failure is silent
+  /// — the relay path still works, just slower. Stores a snapshot of the
+  /// local LAN addresses so they can be advertised to peers via the
+  /// chunk_request payload hint.
+  Future<void> _startLanDirectChannel() async {
+    final channel = _lanDirectChannel;
+    if (channel == null) return;
+    channel.onEnvelope = _handleLanDirectEnvelope;
+    try {
+      final port = await channel.start();
+      if (port != null) {
+        appendDebugLog('LAN-direct server listening on port $port');
+      } else {
+        appendDebugLog('LAN-direct server refused to bind — fast-path off.');
+      }
+    } catch (error) {
+      appendDebugLog('LAN-direct server failed to start: $error');
+    }
+    try {
+      _localLanAddressesCache = await _lanAddressProvider();
+    } catch (_) {
+      _localLanAddressesCache = const <String>[];
+    }
+  }
+
+  /// Dispatch entrypoint for envelopes arriving on the LAN-direct HTTP
+  /// server. Wraps the existing `_handleAttachmentEnvelope` with the
+  /// same deferred-notification accounting `_processEnvelopes` uses, so
+  /// concurrent LAN + relay arrivals still coalesce into one notify.
+  Future<void> _handleLanDirectEnvelope(RelayEnvelope envelope) async {
+    if (_disposed) return;
+    _notificationsDeferredDepth++;
+    try {
+      // Reuse the existing crypto + dispatch path. _handleAttachmentEnvelope
+      // already verifies the sender is a known non-pending contact, decrypts
+      // the payload, and routes by kind — so an attacker on the LAN who
+      // sends garbage just gets dropped at the crypto layer.
+      await _handleAttachmentEnvelope(envelope);
+    } finally {
+      _notificationsDeferredDepth--;
+      if (_notificationsDeferredDepth == 0 && _deferredNotificationPending) {
+        _deferredNotificationPending = false;
+        super.notifyListeners();
+      }
+    }
+  }
+
+  /// Public getter so the host (main.dart) and tests can read the bound
+  /// port for diagnostics or assertions. Null until the channel starts.
+  int? get lanDirectPort => _lanDirectChannel?.localPort;
+
+  /// JSON-encodable hint embedded in our outgoing attachment_chunk_request
+  /// (and offer) payloads so peers can cache our LAN-direct endpoint.
+  /// Returns an empty map when the channel isn't running, the platform
+  /// refused to bind, or no LAN addresses are known.
+  Map<String, dynamic> _localLanDirectHintPayload() {
+    final port = _lanDirectChannel?.localPort;
+    if (port == null) return const <String, dynamic>{};
+    if (_localLanAddressesCache.isEmpty) return const <String, dynamic>{};
+    return {
+      'senderLanDirectPort': port,
+      'senderLanAddresses': _localLanAddressesCache,
+    };
+  }
+
+  /// Test-only view of which peer endpoints we have cached. Used by
+  /// integration tests to assert the hint flowed through correctly.
+  @visibleForTesting
+  LanDirectEndpoint? peerLanDirectEndpointForTesting(String peerDeviceId) =>
+      _peerLanDirect[peerDeviceId];
+
+  /// Picks the host of [endpoint] if it is currently reachable. Today
+  /// returns the endpoint as-is; future work could probe via Socket.
+  bool _lanDirectEndpointUsable(LanDirectEndpoint endpoint) {
+    if (endpoint.demotedUntil != null &&
+        endpoint.demotedUntil!.isAfter(DateTime.now().toUtc())) {
+      return false;
+    }
+    // The endpoint must be "fresh" — peers re-advertise every chunk_request,
+    // so anything older than 5 minutes is likely stale (peer's LAN changed).
+    if (DateTime.now().toUtc().difference(endpoint.cachedAt) >
+        const Duration(minutes: 5)) {
+      return false;
+    }
+    return true;
+  }
+
+  /// Parses the LAN-direct hint embedded in incoming `attachment_offer`
+  /// and `attachment_chunk_request` payloads and caches the peer's
+  /// endpoint. Picks the FIRST advertised address (peers should list
+  /// their best-guess LAN IP first). Tests inject a fake transport that
+  /// uses a sentinel host string so the resolver doesn't matter.
+  void _cachePeerLanDirectFromPayload(
+    String peerDeviceId,
+    Map<String, dynamic> payload,
+  ) {
+    final port = payload['senderLanDirectPort'];
+    final addresses = payload['senderLanAddresses'];
+    if (port is! int || addresses is! List || addresses.isEmpty) {
+      return;
+    }
+    final host = addresses.first;
+    if (host is! String || host.isEmpty) return;
+    _peerLanDirect[peerDeviceId] = LanDirectEndpoint(
+      host: host,
+      port: port,
+      cachedAt: DateTime.now().toUtc(),
+    );
+  }
+
+  /// Records a PUT failure and demotes the peer to relay-only after the
+  /// second consecutive miss inside a short window.
+  void _onLanDirectPutFailure(String peerDeviceId) {
+    final ep = _peerLanDirect[peerDeviceId];
+    if (ep == null) return;
+    ep.consecutiveFailures++;
+    if (ep.consecutiveFailures >= 2) {
+      ep.demotedUntil = DateTime.now().toUtc().add(_lanDirectCooldown);
+      appendDebugLog(
+        'LAN-direct demoted for $peerDeviceId after '
+        '${ep.consecutiveFailures} failures; cooldown '
+        '${_lanDirectCooldown.inSeconds}s.',
+      );
+    }
+  }
+
+  /// Clears the failure counter after a successful PUT.
+  void _onLanDirectPutSuccess(String peerDeviceId) {
+    final ep = _peerLanDirect[peerDeviceId];
+    if (ep == null) return;
+    ep.consecutiveFailures = 0;
+    ep.demotedUntil = null;
+  }
+
+  /// nightly.9 one-shot scrubber for the nightly.8 regression where the
+  /// outer envelope-kind gate did not forward `attachment_progress` or
+  /// `attachment_pause_control` to the attachment handler. The payloads
+  /// then fell through to the default text-message path and surfaced as
+  /// JSON-shaped chat bodies. Idempotent — running it twice is a no-op
+  /// once the conversations have been cleaned.
+  bool _scrubLeakedAttachmentEnvelopeMessages() {
+    var anyChanged = false;
+    final cleanedConversations = <ConversationRecord>[];
+    for (final conversation in _snapshot.conversations) {
+      final filtered = conversation.messages
+          .where((message) => !_isLeakedAttachmentEnvelopeBody(message.body))
+          .toList(growable: false);
+      if (filtered.length == conversation.messages.length) {
+        cleanedConversations.add(conversation);
+        continue;
+      }
+      anyChanged = true;
+      cleanedConversations.add(conversation.copyWith(messages: filtered));
+    }
+    if (!anyChanged) {
+      return false;
+    }
+    final removed =
+        _snapshot.conversations.fold<int>(
+          0,
+          (sum, c) => sum + c.messages.length,
+        ) -
+        cleanedConversations.fold<int>(0, (sum, c) => sum + c.messages.length);
+    appendDebugLog(
+      'nightly.9 scrubber: removed $removed leaked attachment-envelope body '
+      'message(s) from ${cleanedConversations.length} conversation(s).',
+    );
+    _snapshot = _snapshot.copyWith(conversations: cleanedConversations);
+    return true;
+  }
+
+  static bool _isLeakedAttachmentEnvelopeBody(String body) {
+    final trimmed = body.trimLeft();
+    if (!trimmed.startsWith('{')) return false;
+    try {
+      final decoded = jsonDecode(trimmed);
+      if (decoded is! Map<String, dynamic>) return false;
+      if (!decoded.containsKey('attachmentId')) return false;
+      return decoded.containsKey('received') ||
+          decoded.containsKey('pausedByMe') ||
+          decoded.containsKey('pausedByPeer');
+    } catch (_) {
+      return false;
+    }
+  }
+
   String _routeBackoffSummaryForRoutes(Iterable<PeerEndpoint> routes) {
     final entries = <String>[];
     final seen = <String>{};
@@ -11159,6 +11591,7 @@ class MessengerController extends ChangeNotifier {
     unawaited(_stopPairingBeacon());
     unawaited(_platformBridge.setAndroidBackgroundRuntimeEnabled(false));
     unawaited(_localRelayNode.stop());
+    unawaited(_lanDirectChannel?.stop());
     super.dispose();
   }
 }
@@ -11236,6 +11669,18 @@ class _OutboundAttachmentState {
   /// [MessengerController._outboundAutoRetryLimit]; after that the
   /// bubble flips to Failed and waits for a manual tap.
   int autoRetries = 0;
+
+  /// Set whenever a chunk is delivered via a NON-primary route — the
+  /// preferred route (usually LAN) failed and the rotation inside
+  /// `_deliverToContact` had to fall through to relay. The bubble's
+  /// status line shows "Rerouting · X%" while this flag is fresh so the
+  /// user can tell their transfer is recovering via a backup path.
+  DateTime? lastRouteFallbackAt;
+
+  /// `_handleAttachmentChunkRequest` tracks consecutive failed chunk
+  /// deliveries. When this hits a small threshold the UI surfaces a
+  /// rerouting hint even before a successful fallback lands.
+  int consecutiveChunkFailures = 0;
 }
 
 class _InboundAttachmentState {
