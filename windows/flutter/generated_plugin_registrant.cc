@@ -11,6 +11,7 @@
 #include <dynamic_color/dynamic_color_plugin_c_api.h>
 #include <flutter_secure_storage_windows/flutter_secure_storage_windows_plugin.h>
 #include <irondash_engine_context/irondash_engine_context_plugin_c_api.h>
+#include <media_kit_video/media_kit_video_plugin_c_api.h>
 #include <super_native_extensions/super_native_extensions_plugin_c_api.h>
 
 void RegisterPlugins(flutter::PluginRegistry* registry) {
@@ -24,6 +25,8 @@ void RegisterPlugins(flutter::PluginRegistry* registry) {
       registry->GetRegistrarForPlugin("FlutterSecureStorageWindowsPlugin"));
   IrondashEngineContextPluginCApiRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("IrondashEngineContextPluginCApi"));
+  MediaKitVideoPluginCApiRegisterWithRegistrar(
+      registry->GetRegistrarForPlugin("MediaKitVideoPluginCApi"));
   SuperNativeExtensionsPluginCApiRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("SuperNativeExtensionsPluginCApi"));
 }

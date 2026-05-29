@@ -14,6 +14,7 @@ import 'package:dynamic_color/dynamic_color.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 import 'package:video_player/video_player.dart';
+import 'package:video_player_media_kit/video_player_media_kit.dart';
 
 import 'src/app_storage.dart';
 import 'src/build_info.dart';
@@ -74,6 +75,14 @@ Future<void> _runConestWithProfile(
   if (!await instanceLock.acquire()) {
     runApp(ConestAlreadyRunningApp(themeController: themeController));
     return;
+  }
+  // nightly.10: register the libmpv-backed VideoPlayer platform impl on
+  // Linux + Windows. Without this, video_player throws
+  // `UnimplementedError: init() has not been implemented` on those
+  // platforms (the federated plugin only ships Android/iOS/macOS/web by
+  // default). Cheap no-op on the other platforms.
+  if (Platform.isLinux || Platform.isWindows) {
+    VideoPlayerMediaKit.ensureInitialized(linux: true, windows: true);
   }
   final buildInfo = await ConestBuildInfo.load();
   final platformBridge = PlatformBridge();
@@ -1473,10 +1482,19 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _sendCurrentMessage() async {
     final contact = _selectedContact;
+    if (contact == null) return;
     final body = _composerController.text.trim();
-    if (contact == null || body.isEmpty) {
+    // nightly.10: when files are staged, Send commits the bundle (with
+    // the typed text as caption on the first item). When no files are
+    // staged, fall through to the text-only send path.
+    final staged = widget.controller.stagedAttachmentsFor(contact.deviceId);
+    if (staged.isNotEmpty) {
+      _composerController.clear();
+      setState(() => _replyTarget = null);
+      await widget.controller.sendStagedBundle(contact: contact, caption: body);
       return;
     }
+    if (body.isEmpty) return;
     final replyTarget = _replyTarget;
     _composerController.clear();
     setState(() => _replyTarget = null);
@@ -1541,7 +1559,7 @@ class _HomeScreenState extends State<HomeScreen> {
         widget.controller.setStatus('Could not read ${file.name}: $error');
       }
     }
-    await _sendMultipleAttachments(contact: contact, items: items);
+    await _stageMultipleAttachments(contact: contact, items: items);
   }
 
   /// Ctrl/Cmd+V handler that prefers binary paste. Tries the
@@ -1663,7 +1681,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final result = await showMediaPickerSheet(
       context: context,
       palette: widget.palette,
-      maxBytes: MessengerController.maxAttachmentSizeBytes,
+      // nightly.10: per-contact + LAN-aware cap.
+      maxBytes: widget.controller.effectiveMaxAttachmentSizeFor(contact),
     );
     if (!mounted || result == null) {
       return;
@@ -1673,7 +1692,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     if (result.items != null) {
-      await _sendMultipleAttachments(contact: contact, items: result.items!);
+      await _stageMultipleAttachments(contact: contact, items: result.items!);
       return;
     }
     await _sendAttachmentBytes(
@@ -1736,7 +1755,7 @@ class _HomeScreenState extends State<HomeScreen> {
         poster: null,
       ));
     }
-    await _sendMultipleAttachments(contact: contact, items: items);
+    await _stageMultipleAttachments(contact: contact, items: items);
   }
 
   Future<void> _sendAttachmentBytes({
@@ -1745,7 +1764,7 @@ class _HomeScreenState extends State<HomeScreen> {
     required String fileName,
     required String mimeType,
   }) {
-    return _sendMultipleAttachments(
+    return _stageMultipleAttachments(
       contact: contact,
       items: [
         (
@@ -1759,7 +1778,15 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _sendMultipleAttachments({
+  /// nightly.10: every input pipeline (media picker, drag-drop, paste,
+  /// Ctrl+V, file picker) calls THIS to add to the staging tray instead
+  /// of immediately sending. The Send button reads the staged bucket via
+  /// `controller.sendStagedBundle(contact, caption: composer.text)`.
+  ///
+  /// Album packing + per-item delays now live on `sendStagedBundle` in
+  /// the controller; this function only filters by per-contact cap and
+  /// converts the tuple into [StagedAttachment].
+  Future<void> _stageMultipleAttachments({
     required ContactRecord contact,
     required List<
       ({
@@ -1772,145 +1799,41 @@ class _HomeScreenState extends State<HomeScreen> {
     >
     items,
   }) async {
-    if (items.isEmpty) {
-      return;
-    }
+    if (items.isEmpty) return;
     final cap = MessengerController.maxAttachmentsPerSend;
     final clamped = items.take(cap).toList(growable: false);
     if (items.length > cap) {
       widget.controller.setStatus(
-        'Only the first $cap files will be sent (got ${items.length}).',
+        'Only the first $cap files will be staged (got ${items.length}).',
       );
     }
-    // Composer-level caption is the fallback for the first uncaptioned item.
-    final composerCaption = _composerController.text.trim();
-    if (composerCaption.isNotEmpty) {
-      _composerController.clear();
-    }
-    final capMb = MessengerController.maxAttachmentSizeBytes ~/ (1024 * 1024);
-    // First drop oversize items so the album grouping below operates on
-    // the items that will actually ship.
-    final filtered =
-        <
-          ({
-            Uint8List bytes,
-            String fileName,
-            String mimeType,
-            String caption,
-            Uint8List? poster,
-          })
-        >[];
+    final perContactCap = widget.controller.effectiveMaxAttachmentSizeFor(
+      contact,
+    );
+    final capMb = perContactCap ~/ (1024 * 1024);
+    final staged = <StagedAttachment>[];
     for (final item in clamped) {
-      if (item.bytes.length > MessengerController.maxAttachmentSizeBytes) {
+      if (item.bytes.length > perContactCap) {
         widget.controller.setStatus(
           '${item.fileName} skipped: ${(item.bytes.length / (1024 * 1024)).toStringAsFixed(1)} '
           'MB exceeds the $capMb MB cap.',
         );
         continue;
       }
-      filtered.add(item);
-    }
-    if (filtered.isEmpty) return;
-
-    // Album packing: captioned items go solo (single-item album, no
-    // albumId so they render as a standalone bubble). Uncaptioned items
-    // bundle into albums of `maxAttachmentsPerAlbum`.
-    final albums =
-        <
-          List<
-            ({
-              Uint8List bytes,
-              String fileName,
-              String mimeType,
-              String caption,
-              Uint8List? poster,
-            })
-          >
-        >[];
-    List<
-      ({
-        Uint8List bytes,
-        String fileName,
-        String mimeType,
-        String caption,
-        Uint8List? poster,
-      })
-    >
-    current = [];
-    var composerCaptionUsed = false;
-    for (final item in filtered) {
-      // Promote composer caption to the first uncaptioned item.
-      var effective = item;
-      if (item.caption.isEmpty &&
-          !composerCaptionUsed &&
-          composerCaption.isNotEmpty) {
-        effective = (
-          bytes: item.bytes,
+      staged.add(
+        StagedAttachment(
+          id: widget.controller.newAlbumId(),
           fileName: item.fileName,
           mimeType: item.mimeType,
-          caption: composerCaption,
+          sizeBytes: item.bytes.length,
+          bytes: item.bytes,
           poster: item.poster,
-        );
-        composerCaptionUsed = true;
-      }
-      if (effective.caption.isNotEmpty) {
-        if (current.isNotEmpty) {
-          albums.add(current);
-          current = [];
-        }
-        albums.add([effective]);
-        continue;
-      }
-      current.add(effective);
-      if (current.length == MessengerController.maxAttachmentsPerAlbum) {
-        albums.add(current);
-        current = [];
-      }
+          caption: item.caption,
+        ),
+      );
     }
-    if (current.isNotEmpty) albums.add(current);
-
-    for (var a = 0; a < albums.length; a++) {
-      final album = albums[a];
-      // Single-item "albums" don't need an id — they render as a
-      // standalone bubble. The previous timestamp-based id collided
-      // when two batches landed in the same microsecond, merging
-      // distinct albums into one bubble — see nightly.8 plan.
-      final albumId = album.length > 1 ? widget.controller.newAlbumId() : null;
-      for (var i = 0; i < album.length; i++) {
-        final entry = album[i];
-        try {
-          await widget.controller.sendAttachment(
-            contact: contact,
-            bytes: entry.bytes,
-            fileName: entry.fileName,
-            mimeType: entry.mimeType,
-            // Caption only on the FIRST item of an uncaptioned-grouped
-            // album; for solo (captioned) items the caption is theirs.
-            caption: album.length == 1
-                ? entry.caption
-                : (i == 0 ? entry.caption : ''),
-            albumId: albumId,
-            poster: entry.poster,
-          );
-        } catch (error) {
-          widget.controller.setStatus(
-            'Send failed for ${entry.fileName}: $error',
-          );
-        }
-        if (i < album.length - 1) {
-          await Future<void>.delayed(
-            const Duration(
-              milliseconds: MessengerController.albumOfferIntervalMs,
-            ),
-          );
-        }
-      }
-      if (a < albums.length - 1) {
-        await Future<void>.delayed(
-          const Duration(milliseconds: MessengerController.albumGapIntervalMs),
-        );
-      }
-    }
+    if (staged.isEmpty) return;
+    widget.controller.stageAttachments(contact: contact, items: staged);
   }
 
   static String _guessMimeType(String fileName) {
@@ -3538,11 +3461,32 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
 
   Widget _buildAlbumBubble(BuildContext context, List<ChatMessage> members) {
     if (members.isEmpty) return const SizedBox.shrink();
+    final allSelected = members.every(
+      (m) => _selectedMessageIds.contains(m.id),
+    );
     return _AlbumBubble(
       members: members,
       controller: controller,
       palette: palette,
       outbound: members.first.outbound,
+      selectionMode: _selectionMode,
+      selected: allSelected,
+      onToggleSelection: (album) {
+        setState(() {
+          final alreadyAll = album.every(
+            (m) => _selectedMessageIds.contains(m.id),
+          );
+          if (alreadyAll) {
+            for (final m in album) {
+              _selectedMessageIds.remove(m.id);
+            }
+          } else {
+            for (final m in album) {
+              _selectedMessageIds.add(m.id);
+            }
+          }
+        });
+      },
     );
   }
 
@@ -3554,18 +3498,21 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     final baseColor = selected
         ? palette.primary.withValues(alpha: 0.18)
         : (outbound ? palette.outboundBubble : palette.inboundBubble);
-    return Align(
+    return GestureDetector(
       key: _messageKeyFor(message.id),
-      alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
-      child: GestureDetector(
-        onTap: _selectionMode ? () => _toggleMessageSelection(message) : null,
-        onLongPress: () => _toggleMessageSelection(message),
-        onDoubleTap: _selectionMode
-            ? null
-            : () {
-                _flashMessage(message.id);
-                widget.onReplyToMessage(message);
-              },
+      // nightly.10: opaque so long-press registers on the empty row space
+      // next to the bubble too, not just on the bubble itself.
+      behavior: HitTestBehavior.opaque,
+      onTap: _selectionMode ? () => _toggleMessageSelection(message) : null,
+      onLongPress: () => _toggleMessageSelection(message),
+      onDoubleTap: _selectionMode
+          ? null
+          : () {
+              _flashMessage(message.id);
+              widget.onReplyToMessage(message);
+            },
+      child: Align(
+        alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
         child: AnimatedContainer(
           duration: _replyFlashDuration,
           curve: Curves.easeOut,
@@ -4328,11 +4275,32 @@ class _ChatPanelState extends State<_ChatPanel> {
 
   Widget _buildAlbumBubble(BuildContext context, List<ChatMessage> members) {
     if (members.isEmpty) return const SizedBox.shrink();
+    final allSelected = members.every(
+      (m) => _selectedMessageIds.contains(m.id),
+    );
     return _AlbumBubble(
       members: members,
       controller: controller,
       palette: palette,
       outbound: members.first.outbound,
+      selectionMode: _selectionMode,
+      selected: allSelected,
+      onToggleSelection: (album) {
+        setState(() {
+          final alreadyAll = album.every(
+            (m) => _selectedMessageIds.contains(m.id),
+          );
+          if (alreadyAll) {
+            for (final m in album) {
+              _selectedMessageIds.remove(m.id);
+            }
+          } else {
+            for (final m in album) {
+              _selectedMessageIds.add(m.id);
+            }
+          }
+        });
+      },
     );
   }
 
@@ -4344,22 +4312,25 @@ class _ChatPanelState extends State<_ChatPanel> {
     final baseColor = selected
         ? palette.primary.withValues(alpha: 0.18)
         : (outbound ? palette.outboundBubble : palette.inboundBubble);
-    return Align(
+    return GestureDetector(
       key: _messageKeyFor(message.id),
-      alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
-      child: GestureDetector(
-        onTap: _selectionMode ? () => _toggleMessageSelection(message) : null,
-        onLongPress: () => _toggleMessageSelection(message),
-        onDoubleTap: _selectionMode
-            ? null
-            : () async {
-                _flashMessage(message.id);
-                if (outbound) {
-                  await _editMessage(context, message);
-                } else {
-                  widget.onReplyToMessage(message);
-                }
-              },
+      // nightly.10: opaque so long-press registers in the empty row space
+      // next to the bubble, not just on the bubble itself.
+      behavior: HitTestBehavior.opaque,
+      onTap: _selectionMode ? () => _toggleMessageSelection(message) : null,
+      onLongPress: () => _toggleMessageSelection(message),
+      onDoubleTap: _selectionMode
+          ? null
+          : () async {
+              _flashMessage(message.id);
+              if (outbound) {
+                await _editMessage(context, message);
+              } else {
+                widget.onReplyToMessage(message);
+              }
+            },
+      child: Align(
+        alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
         child: AnimatedContainer(
           duration: _replyFlashDuration,
           curve: Curves.easeOut,
@@ -4720,6 +4691,13 @@ class _ChatPanelState extends State<_ChatPanel> {
                     ),
                     const SizedBox(height: 12),
                   ],
+                  // nightly.10: staged-attachment tray (preview tiles +
+                  // X-to-cancel). Hidden when no items are staged.
+                  _StagedAttachmentTray(
+                    controller: widget.controller,
+                    contact: contact,
+                    palette: palette,
+                  ),
                   Row(
                     children: [
                       IconButton(
@@ -8774,12 +8752,20 @@ class _AlbumBubble extends StatelessWidget {
     required this.controller,
     required this.palette,
     required this.outbound,
+    this.selectionMode = false,
+    this.selected = false,
+    this.onToggleSelection,
   });
 
   final List<ChatMessage> members;
   final MessengerController controller;
   final ConestPalette palette;
   final bool outbound;
+  final bool selectionMode;
+  final bool selected;
+  // nightly.10: when non-null, long-press + tap-in-selection-mode invoke
+  // this to select the album as a unit (all members toggle together).
+  final void Function(List<ChatMessage> members)? onToggleSelection;
 
   @override
   Widget build(BuildContext context) {
@@ -8796,115 +8782,127 @@ class _AlbumBubble extends StatelessWidget {
     final bool anyFailed = members.any(
       (m) => m.outbound && m.state == DeliveryState.failed,
     );
-    return Align(
-      alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 520),
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: outbound ? palette.outboundBubble : palette.inboundBubble,
-          borderRadius: BorderRadius.circular(18),
-        ),
-        child: Stack(
-          children: [
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                GridView.count(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  crossAxisCount: cols,
-                  mainAxisSpacing: 4,
-                  crossAxisSpacing: 4,
-                  childAspectRatio: 1.0,
-                  children: [
-                    for (final m in members)
-                      if (m.attachment != null)
-                        _AttachmentRow(
-                          descriptor: m.attachment!,
-                          outbound: outbound,
-                          controller: controller,
-                          palette: palette,
-                          messageState: m.state,
-                        ),
-                  ],
-                ),
-                if (caption.trim().isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    caption,
-                    style: TextStyle(
-                      color: outbound
-                          ? palette.outboundText
-                          : palette.inboundText,
-                    ),
+    final bubbleColor = selected
+        ? palette.primary.withValues(alpha: 0.18)
+        : (outbound ? palette.outboundBubble : palette.inboundBubble);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: selectionMode && onToggleSelection != null
+          ? () => onToggleSelection!(members)
+          : null,
+      onLongPress: onToggleSelection != null
+          ? () => onToggleSelection!(members)
+          : null,
+      child: Align(
+        alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 520),
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: bubbleColor,
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Stack(
+            children: [
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  GridView.count(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    crossAxisCount: cols,
+                    mainAxisSpacing: 4,
+                    crossAxisSpacing: 4,
+                    childAspectRatio: 1.0,
+                    children: [
+                      for (final m in members)
+                        if (m.attachment != null)
+                          _AttachmentRow(
+                            descriptor: m.attachment!,
+                            outbound: outbound,
+                            controller: controller,
+                            palette: palette,
+                            messageState: m.state,
+                          ),
+                    ],
                   ),
-                ],
-                if (anyFailed) ...[
-                  const SizedBox(height: 6),
-                  InkWell(
-                    onTap: () {
-                      for (final m in members) {
-                        if (m.outbound &&
-                            m.state == DeliveryState.failed &&
-                            m.attachment != null) {
-                          controller.retryAttachment(m.attachment!.id);
-                        }
-                      }
-                    },
-                    child: Text(
-                      'Retry failed',
+                  if (caption.trim().isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      caption,
                       style: TextStyle(
                         color: outbound
                             ? palette.outboundText
                             : palette.inboundText,
-                        decoration: TextDecoration.underline,
-                        fontSize: 12,
                       ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-            if (albumId != null && albumId.isNotEmpty)
-              Positioned(
-                right: -8,
-                top: -8,
-                child: PopupMenuButton<String>(
-                  tooltip: 'Album actions',
-                  icon: Icon(
-                    Icons.more_horiz,
-                    size: 18,
-                    color: outbound
-                        ? palette.outboundMeta
-                        : palette.inboundMeta,
-                  ),
-                  onSelected: (value) async {
-                    switch (value) {
-                      case 'cancel':
-                        await controller.cancelAlbum(albumId);
-                        break;
-                      case 'delete':
-                        await controller.deleteAlbum(albumId);
-                        break;
-                    }
-                  },
-                  itemBuilder: (_) => [
-                    if (anyInFlight)
-                      const PopupMenuItem(
-                        value: 'cancel',
-                        child: Text('Cancel album'),
-                      ),
-                    const PopupMenuItem(
-                      value: 'delete',
-                      child: Text('Delete album'),
                     ),
                   ],
-                ),
+                  if (anyFailed) ...[
+                    const SizedBox(height: 6),
+                    InkWell(
+                      onTap: () {
+                        for (final m in members) {
+                          if (m.outbound &&
+                              m.state == DeliveryState.failed &&
+                              m.attachment != null) {
+                            controller.retryAttachment(m.attachment!.id);
+                          }
+                        }
+                      },
+                      child: Text(
+                        'Retry failed',
+                        style: TextStyle(
+                          color: outbound
+                              ? palette.outboundText
+                              : palette.inboundText,
+                          decoration: TextDecoration.underline,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
-          ],
+              if (albumId != null && albumId.isNotEmpty)
+                Positioned(
+                  right: -8,
+                  top: -8,
+                  child: PopupMenuButton<String>(
+                    tooltip: 'Album actions',
+                    icon: Icon(
+                      Icons.more_horiz,
+                      size: 18,
+                      color: outbound
+                          ? palette.outboundMeta
+                          : palette.inboundMeta,
+                    ),
+                    onSelected: (value) async {
+                      switch (value) {
+                        case 'cancel':
+                          await controller.cancelAlbum(albumId);
+                          break;
+                        case 'delete':
+                          await controller.deleteAlbum(albumId);
+                          break;
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      if (anyInFlight)
+                        const PopupMenuItem(
+                          value: 'cancel',
+                          child: Text('Cancel album'),
+                        ),
+                      const PopupMenuItem(
+                        value: 'delete',
+                        child: Text('Delete album'),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -9132,9 +9130,6 @@ class _AttachmentRow extends StatelessWidget {
 
   Future<void> _saveToDisk(BuildContext context, Uint8List bytes) =>
       _saveToDiskFor(context, bytes, descriptor.fileName, descriptor.mimeType);
-
-  Future<void> _copyImageBytes(Uint8List bytes) =>
-      _copyImageBytesFor(bytes, descriptor.fileName);
 
   Future<void> _copyImageBytesFor(Uint8List bytes, String filename) async {
     // Always put the filename on the OS text clipboard first as the
@@ -9406,32 +9401,30 @@ class _AttachmentRow extends StatelessWidget {
                 onTap: () => _openFullScreenImage(context, bytes),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(14),
-                  child: Image.memory(
-                    bytes,
-                    fit: BoxFit.cover,
-                    gaplessPlayback: true,
-                    cacheWidth: 640,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Image.memory(
+                        bytes,
+                        fit: BoxFit.cover,
+                        gaplessPlayback: true,
+                        cacheWidth: 640,
+                      ),
+                      // nightly.10: Telegram-style dim+spinner overlay
+                      // while the transfer is in flight so the preview
+                      // doesn't give a false "sent" feel. Hidden once
+                      // the bubble is delivered/read.
+                      if (transferInFlight)
+                        _TransferOverlay(progress: progress),
+                    ],
                   ),
                 ),
               ),
             ),
           ),
-          const SizedBox(height: 6),
-          _AttachmentActions(
-            metaColor: metaColor,
-            actions: [
-              _AttachmentAction(
-                icon: Icons.copy_outlined,
-                label: 'Copy',
-                onTap: () => _copyImageBytes(bytes),
-              ),
-              _AttachmentAction(
-                icon: Icons.download_outlined,
-                label: 'Save',
-                onTap: () => _saveToDisk(context, bytes),
-              ),
-            ],
-          ),
+          // nightly.10: Copy / Save moved into the full-screen viewer's
+          // AppBar to declutter the bubble. Tap the image to open the
+          // viewer, then use the AppBar icons.
         ],
       );
     }
@@ -9469,37 +9462,31 @@ class _AttachmentRow extends StatelessWidget {
                         gaplessPlayback: true,
                         cacheWidth: 640,
                       ),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.35),
-                          shape: BoxShape.circle,
+                      // nightly.10: dim+spinner overlay while in flight
+                      // so the receiver doesn't think the video is ready
+                      // before its bytes arrive.
+                      if (transferInFlight)
+                        _TransferOverlay(progress: progress)
+                      else
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.35),
+                            shape: BoxShape.circle,
+                          ),
+                          padding: const EdgeInsets.all(10),
+                          child: const Icon(
+                            Icons.play_arrow,
+                            color: Colors.white,
+                            size: 38,
+                          ),
                         ),
-                        padding: const EdgeInsets.all(10),
-                        child: const Icon(
-                          Icons.play_arrow,
-                          color: Colors.white,
-                          size: 38,
-                        ),
-                      ),
                     ],
                   ),
                 ),
               ),
             ),
           ),
-          if (hasBytes) ...[
-            const SizedBox(height: 6),
-            _AttachmentActions(
-              metaColor: metaColor,
-              actions: [
-                _AttachmentAction(
-                  icon: Icons.download_outlined,
-                  label: 'Save',
-                  onTap: () => _saveToDisk(context, bytes),
-                ),
-              ],
-            ),
-          ] else ...[
+          if (!hasBytes) ...[
             const SizedBox(height: 6),
             Text(
               progress != null
@@ -9752,6 +9739,194 @@ class _ViewerPage {
   final String mimeType;
 }
 
+/// nightly.10: horizontal tray of staged attachment previews above the
+/// composer. Each tile shows the file's thumbnail (image, video poster,
+/// or generic file icon) + X button to drop it. Hidden when no items
+/// are staged. Listens directly to the controller so adds from any
+/// pipeline (picker, drag-drop, paste, Ctrl+V) appear immediately.
+class _StagedAttachmentTray extends StatelessWidget {
+  const _StagedAttachmentTray({
+    required this.controller,
+    required this.contact,
+    required this.palette,
+  });
+
+  final MessengerController controller;
+  final ContactRecord contact;
+  final ConestPalette palette;
+
+  String _formatBytes(int size) {
+    if (size < 1024) return '$size B';
+    if (size < 1024 * 1024) return '${(size / 1024).toStringAsFixed(1)} KB';
+    return '${(size / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final staged = controller.stagedAttachmentsFor(contact.deviceId);
+        if (staged.isEmpty) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: SizedBox(
+            height: 88,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: staged.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              itemBuilder: (context, i) {
+                final item = staged[i];
+                final isImage = item.mimeType.startsWith('image/');
+                final isVideo = item.mimeType.startsWith('video/');
+                final preview = item.previewBytesIfCheap;
+                Widget previewChild;
+                if (isImage && preview != null) {
+                  previewChild = Image.memory(
+                    preview,
+                    fit: BoxFit.cover,
+                    cacheWidth: 176,
+                  );
+                } else if (isVideo && item.poster != null) {
+                  previewChild = Stack(
+                    fit: StackFit.expand,
+                    alignment: Alignment.center,
+                    children: [
+                      Image.memory(
+                        item.poster!,
+                        fit: BoxFit.cover,
+                        cacheWidth: 176,
+                      ),
+                      const Icon(
+                        Icons.play_circle_outline,
+                        color: Colors.white,
+                        size: 28,
+                      ),
+                    ],
+                  );
+                } else {
+                  previewChild = Container(
+                    color: palette.selection,
+                    alignment: Alignment.center,
+                    padding: const EdgeInsets.all(6),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          isVideo
+                              ? Icons.play_circle_outline
+                              : Icons.insert_drive_file_outlined,
+                          size: 22,
+                          color: palette.inboundMeta,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _formatBytes(item.sizeBytes),
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: palette.inboundMeta,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  );
+                }
+                return Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: SizedBox(
+                        width: 88,
+                        height: 88,
+                        child: previewChild,
+                      ),
+                    ),
+                    Positioned(
+                      right: -6,
+                      top: -6,
+                      child: InkWell(
+                        onTap: () => controller.removeStaged(
+                          deviceId: contact.deviceId,
+                          stagedId: item.id,
+                        ),
+                        child: Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.7),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.close,
+                            color: Colors.white,
+                            size: 16,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// nightly.10: Telegram-style overlay for in-flight image/video previews.
+/// A black-tinted scrim with a centered progress indicator + percentage
+/// text. Makes "this file hasn't actually been sent yet" unmissable —
+/// users were reading the preview alone as "delivered" before this.
+class _TransferOverlay extends StatelessWidget {
+  const _TransferOverlay({this.progress});
+
+  /// 0.0 to 1.0, or null for an indeterminate spinner.
+  final double? progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = progress != null ? (progress! * 100).round() : null;
+    return Positioned.fill(
+      child: ColoredBox(
+        color: Colors.black.withValues(alpha: 0.45),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 44,
+                height: 44,
+                child: CircularProgressIndicator(
+                  value: progress,
+                  strokeWidth: 3,
+                  color: Colors.white,
+                  backgroundColor: Colors.white24,
+                ),
+              ),
+              if (pct != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  '$pct%',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ImageViewerScreen extends StatefulWidget {
   const _ImageViewerScreen({
     required this.pages,
@@ -9788,6 +9963,24 @@ class _ImageViewerScreenState extends State<_ImageViewerScreen> {
     super.dispose();
   }
 
+  void _previousPage() {
+    if (_index > 0) {
+      _controller.previousPage(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  void _nextPage() {
+    if (_index < widget.pages.length - 1) {
+      _controller.nextPage(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final activePage = widget.pages[_index];
@@ -9816,34 +10009,53 @@ class _ImageViewerScreenState extends State<_ImageViewerScreen> {
             ),
         ],
       ),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final dpr = MediaQuery.of(context).devicePixelRatio.clamp(1.0, 3.0);
-          // Cap decoded width at the viewport's physical width — enough
-          // for pixel-perfect rendering, far less than the source image
-          // (a 30 MB photo could be 8 K × 6 K and OOM the platform
-          // image codec without this).
-          final cacheW = (constraints.maxWidth * dpr).round();
-          return PageView.builder(
-            controller: _controller,
-            itemCount: widget.pages.length,
-            onPageChanged: (i) => setState(() => _index = i),
-            itemBuilder: (context, i) {
-              final page = widget.pages[i];
-              return Center(
-                child: InteractiveViewer(
-                  minScale: 0.5,
-                  maxScale: 6,
-                  child: Image.memory(
-                    page.bytes,
-                    fit: BoxFit.contain,
-                    cacheWidth: cacheW,
-                  ),
-                ),
-              );
-            },
-          );
+      body: Focus(
+        autofocus: true,
+        // nightly.10: desktop users navigate album pages with arrow keys
+        // (the PageView's built-in gesture handling is touch-only).
+        onKeyEvent: (node, event) {
+          if (event is! KeyDownEvent) return KeyEventResult.ignored;
+          if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+            _previousPage();
+            return KeyEventResult.handled;
+          } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+            _nextPage();
+            return KeyEventResult.handled;
+          } else if (event.logicalKey == LogicalKeyboardKey.escape) {
+            Navigator.of(context).pop();
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
         },
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final dpr = MediaQuery.of(context).devicePixelRatio.clamp(1.0, 3.0);
+            // Cap decoded width at the viewport's physical width — enough
+            // for pixel-perfect rendering, far less than the source image
+            // (a 30 MB photo could be 8 K × 6 K and OOM the platform
+            // image codec without this).
+            final cacheW = (constraints.maxWidth * dpr).round();
+            return PageView.builder(
+              controller: _controller,
+              itemCount: widget.pages.length,
+              onPageChanged: (i) => setState(() => _index = i),
+              itemBuilder: (context, i) {
+                final page = widget.pages[i];
+                return Center(
+                  child: InteractiveViewer(
+                    minScale: 0.5,
+                    maxScale: 6,
+                    child: Image.memory(
+                      page.bytes,
+                      fit: BoxFit.contain,
+                      cacheWidth: cacheW,
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        ),
       ),
     );
   }
@@ -9894,6 +10106,24 @@ class _VideoPlayerScreenState extends State<_VideoPlayerScreen> {
     super.dispose();
   }
 
+  /// nightly.10: when video_player can't decode (libmpv missing codec,
+  /// unsupported container, or the platform impl just refuses) hand the
+  /// file off to the OS default player. xdg-open / start / open per OS.
+  Future<void> _openInSystemPlayer() async {
+    try {
+      if (Platform.isLinux) {
+        await Process.start('xdg-open', [widget.cachePath]);
+      } else if (Platform.isMacOS) {
+        await Process.start('open', [widget.cachePath]);
+      } else if (Platform.isWindows) {
+        await Process.start('cmd', ['/c', 'start', '', widget.cachePath]);
+      }
+      if (mounted) Navigator.of(context).pop();
+    } catch (_) {
+      // Best-effort; the error UI already shows the underlying problem.
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = _controller;
@@ -9912,29 +10142,59 @@ class _VideoPlayerScreenState extends State<_VideoPlayerScreen> {
             ),
         ],
       ),
-      body: Center(
-        child: _initError != null
-            ? Padding(
-                padding: const EdgeInsets.all(24),
-                child: Text(
-                  'Could not play this video: $_initError\n\n'
-                  'Try Save to open it in your system video player.',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70),
-                ),
-              )
-            : (c != null && c.value.isInitialized)
-            ? AspectRatio(
-                aspectRatio: c.value.aspectRatio,
-                child: Stack(
-                  alignment: Alignment.bottomCenter,
-                  children: [
-                    VideoPlayer(c),
-                    VideoProgressIndicator(c, allowScrubbing: true),
-                  ],
-                ),
-              )
-            : const CircularProgressIndicator(),
+      body: Focus(
+        autofocus: true,
+        // nightly.10: desktop Esc closes the player; space toggles play/pause.
+        onKeyEvent: (node, event) {
+          if (event is! KeyDownEvent) return KeyEventResult.ignored;
+          if (event.logicalKey == LogicalKeyboardKey.escape) {
+            Navigator.of(context).pop();
+            return KeyEventResult.handled;
+          }
+          if (event.logicalKey == LogicalKeyboardKey.space &&
+              c != null &&
+              c.value.isInitialized) {
+            setState(() {
+              c.value.isPlaying ? c.pause() : c.play();
+            });
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+        },
+        child: Center(
+          child: _initError != null
+              ? Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Could not play this video: $_initError',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: _openInSystemPlayer,
+                        icon: const Icon(Icons.open_in_new),
+                        label: const Text('Open in default player'),
+                      ),
+                    ],
+                  ),
+                )
+              : (c != null && c.value.isInitialized)
+              ? AspectRatio(
+                  aspectRatio: c.value.aspectRatio,
+                  child: Stack(
+                    alignment: Alignment.bottomCenter,
+                    children: [
+                      VideoPlayer(c),
+                      VideoProgressIndicator(c, allowScrubbing: true),
+                    ],
+                  ),
+                )
+              : const CircularProgressIndicator(),
+        ),
       ),
       floatingActionButton: (c != null && c.value.isInitialized)
           ? FloatingActionButton(

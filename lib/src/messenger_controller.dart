@@ -16,6 +16,9 @@ import 'local_relay_node.dart';
 import 'models.dart';
 import 'platform_bridge.dart';
 import 'reachability_tracker.dart';
+import 'staged_attachment.dart';
+
+export 'staged_attachment.dart' show StagedAttachment;
 import 'relay_client.dart';
 import 'relay_defaults.dart';
 import 'route_health_tracker.dart';
@@ -50,9 +53,12 @@ const Duration _foregroundIdlePollInterval = Duration(seconds: 15);
 
 /// Cadence used while at least one attachment transfer is in flight. The
 /// idle 15 s cadence killed file transfers that fell back to relay polling
-/// (each chunk RTT stretched into 15 s of wait). 1 s strikes a balance
-/// between battery cost and getting chunks through quickly.
-const Duration _activeTransferPollInterval = Duration(seconds: 1);
+/// (each chunk RTT stretched into 15 s of wait). nightly.10 drops this
+/// from 1 s → 250 ms so a relay-only 10 MB transfer doesn't pay a full
+/// second of wait between every chunk wave. The relay's wake-on-store
+/// Condvar means most polls are no-ops; this just shortens the worst
+/// case when wake-up misses.
+const Duration _activeTransferPollInterval = Duration(milliseconds: 250);
 const Duration _backgroundEnabledPollInterval = Duration(seconds: 30);
 const Duration _desktopBackgroundPollInterval = Duration(seconds: 15);
 const Duration _runtimeActiveWindow = Duration(seconds: 20);
@@ -196,6 +202,15 @@ class MessengerController extends ChangeNotifier {
   /// PUT failures we demote a peer to relay-only for this window before
   /// re-probing.
   static const Duration _lanDirectCooldown = Duration(seconds: 30);
+
+  /// nightly.10 staged-attachment buckets, keyed by recipient deviceId.
+  /// Every input pipeline (picker, drag-drop, paste, Ctrl+V) calls
+  /// `stageAttachments` to populate one of these instead of sending
+  /// immediately. The composer renders them as preview tiles with an
+  /// X-to-cancel; the Send button calls `sendStagedBundle` to commit.
+  /// Lives on the controller (not the chat screen state) so navigation
+  /// between contacts doesn't lose the staged items.
+  final Map<String, List<StagedAttachment>> _stagedAttachments = {};
   VaultSnapshot _snapshot = VaultSnapshot.empty();
   Timer? _pollTimer;
   bool _ready = false;
@@ -3080,8 +3095,16 @@ class MessengerController extends ChangeNotifier {
   int effectiveMaxAttachmentSizeFor(ContactRecord contact) {
     final effective = _effectiveTransports(contact);
     if (!effective.lan) return maxAttachmentSizeBytes;
-    if (effective.online) return maxAttachmentSizeBytes;
-    return _lanUnlimitedAttachmentCap;
+    if (!effective.online) return _lanUnlimitedAttachmentCap;
+    // nightly.10: when both LAN + online are enabled, normally we hold to
+    // the 30 MB cap because the path may fall through to relay. BUT if
+    // we have a fresh cached LAN-direct endpoint for this peer, we KNOW
+    // direct PUT is on the table and the relay-envelope cap is irrelevant.
+    final ep = _peerLanDirect[contact.deviceId];
+    if (ep != null && _lanDirectEndpointUsable(ep)) {
+      return _lanUnlimitedAttachmentCap;
+    }
+    return maxAttachmentSizeBytes;
   }
 
   /// Picks the chunk size to use when slicing a new outbound attachment.
@@ -3287,6 +3310,12 @@ class MessengerController extends ChangeNotifier {
       _pumpOutboundQueue(contact);
       return;
     }
+    // nightly.10: embed our LAN-direct endpoint hint in the offer so the
+    // receiver can issue chunk_requests directly via HTTP from the very
+    // first chunk — no relay round-trip required even for the request
+    // direction. Empty map when the LAN-direct channel isn't available
+    // (web, sandboxed CI), so peers gracefully fall back to relay.
+    final lanHint = _localLanDirectHintPayload();
     final envelope = await _crypto.encryptPayloadEnvelope(
       kind: 'attachment_offer',
       messageId: _randomId('aoff'),
@@ -3307,6 +3336,7 @@ class MessengerController extends ChangeNotifier {
         if (_videoPosters[descriptor.id] != null &&
             _videoPosters[descriptor.id]!.length <= 32 * 1024)
           'posterBase64': base64Encode(_videoPosters[descriptor.id]!),
+        ...lanHint,
       }),
       createdAt: message.createdAt,
     );
@@ -4063,6 +4093,134 @@ class MessengerController extends ChangeNotifier {
       }
     }
     notifyListeners();
+  }
+
+  // ---- nightly.10 staged attachment API ----
+
+  /// Append [items] to the staged bucket for [contact]. The composer's
+  /// preview tray will pick this up via `stagedAttachmentsFor` on the
+  /// next notify.
+  void stageAttachments({
+    required ContactRecord contact,
+    required List<StagedAttachment> items,
+  }) {
+    if (items.isEmpty) return;
+    final list = _stagedAttachments.putIfAbsent(
+      contact.deviceId,
+      () => <StagedAttachment>[],
+    );
+    list.addAll(items);
+    notifyListeners();
+  }
+
+  /// Read-only view of what's currently staged for [deviceId]. Returns
+  /// the empty list when no staging exists — the composer treats that as
+  /// "no preview tray to show".
+  List<StagedAttachment> stagedAttachmentsFor(String deviceId) {
+    final list = _stagedAttachments[deviceId];
+    if (list == null) return const <StagedAttachment>[];
+    return List<StagedAttachment>.unmodifiable(list);
+  }
+
+  /// Drop a single staged item via its [stagedId]. Wired to the X button
+  /// on each preview tile.
+  void removeStaged({required String deviceId, required String stagedId}) {
+    final list = _stagedAttachments[deviceId];
+    if (list == null) return;
+    list.removeWhere((item) => item.id == stagedId);
+    if (list.isEmpty) {
+      _stagedAttachments.remove(deviceId);
+    }
+    notifyListeners();
+  }
+
+  /// Wipe the bucket — used after a successful `sendStagedBundle` and
+  /// when the user navigates away from the contact and explicitly
+  /// abandons the bundle.
+  void clearStagedFor(String deviceId) {
+    final removed = _stagedAttachments.remove(deviceId);
+    if (removed != null) notifyListeners();
+  }
+
+  /// Commit the staged bundle. Applies the same album packing the
+  /// (now-deprecated) `_sendMultipleAttachments` did: per-item captions
+  /// go solo; uncaptioned items bundle into albums of
+  /// [maxAttachmentsPerAlbum]; the composer's [caption] (typed in the
+  /// TextField) is promoted to the FIRST uncaptioned item. Clears the
+  /// bucket immediately so the UI moves the previews into the chat
+  /// thread; per-item failures surface via the bubble's Failed state.
+  Future<void> sendStagedBundle({
+    required ContactRecord contact,
+    String caption = '',
+  }) async {
+    final staged = _stagedAttachments[contact.deviceId];
+    if (staged == null || staged.isEmpty) return;
+    final items = List<StagedAttachment>.from(staged);
+    _stagedAttachments.remove(contact.deviceId);
+    notifyListeners();
+
+    // Album packing identical to the pre-staging flow.
+    final albums = <List<StagedAttachment>>[];
+    var current = <StagedAttachment>[];
+    var composerCaptionUsed = false;
+    for (final item in items) {
+      var effectiveCaption = item.caption;
+      if (item.caption.isEmpty && !composerCaptionUsed && caption.isNotEmpty) {
+        effectiveCaption = caption;
+        composerCaptionUsed = true;
+      }
+      final effective = effectiveCaption == item.caption
+          ? item
+          : item.copyWith(caption: effectiveCaption);
+      if (effective.caption.isNotEmpty) {
+        if (current.isNotEmpty) {
+          albums.add(current);
+          current = <StagedAttachment>[];
+        }
+        albums.add([effective]);
+        continue;
+      }
+      current.add(effective);
+      if (current.length == maxAttachmentsPerAlbum) {
+        albums.add(current);
+        current = <StagedAttachment>[];
+      }
+    }
+    if (current.isNotEmpty) albums.add(current);
+
+    for (var a = 0; a < albums.length; a++) {
+      final album = albums[a];
+      final albumId = album.length > 1 ? newAlbumId() : null;
+      for (var i = 0; i < album.length; i++) {
+        final entry = album[i];
+        try {
+          final bytes = await entry.readBytes();
+          await sendAttachment(
+            contact: contact,
+            bytes: bytes,
+            fileName: entry.fileName,
+            mimeType: entry.mimeType,
+            caption: album.length == 1
+                ? entry.caption
+                : (i == 0 ? entry.caption : ''),
+            albumId: albumId,
+            poster: entry.poster,
+          );
+        } catch (error) {
+          appendDebugLog('sendStagedBundle: ${entry.fileName} failed — $error');
+        }
+        if (i < album.length - 1) {
+          await Future<void>.delayed(
+            const Duration(milliseconds: albumOfferIntervalMs),
+          );
+        }
+      }
+      if (a < albums.length - 1) {
+        await Future<void>.delayed(
+          const Duration(milliseconds: albumGapIntervalMs),
+        );
+      }
+    }
   }
 
   /// Called when the host platform reports a connectivity-interface change
@@ -5994,6 +6152,10 @@ class MessengerController extends ChangeNotifier {
     RelayEnvelope envelope,
     Map<String, dynamic> payload,
   ) async {
+    // nightly.10: cache the sender's LAN-direct endpoint from the offer
+    // so the very first chunk_request we issue can go via direct HTTP
+    // instead of round-tripping through the relay.
+    _cachePeerLanDirectFromPayload(sender.deviceId, payload);
     final descriptorJson = payload['descriptor'];
     if (descriptorJson is! Map<String, dynamic>) {
       return;
@@ -6116,6 +6278,30 @@ class MessengerController extends ChangeNotifier {
         ...hint,
       }),
     );
+    // nightly.10: LAN-direct fast-path for chunk_request too. If the peer
+    // advertised their port in the offer/chunk_request hint, push this
+    // request straight to their HTTP server instead of round-tripping
+    // through the relay. Together with the chunk-response fast-path from
+    // nightly.9 this gives full LAN symmetry — zero relay round-trips
+    // for the chunk loop once the offer lands.
+    final lanDirectChannel = _lanDirectChannel;
+    final lanDirectEndpoint = _peerLanDirect[peer.deviceId];
+    if (lanDirectChannel != null &&
+        lanDirectChannel.isRunning &&
+        lanDirectEndpoint != null &&
+        _lanDirectEndpointUsable(lanDirectEndpoint)) {
+      final ok = await lanDirectChannel.putEnvelope(
+        host: lanDirectEndpoint.host,
+        port: lanDirectEndpoint.port,
+        envelope: envelope,
+        timeout: const Duration(seconds: 5),
+      );
+      if (ok) {
+        _onLanDirectPutSuccess(peer.deviceId);
+        return;
+      }
+      _onLanDirectPutFailure(peer.deviceId);
+    }
     try {
       await _deliverToContact(
         contact: peer,

@@ -6099,6 +6099,116 @@ void main() {
     });
   });
 
+  group('nightly.10 staged-attachment API', () {
+    test(
+      'stageAttachments + sendStagedBundle round-trips a 3-item album',
+      () async {
+        final relayClient = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final bobOnAlice = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+
+        // Stage three small files — none have a caption, so they should
+        // bundle into one album.
+        final items = [
+          for (var i = 0; i < 3; i++)
+            StagedAttachment(
+              id: 'stage-$i',
+              fileName: 'file$i.bin',
+              mimeType: 'application/octet-stream',
+              sizeBytes: 32,
+              bytes: Uint8List.fromList(
+                List<int>.generate(32, (j) => (i * 31 + j) & 0xff),
+              ),
+            ),
+        ];
+        alice.stageAttachments(contact: bobOnAlice, items: items);
+        expect(
+          alice.stagedAttachmentsFor(bobOnAlice.deviceId).length,
+          3,
+          reason: 'all three items should appear in the staged tray',
+        );
+        // Before send: no outbound messages yet (false-sent fix).
+        final beforeSendCount = alice
+            .messagesFor(bobOnAlice.deviceId)
+            .where((m) => m.attachment != null)
+            .length;
+        expect(
+          beforeSendCount,
+          0,
+          reason: 'staging must not create chat messages',
+        );
+
+        // No composer caption → all 3 stay in one uncaptioned album.
+        await alice.sendStagedBundle(contact: bobOnAlice, caption: '');
+
+        // Staged bucket cleared.
+        expect(alice.stagedAttachmentsFor(bobOnAlice.deviceId), isEmpty);
+        // Three outbound messages now exist with the SAME albumId.
+        final outbound = alice
+            .messagesFor(bobOnAlice.deviceId)
+            .where((m) => m.attachment != null)
+            .toList();
+        expect(outbound.length, 3);
+        expect(outbound.first.albumId, isNotNull);
+        expect(
+          outbound.every((m) => m.albumId == outbound.first.albumId),
+          isTrue,
+          reason: 'all three uncaptioned members share one albumId',
+        );
+      },
+      timeout: const Timeout(Duration(seconds: 20)),
+    );
+
+    test('removeStaged drops a single item by id', () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobOnAlice = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+
+      alice.stageAttachments(
+        contact: bobOnAlice,
+        items: [
+          StagedAttachment(
+            id: 'keep',
+            fileName: 'a.bin',
+            mimeType: 'application/octet-stream',
+            sizeBytes: 8,
+            bytes: Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8]),
+          ),
+          StagedAttachment(
+            id: 'drop',
+            fileName: 'b.bin',
+            mimeType: 'application/octet-stream',
+            sizeBytes: 8,
+            bytes: Uint8List.fromList([9, 10, 11, 12, 13, 14, 15, 16]),
+          ),
+        ],
+      );
+      alice.removeStaged(deviceId: bobOnAlice.deviceId, stagedId: 'drop');
+      final remaining = alice.stagedAttachmentsFor(bobOnAlice.deviceId);
+      expect(remaining.map((s) => s.id), ['keep']);
+    });
+  });
+
   group('nightly.9 LAN-direct HTTP fast-path', () {
     test('HttpLanDirectChannel start/stop binds and releases a port', () async {
       final channel = HttpLanDirectChannel();
