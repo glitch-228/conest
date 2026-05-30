@@ -122,4 +122,38 @@ void main() {
       );
     },
   );
+
+  group('nightly.11 AppInstanceLock stale-PID recovery', () {
+    test('acquire steals a lock recorded by a long-dead PID', () async {
+      final dir = await createTempRoot('conest_lock_test_');
+      final lockFile = File(p.join(dir.path, 'conest.lock'));
+      // PID 1 always exists on POSIX (init) but PID 999999 doesn't on a
+      // freshly booted box. On Windows tasklist similarly returns empty
+      // for a very high unallocated PID. Pick something virtually
+      // guaranteed to be dead.
+      const deadPid = 999999;
+      await lockFile.writeAsString('$deadPid\n');
+      final lock = AppInstanceLock(directory: dir);
+      // Should detect the stale PID and steal the lock.
+      expect(await lock.acquire(), isTrue);
+      await lock.release();
+      // After release the file should be gone.
+      expect(await lockFile.exists(), isFalse);
+    });
+
+    test(
+      'release deletes the lock file so a fresh acquire is unblocked',
+      () async {
+        final dir = await createTempRoot('conest_lock_test2_');
+        final first = AppInstanceLock(directory: dir);
+        expect(await first.acquire(), isTrue);
+        await first.release();
+        expect(await File(p.join(dir.path, 'conest.lock')).exists(), isFalse);
+        // Re-acquire on the same dir works.
+        final second = AppInstanceLock(directory: dir);
+        expect(await second.acquire(), isTrue);
+        await second.release();
+      },
+    );
+  });
 }

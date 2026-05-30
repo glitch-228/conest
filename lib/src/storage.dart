@@ -32,14 +32,30 @@ class AppInstanceLock {
 
   final Directory? _directory;
   RandomAccessFile? _lockFile;
+  File? _lockFilePath;
 
   Future<bool> acquire() async {
     final directory = _directory ?? await getApplicationSupportDirectory();
     await directory.create(recursive: true);
     final file = File('${directory.path}/conest.lock');
-    // Open in append mode so the existing pid recorded by another instance is
-    // preserved if we fail to acquire the lock. Only truncate and rewrite the
-    // file once we hold the exclusive lock ourselves.
+    _lockFilePath = file;
+    // First try.
+    if (await _tryAcquire(file)) return true;
+    // nightly.11: contended. On Windows the user's "restart and update"
+    // flow could leave a stale lock if the old Conest exited before the
+    // OS released its lock handle. Steal the lock when the recorded PID
+    // is dead; otherwise honour the existing instance.
+    final stalePid = await _readRecordedPid(file);
+    if (stalePid != null && !_isProcessAlive(stalePid)) {
+      try {
+        await file.delete();
+      } catch (_) {}
+      return _tryAcquire(file);
+    }
+    return false;
+  }
+
+  Future<bool> _tryAcquire(File file) async {
     final lockFile = await file.open(mode: FileMode.append);
     try {
       await lockFile.lock(FileLock.exclusive);
@@ -62,14 +78,68 @@ class AppInstanceLock {
     }
   }
 
+  Future<int?> _readRecordedPid(File file) async {
+    try {
+      final raw = await file.readAsString();
+      return int.tryParse(raw.trim().split('\n').first.trim());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// nightly.11: cross-platform "is this PID currently alive?". On
+  /// POSIX, sending SIGCONT is a cheap probe — alive PIDs accept it as a
+  /// no-op; dead PIDs throw ESRCH. On Windows we shell out to `tasklist`
+  /// which is the boring-but-reliable approach (no FFI required).
+  bool _isProcessAlive(int candidatePid) {
+    if (candidatePid <= 0) return false;
+    if (Platform.isWindows) {
+      try {
+        final result = Process.runSync('tasklist', [
+          '/FI',
+          'PID eq $candidatePid',
+          '/NH',
+          '/FO',
+          'CSV',
+        ], runInShell: false);
+        if (result.exitCode != 0) return false;
+        return (result.stdout as String).contains('"$candidatePid"');
+      } catch (_) {
+        // tasklist unavailable — assume alive to be safe (we just won't
+        // steal the lock, the user can clear it manually).
+        return true;
+      }
+    }
+    try {
+      Process.killPid(candidatePid, ProcessSignal.sigcont);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> release() async {
     final lockFile = _lockFile;
     if (lockFile == null) {
       return;
     }
     _lockFile = null;
-    await lockFile.unlock();
-    await lockFile.close();
+    try {
+      await lockFile.unlock();
+    } catch (_) {}
+    try {
+      await lockFile.close();
+    } catch (_) {}
+    // nightly.11: explicitly delete the lock file so the next process
+    // (especially the post-update relaunch on Windows) doesn't race the
+    // OS for the lock-handle teardown. Best-effort — if delete fails the
+    // stale-PID check in acquire() will rescue.
+    final path = _lockFilePath;
+    if (path != null) {
+      try {
+        await path.delete();
+      } catch (_) {}
+    }
   }
 }
 

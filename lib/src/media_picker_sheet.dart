@@ -559,7 +559,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
   }
 }
 
-class _AssetTile extends StatelessWidget {
+class _AssetTile extends StatefulWidget {
   const _AssetTile({
     required this.asset,
     required this.palette,
@@ -583,32 +583,56 @@ class _AssetTile extends StatelessWidget {
   final int? selectionIndex;
 
   @override
+  State<_AssetTile> createState() => _AssetTileState();
+}
+
+class _AssetTileState extends State<_AssetTile> {
+  // nightly.11: cache the thumbnail future PER tile across rebuilds.
+  // Previously the picker re-issued thumbnailDataWithSize on every
+  // parent setState (e.g. when a selection toggled), which thrashed the
+  // photo_manager isolate channel and caused the freezing / flickering
+  // the user reported.
+  Future<Uint8List?>? _thumbFuture;
+
+  Future<Uint8List?> _thumb() {
+    return _thumbFuture ??= widget.asset.thumbnailDataWithSize(
+      const ThumbnailSize.square(300),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _AssetTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.asset.id != widget.asset.id) {
+      _thumbFuture = null;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final selected = selectionIndex != null;
+    final selected = widget.selectionIndex != null;
     final errorColor = Theme.of(context).colorScheme.error;
     return FutureBuilder<int?>(
-      future: sizeBytesFuture,
+      future: widget.sizeBytesFuture,
       builder: (context, sizeSnap) {
         final size = sizeSnap.data;
-        final overCap = size != null && size > maxBytes;
+        final overCap = size != null && size > widget.maxBytes;
         return InkWell(
           onTap: overCap
               ? () {
                   ScaffoldMessenger.maybeOf(context)?.showSnackBar(
                     SnackBar(
                       content: Text(
-                        'Skipped: ${humanSize(size)} is over the '
-                        '${maxBytes ~/ (1024 * 1024)} MB cap.',
+                        'Skipped: ${widget.humanSize(size)} is over the '
+                        '${widget.maxBytes ~/ (1024 * 1024)} MB cap.',
                       ),
                     ),
                   );
                 }
-              : onTap,
-          onLongPress: overCap ? null : onLongPress,
+              : widget.onTap,
+          onLongPress: overCap ? null : widget.onLongPress,
           child: FutureBuilder<Uint8List?>(
-            future: asset.thumbnailDataWithSize(
-              const ThumbnailSize.square(300),
-            ),
+            future: _thumb(),
             builder: (context, snap) {
               final thumb = snap.data;
               return Stack(
@@ -621,18 +645,20 @@ class _AssetTile extends StatelessWidget {
                       gaplessPlayback: true,
                     )
                   else
-                    Container(color: palette.stroke),
+                    Container(color: widget.palette.stroke),
                   if (selected && !overCap)
-                    Container(color: palette.primary.withValues(alpha: 0.30)),
+                    Container(
+                      color: widget.palette.primary.withValues(alpha: 0.30),
+                    ),
                   if (overCap)
                     Container(color: errorColor.withValues(alpha: 0.18)),
-                  if (asset.type == AssetType.video)
+                  if (widget.asset.type == AssetType.video)
                     Positioned(
                       left: 4,
                       bottom: 4,
                       child: _BadgeChip(
                         icon: Icons.play_arrow,
-                        text: humanDuration(asset.videoDuration),
+                        text: widget.humanDuration(widget.asset.videoDuration),
                       ),
                     ),
                   // Size badge (bottom-right). Loading… until resolved.
@@ -640,7 +666,7 @@ class _AssetTile extends StatelessWidget {
                     right: 4,
                     bottom: 4,
                     child: _BadgeChip(
-                      text: size == null ? '…' : humanSize(size),
+                      text: size == null ? '…' : widget.humanSize(size),
                       foreground: overCap ? errorColor : null,
                     ),
                   ),
@@ -650,9 +676,9 @@ class _AssetTile extends StatelessWidget {
                       right: 4,
                       child: CircleAvatar(
                         radius: 12,
-                        backgroundColor: palette.primary,
+                        backgroundColor: widget.palette.primary,
                         child: Text(
-                          '${selectionIndex!}',
+                          '${widget.selectionIndex!}',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 12,

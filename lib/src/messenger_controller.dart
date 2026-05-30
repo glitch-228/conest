@@ -3471,6 +3471,18 @@ class MessengerController extends ChangeNotifier {
     return (state.highestChunkSent + 1) / total;
   }
 
+  /// nightly.11: the channel that carried the most recent successful
+  /// chunk delivery for this attachment. The bubble overlay renders this
+  /// as a small "LAN" / "relay" chip — when LAN-direct is firing the
+  /// user sees green "LAN" and knows the fast path works. When something
+  /// silently kicks delivery back to relay (Android cleartext block,
+  /// peer behind isolation), the chip flips to "relay" and the user can
+  /// flag it instead of just feeling "slow".
+  OutboundDeliveryRoute lastDeliveryRouteFor(String attachmentId) {
+    final state = _outboundAttachments[attachmentId];
+    return state?.lastDeliveryRoute ?? OutboundDeliveryRoute.unknown;
+  }
+
   /// True when [attachmentId] recently delivered a chunk via a non-primary
   /// route (LAN failed, relay succeeded — or both consecutive failures).
   /// The bubble's status line prepends "Rerouting · " while this is set.
@@ -4254,6 +4266,29 @@ class MessengerController extends ChangeNotifier {
     }
     // Drain whatever queued at the relay during the interface flap.
     unawaited(pollNow());
+  }
+
+  /// nightly.11: cancel an outbound transfer by attachmentId. Walks the
+  /// outbound state, sends an attachment_cancel envelope to the peer,
+  /// clears local state and flips the parent message to canceled. Used
+  /// by the context-menu Cancel action where we only have the
+  /// attachment id, not the (contact, message) pair.
+  void cancelAttachmentById(String attachmentId) {
+    final state = _outboundAttachments[attachmentId];
+    if (state == null) return;
+    final contact = _contactByDeviceId(state.peerDeviceId);
+    if (contact == null) return;
+    unawaited(_sendAttachmentCancel(contact, attachmentId));
+    _clearOutboundAttempt(contact.deviceId, state.messageId);
+    _outboundAttachments.remove(attachmentId);
+    _activeOutboundByContact.remove(contact.deviceId);
+    _outboundQueueByContact[contact.deviceId]?.remove(attachmentId);
+    _updateMessageState(
+      contact.deviceId,
+      state.messageId,
+      DeliveryState.canceled,
+    );
+    notifyListeners();
   }
 
   /// User-initiated retry of a Failed attachment. Resets the auto-retry
@@ -6399,6 +6434,7 @@ class MessengerController extends ChangeNotifier {
           }
           state.lastChunkAt = DateTime.now().toUtc();
           state.consecutiveChunkFailures = 0;
+          state.lastDeliveryRoute = OutboundDeliveryRoute.lanDirect;
           _armOutboundStallTimer(requester);
           notifyListeners();
         }
@@ -6424,6 +6460,7 @@ class MessengerController extends ChangeNotifier {
         }
         state.lastChunkAt = DateTime.now().toUtc();
         state.consecutiveChunkFailures = 0;
+        state.lastDeliveryRoute = OutboundDeliveryRoute.relay;
         // If the delivered route is NOT the preferred primary, surface
         // "Rerouting · X%" on the bubble for the next few seconds so the
         // user sees the fallback is working.
@@ -11867,7 +11904,19 @@ class _OutboundAttachmentState {
   /// deliveries. When this hits a small threshold the UI surfaces a
   /// rerouting hint even before a successful fallback lands.
   int consecutiveChunkFailures = 0;
+
+  /// nightly.11: kind of the route the most recent successful chunk
+  /// delivery used. The bubble overlay shows this as a small "LAN" or
+  /// "relay" chip so the user can see at a glance whether LAN-direct is
+  /// actually firing — the nightly.9-10 LAN-speed root cause was that
+  /// LAN-direct was silently failing on Android and falling through to
+  /// relay; this chip surfaces the misbehaviour instantly.
+  OutboundDeliveryRoute lastDeliveryRoute = OutboundDeliveryRoute.unknown;
 }
+
+/// Channel that carried the most recent successful chunk delivery for
+/// an outbound attachment.
+enum OutboundDeliveryRoute { unknown, lanDirect, relay }
 
 class _InboundAttachmentState {
   _InboundAttachmentState({

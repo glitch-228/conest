@@ -769,6 +769,11 @@ class UpdateService extends ChangeNotifier {
     }
     _statusMessage = 'Restarting to apply $releaseTag...';
     notifyListeners();
+    // nightly.11: pass the application-support directory so the updater
+    // can wait for the previous instance's conest.lock to be releasable
+    // before launching the new binary (Windows file-lock teardown races
+    // were the user-reported "Conest is already running" with no window).
+    final appSupportDir = await _applicationSupportDirectoryProvider();
     await _desktopUpdaterLauncher(launchedHelper.path, [
       '--staging-dir',
       sourceRoot.path,
@@ -776,6 +781,8 @@ class UpdateService extends ChangeNotifier {
       bundleDir.path,
       '--app-binary',
       p.basename(appExecutable.path),
+      '--data-root',
+      appSupportDir.path,
     ]);
     _exitCallback(0);
   }

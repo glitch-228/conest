@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  nightly.11: allow plaintext HTTP to the LanDirectClient's RFC1918 LAN
+  peers. The chunk envelope BODY is already ChaCha20-Poly1305 encrypted
+  end-to-end; cleartext here is just the HTTP framing around it. The only
+  outbound HTTP path this app makes is the LAN-direct PUT to peer phones
+  on the same Wi-Fi — relay traffic goes via HTTPS, unaffected. Without
+  this config Android 9+ silently blocks every LAN-direct PUT, which was
+  the nightly.9-10 root cause of "LAN transfers still slow".
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

@@ -8,6 +8,7 @@ import 'package:cross_file/cross_file.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:dynamic_color/dynamic_color.dart';
@@ -56,6 +57,14 @@ Future<void> main() async {
   );
 }
 
+/// nightly.11: set during desktop boot to record whether the
+/// video_player_media_kit platform impl initialized successfully (i.e.
+/// libmpv is present on this Linux/Windows host). When false,
+/// `_VideoPlayerScreen` skips inline playback and routes straight to
+/// xdg-open / start. macOS/iOS/Android use the native impls and don't
+/// gate on this — initialized to true via the constructor in main().
+bool _mediaKitAvailable = true;
+
 Future<void> _runConestWithProfile(
   AppStorageProfile profile, {
   String? passphrase,
@@ -81,8 +90,22 @@ Future<void> _runConestWithProfile(
   // `UnimplementedError: init() has not been implemented` on those
   // platforms (the federated plugin only ships Android/iOS/macOS/web by
   // default). Cheap no-op on the other platforms.
+  //
+  // nightly.11: wrap in try/catch — when libmpv isn't installed on the
+  // host (common on a fresh Linux box) the dlopen crashes the process.
+  // Failure flips _mediaKitAvailable to false and `_VideoPlayerScreen`
+  // instantly routes to xdg-open / start instead of attempting inline
+  // playback. README mentions libmpv as an optional Linux runtime dep.
   if (Platform.isLinux || Platform.isWindows) {
-    VideoPlayerMediaKit.ensureInitialized(linux: true, windows: true);
+    try {
+      VideoPlayerMediaKit.ensureInitialized(linux: true, windows: true);
+      _mediaKitAvailable = true;
+    } catch (error) {
+      _mediaKitAvailable = false;
+      debugPrint('media_kit init failed: $error');
+    }
+  } else {
+    _mediaKitAvailable = true;
   }
   final buildInfo = await ConestBuildInfo.load();
   final platformBridge = PlatformBridge();
@@ -9272,6 +9295,91 @@ class _AttachmentRow extends StatelessWidget {
     controller.setStatus('Cache path copied: $path');
   }
 
+  /// nightly.11: long-press / right-click context menu. Replaces the
+  /// inline Copy / Save / Copy path / Delete buttons on every bubble
+  /// (cluttered the UI; user requested a single menu affordance).
+  Future<void> _showContextMenu(BuildContext context, Offset globalPos) async {
+    final bytes = controller.attachmentBytesFor(descriptor.id);
+    final hasBytes = bytes != null;
+    final inFlight =
+        controller.attachmentTransferProgress(descriptor.id) != null ||
+        controller.outboundAttachmentProgress(descriptor.id) != null;
+    final isFailed = messageState == DeliveryState.failed;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+    final selected = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromPoints(globalPos, globalPos),
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        if (hasBytes && _isImage)
+          const PopupMenuItem(value: 'copy_image', child: Text('Copy')),
+        if (hasBytes) const PopupMenuItem(value: 'save', child: Text('Save')),
+        if (hasBytes)
+          const PopupMenuItem(
+            value: 'copy_path',
+            child: Text('Copy cache path'),
+          ),
+        if (inFlight)
+          const PopupMenuItem(value: 'cancel', child: Text('Cancel')),
+        if (isFailed && outbound)
+          const PopupMenuItem(value: 'retry', child: Text('Retry')),
+        const PopupMenuItem(value: 'delete', child: Text('Delete')),
+      ],
+    );
+    if (selected == null || !context.mounted) return;
+    switch (selected) {
+      case 'copy_image':
+        if (bytes != null) {
+          await _copyImageBytesFor(bytes, descriptor.fileName);
+        }
+        break;
+      case 'save':
+        if (bytes != null) {
+          await _saveToDisk(context, bytes);
+        }
+        break;
+      case 'copy_path':
+        await _copyCachePath();
+        break;
+      case 'cancel':
+      case 'delete':
+        // For now both route to the cancel-by-id path which sends an
+        // attachment_cancel envelope + clears local state. Full delete
+        // (including remote tombstone) requires the parent ChatMessage
+        // context — deferred until the bubble passes it down.
+        controller.cancelAttachmentById(descriptor.id);
+        break;
+      case 'retry':
+        controller.retryAttachment(descriptor.id);
+        break;
+    }
+  }
+
+  Widget _wrapContextMenu({
+    required BuildContext context,
+    required Widget child,
+  }) {
+    return GestureDetector(
+      behavior: HitTestBehavior.deferToChild,
+      onLongPressStart: (details) =>
+          _showContextMenu(context, details.globalPosition),
+      child: Listener(
+        behavior: HitTestBehavior.deferToChild,
+        onPointerDown: (event) {
+          // Secondary mouse button (right-click) on desktop.
+          if (event.buttons & kSecondaryMouseButton != 0) {
+            _showContextMenu(context, event.position);
+          }
+        },
+        child: child,
+      ),
+    );
+  }
+
   Future<void> _openVideoPlayer(BuildContext context) async {
     final navigator = Navigator.of(context);
     final path = await controller.attachmentCachePathFor(descriptor.id);
@@ -9388,44 +9496,66 @@ class _AttachmentRow extends StatelessWidget {
         outboundProgress != null || inboundProgress != null;
 
     if (showImage) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 320, maxHeight: 320),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(14),
-                onTap: () => _openFullScreenImage(context, bytes),
-                child: ClipRRect(
+      return _wrapContextMenu(
+        context: context,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 320, maxHeight: 320),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
                   borderRadius: BorderRadius.circular(14),
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      Image.memory(
-                        bytes,
-                        fit: BoxFit.cover,
-                        gaplessPlayback: true,
-                        cacheWidth: 640,
-                      ),
-                      // nightly.10: Telegram-style dim+spinner overlay
-                      // while the transfer is in flight so the preview
-                      // doesn't give a false "sent" feel. Hidden once
-                      // the bubble is delivered/read.
-                      if (transferInFlight)
-                        _TransferOverlay(progress: progress),
-                    ],
+                  onTap: () => _openFullScreenImage(context, bytes),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Image.memory(
+                          bytes,
+                          fit: BoxFit.cover,
+                          gaplessPlayback: true,
+                          cacheWidth: 640,
+                        ),
+                        // nightly.10: Telegram-style dim+spinner overlay
+                        // while the transfer is in flight so the preview
+                        // doesn't give a false "sent" feel. Hidden once
+                        // the bubble is delivered/read.
+                        if (transferInFlight)
+                          _TransferOverlay(
+                            progress: progress,
+                            route: outbound
+                                ? controller.lastDeliveryRouteFor(descriptor.id)
+                                : OutboundDeliveryRoute.unknown,
+                            pauseState: pauseState,
+                            onPauseToggle: () {
+                              if (pauseState?.pausedByMe ?? false) {
+                                controller.resumeAttachment(descriptor.id);
+                              } else {
+                                controller.pauseAttachment(descriptor.id);
+                              }
+                            },
+                          ),
+                        if (queuePosition > 0)
+                          Positioned(
+                            top: 6,
+                            left: 6,
+                            child: _QueueBadge(position: queuePosition),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-          // nightly.10: Copy / Save moved into the full-screen viewer's
-          // AppBar to declutter the bubble. Tap the image to open the
-          // viewer, then use the AppBar icons.
-        ],
+            // nightly.10: Copy / Save moved into the full-screen viewer's
+            // AppBar to declutter the bubble. Tap the image to open the
+            // viewer, then use the AppBar icons.
+          ],
+        ),
       );
     }
 
@@ -9436,49 +9566,155 @@ class _AttachmentRow extends StatelessWidget {
     // no poster is present.
     final poster = _isVideo ? controller.videoPosterFor(descriptor.id) : null;
     if (_isVideo && poster != null) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 320, maxHeight: 320),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(14),
-                onTap: hasBytes
-                    ? () => unawaited(_openVideoPlayer(context))
-                    : () => controller.setStatus(
-                        'Video still transferring (${(progress ?? 0) * 100 ~/ 1}%).',
-                      ),
-                child: ClipRRect(
+      return _wrapContextMenu(
+        context: context,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 320, maxHeight: 320),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
                   borderRadius: BorderRadius.circular(14),
+                  onTap: hasBytes
+                      ? () => unawaited(_openVideoPlayer(context))
+                      : () => controller.setStatus(
+                          'Video still transferring (${(progress ?? 0) * 100 ~/ 1}%).',
+                        ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Image.memory(
+                          poster,
+                          fit: BoxFit.cover,
+                          gaplessPlayback: true,
+                          cacheWidth: 640,
+                        ),
+                        // nightly.10: dim+spinner overlay while in flight
+                        // so the receiver doesn't think the video is ready
+                        // before its bytes arrive.
+                        if (transferInFlight)
+                          _TransferOverlay(
+                            progress: progress,
+                            route: outbound
+                                ? controller.lastDeliveryRouteFor(descriptor.id)
+                                : OutboundDeliveryRoute.unknown,
+                            pauseState: pauseState,
+                            onPauseToggle: () {
+                              if (pauseState?.pausedByMe ?? false) {
+                                controller.resumeAttachment(descriptor.id);
+                              } else {
+                                controller.pauseAttachment(descriptor.id);
+                              }
+                            },
+                          )
+                        else if (queuePosition > 0)
+                          Positioned(
+                            top: 6,
+                            left: 6,
+                            child: _QueueBadge(position: queuePosition),
+                          )
+                        else
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.35),
+                              shape: BoxShape.circle,
+                            ),
+                            padding: const EdgeInsets.all(10),
+                            child: const Icon(
+                              Icons.play_arrow,
+                              color: Colors.white,
+                              size: 38,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            if (!hasBytes) ...[
+              const SizedBox(height: 6),
+              Text(
+                progress != null
+                    ? 'Transferring · ${(progress * 100).toStringAsFixed(0)}% · '
+                          '${_formatBytes(descriptor.sizeBytes)}'
+                    : 'Transferring · ${_formatBytes(descriptor.sizeBytes)}',
+                style: Theme.of(
+                  context,
+                ).textTheme.labelSmall?.copyWith(color: metaColor),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    // nightly.11: video without a poster — render a black placeholder
+    // tile with a play-circle so it LOOKS like a video, not a generic
+    // document. Without this fallthrough, posterless videos hit the
+    // generic file row and rendered as documents.
+    if (_isVideo) {
+      return _wrapContextMenu(
+        context: context,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 320, maxHeight: 320),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: hasBytes
+                  ? () => unawaited(_openVideoPlayer(context))
+                  : () => controller.setStatus(
+                      'Video still transferring '
+                      '(${((progress ?? 0) * 100).toStringAsFixed(0)}%).',
+                    ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: AspectRatio(
+                  aspectRatio: 1.0,
                   child: Stack(
+                    fit: StackFit.expand,
                     alignment: Alignment.center,
                     children: [
-                      Image.memory(
-                        poster,
-                        fit: BoxFit.cover,
-                        gaplessPlayback: true,
-                        cacheWidth: 640,
+                      Container(color: Colors.black),
+                      const Icon(
+                        Icons.play_circle_outline,
+                        color: Colors.white70,
+                        size: 64,
                       ),
-                      // nightly.10: dim+spinner overlay while in flight
-                      // so the receiver doesn't think the video is ready
-                      // before its bytes arrive.
-                      if (transferInFlight)
-                        _TransferOverlay(progress: progress)
-                      else
-                        Container(
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.35),
-                            shape: BoxShape.circle,
-                          ),
-                          padding: const EdgeInsets.all(10),
-                          child: const Icon(
-                            Icons.play_arrow,
+                      Positioned(
+                        left: 8,
+                        right: 8,
+                        bottom: 8,
+                        child: Text(
+                          '${descriptor.fileName} · ${_formatBytes(descriptor.sizeBytes)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
                             color: Colors.white,
-                            size: 38,
+                            fontSize: 11,
                           ),
+                        ),
+                      ),
+                      if (transferInFlight)
+                        _TransferOverlay(
+                          progress: progress,
+                          route: outbound
+                              ? controller.lastDeliveryRouteFor(descriptor.id)
+                              : OutboundDeliveryRoute.unknown,
+                          pauseState: pauseState,
+                          onPauseToggle: () {
+                            if (pauseState?.pausedByMe ?? false) {
+                              controller.resumeAttachment(descriptor.id);
+                            } else {
+                              controller.pauseAttachment(descriptor.id);
+                            }
+                          },
                         ),
                     ],
                   ),
@@ -9486,19 +9722,7 @@ class _AttachmentRow extends StatelessWidget {
               ),
             ),
           ),
-          if (!hasBytes) ...[
-            const SizedBox(height: 6),
-            Text(
-              progress != null
-                  ? 'Transferring · ${(progress * 100).toStringAsFixed(0)}% · '
-                        '${_formatBytes(descriptor.sizeBytes)}'
-                  : 'Transferring · ${_formatBytes(descriptor.sizeBytes)}',
-              style: Theme.of(
-                context,
-              ).textTheme.labelSmall?.copyWith(color: metaColor),
-            ),
-          ],
-        ],
+        ),
       );
     }
 
@@ -9543,103 +9767,94 @@ class _AttachmentRow extends StatelessWidget {
     } else {
       statusLine = 'Transferring · ${_formatBytes(descriptor.sizeBytes)}';
     }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: outbound
-            ? palette.primary.withValues(alpha: 0.10)
-            : palette.selection,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      // mainAxisSize default (max) so Flexible inside gets real width.
-      // The earlier MainAxisSize.min collapsed Flexible to 0 → bubble
-      // looked empty for non-image attachments on the receiver.
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 20, color: textColor),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      descriptor.fileName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: textColor,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    if (messageState == DeliveryState.failed && outbound)
-                      InkWell(
-                        onTap: () {
-                          controller.retryAttachment(descriptor.id);
-                        },
-                        child: Text(
-                          statusLine,
-                          style: Theme.of(context).textTheme.labelSmall
-                              ?.copyWith(
-                                color: metaColor,
-                                decoration: TextDecoration.underline,
-                              ),
-                        ),
-                      )
-                    else
+    return _wrapContextMenu(
+      context: context,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: outbound
+              ? palette.primary.withValues(alpha: 0.10)
+              : palette.selection,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        // mainAxisSize default (max) so Flexible inside gets real width.
+        // The earlier MainAxisSize.min collapsed Flexible to 0 → bubble
+        // looked empty for non-image attachments on the receiver.
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Icon(icon, size: 20, color: textColor),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
                       Text(
-                        statusLine,
-                        style: Theme.of(
-                          context,
-                        ).textTheme.labelSmall?.copyWith(color: metaColor),
+                        descriptor.fileName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: textColor,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          if (progress != null && progress < 1.0) ...[
-            const SizedBox(height: 8),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: progress,
-                minHeight: 4,
-                backgroundColor: metaColor.withValues(alpha: 0.18),
-                color: palette.primary,
-              ),
-            ),
-          ],
-          if (transferInFlight) ...[
-            const SizedBox(height: 8),
-            _AttachmentActions(
-              metaColor: metaColor,
-              actions: _pauseActionsFor(pauseState),
-            ),
-          ] else if (hasBytes) ...[
-            const SizedBox(height: 8),
-            _AttachmentActions(
-              metaColor: metaColor,
-              actions: [
-                _AttachmentAction(
-                  icon: Icons.copy_outlined,
-                  label: 'Copy path',
-                  onTap: _copyCachePath,
-                ),
-                _AttachmentAction(
-                  icon: Icons.download_outlined,
-                  label: 'Save',
-                  onTap: () => _saveToDisk(context, bytes),
+                      const SizedBox(height: 2),
+                      if (messageState == DeliveryState.failed && outbound)
+                        InkWell(
+                          onTap: () {
+                            controller.retryAttachment(descriptor.id);
+                          },
+                          child: Text(
+                            statusLine,
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(
+                                  color: metaColor,
+                                  decoration: TextDecoration.underline,
+                                ),
+                          ),
+                        )
+                      else
+                        Text(
+                          statusLine,
+                          style: Theme.of(
+                            context,
+                          ).textTheme.labelSmall?.copyWith(color: metaColor),
+                        ),
+                    ],
+                  ),
                 ),
               ],
             ),
+            if (progress != null && progress < 1.0) ...[
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 4,
+                  backgroundColor: metaColor.withValues(alpha: 0.18),
+                  color: palette.primary,
+                ),
+              ),
+            ],
+            // nightly.11: Pause is now on the in-flight overlay (image/video
+            // bubbles). For generic file rows (no preview), keep the inline
+            // pause row — there's no overlay to host the Pause icon. All
+            // Copy / Save / Delete actions moved to the long-press / right-
+            // click context menu (Phase 5).
+            if (transferInFlight && !_isImage && !_isVideo) ...[
+              const SizedBox(height: 8),
+              _AttachmentActions(
+                metaColor: metaColor,
+                actions: _pauseActionsFor(pauseState),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -9883,45 +10098,138 @@ class _StagedAttachmentTray extends StatelessWidget {
 /// text. Makes "this file hasn't actually been sent yet" unmissable —
 /// users were reading the preview alone as "delivered" before this.
 class _TransferOverlay extends StatelessWidget {
-  const _TransferOverlay({this.progress});
+  const _TransferOverlay({
+    this.progress,
+    this.route = OutboundDeliveryRoute.unknown,
+    this.pauseState,
+    this.onPauseToggle,
+  });
 
   /// 0.0 to 1.0, or null for an indeterminate spinner.
   final double? progress;
 
+  /// nightly.11: render a tiny "LAN" / "relay" chip in the corner so the
+  /// user can verify the LAN-direct fast-path is actually firing.
+  /// `unknown` hides the chip (inbound transfers, just-started outbound
+  /// before the first chunk lands).
+  final OutboundDeliveryRoute route;
+
+  /// nightly.11: current pause state. When `pausedByMe` is true the
+  /// overlay swaps the spinner for a static "Paused" label + Play icon.
+  /// `pausedByPeer` true shows "Paused by peer" (no toggle).
+  final ({bool pausedByMe, bool pausedByPeer})? pauseState;
+
+  /// nightly.11: tapped on the Pause/Resume icon. Null = no toggle (e.g.
+  /// inbound transfers don't expose a pause from this overlay).
+  final VoidCallback? onPauseToggle;
+
   @override
   Widget build(BuildContext context) {
+    final pausedByMe = pauseState?.pausedByMe ?? false;
+    final pausedByPeer = pauseState?.pausedByPeer ?? false;
     final pct = progress != null ? (progress! * 100).round() : null;
     return Positioned.fill(
-      child: ColoredBox(
-        color: Colors.black.withValues(alpha: 0.45),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox(
-                width: 44,
-                height: 44,
-                child: CircularProgressIndicator(
-                  value: progress,
-                  strokeWidth: 3,
-                  color: Colors.white,
-                  backgroundColor: Colors.white24,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: ColoredBox(
+              color: Colors.black.withValues(alpha: 0.45),
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (pausedByMe || pausedByPeer)
+                      const Icon(
+                        Icons.pause_circle_outline,
+                        color: Colors.white,
+                        size: 44,
+                      )
+                    else
+                      SizedBox(
+                        width: 44,
+                        height: 44,
+                        child: CircularProgressIndicator(
+                          value: progress,
+                          strokeWidth: 3,
+                          color: Colors.white,
+                          backgroundColor: Colors.white24,
+                        ),
+                      ),
+                    const SizedBox(height: 6),
+                    Text(
+                      pausedByMe
+                          ? 'Paused'
+                          : pausedByPeer
+                          ? 'Paused by peer'
+                          : (pct != null ? '$pct%' : ''),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12,
+                      ),
+                    ),
+                    if (onPauseToggle != null && !pausedByPeer) ...[
+                      const SizedBox(height: 4),
+                      InkWell(
+                        onTap: onPauseToggle,
+                        borderRadius: BorderRadius.circular(20),
+                        child: Padding(
+                          padding: const EdgeInsets.all(4),
+                          child: Icon(
+                            pausedByMe
+                                ? Icons.play_circle_outline
+                                : Icons.pause_circle_outline,
+                            color: Colors.white,
+                            size: 26,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-              if (pct != null) ...[
-                const SizedBox(height: 6),
-                Text(
-                  '$pct%',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ],
+            ),
           ),
-        ),
+          if (route != OutboundDeliveryRoute.unknown)
+            Positioned(
+              right: 6,
+              bottom: 6,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.7),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: route == OutboundDeliveryRoute.lanDirect
+                            ? const Color(0xFF4ADE80) // green
+                            : const Color(0xFFFBBF24), // amber
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      route == OutboundDeliveryRoute.lanDirect
+                          ? 'LAN'
+                          : 'relay',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -10042,20 +10350,100 @@ class _ImageViewerScreenState extends State<_ImageViewerScreen> {
               itemBuilder: (context, i) {
                 final page = widget.pages[i];
                 return Center(
-                  child: InteractiveViewer(
-                    minScale: 0.5,
-                    maxScale: 6,
-                    child: Image.memory(
-                      page.bytes,
-                      fit: BoxFit.contain,
-                      cacheWidth: cacheW,
-                    ),
-                  ),
+                  child: _ZoomablePage(bytes: page.bytes, cacheWidth: cacheW),
                 );
               },
             );
           },
         ),
+      ),
+    );
+  }
+}
+
+/// nightly.11: Telegram-style queue position badge — a small dark
+/// circle with `#N` in the corner of preview tiles. Replaces the
+/// verbose "Queued · #N · X MB" status line so multi-item album
+/// transfers feel visually ordered rather than text-cluttered.
+class _QueueBadge extends StatelessWidget {
+  const _QueueBadge({required this.position});
+
+  final int position;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 24,
+      height: 24,
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.7),
+        shape: BoxShape.circle,
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        '$position',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+/// nightly.11: a PageView page that hosts an `InteractiveViewer` for
+/// pinch-zoom. The catch: InteractiveViewer's panEnabled defaults to
+/// true, which means it claims horizontal swipes too — and those are
+/// what `PageView` needs for page-to-page navigation. The fix is to
+/// disable pan when not zoomed; the gesture goes straight to PageView.
+/// Once the user pinches in, pan re-enables so they can drag the
+/// zoomed image around inside the page.
+class _ZoomablePage extends StatefulWidget {
+  const _ZoomablePage({required this.bytes, required this.cacheWidth});
+
+  final Uint8List bytes;
+  final int cacheWidth;
+
+  @override
+  State<_ZoomablePage> createState() => _ZoomablePageState();
+}
+
+class _ZoomablePageState extends State<_ZoomablePage> {
+  final TransformationController _tc = TransformationController();
+  bool _zoomed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _tc.addListener(_onTransform);
+  }
+
+  @override
+  void dispose() {
+    _tc.removeListener(_onTransform);
+    _tc.dispose();
+    super.dispose();
+  }
+
+  void _onTransform() {
+    final scale = _tc.value.getMaxScaleOnAxis();
+    final z = scale > 1.05;
+    if (z != _zoomed) setState(() => _zoomed = z);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return InteractiveViewer(
+      transformationController: _tc,
+      minScale: 1.0,
+      maxScale: 6,
+      panEnabled: _zoomed,
+      scaleEnabled: true,
+      child: Image.memory(
+        widget.bytes,
+        fit: BoxFit.contain,
+        cacheWidth: widget.cacheWidth,
       ),
     );
   }
@@ -10085,6 +10473,16 @@ class _VideoPlayerScreenState extends State<_VideoPlayerScreen> {
   @override
   void initState() {
     super.initState();
+    // nightly.11: when the libmpv platform impl failed to initialize at
+    // app boot (libmpv missing on this desktop), don't even try inline
+    // playback — instantly route to xdg-open / start / open. Avoids the
+    // crash that battle-tested users on Linux without libmpv hit.
+    if (!_mediaKitAvailable && (Platform.isLinux || Platform.isWindows)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _openInSystemPlayer();
+      });
+      return;
+    }
     final controller = VideoPlayerController.file(File(widget.cachePath));
     _controller = controller;
     controller
@@ -10095,8 +10493,16 @@ class _VideoPlayerScreenState extends State<_VideoPlayerScreen> {
           controller.play();
         })
         .catchError((Object error) {
+          // nightly.11: on init failure, instantly hand off to the OS
+          // default player rather than showing an error screen. The user
+          // sees their video open in mpv/VLC/Windows Media Player
+          // immediately and the Conest viewer closes itself.
           if (!mounted) return;
-          setState(() => _initError = error);
+          if (Platform.isLinux || Platform.isWindows) {
+            _openInSystemPlayer();
+          } else {
+            setState(() => _initError = error);
+          }
         });
   }
 

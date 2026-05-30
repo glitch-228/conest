@@ -12,6 +12,14 @@ use std::os::unix::fs::PermissionsExt;
 const RETRY_DELAY: Duration = Duration::from_millis(500);
 const MAX_ATTEMPTS: usize = 120;
 
+// nightly.11: how long the updater waits for the old Conest's
+// `conest.lock` to be deletable before launching the new binary. Solves
+// the Windows race where the OS hadn't fully released the lock by the
+// time the updater spawned the new app, surfacing as "Conest is already
+// running" with no visible window.
+const LOCK_POLL_DELAY: Duration = Duration::from_millis(250);
+const LOCK_POLL_MAX_ATTEMPTS: usize = 40; // 10 s ceiling
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("conest_updater: {error}");
@@ -34,6 +42,13 @@ fn run() -> Result<(), String> {
     for _ in 0..MAX_ATTEMPTS {
         match sync_directories(&config.staging_dir, &config.bundle_dir) {
             Ok(()) => {
+                // nightly.11: wait for the previous Conest's lock file to
+                // be deletable before we relaunch. Belt-and-suspenders on
+                // top of the Dart-side stale-PID recovery — keeps the
+                // Windows post-update reopen fast and predictable.
+                if let Some(ref data_root) = config.data_root {
+                    wait_for_lock_release(data_root, LOCK_POLL_MAX_ATTEMPTS);
+                }
                 launch_application(&config)?;
                 return Ok(());
             }
@@ -50,10 +65,32 @@ fn run() -> Result<(), String> {
     ))
 }
 
+/// nightly.11: poll the Conest data root for `conest.lock` until either
+/// it disappears, we can open it (signalling the old process released
+/// it), or we run out of attempts. Returns true on successful release.
+fn wait_for_lock_release(data_root: &Path, max_attempts: usize) -> bool {
+    let lock_path = data_root.join("conest.lock");
+    for _ in 0..max_attempts {
+        if !lock_path.exists() {
+            return true;
+        }
+        // Can we delete it? If so, the OS has released the handle.
+        if fs::remove_file(&lock_path).is_ok() {
+            return true;
+        }
+        thread::sleep(LOCK_POLL_DELAY);
+    }
+    // Timed out — launch anyway; the Dart-side stale-PID guard will
+    // recover from a still-locked lock file on the new instance's
+    // acquire() call.
+    false
+}
+
 struct Config {
     staging_dir: PathBuf,
     bundle_dir: PathBuf,
     app_binary: String,
+    data_root: Option<PathBuf>,
 }
 
 impl Config {
@@ -61,12 +98,14 @@ impl Config {
         let mut staging_dir = None;
         let mut bundle_dir = None;
         let mut app_binary = None;
+        let mut data_root = None;
         let mut args = env::args().skip(1).peekable();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--staging-dir" => staging_dir = Some(next_arg(&mut args, &arg)?),
                 "--bundle-dir" => bundle_dir = Some(next_arg(&mut args, &arg)?),
                 "--app-binary" => app_binary = Some(next_arg(&mut args, &arg)?),
+                "--data-root" => data_root = Some(next_arg(&mut args, &arg)?),
                 "--help" | "-h" => return Err(usage()),
                 value => return Err(format!("unknown option: {value}\n\n{}", usage())),
             }
@@ -79,12 +118,15 @@ impl Config {
                 bundle_dir.ok_or_else(|| format!("missing --bundle-dir\n\n{}", usage()))?,
             ),
             app_binary: app_binary.ok_or_else(|| format!("missing --app-binary\n\n{}", usage()))?,
+            data_root: data_root.map(PathBuf::from),
         })
     }
 }
 
 fn usage() -> String {
-    "usage: conest_updater --staging-dir <dir> --bundle-dir <dir> --app-binary <name>".to_owned()
+    "usage: conest_updater --staging-dir <dir> --bundle-dir <dir> --app-binary <name> \
+     [--data-root <dir>]"
+        .to_owned()
 }
 
 fn next_arg(
