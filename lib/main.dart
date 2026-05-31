@@ -9841,16 +9841,66 @@ class _AttachmentRow extends StatelessWidget {
                 ),
               ),
             ],
-            // nightly.11: Pause is now on the in-flight overlay (image/video
-            // bubbles). For generic file rows (no preview), keep the inline
-            // pause row — there's no overlay to host the Pause icon. All
-            // Copy / Save / Delete actions moved to the long-press / right-
-            // click context menu (Phase 5).
+            // nightly.12: generic file rows (no preview) get an inline
+            // route chip + Pause + Cancel row so the user can see whether
+            // LAN-direct or relay is in use and abort or pause mid-transfer.
+            // Image/video bubbles get the same affordances via _TransferOverlay.
             if (transferInFlight && !_isImage && !_isVideo) ...[
               const SizedBox(height: 8),
-              _AttachmentActions(
-                metaColor: metaColor,
-                actions: _pauseActionsFor(pauseState),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (outbound)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: _RouteChip(
+                        route: controller.lastDeliveryRouteFor(descriptor.id),
+                      ),
+                    ),
+                  if (pauseState != null)
+                    IconButton(
+                      icon: Icon(
+                        pauseState.pausedByMe
+                            ? Icons.play_circle_outline
+                            : Icons.pause_circle_outline,
+                        size: 22,
+                        color: metaColor,
+                      ),
+                      tooltip: pauseState.pausedByMe ? 'Resume' : 'Pause',
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 28,
+                        minHeight: 28,
+                      ),
+                      onPressed: pauseState.pausedByPeer
+                          ? null
+                          : () {
+                              if (pauseState.pausedByMe) {
+                                controller.resumeAttachment(descriptor.id);
+                              } else {
+                                controller.pauseAttachment(descriptor.id);
+                              }
+                            },
+                    ),
+                  if (outbound)
+                    IconButton(
+                      icon: Icon(
+                        Icons.cancel_outlined,
+                        size: 22,
+                        color: metaColor,
+                      ),
+                      tooltip: 'Cancel',
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 28,
+                        minHeight: 28,
+                      ),
+                      onPressed: () =>
+                          controller.cancelAttachmentById(descriptor.id),
+                    ),
+                ],
               ),
             ],
           ],
@@ -9858,88 +9908,12 @@ class _AttachmentRow extends StatelessWidget {
       ),
     );
   }
-
-  /// Action row shown while a transfer is in flight. Bilateral pause:
-  /// only the side that paused can resume; the other side sees a disabled
-  /// resume affordance.
-  List<_AttachmentAction> _pauseActionsFor(
-    ({bool pausedByMe, bool pausedByPeer})? state,
-  ) {
-    final pausedByMe = state?.pausedByMe ?? false;
-    final pausedByPeer = state?.pausedByPeer ?? false;
-    if (pausedByMe) {
-      return [
-        _AttachmentAction(
-          icon: Icons.play_arrow_outlined,
-          label: 'Resume',
-          onTap: () => controller.resumeAttachment(descriptor.id),
-        ),
-      ];
-    }
-    if (pausedByPeer) {
-      return [
-        _AttachmentAction(
-          icon: Icons.pause_circle_outline,
-          label: 'Paused by peer',
-          onTap: () async => controller.setStatus(
-            'Only the peer who paused can resume the transfer.',
-          ),
-        ),
-      ];
-    }
-    return [
-      _AttachmentAction(
-        icon: Icons.pause_outlined,
-        label: 'Pause',
-        onTap: () => controller.pauseAttachment(descriptor.id),
-      ),
-    ];
-  }
 }
 
-class _AttachmentAction {
-  const _AttachmentAction({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final Future<void> Function() onTap;
-}
-
-class _AttachmentActions extends StatelessWidget {
-  const _AttachmentActions({required this.metaColor, required this.actions});
-
-  final Color metaColor;
-  final List<_AttachmentAction> actions;
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 4,
-      children: [
-        for (final action in actions)
-          TextButton.icon(
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              foregroundColor: metaColor,
-              minimumSize: const Size(0, 32),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              textStyle: Theme.of(context).textTheme.labelSmall,
-            ),
-            onPressed: () {
-              action.onTap();
-            },
-            icon: Icon(action.icon, size: 16),
-            label: Text(action.label),
-          ),
-      ],
-    );
-  }
-}
+// nightly.12: _AttachmentAction / _AttachmentActions / _pauseActionsFor
+// removed — every bubble now uses raw IconButtons for pause/cancel in
+// the inline row (generic files) or _TransferOverlay (image/video).
+// Long-press / right-click handles Copy / Save / Delete via the menu.
 
 class _ViewerPage {
   const _ViewerPage({
@@ -10191,44 +10165,7 @@ class _TransferOverlay extends StatelessWidget {
             ),
           ),
           if (route != OutboundDeliveryRoute.unknown)
-            Positioned(
-              right: 6,
-              bottom: 6,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.7),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 6,
-                      height: 6,
-                      decoration: BoxDecoration(
-                        color: route == OutboundDeliveryRoute.lanDirect
-                            ? const Color(0xFF4ADE80) // green
-                            : const Color(0xFFFBBF24), // amber
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      route == OutboundDeliveryRoute.lanDirect
-                          ? 'LAN'
-                          : 'relay',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.3,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+            Positioned(right: 6, bottom: 6, child: _RouteChip(route: route)),
         ],
       ),
     );
@@ -10365,6 +10302,52 @@ class _ImageViewerScreenState extends State<_ImageViewerScreen> {
 /// circle with `#N` in the corner of preview tiles. Replaces the
 /// verbose "Queued · #N · X MB" status line so multi-item album
 /// transfers feel visually ordered rather than text-cluttered.
+/// nightly.12: shared LAN / relay route chip. Used by `_TransferOverlay`
+/// for preview tiles AND by the generic file bubble's inline control bar.
+/// Single source of truth so both surfaces look identical and the user
+/// learns the chip = "this is the active route".
+class _RouteChip extends StatelessWidget {
+  const _RouteChip({required this.route});
+
+  final OutboundDeliveryRoute route;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(
+              color: route == OutboundDeliveryRoute.lanDirect
+                  ? const Color(0xFF4ADE80) // green
+                  : const Color(0xFFFBBF24), // amber
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            route == OutboundDeliveryRoute.lanDirect ? 'LAN' : 'relay',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.3,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _QueueBadge extends StatelessWidget {
   const _QueueBadge({required this.position});
 

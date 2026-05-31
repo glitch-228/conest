@@ -44,6 +44,17 @@ abstract class LanDirectChannel {
   /// installs a callback that decrypts + dispatches via its existing
   /// `_handleAttachmentEnvelope` path.
   set onEnvelope(Future<void> Function(RelayEnvelope envelope) handler);
+
+  /// nightly.12: cheap TCP-level probe used by the controller before
+  /// demoting a peer to relay-only on PUT failure. A single PUT can fail
+  /// for many reasons (network jitter, peer briefly busy serving another
+  /// chunk, Wi-Fi handoff); the probe distinguishes "peer's HTTP server
+  /// is actually unreachable" from a transient blip.
+  Future<bool> probeReachable({
+    required String host,
+    required int port,
+    Duration timeout = const Duration(milliseconds: 500),
+  });
 }
 
 /// Real `dart:io` implementation. Skipped on platforms that can't bind a
@@ -141,6 +152,21 @@ class HttpLanDirectChannel implements LanDirectChannel {
         req.response.statusCode = HttpStatus.internalServerError;
         await req.response.close();
       } catch (_) {}
+    }
+  }
+
+  @override
+  Future<bool> probeReachable({
+    required String host,
+    required int port,
+    Duration timeout = const Duration(milliseconds: 500),
+  }) async {
+    try {
+      final socket = await Socket.connect(host, port, timeout: timeout);
+      socket.destroy();
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 

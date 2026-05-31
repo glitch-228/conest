@@ -2152,10 +2152,32 @@ class PendingGroupMembershipDelivery {
 }
 
 enum PendingAckKind {
+  // Pre-nightly.12: receipts that the receiver implicitly acks by their
+  // existence. Cleared from the queue once the first send completes.
   delivered,
-  read;
+  read,
+  // nightly.12 additions: at-least-once delivery of CONTROL envelopes.
+  // These don't wait for a peer ACK; they piggy-back the same retry
+  // queue because we want the same persistence + backoff + drain-on-poll
+  // behaviour as `delivered`/`read`. The envelope payload itself is
+  // carried via `PendingAckDelivery.envelopeJson` so the retry loop can
+  // re-push without re-encrypting.
+  messageDelete,
+  messageEdit,
+  attachmentCancel,
+  debugProbe,
+  debugProbeAck,
+  debugTwoWayMessage,
+  debugTwoWayReply;
 
   String get wireValue => name;
+
+  /// nightly.12: kinds that carry their full encrypted envelope in
+  /// `PendingAckDelivery.envelopeJson` (rather than being rebuilt from
+  /// scratch by the retry loop). The retry loop forwards the stored
+  /// envelope verbatim instead of calling the per-kind builder.
+  bool get carriesEnvelope =>
+      this != PendingAckKind.delivered && this != PendingAckKind.read;
 
   static PendingAckKind? tryParse(String? value) {
     if (value == null) return null;
@@ -2180,6 +2202,7 @@ class PendingAckDelivery {
     required this.kind,
     required this.lastAttemptedAt,
     required this.attempts,
+    this.envelopeJson,
   });
 
   final String targetDeviceId;
@@ -2189,6 +2212,12 @@ class PendingAckDelivery {
   final DateTime lastAttemptedAt;
   final int attempts;
 
+  /// nightly.12: for `kind.carriesEnvelope == true` entries, the full
+  /// encrypted `RelayEnvelope` JSON ready to re-push verbatim. Null for
+  /// pre-nightly.12 `delivered`/`read` entries which the retry loop
+  /// rebuilds via the per-kind builder.
+  final Map<String, dynamic>? envelopeJson;
+
   PendingAckDelivery copyWith({DateTime? lastAttemptedAt, int? attempts}) {
     return PendingAckDelivery(
       targetDeviceId: targetDeviceId,
@@ -2197,6 +2226,7 @@ class PendingAckDelivery {
       kind: kind,
       lastAttemptedAt: lastAttemptedAt ?? this.lastAttemptedAt,
       attempts: attempts ?? this.attempts,
+      envelopeJson: envelopeJson,
     );
   }
 
@@ -2207,6 +2237,7 @@ class PendingAckDelivery {
     'kind': kind.wireValue,
     'lastAttemptedAt': lastAttemptedAt.toIso8601String(),
     'attempts': attempts,
+    if (envelopeJson != null) 'envelopeJson': envelopeJson,
   };
 
   factory PendingAckDelivery.fromJson(Map<String, dynamic> json) {
@@ -2221,6 +2252,7 @@ class PendingAckDelivery {
           DateTime.tryParse(json['lastAttemptedAt'] as String? ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
       attempts: (json['attempts'] as num?)?.toInt() ?? 0,
+      envelopeJson: json['envelopeJson'] as Map<String, dynamic>?,
     );
   }
 }

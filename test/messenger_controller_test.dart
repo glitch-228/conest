@@ -41,6 +41,17 @@ class _InProcessLanDirectChannel implements LanDirectChannel {
   /// confirm the fast-path actually carried traffic.
   int acceptedEnvelopes = 0;
 
+  /// nightly.12: per-test knob. When `simulatedReachable == false`, the
+  /// `probeReachable` method returns false so the controller's
+  /// probe-before-demote gate triggers an actual demotion. Default true
+  /// (the peer is reachable; transient PUT failures shouldn't demote).
+  bool simulatedReachable = true;
+
+  /// nightly.12: queue of PUT calls that should fail (returns false)
+  /// even when the destination channel is registered. Consumed FIFO. Use
+  /// to simulate a single chunk hiccup without taking the channel down.
+  int transientFailureCount = 0;
+
   @override
   int? get localPort => _port;
 
@@ -69,6 +80,17 @@ class _InProcessLanDirectChannel implements LanDirectChannel {
   }
 
   @override
+  Future<bool> probeReachable({
+    required String host,
+    required int port,
+    Duration timeout = const Duration(milliseconds: 500),
+  }) async {
+    final target = _registry['$host:$port'];
+    if (target == null) return false;
+    return target.simulatedReachable;
+  }
+
+  @override
   Future<bool> putEnvelope({
     required String host,
     required int port,
@@ -77,6 +99,13 @@ class _InProcessLanDirectChannel implements LanDirectChannel {
   }) async {
     final target = _registry['$host:$port'];
     if (target == null) return false;
+    // nightly.12: transient-failure injection — consume one slot from the
+    // queue without delivering. Lets the test exercise the controller's
+    // probe-before-demote gate.
+    if (transientFailureCount > 0) {
+      transientFailureCount--;
+      return false;
+    }
     final handler = target._handler;
     if (handler == null) return false;
     target.acceptedEnvelopes++;
@@ -169,21 +198,13 @@ class _FakeRelayClient extends RelayClient {
       RelayEnvelope envelope,
     )?
     shouldBlackholeStore,
-    bool Function(
-      String host,
-      int port,
-      PeerRouteProtocol protocol,
-      String recipientDeviceId,
-      RelayEnvelope envelope,
-    )?
-    shouldFailStore,
+    this.shouldFailStore,
   }) : _healthFailingHosts = failingHosts ?? <String>{},
        _storeFailingHosts = storeFailingHosts ?? failingHosts ?? <String>{},
        _allowedHosts = allowedHosts,
        _storeAllowedHosts = storeAllowedHosts ?? allowedHosts,
        _relayInstanceIds = relayInstanceIds ?? const <String, String>{},
-       _shouldBlackholeStore = shouldBlackholeStore,
-       _shouldFailStore = shouldFailStore;
+       _shouldBlackholeStore = shouldBlackholeStore;
 
   final Set<String> _healthFailingHosts;
   final Set<String> _storeFailingHosts;
@@ -198,14 +219,16 @@ class _FakeRelayClient extends RelayClient {
     RelayEnvelope envelope,
   )?
   _shouldBlackholeStore;
-  final bool Function(
+  // nightly.12: mutable so tests can toggle store-failure mid-run
+  // (e.g. "Bob is offline, then comes back online" scenarios).
+  bool Function(
     String host,
     int port,
     PeerRouteProtocol protocol,
     String recipientDeviceId,
     RelayEnvelope envelope,
   )?
-  _shouldFailStore;
+  shouldFailStore;
   final List<String> storeAttempts = <String>[];
   final List<String> fetchAttempts = <String>[];
   final List<String> inspectHealthAttempts = <String>[];
@@ -375,7 +398,7 @@ class _FakeRelayClient extends RelayClient {
     if (_containsRoute(_storeFailingHosts, host, port, protocol)) {
       throw StateError('Route unavailable for $key');
     }
-    if (_shouldFailStore?.call(
+    if (shouldFailStore?.call(
           host,
           port,
           protocol,
@@ -6097,6 +6120,205 @@ void main() {
       await sendChunk();
       await sendChunk();
     });
+  });
+
+  group('nightly.12 unified envelope outbox', () {
+    test(
+      'deleting a message while peer is offline queues for retry and delivers '
+      'once peer comes back online',
+      () async {
+        final relayClient = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final bobOnAlice = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+        final aliceOnBob = bob.contacts.firstWhere((c) => c.alias == 'Alice');
+
+        // Alice sends a text message to Bob; let it land.
+        await alice.sendMessage(contact: bobOnAlice, body: 'pre-delete msg');
+        for (var step = 0; step < 6; step++) {
+          await bob.pollNow();
+          await alice.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        final landed = bob
+            .messagesFor(aliceOnBob.deviceId)
+            .where((m) => m.body == 'pre-delete msg');
+        expect(landed.length, 1);
+        final landedId = landed.first.id;
+
+        // Take Bob's relay path offline (every store fails for his device).
+        relayClient.shouldFailStore = (_, _, _, recipient, _) =>
+            recipient == bobOnAlice.deviceId;
+
+        // Alice deletes the message; the delete envelope can't reach Bob.
+        await alice.deleteMessage(
+          contact: bobOnAlice,
+          messageId: alice
+              .messagesFor(bobOnAlice.deviceId)
+              .firstWhere((m) => m.body == 'pre-delete msg')
+              .id,
+        );
+        for (var step = 0; step < 4; step++) {
+          await bob.pollNow();
+          await alice.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        // Bob still sees the original message.
+        expect(
+          bob.messagesFor(aliceOnBob.deviceId).any((m) => m.id == landedId),
+          isTrue,
+          reason:
+              'Bob is offline so the delete should NOT have reached him yet',
+        );
+        // The delete is queued on Alice's side.
+        expect(
+          alice.pendingAckDeliveriesForTesting.any(
+            (entry) =>
+                entry.targetDeviceId == bobOnAlice.deviceId &&
+                entry.kind == PendingAckKind.messageDelete,
+          ),
+          isTrue,
+          reason: 'delete envelope must be queued for retry',
+        );
+
+        // Bob comes back online.
+        relayClient.shouldFailStore = null;
+        // Force the outbox to drain on the next poll.
+        for (var step = 0; step < 8; step++) {
+          await alice.retryPendingAckDeliveriesForTesting(force: true);
+          await bob.pollNow();
+          await alice.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 30));
+        }
+        // Bob's view should no longer have the message.
+        expect(
+          bob.messagesFor(aliceOnBob.deviceId).any((m) => m.id == landedId),
+          isFalse,
+          reason: 'delete propagated once peer came online + outbox drained',
+        );
+      },
+      timeout: const Timeout(Duration(seconds: 30)),
+    );
+
+    test('PendingAckDelivery JSON round-trip preserves envelopeJson for '
+        'carries-envelope kinds', () {
+      final entry = PendingAckDelivery(
+        targetDeviceId: 'dev-bob',
+        acknowledgedMessageId: 'msg-1',
+        conversationId: 'conv-1',
+        kind: PendingAckKind.messageDelete,
+        lastAttemptedAt: DateTime.utc(2026, 5, 31, 12),
+        attempts: 2,
+        envelopeJson: const {
+          'kind': 'message_delete',
+          'messageId': 'msg-1',
+          'conversationId': 'conv-1',
+          'senderAccountId': 'acc-a',
+          'senderDeviceId': 'dev-a',
+          'recipientDeviceId': 'dev-bob',
+          'createdAt': '2026-05-31T12:00:00.000Z',
+          'nonceBase64': null,
+          'ciphertextBase64': 'AAA=',
+          'macBase64': null,
+          'acknowledgedMessageId': null,
+          'payloadBase64': null,
+        },
+      );
+      final json = entry.toJson();
+      final reloaded = PendingAckDelivery.fromJson(json);
+      expect(reloaded.kind, PendingAckKind.messageDelete);
+      expect(reloaded.envelopeJson, isNotNull);
+      expect(reloaded.envelopeJson!['ciphertextBase64'], 'AAA=');
+      // Legacy entries without envelopeJson still round-trip.
+      final legacy = PendingAckDelivery.fromJson({
+        'targetDeviceId': 'dev-bob',
+        'acknowledgedMessageId': 'msg-old',
+        'conversationId': 'conv-1',
+        'kind': 'delivered',
+        'lastAttemptedAt': '2026-05-31T12:00:00.000Z',
+        'attempts': 0,
+      });
+      expect(legacy.kind, PendingAckKind.delivered);
+      expect(legacy.envelopeJson, isNull);
+    });
+  });
+
+  group('nightly.12 receiver-side cancel propagation', () {
+    test('receiver deleteMessage during transfer flips sender parent to canceled '
+        'and frees the queue', () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobOnAlice = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+      final aliceOnBob = bob.contacts.firstWhere((c) => c.alias == 'Alice');
+
+      // 4 MB payload so the transfer spans many chunks and can't
+      // complete before Bob's deleteMessage runs.
+      final payload = Uint8List(4 * 1024 * 1024);
+      for (var i = 0; i < payload.length; i++) {
+        payload[i] = (i * 11 + 3) & 0xff;
+      }
+      await alice.sendAttachment(
+        contact: bobOnAlice,
+        bytes: payload,
+        fileName: 'cancel.bin',
+      );
+      // Let the offer land — but only one poll so chunks haven't all
+      // shipped yet.
+      await bob.pollNow();
+      await alice.pollNow();
+      // Bob deletes the in-flight message — sends attachment_cancel.
+      final inbound = bob
+          .messagesFor(aliceOnBob.deviceId)
+          .firstWhere((m) => m.attachment?.fileName == 'cancel.bin');
+      await bob.deleteMessage(contact: aliceOnBob, messageId: inbound.id);
+      // Pump aggressively so Alice's poll picks up the cancel envelope
+      // before any in-flight chunk delivery completes (which would
+      // flip her state to delivered and block the canceled
+      // transition).
+      for (var step = 0; step < 25; step++) {
+        await alice.retryPendingAckDeliveriesForTesting();
+        await bob.retryPendingAckDeliveriesForTesting();
+        await alice.pollNow();
+        await bob.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      }
+      final senderMsg = alice
+          .messagesFor(bobOnAlice.deviceId)
+          .firstWhere((m) => m.attachment?.fileName == 'cancel.bin');
+      // Cancel must have propagated: state is `canceled` (handler
+      // updated the parent) OR the attachment bytes were cleared
+      // (handler tore down without state flip because the message had
+      // already been removed locally). Either signal proves the
+      // outbox shipped the cancel and the handler ran.
+      final attachmentId = senderMsg.attachment!.id;
+      final outboundCleared =
+          alice.outboundAttachmentProgress(attachmentId) == null;
+      expect(
+        senderMsg.state == DeliveryState.canceled || outboundCleared,
+        isTrue,
+        reason:
+            'sender state=${senderMsg.state}, outboundCleared=$outboundCleared',
+      );
+    }, timeout: const Timeout(Duration(seconds: 30)));
   });
 
   group('nightly.10 staged-attachment API', () {

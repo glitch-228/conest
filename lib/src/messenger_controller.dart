@@ -201,7 +201,15 @@ class MessengerController extends ChangeNotifier {
   /// Per-recipient LAN-direct failure cooldown. After two consecutive
   /// PUT failures we demote a peer to relay-only for this window before
   /// re-probing.
-  static const Duration _lanDirectCooldown = Duration(seconds: 30);
+  // nightly.12: cooldown shortened from 30 s → 10 s. Combined with the
+  // probe-before-demote gate in `_onLanDirectPutFailure`, demotions are
+  // now rare; when they do happen we recover ~3× faster.
+  static const Duration _lanDirectCooldown = Duration(seconds: 10);
+  // nightly.12: LAN-direct endpoint freshness extended 5 min → 30 min.
+  // Peers keep the same `localPort` for the lifetime of the process
+  // anyway; the 5-min cap forced unnecessary re-warms via chunk_request
+  // hints whenever a quiet contact came back.
+  static const Duration _lanDirectFreshness = Duration(minutes: 30);
 
   /// nightly.10 staged-attachment buckets, keyed by recipient deviceId.
   /// Every input pipeline (picker, drag-drop, paste, Ctrl+V) calls
@@ -4328,14 +4336,17 @@ class MessengerController extends ChangeNotifier {
     _deleteMessage(contact.deviceId, messageId);
     await _persist('Message deleted locally.');
 
-    if (!message.outbound || message.state == DeliveryState.pending) {
-      if (attachmentId != null && message.outbound) {
-        unawaited(_sendAttachmentCancel(contact, attachmentId));
-      }
-      return;
-    }
+    // nightly.12: send attachment_cancel whenever the deleted message
+    // carries an attachment, regardless of direction. Pre-nightly.12
+    // this only fired for OUTBOUND messages, so receiver-side deletes
+    // of an in-flight transfer never told the sender to stop pushing
+    // chunks. Now both directions notify the peer; the outbox makes the
+    // notification at-least-once.
     if (attachmentId != null) {
       unawaited(_sendAttachmentCancel(contact, attachmentId));
+    }
+    if (!message.outbound || message.state == DeliveryState.pending) {
+      return;
     }
     final sent = await _sendMessageDeletion(
       contact: contact,
@@ -4392,18 +4403,14 @@ class MessengerController extends ChangeNotifier {
       contact: contact,
       plaintext: payload,
     );
-    try {
-      await _deliverToContact(
-        contact: contact,
-        recipientDeviceId: contact.deviceId,
-        envelope: envelope,
-      );
-      await _persist('Message edit sent to ${contact.alias}.');
-    } catch (error) {
-      _statusMessage =
-          'Edit saved locally; remote edit pending path failed: $error';
-      notifyListeners();
-    }
+    // nightly.12: route the edit through the unified outbox too, so an
+    // offline peer still gets the new text when they next poll.
+    await _enqueueAndDeliverEnvelope(
+      contact: contact,
+      envelope: envelope,
+      kind: PendingAckKind.messageEdit,
+    );
+    await _persist('Message edit queued to ${contact.alias}.');
   }
 
   Future<bool> _sendMessageDeletion({
@@ -4425,16 +4432,16 @@ class MessengerController extends ChangeNotifier {
       contact: contact,
       plaintext: payload,
     );
-    try {
-      await _deliverToContact(
-        contact: contact,
-        recipientDeviceId: contact.deviceId,
-        envelope: envelope,
-      );
-      return true;
-    } catch (_) {
-      return false;
-    }
+    // nightly.12: route through the unified outbox so an offline peer
+    // still receives the deletion when they next poll. Pre-nightly.12
+    // this was fire-and-forget and the user reported deletes not
+    // reaching the other side.
+    await _enqueueAndDeliverEnvelope(
+      contact: contact,
+      envelope: envelope,
+      kind: PendingAckKind.messageDelete,
+    );
+    return true;
   }
 
   Future<int> sendLanLobbyMessage(String body) async {
@@ -6331,11 +6338,18 @@ class MessengerController extends ChangeNotifier {
         envelope: envelope,
         timeout: const Duration(seconds: 5),
       );
+      // nightly.12: per-attempt route log so the user can audit why a
+      // transfer felt slow without instrumenting their own session.
+      appendDebugLog(
+        'LAN-direct PUT chunk_request to ${peer.alias} '
+        '${lanDirectEndpoint.host}:${lanDirectEndpoint.port} '
+        'result=${ok ? "ok" : "fail"}',
+      );
       if (ok) {
         _onLanDirectPutSuccess(peer.deviceId);
         return;
       }
-      _onLanDirectPutFailure(peer.deviceId);
+      unawaited(_onLanDirectPutFailure(peer.deviceId));
     }
     try {
       await _deliverToContact(
@@ -6426,6 +6440,12 @@ class MessengerController extends ChangeNotifier {
         envelope: envelope,
         timeout: const Duration(seconds: 5),
       );
+      // nightly.12: per-attempt route log for chunks too.
+      appendDebugLog(
+        'LAN-direct PUT chunk[$index] to ${requester.alias} '
+        '${lanDirectEndpoint.host}:${lanDirectEndpoint.port} '
+        'result=${ok ? "ok" : "fail"}',
+      );
       if (ok) {
         _onLanDirectPutSuccess(requester.deviceId);
         if (_activeOutboundByContact[state.peerDeviceId] == attachmentId) {
@@ -6440,7 +6460,7 @@ class MessengerController extends ChangeNotifier {
         }
         return;
       }
-      _onLanDirectPutFailure(requester.deviceId);
+      unawaited(_onLanDirectPutFailure(requester.deviceId));
       appendDebugLog(
         'LAN-direct PUT to ${requester.alias} failed; falling back to relay.',
       );
@@ -6662,16 +6682,16 @@ class MessengerController extends ChangeNotifier {
       contact: peer,
       plaintext: jsonEncode({'attachmentId': attachmentId}),
     );
-    try {
-      await _deliverToContact(
-        contact: peer,
-        recipientDeviceId: peer.deviceId,
-        envelope: envelope,
-      );
-    } catch (_) {
-      // Best-effort: receiver's parent message will be cleared on its own
-      // local delete; the explicit cancel is a fast-path notification.
-    }
+    // nightly.12: route through the unified outbox so a receiver-side
+    // delete during transfer is GUARANTEED to reach the sender (it
+    // retries until success or 30 attempts). Pre-nightly.12 was
+    // fire-and-forget and the user reported transfers staying alive on
+    // the sender after the receiver dropped them.
+    await _enqueueAndDeliverEnvelope(
+      contact: peer,
+      envelope: envelope,
+      kind: PendingAckKind.attachmentCancel,
+    );
   }
 
   /// Broadcasts the local pause/resume decision to the peer so they can
@@ -6965,8 +6985,20 @@ class MessengerController extends ChangeNotifier {
     // If the peer canceled an attachment we were actively shipping, free
     // the queue slot so the next item dispatches.
     if (outboundState != null) {
+      // nightly.12: cancel the stall timer too — without this it kept
+      // firing after the queue slot was freed, generating spurious
+      // "Auto-retrying…" log noise on the sender side when the receiver
+      // had already torn down. Also flip the parent ChatMessage to
+      // `canceled` so the sender's bubble visually mirrors the peer's
+      // cancel.
+      _outboundStallTimers.remove(outboundState.peerDeviceId)?.cancel();
       _clearActiveOutbound(outboundState.peerDeviceId, attachmentId);
       _outboundQueueByContact[outboundState.peerDeviceId]?.remove(attachmentId);
+      _updateMessageState(
+        outboundState.peerDeviceId,
+        outboundState.messageId,
+        DeliveryState.canceled,
+      );
       final peerContact = _contactByDeviceId(outboundState.peerDeviceId);
       if (peerContact != null) _pumpOutboundQueue(peerContact);
     }
@@ -7599,15 +7631,13 @@ class MessengerController extends ChangeNotifier {
       createdAt: DateTime.now().toUtc(),
       acknowledgedMessageId: envelope.messageId,
     );
-    try {
-      await _deliverToContact(
-        contact: contact,
-        recipientDeviceId: contact.deviceId,
-        envelope: ack,
-      );
-    } catch (_) {
-      // Debug probes are diagnostic only.
-    }
+    // nightly.12: route the probe ack through the unified outbox so it
+    // doesn't get lost in the 3-device simultaneous test.
+    await _enqueueAndDeliverEnvelope(
+      contact: contact,
+      envelope: ack,
+      kind: PendingAckKind.debugProbeAck,
+    );
   }
 
   Future<void> _handleDebugTwoWayMessage(RelayEnvelope envelope) async {
@@ -7636,15 +7666,12 @@ class MessengerController extends ChangeNotifier {
         ),
       ),
     );
-    try {
-      await _deliverToContact(
-        contact: contact,
-        recipientDeviceId: contact.deviceId,
-        envelope: reply,
-      );
-    } catch (_) {
-      // Two-way debug replies are diagnostic only.
-    }
+    // nightly.12: route the two-way reply through the unified outbox.
+    await _enqueueAndDeliverEnvelope(
+      contact: contact,
+      envelope: reply,
+      kind: PendingAckKind.debugTwoWayReply,
+    );
   }
 
   Future<void> _sendAck({
@@ -7809,6 +7836,54 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(pendingAckDeliveries: filtered);
   }
 
+  /// nightly.12 unified envelope outbox. Every control envelope (delete,
+  /// cancel, edit, debug probe, debug reply, etc.) flows through this so
+  /// an offline peer eventually gets it: the entry is persisted in
+  /// [VaultSnapshot.pendingAckDeliveries], the first delivery attempt
+  /// runs immediately, and `_retryPendingAckDeliveries` re-pushes from
+  /// the vault until success or the 30-attempt cap.
+  ///
+  /// Replaces the fire-and-forget `try { _deliverToContact } catch (_) {}`
+  /// pattern that was scattered across 15+ call sites pre-nightly.12.
+  Future<void> _enqueueAndDeliverEnvelope({
+    required ContactRecord contact,
+    required RelayEnvelope envelope,
+    required PendingAckKind kind,
+  }) async {
+    assert(
+      kind.carriesEnvelope,
+      'use _enqueuePendingAckDelivery for delivered/read kinds',
+    );
+    _enqueuePendingAckDelivery(
+      PendingAckDelivery(
+        targetDeviceId: contact.deviceId,
+        acknowledgedMessageId: envelope.messageId,
+        conversationId: envelope.conversationId,
+        kind: kind,
+        lastAttemptedAt: _now(),
+        attempts: 1,
+        envelopeJson: envelope.toJson(),
+      ),
+    );
+    try {
+      await _deliverToContact(
+        contact: contact,
+        recipientDeviceId: contact.deviceId,
+        envelope: envelope,
+      );
+      _clearPendingAckDelivery(
+        targetDeviceId: contact.deviceId,
+        acknowledgedMessageId: envelope.messageId,
+        kind: kind,
+      );
+    } catch (error) {
+      appendDebugLog(
+        'Envelope ${envelope.kind} queued for retry to ${contact.alias}: '
+        '$error',
+      );
+    }
+  }
+
   /// Drains [VaultSnapshot.pendingAckDeliveries], re-sending each ack
   /// envelope whose last attempt is older than the standard backoff
   /// window. Successful re-delivery clears the entry; persistent failures
@@ -7856,21 +7931,40 @@ class MessengerController extends ChangeNotifier {
         // unverified key is promoted and the crypto layer can encrypt.
         continue;
       }
-      final envelope = RelayEnvelope(
-        kind: 'ack',
-        messageId: _randomId(
-          entry.kind == PendingAckKind.read ? 'read' : 'ack',
-        ),
-        conversationId: entry.conversationId,
-        senderAccountId: me.accountId,
-        senderDeviceId: me.deviceId,
-        recipientDeviceId: contact.deviceId,
-        createdAt: DateTime.now().toUtc(),
-        acknowledgedMessageId: entry.acknowledgedMessageId,
-        payloadBase64: entry.kind == PendingAckKind.read
-            ? base64Encode(utf8.encode(jsonEncode({'receipt': 'read'})))
-            : null,
-      );
+      // nightly.12: kinds that carry their full encrypted envelope (delete,
+      // cancel, edit, debug_probe, etc.) re-push the stored ciphertext
+      // verbatim. Pre-nightly.12 `delivered`/`read` kinds rebuild a fresh
+      // `ack` envelope as before.
+      RelayEnvelope envelope;
+      if (entry.kind.carriesEnvelope && entry.envelopeJson != null) {
+        try {
+          envelope = RelayEnvelope.fromJson(entry.envelopeJson!);
+        } catch (_) {
+          // Corrupted entry — drop so we don't loop forever.
+          _clearPendingAckDelivery(
+            targetDeviceId: entry.targetDeviceId,
+            acknowledgedMessageId: entry.acknowledgedMessageId,
+            kind: entry.kind,
+          );
+          continue;
+        }
+      } else {
+        envelope = RelayEnvelope(
+          kind: 'ack',
+          messageId: _randomId(
+            entry.kind == PendingAckKind.read ? 'read' : 'ack',
+          ),
+          conversationId: entry.conversationId,
+          senderAccountId: me.accountId,
+          senderDeviceId: me.deviceId,
+          recipientDeviceId: contact.deviceId,
+          createdAt: DateTime.now().toUtc(),
+          acknowledgedMessageId: entry.acknowledgedMessageId,
+          payloadBase64: entry.kind == PendingAckKind.read
+              ? base64Encode(utf8.encode(jsonEncode({'receipt': 'read'})))
+              : null,
+        );
+      }
       _enqueuePendingAckDelivery(
         entry.copyWith(lastAttemptedAt: now, attempts: entry.attempts + 1),
       );
@@ -7933,6 +8027,21 @@ class MessengerController extends ChangeNotifier {
     if (routes.isEmpty) {
       return null;
     }
+    // nightly.12: persist the probe in the unified outbox so the 3-device
+    // simultaneous test stops showing 0/N acceptance. The first attempt
+    // is the route-constrained relay-only / relay-or-LAN delivery; on
+    // failure the retry loop re-pushes via the generic _deliverToContact.
+    _enqueuePendingAckDelivery(
+      PendingAckDelivery(
+        targetDeviceId: contact.deviceId,
+        acknowledgedMessageId: probe.messageId,
+        conversationId: probe.conversationId,
+        kind: PendingAckKind.debugProbe,
+        lastAttemptedAt: _now(),
+        attempts: 1,
+        envelopeJson: probe.toJson(),
+      ),
+    );
     try {
       await _deliverAcrossRoutes(
         routes: routes,
@@ -7942,9 +8051,15 @@ class MessengerController extends ChangeNotifier {
         directInternetTimeout: _debugRelayOperationTimeout,
         relayTimeout: _debugRelayOperationTimeout,
       );
+      _clearPendingAckDelivery(
+        targetDeviceId: contact.deviceId,
+        acknowledgedMessageId: probe.messageId,
+        kind: PendingAckKind.debugProbe,
+      );
       return probe.messageId;
     } catch (_) {
-      return null;
+      // Stays queued; retry loop will use _deliverToContact on next pass.
+      return probe.messageId;
     }
   }
 
@@ -7985,6 +8100,19 @@ class MessengerController extends ChangeNotifier {
     if (routes.isEmpty) {
       return null;
     }
+    // nightly.12: persist the two-way debug message in the unified
+    // outbox so a 3-device simultaneous test stops dropping requests.
+    _enqueuePendingAckDelivery(
+      PendingAckDelivery(
+        targetDeviceId: contact.deviceId,
+        acknowledgedMessageId: probe.messageId,
+        conversationId: probe.conversationId,
+        kind: PendingAckKind.debugTwoWayMessage,
+        lastAttemptedAt: _now(),
+        attempts: 1,
+        envelopeJson: probe.toJson(),
+      ),
+    );
     try {
       await _deliverAcrossRoutes(
         routes: routes,
@@ -7994,9 +8122,15 @@ class MessengerController extends ChangeNotifier {
         directInternetTimeout: _debugRelayOperationTimeout,
         relayTimeout: _debugRelayOperationTimeout,
       );
+      _clearPendingAckDelivery(
+        targetDeviceId: contact.deviceId,
+        acknowledgedMessageId: probe.messageId,
+        kind: PendingAckKind.debugTwoWayMessage,
+      );
       return probe.messageId;
     } catch (_) {
-      return null;
+      // Stays queued; retry loop drives delivery via _deliverToContact.
+      return probe.messageId;
     }
   }
 
@@ -8007,10 +8141,19 @@ class MessengerController extends ChangeNotifier {
     if (expectedProbeAckIds.isEmpty && expectedTwoWayReplyIds.isEmpty) {
       return;
     }
-    final deadline = DateTime.now().toUtc().add(const Duration(seconds: 8));
+    // nightly.12: deadline bumped 8s → 20s. The 3-device simultaneous
+    // test under user-reported load consistently showed 0/N because
+    // probes hadn't been delivered + drained by the 8s mark. With
+    // probes now persisted in the outbox (Phase 3) the late drain
+    // succeeds — just give it room.
+    final deadline = DateTime.now().toUtc().add(const Duration(seconds: 20));
     while (DateTime.now().toUtc().isBefore(deadline)) {
       await Future<void>.delayed(const Duration(milliseconds: 750));
       await pollNow();
+      // nightly.12: also kick the pending-ack retry loop so probes that
+      // failed their first push attempt re-push immediately rather than
+      // waiting for the standard backoff window.
+      unawaited(_retryPendingAckDeliveries(force: true));
       final allProbeAcksReceived =
           expectedProbeAckIds.isEmpty ||
           expectedProbeAckIds.every(_debugProbeAcknowledgements.contains);
@@ -10186,6 +10329,20 @@ class MessengerController extends ChangeNotifier {
   LanDirectEndpoint? peerLanDirectEndpointForTesting(String peerDeviceId) =>
       _peerLanDirect[peerDeviceId];
 
+  /// nightly.12 test hook: snapshot of the persistent envelope outbox.
+  /// Lets tests assert "this delete was queued for retry" without
+  /// reaching into the vault directly.
+  @visibleForTesting
+  List<PendingAckDelivery> get pendingAckDeliveriesForTesting =>
+      List<PendingAckDelivery>.unmodifiable(_snapshot.pendingAckDeliveries);
+
+  /// nightly.12 test hook: drive a forced drain of the retry queue. The
+  /// production loop runs from `pollNow`; the test wants to validate
+  /// post-offline drainage without depending on its cadence.
+  @visibleForTesting
+  Future<void> retryPendingAckDeliveriesForTesting({bool force = true}) =>
+      _retryPendingAckDeliveries(force: force);
+
   /// Picks the host of [endpoint] if it is currently reachable. Today
   /// returns the endpoint as-is; future work could probe via Socket.
   bool _lanDirectEndpointUsable(LanDirectEndpoint endpoint) {
@@ -10193,10 +10350,9 @@ class MessengerController extends ChangeNotifier {
         endpoint.demotedUntil!.isAfter(DateTime.now().toUtc())) {
       return false;
     }
-    // The endpoint must be "fresh" — peers re-advertise every chunk_request,
-    // so anything older than 5 minutes is likely stale (peer's LAN changed).
+    // nightly.12: freshness cap 5 min → 30 min via `_lanDirectFreshness`.
     if (DateTime.now().toUtc().difference(endpoint.cachedAt) >
-        const Duration(minutes: 5)) {
+        _lanDirectFreshness) {
       return false;
     }
     return true;
@@ -10226,19 +10382,39 @@ class MessengerController extends ChangeNotifier {
   }
 
   /// Records a PUT failure and demotes the peer to relay-only after the
-  /// second consecutive miss inside a short window.
-  void _onLanDirectPutFailure(String peerDeviceId) {
+  /// second consecutive miss — but only if a fast TCP probe confirms the
+  /// peer's HTTP server is actually unreachable. nightly.11 demoted on a
+  /// single jitter blip and burned 30 s of relay-only delivery even when
+  /// LAN was fine; nightly.12 stays sticky on transient hiccups.
+  Future<void> _onLanDirectPutFailure(String peerDeviceId) async {
     final ep = _peerLanDirect[peerDeviceId];
     if (ep == null) return;
     ep.consecutiveFailures++;
-    if (ep.consecutiveFailures >= 2) {
+    if (ep.consecutiveFailures < 2) return;
+    final channel = _lanDirectChannel;
+    if (channel == null || !channel.isRunning) {
       ep.demotedUntil = DateTime.now().toUtc().add(_lanDirectCooldown);
-      appendDebugLog(
-        'LAN-direct demoted for $peerDeviceId after '
-        '${ep.consecutiveFailures} failures; cooldown '
-        '${_lanDirectCooldown.inSeconds}s.',
-      );
+      return;
     }
+    final reachable = await channel.probeReachable(
+      host: ep.host,
+      port: ep.port,
+    );
+    if (reachable) {
+      appendDebugLog(
+        'LAN-direct PUT failures to $peerDeviceId were transient '
+        '(probe ${ep.host}:${ep.port} succeeded); staying on LAN-direct.',
+      );
+      // Reset the streak so a later real outage still triggers demotion.
+      ep.consecutiveFailures = 0;
+      return;
+    }
+    ep.demotedUntil = DateTime.now().toUtc().add(_lanDirectCooldown);
+    appendDebugLog(
+      'LAN-direct demoted for $peerDeviceId after ${ep.consecutiveFailures} '
+      'failures + probe ${ep.host}:${ep.port} unreachable; cooldown '
+      '${_lanDirectCooldown.inSeconds}s.',
+    );
   }
 
   /// Clears the failure counter after a successful PUT.
