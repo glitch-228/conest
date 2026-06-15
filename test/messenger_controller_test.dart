@@ -5536,6 +5536,106 @@ void main() {
     );
   });
 
+  test('the same envelope delivered concurrently via two transports is '
+      'dispatched once', () async {
+    // LAN push and relay poll can hand _processEnvelopes the same envelope
+    // before either run reaches _markSeen (the seen ledger is only written
+    // after the dispatch awaits). The in-flight reservation must collapse
+    // the second copy: one bubble, one ack.
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    addTearDown(alice.dispose);
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    addTearDown(bob.dispose);
+    await _pairControllers(alice, bob);
+
+    final bobContact = alice.contacts.singleWhere(
+      (contact) => contact.deviceId == bob.identity!.deviceId,
+    );
+    await alice.sendMessage(contact: bobContact, body: 'duplicate-transport');
+    final envelope = relayClient.storedEnvelopes.firstWhere(
+      (stored) =>
+          stored.kind == 'direct_message' &&
+          stored.recipientDeviceId == bob.identity!.deviceId,
+    );
+    // Drop the relay copy so a background poll can't add a third delivery.
+    relayClient._queues[bob.identity!.deviceId]?.clear();
+
+    final processed = await Future.wait([
+      bob.processEnvelopesForTesting([envelope]),
+      bob.processEnvelopesForTesting([envelope]),
+    ]);
+    expect(
+      processed[0] + processed[1],
+      1,
+      reason: 'exactly one run may dispatch the envelope',
+    );
+    expect(
+      bob
+          .messagesFor(alice.identity!.deviceId)
+          .where((message) => message.id == envelope.messageId)
+          .length,
+      1,
+    );
+    final ackIds = relayClient.storedEnvelopes
+        .where(
+          (stored) =>
+              stored.kind == 'ack' &&
+              stored.acknowledgedMessageId == envelope.messageId,
+        )
+        .map((stored) => stored.messageId)
+        .toSet();
+    expect(
+      ackIds.length,
+      1,
+      reason: 'concurrent duplicate delivery must produce a single ack',
+    );
+  });
+
+  test('seen-envelope ledger is capped and evicts oldest ids first', () async {
+    final previousCap = MessengerController.seenEnvelopeCap;
+    MessengerController.seenEnvelopeCap = 50;
+    addTearDown(() => MessengerController.seenEnvelopeCap = previousCap);
+    final relayClient = _FakeRelayClient();
+    final controller = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    addTearDown(controller.dispose);
+
+    RelayEnvelope ackEnvelope(int index) => RelayEnvelope(
+      kind: 'ack',
+      messageId: 'cap-ack-$index',
+      conversationId: 'conv-cap',
+      senderAccountId: 'acc-peer',
+      senderDeviceId: 'dev-peer',
+      recipientDeviceId: controller.identity!.deviceId,
+      createdAt: DateTime.now().toUtc(),
+      acknowledgedMessageId: 'msg-$index',
+    );
+
+    for (var index = 0; index < 60; index++) {
+      await controller.processEnvelopesForTesting([ackEnvelope(index)]);
+    }
+    expect(
+      controller.seenEnvelopeCount,
+      lessThanOrEqualTo(50),
+      reason: 'ledger must stay within the cap instead of growing forever',
+    );
+    // Recent ids must still dedupe (processed == 0 → replay path taken).
+    expect(await controller.processEnvelopesForTesting([ackEnvelope(59)]), 0);
+    // The oldest ids were evicted — in production they are long past every
+    // relay queue TTL, so re-delivery cannot occur; re-processing here just
+    // demonstrates the eviction order.
+    expect(await controller.processEnvelopesForTesting([ackEnvelope(0)]), 1);
+  });
+
   group('connectivity preferences', () {
     test('ContactRoutingPreferences JSON round-trip with missing fields '
         'defaults to LAN-first', () {

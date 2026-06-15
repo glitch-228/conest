@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -12,6 +13,41 @@ import 'models.dart';
 List<int> _secureRandomBytes(int length) {
   final random = Random.secure();
   return List<int>.generate(length, (_) => random.nextInt(256));
+}
+
+/// Payload for the off-main-isolate vault encryption pass. Only sendable
+/// plain data crosses the isolate boundary (the JSON map, raw key bytes,
+/// and a pre-generated nonce).
+class _VaultEncryptRequest {
+  const _VaultEncryptRequest({
+    required this.snapshotJson,
+    required this.key,
+    required this.nonce,
+  });
+
+  final Map<String, dynamic> snapshotJson;
+  final List<int> key;
+  final List<int> nonce;
+}
+
+/// Runs in a `compute` isolate: JSON-encodes the full snapshot, encrypts
+/// it, and returns the ready-to-write envelope string. The vault grows
+/// with the whole message history, so doing this on the UI isolate makes
+/// every save jank in proportion to how long the user has used the app.
+Future<String> _encodeAndEncryptVault(_VaultEncryptRequest request) async {
+  final algorithm = Chacha20.poly1305Aead();
+  final secretBox = await algorithm.encrypt(
+    utf8.encode(jsonEncode(request.snapshotJson)),
+    secretKey: SecretKey(request.key),
+    nonce: request.nonce,
+    aad: utf8.encode('conest.vault.v1'),
+  );
+  return jsonEncode(<String, dynamic>{
+    'version': 1,
+    'nonceBase64': base64Encode(secretBox.nonce),
+    'ciphertextBase64': base64Encode(secretBox.cipherText),
+    'macBase64': base64Encode(secretBox.mac.bytes),
+  });
 }
 
 Future<void> _restrictOwnerOnly(File file) async {
@@ -297,20 +333,20 @@ class VaultStore {
     final file = await _vaultFile();
     await file.parent.create(recursive: true);
     final key = await _readOrCreateVaultKey();
-    final algorithm = Chacha20.poly1305Aead();
-    final secretBox = await algorithm.encrypt(
-      utf8.encode(jsonEncode(snapshot.toJson())),
-      secretKey: SecretKey(key),
-      nonce: _secureRandomBytes(algorithm.nonceLength),
-      aad: utf8.encode('conest.vault.v1'),
+    // JSON-encode + encrypt + base64 of the whole history runs off the UI
+    // isolate; only the (sendable) snapshot map crosses the boundary. The
+    // nonce is generated here so the isolate stays deterministic-in,
+    // deterministic-out.
+    final envelope = await compute(
+      _encodeAndEncryptVault,
+      _VaultEncryptRequest(
+        snapshotJson: snapshot.toJson(),
+        key: key,
+        nonce: _secureRandomBytes(Chacha20.poly1305Aead().nonceLength),
+      ),
+      debugLabel: 'conest-vault-save',
     );
-    final envelope = <String, dynamic>{
-      'version': 1,
-      'nonceBase64': base64Encode(secretBox.nonce),
-      'ciphertextBase64': base64Encode(secretBox.cipherText),
-      'macBase64': base64Encode(secretBox.mac.bytes),
-    };
-    await file.writeAsString(jsonEncode(envelope), flush: true);
+    await file.writeAsString(envelope, flush: true);
   }
 
   Future<void> clear() async {

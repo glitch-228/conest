@@ -1,0 +1,5 @@
+Bundled fonts in this directory are licensed under the SIL Open Font License 1.1.
+
+- Space Grotesk (c) Florian Karsten — see SpaceGrotesk-OFL.txt
+  Instanced from the upstream variable font into static weights 400/500/600/700 via fonttools.
+- JetBrains Mono (c) The JetBrains Mono Project Authors — see JetBrainsMono-OFL.txt

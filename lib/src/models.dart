@@ -457,12 +457,20 @@ List<PeerEndpoint> _peerEndpointsFromJsonList(
   final routes = <PeerEndpoint>[];
   for (final value in values) {
     if (value is! Map<String, dynamic>) {
+      debugPrint('Skipping malformed persisted route (not an object): $value');
       continue;
     }
     final PeerEndpoint route;
     try {
       route = PeerEndpoint.fromJson(value);
-    } on Object {
+    } on Object catch (error) {
+      // A silently-vanishing route makes "my contact lost its relay" bugs
+      // undiagnosable — keep the skip (one bad route must not take down
+      // the whole contact) but leave a trace.
+      debugPrint(
+        'Skipping malformed persisted route '
+        '${value['host']}:${value['port']}: $error',
+      );
       continue;
     }
     routes.add(route);

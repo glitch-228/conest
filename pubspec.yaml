@@ -1,7 +1,7 @@
 name: conest
 description: "Cross-platform secure text exchange prototype."
 publish_to: 'none'
-version: 0.3.3+28
+version: 0.3.3+29
 
 environment:
   sdk: ^3.11.4
@@ -41,3 +41,25 @@ flutter:
   assets:
     - assets/default_relays.json
     - assets/default_relays.ed25519.sig
+  # Signature redesign typography — bundled OFL fonts (offline/deterministic,
+  # no runtime fetch). Space Grotesk = display/body, JetBrains Mono = the mono
+  # labels/chips/receipts. See assets/fonts/OFL.txt for licenses.
+  fonts:
+    - family: SpaceGrotesk
+      fonts:
+        - asset: assets/fonts/SpaceGrotesk-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/SpaceGrotesk-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/SpaceGrotesk-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/SpaceGrotesk-Bold.ttf
+          weight: 700
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/JetBrainsMono-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/JetBrainsMono-SemiBold.ttf
+          weight: 600

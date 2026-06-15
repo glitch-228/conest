@@ -220,6 +220,31 @@ class MessengerController extends ChangeNotifier {
   /// between contacts doesn't lose the staged items.
   final Map<String, List<StagedAttachment>> _stagedAttachments = {};
   VaultSnapshot _snapshot = VaultSnapshot.empty();
+
+  /// Rolling cap on the persisted seen-envelope ledger. Envelopes older
+  /// than the cap window are also long past every relay's queue TTL, so
+  /// they can never be re-delivered and keeping their ids only bloats the
+  /// vault. Mutable so tests can exercise the eviction without processing
+  /// tens of thousands of envelopes.
+  @visibleForTesting
+  static int seenEnvelopeCap = 20000;
+
+  /// In-memory mirror of [VaultSnapshot.seenEnvelopeIds]. The persisted
+  /// form stays a List (ordered, JSON-friendly, cap-evictable from the
+  /// front) but dedupe checks run against this Set so envelope processing
+  /// doesn't pay an O(n) List scan per envelope. Rebuilt wherever
+  /// `_snapshot` is replaced wholesale (vault load, identity reset).
+  final Set<String> _seenEnvelopeIdSet = <String>{};
+
+  /// Envelope ids currently being dispatched by an in-flight
+  /// `_processEnvelopes` run. Long-poll, `pollNow`, and the local-relay
+  /// store callback run overlapping `_processEnvelopes` futures, and the
+  /// same envelope can arrive via two transports (LAN push + relay poll)
+  /// before either run reaches `_markSeen` — the seen ledger alone can't
+  /// catch that because it's only written after the dispatch awaits.
+  /// Reserving the id here, synchronously, before the first await closes
+  /// the window (duplicate acks, double-run control-envelope handlers).
+  final Set<String> _inFlightEnvelopeIds = <String>{};
   Timer? _pollTimer;
   bool _ready = false;
   bool _polling = false;
@@ -800,6 +825,7 @@ class MessengerController extends ChangeNotifier {
   Future<void> initialize() async {
     try {
       _snapshot = await _vaultStore.load();
+      _rebuildSeenEnvelopeIdSet();
       final normalized = _normalizeStoredContactRoutes();
       if (normalized) {
         await _saveSnapshotSilently(notify: false);
@@ -2667,6 +2693,7 @@ class MessengerController extends ChangeNotifier {
     await _localRelayNode.stop().timeout(platformCallTimeout, onTimeout: () {});
     await _vaultStore.clear();
     _snapshot = VaultSnapshot.empty();
+    _rebuildSeenEnvelopeIdSet();
     _polling = false;
     _pairingSessionActiveUntil = null;
     _lastPairingBeaconSentAt = null;
@@ -4332,6 +4359,15 @@ class MessengerController extends ChangeNotifier {
       throw ArgumentError('Message not found.');
     }
     final attachmentId = message.attachment?.id;
+    if (attachmentId != null) {
+      // Deleting a message with an in-flight *inbound* transfer must also
+      // tear down the local chunk-assembly state: the attachment_cancel
+      // below only stops the peer's side, and an orphaned retryTimer keeps
+      // firing chunk_requests for a message that no longer exists.
+      final inboundState = _inboundAttachments.remove(attachmentId);
+      inboundState?.retryTimer?.cancel();
+      _assembledAttachments.remove(attachmentId);
+    }
     _clearOutboundAttempt(contact.deviceId, messageId);
     _deleteMessage(contact.deviceId, messageId);
     await _persist('Message deleted locally.');
@@ -5871,229 +5907,239 @@ class MessengerController extends ChangeNotifier {
         return leftPriority.compareTo(rightPriority);
       });
     for (final envelope in orderedEnvelopes) {
-      if (_snapshot.seenEnvelopeIds.contains(envelope.messageId)) {
+      if (_seenEnvelopeIdSet.contains(envelope.messageId)) {
         await _replayAckForSeenEnvelope(envelope);
         continue;
       }
-      if (_locallyDeletedMessageIds.contains(envelope.messageId)) {
-        _markSeen(envelope.messageId);
+      if (!_inFlightEnvelopeIds.add(envelope.messageId)) {
+        // An overlapping _processEnvelopes run (the same envelope arriving
+        // via a second transport) is already dispatching this id; its ack
+        // and side effects cover this copy too.
         continue;
       }
-      // Identity-reset guardrail: if the sender is a known contact in
-      // `pendingVerification`, hold the raw envelope without decrypt /
-      // dispatch — applies to every kind (ack, route_update, group_*,
-      // message_*, etc.), not just direct text. The crypto layer already
-      // can't process these (the contact has no active publicKeyBase64
-      // while pending), but short-circuiting here keeps logs quiet and
-      // ensures inbound state stays consistent with confirm/reject.
-      final senderContact = _contactByDeviceId(envelope.senderDeviceId);
-      if (senderContact != null && senderContact.pendingVerification) {
-        _enqueueHeldEnvelope(senderContact.deviceId, envelope);
-        _markSeen(envelope.messageId);
-        continue;
-      }
-      // Connectivity mode is bidirectional: if the sender contact's
-      // effective prefs forbid the ingress transport, drop the envelope
-      // silently. No ack is emitted, so the sender's queue stall timer
-      // eventually marks the message Failed. Pairing / contact_exchange
-      // envelopes (sender unknown locally) are not gated — they need to
-      // land for the contact to be created in the first place.
-      if (senderContact != null &&
-          _droppedByIngressMode(senderContact, ingressKind)) {
-        _markSeen(envelope.messageId);
-        appendDebugLog(
-          'Dropped inbound from ${senderContact.alias}: ingress '
-          '${ingressKind.name} disabled per effective connectivity prefs.',
-        );
-        continue;
-      }
-      processed++;
-      if (envelope.kind == 'ack') {
-        _reachability.noteTwoWaySuccess(envelope.senderDeviceId);
-        if (_groupById(envelope.conversationId) != null) {
-          _updateGroupRecipientState(
-            envelope.conversationId,
-            envelope.acknowledgedMessageId ?? '',
-            envelope.senderDeviceId,
-            _isReadReceiptAck(envelope)
-                ? DeliveryState.read
-                : DeliveryState.delivered,
+      try {
+        if (_locallyDeletedMessageIds.contains(envelope.messageId)) {
+          _markSeen(envelope.messageId);
+          continue;
+        }
+        // Identity-reset guardrail: if the sender is a known contact in
+        // `pendingVerification`, hold the raw envelope without decrypt /
+        // dispatch — applies to every kind (ack, route_update, group_*,
+        // message_*, etc.), not just direct text. The crypto layer already
+        // can't process these (the contact has no active publicKeyBase64
+        // while pending), but short-circuiting here keeps logs quiet and
+        // ensures inbound state stays consistent with confirm/reject.
+        final senderContact = _contactByDeviceId(envelope.senderDeviceId);
+        if (senderContact != null && senderContact.pendingVerification) {
+          _enqueueHeldEnvelope(senderContact.deviceId, envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+        // Connectivity mode is bidirectional: if the sender contact's
+        // effective prefs forbid the ingress transport, drop the envelope
+        // silently. No ack is emitted, so the sender's queue stall timer
+        // eventually marks the message Failed. Pairing / contact_exchange
+        // envelopes (sender unknown locally) are not gated — they need to
+        // land for the contact to be created in the first place.
+        if (senderContact != null &&
+            _droppedByIngressMode(senderContact, ingressKind)) {
+          _markSeen(envelope.messageId);
+          appendDebugLog(
+            'Dropped inbound from ${senderContact.alias}: ingress '
+            '${ingressKind.name} disabled per effective connectivity prefs.',
           );
-        } else {
-          if (_isReadReceiptAck(envelope)) {
-            _markMessagesReadThroughMessage(
-              envelope.senderDeviceId,
+          continue;
+        }
+        processed++;
+        if (envelope.kind == 'ack') {
+          _reachability.noteTwoWaySuccess(envelope.senderDeviceId);
+          if (_groupById(envelope.conversationId) != null) {
+            _updateGroupRecipientState(
+              envelope.conversationId,
               envelope.acknowledgedMessageId ?? '',
+              envelope.senderDeviceId,
+              _isReadReceiptAck(envelope)
+                  ? DeliveryState.read
+                  : DeliveryState.delivered,
             );
           } else {
-            _updateMessageState(
-              envelope.senderDeviceId,
-              envelope.acknowledgedMessageId ?? '',
-              DeliveryState.delivered,
-            );
-            _clearOutboundAttempt(
-              envelope.senderDeviceId,
-              envelope.acknowledgedMessageId ?? '',
-            );
+            if (_isReadReceiptAck(envelope)) {
+              _markMessagesReadThroughMessage(
+                envelope.senderDeviceId,
+                envelope.acknowledgedMessageId ?? '',
+              );
+            } else {
+              _updateMessageState(
+                envelope.senderDeviceId,
+                envelope.acknowledgedMessageId ?? '',
+                DeliveryState.delivered,
+              );
+              _clearOutboundAttempt(
+                envelope.senderDeviceId,
+                envelope.acknowledgedMessageId ?? '',
+              );
+            }
+          }
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'contact_exchange') {
+          await _handleContactExchange(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'route_update') {
+          await _handleRouteUpdate(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'lan_lobby_message') {
+          await _handleLanLobbyMessage(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'group_membership') {
+          await _handleGroupMembership(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'group_membership_ack') {
+          await _handleGroupMembershipAck(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'group_leave') {
+          await _handleGroupLeave(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'group_message') {
+          await _handleGroupMessage(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'contact_remove') {
+          await _handleContactRemoval(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'attachment_offer' ||
+            envelope.kind == 'attachment_chunk_request' ||
+            envelope.kind == 'attachment_chunk' ||
+            envelope.kind == 'attachment_complete' ||
+            envelope.kind == 'attachment_cancel' ||
+            envelope.kind == 'attachment_pause_control' ||
+            envelope.kind == 'attachment_progress') {
+          await _handleAttachmentEnvelope(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'message_edit') {
+          await _handleMessageEdit(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'message_delete') {
+          await _handleMessageDelete(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (kDebugMode && envelope.kind == 'debug_probe') {
+          await _handleDebugProbe(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (kDebugMode && envelope.kind == 'debug_probe_ack') {
+          _debugProbeAcknowledgements.add(
+            envelope.acknowledgedMessageId ?? envelope.messageId,
+          );
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (kDebugMode && envelope.kind == 'debug_two_way_message') {
+          await _handleDebugTwoWayMessage(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (kDebugMode && envelope.kind == 'debug_two_way_reply') {
+          _debugTwoWayReplies.add(
+            envelope.acknowledgedMessageId ?? envelope.messageId,
+          );
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        ContactRecord? contact;
+        for (final candidate in _snapshot.contacts) {
+          if (candidate.deviceId == envelope.senderDeviceId) {
+            contact = candidate;
+            break;
           }
         }
-        _markSeen(envelope.messageId);
-        continue;
-      }
-
-      if (envelope.kind == 'contact_exchange') {
-        await _handleContactExchange(envelope);
-        _markSeen(envelope.messageId);
-        continue;
-      }
-
-      if (envelope.kind == 'route_update') {
-        await _handleRouteUpdate(envelope);
-        _markSeen(envelope.messageId);
-        continue;
-      }
-
-      if (envelope.kind == 'lan_lobby_message') {
-        await _handleLanLobbyMessage(envelope);
-        _markSeen(envelope.messageId);
-        continue;
-      }
-
-      if (envelope.kind == 'group_membership') {
-        await _handleGroupMembership(envelope);
-        _markSeen(envelope.messageId);
-        continue;
-      }
-
-      if (envelope.kind == 'group_membership_ack') {
-        await _handleGroupMembershipAck(envelope);
-        _markSeen(envelope.messageId);
-        continue;
-      }
-
-      if (envelope.kind == 'group_leave') {
-        await _handleGroupLeave(envelope);
-        _markSeen(envelope.messageId);
-        continue;
-      }
-
-      if (envelope.kind == 'group_message') {
-        await _handleGroupMessage(envelope);
-        _markSeen(envelope.messageId);
-        continue;
-      }
-
-      if (envelope.kind == 'contact_remove') {
-        await _handleContactRemoval(envelope);
-        _markSeen(envelope.messageId);
-        continue;
-      }
-
-      if (envelope.kind == 'attachment_offer' ||
-          envelope.kind == 'attachment_chunk_request' ||
-          envelope.kind == 'attachment_chunk' ||
-          envelope.kind == 'attachment_complete' ||
-          envelope.kind == 'attachment_cancel' ||
-          envelope.kind == 'attachment_pause_control' ||
-          envelope.kind == 'attachment_progress') {
-        await _handleAttachmentEnvelope(envelope);
-        _markSeen(envelope.messageId);
-        continue;
-      }
-
-      if (envelope.kind == 'message_edit') {
-        await _handleMessageEdit(envelope);
-        _markSeen(envelope.messageId);
-        continue;
-      }
-
-      if (envelope.kind == 'message_delete') {
-        await _handleMessageDelete(envelope);
-        _markSeen(envelope.messageId);
-        continue;
-      }
-
-      if (kDebugMode && envelope.kind == 'debug_probe') {
-        await _handleDebugProbe(envelope);
-        _markSeen(envelope.messageId);
-        continue;
-      }
-
-      if (kDebugMode && envelope.kind == 'debug_probe_ack') {
-        _debugProbeAcknowledgements.add(
-          envelope.acknowledgedMessageId ?? envelope.messageId,
-        );
-        _markSeen(envelope.messageId);
-        continue;
-      }
-
-      if (kDebugMode && envelope.kind == 'debug_two_way_message') {
-        await _handleDebugTwoWayMessage(envelope);
-        _markSeen(envelope.messageId);
-        continue;
-      }
-
-      if (kDebugMode && envelope.kind == 'debug_two_way_reply') {
-        _debugTwoWayReplies.add(
-          envelope.acknowledgedMessageId ?? envelope.messageId,
-        );
-        _markSeen(envelope.messageId);
-        continue;
-      }
-
-      ContactRecord? contact;
-      for (final candidate in _snapshot.contacts) {
-        if (candidate.deviceId == envelope.senderDeviceId) {
-          contact = candidate;
-          break;
+        if (contact == null) {
+          // The peer thinks we're a contact but we don't think they are.
+          // The likely cause is that our earlier contact_remove envelope
+          // never reached them (relay down / both peers offline at
+          // different times). Echo one contact_remove back so they can
+          // catch up. Rate-limited to once per cooldown per sender.
+          unawaited(
+            _maybeSendOrphanContactRemoval(
+              senderDeviceId: envelope.senderDeviceId,
+            ),
+          );
+          continue;
         }
-      }
-      if (contact == null) {
-        // The peer thinks we're a contact but we don't think they are.
-        // The likely cause is that our earlier contact_remove envelope
-        // never reached them (relay down / both peers offline at
-        // different times). Echo one contact_remove back so they can
-        // catch up. Rate-limited to once per cooldown per sender.
-        unawaited(
-          _maybeSendOrphanContactRemoval(
-            senderDeviceId: envelope.senderDeviceId,
-          ),
-        );
-        continue;
-      }
 
-      final decodedMessage = await _crypto.decryptDirectMessage(
-        contact: contact,
-        envelope: envelope,
-      );
-      final existingConversation = _conversationFor(contact.deviceId);
-      final alreadyKnown = existingConversation.messages.any(
-        (message) => message.id == envelope.messageId,
-      );
-      if (!alreadyKnown) {
-        final inbound = ChatMessage(
-          id: envelope.messageId,
-          conversationId: envelope.conversationId,
-          senderDeviceId: envelope.senderDeviceId,
-          recipientDeviceId: envelope.recipientDeviceId,
-          body: decodedMessage.body,
-          outbound: false,
-          state: DeliveryState.delivered,
-          createdAt: envelope.createdAt,
-          replyToMessageId: decodedMessage.replyToMessageId,
-          replySnippet: decodedMessage.replySnippet,
-          replySenderDeviceId: decodedMessage.replySenderDeviceId,
-          replySenderDisplayName: decodedMessage.replySenderDisplayName,
-        );
-        _upsertMessage(contact.deviceId, inbound);
-        _showInboundMessageNotification(
+        final decodedMessage = await _crypto.decryptDirectMessage(
           contact: contact,
-          body: decodedMessage.body,
+          envelope: envelope,
         );
+        final existingConversation = _conversationFor(contact.deviceId);
+        final alreadyKnown = existingConversation.messages.any(
+          (message) => message.id == envelope.messageId,
+        );
+        if (!alreadyKnown) {
+          final inbound = ChatMessage(
+            id: envelope.messageId,
+            conversationId: envelope.conversationId,
+            senderDeviceId: envelope.senderDeviceId,
+            recipientDeviceId: envelope.recipientDeviceId,
+            body: decodedMessage.body,
+            outbound: false,
+            state: DeliveryState.delivered,
+            createdAt: envelope.createdAt,
+            replyToMessageId: decodedMessage.replyToMessageId,
+            replySnippet: decodedMessage.replySnippet,
+            replySenderDeviceId: decodedMessage.replySenderDeviceId,
+            replySenderDisplayName: decodedMessage.replySenderDisplayName,
+          );
+          _upsertMessage(contact.deviceId, inbound);
+          _showInboundMessageNotification(
+            contact: contact,
+            body: decodedMessage.body,
+          );
+        }
+        _reachability.noteAnySignal(contact.deviceId, at: envelope.createdAt);
+        await _sendAck(contact: contact, envelope: envelope);
+        _markSeen(envelope.messageId);
+      } finally {
+        _inFlightEnvelopeIds.remove(envelope.messageId);
       }
-      _reachability.noteAnySignal(contact.deviceId, at: envelope.createdAt);
-      await _sendAck(contact: contact, envelope: envelope);
-      _markSeen(envelope.messageId);
     }
     return processed;
   }
@@ -11751,12 +11797,65 @@ class MessengerController extends ChangeNotifier {
   }
 
   void _markSeen(String envelopeId) {
-    if (_snapshot.seenEnvelopeIds.contains(envelopeId)) {
+    if (!_seenEnvelopeIdSet.add(envelopeId)) {
       return;
     }
+    var ids = List<String>.from(_snapshot.seenEnvelopeIds)..add(envelopeId);
+    if (ids.length > seenEnvelopeCap) {
+      // Trim with 10% headroom so the front-of-list copy runs once per
+      // ~cap/10 envelopes instead of on every overflowing envelope. The
+      // list is append-ordered, so the front holds the oldest ids.
+      final keepCount = seenEnvelopeCap - (seenEnvelopeCap ~/ 10);
+      final evicted = ids.sublist(0, ids.length - keepCount);
+      ids = ids.sublist(ids.length - keepCount);
+      evicted.forEach(_seenEnvelopeIdSet.remove);
+    }
+    _snapshot = _snapshot.copyWith(seenEnvelopeIds: ids);
+  }
+
+  /// Rebuilds the O(1) dedupe mirror after `_snapshot` is replaced
+  /// wholesale (vault load, identity reset). Keep in sync with every
+  /// `_snapshot = <whole new snapshot>` assignment.
+  void _rebuildSeenEnvelopeIdSet() {
+    _seenEnvelopeIdSet
+      ..clear()
+      ..addAll(_snapshot.seenEnvelopeIds);
+  }
+
+  /// Vault-bloat guard: relay health scores accumulate for every endpoint
+  /// ever probed (debug relay checks, contacts' stale hints, defaults that
+  /// rotated away) and were never evicted. Keep the most recently exercised
+  /// [_relayHealthScoreCap]; an evicted score just re-learns over a few
+  /// probes if its endpoint comes back.
+  static const int _relayHealthScoreCap = 128;
+
+  void _pruneRelayHealthScores() {
+    final scores = _snapshot.relayHealthScores;
+    if (scores.length <= _relayHealthScoreCap) {
+      return;
+    }
+    DateTime lastTouched(RelayHealthScore score) {
+      final success = score.lastSuccessAt;
+      final failure = score.lastFailureAt;
+      if (success == null) {
+        return failure ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+      }
+      if (failure == null || success.isAfter(failure)) {
+        return success;
+      }
+      return failure;
+    }
+
+    final entries = scores.entries.toList(growable: false)
+      ..sort(
+        (left, right) =>
+            lastTouched(right.value).compareTo(lastTouched(left.value)),
+      );
     _snapshot = _snapshot.copyWith(
-      seenEnvelopeIds: List<String>.from(_snapshot.seenEnvelopeIds)
-        ..add(envelopeId),
+      relayHealthScores: <String, RelayHealthScore>{
+        for (final entry in entries.take(_relayHealthScoreCap))
+          entry.key: entry.value,
+      },
     );
   }
 
@@ -11777,6 +11876,7 @@ class MessengerController extends ChangeNotifier {
     bool debounce = false,
   }) async {
     _prunePendingRouteUpdateProbes();
+    _pruneRelayHealthScores();
     if (debounce) {
       final existingCompleter = _pendingSaveCompleter;
       if (existingCompleter != null && !existingCompleter.isCompleted) {
@@ -11791,6 +11891,7 @@ class MessengerController extends ChangeNotifier {
       _pendingSaveTimer = Timer(_saveDebounceWindow, () async {
         try {
           _prunePendingRouteUpdateProbes();
+          _pruneRelayHealthScores();
           await _vaultStore.save(_snapshot);
           _vaultSaveCount++;
           _lastVaultSaveAt = _now();

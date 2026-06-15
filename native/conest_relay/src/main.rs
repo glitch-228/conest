@@ -25,6 +25,13 @@ const DEFAULT_IDENTITY_SEED_FILE: &str = "conest_relay_identity.seed";
 const DEFAULT_MAX_BYTES_PER_MAILBOX_PER_MINUTE: u64 = 10 * 1024 * 1024;
 const DEFAULT_SOFT_BAN_THRESHOLD: u32 = 5;
 const DEFAULT_SOFT_BAN_SECONDS: u64 = 300;
+const DEFAULT_MAX_CONNECTIONS: usize = 1024;
+// `senderDeviceId` is client-controlled, so the dedup-by-sender pass alone
+// cannot bound pairing announcements in a mailbox: a flood of announcements
+// with random sender ids would otherwise bypass the byte quota (pairing is
+// exempt from it by design) and crowd the queue. Capping the count bounds
+// the worst case to MAX_PAIRING_PER_MAILBOX * max_envelope_bytes.
+const MAX_PAIRING_PER_MAILBOX: usize = 8;
 
 #[derive(Debug, Clone)]
 struct RelayConfig {
@@ -42,6 +49,7 @@ struct RelayConfig {
     max_bytes_per_mailbox_per_minute: u64,
     soft_ban_threshold: u32,
     soft_ban_duration: Duration,
+    max_connections: usize,
 }
 
 impl RelayConfig {
@@ -81,6 +89,7 @@ impl RelayConfig {
                 "CONEST_RELAY_SOFT_BAN_SECONDS",
                 DEFAULT_SOFT_BAN_SECONDS,
             )),
+            max_connections: env_usize("CONEST_RELAY_MAX_CONNECTIONS", DEFAULT_MAX_CONNECTIONS),
         };
 
         let mut args = env::args().skip(1).peekable();
@@ -124,6 +133,9 @@ impl RelayConfig {
                     config.soft_ban_duration =
                         Duration::from_secs(parse_next_u64(&mut args, &arg)?);
                 }
+                "--max-connections" => {
+                    config.max_connections = parse_next_usize(&mut args, &arg)?;
+                }
                 value if value.starts_with('-') => {
                     return Err(format!("unknown option: {value}\n\n{}", usage()));
                 }
@@ -145,6 +157,9 @@ impl RelayConfig {
         }
         if config.relay_id.trim().is_empty() {
             return Err("relay id must not be empty".to_owned());
+        }
+        if config.max_connections == 0 {
+            return Err("max connections must be greater than zero".to_owned());
         }
         Ok(config)
     }
@@ -174,6 +189,7 @@ enum RelayRequest {
 const LONG_POLL_MAX_WAIT_MS: u64 = 25_000;
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 struct RelayStats {
     relay_id: String,
     queue_count: usize,
@@ -280,6 +296,7 @@ impl RelayIdentity {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 struct RelayResponse {
     ok: bool,
     stored: bool,
@@ -555,13 +572,31 @@ impl RelayState {
         self.cleanup_locked(&mut queues);
         let queue = queues.entry(recipient_device_id.clone()).or_default();
 
-        if envelope_kind(&envelope) == Some("pairing_announcement")
-            && let Some(sender) = envelope_sender_device_id(&envelope)
-        {
-            queue.retain(|entry| {
-                envelope_kind(&entry.envelope) != Some("pairing_announcement")
-                    || envelope_sender_device_id(&entry.envelope) != Some(sender)
-            });
+        if envelope_kind(&envelope) == Some("pairing_announcement") {
+            if let Some(sender) = envelope_sender_device_id(&envelope) {
+                queue.retain(|entry| {
+                    envelope_kind(&entry.envelope) != Some("pairing_announcement")
+                        || envelope_sender_device_id(&entry.envelope) != Some(sender)
+                });
+            }
+            // Enforce the per-mailbox pairing cap by evicting the oldest
+            // pairing entry (never a real message): a legit announcement
+            // that gets crowded out is re-posted by its sender on the next
+            // beacon, while reject-new would let a one-shot flood block
+            // discovery until TTL expiry.
+            while queue
+                .iter()
+                .filter(|entry| envelope_kind(&entry.envelope) == Some("pairing_announcement"))
+                .count()
+                >= MAX_PAIRING_PER_MAILBOX
+            {
+                let Some(index) = queue.iter().position(|entry| {
+                    envelope_kind(&entry.envelope) == Some("pairing_announcement")
+                }) else {
+                    break;
+                };
+                queue.remove(index);
+            }
         }
 
         while queue.len() >= self.config.max_queue_per_mailbox {
@@ -708,11 +743,26 @@ fn main() -> std::io::Result<()> {
         thread::spawn(move || serve_udp(udp_socket, state, config));
     }
 
+    // Every accepted connection holds a worker thread — a long-poll fetch
+    // for up to ~25 s — so an unbounded accept loop is a cheap thread/memory
+    // exhaustion vector. Past the cap, connections get a best-effort error
+    // line and are dropped; clients treat it like any other route failure.
+    let active_connections = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     for stream in listener.incoming() {
         match stream {
-            Ok(stream) => {
+            Ok(mut stream) => {
+                let active = Arc::clone(&active_connections);
+                if active.fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+                    >= config.max_connections
+                {
+                    active.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+                    let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
+                    let _ = stream.write_all(b"{\"ok\":false,\"error\":\"relay at capacity\"}\n");
+                    continue;
+                }
                 let state = state.clone();
                 thread::spawn(move || {
+                    let _guard = ConnectionGuard(active);
                     let peer = stream
                         .peer_addr()
                         .map(|address| address.ip().to_string())
@@ -727,6 +777,17 @@ fn main() -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+/// Decrements the active-connection counter when a worker thread exits,
+/// including on panic, so a wedged or crashed handler can never leak a
+/// connection slot.
+struct ConnectionGuard(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
 }
 
 fn handle_client(
@@ -770,7 +831,7 @@ fn handle_http_request<R: BufRead>(
     reader: &mut R,
     state: &RelayState,
     peer: &str,
-) -> (u16, RelayResponse) {
+) -> (u16, Value) {
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or_default();
     let path = parts.next().unwrap_or("/");
@@ -782,7 +843,10 @@ fn handle_http_request<R: BufRead>(
         && path_without_query != "/health"
         && path_without_query != "/relay"
     {
-        return (404, RelayResponse::error("unknown HTTP relay path"));
+        return (
+            404,
+            to_wire(RelayResponse::error("unknown HTTP relay path")),
+        );
     }
 
     let mut headers = Vec::new();
@@ -791,13 +855,18 @@ fn handle_http_request<R: BufRead>(
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
-            Ok(0) => return (400, RelayResponse::error("incomplete HTTP headers")),
+            Ok(0) => {
+                return (
+                    400,
+                    to_wire(RelayResponse::error("incomplete HTTP headers")),
+                );
+            }
             Ok(_) => {
                 if line == "\r\n" || line == "\n" {
                     break;
                 }
                 if headers.len() + line.len() > state.config.max_line_bytes {
-                    return (413, RelayResponse::error("HTTP headers too large"));
+                    return (413, to_wire(RelayResponse::error("HTTP headers too large")));
                 }
                 if let Some((name, value)) = line.split_once(':') {
                     let name = name.trim();
@@ -822,7 +891,9 @@ fn handle_http_request<R: BufRead>(
             Err(error) => {
                 return (
                     400,
-                    RelayResponse::error(format!("HTTP header read failed: {error}")),
+                    to_wire(RelayResponse::error(format!(
+                        "HTTP header read failed: {error}"
+                    ))),
                 );
             }
         }
@@ -833,22 +904,30 @@ fn handle_http_request<R: BufRead>(
     match method {
         "GET" | "OPTIONS" => {
             if !state.allow_request(effective_peer) {
-                return (429, RelayResponse::error("rate limit exceeded"));
+                return (429, to_wire(RelayResponse::error("rate limit exceeded")));
             }
-            (200, handle_request(RelayRequest::Health, state))
+            (200, to_wire(handle_request(RelayRequest::Health, state)))
         }
         "POST" => {
             if content_length == 0 {
-                return (400, RelayResponse::error("HTTP relay POST body is empty"));
+                return (
+                    400,
+                    to_wire(RelayResponse::error("HTTP relay POST body is empty")),
+                );
             }
             if content_length > state.config.max_line_bytes {
-                return (413, RelayResponse::error("HTTP relay POST body too large"));
+                return (
+                    413,
+                    to_wire(RelayResponse::error("HTTP relay POST body too large")),
+                );
             }
             let mut body = vec![0_u8; content_length];
             if let Err(error) = reader.read_exact(&mut body) {
                 return (
                     400,
-                    RelayResponse::error(format!("HTTP body read failed: {error}")),
+                    to_wire(RelayResponse::error(format!(
+                        "HTTP body read failed: {error}"
+                    ))),
                 );
             }
             (
@@ -856,14 +935,17 @@ fn handle_http_request<R: BufRead>(
                 handle_request_bytes(&body, body.len(), state, effective_peer),
             )
         }
-        _ => (405, RelayResponse::error("unsupported HTTP method")),
+        _ => (
+            405,
+            to_wire(RelayResponse::error("unsupported HTTP method")),
+        ),
     }
 }
 
 fn write_http_response<W: Write>(
     writer: &mut W,
     status: u16,
-    response: &RelayResponse,
+    response: &Value,
 ) -> std::io::Result<()> {
     let body = serde_json::to_vec(response)?;
     let status_text = match status {
@@ -917,27 +999,24 @@ fn handle_udp_datagram(
     bytes_read: usize,
     state: &RelayState,
     peer: SocketAddr,
-) -> RelayResponse {
+) -> Value {
     let peer_key = peer.ip().to_string();
     handle_request_bytes(datagram, bytes_read, state, &peer_key)
 }
 
-fn handle_request_bytes(
-    bytes: &[u8],
-    bytes_read: usize,
-    state: &RelayState,
-    peer: &str,
-) -> RelayResponse {
+fn handle_request_bytes(bytes: &[u8], bytes_read: usize, state: &RelayState, peer: &str) -> Value {
     if bytes_read > state.config.max_line_bytes {
-        return RelayResponse::error("request line too large");
+        return to_wire(RelayResponse::error("request line too large"));
     }
     if !state.allow_request(peer) {
-        return RelayResponse::error("rate limit exceeded");
+        return to_wire(RelayResponse::error("rate limit exceeded"));
     }
     let line = match std::str::from_utf8(bytes) {
         Ok(value) => value,
         Err(error) => {
-            return RelayResponse::error(format!("request is not utf-8: {error}"));
+            return to_wire(RelayResponse::error(format!(
+                "request is not utf-8: {error}"
+            )));
         }
     };
     let trimmed = line.trim();
@@ -948,7 +1027,7 @@ fn handle_request_bytes(
     let parsed: Value = match serde_json::from_str(trimmed) {
         Ok(value) => value,
         Err(error) => {
-            return RelayResponse::error(format!("invalid request: {error}"));
+            return to_wire(RelayResponse::error(format!("invalid request: {error}")));
         }
     };
     let action = parsed
@@ -960,19 +1039,84 @@ fn handle_request_bytes(
         .get("nonce")
         .and_then(|value| value.as_str())
         .and_then(|encoded| BASE64_STANDARD.decode(encoded).ok());
+    let detached = parsed.get("sig_mode").and_then(|value| value.as_str()) == Some("detached");
     let request: RelayRequest = match serde_json::from_value(parsed) {
         Ok(request) => request,
         Err(error) => {
-            return finalize_response(
+            return finalize_wire(
                 RelayResponse::error(format!("invalid request: {error}")),
                 &action,
                 nonce_bytes.as_deref(),
+                detached,
                 &state.identity,
             );
         }
     };
     let response = handle_request(request, state);
-    finalize_response(response, &action, nonce_bytes.as_deref(), &state.identity)
+    finalize_wire(
+        response,
+        &action,
+        nonce_bytes.as_deref(),
+        detached,
+        &state.identity,
+    )
+}
+
+/// Serializes a response for the wire. Infallible by construction; the
+/// fallback shape only exists so a serialization bug cannot crash the relay.
+fn to_wire(response: RelayResponse) -> Value {
+    serde_json::to_value(&response)
+        .unwrap_or_else(|_| serde_json::json!({"ok": false, "error": "response encoding failed"}))
+}
+
+fn finalize_wire(
+    response: RelayResponse,
+    action: &str,
+    nonce_bytes: Option<&[u8]>,
+    detached: bool,
+    identity: &RelayIdentity,
+) -> Value {
+    match (detached, nonce_bytes) {
+        (true, Some(nonce)) => finalize_detached_response(response, action, nonce, identity),
+        _ => to_wire(finalize_response(response, action, nonce_bytes, identity)),
+    }
+}
+
+/// Detached-signature wire format, requested via `"sig_mode": "detached"`
+/// alongside the nonce. The response body is serialized exactly once,
+/// signed over those bytes, and transmitted as a JSON *string* inside a
+/// small wrapper:
+///
+/// ```json
+/// {"sig_v":2,"body":"<body JSON>","nonce_echo":"…","signature":"…"}
+/// ```
+///
+/// The client verifies Ed25519 over `action || nonce || body-string-bytes`
+/// before parsing the body, so verification no longer depends on the
+/// client's JSON encoder reproducing serde's output byte-for-byte (field
+/// order, float formatting, large integers — the inline scheme silently
+/// degrades to "unsigned" the moment any of those diverge).
+fn finalize_detached_response(
+    response: RelayResponse,
+    action: &str,
+    nonce: &[u8],
+    identity: &RelayIdentity,
+) -> Value {
+    let body = match serde_json::to_string(&response) {
+        Ok(body) => body,
+        Err(_) => return to_wire(RelayResponse::error("response encoding failed")),
+    };
+    let mut signing_input = Vec::with_capacity(action.len() + nonce.len() + body.len());
+    signing_input.extend_from_slice(action.as_bytes());
+    signing_input.extend_from_slice(nonce);
+    signing_input.extend_from_slice(body.as_bytes());
+    let signature = identity.sign(&signing_input);
+    serde_json::json!({
+        "sig_v": 2,
+        "body": body,
+        "nonce_echo": BASE64_STANDARD.encode(nonce),
+        "signature": BASE64_STANDARD.encode(signature),
+    })
 }
 
 fn handle_request(request: RelayRequest, state: &RelayState) -> RelayResponse {
@@ -1173,6 +1317,7 @@ mod tests {
             max_bytes_per_mailbox_per_minute: DEFAULT_MAX_BYTES_PER_MAILBOX_PER_MINUTE,
             soft_ban_threshold: DEFAULT_SOFT_BAN_THRESHOLD,
             soft_ban_duration: Duration::from_secs(DEFAULT_SOFT_BAN_SECONDS),
+            max_connections: DEFAULT_MAX_CONNECTIONS,
         }
     }
 
@@ -1251,6 +1396,82 @@ mod tests {
     }
 
     #[test]
+    fn pairing_cap_bounds_flood_with_forged_sender_ids() {
+        // senderDeviceId is client-controlled: dedup-by-sender alone cannot
+        // bound the queue against an attacker rotating fake sender ids.
+        let mut config = test_config();
+        config.max_queue_per_mailbox = 64;
+        config.max_fetch_limit = 64;
+        let state = RelayState::new(config, test_identity());
+        for index in 0..13 {
+            state
+                .store(
+                    "pair-mailbox".to_owned(),
+                    envelope(
+                        "pairing_announcement",
+                        &format!("pair-{index}"),
+                        &format!("dev-forged-{index}"),
+                    ),
+                )
+                .expect("store should work");
+        }
+
+        let fetched = state
+            .fetch("pair-mailbox", Some(64), None)
+            .expect("fetch should work");
+        assert_eq!(fetched.len(), MAX_PAIRING_PER_MAILBOX);
+        let ids: Vec<&str> = fetched
+            .iter()
+            .filter_map(|value| value["messageId"].as_str())
+            .collect();
+        // Oldest entries were evicted first; the newest cap-sized window stays.
+        assert_eq!(ids[0], "pair-5");
+        assert_eq!(ids[MAX_PAIRING_PER_MAILBOX - 1], "pair-12");
+    }
+
+    #[test]
+    fn pairing_flood_does_not_evict_real_messages() {
+        let mut config = test_config();
+        config.max_queue_per_mailbox = 10;
+        config.max_fetch_limit = 16;
+        let state = RelayState::new(config, test_identity());
+        for index in 0..2 {
+            state
+                .store(
+                    "dev-b".to_owned(),
+                    envelope("direct_message", &format!("msg-{index}"), "dev-a"),
+                )
+                .expect("store should work");
+        }
+        for index in 0..20 {
+            state
+                .store(
+                    "dev-b".to_owned(),
+                    envelope(
+                        "pairing_announcement",
+                        &format!("pair-{index}"),
+                        &format!("dev-forged-{index}"),
+                    ),
+                )
+                .expect("store should work");
+        }
+
+        let fetched = state
+            .fetch("dev-b", Some(16), None)
+            .expect("fetch should work");
+        let ids: Vec<&str> = fetched
+            .iter()
+            .filter_map(|value| value["messageId"].as_str())
+            .collect();
+        assert!(ids.contains(&"msg-0"), "real message evicted: {ids:?}");
+        assert!(ids.contains(&"msg-1"), "real message evicted: {ids:?}");
+        assert_eq!(
+            ids.iter().filter(|id| id.starts_with("pair-")).count(),
+            MAX_PAIRING_PER_MAILBOX,
+        );
+    }
+
+    #[test]
     fn queue_limit_drops_oldest_non_pairing_envelopes() {
         let state = RelayState::new(test_config(), test_identity());
         for index in 0..4 {
@@ -1300,10 +1521,11 @@ mod tests {
         let stored = handle_udp_datagram(store.as_bytes(), store.len(), &state, peer);
         let fetched = handle_udp_datagram(fetch.as_bytes(), fetch.len(), &state, peer);
 
-        assert!(stored.ok);
-        assert!(stored.stored);
-        assert_eq!(fetched.messages.len(), 1);
-        assert_eq!(fetched.messages[0]["messageId"], "msg-udp");
+        assert_eq!(stored["ok"], true);
+        assert_eq!(stored["stored"], true);
+        let messages = fetched["messages"].as_array().expect("messages array");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["messageId"], "msg-udp");
     }
 
     #[test]
@@ -1342,11 +1564,12 @@ mod tests {
             handle_http_request("POST /relay HTTP/1.1\r\n", &mut fetch_reader, &state, peer);
 
         assert_eq!(store_status, 200);
-        assert!(stored.ok);
-        assert!(stored.stored);
+        assert_eq!(stored["ok"], true);
+        assert_eq!(stored["stored"], true);
         assert_eq!(fetch_status, 200);
-        assert_eq!(fetched.messages.len(), 1);
-        assert_eq!(fetched.messages[0]["messageId"], "msg-http");
+        let messages = fetched["messages"].as_array().expect("messages array");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["messageId"], "msg-http");
     }
 
     #[test]
@@ -1355,11 +1578,10 @@ mod tests {
         let mut reader = BufReader::new("Host: relay.test\r\n\r\n".as_bytes());
         let (status, response) =
             handle_http_request("GET /health HTTP/1.1\r\n", &mut reader, &state, "127.0.0.1");
-        let stats = response.stats.expect("health should include stats");
 
         assert_eq!(status, 200);
-        assert!(response.ok);
-        assert_eq!(stats.relay_id, "relay-test");
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["stats"]["relay_id"], "relay-test");
     }
 
     #[test]
@@ -1383,7 +1605,7 @@ mod tests {
             "127.0.0.1",
         );
         assert_eq!(status, 200);
-        assert!(response.ok);
+        assert_eq!(response["ok"], true);
     }
 
     #[test]
@@ -1510,7 +1732,8 @@ mod tests {
             "nonce": BASE64_STANDARD.encode([1_u8; 16]),
         })
         .to_string();
-        let response = handle_request_bytes(request.as_bytes(), request.len(), &state, "127.0.0.1");
+        let raw = handle_request_bytes(request.as_bytes(), request.len(), &state, "127.0.0.1");
+        let response: RelayResponse = serde_json::from_value(raw).expect("inline response decodes");
         assert!(response.signature.is_some(), "signed responses required");
         assert!(
             verify_signature(&state.identity, &response, "health"),
@@ -1524,10 +1747,10 @@ mod tests {
         let request = json!({ "action": "health" }).to_string();
         let response = handle_request_bytes(request.as_bytes(), request.len(), &state, "127.0.0.1");
         assert!(
-            response.signature.is_none(),
+            response.get("signature").is_none(),
             "legacy clients without a nonce keep getting unsigned responses"
         );
-        assert!(response.nonce_echo.is_none());
+        assert!(response.get("nonce_echo").is_none());
     }
 
     #[test]
@@ -1538,8 +1761,9 @@ mod tests {
             "nonce": BASE64_STANDARD.encode([9_u8; 16]),
         })
         .to_string();
-        let mut response =
-            handle_request_bytes(request.as_bytes(), request.len(), &state, "127.0.0.1");
+        let raw = handle_request_bytes(request.as_bytes(), request.len(), &state, "127.0.0.1");
+        let mut response: RelayResponse =
+            serde_json::from_value(raw).expect("inline response decodes");
         // Flip a byte of the response that participates in the signing
         // input. Verifier must reject it.
         if let Some(stats) = response.stats.as_mut() {
@@ -1548,6 +1772,52 @@ mod tests {
         assert!(
             !verify_signature(&state.identity, &response, "health"),
             "tampered body must fail signature verification"
+        );
+    }
+
+    #[test]
+    fn detached_sig_mode_signs_the_exact_body_bytes() {
+        use ed25519_dalek::{Signature, Verifier};
+        let state = test_state();
+        let nonce = BASE64_STANDARD.encode([9_u8; 16]);
+        let request = json!({
+            "action": "health",
+            "nonce": nonce,
+            "sig_mode": "detached",
+        })
+        .to_string();
+        let response = handle_request_bytes(request.as_bytes(), request.len(), &state, "127.0.0.1");
+
+        assert_eq!(response["sig_v"], 2);
+        assert_eq!(response["nonce_echo"], nonce.as_str());
+        let body = response["body"].as_str().expect("body travels as a string");
+        let signature_bytes = BASE64_STANDARD
+            .decode(response["signature"].as_str().expect("signature present"))
+            .expect("signature is base64");
+        let mut sig_array = [0_u8; 64];
+        sig_array.copy_from_slice(&signature_bytes);
+
+        // Verification happens over the exact body-string bytes — no JSON
+        // re-encoding round-trip on the verifier side.
+        let mut signing_input = Vec::new();
+        signing_input.extend_from_slice(b"health");
+        signing_input.extend_from_slice(&[9_u8; 16]);
+        signing_input.extend_from_slice(body.as_bytes());
+        assert!(
+            state
+                .identity
+                .signing_key
+                .verifying_key()
+                .verify(&signing_input, &Signature::from_bytes(&sig_array))
+                .is_ok(),
+            "detached signature must verify over the raw body bytes"
+        );
+
+        let parsed: Value = serde_json::from_str(body).expect("body parses as JSON");
+        assert_eq!(parsed["ok"], true);
+        assert!(
+            parsed.get("signature").is_none() && parsed.get("nonce_echo").is_none(),
+            "signed body must not embed the signature fields"
         );
     }
 

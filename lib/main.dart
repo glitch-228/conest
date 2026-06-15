@@ -28,6 +28,10 @@ import 'src/platform_bridge.dart';
 import 'src/qr_scan_screen.dart';
 import 'src/relay_client.dart';
 import 'src/storage.dart';
+import 'src/ui/seal_avatar.dart';
+import 'src/ui/signature_decoration.dart';
+import 'src/ui/signature_panels.dart';
+import 'src/ui/signature_widgets.dart';
 import 'src/update_service.dart';
 
 export 'src/conest_theme.dart'
@@ -1144,6 +1148,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                       fontWeight: FontWeight.w700,
                                     ),
                               ),
+                              const SizedBox(height: 6),
+                              Text(
+                                '◢ SECURE TEXT EXCHANGE',
+                                style: TextStyle(
+                                  fontFamily: ConestPalette.monoFont,
+                                  fontSize: 11,
+                                  letterSpacing: 2,
+                                  color: palette.primary,
+                                ),
+                              ),
                               const SizedBox(height: 16),
                               Text(
                                 'Pair by scanning a QR invite or by sharing only the current codephrase, deliver over LAN first, and continue over the internet through relay routes when LAN disappears.',
@@ -1361,6 +1375,40 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _replyTargetMatchesGroup(GroupRecord group) {
     final target = _replyTarget;
     return target != null && target.conversationId == group.groupId;
+  }
+
+  // Shared home-column selection handlers — used by the Signature sidebar and
+  // the Garrison/Courier shells so all three drive the same chat panels.
+  void _selectHomeContact(ContactRecord contact) {
+    setState(() {
+      _lanLobbySelected = false;
+      _selectedGroupId = null;
+      _selectedContactId = contact.deviceId;
+      if (!_replyTargetMatchesContact(contact)) {
+        _replyTarget = null;
+      }
+    });
+  }
+
+  void _selectHomeGroup(GroupRecord group) {
+    setState(() {
+      _lanLobbySelected = false;
+      _selectedContactId = null;
+      _selectedGroupId = group.groupId;
+      if (!_replyTargetMatchesGroup(group)) {
+        _replyTarget = null;
+      }
+    });
+  }
+
+  void _selectHomeLanLobby() {
+    setState(() {
+      _selectedContactId = null;
+      _selectedGroupId = null;
+      _lanLobbySelected = true;
+      _replyTarget = null;
+    });
+    unawaited(widget.controller.markLanLobbyRead());
   }
 
   Future<void> _showInvite() async {
@@ -1889,196 +1937,222 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       body: DecoratedBox(
         decoration: BoxDecoration(gradient: palette.appGradient),
-        child: PopScope(
-          canPop:
-              selectedContact == null &&
-              selectedGroup == null &&
-              !lanLobbySelected,
-          onPopInvokedWithResult: (didPop, result) {
-            if (!didPop &&
-                (_selectedContactId != null ||
-                    _selectedGroupId != null ||
-                    _lanLobbySelected)) {
-              setState(() {
-                _selectedContactId = null;
-                _selectedGroupId = null;
-                _lanLobbySelected = false;
-                _replyTarget = null;
-              });
-            }
-          },
-          child: SafeArea(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final isWide = constraints.maxWidth > 920;
-                if (!isWide && selectedContact != null) {
-                  return _ChatPanel(
-                    key: ValueKey('chat-${selectedContact.deviceId}'),
-                    controller: widget.controller,
-                    palette: palette,
-                    contact: selectedContact,
-                    composerController: _composerController,
-                    replyTarget: _replyTarget,
-                    onBack: () => setState(() {
-                      _selectedContactId = null;
-                      _replyTarget = null;
-                    }),
-                    onCancelReply: () => setState(() => _replyTarget = null),
-                    onReplyToMessage: (message) =>
-                        setState(() => _replyTarget = message),
-                    onShowProfile: () => _showContactProfile(selectedContact),
-                    onSend: _sendCurrentMessage,
-                    onAttach: _openMediaPicker,
-                    onDropFiles: _handleDroppedFiles,
-                    onSmartPaste: () => unawaited(_handleSmartPaste()),
-                  );
+        child: Stack(
+          children: [
+            // Signature ambient overlay — sits behind all panels, hugs the
+            // screen corners with reticles + readout. Intensity is the
+            // user-controlled Decoration setting.
+            Positioned.fill(
+              child: SignatureDecoration(
+                palette: palette,
+                intensity: widget.themeController.decorationIntensity,
+              ),
+            ),
+            PopScope(
+              canPop:
+                  selectedContact == null &&
+                  selectedGroup == null &&
+                  !lanLobbySelected,
+              onPopInvokedWithResult: (didPop, result) {
+                if (!didPop &&
+                    (_selectedContactId != null ||
+                        _selectedGroupId != null ||
+                        _lanLobbySelected)) {
+                  setState(() {
+                    _selectedContactId = null;
+                    _selectedGroupId = null;
+                    _lanLobbySelected = false;
+                    _replyTarget = null;
+                  });
                 }
-                if (!isWide && selectedGroup != null) {
-                  return _GroupChatPanel(
-                    key: ValueKey('group-${selectedGroup.groupId}'),
-                    controller: widget.controller,
-                    palette: palette,
-                    group: selectedGroup,
-                    composerController: _composerController,
-                    replyTarget: _replyTarget,
-                    onBack: () => setState(() {
-                      _selectedGroupId = null;
-                      _replyTarget = null;
-                    }),
-                    onCancelReply: () => setState(() => _replyTarget = null),
-                    onReplyToMessage: (message) =>
-                        setState(() => _replyTarget = message),
-                    onShowDetails: () => _showGroupDetails(selectedGroup),
-                    onSend: _sendCurrentGroupMessage,
-                    onDropFiles: _handleDroppedFilesForGroup,
-                    onSmartPaste: () => unawaited(_handleSmartPaste()),
-                  );
-                }
-                if (!isWide && lanLobbySelected) {
-                  return _LanLobbyPanel(
-                    controller: widget.controller,
-                    palette: palette,
-                    composerController: _composerController,
-                    onBack: () => setState(() => _lanLobbySelected = false),
-                    onSend: _sendLanLobbyMessage,
-                  );
-                }
-                return Row(
-                  children: [
-                    SizedBox(
-                      width: isWide ? 380 : constraints.maxWidth,
-                      child: _Sidebar(
+              },
+              child: SafeArea(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isWide = constraints.maxWidth > 920;
+                    if (!isWide && selectedContact != null) {
+                      return _ChatPanel(
+                        key: ValueKey('chat-${selectedContact.deviceId}'),
                         controller: widget.controller,
                         palette: palette,
-                        selectedContactId: _selectedContactId,
-                        selectedGroupId: _selectedGroupId,
-                        lanLobbySelected: lanLobbySelected,
-                        onAddContact: _showAddContact,
-                        onCreateGroup: _showCreateGroup,
-                        onLanLobbySelected: () {
-                          setState(() {
-                            _selectedContactId = null;
-                            _selectedGroupId = null;
-                            _lanLobbySelected = true;
-                            _replyTarget = null;
-                          });
-                          unawaited(widget.controller.markLanLobbyRead());
-                        },
-                        onGroupSelected: (group) {
-                          setState(() {
-                            _lanLobbySelected = false;
-                            _selectedContactId = null;
-                            _selectedGroupId = group.groupId;
-                            if (!_replyTargetMatchesGroup(group)) {
-                              _replyTarget = null;
-                            }
-                          });
-                        },
-                        onGroupDetails: _showGroupDetails,
-                        onContactSelected: (contact) {
-                          setState(() {
-                            _lanLobbySelected = false;
-                            _selectedGroupId = null;
-                            _selectedContactId = contact.deviceId;
-                            if (!_replyTargetMatchesContact(contact)) {
-                              _replyTarget = null;
-                            }
-                          });
-                        },
-                        onContactProfile: _showContactProfile,
-                        // Surface the Run Debug Tests button on nightly
-                        // builds (and any debug build) so the user can
-                        // exercise runDebugSelfTest on real hardware
-                        // without rebuilding. Hidden on stable to avoid
-                        // confusing end users.
-                        onShowDebug:
-                            (widget.buildInfo.channel ==
-                                    UpdateChannel.nightly ||
-                                kDebugMode)
-                            ? _showDebugMenu
-                            : null,
-                        onPoll: widget.controller.pollNow,
-                        onShowSettings: _showSettings,
-                        onShowInvite: _showInvite,
-                      ),
-                    ),
-                    if (isWide)
-                      Expanded(
-                        child: lanLobbySelected
-                            ? _LanLobbyPanel(
-                                controller: widget.controller,
-                                palette: palette,
-                                composerController: _composerController,
-                                onSend: _sendLanLobbyMessage,
-                              )
-                            : selectedGroup != null
-                            ? _GroupChatPanel(
-                                key: ValueKey('group-${selectedGroup.groupId}'),
-                                controller: widget.controller,
-                                palette: palette,
-                                group: selectedGroup,
-                                composerController: _composerController,
-                                replyTarget: _replyTarget,
-                                onCancelReply: () =>
-                                    setState(() => _replyTarget = null),
-                                onReplyToMessage: (message) =>
-                                    setState(() => _replyTarget = message),
-                                onShowDetails: () =>
-                                    _showGroupDetails(selectedGroup),
-                                onSend: _sendCurrentGroupMessage,
-                                onDropFiles: _handleDroppedFilesForGroup,
-                                onSmartPaste: () =>
-                                    unawaited(_handleSmartPaste()),
-                              )
-                            : selectedContact == null
-                            ? _EmptyChatState(palette: palette)
-                            : _ChatPanel(
-                                key: ValueKey(
-                                  'chat-${selectedContact.deviceId}',
-                                ),
-                                controller: widget.controller,
-                                palette: palette,
-                                contact: selectedContact,
-                                composerController: _composerController,
-                                replyTarget: _replyTarget,
-                                onCancelReply: () =>
-                                    setState(() => _replyTarget = null),
-                                onReplyToMessage: (message) =>
-                                    setState(() => _replyTarget = message),
-                                onShowProfile: () =>
-                                    _showContactProfile(selectedContact),
-                                onSend: _sendCurrentMessage,
-                                onAttach: _openMediaPicker,
-                                onDropFiles: _handleDroppedFiles,
-                                onSmartPaste: () =>
-                                    unawaited(_handleSmartPaste()),
-                              ),
-                      ),
-                  ],
-                );
-              },
+                        contact: selectedContact,
+                        composerController: _composerController,
+                        replyTarget: _replyTarget,
+                        onBack: () => setState(() {
+                          _selectedContactId = null;
+                          _replyTarget = null;
+                        }),
+                        onCancelReply: () =>
+                            setState(() => _replyTarget = null),
+                        onReplyToMessage: (message) =>
+                            setState(() => _replyTarget = message),
+                        onShowProfile: () =>
+                            _showContactProfile(selectedContact),
+                        onSend: _sendCurrentMessage,
+                        onAttach: _openMediaPicker,
+                        onDropFiles: _handleDroppedFiles,
+                        onSmartPaste: () => unawaited(_handleSmartPaste()),
+                      );
+                    }
+                    if (!isWide && selectedGroup != null) {
+                      return _GroupChatPanel(
+                        key: ValueKey('group-${selectedGroup.groupId}'),
+                        controller: widget.controller,
+                        palette: palette,
+                        group: selectedGroup,
+                        composerController: _composerController,
+                        replyTarget: _replyTarget,
+                        onBack: () => setState(() {
+                          _selectedGroupId = null;
+                          _replyTarget = null;
+                        }),
+                        onCancelReply: () =>
+                            setState(() => _replyTarget = null),
+                        onReplyToMessage: (message) =>
+                            setState(() => _replyTarget = message),
+                        onShowDetails: () => _showGroupDetails(selectedGroup),
+                        onSend: _sendCurrentGroupMessage,
+                        onDropFiles: _handleDroppedFilesForGroup,
+                        onSmartPaste: () => unawaited(_handleSmartPaste()),
+                      );
+                    }
+                    if (!isWide && lanLobbySelected) {
+                      return _LanLobbyPanel(
+                        controller: widget.controller,
+                        palette: palette,
+                        composerController: _composerController,
+                        onBack: () => setState(() => _lanLobbySelected = false),
+                        onSend: _sendLanLobbyMessage,
+                      );
+                    }
+                    return Row(
+                      children: [
+                        SizedBox(
+                          width: isWide ? 380 : constraints.maxWidth,
+                          // Shell selector — Garrison (Discord rail) and
+                          // Courier (Telegram list) are alternate home
+                          // presentations; all reuse the chat panels below.
+                          child: switch (widget.themeController.shell) {
+                            ConestShell.courier => _CourierHome(
+                              controller: widget.controller,
+                              palette: palette,
+                              selectedContactId: _selectedContactId,
+                              selectedGroupId: _selectedGroupId,
+                              lanLobbySelected: lanLobbySelected,
+                              onContactSelected: _selectHomeContact,
+                              onGroupSelected: _selectHomeGroup,
+                              onLanLobbySelected: _selectHomeLanLobby,
+                              onAddContact: _showAddContact,
+                              onShowSettings: _showSettings,
+                              onShowInvite: _showInvite,
+                            ),
+                            ConestShell.garrison => _GarrisonHome(
+                              controller: widget.controller,
+                              palette: palette,
+                              selectedContactId: _selectedContactId,
+                              selectedGroupId: _selectedGroupId,
+                              lanLobbySelected: lanLobbySelected,
+                              onContactSelected: _selectHomeContact,
+                              onGroupSelected: _selectHomeGroup,
+                              onGroupDetails: _showGroupDetails,
+                              onLanLobbySelected: _selectHomeLanLobby,
+                              onAddContact: _showAddContact,
+                              onCreateGroup: _showCreateGroup,
+                              onShowSettings: _showSettings,
+                              onShowInvite: _showInvite,
+                            ),
+                            ConestShell.signature => _Sidebar(
+                              controller: widget.controller,
+                              palette: palette,
+                              homeLayout: widget.themeController.homeLayout,
+                              selectedContactId: _selectedContactId,
+                              selectedGroupId: _selectedGroupId,
+                              lanLobbySelected: lanLobbySelected,
+                              onAddContact: _showAddContact,
+                              onCreateGroup: _showCreateGroup,
+                              onLanLobbySelected: _selectHomeLanLobby,
+                              onGroupSelected: _selectHomeGroup,
+                              onGroupDetails: _showGroupDetails,
+                              onContactSelected: _selectHomeContact,
+                              onContactProfile: _showContactProfile,
+                              // Surface the Run Debug Tests button on nightly
+                              // builds (and any debug build) so the user can
+                              // exercise runDebugSelfTest on real hardware
+                              // without rebuilding. Hidden on stable to avoid
+                              // confusing end users.
+                              onShowDebug:
+                                  (widget.buildInfo.channel ==
+                                          UpdateChannel.nightly ||
+                                      kDebugMode)
+                                  ? _showDebugMenu
+                                  : null,
+                              onPoll: widget.controller.pollNow,
+                              onShowSettings: _showSettings,
+                              onShowInvite: _showInvite,
+                            ),
+                          },
+                        ),
+                        if (isWide)
+                          Expanded(
+                            child: lanLobbySelected
+                                ? _LanLobbyPanel(
+                                    controller: widget.controller,
+                                    palette: palette,
+                                    composerController: _composerController,
+                                    onSend: _sendLanLobbyMessage,
+                                  )
+                                : selectedGroup != null
+                                ? _GroupChatPanel(
+                                    key: ValueKey(
+                                      'group-${selectedGroup.groupId}',
+                                    ),
+                                    controller: widget.controller,
+                                    palette: palette,
+                                    group: selectedGroup,
+                                    composerController: _composerController,
+                                    replyTarget: _replyTarget,
+                                    onCancelReply: () =>
+                                        setState(() => _replyTarget = null),
+                                    onReplyToMessage: (message) =>
+                                        setState(() => _replyTarget = message),
+                                    onShowDetails: () =>
+                                        _showGroupDetails(selectedGroup),
+                                    onSend: _sendCurrentGroupMessage,
+                                    onDropFiles: _handleDroppedFilesForGroup,
+                                    onSmartPaste: () =>
+                                        unawaited(_handleSmartPaste()),
+                                  )
+                                : selectedContact == null
+                                ? _EmptyChatState(palette: palette)
+                                : _ChatPanel(
+                                    key: ValueKey(
+                                      'chat-${selectedContact.deviceId}',
+                                    ),
+                                    controller: widget.controller,
+                                    palette: palette,
+                                    contact: selectedContact,
+                                    composerController: _composerController,
+                                    replyTarget: _replyTarget,
+                                    onCancelReply: () =>
+                                        setState(() => _replyTarget = null),
+                                    onReplyToMessage: (message) =>
+                                        setState(() => _replyTarget = message),
+                                    onShowProfile: () =>
+                                        _showContactProfile(selectedContact),
+                                    onSend: _sendCurrentMessage,
+                                    onAttach: _openMediaPicker,
+                                    onDropFiles: _handleDroppedFiles,
+                                    onSmartPaste: () =>
+                                        unawaited(_handleSmartPaste()),
+                                  ),
+                          ),
+                      ],
+                    );
+                  },
+                ),
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -2094,10 +2168,681 @@ class _PasteMediaIntent extends Intent {
   const _PasteMediaIntent();
 }
 
+/// Courier shell — a Telegram-shaped unified conversation list. Contacts,
+/// groups and the LAN lobby merge into one list sorted by recent activity,
+/// each a clean tailed row (seal · name · preview · time · unread). Reuses
+/// the shared chat panels on tap.
+class _CourierHome extends StatelessWidget {
+  const _CourierHome({
+    required this.controller,
+    required this.palette,
+    required this.selectedContactId,
+    required this.selectedGroupId,
+    required this.lanLobbySelected,
+    required this.onContactSelected,
+    required this.onGroupSelected,
+    required this.onLanLobbySelected,
+    required this.onAddContact,
+    required this.onShowSettings,
+    required this.onShowInvite,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+  final String? selectedContactId;
+  final String? selectedGroupId;
+  final bool lanLobbySelected;
+  final ValueChanged<ContactRecord> onContactSelected;
+  final ValueChanged<GroupRecord> onGroupSelected;
+  final VoidCallback onLanLobbySelected;
+  final VoidCallback onAddContact;
+  final Future<void> Function() onShowSettings;
+  final Future<void> Function() onShowInvite;
+
+  @override
+  Widget build(BuildContext context) {
+    // Unified, recency-sorted conversation entries.
+    final entries =
+        <
+          ({
+            String seed,
+            String title,
+            String preview,
+            DateTime? at,
+            int unread,
+            bool selected,
+            bool isGroup,
+            int memberCount,
+            VoidCallback onTap,
+          })
+        >[];
+    for (final contact in controller.contacts) {
+      final last = controller.lastMessageFor(contact.deviceId);
+      entries.add((
+        seed: contact.deviceId,
+        title: contact.alias,
+        preview: last?.bodyPreview ?? 'No messages yet',
+        at: last?.createdAt,
+        unread: controller.unreadCountFor(contact.deviceId),
+        selected: selectedContactId == contact.deviceId,
+        isGroup: false,
+        memberCount: 0,
+        onTap: () => onContactSelected(contact),
+      ));
+    }
+    for (final group in controller.visibleGroups) {
+      final last = controller.lastGroupMessageFor(group.groupId);
+      entries.add((
+        seed: group.groupId,
+        title: group.title,
+        preview:
+            last?.bodyPreview ??
+            '${group.activeMemberDeviceIds.length} member(s)',
+        at: last?.createdAt,
+        unread: controller.unreadGroupCountFor(group.groupId),
+        selected: selectedGroupId == group.groupId,
+        isGroup: true,
+        memberCount: group.activeMemberDeviceIds.length,
+        onTap: () => onGroupSelected(group),
+      ));
+    }
+    entries.sort((a, b) {
+      final at = a.at;
+      final bt = b.at;
+      if (at == null && bt == null) return a.title.compareTo(b.title);
+      if (at == null) return 1;
+      if (bt == null) return -1;
+      return bt.compareTo(at);
+    });
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 12, 8),
+          child: Row(
+            children: [
+              Text(
+                'Conest',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const Spacer(),
+              IconButton(
+                tooltip: 'My invite',
+                onPressed: () => unawaited(onShowInvite()),
+                icon: const Icon(Icons.qr_code_2),
+              ),
+              IconButton(
+                tooltip: 'Settings',
+                onPressed: () => unawaited(onShowSettings()),
+                icon: const Icon(Icons.settings_outlined),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: palette.panel2,
+              borderRadius: BorderRadius.circular(ConestPalette.radius),
+              border: Border.all(color: palette.border),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.search, size: 18, color: palette.inkSoft),
+                const SizedBox(width: 8),
+                Text(
+                  'Search contacts, codephrase, key…',
+                  style: TextStyle(fontSize: 13, color: palette.inkSoft),
+                ),
+              ],
+            ),
+          ),
+        ),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.only(bottom: 12),
+            children: [
+              _CourierRow(
+                palette: palette,
+                icon: Icons.forum_outlined,
+                title: 'LAN lobby',
+                preview: 'Free-for-all local chat · untrusted',
+                unread: controller.unreadLanLobbyCount,
+                selected: lanLobbySelected,
+                onTap: onLanLobbySelected,
+              ),
+              if (entries.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: _EmptyContactsState(palette: palette),
+                ),
+              for (final entry in entries)
+                _CourierRow(
+                  palette: palette,
+                  seed: entry.seed,
+                  title: entry.title,
+                  preview: entry.preview,
+                  at: entry.at,
+                  unread: entry.unread,
+                  selected: entry.selected,
+                  isGroup: entry.isGroup,
+                  memberCount: entry.memberCount,
+                  onTap: entry.onTap,
+                ),
+            ],
+          ),
+        ),
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: FloatingActionButton.extended(
+                heroTag: 'courier-add',
+                onPressed: onAddContact,
+                backgroundColor: palette.primary,
+                foregroundColor: palette.onPrimary,
+                icon: const Icon(Icons.person_add_alt_1),
+                label: const Text('Add'),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// One Telegram-style row in the [_CourierHome] list.
+class _CourierRow extends StatelessWidget {
+  const _CourierRow({
+    required this.palette,
+    required this.title,
+    required this.preview,
+    required this.unread,
+    required this.selected,
+    required this.onTap,
+    this.seed,
+    this.icon,
+    this.at,
+    this.isGroup = false,
+    this.memberCount = 0,
+  });
+
+  final ConestPalette palette;
+  final String title;
+  final String preview;
+  final int unread;
+  final bool selected;
+  final VoidCallback onTap;
+  final String? seed;
+  final IconData? icon;
+  final DateTime? at;
+  final bool isGroup;
+  final int memberCount;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        color: selected ? palette.selection : Colors.transparent,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          children: [
+            if (seed != null)
+              SizedBox(
+                width: 44,
+                height: 44,
+                child: Stack(
+                  children: [
+                    SealAvatar(
+                      seed: seed!,
+                      palette: palette,
+                      size: 44,
+                      label: title,
+                    ),
+                    if (isGroup)
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: palette.secondary,
+                            borderRadius: BorderRadius.circular(
+                              ConestPalette.radiusSm,
+                            ),
+                          ),
+                          child: Text(
+                            '$memberCount',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              )
+            else
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: palette.panel2,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: palette.border),
+                ),
+                child: Icon(icon, color: palette.primary, size: 22),
+              ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleSmall
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      if (at != null)
+                        Text(
+                          formatTimestamp(at!),
+                          style: TextStyle(
+                            fontFamily: ConestPalette.monoFont,
+                            fontSize: 10,
+                            color: palette.inkSoft,
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          preview,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: palette.inkSoft,
+                                fontWeight: unread > 0
+                                    ? FontWeight.w700
+                                    : FontWeight.w400,
+                              ),
+                        ),
+                      ),
+                      if (unread > 0) ...[
+                        const SizedBox(width: 6),
+                        _UnreadBadge(
+                          count: unread,
+                          palette: palette,
+                          compact: true,
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Garrison shell — a Discord-shaped rail of "cells" (a Home/DMs cell plus
+/// one cell per group) and a content column. Home lists the LAN lobby + DM
+/// contacts; a group cell shows the group header + members with an open-chat
+/// action. Reuses the shared chat panels on tap.
+class _GarrisonHome extends StatefulWidget {
+  const _GarrisonHome({
+    required this.controller,
+    required this.palette,
+    required this.selectedContactId,
+    required this.selectedGroupId,
+    required this.lanLobbySelected,
+    required this.onContactSelected,
+    required this.onGroupSelected,
+    required this.onGroupDetails,
+    required this.onLanLobbySelected,
+    required this.onAddContact,
+    required this.onCreateGroup,
+    required this.onShowSettings,
+    required this.onShowInvite,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+  final String? selectedContactId;
+  final String? selectedGroupId;
+  final bool lanLobbySelected;
+  final ValueChanged<ContactRecord> onContactSelected;
+  final ValueChanged<GroupRecord> onGroupSelected;
+  final ValueChanged<GroupRecord> onGroupDetails;
+  final VoidCallback onLanLobbySelected;
+  final VoidCallback onAddContact;
+  final VoidCallback onCreateGroup;
+  final Future<void> Function() onShowSettings;
+  final Future<void> Function() onShowInvite;
+
+  @override
+  State<_GarrisonHome> createState() => _GarrisonHomeState();
+}
+
+class _GarrisonHomeState extends State<_GarrisonHome> {
+  String? _cellGroupId; // null = the Home / DMs cell.
+
+  MessengerController get controller => widget.controller;
+  ConestPalette get palette => widget.palette;
+
+  GroupRecord? _activeCellGroup(List<GroupRecord> groups) {
+    final id = _cellGroupId;
+    if (id == null) return null;
+    for (final group in groups) {
+      if (group.groupId == id) return group;
+    }
+    return null;
+  }
+
+  Widget _railCell({
+    required bool selected,
+    required Widget child,
+    required VoidCallback onTap,
+    String? tooltip,
+    int unread = 0,
+  }) {
+    final cell = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 3,
+            height: selected ? 30 : 0,
+            decoration: BoxDecoration(
+              color: palette.primary,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 5),
+          Stack(
+            children: [
+              InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: onTap,
+                child: Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: selected ? palette.selection : palette.panel2,
+                    borderRadius: BorderRadius.circular(selected ? 14 : 22),
+                    border: Border.all(
+                      color: selected ? palette.primary : palette.border,
+                    ),
+                  ),
+                  alignment: Alignment.center,
+                  child: child,
+                ),
+              ),
+              if (unread > 0)
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  child: Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: palette.secondary,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: palette.panel, width: 1.5),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+    return tooltip == null ? cell : Tooltip(message: tooltip, child: cell);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final groups = controller.visibleGroups;
+    final cellGroup = _activeCellGroup(groups);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          width: 60,
+          color: palette.panel,
+          child: SafeArea(
+            right: false,
+            child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              children: [
+                _railCell(
+                  selected: _cellGroupId == null,
+                  tooltip: 'Direct messages',
+                  onTap: () => setState(() => _cellGroupId = null),
+                  child: Icon(
+                    Icons.forum_outlined,
+                    color: _cellGroupId == null
+                        ? palette.primary
+                        : palette.inkSoft,
+                    size: 22,
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 6, 8, 6),
+                  child: Divider(height: 1, color: palette.border),
+                ),
+                for (final group in groups)
+                  _railCell(
+                    selected: _cellGroupId == group.groupId,
+                    tooltip: group.title,
+                    unread: controller.unreadGroupCountFor(group.groupId),
+                    onTap: () => setState(() => _cellGroupId = group.groupId),
+                    child: SealAvatar(
+                      seed: group.groupId,
+                      palette: palette,
+                      size: 32,
+                      label: group.title,
+                    ),
+                  ),
+                _railCell(
+                  selected: false,
+                  tooltip: 'New group',
+                  onTap: widget.onCreateGroup,
+                  child: Icon(Icons.add, color: palette.primary, size: 22),
+                ),
+              ],
+            ),
+          ),
+        ),
+        VerticalDivider(width: 1, color: palette.border),
+        Expanded(
+          child: cellGroup == null
+              ? _homeContent(context)
+              : _groupContent(context, cellGroup),
+        ),
+      ],
+    );
+  }
+
+  Widget _homeContent(BuildContext context) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
+          child: Row(
+            children: [
+              Text(
+                'Direct messages',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const Spacer(),
+              IconButton(
+                tooltip: 'My invite',
+                onPressed: () => unawaited(widget.onShowInvite()),
+                icon: const Icon(Icons.qr_code_2),
+              ),
+              IconButton(
+                tooltip: 'Settings',
+                onPressed: () => unawaited(widget.onShowSettings()),
+                icon: const Icon(Icons.settings_outlined),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.only(bottom: 12),
+            children: [
+              _CourierRow(
+                palette: palette,
+                icon: Icons.forum_outlined,
+                title: 'LAN lobby',
+                preview: 'Free-for-all local chat · untrusted',
+                unread: controller.unreadLanLobbyCount,
+                selected: widget.lanLobbySelected,
+                onTap: widget.onLanLobbySelected,
+              ),
+              if (controller.contacts.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: _EmptyContactsState(palette: palette),
+                ),
+              for (final contact in controller.contacts)
+                _CourierRow(
+                  palette: palette,
+                  seed: contact.deviceId,
+                  title: contact.alias,
+                  preview:
+                      controller
+                          .lastMessageFor(contact.deviceId)
+                          ?.bodyPreview ??
+                      'No messages yet',
+                  at: controller.lastMessageFor(contact.deviceId)?.createdAt,
+                  unread: controller.unreadCountFor(contact.deviceId),
+                  selected: widget.selectedContactId == contact.deviceId,
+                  onTap: () => widget.onContactSelected(contact),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _groupContent(BuildContext context, GroupRecord group) {
+    final memberIds = group.activeMemberDeviceIds;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
+          child: Row(
+            children: [
+              SealAvatar(
+                seed: group.groupId,
+                palette: palette,
+                size: 34,
+                label: group.title,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  group.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Group details',
+                onPressed: () => widget.onGroupDetails(group),
+                icon: const Icon(Icons.groups_2_outlined),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: () => widget.onGroupSelected(group),
+              icon: const Icon(Icons.chat_bubble_outline),
+              label: Text(
+                'Open #${group.title.toLowerCase().replaceAll(' ', '-')}',
+              ),
+            ),
+          ),
+        ),
+        MonoSectionLabel(
+          palette: palette,
+          label: 'Members · ${memberIds.length}',
+        ),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.only(bottom: 12),
+            children: [
+              for (final deviceId in memberIds)
+                ListTile(
+                  leading: SealAvatar(
+                    seed: deviceId,
+                    palette: palette,
+                    size: 32,
+                    label: controller.groupMemberLabel(deviceId),
+                  ),
+                  title: Text(controller.groupMemberLabel(deviceId)),
+                  subtitle: Text(
+                    group.roleFor(deviceId)?.label ?? 'Member',
+                    style: TextStyle(
+                      fontFamily: ConestPalette.monoFont,
+                      fontSize: 11,
+                      color: palette.inkSoft,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _Sidebar extends StatelessWidget {
   const _Sidebar({
     required this.controller,
     required this.palette,
+    required this.homeLayout,
     required this.selectedContactId,
     required this.selectedGroupId,
     required this.lanLobbySelected,
@@ -2116,6 +2861,7 @@ class _Sidebar extends StatelessWidget {
 
   final MessengerController controller;
   final ConestPalette palette;
+  final ConestHomeLayout homeLayout;
   final String? selectedContactId;
   final String? selectedGroupId;
   final bool lanLobbySelected;
@@ -2130,6 +2876,224 @@ class _Sidebar extends StatelessWidget {
   final Future<void> Function() onShowSettings;
   final Future<void> Function() onShowInvite;
   final Future<void> Function()? onShowDebug;
+
+  /// Classic layout — a compact one-line list row per contact (seal · name ·
+  /// last message · time · unread badge).
+  List<Widget> _buildClassicRows(BuildContext context) {
+    final rows = <Widget>[];
+    for (final contact in controller.contacts) {
+      final preview = controller.lastMessageFor(contact.deviceId);
+      final unread = controller.unreadCountFor(contact.deviceId);
+      final selected = selectedContactId == contact.deviceId;
+      rows.add(
+        InkWell(
+          key: ValueKey('classic-${contact.deviceId}'),
+          borderRadius: BorderRadius.circular(ConestPalette.radius),
+          onTap: () => onContactSelected(contact),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: selected ? palette.selection : Colors.transparent,
+              borderRadius: BorderRadius.circular(ConestPalette.radius),
+            ),
+            child: Row(
+              children: [
+                SealAvatar(
+                  seed: contact.deviceId,
+                  palette: palette,
+                  size: 38,
+                  label: contact.alias,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              contact.alias,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          Text(
+                            preview == null
+                                ? ''
+                                : formatTimestamp(preview.createdAt),
+                            style: TextStyle(
+                              fontFamily: ConestPalette.monoFont,
+                              fontSize: 10,
+                              color: palette.inkSoft,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              preview?.bodyPreview ?? 'No messages yet',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: palette.inkSoft,
+                                    fontWeight: unread > 0
+                                        ? FontWeight.w700
+                                        : FontWeight.w400,
+                                  ),
+                            ),
+                          ),
+                          if (unread > 0) ...[
+                            const SizedBox(width: 6),
+                            _UnreadBadge(
+                              count: unread,
+                              palette: palette,
+                              compact: true,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    return rows;
+  }
+
+  /// Station Feed — an operator packet-log: the latest activity per peer,
+  /// newest first, each a typed event row (time gutter · seal · peer · a
+  /// SENT/RECV mono tag · snippet).
+  List<Widget> _buildStationFeed(BuildContext context) {
+    final entries = <({ContactRecord contact, ChatMessage message})>[];
+    for (final contact in controller.contacts) {
+      final message = controller.lastMessageFor(contact.deviceId);
+      if (message != null) {
+        entries.add((contact: contact, message: message));
+      }
+    }
+    entries.sort((a, b) => b.message.createdAt.compareTo(a.message.createdAt));
+    if (entries.isEmpty) {
+      return [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Text(
+            'No activity yet — pair a contact to start the log.',
+            style: TextStyle(
+              fontFamily: ConestPalette.monoFont,
+              fontSize: 11,
+              color: palette.inkSoft,
+            ),
+          ),
+        ),
+      ];
+    }
+    final rows = <Widget>[];
+    for (final entry in entries) {
+      final outbound = entry.message.outbound;
+      final tagColor = outbound ? palette.primary : palette.secondary;
+      rows.add(
+        InkWell(
+          key: ValueKey('feed-${entry.contact.deviceId}'),
+          onTap: () => onContactSelected(entry.contact),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 46,
+                  child: Text(
+                    formatTimestamp(entry.message.createdAt),
+                    style: TextStyle(
+                      fontFamily: ConestPalette.monoFont,
+                      fontSize: 10,
+                      color: palette.inkSoft,
+                    ),
+                  ),
+                ),
+                SealAvatar(
+                  seed: entry.contact.deviceId,
+                  palette: palette,
+                  size: 30,
+                  label: entry.contact.alias,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              entry.contact.alias,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.labelLarge
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5,
+                              vertical: 1,
+                            ),
+                            decoration: BoxDecoration(
+                              border: Border.all(
+                                color: tagColor.withValues(alpha: 0.5),
+                              ),
+                              borderRadius: BorderRadius.circular(
+                                ConestPalette.radiusSm,
+                              ),
+                            ),
+                            child: Text(
+                              outbound ? 'SENT' : 'RECV',
+                              style: TextStyle(
+                                fontFamily: ConestPalette.monoFont,
+                                fontSize: 8,
+                                letterSpacing: 1,
+                                fontWeight: FontWeight.w700,
+                                color: tagColor,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        entry.message.bodyPreview,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      rows.add(
+        Divider(height: 1, color: palette.border.withValues(alpha: 0.4)),
+      );
+    }
+    return rows;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2152,6 +3116,18 @@ class _Sidebar extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
+        StatusStrip(
+          palette: palette,
+          title: 'Node · online',
+          detail:
+              '$lanSummary · '
+              '${identity.hasInternetRelay ? 'relay ✓' : 'relay optional'} · '
+              'vault unlocked',
+          dotColor: controller.localRelayRunning
+              ? palette.success
+              : palette.warning,
+          margin: const EdgeInsets.only(bottom: 14),
+        ),
         Card(
           elevation: 0,
           color: palette.paperStrong,
@@ -2166,21 +3142,12 @@ class _Sidebar extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                        color: palette.outboundBubble,
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        identity.displayName.characters.first.toUpperCase(),
-                        style: TextStyle(
-                          color: palette.outboundText,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+                    SealAvatar(
+                      seed: identity.deviceId,
+                      palette: palette,
+                      size: 44,
+                      animate: true,
+                      label: identity.displayName,
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -2380,6 +3347,9 @@ class _Sidebar extends StatelessWidget {
           ) ...[
             if (index > 0) const SizedBox(height: 8),
             Builder(
+              // Stable identity so a reorder/insert can't transiently hand
+              // this slot another group's element.
+              key: ValueKey(controller.visibleGroups[index].groupId),
               builder: (context) {
                 final group = controller.visibleGroups[index];
                 final preview = controller.lastGroupMessageFor(group.groupId);
@@ -2462,120 +3432,166 @@ class _Sidebar extends StatelessWidget {
             ),
           ],
         const SizedBox(height: 16),
-        Row(
-          children: [
-            Text(
-              'Contacts',
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const Spacer(),
-            Text(
-              '${controller.contacts.length}',
-              style: Theme.of(
-                context,
-              ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
+        // The "Contacts · 0" header above an empty-state card is redundant —
+        // show the header only when there is something to count.
         if (controller.contacts.isEmpty)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: _EmptyContactsState(palette: palette),
           )
-        else
-          for (var index = 0; index < controller.contacts.length; index++) ...[
-            if (index > 0) const SizedBox(height: 8),
-            Builder(
-              builder: (context) {
-                final contact = controller.contacts[index];
-                final preview = controller.lastMessageFor(contact.deviceId);
-                final unreadCount = controller.unreadCountFor(contact.deviceId);
-                final reachabilityState = controller.reachabilityStateFor(
-                  contact.deviceId,
-                );
-                final selected = selectedContactId == contact.deviceId;
-                return InkWell(
-                  borderRadius: BorderRadius.circular(18),
-                  onTap: () => onContactSelected(contact),
-                  child: Ink(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: selected ? palette.selection : palette.paperStrong,
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(
-                        color: selected ? palette.primary : palette.stroke,
+        else ...[
+          Row(
+            children: [
+              Text(
+                'Contacts',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const Spacer(),
+              Text(
+                '${controller.contacts.length}',
+                style: Theme.of(
+                  context,
+                ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (homeLayout == ConestHomeLayout.classic)
+            ..._buildClassicRows(context)
+          else if (homeLayout == ConestHomeLayout.stationFeed)
+            ..._buildStationFeed(context)
+          else
+            for (
+              var index = 0;
+              index < controller.contacts.length;
+              index++
+            ) ...[
+              if (index > 0) const SizedBox(height: 8),
+              Builder(
+                key: ValueKey(controller.contacts[index].deviceId),
+                builder: (context) {
+                  final contact = controller.contacts[index];
+                  final preview = controller.lastMessageFor(contact.deviceId);
+                  final unreadCount = controller.unreadCountFor(
+                    contact.deviceId,
+                  );
+                  final reachabilityState = controller.reachabilityStateFor(
+                    contact.deviceId,
+                  );
+                  final selected = selectedContactId == contact.deviceId;
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(18),
+                    onTap: () => onContactSelected(contact),
+                    child: Ink(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? palette.selection
+                            : palette.paperStrong,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: selected ? palette.primary : palette.stroke,
+                        ),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SealAvatar(
+                            seed: contact.deviceId,
+                            palette: palette,
+                            size: 44,
+                            label: contact.alias,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        contact.alias,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleMedium
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                      ),
+                                    ),
+                                    TrustChip(
+                                      palette: palette,
+                                      kind: TrustChipKind.e2ee,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      contact.shortSafetyNumber,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelSmall
+                                          ?.copyWith(
+                                            fontFamily: ConestPalette.monoFont,
+                                            color: palette.inkSoft,
+                                          ),
+                                    ),
+                                    if (unreadCount > 0) ...[
+                                      const SizedBox(width: 8),
+                                      _UnreadBadge(
+                                        count: unreadCount,
+                                        palette: palette,
+                                        compact: true,
+                                      ),
+                                    ],
+                                    IconButton(
+                                      visualDensity: VisualDensity.compact,
+                                      onPressed: () =>
+                                          onContactProfile(contact),
+                                      icon: const Icon(Icons.badge_outlined),
+                                      tooltip: 'Contact profile',
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                _ReachabilityChip(
+                                  state: reachabilityState,
+                                  palette: palette,
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  contact.routeSummary,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(color: palette.inkSoft),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  preview == null
+                                      ? 'No messages yet'
+                                      : preview.bodyPreview,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(
+                                        fontWeight: unreadCount > 0
+                                            ? FontWeight.w700
+                                            : FontWeight.w400,
+                                      ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                contact.alias,
-                                style: Theme.of(context).textTheme.titleMedium
-                                    ?.copyWith(fontWeight: FontWeight.w700),
-                              ),
-                            ),
-                            Text(
-                              contact.shortSafetyNumber,
-                              style: Theme.of(context).textTheme.labelSmall
-                                  ?.copyWith(color: palette.inkSoft),
-                            ),
-                            if (unreadCount > 0) ...[
-                              const SizedBox(width: 8),
-                              _UnreadBadge(
-                                count: unreadCount,
-                                palette: palette,
-                                compact: true,
-                              ),
-                            ],
-                            IconButton(
-                              visualDensity: VisualDensity.compact,
-                              onPressed: () => onContactProfile(contact),
-                              icon: const Icon(Icons.badge_outlined),
-                              tooltip: 'Contact profile',
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        _ReachabilityChip(
-                          state: reachabilityState,
-                          palette: palette,
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          contact.routeSummary,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: palette.inkSoft),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          preview == null
-                              ? 'No messages yet'
-                              : preview.bodyPreview,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                fontWeight: unreadCount > 0
-                                    ? FontWeight.w700
-                                    : FontWeight.w400,
-                              ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-          ],
+                  );
+                },
+              ),
+            ],
+        ],
         if (controller.statusMessage != null) ...[
           const SizedBox(height: 12),
           Align(
@@ -3099,6 +4115,30 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
     final addable = widget.controller.contacts
         .where((contact) => !activeIds.contains(contact.deviceId))
         .toList(growable: false);
+    final myId = widget.controller.identity?.deviceId;
+    String mapLabel(String id) {
+      final name = widget.controller.groupMemberLabel(id).trim();
+      if (name.isEmpty) return '?';
+      final parts = name
+          .split(RegExp(r'\s+'))
+          .where((p) => p.isNotEmpty)
+          .toList();
+      if (parts.length >= 2) {
+        return (parts[0][0] + parts[1][0]).toUpperCase();
+      }
+      return name.substring(0, name.length >= 2 ? 2 : 1).toUpperCase();
+    }
+
+    final trustNodes = [
+      for (final deviceId in activeIds)
+        if (deviceId != myId)
+          TrustMapNode(
+            label: mapLabel(deviceId),
+            trusted: widget.controller.contacts.any(
+              (c) => c.deviceId == deviceId && !c.pendingVerification,
+            ),
+          ),
+    ];
     return AlertDialog(
       title: Text(group.title),
       content: SizedBox(
@@ -3121,6 +4161,30 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
                 subtitle: Text(group.roleFor(deviceId)?.label ?? 'Member'),
                 trailing: _memberTrailing(deviceId, group.roleFor(deviceId)),
               ),
+            // Trust fanout sits below the member list so the role rows render
+            // first (and aren't pushed out of a constrained dialog viewport).
+            if (trustNodes.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Center(
+                child: TrustMap(
+                  palette: widget.palette,
+                  members: trustNodes,
+                  size: 220,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Center(
+                child: Text(
+                  '// GROUP TRUST FANOUT · mint = paired',
+                  style: TextStyle(
+                    fontFamily: ConestPalette.monoFont,
+                    fontSize: 10,
+                    letterSpacing: 1,
+                    color: widget.palette.inkSoft,
+                  ),
+                ),
+              ),
+            ],
             if (_canAddMembers && addable.isNotEmpty) ...[
               const Divider(),
               Text(
@@ -3269,12 +4333,6 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     return all.where((m) => _selectedMessageIds.contains(m.id)).toList();
   }
 
-  bool _canDeleteSelected(List<ChatMessage> all) {
-    final selected = _selectedMessagesInOrder(all);
-    if (selected.isEmpty) return false;
-    return selected.every((m) => m.outbound);
-  }
-
   bool _canSaveSelected(List<ChatMessage> all) {
     final selected = _selectedMessagesInOrder(all);
     return selected.any((m) {
@@ -3308,17 +4366,6 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     controller.setStatus('Copied ${selected.length} message(s).');
     _clearMessageSelection();
   }
-
-  Future<void> _deleteSelected(List<ChatMessage> all) async {
-    // Group-message delete is not yet wired in the controller; surface a
-    // clear status rather than silently failing.
-    controller.setStatus(
-      'Deleting group messages is not yet supported — coming later.',
-    );
-    _clearMessageSelection();
-  }
-
-  bool get _supportsGroupDelete => false;
 
   Future<void> _bulkSaveSelected(List<ChatMessage> all) async {
     final selected = _selectedMessagesInOrder(
@@ -3543,19 +4590,34 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: flashing
-                ? Color.alphaBlend(
-                    palette.primary.withValues(alpha: 0.28),
-                    baseColor,
-                  )
-                : baseColor,
+            color: (outbound && !selected && !flashing)
+                ? null
+                : (flashing
+                      ? Color.alphaBlend(
+                          palette.primary.withValues(alpha: 0.28),
+                          baseColor,
+                        )
+                      : baseColor),
+            gradient: (outbound && !selected && !flashing)
+                ? palette.outboundBubbleGradient
+                : null,
             borderRadius: BorderRadius.circular(18),
+            boxShadow: (outbound && !selected && !flashing) && palette.glow
+                ? [
+                    BoxShadow(
+                      color: palette.primary.withValues(alpha: 0.22),
+                      blurRadius: 12,
+                    ),
+                  ]
+                : null,
             border: selected
                 ? Border.all(color: palette.primary, width: 2)
-                : (outbound || !unread
+                : (outbound
                       ? null
                       : Border.all(
-                          color: palette.unread.withValues(alpha: 0.55),
+                          color: unread
+                              ? palette.unread.withValues(alpha: 0.55)
+                              : palette.border,
                         )),
           ),
           child: Column(
@@ -3612,6 +4674,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                   Text(
                     formatTimestamp(message.createdAt),
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      fontFamily: ConestPalette.monoFont,
                       color: outbound
                           ? palette.outboundMeta
                           : palette.inboundMeta,
@@ -3622,6 +4685,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     Text(
                       'new',
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        fontFamily: ConestPalette.monoFont,
                         color: palette.unread,
                         fontWeight: FontWeight.w700,
                       ),
@@ -3745,9 +4809,10 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                 onSave: _canSaveSelected(messages)
                     ? () => _bulkSaveSelected(messages)
                     : null,
-                onDelete: _supportsGroupDelete && _canDeleteSelected(messages)
-                    ? () => _deleteSelected(messages)
-                    : null,
+                // Group-message deletion is not wired in the controller yet;
+                // hide the affordance rather than render a dead button.
+                onDelete: null,
+                showDelete: false,
               ),
             Expanded(
               child: Builder(
@@ -3983,6 +5048,7 @@ class _ChatPanelState extends State<_ChatPanel> {
   final LinkedHashSet<String> _selectedMessageIds = LinkedHashSet<String>();
   String? _flashingMessageId;
   Timer? _flashTimer;
+  bool _routeInspectorOpen = false;
 
   static const Duration _readSweepDelay = Duration(milliseconds: 800);
   static const Duration _replyFlashDuration = Duration(milliseconds: 320);
@@ -3992,6 +5058,55 @@ class _ChatPanelState extends State<_ChatPanel> {
   MessengerController get controller => widget.controller;
   ConestPalette get palette => widget.palette;
   ContactRecord get contact => widget.contact;
+
+  /// Derives the LAN/relay paths for the [RouteInspector] from the contact's
+  /// route hints and the live route-health tracker. The lower-RTT reachable
+  /// LAN route is preferred (active); relay is the fallback.
+  List<RouteInspectorPath> _routeInspectorPaths() {
+    Duration? lanRtt;
+    Duration? relayRtt;
+    var lanUp = false;
+    var relayUp = false;
+    for (final route in contact.routeHints) {
+      final health = controller.routeHealthFor(route);
+      final up = health?.available ?? false;
+      final latency = health?.latency;
+      if (route.kind == PeerRouteKind.lan ||
+          route.kind == PeerRouteKind.directInternet) {
+        if (up) {
+          lanUp = true;
+          if (latency != null && (lanRtt == null || latency < lanRtt)) {
+            lanRtt = latency;
+          }
+        }
+      } else if (route.kind == PeerRouteKind.relay) {
+        if (up) {
+          relayUp = true;
+          if (latency != null && (relayRtt == null || latency < relayRtt)) {
+            relayRtt = latency;
+          }
+        }
+      }
+    }
+    String rtt(Duration? d) => d == null ? '? ms' : '${d.inMilliseconds}ms';
+    final lanActive = lanUp;
+    return [
+      RouteInspectorPath(
+        label: 'LAN',
+        detail: lanUp ? '${rtt(lanRtt)} · 0 hops' : 'unreachable',
+        color: palette.primary,
+        active: lanActive,
+        available: lanUp,
+      ),
+      RouteInspectorPath(
+        label: 'RELAY',
+        detail: relayUp ? '${rtt(relayRtt)} · 2 hops' : 'unreachable',
+        color: palette.secondary,
+        active: !lanActive && relayUp,
+        available: relayUp,
+      ),
+    ];
+  }
 
   void _flashMessage(String messageId) {
     _flashTimer?.cancel();
@@ -4335,6 +5450,10 @@ class _ChatPanelState extends State<_ChatPanel> {
     final baseColor = selected
         ? palette.primary.withValues(alpha: 0.18)
         : (outbound ? palette.outboundBubble : palette.inboundBubble);
+    // Signature: the outbound (self) bubble is the mint→teal gradient with a
+    // faint bloom when the theme wants glow; inbound stays a flat panel with a
+    // hairline border. Selection/flash states fall back to a flat fill.
+    final useSelfGradient = outbound && !selected && !flashing;
     return GestureDetector(
       key: _messageKeyFor(message.id),
       // nightly.10: opaque so long-press registers in the empty row space
@@ -4361,19 +5480,32 @@ class _ChatPanelState extends State<_ChatPanel> {
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: flashing
-                ? Color.alphaBlend(
-                    palette.primary.withValues(alpha: 0.28),
-                    baseColor,
-                  )
-                : baseColor,
+            color: useSelfGradient
+                ? null
+                : (flashing
+                      ? Color.alphaBlend(
+                          palette.primary.withValues(alpha: 0.28),
+                          baseColor,
+                        )
+                      : baseColor),
+            gradient: useSelfGradient ? palette.outboundBubbleGradient : null,
             borderRadius: BorderRadius.circular(18),
+            boxShadow: useSelfGradient && palette.glow
+                ? [
+                    BoxShadow(
+                      color: palette.primary.withValues(alpha: 0.22),
+                      blurRadius: 12,
+                    ),
+                  ]
+                : null,
             border: selected
                 ? Border.all(color: palette.primary, width: 2)
-                : (outbound || !unread
+                : (outbound
                       ? null
                       : Border.all(
-                          color: palette.unread.withValues(alpha: 0.55),
+                          color: unread
+                              ? palette.unread.withValues(alpha: 0.55)
+                              : palette.border,
                         )),
           ),
           child: Column(
@@ -4423,6 +5555,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                   Text(
                     formatTimestamp(message.createdAt),
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      fontFamily: ConestPalette.monoFont,
                       color: outbound
                           ? palette.outboundMeta
                           : palette.inboundMeta,
@@ -4433,6 +5566,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                     Text(
                       'new',
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        fontFamily: ConestPalette.monoFont,
                         color: palette.unread,
                         fontWeight: FontWeight.w700,
                       ),
@@ -4553,22 +5687,38 @@ class _ChatPanelState extends State<_ChatPanel> {
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final compactHeader = constraints.maxWidth < 560;
-                  final title = Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  final title = Row(
                     children: [
-                      Text(
-                        contact.alias,
-                        style: Theme.of(context).textTheme.headlineSmall
-                            ?.copyWith(fontWeight: FontWeight.w700),
+                      SealAvatar(
+                        seed: contact.deviceId,
+                        palette: palette,
+                        size: 38,
+                        animate: true,
+                        label: contact.alias,
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${contact.routeSummary} • safety ${contact.shortSafetyNumber}',
-                        maxLines: compactHeader ? 3 : 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(
-                          context,
-                        ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              contact.alias,
+                              style: Theme.of(context).textTheme.headlineSmall
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${contact.routeSummary} • safety ${contact.shortSafetyNumber}',
+                              maxLines: compactHeader ? 3 : 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    fontFamily: ConestPalette.monoFont,
+                                    color: palette.inkSoft,
+                                  ),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   );
@@ -4581,6 +5731,15 @@ class _ChatPanelState extends State<_ChatPanel> {
                       contact: contact,
                       controller: controller,
                       palette: palette,
+                    ),
+                    IconButton(
+                      onPressed: () => setState(
+                        () => _routeInspectorOpen = !_routeInspectorOpen,
+                      ),
+                      icon: const Icon(Icons.route_outlined),
+                      tooltip: 'Route inspector',
+                      isSelected: _routeInspectorOpen,
+                      color: _routeInspectorOpen ? palette.primary : null,
                     ),
                     IconButton(
                       onPressed: widget.onShowProfile,
@@ -4630,6 +5789,18 @@ class _ChatPanelState extends State<_ChatPanel> {
               ),
             ),
             const Divider(height: 1),
+            if (_routeInspectorOpen)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 12, 18, 0),
+                child: ListenableBuilder(
+                  listenable: controller,
+                  builder: (context, _) => RouteInspector(
+                    palette: palette,
+                    paths: _routeInspectorPaths(),
+                    note: 'auto-fallback ✓',
+                  ),
+                ),
+              ),
             if (contact.pendingVerification)
               _PendingVerificationBanner(
                 controller: controller,
@@ -5838,20 +7009,25 @@ class _InviteScreenState extends State<InviteScreen> {
                                     color: Colors.white,
                                     borderRadius: BorderRadius.circular(24),
                                   ),
-                                  child: QrImageView(
-                                    data: _payload,
-                                    version: QrVersions.auto,
-                                    size: 260,
-                                    gapless: false,
-                                    errorStateBuilder: (context, error) {
-                                      return _QrFallback(
-                                        palette: palette,
-                                        error: error.toString(),
-                                      );
-                                    },
-                                    eyeStyle: QrEyeStyle(color: palette.qrInk),
-                                    dataModuleStyle: QrDataModuleStyle(
-                                      color: palette.qrInk,
+                                  child: _SignatureQrFrame(
+                                    palette: palette,
+                                    child: QrImageView(
+                                      data: _payload,
+                                      version: QrVersions.auto,
+                                      size: 260,
+                                      gapless: false,
+                                      errorStateBuilder: (context, error) {
+                                        return _QrFallback(
+                                          palette: palette,
+                                          error: error.toString(),
+                                        );
+                                      },
+                                      eyeStyle: QrEyeStyle(
+                                        color: palette.qrInk,
+                                      ),
+                                      dataModuleStyle: QrDataModuleStyle(
+                                        color: palette.qrInk,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -5905,22 +7081,25 @@ class _InviteScreenState extends State<InviteScreen> {
                             ),
                           ),
                         const SizedBox(height: 18),
-                        Text(
-                          'Rotating codephrase',
-                          style: Theme.of(context).textTheme.labelLarge
-                              ?.copyWith(color: palette.inkSoft),
+                        Center(
+                          child: CodephraseRing(
+                            palette: palette,
+                            codephrase: pairingSnapshot.codephrase,
+                            secondsRemaining: pairingSnapshot.secondsRemaining,
+                            totalSeconds: pairingCodeWindow.inSeconds,
+                          ),
                         ),
-                        const SizedBox(height: 6),
-                        SelectableText(
-                          pairingSnapshot.codephrase,
-                          style: Theme.of(context).textTheme.titleLarge
-                              ?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'Changes in ${pairingSnapshot.secondsRemaining}s',
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: palette.inkSoft),
+                        const SizedBox(height: 8),
+                        Center(
+                          child: SelectableText(
+                            pairingSnapshot.codephrase,
+                            style: TextStyle(
+                              fontFamily: ConestPalette.monoFont,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 1,
+                              color: palette.inkSoft,
+                            ),
+                          ),
                         ),
                         const SizedBox(height: 12),
                         Text(
@@ -6524,6 +7703,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             palette: widget.palette,
                           ),
                           const SizedBox(height: 12),
+                          _RelayHealthDashboard(
+                            controller: widget.controller,
+                            palette: widget.palette,
+                          ),
                           Text(
                             'Configured relays',
                             style: Theme.of(context).textTheme.titleMedium
@@ -7364,16 +8547,163 @@ class _SettingsSection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Signature settings header — mono `// SECTION` in place of the
+          // old titleLarge, matching the design's SectionLabel vocabulary.
           Text(
-            title,
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+            '// ${title.toUpperCase()}',
+            style: TextStyle(
+              fontFamily: ConestPalette.monoFont,
+              fontSize: 11,
+              letterSpacing: 2,
+              color: palette.textMuted,
+            ),
           ),
           const SizedBox(height: 14),
           child,
         ],
       ),
+    );
+  }
+}
+
+/// Live relay health dashboard — an aggregate OK/WARN/DOWN/AVG-RTT strip plus
+/// a per-relay [RelayHealthRow] with a latency sparkline, driven by the
+/// controller's `relayHealthScores`. Self-updating via [ListenableBuilder].
+class _RelayHealthDashboard extends StatelessWidget {
+  const _RelayHealthDashboard({
+    required this.controller,
+    required this.palette,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+
+  Color _statusColor(RelayHealthScore? score) {
+    if (score == null || score.recentAttempts == 0) return palette.textMuted;
+    final rate = score.successRate;
+    if (rate >= 0.7) return palette.success;
+    if (rate > 0) return palette.warning;
+    return palette.danger;
+  }
+
+  String _detail(RelayHealthScore? score) {
+    if (score == null || score.recentAttempts == 0) return 'no probes yet';
+    final med = score.recentMedianLatency;
+    final rtt = med == null ? '—' : '${med.inMilliseconds}ms';
+    return '${(score.successRate * 100).round()}% ok · $rtt · '
+        '${score.recentAttempts} probe(s)';
+  }
+
+  List<double> _spark(RelayHealthScore? score) {
+    if (score == null) return const <double>[];
+    return [
+      for (final s in score.recentSamples)
+        s.succeeded ? (s.latency?.inMilliseconds.toDouble() ?? 1.0) : 0.0,
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final relays = controller.configuredRelays;
+        if (relays.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        var ok = 0, warn = 0, down = 0;
+        final rtts = <int>[];
+        for (final relay in relays) {
+          final score =
+              controller.relayHealthScores[relayHealthEndpointKey(relay)];
+          if (score == null || score.recentAttempts == 0) continue;
+          final rate = score.successRate;
+          if (rate >= 0.7) {
+            ok++;
+          } else if (rate > 0) {
+            warn++;
+          } else {
+            down++;
+          }
+          final med = score.recentMedianLatency;
+          if (med != null) rtts.add(med.inMilliseconds);
+        }
+        final avgRtt = rtts.isEmpty
+            ? '—'
+            : '${(rtts.reduce((a, b) => a + b) / rtts.length).round()}ms';
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: palette.panel2,
+                border: Border.all(color: palette.border),
+                borderRadius: BorderRadius.circular(ConestPalette.radius),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: RelayStat(
+                      palette: palette,
+                      label: 'OK',
+                      value: '$ok',
+                      color: palette.success,
+                    ),
+                  ),
+                  Expanded(
+                    child: RelayStat(
+                      palette: palette,
+                      label: 'WARN',
+                      value: '$warn',
+                      color: palette.warning,
+                    ),
+                  ),
+                  Expanded(
+                    child: RelayStat(
+                      palette: palette,
+                      label: 'DOWN',
+                      value: '$down',
+                      color: palette.danger,
+                    ),
+                  ),
+                  Expanded(
+                    child: RelayStat(
+                      palette: palette,
+                      label: 'AVG RTT',
+                      value: avgRtt,
+                      color: palette.textPrimary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(ConestPalette.radius),
+              child: Column(
+                children: [
+                  for (final relay in relays)
+                    Builder(
+                      builder: (context) {
+                        final score = controller
+                            .relayHealthScores[relayHealthEndpointKey(relay)];
+                        return RelayHealthRow(
+                          palette: palette,
+                          host: controller.relayDisplayLabel(relay),
+                          detail: _detail(score),
+                          statusColor: _statusColor(score),
+                          spark: _spark(score),
+                        );
+                      },
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
+        );
+      },
     );
   }
 }
@@ -7448,10 +8778,111 @@ class _ThemeModeSelector extends StatelessWidget {
                 context,
               ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
             ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Text(
+                  'Decoration',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  _decorationLabel(controller.decorationIntensity),
+                  style: TextStyle(
+                    fontFamily: ConestPalette.monoFont,
+                    fontSize: 11,
+                    letterSpacing: 1,
+                    color: palette.inkSoft,
+                  ),
+                ),
+              ],
+            ),
+            Slider(
+              value: controller.decorationIntensity.clamp(0.0, 1.5),
+              min: 0,
+              max: 1.5,
+              divisions: 6,
+              label: _decorationLabel(controller.decorationIntensity),
+              onChanged: (value) =>
+                  unawaited(controller.setDecorationIntensity(value)),
+            ),
+            Text(
+              'Ambient grid, scanlines, corner reticles and the status '
+              'readout. Clean ↔ full atmosphere.',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Shell',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SegmentedButton<ConestShell>(
+                segments: [
+                  for (final shell in ConestShell.values)
+                    ButtonSegment(value: shell, label: Text(shell.label)),
+                ],
+                selected: {controller.shell},
+                onSelectionChanged: (selected) =>
+                    unawaited(controller.setShell(selected.single)),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              controller.shell.blurb,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+            ),
+            // The inner Home layout only applies to the Signature shell.
+            if (controller.shell == ConestShell.signature) ...[
+              const SizedBox(height: 16),
+              Text(
+                'Home layout',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 8),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SegmentedButton<ConestHomeLayout>(
+                  segments: [
+                    for (final layout in ConestHomeLayout.values)
+                      ButtonSegment(value: layout, label: Text(layout.label)),
+                  ],
+                  selected: {controller.homeLayout},
+                  onSelectionChanged: (selected) =>
+                      unawaited(controller.setHomeLayout(selected.single)),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                controller.homeLayout.blurb,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+              ),
+            ],
           ],
         );
       },
     );
+  }
+
+  String _decorationLabel(double intensity) {
+    if (intensity <= 0.05) return 'CLEAN';
+    if (intensity < 0.8) return 'SUBTLE';
+    if (intensity <= 1.05) return 'DEFAULT';
+    return 'FULL';
   }
 
   IconData _themeModeIcon(ConestThemeMode mode) {
@@ -7459,6 +8890,7 @@ class _ThemeModeSelector extends StatelessWidget {
       ConestThemeMode.system => Icons.brightness_auto_outlined,
       ConestThemeMode.light => Icons.light_mode_outlined,
       ConestThemeMode.dark => Icons.dark_mode_outlined,
+      ConestThemeMode.black => Icons.contrast_outlined,
       ConestThemeMode.adaptive => Icons.palette_outlined,
     };
   }
@@ -8008,6 +9440,85 @@ class _RoutePill extends StatelessWidget {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
+    );
+  }
+}
+
+/// Signature ci5 frame around a QR: thin corner brackets + a rotated mono
+/// "CONEST · ci5 · YEAR" stamp. Drawn in dark ink because it overlays the
+/// white QR field where mint would wash out.
+class _SignatureQrFrame extends StatelessWidget {
+  const _SignatureQrFrame({required this.palette, required this.child});
+
+  final ConestPalette palette;
+  final Widget child;
+
+  static const _ink = Color(0xFF111111);
+
+  Widget _bracket({required bool top, required bool left}) {
+    return SizedBox(
+      width: 14,
+      height: 14,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(
+            top: top
+                ? const BorderSide(color: _ink, width: 1.5)
+                : BorderSide.none,
+            bottom: top
+                ? BorderSide.none
+                : const BorderSide(color: _ink, width: 1.5),
+            left: left
+                ? const BorderSide(color: _ink, width: 1.5)
+                : BorderSide.none,
+            right: left
+                ? BorderSide.none
+                : const BorderSide(color: _ink, width: 1.5),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        child,
+        Positioned(left: 0, top: 0, child: _bracket(top: true, left: true)),
+        Positioned(right: 0, top: 0, child: _bracket(top: true, left: false)),
+        Positioned(left: 0, bottom: 0, child: _bracket(top: false, left: true)),
+        Positioned(
+          right: 0,
+          bottom: 0,
+          child: _bracket(top: false, left: false),
+        ),
+        Positioned(
+          right: -2,
+          top: -10,
+          child: Transform.rotate(
+            angle: -0.035,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.85),
+                border: Border.all(color: _ink),
+              ),
+              child: Text(
+                'CONEST · ci5 · ${DateTime.now().year}',
+                style: const TextStyle(
+                  fontFamily: ConestPalette.monoFont,
+                  fontSize: 8,
+                  letterSpacing: 1.5,
+                  fontWeight: FontWeight.w700,
+                  color: _ink,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -8808,6 +10319,7 @@ class _AlbumBubble extends StatelessWidget {
     final bubbleColor = selected
         ? palette.primary.withValues(alpha: 0.18)
         : (outbound ? palette.outboundBubble : palette.inboundBubble);
+    final useSelfGradient = outbound && !selected;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: selectionMode && onToggleSelection != null
@@ -8823,7 +10335,8 @@ class _AlbumBubble extends StatelessWidget {
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: bubbleColor,
+            color: useSelfGradient ? null : bubbleColor,
+            gradient: useSelfGradient ? palette.outboundBubbleGradient : null,
             borderRadius: BorderRadius.circular(18),
           ),
           child: Stack(
@@ -8976,6 +10489,7 @@ class _MessageSelectionBar extends StatelessWidget {
     required this.onCopy,
     required this.onSave,
     required this.onDelete,
+    this.showDelete = true,
   });
 
   final ConestPalette palette;
@@ -8984,6 +10498,12 @@ class _MessageSelectionBar extends StatelessWidget {
   final VoidCallback onCopy;
   final VoidCallback? onSave;
   final VoidCallback? onDelete;
+
+  /// `onDelete: null` means "temporarily unavailable for this selection"
+  /// (button renders disabled). When the surface can never delete — group
+  /// chats until controller support lands — hide the affordance entirely
+  /// instead of showing a permanently dead button.
+  final bool showDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -9016,14 +10536,15 @@ class _MessageSelectionBar extends StatelessWidget {
             icon: const Icon(Icons.download_outlined),
             tooltip: 'Save attachments',
           ),
-          IconButton(
-            onPressed: onDelete,
-            icon: const Icon(Icons.delete_outline),
-            tooltip: 'Delete',
-            color: onDelete != null
-                ? Theme.of(context).colorScheme.error
-                : null,
-          ),
+          if (showDelete)
+            IconButton(
+              onPressed: onDelete,
+              icon: const Icon(Icons.delete_outline),
+              tooltip: 'Delete',
+              color: onDelete != null
+                  ? Theme.of(context).colorScheme.error
+                  : null,
+            ),
         ],
       ),
     );
@@ -9059,6 +10580,30 @@ class _AttachmentRow extends StatelessWidget {
 
   bool get _isImage => descriptor.mimeType.startsWith('image/');
   bool get _isVideo => descriptor.mimeType.startsWith('video/');
+
+  /// Wraps an image/video thumbnail so it never overflows its parent. In a
+  /// tight (bounded-height) context — e.g. the album grid's square cells —
+  /// the tile fills the cell exactly; as a standalone bubble (unbounded
+  /// height) it caps at 320 inside a min-sized Column like before.
+  Widget _thumbnailContainer(Widget tile) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxHeight.isFinite) {
+          return tile;
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 320, maxHeight: 320),
+              child: tile,
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   String _saveKindFor(String mimeType) {
     if (mimeType.startsWith('image/')) return 'image';
@@ -9496,66 +11041,56 @@ class _AttachmentRow extends StatelessWidget {
         outboundProgress != null || inboundProgress != null;
 
     if (showImage) {
+      // nightly.10: Copy / Save moved into the full-screen viewer's AppBar to
+      // declutter the bubble. Tap the image to open the viewer.
+      final tile = Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () => _openFullScreenImage(context, bytes),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Image.memory(
+                  bytes,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  cacheWidth: 640,
+                ),
+                // nightly.10: Telegram-style dim+spinner overlay while the
+                // transfer is in flight so the preview doesn't give a false
+                // "sent" feel. Hidden once the bubble is delivered/read.
+                if (transferInFlight)
+                  _TransferOverlay(
+                    progress: progress,
+                    route: outbound
+                        ? controller.lastDeliveryRouteFor(descriptor.id)
+                        : OutboundDeliveryRoute.unknown,
+                    pauseState: pauseState,
+                    onPauseToggle: () {
+                      if (pauseState?.pausedByMe ?? false) {
+                        controller.resumeAttachment(descriptor.id);
+                      } else {
+                        controller.pauseAttachment(descriptor.id);
+                      }
+                    },
+                  ),
+                if (queuePosition > 0)
+                  Positioned(
+                    top: 6,
+                    left: 6,
+                    child: _QueueBadge(position: queuePosition),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
       return _wrapContextMenu(
         context: context,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 320, maxHeight: 320),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(14),
-                  onTap: () => _openFullScreenImage(context, bytes),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(14),
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        Image.memory(
-                          bytes,
-                          fit: BoxFit.cover,
-                          gaplessPlayback: true,
-                          cacheWidth: 640,
-                        ),
-                        // nightly.10: Telegram-style dim+spinner overlay
-                        // while the transfer is in flight so the preview
-                        // doesn't give a false "sent" feel. Hidden once
-                        // the bubble is delivered/read.
-                        if (transferInFlight)
-                          _TransferOverlay(
-                            progress: progress,
-                            route: outbound
-                                ? controller.lastDeliveryRouteFor(descriptor.id)
-                                : OutboundDeliveryRoute.unknown,
-                            pauseState: pauseState,
-                            onPauseToggle: () {
-                              if (pauseState?.pausedByMe ?? false) {
-                                controller.resumeAttachment(descriptor.id);
-                              } else {
-                                controller.pauseAttachment(descriptor.id);
-                              }
-                            },
-                          ),
-                        if (queuePosition > 0)
-                          Positioned(
-                            top: 6,
-                            left: 6,
-                            child: _QueueBadge(position: queuePosition),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            // nightly.10: Copy / Save moved into the full-screen viewer's
-            // AppBar to declutter the bubble. Tap the image to open the
-            // viewer, then use the AppBar icons.
-          ],
-        ),
+        child: _thumbnailContainer(tile),
       );
     }
 
@@ -9566,90 +11101,103 @@ class _AttachmentRow extends StatelessWidget {
     // no poster is present.
     final poster = _isVideo ? controller.videoPosterFor(descriptor.id) : null;
     if (_isVideo && poster != null) {
-      return _wrapContextMenu(
-        context: context,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 320, maxHeight: 320),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(14),
-                  onTap: hasBytes
-                      ? () => unawaited(_openVideoPlayer(context))
-                      : () => controller.setStatus(
-                          'Video still transferring (${(progress ?? 0) * 100 ~/ 1}%).',
-                        ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(14),
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        Image.memory(
-                          poster,
-                          fit: BoxFit.cover,
-                          gaplessPlayback: true,
-                          cacheWidth: 640,
-                        ),
-                        // nightly.10: dim+spinner overlay while in flight
-                        // so the receiver doesn't think the video is ready
-                        // before its bytes arrive.
-                        if (transferInFlight)
-                          _TransferOverlay(
-                            progress: progress,
-                            route: outbound
-                                ? controller.lastDeliveryRouteFor(descriptor.id)
-                                : OutboundDeliveryRoute.unknown,
-                            pauseState: pauseState,
-                            onPauseToggle: () {
-                              if (pauseState?.pausedByMe ?? false) {
-                                controller.resumeAttachment(descriptor.id);
-                              } else {
-                                controller.pauseAttachment(descriptor.id);
-                              }
-                            },
-                          )
-                        else if (queuePosition > 0)
-                          Positioned(
-                            top: 6,
-                            left: 6,
-                            child: _QueueBadge(position: queuePosition),
-                          )
-                        else
-                          Container(
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.35),
-                              shape: BoxShape.circle,
-                            ),
-                            padding: const EdgeInsets.all(10),
-                            child: const Icon(
-                              Icons.play_arrow,
-                              color: Colors.white,
-                              size: 38,
-                            ),
-                          ),
-                      ],
+      final tile = Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: hasBytes
+              ? () => unawaited(_openVideoPlayer(context))
+              : () => controller.setStatus(
+                  'Video still transferring (${(progress ?? 0) * 100 ~/ 1}%).',
+                ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Image.memory(
+                  poster,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  cacheWidth: 640,
+                ),
+                // nightly.10: dim+spinner overlay while in flight so the
+                // receiver doesn't think the video is ready before its
+                // bytes arrive.
+                if (transferInFlight)
+                  _TransferOverlay(
+                    progress: progress,
+                    route: outbound
+                        ? controller.lastDeliveryRouteFor(descriptor.id)
+                        : OutboundDeliveryRoute.unknown,
+                    pauseState: pauseState,
+                    onPauseToggle: () {
+                      if (pauseState?.pausedByMe ?? false) {
+                        controller.resumeAttachment(descriptor.id);
+                      } else {
+                        controller.pauseAttachment(descriptor.id);
+                      }
+                    },
+                  )
+                else if (queuePosition > 0)
+                  Positioned(
+                    top: 6,
+                    left: 6,
+                    child: _QueueBadge(position: queuePosition),
+                  )
+                else
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.35),
+                      shape: BoxShape.circle,
+                    ),
+                    padding: const EdgeInsets.all(10),
+                    child: const Icon(
+                      Icons.play_arrow,
+                      color: Colors.white,
+                      size: 38,
                     ),
                   ),
-                ),
-              ),
+              ],
             ),
-            if (!hasBytes) ...[
-              const SizedBox(height: 6),
-              Text(
-                progress != null
-                    ? 'Transferring · ${(progress * 100).toStringAsFixed(0)}% · '
-                          '${_formatBytes(descriptor.sizeBytes)}'
-                    : 'Transferring · ${_formatBytes(descriptor.sizeBytes)}',
-                style: Theme.of(
-                  context,
-                ).textTheme.labelSmall?.copyWith(color: metaColor),
-              ),
-            ],
-          ],
+          ),
+        ),
+      );
+      return _wrapContextMenu(
+        context: context,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // Album grid cells are tight squares — let the poster fill the
+            // cell and drop the meta line that would overflow it.
+            if (constraints.maxHeight.isFinite) {
+              return tile;
+            }
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ConstrainedBox(
+                  constraints: const BoxConstraints(
+                    maxWidth: 320,
+                    maxHeight: 320,
+                  ),
+                  child: tile,
+                ),
+                if (!hasBytes) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    progress != null
+                        ? 'Transferring · ${(progress * 100).toStringAsFixed(0)}% · '
+                              '${_formatBytes(descriptor.sizeBytes)}'
+                        : 'Transferring · ${_formatBytes(descriptor.sizeBytes)}',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelSmall?.copyWith(color: metaColor),
+                  ),
+                ],
+              ],
+            );
+          },
         ),
       );
     }

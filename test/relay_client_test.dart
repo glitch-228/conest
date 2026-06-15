@@ -1,11 +1,61 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:conest/src/local_relay_node.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/relay_client.dart';
+
+/// Minimal line-protocol relay that answers every request with a v2
+/// detached-signature wrapper. [mutateBodyAfterSigning] simulates an
+/// on-path attacker tampering with the body after the relay signed it.
+Future<ServerSocket> _startDetachedSigningRelay({
+  required SimpleKeyPair keyPair,
+  required String identityPublicKeyBase64,
+  String Function(String rawBody)? mutateBodyAfterSigning,
+}) async {
+  final algorithm = Ed25519();
+  final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+  server.listen((socket) {
+    utf8.decoder.bind(socket).transform(const LineSplitter()).listen((
+      line,
+    ) async {
+      final request = jsonDecode(line) as Map<String, dynamic>;
+      expect(request['sig_mode'], 'detached');
+      final action = request['action'] as String;
+      final nonce = base64Decode(request['nonce'] as String);
+      // `1.5e3` is valid JSON that serde emits but Dart's jsonEncode
+      // re-encodes as `1500.0` — the legacy inline scheme silently
+      // degrades exactly this response to "unsigned".
+      final rawBody =
+          '{"ok":true,"stored":false,"messages":[],"error":null,'
+          '"stats":{"relay_id":"detached-test","queue_count":0,'
+          '"queued_envelope_count":0,"ttl_seconds":1.5e3,'
+          '"max_queue_per_mailbox":512,"max_fetch_limit":128,'
+          '"identity_public_key":"$identityPublicKeyBase64"}}';
+      final signature = await algorithm.sign([
+        ...utf8.encode(action),
+        ...nonce,
+        ...utf8.encode(rawBody),
+      ], keyPair: keyPair);
+      final wireBody = mutateBodyAfterSigning?.call(rawBody) ?? rawBody;
+      socket.writeln(
+        jsonEncode({
+          'sig_v': 2,
+          'body': wireBody,
+          'nonce_echo': request['nonce'],
+          'signature': base64Encode(signature.bytes),
+        }),
+      );
+      await socket.flush();
+      await socket.close();
+    });
+  });
+  return server;
+}
 
 void main() {
   test(
@@ -280,6 +330,65 @@ void main() {
           timeout: const Duration(seconds: 2),
         ),
         throwsA(isA<StateError>()),
+      );
+    },
+  );
+
+  test('detached-signature responses verify over raw body bytes even when the '
+      'body contains float formatting Dart cannot round-trip', () async {
+    final keyPair = await Ed25519().newKeyPair();
+    final publicKeyBase64 = base64Encode(
+      (await keyPair.extractPublicKey()).bytes,
+    );
+    final server = await _startDetachedSigningRelay(
+      keyPair: keyPair,
+      identityPublicKeyBase64: publicKeyBase64,
+    );
+    addTearDown(server.close);
+
+    const client = RelayClient();
+    final info = await client.inspectHealth(
+      host: '127.0.0.1',
+      port: server.port,
+      timeout: const Duration(seconds: 2),
+    );
+
+    expect(info.ok, isTrue);
+    expect(info.relayInstanceId, 'detached-test');
+    expect(info.identityPublicKeyBase64, publicKeyBase64);
+    expect(
+      info.signatureVerified,
+      isTrue,
+      reason:
+          'the detached path must verify over the exact body bytes; the '
+          'legacy re-encode path degrades this response to unsigned',
+    );
+  });
+
+  test(
+    'tampered detached body fails verification against a pinned key',
+    () async {
+      final keyPair = await Ed25519().newKeyPair();
+      final publicKeyBase64 = base64Encode(
+        (await keyPair.extractPublicKey()).bytes,
+      );
+      final server = await _startDetachedSigningRelay(
+        keyPair: keyPair,
+        identityPublicKeyBase64: publicKeyBase64,
+        mutateBodyAfterSigning: (rawBody) =>
+            rawBody.replaceFirst('"queue_count":0', '"queue_count":7'),
+      );
+      addTearDown(server.close);
+
+      const client = RelayClient();
+      await expectLater(
+        client.inspectHealth(
+          host: '127.0.0.1',
+          port: server.port,
+          timeout: const Duration(seconds: 2),
+          expectedIdentityPublicKeyBase64: publicKeyBase64,
+        ),
+        throwsA(isA<RelayIdentityMismatchException>()),
       );
     },
   );

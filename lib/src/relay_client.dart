@@ -207,7 +207,16 @@ class RelayClient {
     final nonceBytes = _secureRandomBytes(16);
     final nonceBase64 = base64Encode(nonceBytes);
     final action = (request['action'] as String?) ?? '';
-    final signedRequest = <String, dynamic>{...request, 'nonce': nonceBase64};
+    final signedRequest = <String, dynamic>{
+      ...request,
+      'nonce': nonceBase64,
+      // v2 relays answer with the detached-signature wrapper — the body
+      // travels as the exact signed JSON string, so verification does not
+      // depend on this client's JSON encoder reproducing the relay's
+      // byte-for-byte. Older relays ignore the unknown field and keep
+      // sending inline-signed responses (legacy path below).
+      'sig_mode': 'detached',
+    };
     final body = await switch (protocol) {
       PeerRouteProtocol.tcp => _sendTcpRequest(
         host: endpoint.host,
@@ -260,6 +269,14 @@ class RelayClient {
     required String nonceBase64,
     required String? expectedIdentityPublicKeyBase64,
   }) async {
+    if (body['sig_v'] == 2 && body['body'] is String) {
+      return _verifyDetachedResponse(
+        wrapper: body,
+        action: action,
+        nonceBase64: nonceBase64,
+        expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+      );
+    }
     final stats = body['stats'];
     final announcedKey = stats is Map<String, dynamic>
         ? stats['identity_public_key'] as String?
@@ -284,27 +301,11 @@ class RelayClient {
       nonceBase64: nonceBase64,
       body: body,
     );
-    final algorithm = Ed25519();
-    Future<bool> verifyAgainst(String pubKeyBase64) async {
-      final List<int> sig;
-      final List<int> pub;
-      try {
-        sig = base64Decode(signatureBase64);
-        pub = base64Decode(pubKeyBase64);
-      } on FormatException {
-        return false;
-      }
-      if (sig.length != 64 || pub.length != 32) {
-        return false;
-      }
-      return algorithm.verify(
-        signingInput,
-        signature: Signature(
-          sig,
-          publicKey: SimplePublicKey(pub, type: KeyPairType.ed25519),
-        ),
-      );
-    }
+    Future<bool> verifyAgainst(String pubKeyBase64) => _verifyEd25519(
+      signingInput: signingInput,
+      signatureBase64: signatureBase64,
+      publicKeyBase64: pubKeyBase64,
+    );
 
     if (expectedIdentityPublicKeyBase64 != null &&
         expectedIdentityPublicKeyBase64.trim().isNotEmpty) {
@@ -344,6 +345,126 @@ class RelayClient {
     return _RelayCallResult(
       body: body,
       announcedIdentityPublicKeyBase64: announcedKey,
+    );
+  }
+
+  /// Verifies a v2 detached-signature wrapper:
+  /// `{"sig_v":2,"body":"<json>","nonce_echo":…,"signature":…}`.
+  ///
+  /// The signature covers `action || nonce || raw body-string bytes`, so
+  /// verification is independent of JSON re-encoding — the legacy inline
+  /// scheme below silently degrades to "unsigned" the moment Dart's
+  /// `jsonEncode` and the relay's serde output diverge (field order, float
+  /// formatting like `1e30` vs `1e+30`, large integers).
+  Future<_RelayCallResult> _verifyDetachedResponse({
+    required Map<String, dynamic> wrapper,
+    required String action,
+    required String nonceBase64,
+    required String? expectedIdentityPublicKeyBase64,
+  }) async {
+    final rawBody = wrapper['body'] as String;
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(rawBody);
+    } on FormatException {
+      throw StateError('Relay returned a malformed detached response body.');
+    }
+    if (decoded is! Map<String, dynamic>) {
+      throw StateError('Relay detached response body is not a JSON object.');
+    }
+    final body = decoded;
+    if (body['ok'] == false) {
+      // Same semantics as `_decodeResponse` on the legacy path: relay-side
+      // failures surface as exceptions before signature bookkeeping.
+      throw StateError(body['error'] as String? ?? 'Relay request failed.');
+    }
+    final stats = body['stats'];
+    final announcedKey = stats is Map<String, dynamic>
+        ? stats['identity_public_key'] as String?
+        : null;
+    final signatureBase64 = wrapper['signature'] as String?;
+    final nonceEcho = wrapper['nonce_echo'] as String?;
+    if (signatureBase64 == null ||
+        nonceEcho == null ||
+        nonceEcho != nonceBase64) {
+      // Missing signature or replay/mismatch — refuse to credit the
+      // signature; the caller decides what an unsigned response is worth.
+      return _RelayCallResult(
+        body: body,
+        announcedIdentityPublicKeyBase64: announcedKey,
+      );
+    }
+    final signingInput = <int>[
+      ...utf8.encode(action),
+      ...base64Decode(nonceBase64),
+      ...utf8.encode(rawBody),
+    ];
+    Future<bool> verifyAgainst(String pubKeyBase64) => _verifyEd25519(
+      signingInput: signingInput,
+      signatureBase64: signatureBase64,
+      publicKeyBase64: pubKeyBase64,
+    );
+
+    if (expectedIdentityPublicKeyBase64 != null &&
+        expectedIdentityPublicKeyBase64.trim().isNotEmpty) {
+      final verified = await verifyAgainst(expectedIdentityPublicKeyBase64);
+      if (!verified) {
+        throw RelayIdentityMismatchException(
+          'Relay response signature did not verify against the pinned identity key.',
+        );
+      }
+      if (announcedKey != null &&
+          announcedKey != expectedIdentityPublicKeyBase64) {
+        return _RelayCallResult(
+          body: body,
+          announcedIdentityPublicKeyBase64: announcedKey,
+          signatureVerified: true,
+          pinnedKeyMismatch: true,
+        );
+      }
+      return _RelayCallResult(
+        body: body,
+        announcedIdentityPublicKeyBase64:
+            announcedKey ?? expectedIdentityPublicKeyBase64,
+        signatureVerified: true,
+      );
+    }
+    if (announcedKey != null && announcedKey.trim().isNotEmpty) {
+      final verified = await verifyAgainst(announcedKey);
+      return _RelayCallResult(
+        body: body,
+        announcedIdentityPublicKeyBase64: announcedKey,
+        signatureVerified: verified,
+      );
+    }
+    return _RelayCallResult(
+      body: body,
+      announcedIdentityPublicKeyBase64: announcedKey,
+    );
+  }
+
+  Future<bool> _verifyEd25519({
+    required List<int> signingInput,
+    required String signatureBase64,
+    required String publicKeyBase64,
+  }) async {
+    final List<int> sig;
+    final List<int> pub;
+    try {
+      sig = base64Decode(signatureBase64);
+      pub = base64Decode(publicKeyBase64);
+    } on FormatException {
+      return false;
+    }
+    if (sig.length != 64 || pub.length != 32) {
+      return false;
+    }
+    return Ed25519().verify(
+      signingInput,
+      signature: Signature(
+        sig,
+        publicKey: SimplePublicKey(pub, type: KeyPairType.ed25519),
+      ),
     );
   }
 
@@ -594,7 +715,19 @@ class RelayClient {
   }
 
   Map<String, dynamic> _decodeResponse(String line) {
-    final response = jsonDecode(line) as Map<String, dynamic>;
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(line);
+    } on FormatException {
+      // Misbehaving relays / captive portals can answer with HTML or
+      // truncated junk; surface a clean route failure instead of an
+      // unhandled FormatException.
+      throw StateError('Relay returned a malformed (non-JSON) response.');
+    }
+    if (decoded is! Map<String, dynamic>) {
+      throw StateError('Relay response is not a JSON object.');
+    }
+    final response = decoded;
     if (response['ok'] == false) {
       throw StateError(response['error'] as String? ?? 'Relay request failed.');
     }
