@@ -5,6 +5,7 @@
 list(APPEND FLUTTER_PLUGIN_LIST
   connectivity_plus
   desktop_drop
+  disk_space_2
   dynamic_color
   flutter_secure_storage_windows
   irondash_engine_context

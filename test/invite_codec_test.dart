@@ -2,6 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:conest/src/models.dart';
 
+const _validPublicKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
+
 void main() {
   test(
     'contact invites round-trip through payload encoding with route hints',
@@ -15,7 +17,7 @@ void main() {
         pairingNonce: 'nonce-a',
         pairingEpochMs: 1760000000000,
         relayCapable: true,
-        publicKeyBase64: 'public-key',
+        publicKeyBase64: _validPublicKey,
         routeHints: const [
           PeerEndpoint(
             kind: PeerRouteKind.lan,
@@ -117,7 +119,7 @@ void main() {
         'accountId': 'acc-a1',
         'deviceId': 'dev-b2',
         'displayName': 'Alice',
-        'publicKeyBase64': 'public-key',
+        'publicKeyBase64': _validPublicKey,
         'routeHints': [
           {
             'kind': 'relay',
@@ -150,7 +152,7 @@ void main() {
       pairingNonce: 'nonce-a',
       pairingEpochMs: early.millisecondsSinceEpoch,
       relayCapable: false,
-      publicKeyBase64: 'public-key',
+      publicKeyBase64: _validPublicKey,
       routeHints: const [],
     );
     final payload = invite.encodePayload();
@@ -189,7 +191,7 @@ void main() {
       pairingNonce: 'nonce-a',
       pairingEpochMs: startedAt.millisecondsSinceEpoch,
       relayCapable: false,
-      publicKeyBase64: 'public-key',
+      publicKeyBase64: _validPublicKey,
       routeHints: const [],
     );
     final payload = invite.encodePayload();
@@ -221,7 +223,7 @@ void main() {
       pairingNonce: 'nonce-b',
       pairingEpochMs: rotatedAt.millisecondsSinceEpoch,
       relayCapable: true,
-      publicKeyBase64: 'public-key',
+      publicKeyBase64: _validPublicKey,
       routeHints: const [],
     );
 
@@ -263,5 +265,44 @@ void main() {
     expect(decoded.attachment.chunkHashes.length, 2);
     expect(decoded.state, TransferState.transferring);
     expect(decoded.completedChunks, const [0]);
+  });
+
+  test('transfer progress is persisted as compact completed ranges', () {
+    final descriptor = AttachmentDescriptor(
+      id: 'att-ranges',
+      fileName: 'ranges.bin',
+      mimeType: 'application/octet-stream',
+      sizeBytes: 4096,
+      chunkSize: 512,
+      chunkHashes: const [],
+      chunkCount: 8,
+      fileHashBase64: _validPublicKey,
+      encryptionKeyBase64: _validPublicKey,
+      createdAt: DateTime.utc(2026, 7, 13),
+    );
+    final session = TransferSession(
+      id: descriptor.id,
+      attachment: descriptor,
+      peerDeviceIds: const ['dev-b'],
+      state: TransferState.transferring,
+      completedChunks: const [0, 1, 2, 5, 7],
+      createdAt: descriptor.createdAt,
+      updatedAt: descriptor.createdAt,
+    );
+
+    final encoded = session.toJson();
+    expect(encoded.containsKey('completedChunks'), isFalse);
+    expect(encoded['completedRanges'], const [
+      [0, 2],
+      [5, 5],
+      [7, 7],
+    ]);
+    expect(TransferSession.fromJson(encoded).completedChunks, const [
+      0,
+      1,
+      2,
+      5,
+      7,
+    ]);
   });
 }

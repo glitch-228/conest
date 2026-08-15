@@ -64,6 +64,48 @@ android {
             signingConfig = signingConfigs.getByName("release")
         }
     }
+
+    sourceSets.getByName("main").jniLibs.srcDir(
+        layout.buildDirectory.dir("conestNativeJniLibs")
+    )
+}
+
+val conestAndroidTargets =
+    (System.getenv("CON_ANDROID_TARGETS")
+        ?: "arm64-v8a,armeabi-v7a,x86,x86_64")
+        .split(',')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+
+val buildConestNative by tasks.registering(Exec::class) {
+    val repositoryRoot = rootProject.projectDir.parentFile
+    val outputDirectory = layout.buildDirectory.dir("conestNativeJniLibs")
+    workingDir(repositoryRoot)
+    commandLine(
+        buildList {
+            add("cargo")
+            add("ndk")
+            for (target in conestAndroidTargets) {
+                add("-t")
+                add(target)
+            }
+            add("-o")
+            add(outputDirectory.get().asFile.absolutePath)
+            add("build")
+            add("--manifest-path")
+            add(File(repositoryRoot, "native/conest_native/Cargo.toml").absolutePath)
+            add("--release")
+        }
+    )
+    inputs.files(
+        fileTree(File(repositoryRoot, "native/conest_native/src")),
+        File(repositoryRoot, "native/conest_native/Cargo.toml"),
+    )
+    outputs.dir(outputDirectory)
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(buildConestNative)
 }
 
 flutter {

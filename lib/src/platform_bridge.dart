@@ -113,6 +113,27 @@ class PlatformBridge {
     }
   }
 
+  /// Streaming counterpart to [saveMediaToGallery]. Passing a path keeps
+  /// large attachments out of the method-channel heap.
+  Future<String?> saveMediaFileToGallery({
+    required String sourcePath,
+    required String fileName,
+    required String mimeType,
+    required String kind,
+  }) async {
+    if (!_supportsAndroidSystemCalls) return null;
+    try {
+      return await _channel.invokeMethod<String>('saveMediaFileToGallery', {
+        'sourcePath': sourcePath,
+        'fileName': fileName,
+        'mimeType': mimeType,
+        'kind': kind,
+      });
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
   /// Stages the image bytes into the Android cache directory's
   /// `clipboard/` subdir via FileProvider and puts a content URI on the
   /// system clipboard via `ClipboardManager.setPrimaryClip`. Returns the

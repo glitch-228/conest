@@ -423,6 +423,7 @@ void main() {
         buildNumber: '1',
         channel: UpdateChannel.nightly,
         isDebugBuild: true,
+        buildTag: 'v0.1.0-nightly.20260419.1',
       ),
       targetPlatform: UpdateTargetPlatform.windows,
       apiBaseUri: Uri.parse(baseUrl),
@@ -543,6 +544,7 @@ void main() {
           buildNumber: '1',
           channel: UpdateChannel.nightly,
           isDebugBuild: true,
+          buildTag: 'v0.1.0-nightly.20260419.1',
         ),
         platformBridge: platformBridge,
         targetPlatform: UpdateTargetPlatform.android,
@@ -931,5 +933,25 @@ void main() {
       parsed['app.zip'],
       '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
     );
+  });
+
+  test('semantic release ordering rejects downgrade and replay tags', () {
+    expect(isReleaseTagNewerThan('v0.9.99', 'v0.10.0'), isFalse);
+    expect(isReleaseTagNewerThan('v0.10.0', 'v0.10.0'), isFalse);
+    expect(
+      isReleaseTagNewerThan(
+        'v0.10.0-nightly.20260713.9',
+        'v0.10.0-nightly.20260713.10',
+      ),
+      isFalse,
+    );
+    expect(
+      isReleaseTagNewerThan(
+        'v0.10.0-nightly.20260713.11',
+        'v0.10.0-nightly.20260713.10',
+      ),
+      isTrue,
+    );
+    expect(isReleaseTagNewerThan('not-a-version', 'v0.10.0'), isFalse);
   });
 }

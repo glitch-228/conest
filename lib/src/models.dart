@@ -3,6 +3,10 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 
+import 'transport_models.dart';
+
+export 'transport_models.dart';
+
 enum ConversationKind { direct, group, lanLobby }
 
 enum GroupMemberRole {
@@ -498,36 +502,144 @@ enum EffectiveRoutingMode {
   offline,
 }
 
+List<String> normalizeIrohRelayUrls(
+  Iterable<String> values, {
+  bool rejectInvalid = true,
+}) {
+  final result = <String>[];
+  final seen = <String>{};
+  for (final raw in values) {
+    final value = raw.trim();
+    final uri = Uri.tryParse(value);
+    final valid =
+        value.isNotEmpty &&
+        uri != null &&
+        uri.scheme == 'https' &&
+        uri.host.isNotEmpty &&
+        uri.userInfo.isEmpty &&
+        !uri.hasQuery &&
+        !uri.hasFragment;
+    if (!valid) {
+      if (rejectInvalid) {
+        throw ArgumentError.value(
+          raw,
+          'irohRelayUrls',
+          'Invalid HTTPS relay URL.',
+        );
+      }
+      continue;
+    }
+    final canonical = uri.toString();
+    if (!seen.add(canonical)) continue;
+    if (result.length == 8) {
+      if (rejectInvalid) {
+        throw ArgumentError(
+          'At most eight custom Iroh relay URLs are allowed.',
+        );
+      }
+      break;
+    }
+    result.add(canonical);
+  }
+  return List.unmodifiable(result);
+}
+
 class GlobalConnectivityPreferences {
   const GlobalConnectivityPreferences({
     this.lanEnabled = true,
     this.onlineEnabled = true,
+    this.irohRelayEnabled = true,
+    this.irohRelayUrls = const [],
+    this.transportPolicies = const {
+      TransportKind.lan: TransportPolicy.automatic,
+      TransportKind.iroh: TransportPolicy.automatic,
+      TransportKind.conestRelay: TransportPolicy.automatic,
+      TransportKind.optical: TransportPolicy.askBeforeUse,
+      TransportKind.deltaChat: TransportPolicy.disabled,
+      TransportKind.reticulum: TransportPolicy.disabled,
+      TransportKind.localSend: TransportPolicy.disabled,
+    },
   });
 
   final bool lanEnabled;
   final bool onlineEnabled;
+  final bool irohRelayEnabled;
+
+  /// Empty uses Iroh's standard N0 relay set. A non-empty list replaces it.
+  final List<String> irohRelayUrls;
+  final Map<TransportKind, TransportPolicy> transportPolicies;
 
   bool get anyEnabled => lanEnabled || onlineEnabled;
+
+  TransportPolicy policyFor(TransportKind kind) {
+    if (kind == TransportKind.lan && !lanEnabled) {
+      return TransportPolicy.disabled;
+    }
+    if ((kind == TransportKind.iroh ||
+            kind == TransportKind.conestRelay ||
+            kind == TransportKind.deltaChat ||
+            kind == TransportKind.reticulum) &&
+        !onlineEnabled) {
+      return TransportPolicy.disabled;
+    }
+    return transportPolicies[kind] ?? TransportPolicy.disabled;
+  }
 
   GlobalConnectivityPreferences copyWith({
     bool? lanEnabled,
     bool? onlineEnabled,
+    bool? irohRelayEnabled,
+    List<String>? irohRelayUrls,
+    Map<TransportKind, TransportPolicy>? transportPolicies,
   }) {
     return GlobalConnectivityPreferences(
       lanEnabled: lanEnabled ?? this.lanEnabled,
       onlineEnabled: onlineEnabled ?? this.onlineEnabled,
+      irohRelayEnabled: irohRelayEnabled ?? this.irohRelayEnabled,
+      irohRelayUrls: irohRelayUrls ?? this.irohRelayUrls,
+      transportPolicies: transportPolicies ?? this.transportPolicies,
     );
   }
 
   Map<String, dynamic> toJson() => {
     'lanEnabled': lanEnabled,
     'onlineEnabled': onlineEnabled,
+    'irohRelayEnabled': irohRelayEnabled,
+    'irohRelayUrls': irohRelayUrls,
+    'transportPolicies': transportPoliciesToJson(transportPolicies),
   };
 
   factory GlobalConnectivityPreferences.fromJson(Map<String, dynamic> json) {
+    final lanEnabled = json['lanEnabled'] as bool? ?? true;
+    final onlineEnabled = json['onlineEnabled'] as bool? ?? true;
+    final defaults = <TransportKind, TransportPolicy>{
+      TransportKind.lan: lanEnabled
+          ? TransportPolicy.automatic
+          : TransportPolicy.disabled,
+      TransportKind.iroh: onlineEnabled
+          ? TransportPolicy.automatic
+          : TransportPolicy.disabled,
+      TransportKind.conestRelay: onlineEnabled
+          ? TransportPolicy.automatic
+          : TransportPolicy.disabled,
+      TransportKind.optical: TransportPolicy.askBeforeUse,
+      TransportKind.deltaChat: TransportPolicy.disabled,
+      TransportKind.reticulum: TransportPolicy.disabled,
+      TransportKind.localSend: TransportPolicy.disabled,
+    };
     return GlobalConnectivityPreferences(
-      lanEnabled: json['lanEnabled'] as bool? ?? true,
-      onlineEnabled: json['onlineEnabled'] as bool? ?? true,
+      lanEnabled: lanEnabled,
+      onlineEnabled: onlineEnabled,
+      irohRelayEnabled: json['irohRelayEnabled'] as bool? ?? true,
+      irohRelayUrls: normalizeIrohRelayUrls(
+        (json['irohRelayUrls'] as List<dynamic>? ?? const [])
+            .whereType<String>(),
+        rejectInvalid: false,
+      ),
+      transportPolicies: transportPoliciesFromJson(
+        json['transportPolicies'],
+        defaults: defaults,
+      ),
     );
   }
 }
@@ -537,21 +649,72 @@ class ContactRoutingPreferences {
     this.lanEnabled = true,
     this.onlineEnabled = true,
     this.preferred = RoutingPreference.lan,
+    this.irohRelayEnabled = true,
+    this.transportPolicies = const {
+      TransportKind.lan: TransportPolicy.automatic,
+      TransportKind.iroh: TransportPolicy.automatic,
+      TransportKind.conestRelay: TransportPolicy.automatic,
+      TransportKind.optical: TransportPolicy.askBeforeUse,
+      TransportKind.deltaChat: TransportPolicy.disabled,
+      TransportKind.reticulum: TransportPolicy.disabled,
+      TransportKind.localSend: TransportPolicy.disabled,
+    },
   });
 
   final bool lanEnabled;
   final bool onlineEnabled;
   final RoutingPreference preferred;
+  final bool irohRelayEnabled;
+  final Map<TransportKind, TransportPolicy> transportPolicies;
+
+  TransportPolicy policyFor(TransportKind kind) {
+    if (kind == TransportKind.lan && !lanEnabled) {
+      return TransportPolicy.disabled;
+    }
+    if ((kind == TransportKind.iroh ||
+            kind == TransportKind.conestRelay ||
+            kind == TransportKind.deltaChat ||
+            kind == TransportKind.reticulum) &&
+        !onlineEnabled) {
+      return TransportPolicy.disabled;
+    }
+    return transportPolicies[kind] ?? TransportPolicy.disabled;
+  }
+
+  TransportPolicy effectivePolicy(
+    TransportKind kind,
+    GlobalConnectivityPreferences global,
+  ) {
+    final globalPolicy = global.policyFor(kind);
+    final contactPolicy = policyFor(kind);
+    if (globalPolicy == TransportPolicy.disabled ||
+        contactPolicy == TransportPolicy.disabled) {
+      return TransportPolicy.disabled;
+    }
+    if (globalPolicy == TransportPolicy.askBeforeUse ||
+        contactPolicy == TransportPolicy.askBeforeUse) {
+      return TransportPolicy.askBeforeUse;
+    }
+    if (globalPolicy == TransportPolicy.preferred ||
+        contactPolicy == TransportPolicy.preferred) {
+      return TransportPolicy.preferred;
+    }
+    return TransportPolicy.automatic;
+  }
 
   ContactRoutingPreferences copyWith({
     bool? lanEnabled,
     bool? onlineEnabled,
     RoutingPreference? preferred,
+    bool? irohRelayEnabled,
+    Map<TransportKind, TransportPolicy>? transportPolicies,
   }) {
     return ContactRoutingPreferences(
       lanEnabled: lanEnabled ?? this.lanEnabled,
       onlineEnabled: onlineEnabled ?? this.onlineEnabled,
       preferred: preferred ?? this.preferred,
+      irohRelayEnabled: irohRelayEnabled ?? this.irohRelayEnabled,
+      transportPolicies: transportPolicies ?? this.transportPolicies,
     );
   }
 
@@ -571,6 +734,8 @@ class ContactRoutingPreferences {
     'lanEnabled': lanEnabled,
     'onlineEnabled': onlineEnabled,
     'preferred': preferred.name,
+    'irohRelayEnabled': irohRelayEnabled,
+    'transportPolicies': transportPoliciesToJson(transportPolicies),
   };
 
   factory ContactRoutingPreferences.fromJson(Map<String, dynamic> json) {
@@ -578,10 +743,32 @@ class ContactRoutingPreferences {
     final preferred = RoutingPreference.values
         .where((p) => p.name == preferredRaw)
         .firstOrNull;
+    final lanEnabled = json['lanEnabled'] as bool? ?? true;
+    final onlineEnabled = json['onlineEnabled'] as bool? ?? true;
+    final defaults = <TransportKind, TransportPolicy>{
+      TransportKind.lan: lanEnabled
+          ? TransportPolicy.automatic
+          : TransportPolicy.disabled,
+      TransportKind.iroh: onlineEnabled
+          ? TransportPolicy.automatic
+          : TransportPolicy.disabled,
+      TransportKind.conestRelay: onlineEnabled
+          ? TransportPolicy.automatic
+          : TransportPolicy.disabled,
+      TransportKind.optical: TransportPolicy.askBeforeUse,
+      TransportKind.deltaChat: TransportPolicy.disabled,
+      TransportKind.reticulum: TransportPolicy.disabled,
+      TransportKind.localSend: TransportPolicy.disabled,
+    };
     return ContactRoutingPreferences(
-      lanEnabled: json['lanEnabled'] as bool? ?? true,
-      onlineEnabled: json['onlineEnabled'] as bool? ?? true,
+      lanEnabled: lanEnabled,
+      onlineEnabled: onlineEnabled,
       preferred: preferred ?? RoutingPreference.lan,
+      irohRelayEnabled: json['irohRelayEnabled'] as bool? ?? true,
+      transportPolicies: transportPoliciesFromJson(
+        json['transportPolicies'],
+        defaults: defaults,
+      ),
     );
   }
 }
@@ -607,6 +794,9 @@ class IdentityRecord {
     required this.lanAddresses,
     required this.safetyNumber,
     required this.createdAt,
+    this.signingPublicKeyBase64,
+    this.signingPrivateKeyBase64,
+    this.irohEndpointId,
   });
 
   final String accountId;
@@ -628,10 +818,16 @@ class IdentityRecord {
   final List<String> lanAddresses;
   final String safetyNumber;
   final DateTime createdAt;
+  final String? signingPublicKeyBase64;
+  final String? signingPrivateKeyBase64;
+  final String? irohEndpointId;
 
   String get deviceIdShort => deviceId.substring(0, 8);
   String get shortSafetyNumber => _truncateSafetyNumber(safetyNumber);
   bool get hasInternetRelay => configuredRelays.isNotEmpty;
+  bool get hasTransportIdentity =>
+      signingPublicKeyBase64?.isNotEmpty == true &&
+      signingPrivateKeyBase64?.isNotEmpty == true;
   PeerEndpoint? get primaryRelayRoute =>
       hasInternetRelay ? configuredRelays.first : null;
   String? get internetRelayHost => primaryRelayRoute?.host;
@@ -670,6 +866,9 @@ class IdentityRecord {
     bool? suppressReadReceipts,
     GlobalConnectivityPreferences? connectivity,
     List<String>? lanAddresses,
+    String? signingPublicKeyBase64,
+    String? signingPrivateKeyBase64,
+    String? irohEndpointId,
   }) {
     return IdentityRecord(
       accountId: accountId,
@@ -693,6 +892,11 @@ class IdentityRecord {
       lanAddresses: lanAddresses ?? this.lanAddresses,
       safetyNumber: safetyNumber,
       createdAt: createdAt,
+      signingPublicKeyBase64:
+          signingPublicKeyBase64 ?? this.signingPublicKeyBase64,
+      signingPrivateKeyBase64:
+          signingPrivateKeyBase64 ?? this.signingPrivateKeyBase64,
+      irohEndpointId: irohEndpointId ?? this.irohEndpointId,
     );
   }
 
@@ -719,6 +923,11 @@ class IdentityRecord {
       'lanAddresses': lanAddresses,
       'safetyNumber': safetyNumber,
       'createdAt': createdAt.toIso8601String(),
+      if (signingPublicKeyBase64 != null)
+        'signingPublicKeyBase64': signingPublicKeyBase64,
+      if (signingPrivateKeyBase64 != null)
+        'signingPrivateKeyBase64': signingPrivateKeyBase64,
+      if (irohEndpointId != null) 'irohEndpointId': irohEndpointId,
     };
   }
 
@@ -781,6 +990,9 @@ class IdentityRecord {
           .cast<String>(),
       safetyNumber: json['safetyNumber'] as String,
       createdAt: createdAt,
+      signingPublicKeyBase64: json['signingPublicKeyBase64'] as String?,
+      signingPrivateKeyBase64: json['signingPrivateKeyBase64'] as String?,
+      irohEndpointId: json['irohEndpointId'] as String?,
     );
   }
 }
@@ -797,6 +1009,10 @@ class ContactInvite {
     required this.relayCapable,
     required this.publicKeyBase64,
     required this.routeHints,
+    this.signingPublicKeyBase64,
+    this.irohEndpointId,
+    this.capabilities = const <TransportKind>[],
+    this.signatureBase64,
   });
 
   final int version;
@@ -809,6 +1025,30 @@ class ContactInvite {
   final bool relayCapable;
   final String publicKeyBase64;
   final List<PeerEndpoint> routeHints;
+  final String? signingPublicKeyBase64;
+  final String? irohEndpointId;
+  final List<TransportKind> capabilities;
+  final String? signatureBase64;
+
+  bool get usesSignedFormat =>
+      version >= 6 && signingPublicKeyBase64?.isNotEmpty == true;
+
+  ContactInvite copyWithSignature(String signature) => ContactInvite(
+    version: version,
+    accountId: accountId,
+    deviceId: deviceId,
+    displayName: displayName,
+    bio: bio,
+    pairingNonce: pairingNonce,
+    pairingEpochMs: pairingEpochMs,
+    relayCapable: relayCapable,
+    publicKeyBase64: publicKeyBase64,
+    routeHints: routeHints,
+    signingPublicKeyBase64: signingPublicKeyBase64,
+    irohEndpointId: irohEndpointId,
+    capabilities: capabilities,
+    signatureBase64: signature,
+  );
 
   Map<String, dynamic> toJson() {
     return {
@@ -822,11 +1062,27 @@ class ContactInvite {
       'relayCapable': relayCapable,
       'publicKeyBase64': publicKeyBase64,
       'routeHints': routeHints.map((route) => route.toJson()).toList(),
+      if (signingPublicKeyBase64 != null)
+        'signingPublicKeyBase64': signingPublicKeyBase64,
+      if (irohEndpointId != null) 'irohEndpointId': irohEndpointId,
+      if (capabilities.isNotEmpty)
+        'capabilities': capabilities.map((entry) => entry.name).toList(),
+      if (signatureBase64 != null) 'signatureBase64': signatureBase64,
     };
   }
 
   String encodePayload() {
-    return _encodeCompactPayload();
+    return usesSignedFormat
+        ? _encodeSignedCompactPayload()
+        : _encodeCompactPayload();
+  }
+
+  /// Canonical text covered by the ci6 Ed25519 signature.
+  String signingPayload() {
+    if (!usesSignedFormat) {
+      throw StateError('Only ci6 invites have a signing payload.');
+    }
+    return _encodeSignedCompactPayload(includeSignature: false);
   }
 
   String encodeLegacyPayload() {
@@ -848,6 +1104,28 @@ class ContactInvite {
       publicKeyBase64,
       routes,
     ].join('|');
+  }
+
+  String _encodeSignedCompactPayload({bool includeSignature = true}) {
+    final routes = routeHints.map(_encodeCompactRoute).join(';');
+    final values = <String>[
+      'ci6',
+      version.toString(),
+      accountId,
+      deviceId,
+      Uri.encodeComponent(displayName),
+      Uri.encodeComponent(bio),
+      pairingNonce,
+      pairingEpochMs.toRadixString(36),
+      relayCapable ? '1' : '0',
+      publicKeyBase64,
+      signingPublicKeyBase64 ?? '',
+      Uri.encodeComponent(irohEndpointId ?? ''),
+      capabilities.map((entry) => entry.name).join(','),
+      routes,
+    ];
+    if (includeSignature) values.add(signatureBase64 ?? '');
+    return values.join('|');
   }
 
   factory ContactInvite.fromJson(Map<String, dynamic> json) {
@@ -877,22 +1155,39 @@ class ContactInvite {
         ),
       );
     }
-    return ContactInvite(
-      version: json['version'] as int? ?? 1,
-      accountId: json['accountId'] as String,
-      deviceId: json['deviceId'] as String,
-      displayName: json['displayName'] as String,
-      bio: json['bio'] as String? ?? '',
-      pairingNonce: json['pairingNonce'] as String? ?? '',
-      pairingEpochMs: json['pairingEpochMs'] as int? ?? 0,
-      relayCapable: json['relayCapable'] as bool? ?? true,
-      publicKeyBase64: json['publicKeyBase64'] as String,
-      routeHints: routeHints,
+    return _validatedContactInvite(
+      ContactInvite(
+        version: json['version'] as int? ?? 1,
+        accountId: json['accountId'] as String,
+        deviceId: json['deviceId'] as String,
+        displayName: json['displayName'] as String,
+        bio: json['bio'] as String? ?? '',
+        pairingNonce: json['pairingNonce'] as String? ?? '',
+        pairingEpochMs: json['pairingEpochMs'] as int? ?? 0,
+        relayCapable: json['relayCapable'] as bool? ?? true,
+        publicKeyBase64: json['publicKeyBase64'] as String,
+        routeHints: routeHints,
+        signingPublicKeyBase64: json['signingPublicKeyBase64'] as String?,
+        irohEndpointId: json['irohEndpointId'] as String?,
+        capabilities: (json['capabilities'] as List<dynamic>? ?? const [])
+            .whereType<String>()
+            .map(
+              (name) => TransportKind.values
+                  .where((entry) => entry.name == name)
+                  .firstOrNull,
+            )
+            .nonNulls
+            .toList(growable: false),
+        signatureBase64: json['signatureBase64'] as String?,
+      ),
     );
   }
 
   factory ContactInvite.decodePayload(String payload) {
     final normalized = payload.trim();
+    if (normalized.startsWith('ci6|')) {
+      return _decodeSignedCompactPayload(normalized);
+    }
     if (normalized.startsWith('ci5|')) {
       return _decodeCompactPayload(normalized);
     }
@@ -917,27 +1212,122 @@ class ContactInvite {
       throw const FormatException('Invalid compact invite payload.');
     }
     final routes = parts.length > 10 ? parts.sublist(10).join('|') : '';
-    return ContactInvite(
-      version: int.tryParse(parts[1]) ?? 5,
-      accountId: parts[2],
-      deviceId: parts[3],
-      displayName: Uri.decodeComponent(parts[4]),
-      bio: Uri.decodeComponent(parts[5]),
-      pairingNonce: parts[6],
-      pairingEpochMs: int.tryParse(parts[7], radix: 36) ?? 0,
-      relayCapable: parts[8] == '1',
-      publicKeyBase64: parts[9],
-      routeHints: dedupePeerEndpoints(
-        routes.isEmpty
-            ? const <PeerEndpoint>[]
-            : routes
-                  .split(';')
-                  .map(_decodeCompactRoute)
-                  .nonNulls
-                  .toList(growable: false),
+    return _validatedContactInvite(
+      ContactInvite(
+        version: int.tryParse(parts[1]) ?? 5,
+        accountId: parts[2],
+        deviceId: parts[3],
+        displayName: Uri.decodeComponent(parts[4]),
+        bio: Uri.decodeComponent(parts[5]),
+        pairingNonce: parts[6],
+        pairingEpochMs: int.tryParse(parts[7], radix: 36) ?? 0,
+        relayCapable: parts[8] == '1',
+        publicKeyBase64: parts[9],
+        routeHints: dedupePeerEndpoints(
+          routes.isEmpty
+              ? const <PeerEndpoint>[]
+              : routes
+                    .split(';')
+                    .map(_decodeCompactRoute)
+                    .nonNulls
+                    .toList(growable: false),
+        ),
       ),
     );
   }
+
+  static ContactInvite _decodeSignedCompactPayload(String payload) {
+    final parts = payload.split('|');
+    if (parts.length != 15 || parts.first != 'ci6') {
+      throw const FormatException('Invalid signed compact invite payload.');
+    }
+    final capabilities = parts[12]
+        .split(',')
+        .where((value) => value.isNotEmpty)
+        .map(
+          (name) => TransportKind.values
+              .where((entry) => entry.name == name)
+              .firstOrNull,
+        )
+        .nonNulls
+        .toList(growable: false);
+    return _validatedContactInvite(
+      ContactInvite(
+        version: int.tryParse(parts[1]) ?? 6,
+        accountId: parts[2],
+        deviceId: parts[3],
+        displayName: Uri.decodeComponent(parts[4]),
+        bio: Uri.decodeComponent(parts[5]),
+        pairingNonce: parts[6],
+        pairingEpochMs: int.tryParse(parts[7], radix: 36) ?? 0,
+        relayCapable: parts[8] == '1',
+        publicKeyBase64: parts[9],
+        signingPublicKeyBase64: parts[10],
+        irohEndpointId: Uri.decodeComponent(parts[11]),
+        capabilities: capabilities,
+        routeHints: dedupePeerEndpoints(
+          parts[13].isEmpty
+              ? const <PeerEndpoint>[]
+              : parts[13]
+                    .split(';')
+                    .map(_decodeCompactRoute)
+                    .nonNulls
+                    .toList(growable: false),
+        ),
+        signatureBase64: parts[14],
+      ),
+    );
+  }
+}
+
+ContactInvite _validatedContactInvite(ContactInvite invite) {
+  bool safeIdentifier(String value) =>
+      value.isNotEmpty &&
+      value.length <= 128 &&
+      !RegExp(r'[\x00-\x1f\x7f]').hasMatch(value);
+  if (invite.version < 1 || invite.version > 16) {
+    throw const FormatException('Unsupported contact invite version.');
+  }
+  if (!safeIdentifier(invite.accountId) ||
+      !safeIdentifier(invite.deviceId) ||
+      invite.displayName.trim().isEmpty ||
+      invite.displayName.length > 80 ||
+      invite.bio.length > 512 ||
+      invite.pairingNonce.length > 128 ||
+      invite.pairingEpochMs < 0 ||
+      invite.routeHints.length > 8) {
+    throw const FormatException('Contact invite fields are out of range.');
+  }
+  final keyBytes = base64Decode(invite.publicKeyBase64);
+  if (keyBytes.length != 32) {
+    throw const FormatException('Contact invite public key must be 32 bytes.');
+  }
+  if (invite.version >= 6) {
+    final signingKey = base64Decode(invite.signingPublicKeyBase64 ?? '');
+    final signature = base64Decode(invite.signatureBase64 ?? '');
+    if (signingKey.length != 32 || signature.length != 64) {
+      throw const FormatException(
+        'Signed contact invite has an invalid identity key or signature.',
+      );
+    }
+    final endpointId = invite.irohEndpointId ?? '';
+    if (endpointId.isEmpty || endpointId.length > 256) {
+      throw const FormatException(
+        'Signed contact invite has no Iroh identity.',
+      );
+    }
+    if (invite.capabilities.length > TransportKind.values.length) {
+      throw const FormatException('Contact invite has too many capabilities.');
+    }
+  }
+  for (final route in invite.routeHints) {
+    if (!isValidPeerEndpointHost(route.host) ||
+        !isValidPeerEndpointPort(route.port) ||
+        route.host.length > 253) {
+      throw const FormatException('Contact invite contains an invalid route.');
+    }
+  }
+  return invite;
 }
 
 String _encodeCompactRoute(PeerEndpoint route) {
@@ -1003,7 +1393,12 @@ class ContactRecord {
     this.replacesDeviceId,
     this.replacedByDeviceId,
     this.unverifiedPublicKeyBase64,
+    this.remoteRemovedAt,
     this.routing = const ContactRoutingPreferences(),
+    this.signingPublicKeyBase64,
+    this.irohEndpointId,
+    this.capabilities = const <TransportKind>[],
+    this.transportIdentityVerifiedAt,
   });
 
   final String accountId;
@@ -1017,6 +1412,10 @@ class ContactRecord {
   final String safetyNumber;
   final DateTime trustedAt;
   final ContactRoutingPreferences routing;
+  final String? signingPublicKeyBase64;
+  final String? irohEndpointId;
+  final List<TransportKind> capabilities;
+  final DateTime? transportIdentityVerifiedAt;
 
   /// True when this contact arrived with a `displayName` matching an existing
   /// trusted contact AND a different identity public key — i.e. possibly a
@@ -1047,10 +1446,19 @@ class ContactRecord {
   /// check is required for correctness.
   final String? unverifiedPublicKeyBase64;
 
+  /// When the peer authenticated a contact-removal request. Remote peers are
+  /// never allowed to erase local history; this flag only archives the
+  /// contact and disables further outbound traffic until the user removes or
+  /// re-adds it locally.
+  final DateTime? remoteRemovedAt;
+
   String get shortSafetyNumber => _truncateSafetyNumber(safetyNumber);
 
-  bool get isArchived => replacedByDeviceId != null;
+  bool get isArchived => replacedByDeviceId != null || remoteRemovedAt != null;
   bool get canSendOutbound => !pendingVerification && !isArchived;
+  bool get hasPinnedIrohIdentity =>
+      irohEndpointId?.isNotEmpty == true &&
+      signingPublicKeyBase64?.isNotEmpty == true;
 
   ContactRecord copyWith({
     String? alias,
@@ -1066,7 +1474,13 @@ class ContactRecord {
     bool clearReplacedByDeviceId = false,
     String? unverifiedPublicKeyBase64,
     bool clearUnverifiedPublicKey = false,
+    DateTime? remoteRemovedAt,
+    bool clearRemoteRemovedAt = false,
     ContactRoutingPreferences? routing,
+    String? signingPublicKeyBase64,
+    String? irohEndpointId,
+    List<TransportKind>? capabilities,
+    DateTime? transportIdentityVerifiedAt,
   }) {
     return ContactRecord(
       accountId: accountId,
@@ -1089,7 +1503,16 @@ class ContactRecord {
       unverifiedPublicKeyBase64: clearUnverifiedPublicKey
           ? null
           : (unverifiedPublicKeyBase64 ?? this.unverifiedPublicKeyBase64),
+      remoteRemovedAt: clearRemoteRemovedAt
+          ? null
+          : (remoteRemovedAt ?? this.remoteRemovedAt),
       routing: routing ?? this.routing,
+      signingPublicKeyBase64:
+          signingPublicKeyBase64 ?? this.signingPublicKeyBase64,
+      irohEndpointId: irohEndpointId ?? this.irohEndpointId,
+      capabilities: capabilities ?? this.capabilities,
+      transportIdentityVerifiedAt:
+          transportIdentityVerifiedAt ?? this.transportIdentityVerifiedAt,
     );
   }
 
@@ -1168,7 +1591,18 @@ class ContactRecord {
       if (replacedByDeviceId != null) 'replacedByDeviceId': replacedByDeviceId,
       if (unverifiedPublicKeyBase64 != null)
         'unverifiedPublicKeyBase64': unverifiedPublicKeyBase64,
+      if (remoteRemovedAt != null)
+        'remoteRemovedAt': remoteRemovedAt!.toUtc().toIso8601String(),
       'routing': routing.toJson(),
+      if (signingPublicKeyBase64 != null)
+        'signingPublicKeyBase64': signingPublicKeyBase64,
+      if (irohEndpointId != null) 'irohEndpointId': irohEndpointId,
+      if (capabilities.isNotEmpty)
+        'capabilities': capabilities.map((entry) => entry.name).toList(),
+      if (transportIdentityVerifiedAt != null)
+        'transportIdentityVerifiedAt': transportIdentityVerifiedAt!
+            .toUtc()
+            .toIso8601String(),
     };
   }
 
@@ -1225,11 +1659,28 @@ class ContactRecord {
       replacesDeviceId: json['replacesDeviceId'] as String?,
       replacedByDeviceId: json['replacedByDeviceId'] as String?,
       unverifiedPublicKeyBase64: unverifiedKey,
+      remoteRemovedAt: DateTime.tryParse(
+        json['remoteRemovedAt'] as String? ?? '',
+      )?.toUtc(),
       routing: json['routing'] is Map<String, dynamic>
           ? ContactRoutingPreferences.fromJson(
               json['routing'] as Map<String, dynamic>,
             )
           : const ContactRoutingPreferences(),
+      signingPublicKeyBase64: json['signingPublicKeyBase64'] as String?,
+      irohEndpointId: json['irohEndpointId'] as String?,
+      capabilities: (json['capabilities'] as List<dynamic>? ?? const [])
+          .whereType<String>()
+          .map(
+            (name) => TransportKind.values
+                .where((entry) => entry.name == name)
+                .firstOrNull,
+          )
+          .nonNulls
+          .toList(growable: false),
+      transportIdentityVerifiedAt: DateTime.tryParse(
+        json['transportIdentityVerifiedAt'] as String? ?? '',
+      )?.toUtc(),
     );
   }
 }
@@ -1325,6 +1776,9 @@ class ChatMessage {
     this.replySenderDisplayName,
     this.attachment,
     this.albumId,
+    this.transportKind,
+    this.transportPath,
+    this.transportDetail,
     Map<String, DeliveryState>? recipientStates,
   }) : recipientStates = Map.unmodifiable(
          recipientStates ?? const <String, DeliveryState>{},
@@ -1354,6 +1808,9 @@ class ChatMessage {
   /// share an `albumId` render as a single album bubble in the UI; null
   /// for standalone messages (text-only OR singleton captioned image).
   final String? albumId;
+  final TransportKind? transportKind;
+  final TransportPathKind? transportPath;
+  final String? transportDetail;
 
   final Map<String, DeliveryState> recipientStates;
 
@@ -1378,6 +1835,9 @@ class ChatMessage {
     AttachmentDescriptor? attachment,
     bool clearAttachment = false,
     String? albumId,
+    TransportKind? transportKind,
+    TransportPathKind? transportPath,
+    String? transportDetail,
     Map<String, DeliveryState>? recipientStates,
   }) {
     return ChatMessage(
@@ -1399,6 +1859,9 @@ class ChatMessage {
           replySenderDisplayName ?? this.replySenderDisplayName,
       attachment: clearAttachment ? null : (attachment ?? this.attachment),
       albumId: albumId ?? this.albumId,
+      transportKind: transportKind ?? this.transportKind,
+      transportPath: transportPath ?? this.transportPath,
+      transportDetail: transportDetail ?? this.transportDetail,
       recipientStates: recipientStates ?? this.recipientStates,
     );
   }
@@ -1422,6 +1885,9 @@ class ChatMessage {
       'replySenderDisplayName': replySenderDisplayName,
       if (attachment != null) 'attachment': attachment!.toJson(),
       if (albumId != null) 'albumId': albumId,
+      if (transportKind != null) 'transportKind': transportKind!.name,
+      if (transportPath != null) 'transportPath': transportPath!.name,
+      if (transportDetail != null) 'transportDetail': transportDetail,
       'recipientStates': recipientStates.map(
         (deviceId, state) => MapEntry(deviceId, state.name),
       ),
@@ -1455,6 +1921,13 @@ class ChatMessage {
             )
           : null,
       albumId: json['albumId'] as String?,
+      transportKind: TransportKind.values
+          .where((entry) => entry.name == json['transportKind'])
+          .firstOrNull,
+      transportPath: TransportPathKind.values
+          .where((entry) => entry.name == json['transportPath'])
+          .firstOrNull,
+      transportDetail: json['transportDetail'] as String?,
       recipientStates: rawRecipientStates.map(
         (deviceId, value) =>
             MapEntry(deviceId, DeliveryState.values.byName(value as String)),
@@ -1856,6 +2329,7 @@ class ConversationRecord {
 
 class RelayEnvelope {
   RelayEnvelope({
+    this.protocolVersion = 2,
     required this.kind,
     required this.messageId,
     required this.conversationId,
@@ -1870,6 +2344,7 @@ class RelayEnvelope {
     this.payloadBase64,
   });
 
+  final int protocolVersion;
   final String kind;
   final String messageId;
   final String conversationId;
@@ -1883,8 +2358,26 @@ class RelayEnvelope {
   final String? acknowledgedMessageId;
   final String? payloadBase64;
 
+  /// Stable v2 AEAD associated-data representation. Map insertion order is
+  /// intentional and covered by crypto tests; null acknowledgement targets
+  /// remain present so both peers authenticate the same field set.
+  List<int> authenticatedHeaderBytes() => utf8.encode(
+    jsonEncode(<String, dynamic>{
+      'protocolVersion': protocolVersion,
+      'kind': kind,
+      'messageId': messageId,
+      'conversationId': conversationId,
+      'senderAccountId': senderAccountId,
+      'senderDeviceId': senderDeviceId,
+      'recipientDeviceId': recipientDeviceId,
+      'createdAt': createdAt.toUtc().toIso8601String(),
+      'acknowledgedMessageId': acknowledgedMessageId,
+    }),
+  );
+
   Map<String, dynamic> toJson() {
     return {
+      'protocolVersion': protocolVersion,
       'kind': kind,
       'messageId': messageId,
       'conversationId': conversationId,
@@ -1902,6 +2395,7 @@ class RelayEnvelope {
 
   factory RelayEnvelope.fromJson(Map<String, dynamic> json) {
     return RelayEnvelope(
+      protocolVersion: (json['protocolVersion'] as num?)?.toInt() ?? 1,
       kind: json['kind'] as String,
       messageId: json['messageId'] as String,
       conversationId: json['conversationId'] as String,
@@ -1946,6 +2440,8 @@ class AttachmentDescriptor {
     required this.chunkHashes,
     required this.encryptionKeyBase64,
     required this.createdAt,
+    this.chunkCount = 0,
+    this.fileHashBase64 = '',
   });
 
   final String id;
@@ -1956,6 +2452,11 @@ class AttachmentDescriptor {
   final List<ChunkHash> chunkHashes;
   final String encryptionKeyBase64;
   final DateTime createdAt;
+  final int chunkCount;
+  final String fileHashBase64;
+
+  int get effectiveChunkCount =>
+      chunkCount > 0 ? chunkCount : chunkHashes.length;
 
   Map<String, dynamic> toJson() {
     return {
@@ -1965,6 +2466,8 @@ class AttachmentDescriptor {
       'sizeBytes': sizeBytes,
       'chunkSize': chunkSize,
       'chunkHashes': chunkHashes.map((hash) => hash.toJson()).toList(),
+      'chunkCount': effectiveChunkCount,
+      if (fileHashBase64.isNotEmpty) 'fileHashBase64': fileHashBase64,
       'encryptionKeyBase64': encryptionKeyBase64,
       'createdAt': createdAt.toIso8601String(),
     };
@@ -1981,6 +2484,8 @@ class AttachmentDescriptor {
           .cast<Map<String, dynamic>>()
           .map(ChunkHash.fromJson)
           .toList(),
+      chunkCount: (json['chunkCount'] as num?)?.toInt() ?? 0,
+      fileHashBase64: json['fileHashBase64'] as String? ?? '',
       encryptionKeyBase64: json['encryptionKeyBase64'] as String,
       createdAt: DateTime.parse(json['createdAt'] as String),
     );
@@ -2026,7 +2531,13 @@ enum TransferState {
   completed,
   failed,
   canceled,
+  waitingForLan,
+  waitingForStorage,
 }
+
+enum TransferDirection { outbound, inbound }
+
+enum TransferSourceKind { privateSpool, originalPath, partialFile }
 
 class TransferSession {
   const TransferSession({
@@ -2037,6 +2548,16 @@ class TransferSession {
     required this.completedChunks,
     required this.createdAt,
     required this.updatedAt,
+    this.direction = TransferDirection.outbound,
+    this.messageId = '',
+    this.relativePath = '',
+    this.sourceKind = TransferSourceKind.privateSpool,
+    this.sourcePath,
+    this.sourceSizeBytes,
+    this.sourceModifiedAt,
+    this.requiresLan = false,
+    this.bytesTransferred = 0,
+    this.lastError,
   });
 
   final String id;
@@ -2046,6 +2567,45 @@ class TransferSession {
   final List<int> completedChunks;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final TransferDirection direction;
+  final String messageId;
+  final String relativePath;
+  final TransferSourceKind sourceKind;
+  final String? sourcePath;
+  final int? sourceSizeBytes;
+  final DateTime? sourceModifiedAt;
+  final bool requiresLan;
+  final int bytesTransferred;
+  final String? lastError;
+
+  TransferSession copyWith({
+    TransferState? state,
+    List<int>? completedChunks,
+    DateTime? updatedAt,
+    int? bytesTransferred,
+    String? lastError,
+    bool clearLastError = false,
+  }) {
+    return TransferSession(
+      id: id,
+      attachment: attachment,
+      peerDeviceIds: peerDeviceIds,
+      state: state ?? this.state,
+      completedChunks: completedChunks ?? this.completedChunks,
+      createdAt: createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      direction: direction,
+      messageId: messageId,
+      relativePath: relativePath,
+      sourceKind: sourceKind,
+      sourcePath: sourcePath,
+      sourceSizeBytes: sourceSizeBytes,
+      sourceModifiedAt: sourceModifiedAt,
+      requiresLan: requiresLan,
+      bytesTransferred: bytesTransferred ?? this.bytesTransferred,
+      lastError: clearLastError ? null : (lastError ?? this.lastError),
+    );
+  }
 
   Map<String, dynamic> toJson() {
     return {
@@ -2053,9 +2613,20 @@ class TransferSession {
       'attachment': attachment.toJson(),
       'peerDeviceIds': peerDeviceIds,
       'state': state.name,
-      'completedChunks': completedChunks,
+      'completedRanges': _encodeChunkRanges(completedChunks),
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
+      'direction': direction.name,
+      'messageId': messageId,
+      'relativePath': relativePath,
+      'sourceKind': sourceKind.name,
+      if (sourcePath != null) 'sourcePath': sourcePath,
+      if (sourceSizeBytes != null) 'sourceSizeBytes': sourceSizeBytes,
+      if (sourceModifiedAt != null)
+        'sourceModifiedAt': sourceModifiedAt!.toUtc().toIso8601String(),
+      'requiresLan': requiresLan,
+      'bytesTransferred': bytesTransferred,
+      if (lastError != null) 'lastError': lastError,
     };
   }
 
@@ -2068,12 +2639,68 @@ class TransferSession {
       peerDeviceIds: (json['peerDeviceIds'] as List<dynamic>? ?? const [])
           .cast<String>(),
       state: TransferState.values.byName(json['state'] as String),
-      completedChunks: (json['completedChunks'] as List<dynamic>? ?? const [])
-          .cast<int>(),
+      completedChunks: json['completedRanges'] is List<dynamic>
+          ? _decodeChunkRanges(json['completedRanges'] as List<dynamic>)
+          : (json['completedChunks'] as List<dynamic>? ?? const [])
+                .whereType<num>()
+                .map((value) => value.toInt())
+                .toList(growable: false),
       createdAt: DateTime.parse(json['createdAt'] as String),
       updatedAt: DateTime.parse(json['updatedAt'] as String),
+      direction: TransferDirection.values.byName(
+        json['direction'] as String? ?? TransferDirection.outbound.name,
+      ),
+      messageId: json['messageId'] as String? ?? '',
+      relativePath: json['relativePath'] as String? ?? '',
+      sourceKind: TransferSourceKind.values.byName(
+        json['sourceKind'] as String? ?? TransferSourceKind.privateSpool.name,
+      ),
+      sourcePath: json['sourcePath'] as String?,
+      sourceSizeBytes: (json['sourceSizeBytes'] as num?)?.toInt(),
+      sourceModifiedAt: DateTime.tryParse(
+        json['sourceModifiedAt'] as String? ?? '',
+      )?.toUtc(),
+      requiresLan: json['requiresLan'] as bool? ?? false,
+      bytesTransferred: (json['bytesTransferred'] as num?)?.toInt() ?? 0,
+      lastError: json['lastError'] as String?,
     );
   }
+}
+
+List<List<int>> _encodeChunkRanges(List<int> chunks) {
+  if (chunks.isEmpty) return const <List<int>>[];
+  final sorted = chunks.toSet().toList()..sort();
+  final ranges = <List<int>>[];
+  var start = sorted.first;
+  var end = start;
+  for (final value in sorted.skip(1)) {
+    if (value == end + 1) {
+      end = value;
+      continue;
+    }
+    ranges.add(<int>[start, end]);
+    start = value;
+    end = value;
+  }
+  ranges.add(<int>[start, end]);
+  return ranges;
+}
+
+List<int> _decodeChunkRanges(List<dynamic> raw) {
+  final values = <int>[];
+  for (final item in raw) {
+    if (item is! List<dynamic> || item.length != 2) continue;
+    final start = (item[0] as num?)?.toInt();
+    final end = (item[1] as num?)?.toInt();
+    if (start == null || end == null || start < 0 || end < start) continue;
+    if (end - start > 8192) {
+      throw const FormatException('Transfer chunk range is too large.');
+    }
+    for (var value = start; value <= end; value++) {
+      values.add(value);
+    }
+  }
+  return values;
 }
 
 class PendingGroupMembershipDelivery {
@@ -2211,6 +2838,7 @@ class PendingAckDelivery {
     required this.lastAttemptedAt,
     required this.attempts,
     this.envelopeJson,
+    this.requiresPeerUpdate = false,
   });
 
   final String targetDeviceId;
@@ -2225,8 +2853,13 @@ class PendingAckDelivery {
   /// pre-nightly.12 `delivered`/`read` entries which the retry loop
   /// rebuilds via the per-kind builder.
   final Map<String, dynamic>? envelopeJson;
+  final bool requiresPeerUpdate;
 
-  PendingAckDelivery copyWith({DateTime? lastAttemptedAt, int? attempts}) {
+  PendingAckDelivery copyWith({
+    DateTime? lastAttemptedAt,
+    int? attempts,
+    bool? requiresPeerUpdate,
+  }) {
     return PendingAckDelivery(
       targetDeviceId: targetDeviceId,
       acknowledgedMessageId: acknowledgedMessageId,
@@ -2235,6 +2868,7 @@ class PendingAckDelivery {
       lastAttemptedAt: lastAttemptedAt ?? this.lastAttemptedAt,
       attempts: attempts ?? this.attempts,
       envelopeJson: envelopeJson,
+      requiresPeerUpdate: requiresPeerUpdate ?? this.requiresPeerUpdate,
     );
   }
 
@@ -2246,6 +2880,7 @@ class PendingAckDelivery {
     'lastAttemptedAt': lastAttemptedAt.toIso8601String(),
     'attempts': attempts,
     if (envelopeJson != null) 'envelopeJson': envelopeJson,
+    if (requiresPeerUpdate) 'requiresPeerUpdate': true,
   };
 
   factory PendingAckDelivery.fromJson(Map<String, dynamic> json) {
@@ -2261,6 +2896,7 @@ class PendingAckDelivery {
           DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
       attempts: (json['attempts'] as num?)?.toInt() ?? 0,
       envelopeJson: json['envelopeJson'] as Map<String, dynamic>?,
+      requiresPeerUpdate: json['requiresPeerUpdate'] as bool? ?? false,
     );
   }
 }
@@ -2296,6 +2932,45 @@ class HeldEnvelope {
         DateTime.tryParse(json['receivedAt'] as String? ?? '') ??
         DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
   );
+}
+
+/// Unauthenticated bootstrap request received from an unknown device. The
+/// invite is deliberately quarantined instead of becoming a trusted contact;
+/// only an explicit approve action may pass it to the normal trust flow.
+class PendingContactRequest {
+  const PendingContactRequest({
+    required this.id,
+    required this.senderAccountId,
+    required this.senderDeviceId,
+    required this.invitePayload,
+    required this.receivedAt,
+  });
+
+  final String id;
+  final String senderAccountId;
+  final String senderDeviceId;
+  final String invitePayload;
+  final DateTime receivedAt;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'senderAccountId': senderAccountId,
+    'senderDeviceId': senderDeviceId,
+    'invitePayload': invitePayload,
+    'receivedAt': receivedAt.toUtc().toIso8601String(),
+  };
+
+  factory PendingContactRequest.fromJson(Map<String, dynamic> json) {
+    return PendingContactRequest(
+      id: json['id'] as String,
+      senderAccountId: json['senderAccountId'] as String,
+      senderDeviceId: json['senderDeviceId'] as String,
+      invitePayload: json['invitePayload'] as String,
+      receivedAt:
+          DateTime.tryParse(json['receivedAt'] as String? ?? '')?.toUtc() ??
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+    );
+  }
 }
 
 /// A user-imported relay list, fetched from an arbitrary URL. Unlike the
@@ -2388,6 +3063,8 @@ class VaultSnapshot {
     this.defaultRelaysLastFetchedAt,
     this.customRelaySources = const <CustomRelaySource>[],
     this.heldUnverifiedEnvelopes = const <HeldEnvelope>[],
+    this.pendingContactRequests = const <PendingContactRequest>[],
+    this.transferSessions = const <TransferSession>[],
   });
 
   final IdentityRecord? identity;
@@ -2455,6 +3132,11 @@ class VaultSnapshot {
   /// reject.
   final List<HeldEnvelope> heldUnverifiedEnvelopes;
 
+  /// Bootstrap contact exchanges from unknown devices awaiting an explicit
+  /// local approval decision.
+  final List<PendingContactRequest> pendingContactRequests;
+  final List<TransferSession> transferSessions;
+
   factory VaultSnapshot.empty() {
     return VaultSnapshot(
       identity: null,
@@ -2474,6 +3156,8 @@ class VaultSnapshot {
       defaultRelaysLastFetchedAt: null,
       customRelaySources: const <CustomRelaySource>[],
       heldUnverifiedEnvelopes: const <HeldEnvelope>[],
+      pendingContactRequests: const <PendingContactRequest>[],
+      transferSessions: const <TransferSession>[],
     );
   }
 
@@ -2495,6 +3179,8 @@ class VaultSnapshot {
     bool clearDefaultRelaysLastFetchedAt = false,
     List<CustomRelaySource>? customRelaySources,
     List<HeldEnvelope>? heldUnverifiedEnvelopes,
+    List<PendingContactRequest>? pendingContactRequests,
+    List<TransferSession>? transferSessions,
     bool clearIdentity = false,
   }) {
     return VaultSnapshot(
@@ -2522,6 +3208,9 @@ class VaultSnapshot {
       customRelaySources: customRelaySources ?? this.customRelaySources,
       heldUnverifiedEnvelopes:
           heldUnverifiedEnvelopes ?? this.heldUnverifiedEnvelopes,
+      pendingContactRequests:
+          pendingContactRequests ?? this.pendingContactRequests,
+      transferSessions: transferSessions ?? this.transferSessions,
     );
   }
 
@@ -2556,6 +3245,12 @@ class VaultSnapshot {
           .map((source) => source.toJson())
           .toList(),
       'heldUnverifiedEnvelopes': heldUnverifiedEnvelopes
+          .map((entry) => entry.toJson())
+          .toList(),
+      'pendingContactRequests': pendingContactRequests
+          .map((entry) => entry.toJson())
+          .toList(),
+      'transferSessions': transferSessions
           .map((entry) => entry.toJson())
           .toList(),
       'pinnedRelayIdentityKeys': pinnedRelayIdentityKeys,
@@ -2638,6 +3333,15 @@ class VaultSnapshot {
               .cast<Map<String, dynamic>>()
               .map(HeldEnvelope.fromJson)
               .toList(),
+      pendingContactRequests:
+          (json['pendingContactRequests'] as List<dynamic>? ?? const [])
+              .cast<Map<String, dynamic>>()
+              .map(PendingContactRequest.fromJson)
+              .toList(),
+      transferSessions: (json['transferSessions'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(TransferSession.fromJson)
+          .toList(),
     );
   }
 }

@@ -76,6 +76,75 @@ void main() {
     expect(plaintext, 'hello bob');
   });
 
+  test('v2 AEAD rejects every authenticated-header mutation', () async {
+    final alice = await _createIdentity(displayName: 'alice');
+    final bob = await _createIdentity(displayName: 'bob');
+    final aliceCrypto = CryptoService(identityProvider: () => alice);
+    final bobCrypto = CryptoService(identityProvider: () => bob);
+    final envelope = await aliceCrypto.encryptPayloadEnvelope(
+      kind: 'ack',
+      messageId: 'ack-1',
+      conversationId: 'conv-1',
+      senderAccountId: alice.accountId,
+      senderDeviceId: alice.deviceId,
+      recipientDeviceId: bob.deviceId,
+      contact: _contactFor(bob),
+      plaintext: '{"state":"delivered"}',
+      createdAt: DateTime.utc(2026, 7, 13, 10),
+      acknowledgedMessageId: 'message-1',
+    );
+    expect(envelope.protocolVersion, 2);
+    final mutations = <String, Object?>{
+      'protocolVersion': 1,
+      'kind': 'read_receipt',
+      'messageId': 'ack-2',
+      'conversationId': 'conv-2',
+      'senderAccountId': 'acct-attacker',
+      'senderDeviceId': 'dev-attacker',
+      'recipientDeviceId': 'dev-attacker',
+      'createdAt': DateTime.utc(2026, 7, 13, 10, 0, 1).toIso8601String(),
+      'acknowledgedMessageId': 'message-2',
+    };
+
+    for (final mutation in mutations.entries) {
+      final json = Map<String, dynamic>.from(envelope.toJson());
+      json[mutation.key] = mutation.value;
+      final tampered = RelayEnvelope.fromJson(json);
+      await expectLater(
+        bobCrypto.decryptMessage(
+          contact: _contactFor(alice),
+          envelope: tampered,
+        ),
+        throwsA(anything),
+        reason: '${mutation.key} must be authenticated',
+      );
+    }
+  });
+
+  test('v1 pairwise envelopes fail closed before decryption', () async {
+    final alice = await _createIdentity(displayName: 'alice');
+    final bob = await _createIdentity(displayName: 'bob');
+    final crypto = CryptoService(identityProvider: () => bob);
+    final legacy = RelayEnvelope(
+      protocolVersion: 1,
+      kind: 'direct_message',
+      messageId: 'legacy-1',
+      conversationId: 'conv-1',
+      senderAccountId: alice.accountId,
+      senderDeviceId: alice.deviceId,
+      recipientDeviceId: bob.deviceId,
+      createdAt: DateTime.utc(2026, 7, 13),
+      nonceBase64: base64Encode(List<int>.filled(12, 0)),
+      ciphertextBase64: base64Encode(const <int>[1]),
+      macBase64: base64Encode(List<int>.filled(16, 0)),
+    );
+
+    await expectLater(
+      crypto.decryptMessage(contact: _contactFor(alice), envelope: legacy),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
   test('sessionKeyFor throws when the contact has no active public key '
       '(pending-verification crypto block)', () async {
     final alice = await _createIdentity(displayName: 'alice');

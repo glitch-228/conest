@@ -386,9 +386,16 @@ struct BanEntry {
 /// Per-mailbox arrival notifier shared between [`RelayState::store`] (which
 /// signals on a successful enqueue) and [`RelayState::fetch`]'s long-poll
 /// path (which waits up to `LONG_POLL_MAX_WAIT_MS` on the condvar). The
-/// `Mutex<()>` is just the lock the condvar requires; the actual queue
-/// state lives on [`RelayState::queues`].
-type MailboxNotifier = Arc<(Mutex<()>, Condvar)>;
+/// The generation predicate closes the drain-before-wait race: a store that
+/// lands between the initial drain and the condvar wait increments the value,
+/// so the fetch observes the change instead of sleeping through it.
+#[derive(Default)]
+struct MailboxSignal {
+    generation: u64,
+    waiters: usize,
+}
+
+type MailboxNotifier = Arc<(Mutex<MailboxSignal>, Condvar)>;
 
 #[derive(Clone)]
 struct RelayState {
@@ -420,8 +427,36 @@ impl RelayState {
             .lock()
             .expect("notifier lock should not poison");
         map.entry(mailbox.to_owned())
-            .or_insert_with(|| Arc::new((Mutex::new(()), Condvar::new())))
+            .or_insert_with(|| Arc::new((Mutex::new(MailboxSignal::default()), Condvar::new())))
             .clone()
+    }
+
+    fn existing_notifier(&self, mailbox: &str) -> Option<MailboxNotifier> {
+        self.notifiers
+            .lock()
+            .expect("notifier lock should not poison")
+            .get(mailbox)
+            .cloned()
+    }
+
+    fn prune_notifier(&self, mailbox: &str, notifier: &MailboxNotifier) {
+        let mut map = self
+            .notifiers
+            .lock()
+            .expect("notifier lock should not poison");
+        let removable = map
+            .get(mailbox)
+            .is_some_and(|current| Arc::ptr_eq(current, notifier))
+            && notifier
+                .0
+                .lock()
+                .expect("notifier mutex should not poison")
+                .waiters
+                == 0
+            && Arc::strong_count(notifier) <= 2;
+        if removable {
+            map.remove(mailbox);
+        }
     }
 
     fn allow_request(&self, peer: &str) -> bool {
@@ -617,8 +652,11 @@ impl RelayState {
         // Release the queue lock before notifying so a waiting fetch can
         // immediately re-acquire it.
         drop(queues);
-        let notifier = self.notifier_for(&recipient_device_id);
-        notifier.1.notify_all();
+        if let Some(notifier) = self.existing_notifier(&recipient_device_id) {
+            let mut signal = notifier.0.lock().expect("notifier mutex should not poison");
+            signal.generation = signal.generation.wrapping_add(1);
+            notifier.1.notify_all();
+        }
         Ok(())
     }
 
@@ -632,24 +670,46 @@ impl RelayState {
         let limit = limit
             .unwrap_or(self.config.max_fetch_limit)
             .clamp(1, self.config.max_fetch_limit);
+        let wait_ms = match wait_ms {
+            Some(value) if value > 0 => Some(value.min(LONG_POLL_MAX_WAIT_MS)),
+            _ => None,
+        };
+        let notifier = wait_ms.map(|_| self.notifier_for(recipient_device_id));
+        let observed_generation = notifier.as_ref().map(|notifier| {
+            notifier
+                .0
+                .lock()
+                .expect("notifier mutex should not poison")
+                .generation
+        });
         let first = self.drain_queue(recipient_device_id, limit);
         if !first.is_empty() {
+            if let Some(notifier) = &notifier {
+                self.prune_notifier(recipient_device_id, notifier);
+            }
             return Ok(first);
         }
-        let wait_ms = match wait_ms {
-            Some(value) if value > 0 => value.min(LONG_POLL_MAX_WAIT_MS),
-            _ => return Ok(first),
+        let Some(wait_ms) = wait_ms else {
+            return Ok(first);
         };
-        let notifier = self.notifier_for(recipient_device_id);
-        let guard = notifier.0.lock().expect("notifier mutex should not poison");
-        // wait_timeout returns a (guard, WaitTimeoutResult) tuple; we drop
-        // the guard before re-acquiring the queue lock.
-        let (dropped, _timeout) = notifier
-            .1
-            .wait_timeout(guard, Duration::from_millis(wait_ms))
-            .expect("notifier condvar should not poison");
-        drop(dropped);
-        Ok(self.drain_queue(recipient_device_id, limit))
+        let notifier = notifier.expect("wait duration implies notifier");
+        let observed_generation = observed_generation.expect("wait duration implies generation");
+        let mut guard = notifier.0.lock().expect("notifier mutex should not poison");
+        if guard.generation == observed_generation {
+            guard.waiters += 1;
+            let (returned, _) = notifier
+                .1
+                .wait_timeout_while(guard, Duration::from_millis(wait_ms), |signal| {
+                    signal.generation == observed_generation
+                })
+                .expect("notifier condvar should not poison");
+            guard = returned;
+            guard.waiters = guard.waiters.saturating_sub(1);
+        }
+        drop(guard);
+        let result = self.drain_queue(recipient_device_id, limit);
+        self.prune_notifier(recipient_device_id, &notifier);
+        Ok(result)
     }
 
     fn drain_queue(&self, recipient_device_id: &str, limit: usize) -> Vec<Value> {
@@ -805,7 +865,7 @@ fn handle_client(
     let mut writer = BufWriter::new(stream);
 
     let mut line = String::new();
-    let bytes_read = reader.read_line(&mut line)?;
+    let bytes_read = read_line_bounded(&mut reader, &mut line, state.config.max_line_bytes)?;
     if bytes_read == 0 {
         return Ok(());
     }
@@ -820,6 +880,43 @@ fn handle_client(
     writer.flush()?;
 
     Ok(())
+}
+
+fn read_line_bounded<R: BufRead>(
+    reader: &mut R,
+    output: &mut String,
+    max_bytes: usize,
+) -> std::io::Result<usize> {
+    let mut bytes = Vec::with_capacity(max_bytes.min(8 * 1024));
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            break;
+        }
+        let take = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len(), |index| index + 1);
+        if bytes.len().saturating_add(take) > max_bytes {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "request line too large",
+            ));
+        }
+        bytes.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if bytes.last() == Some(&b'\n') {
+            break;
+        }
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("request line is not utf-8: {error}"),
+        )
+    })?;
+    output.push_str(text);
+    Ok(bytes.len())
 }
 
 fn is_http_request_line(line: &str) -> bool {
@@ -850,11 +947,13 @@ fn handle_http_request<R: BufRead>(
     }
 
     let mut headers = Vec::new();
-    let mut content_length = 0_usize;
+    let mut content_length: Option<usize> = None;
     let mut forwarded_for: Option<String> = None;
+    let mut header_count = 0_usize;
     loop {
         let mut line = String::new();
-        match reader.read_line(&mut line) {
+        let remaining = state.config.max_line_bytes.saturating_sub(headers.len());
+        match read_line_bounded(reader, &mut line, remaining) {
             Ok(0) => {
                 return (
                     400,
@@ -868,10 +967,29 @@ fn handle_http_request<R: BufRead>(
                 if headers.len() + line.len() > state.config.max_line_bytes {
                     return (413, to_wire(RelayResponse::error("HTTP headers too large")));
                 }
+                header_count += 1;
+                if header_count > 100 {
+                    return (413, to_wire(RelayResponse::error("too many HTTP headers")));
+                }
                 if let Some((name, value)) = line.split_once(':') {
                     let name = name.trim();
                     if name.eq_ignore_ascii_case("content-length") {
-                        content_length = value.trim().parse::<usize>().unwrap_or(0);
+                        let parsed = match value.trim().parse::<usize>() {
+                            Ok(value) => value,
+                            Err(_) => {
+                                return (
+                                    400,
+                                    to_wire(RelayResponse::error("invalid Content-Length")),
+                                );
+                            }
+                        };
+                        if content_length.is_some_and(|existing| existing != parsed) {
+                            return (
+                                400,
+                                to_wire(RelayResponse::error("conflicting Content-Length")),
+                            );
+                        }
+                        content_length = Some(parsed);
                     } else if state.config.trust_forwarded_for
                         && forwarded_for.is_none()
                         && name.eq_ignore_ascii_case("x-forwarded-for")
@@ -889,8 +1007,13 @@ fn handle_http_request<R: BufRead>(
                 headers.extend_from_slice(line.as_bytes());
             }
             Err(error) => {
+                let status = if error.kind() == std::io::ErrorKind::InvalidData {
+                    413
+                } else {
+                    400
+                };
                 return (
-                    400,
+                    status,
                     to_wire(RelayResponse::error(format!(
                         "HTTP header read failed: {error}"
                     ))),
@@ -909,6 +1032,7 @@ fn handle_http_request<R: BufRead>(
             (200, to_wire(handle_request(RelayRequest::Health, state)))
         }
         "POST" => {
+            let content_length = content_length.unwrap_or(0);
             if content_length == 0 {
                 return (
                     400,
@@ -2000,5 +2124,66 @@ mod tests {
             elapsed >= Duration::from_millis(150) && elapsed < Duration::from_millis(800),
             "fetch should return after the wait window, took {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn generation_predicate_catches_store_between_drain_and_wait() {
+        let state = RelayState::new(test_config(), test_identity());
+        let notifier = state.notifier_for("dev-race");
+        let observed = notifier.0.lock().expect("signal lock").generation;
+        assert!(state.drain_queue("dev-race", 4).is_empty());
+
+        state
+            .store(
+                "dev-race".to_owned(),
+                envelope("direct_message", "msg-race", "dev-alice"),
+            )
+            .expect("store in race window");
+
+        let current = notifier.0.lock().expect("signal lock").generation;
+        assert_ne!(current, observed, "store must advance the wait predicate");
+        let messages = state.drain_queue("dev-race", 4);
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn idle_notifiers_are_pruned_and_store_does_not_create_them() {
+        let state = RelayState::new(test_config(), test_identity());
+        let messages = state
+            .fetch("dev-idle", Some(4), Some(1))
+            .expect("short long poll");
+        assert!(messages.is_empty());
+        assert!(state.notifiers.lock().expect("notifier map").is_empty());
+
+        state
+            .store(
+                "dev-no-waiter".to_owned(),
+                envelope("direct_message", "msg-no-waiter", "dev-alice"),
+            )
+            .expect("store without waiter");
+        assert!(state.notifiers.lock().expect("notifier map").is_empty());
+    }
+
+    #[test]
+    fn bounded_line_reader_rejects_oversized_input() {
+        let input = format!("{}\n", "x".repeat(1024));
+        let mut reader = BufReader::new(input.as_bytes());
+        let mut line = String::new();
+        let error = read_line_bounded(&mut reader, &mut line, 64)
+            .expect_err("oversized request line must fail");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(line.is_empty());
+    }
+
+    #[test]
+    fn oversized_http_header_line_is_rejected() {
+        let mut config = test_config();
+        config.max_line_bytes = 64;
+        let state = RelayState::new(config, test_identity());
+        let header = format!("X-Fill: {}\r\n\r\n", "x".repeat(128));
+        let mut reader = BufReader::new(header.as_bytes());
+        let (status, _) =
+            handle_http_request("GET /health HTTP/1.1\r\n", &mut reader, &state, "127.0.0.1");
+        assert_eq!(status, 413);
     }
 }

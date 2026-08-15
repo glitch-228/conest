@@ -10,9 +10,11 @@ import 'dart:typed_data';
 /// Bytes are kept lazy when possible — a desktop drag-drop of a 1 GB
 /// file shouldn't sit in RAM until the user taps Send. The picker and
 /// clipboard paths populate `bytes` directly because they've already
-/// read the content; the file/drag-drop paths populate `filePath` and
-/// `readBytes()` reads on demand.
+/// read the content; the file/drag-drop paths populate `filePath` and expose
+/// a streaming source through [openRead].
 class StagedAttachment {
+  static const int maxInlineBytes = 30 * 1024 * 1024;
+
   StagedAttachment({
     required this.id,
     required this.fileName,
@@ -23,11 +25,19 @@ class StagedAttachment {
     this.poster,
     this.caption = '',
   }) : _bytes = bytes,
-       _filePath = filePath,
-       assert(
-         bytes != null || filePath != null,
-         'StagedAttachment needs either bytes or a filePath',
-       );
+       _filePath = filePath {
+    if (sizeBytes <= 0 || (bytes == null && filePath == null)) {
+      throw ArgumentError('StagedAttachment needs a non-empty source.');
+    }
+    if (bytes != null && bytes.length != sizeBytes) {
+      throw ArgumentError('Inline attachment size does not match its bytes.');
+    }
+    if (bytes != null && bytes.length > maxInlineBytes) {
+      throw ArgumentError(
+        'Large attachments require a streaming file-path source.',
+      );
+    }
+  }
 
   /// Ephemeral id used by the X-to-cancel button to identify which staged
   /// item to drop. Not stable across app restarts.
@@ -44,15 +54,16 @@ class StagedAttachment {
   /// True when the bytes are already resident (picker, clipboard paste).
   /// False when only the file path is known (drag-drop, file picker).
   bool get hasInlineBytes => _bytes != null;
+  String? get filePath => _filePath;
 
-  Future<Uint8List> readBytes() async {
+  Stream<List<int>> openRead() {
     final inline = _bytes;
-    if (inline != null) return inline;
+    if (inline != null) return Stream<List<int>>.value(inline);
     final path = _filePath;
-    if (path != null) {
-      return await File(path).readAsBytes();
-    }
-    throw StateError('StagedAttachment has no source.');
+    if (path != null) return File(path).openRead();
+    return Stream<List<int>>.error(
+      StateError('StagedAttachment has no source.'),
+    );
   }
 
   /// Cheap preview bytes for the staged tray. Returns the inline bytes

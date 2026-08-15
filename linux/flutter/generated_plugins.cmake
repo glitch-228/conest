@@ -4,6 +4,7 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   desktop_drop
+  disk_space_2
   dynamic_color
   flutter_secure_storage_linux
   irondash_engine_context

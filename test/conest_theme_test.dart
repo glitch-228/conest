@@ -90,14 +90,8 @@ void main() {
     final reloaded = await store.load();
     expect(reloaded.homeLayout, ConestHomeLayout.stationFeed);
 
-    expect(
-      ConestHomeLayout.fromStorage('classic'),
-      ConestHomeLayout.classic,
-    );
-    expect(
-      ConestHomeLayout.fromStorage('bogus'),
-      ConestHomeLayout.signalCards,
-    );
+    expect(ConestHomeLayout.fromStorage('classic'), ConestHomeLayout.classic);
+    expect(ConestHomeLayout.fromStorage('bogus'), ConestHomeLayout.signalCards);
   });
 
   test('shell persists and survives reload', () async {

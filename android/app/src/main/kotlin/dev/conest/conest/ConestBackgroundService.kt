@@ -39,8 +39,8 @@ class ConestBackgroundService : Service() {
         }
         return builder
             .setSmallIcon(applicationInfo.icon)
-            .setContentTitle("Conest background runtime")
-            .setContentText("Keeping local receive, relay, and notifications active.")
+            .setContentTitle("Conest experimental background service")
+            .setContentText("Reopen Conest to receive messages; headless receive is not available yet.")
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setPriority(Notification.PRIORITY_LOW)

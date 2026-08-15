@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -303,16 +304,44 @@ class VaultStore {
   final Future<File> Function()? _vaultFileProvider;
   final VaultKeyProvider _keyProvider;
   static const _vaultFileName = 'conest.vault';
+  Future<void> _saveTail = Future<void>.value();
 
   Future<VaultSnapshot> load() async {
     final file = await _vaultFile();
-    if (!await file.exists()) {
+    final backup = File('${file.path}.bak');
+    if (!await file.exists() && !await backup.exists()) {
       return VaultSnapshot.empty();
     }
-
-    final envelopeJson =
-        jsonDecode(await file.readAsString()) as Map<String, dynamic>;
     final key = await _readOrCreateVaultKey();
+    Object? primaryError;
+    if (await file.exists()) {
+      try {
+        return await _decodeVaultFile(file, key);
+      } catch (error) {
+        primaryError = error;
+      }
+    }
+    if (await backup.exists()) {
+      try {
+        final recovered = await _decodeVaultFile(backup, key);
+        final temporary = File('${file.path}.recover.tmp');
+        await _copyFlushed(backup, temporary);
+        await _atomicReplace(temporary, file);
+        return recovered;
+      } catch (_) {
+        // Surface the primary failure below; a corrupt backup must never
+        // replace a readable primary or disguise the original problem.
+      }
+    }
+    throw primaryError ?? const FormatException('Vault backup is corrupt.');
+  }
+
+  Future<VaultSnapshot> _decodeVaultFile(File file, List<int> key) async {
+    final decodedEnvelope = jsonDecode(await file.readAsString());
+    if (decodedEnvelope is! Map<String, dynamic>) {
+      throw const FormatException('Vault envelope must be a JSON object.');
+    }
+    final envelopeJson = decodedEnvelope;
     final algorithm = Chacha20.poly1305Aead();
     final secretBox = SecretBox(
       base64Decode(envelopeJson['ciphertextBase64'] as String),
@@ -329,7 +358,16 @@ class VaultStore {
     return VaultSnapshot.fromJson(snapshotJson);
   }
 
-  Future<void> save(VaultSnapshot snapshot) async {
+  Future<void> save(VaultSnapshot snapshot) {
+    final snapshotJson = snapshot.toJson();
+    final operation = _saveTail
+        .catchError((_) {})
+        .then((_) => _saveSnapshotJson(snapshotJson));
+    _saveTail = operation;
+    return operation;
+  }
+
+  Future<void> _saveSnapshotJson(Map<String, dynamic> snapshotJson) async {
     final file = await _vaultFile();
     await file.parent.create(recursive: true);
     final key = await _readOrCreateVaultKey();
@@ -340,21 +378,93 @@ class VaultStore {
     final envelope = await compute(
       _encodeAndEncryptVault,
       _VaultEncryptRequest(
-        snapshotJson: snapshot.toJson(),
+        snapshotJson: snapshotJson,
         key: key,
         nonce: _secureRandomBytes(Chacha20.poly1305Aead().nonceLength),
       ),
       debugLabel: 'conest-vault-save',
     );
-    await file.writeAsString(envelope, flush: true);
+    final temporary = File('${file.path}.tmp');
+    await _writeFlushed(temporary, envelope);
+
+    // Preserve only a cryptographically valid last-good primary. A corrupt
+    // primary must not overwrite an older usable backup.
+    if (await file.exists()) {
+      try {
+        await _decodeVaultFile(file, key);
+        final backupTemporary = File('${file.path}.bak.tmp');
+        await _copyFlushed(file, backupTemporary);
+        await _atomicReplace(backupTemporary, File('${file.path}.bak'));
+      } catch (_) {}
+    }
+    await _atomicReplace(temporary, file);
   }
 
   Future<void> clear() async {
+    await _saveTail.catchError((_) {});
     final file = await _vaultFile();
-    if (await file.exists()) {
-      await file.delete();
+    for (final candidate in <File>[
+      file,
+      File('${file.path}.tmp'),
+      File('${file.path}.bak'),
+      File('${file.path}.bak.tmp'),
+      File('${file.path}.recover.tmp'),
+      File('${file.path}.replace-old'),
+    ]) {
+      if (await candidate.exists()) await candidate.delete();
     }
     await _keyProvider.clear();
+  }
+
+  Future<void> _writeFlushed(File file, String contents) async {
+    await file.parent.create(recursive: true);
+    await file.create();
+    await _restrictOwnerOnly(file);
+    final handle = await file.open(mode: FileMode.write);
+    try {
+      await handle.writeString(contents);
+      await handle.flush();
+    } finally {
+      await handle.close();
+    }
+    await _restrictOwnerOnly(file);
+  }
+
+  Future<void> _copyFlushed(File source, File target) async {
+    await target.create(recursive: true);
+    await _restrictOwnerOnly(target);
+    final handle = await target.open(mode: FileMode.write);
+    try {
+      await for (final chunk in source.openRead()) {
+        await handle.writeFrom(chunk);
+      }
+      await handle.flush();
+    } finally {
+      await handle.close();
+    }
+    await _restrictOwnerOnly(target);
+  }
+
+  Future<void> _atomicReplace(File source, File target) async {
+    try {
+      await source.rename(target.path);
+      return;
+    } on FileSystemException {
+      // Windows may refuse rename-over-existing. Keep a rollback name until
+      // the new same-directory file has taken the canonical path.
+    }
+    final rollback = File('${target.path}.replace-old');
+    if (await rollback.exists()) await rollback.delete();
+    if (await target.exists()) await target.rename(rollback.path);
+    try {
+      await source.rename(target.path);
+      if (await rollback.exists()) await rollback.delete();
+    } catch (_) {
+      if (await rollback.exists() && !await target.exists()) {
+        await rollback.rename(target.path);
+      }
+      rethrow;
+    }
   }
 
   Future<List<int>> _readOrCreateVaultKey() async {

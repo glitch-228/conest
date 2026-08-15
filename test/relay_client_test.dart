@@ -16,6 +16,7 @@ Future<ServerSocket> _startDetachedSigningRelay({
   required SimpleKeyPair keyPair,
   required String identityPublicKeyBase64,
   String Function(String rawBody)? mutateBodyAfterSigning,
+  bool wrongNonce = false,
 }) async {
   final algorithm = Ed25519();
   final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
@@ -46,10 +47,29 @@ Future<ServerSocket> _startDetachedSigningRelay({
         jsonEncode({
           'sig_v': 2,
           'body': wireBody,
-          'nonce_echo': request['nonce'],
+          'nonce_echo': wrongNonce
+              ? base64Encode(List<int>.filled(16, 0))
+              : request['nonce'],
           'signature': base64Encode(signature.bytes),
         }),
       );
+      await socket.flush();
+      await socket.close();
+    });
+  });
+  return server;
+}
+
+Future<ServerSocket> _startRawLineRelay(
+  String Function(Map<String, dynamic> request) responseFor,
+) async {
+  final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+  server.listen((socket) {
+    utf8.decoder.bind(socket).transform(const LineSplitter()).listen((
+      line,
+    ) async {
+      final request = jsonDecode(line) as Map<String, dynamic>;
+      socket.writeln(responseFor(request));
       await socket.flush();
       await socket.close();
     });
@@ -392,4 +412,97 @@ void main() {
       );
     },
   );
+
+  test('pinned relay rejects stripped signatures and nonce replay', () async {
+    final keyPair = await Ed25519().newKeyPair();
+    final publicKeyBase64 = base64Encode(
+      (await keyPair.extractPublicKey()).bytes,
+    );
+    final unsigned = await _startRawLineRelay(
+      (_) => jsonEncode({
+        'ok': true,
+        'stats': {
+          'relay_id': 'unsigned',
+          'identity_public_key': publicKeyBase64,
+        },
+      }),
+    );
+    addTearDown(unsigned.close);
+    const client = RelayClient();
+    await expectLater(
+      client.inspectHealth(
+        host: '127.0.0.1',
+        port: unsigned.port,
+        expectedIdentityPublicKeyBase64: publicKeyBase64,
+      ),
+      throwsA(isA<RelayIdentityMismatchException>()),
+    );
+
+    final replayed = await _startDetachedSigningRelay(
+      keyPair: keyPair,
+      identityPublicKeyBase64: publicKeyBase64,
+      wrongNonce: true,
+    );
+    addTearDown(replayed.close);
+    await expectLater(
+      client.inspectHealth(
+        host: '127.0.0.1',
+        port: replayed.port,
+        expectedIdentityPublicKeyBase64: publicKeyBase64,
+      ),
+      throwsA(isA<RelayIdentityMismatchException>()),
+    );
+  });
+
+  test('fetch isolates malformed batch items', () async {
+    final valid = RelayEnvelope(
+      protocolVersion: 2,
+      kind: 'direct_message',
+      messageId: 'valid-message',
+      conversationId: 'conversation',
+      senderAccountId: 'account-a',
+      senderDeviceId: 'device-a',
+      recipientDeviceId: 'device-b',
+      createdAt: DateTime.utc(2026, 7, 13),
+      nonceBase64: base64Encode(List<int>.filled(12, 1)),
+      ciphertextBase64: base64Encode(const <int>[1, 2, 3]),
+      macBase64: base64Encode(List<int>.filled(16, 2)),
+    );
+    final server = await _startRawLineRelay(
+      (_) => jsonEncode({
+        'ok': true,
+        'messages': [
+          'not-an-envelope',
+          {'messageId': 42},
+          valid.toJson(),
+        ],
+      }),
+    );
+    addTearDown(server.close);
+
+    final fetched = await const RelayClient().fetchEnvelopes(
+      host: '127.0.0.1',
+      port: server.port,
+      recipientDeviceId: 'device-b',
+    );
+
+    expect(fetched, hasLength(1));
+    expect(fetched.single.messageId, 'valid-message');
+  });
+
+  test('control responses are rejected above one MiB', () async {
+    final server = await _startRawLineRelay(
+      (_) => jsonEncode({'ok': true, 'padding': 'x' * (1024 * 1024)}),
+    );
+    addTearDown(server.close);
+
+    await expectLater(
+      const RelayClient().health(
+        host: '127.0.0.1',
+        port: server.port,
+        timeout: const Duration(seconds: 2),
+      ),
+      throwsA(isA<StateError>()),
+    );
+  });
 }

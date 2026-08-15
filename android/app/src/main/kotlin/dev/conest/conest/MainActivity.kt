@@ -115,6 +115,26 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                 }
+                "saveMediaFileToGallery" -> {
+                    val sourcePath = call.argument<String>("sourcePath")
+                    val fileName = call.argument<String>("fileName") ?: "conest-attachment"
+                    val mimeType = call.argument<String>("mimeType") ?: "application/octet-stream"
+                    val kind = call.argument<String>("kind") ?: "other"
+                    val source = sourcePath?.let(::File)
+                    if (source == null || !source.isFile) {
+                        result.error("missing_file", "A readable source file is required.", null)
+                    } else {
+                        try {
+                            result.success(saveMediaFileToGallery(source, fileName, mimeType, kind))
+                        } catch (error: Exception) {
+                            result.error(
+                                "save_failed",
+                                error.message ?: "Could not save the file.",
+                                null
+                            )
+                        }
+                    }
+                }
                 "installDownloadedApk" -> {
                     val path = call.argument<String>("path")
                     if (path.isNullOrBlank()) {
@@ -252,7 +272,7 @@ class MainActivity : FlutterActivity() {
         mimeType: String,
         kind: String
     ): String {
-        val safeName = if (fileName.isBlank()) "conest-attachment" else fileName
+        val safeName = sanitizeAttachmentFileName(fileName)
         val resolvedKind = when {
             kind == "image" || mimeType.startsWith("image/") -> "image"
             kind == "video" || mimeType.startsWith("video/") -> "video"
@@ -306,8 +326,90 @@ class MainActivity : FlutterActivity() {
         if (!subDir.exists() && !subDir.mkdirs()) {
             throw IllegalStateException("Could not create ${subDir.path}")
         }
-        val target = java.io.File(subDir, safeName)
+        var target = java.io.File(subDir, safeName)
+        var suffix = 1
+        val stem = target.nameWithoutExtension.ifBlank { "conest-attachment" }
+        val extension = target.extension.let { if (it.isEmpty()) "" else ".$it" }
+        while (target.exists()) {
+            target = File(subDir, "$stem ($suffix)$extension")
+            suffix++
+        }
         target.writeBytes(bytes)
+        return target.absolutePath
+    }
+
+    private fun saveMediaFileToGallery(
+        source: File,
+        fileName: String,
+        mimeType: String,
+        kind: String
+    ): String {
+        val safeName = sanitizeAttachmentFileName(fileName)
+        val resolvedKind = when {
+            kind == "image" || mimeType.startsWith("image/") -> "image"
+            kind == "video" || mimeType.startsWith("video/") -> "video"
+            else -> "other"
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val (collection, relativePath) = when (resolvedKind) {
+                "image" -> Pair(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    "${Environment.DIRECTORY_PICTURES}/conest"
+                )
+                "video" -> Pair(
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                    "${Environment.DIRECTORY_MOVIES}/conest"
+                )
+                else -> Pair(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    "${Environment.DIRECTORY_DOWNLOADS}/conest"
+                )
+            }
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val resolver = applicationContext.contentResolver
+            val uri = resolver.insert(collection, values)
+                ?: throw IllegalStateException("MediaStore.insert returned null")
+            try {
+                resolver.openOutputStream(uri)?.use { output ->
+                    source.inputStream().use { input -> input.copyTo(output, 1024 * 1024) }
+                } ?: throw IllegalStateException("openOutputStream returned null")
+                values.clear()
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+                return uri.toString()
+            } catch (error: Exception) {
+                resolver.delete(uri, null, null)
+                throw error
+            }
+        }
+        val baseDirName = when (resolvedKind) {
+            "image" -> Environment.DIRECTORY_PICTURES
+            "video" -> Environment.DIRECTORY_MOVIES
+            else -> Environment.DIRECTORY_DOWNLOADS
+        }
+        val subDir = File(
+            Environment.getExternalStoragePublicDirectory(baseDirName),
+            "conest"
+        )
+        if (!subDir.exists() && !subDir.mkdirs()) {
+            throw IllegalStateException("Could not create ${subDir.path}")
+        }
+        var target = File(subDir, safeName)
+        var suffix = 1
+        val stem = target.nameWithoutExtension.ifBlank { "conest-attachment" }
+        val extension = target.extension.let { if (it.isEmpty()) "" else ".$it" }
+        while (target.exists()) {
+            target = File(subDir, "$stem ($suffix)$extension")
+            suffix++
+        }
+        source.inputStream().use { input ->
+            target.outputStream().use { output -> input.copyTo(output, 1024 * 1024) }
+        }
         return target.absolutePath
     }
 
@@ -320,8 +422,7 @@ class MainActivity : FlutterActivity() {
         if (!cacheDir.exists() && !cacheDir.mkdirs()) {
             throw IllegalStateException("Could not create ${cacheDir.path}")
         }
-        // Strip any path components the caller might have passed.
-        val safeName = fileName.substringAfterLast('/').ifBlank { "conest-image" }
+        val safeName = sanitizeAttachmentFileName(fileName)
         val ext = when (mimeType.lowercase()) {
             "image/png" -> ".png"
             "image/gif" -> ".gif"
@@ -338,6 +439,41 @@ class MainActivity : FlutterActivity() {
             "${packageName}.fileprovider",
             target
         )
+    }
+
+    private fun sanitizeAttachmentFileName(input: String): String {
+        var value = input
+            .map { char ->
+                when {
+                    char == '/' || char == '\\' -> '_'
+                    char.code < 0x20 || char.code == 0x7f -> null
+                    char.code in 0x202a..0x202e || char.code in 0x2066..0x2069 -> null
+                    char in charArrayOf('<', '>', ':', '"', '|', '?', '*') -> '_'
+                    else -> char
+                }
+            }
+            .filterNotNull()
+            .joinToString("")
+            .trim()
+            .trimStart('.', ' ')
+            .trimEnd('.', ' ')
+        if (value.isBlank() || value == "." || value == "..") {
+            value = "conest-attachment"
+        }
+        val stem = value.substringBeforeLast('.', value).lowercase()
+        val reserved = setOf(
+            "con", "prn", "aux", "nul",
+            "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+            "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"
+        )
+        if (stem in reserved) value = "_$value"
+        if (value.length > 120) {
+            val extension = value.substringAfterLast('.', "").let {
+                if (it.isEmpty() || it.length > 19) "" else ".$it"
+            }
+            value = value.take(120 - extension.length) + extension
+        }
+        return value
     }
 
     private fun installDownloadedApk(path: String) {

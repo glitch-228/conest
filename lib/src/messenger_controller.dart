@@ -5,12 +5,15 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:crypto/crypto.dart' as dart_crypto;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show AssetBundle, rootBundle;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart' as path_provider;
 
 import 'crypto_service.dart';
+import 'beam_protocol.dart';
+import 'attachment_safety.dart';
 import 'lan_direct.dart';
 import 'local_relay_node.dart';
 import 'models.dart';
@@ -19,10 +22,29 @@ import 'reachability_tracker.dart';
 import 'staged_attachment.dart';
 
 export 'staged_attachment.dart' show StagedAttachment;
+export 'beam_protocol.dart'
+    show
+        BeamDecodeProgress,
+        BeamDecoder,
+        BeamEncoder,
+        BeamFrame,
+        BeamImportResult,
+        BeamManifest,
+        BeamMode,
+        BeamPackage,
+        PreparedBeamTransfer,
+        conestBeamMaximumPayloadBytes;
 import 'relay_client.dart';
 import 'relay_defaults.dart';
 import 'route_health_tracker.dart';
 import 'storage.dart';
+import 'storage_capacity.dart';
+import 'transport.dart';
+
+const bool experimentalAndroidBackgroundRuntimeAvailable = bool.fromEnvironment(
+  'CONEST_EXPERIMENTAL_ANDROID_BACKGROUND_RUNTIME',
+  defaultValue: false,
+);
 
 /// Fallback attachment cache root used when the constructor caller
 /// doesn't supply one (i.e. production where the bootstrap profile
@@ -35,6 +57,19 @@ Future<Directory> _defaultAttachmentRootProvider() async {
 
 const int _maxInviteRouteHints = 4;
 const int _maxInviteLanHosts = 1;
+
+List<int> _attachmentChunkAssociatedData(
+  String attachmentId,
+  int index,
+  int plaintextLength,
+) => utf8.encode(
+  jsonEncode(<String, Object>{
+    'version': 2,
+    'attachmentId': attachmentId,
+    'index': index,
+    'plaintextLength': plaintextLength,
+  }),
+);
 const int _maxInviteRelayRoutes = 2;
 const int _maxLanPairingScanHostsPerAddress = 64;
 const int _maxLanRediscoveryScanHostsPerAddress = 16;
@@ -71,6 +106,36 @@ const Duration _backgroundHeartbeatInterval = Duration(minutes: 10);
 const Duration _resumeHeartbeatThreshold = Duration(seconds: 90);
 const Duration _pendingMessageRetryDelay = Duration(seconds: 5);
 const Duration _acceptedMessageRetryDelay = Duration(seconds: 15);
+const int _maxEncryptedEnvelopeCiphertextBytes = 1024 * 1024;
+const int _maxBootstrapPayloadBytes = 32 * 1024;
+const int _maxLanLobbyPayloadBytes = 96 * 1024;
+const int _maxPendingContactRequests = 20;
+const Duration _pendingContactRequestTtl = Duration(days: 7);
+
+const Set<String> _v2PairwiseKinds = <String>{
+  'direct_message',
+  'ack',
+  'contact_exchange',
+  'contact_remove',
+  'route_update',
+  'group_membership',
+  'group_membership_ack',
+  'group_leave',
+  'group_message',
+  'attachment_offer',
+  'attachment_chunk_request',
+  'attachment_chunk',
+  'attachment_complete',
+  'attachment_cancel',
+  'attachment_pause_control',
+  'attachment_progress',
+  'message_edit',
+  'message_delete',
+  'debug_probe',
+  'debug_probe_ack',
+  'debug_two_way_message',
+  'debug_two_way_reply',
+};
 
 /// Base URL the "Update default relays" button pulls from. Points at the
 /// project's `main`-branch raw assets so a freshly-pushed signed manifest
@@ -108,6 +173,16 @@ class DefaultRelaysRefreshResult {
   final String? errorMessage;
 }
 
+class AttachmentSpoolException implements Exception {
+  AttachmentSpoolException(this.message, {this.canUseOriginal = false});
+
+  final String message;
+  final bool canUseOriginal;
+
+  @override
+  String toString() => message;
+}
+
 enum DefaultRelaysRefreshStatus { upToDate, updated, error }
 
 class MessengerController extends ChangeNotifier {
@@ -120,8 +195,12 @@ class MessengerController extends ChangeNotifier {
     DateTime Function()? nowProvider,
     Future<SignedRelayDefaults?> Function()? signedRelayDefaultsLoader,
     Future<Directory> Function()? attachmentRootProvider,
+    StorageCapacityProvider? storageCapacityProvider,
     bool enableLongPoll = true,
+    bool enablePairingBeacon = true,
     LanDirectChannel? lanDirectChannel,
+    Future<TransportRegistry?> Function(IdentityRecord identity)?
+    transportRegistryFactory,
   }) : _vaultStore = vaultStore,
        _localRelayNode = localRelayNode ?? LocalRelayNode(),
        _platformBridge = platformBridge ?? PlatformBridge(),
@@ -130,8 +209,12 @@ class MessengerController extends ChangeNotifier {
        _signedRelayDefaultsLoader = signedRelayDefaultsLoader,
        _attachmentRootProvider =
            attachmentRootProvider ?? _defaultAttachmentRootProvider,
+       _storageCapacityProvider =
+           storageCapacityProvider ?? defaultStorageCapacityProvider,
        _longPollEnabled = enableLongPoll,
-       _lanDirectChannel = lanDirectChannel {
+       _pairingBeaconEnabled = enablePairingBeacon,
+       _lanDirectChannel = lanDirectChannel,
+       _transportRegistryFactory = transportRegistryFactory {
     _relayClient = _ScoringRelayClient(
       inner: relayClient,
       onAttempt: _recordRelayAttemptFromShim,
@@ -149,11 +232,13 @@ class MessengerController extends ChangeNotifier {
   }
 
   final VaultStore _vaultStore;
+  final StorageCapacityProvider _storageCapacityProvider;
   late final RelayClient _relayClient;
   late final CryptoService _crypto;
   late final ReachabilityTracker _reachability;
   late final RouteHealthTracker _routeHealthTracker;
   final bool _longPollEnabled;
+  final bool _pairingBeaconEnabled;
   bool _longPollRunning = false;
   // Reference count: while > 0, `notifyListeners` defers and sets the
   // pending flag instead of dispatching. The last `_processEnvelopes` to
@@ -181,6 +266,7 @@ class MessengerController extends ChangeNotifier {
   /// persisted, so the bubble can keep rendering the file row / image
   /// thumbnail after an app restart instead of regressing to "transferring".
   final Future<Directory> Function() _attachmentRootProvider;
+  Future<Directory>? _attachmentRootFuture;
 
   /// nightly.9 LocalSend-style direct PUT channel. Null → fast-path is
   /// disabled and every chunk goes through the relay envelope shape (the
@@ -188,6 +274,11 @@ class MessengerController extends ChangeNotifier {
   /// can advertise their endpoint via the chunk_request payload and the
   /// sender PUTs chunks directly instead of round-tripping via the relay.
   final LanDirectChannel? _lanDirectChannel;
+  final Future<TransportRegistry?> Function(IdentityRecord identity)?
+  _transportRegistryFactory;
+  TransportRegistry? _transportRegistry;
+  final List<StreamSubscription<TransportInboundEnvelope>>
+  _transportInboundSubscriptions = [];
 
   /// Cache: peer deviceId → endpoint where the peer's `LanDirectChannel`
   /// is listening. Populated when an `attachment_chunk_request` payload
@@ -291,6 +382,10 @@ class MessengerController extends ChangeNotifier {
   // [attachmentBytesFor]. Kept in memory for v0.3.2; persisted to disk in
   // a follow-up pass.
   final Map<String, Uint8List> _assembledAttachments = <String, Uint8List>{};
+  // Completed files above 8 MiB intentionally stay out of Dart heap. This
+  // synchronous index lets widgets distinguish "ready on disk" from an
+  // in-flight transfer without probing the filesystem during build.
+  final Set<String> _locallyAvailableAttachments = <String>{};
 
   // Small JPEG posters shipped alongside video offers so the receiver
   // can render a thumbnail BEFORE the full bytes finish transferring.
@@ -825,6 +920,19 @@ class MessengerController extends ChangeNotifier {
   Future<void> initialize() async {
     try {
       _snapshot = await _vaultStore.load();
+      final transportIdentityMigrated = await _ensureTransportIdentity();
+      final protocolQueueMigrated = _markLegacyQueuedControlsIncompatible();
+      if (!experimentalAndroidBackgroundRuntimeAvailable &&
+          (_snapshot.identity?.androidBackgroundRuntimeEnabled ?? false)) {
+        _snapshot = _snapshot.copyWith(
+          identity: _snapshot.identity!.copyWith(
+            androidBackgroundRuntimeEnabled: false,
+          ),
+        );
+        await _saveSnapshotSilently(notify: false);
+      } else if (protocolQueueMigrated || transportIdentityMigrated) {
+        await _saveSnapshotSilently(notify: false);
+      }
       _rebuildSeenEnvelopeIdSet();
       final normalized = _normalizeStoredContactRoutes();
       if (normalized) {
@@ -840,12 +948,17 @@ class MessengerController extends ChangeNotifier {
         await _saveSnapshotSilently(notify: false);
       }
       await _startLanDirectChannel();
+      await _restoreTransferSessionsAndCleanAttachments();
       await _ingestSignedDefaultRelaysIfNeeded();
       if (_snapshot.identity != null) {
+        await _startTransportRegistry();
         await _refreshLanAddresses(persist: false);
         await _ensureLocalRelayRunning();
         await _ensurePairingBeaconRunning();
         _applyAndroidBackgroundPreference();
+        for (final contact in _snapshot.contacts) {
+          _pumpOutboundQueue(contact);
+        }
         _reschedulePolling();
         unawaited(_pollLocalInboxOnly());
         unawaited(pollNow());
@@ -856,6 +969,263 @@ class MessengerController extends ChangeNotifier {
     } finally {
       _ready = true;
       notifyListeners();
+    }
+  }
+
+  Future<void> _startTransportRegistry() async {
+    final factory = _transportRegistryFactory;
+    if (_transportRegistry != null || factory == null) {
+      return;
+    }
+    final me = _snapshot.identity;
+    if (me == null) return;
+    try {
+      final registry = await factory(me);
+      if (registry == null) return;
+      await registry.start();
+      _transportRegistry = registry;
+      for (final adapter in registry.adapters) {
+        _transportInboundSubscriptions.add(
+          adapter.inboundEnvelopes.listen(
+            _handleTransportInbound,
+            onError: (Object error, StackTrace stackTrace) {
+              appendDebugLog(
+                '${adapter.kind.label} inbound transport failed: $error',
+              );
+            },
+          ),
+        );
+      }
+    } catch (error) {
+      appendDebugLog('Native transport startup failed: $error');
+      _setTransientStatus(
+        'Direct online transport is unavailable; relay fallback remains active.',
+      );
+    }
+  }
+
+  Future<void> _stopTransportRegistry() async {
+    for (final subscription in _transportInboundSubscriptions) {
+      await subscription.cancel();
+    }
+    _transportInboundSubscriptions.clear();
+    final registry = _transportRegistry;
+    _transportRegistry = null;
+    if (registry != null) await registry.stop();
+  }
+
+  Future<void> _handleTransportInbound(TransportInboundEnvelope inbound) async {
+    if (inbound.transport != TransportKind.iroh) return;
+    final contact = _snapshot.contacts
+        .where(
+          (candidate) =>
+              candidate.irohEndpointId == inbound.senderTransportIdentity,
+        )
+        .firstOrNull;
+    if (contact == null || !contact.hasPinnedIrohIdentity) {
+      appendDebugLog(
+        'Rejected Iroh envelope from an unpinned endpoint identity.',
+      );
+      return;
+    }
+    final global = _snapshot.identity?.connectivity;
+    if (global == null ||
+        contact.routing.effectivePolicy(TransportKind.iroh, global) ==
+            TransportPolicy.disabled ||
+        (inbound.path == TransportPathKind.relayed &&
+            (!global.irohRelayEnabled || !contact.routing.irohRelayEnabled))) {
+      appendDebugLog('Dropped Iroh ingress disabled for ${contact.alias}.');
+      return;
+    }
+    try {
+      final decoded = jsonDecode(utf8.decode(inbound.bytes));
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('Iroh envelope must be a JSON object.');
+      }
+      final envelope = RelayEnvelope.fromJson(decoded);
+      if (envelope.senderDeviceId != contact.deviceId ||
+          envelope.recipientDeviceId != _snapshot.identity?.deviceId) {
+        throw const FormatException('Iroh envelope identity mismatch.');
+      }
+      final processed = await _processEnvelopes(
+        [envelope],
+        ingressKind: inbound.path == TransportPathKind.relayed
+            ? PeerRouteKind.relay
+            : PeerRouteKind.directInternet,
+      );
+      if (processed > 0) {
+        _reachability.noteAvailablePath(contact.deviceId);
+        await _saveSnapshotSilently(debounce: true);
+      }
+    } catch (error) {
+      appendDebugLog('Rejected malformed Iroh envelope: $error');
+    }
+  }
+
+  Future<bool> _ensureTransportIdentity() async {
+    final current = _snapshot.identity;
+    if (current == null) return false;
+    if (current.hasTransportIdentity) {
+      if (current.irohEndpointId?.isNotEmpty == true) return false;
+      _snapshot = _snapshot.copyWith(
+        identity: current.copyWith(
+          irohEndpointId: _crypto.irohEndpointIdForSigningKey(
+            current.signingPublicKeyBase64!,
+          ),
+        ),
+      );
+      return true;
+    }
+    final signing = await _crypto.createSigningIdentity();
+    _snapshot = _snapshot.copyWith(
+      identity: current.copyWith(
+        signingPublicKeyBase64: signing.publicKeyBase64,
+        signingPrivateKeyBase64: signing.privateKeyBase64,
+        irohEndpointId: _crypto.irohEndpointIdForSigningKey(
+          signing.publicKeyBase64,
+        ),
+      ),
+    );
+    return true;
+  }
+
+  Future<void> _restoreTransferSessionsAndCleanAttachments() async {
+    final root = await _attachmentRoot();
+    final cacheDir = Directory(p.join(root.path, 'cache'));
+    final spoolDir = Directory(p.join(root.path, 'spool'));
+    final partialDir = Directory(p.join(root.path, 'partial'));
+    await Future.wait(<Future<void>>[
+      cacheDir.create(recursive: true),
+      spoolDir.create(recursive: true),
+      partialDir.create(recursive: true),
+    ]);
+
+    final cacheAttachmentIds = <String, String>{
+      for (final conversation in _snapshot.conversations)
+        for (final message in conversation.messages)
+          if (message.attachment != null)
+            attachmentStorageKey(message.attachment!.id):
+                message.attachment!.id,
+    };
+    final referencedCacheKeys = cacheAttachmentIds.keys.toSet();
+    final referencedInternalPaths = <String>{
+      for (final session in _snapshot.transferSessions)
+        if (session.relativePath.isNotEmpty)
+          p.normalize(p.join(root.path, session.relativePath)),
+    };
+
+    Future<void> cleanDirectory(
+      Directory directory, {
+      required bool cache,
+    }) async {
+      await for (final entity in directory.list(followLinks: false)) {
+        if (entity is! File) continue;
+        final normalized = p.normalize(entity.path);
+        final basename = p.basename(entity.path);
+        final keep = cache
+            ? referencedCacheKeys.contains(basename)
+            : referencedInternalPaths.contains(normalized);
+        if (!keep || basename.endsWith('.tmp')) {
+          try {
+            await entity.delete();
+          } catch (_) {}
+        } else if (cache) {
+          final attachmentId = cacheAttachmentIds[basename];
+          if (attachmentId != null) {
+            _locallyAvailableAttachments.add(attachmentId);
+          }
+        }
+      }
+    }
+
+    await cleanDirectory(cacheDir, cache: true);
+    await cleanDirectory(spoolDir, cache: false);
+    await cleanDirectory(partialDir, cache: false);
+    // Pre-hardening caches stored attacker-controlled ids directly under the
+    // root. They are never trusted as paths after v2; remove regular files
+    // left there while preserving the managed subdirectories above.
+    await for (final entity in root.list(followLinks: false)) {
+      if (entity is File) {
+        try {
+          await entity.delete();
+        } catch (_) {}
+      }
+    }
+
+    final retainedSessions = <TransferSession>[];
+    for (final session in _snapshot.transferSessions) {
+      if (session.state == TransferState.completed &&
+          session.sourceKind == TransferSourceKind.originalPath) {
+        final path = session.sourcePath;
+        if (path != null && await File(path).exists()) {
+          retainedSessions.add(session);
+        }
+        continue;
+      }
+      final peerId = session.peerDeviceIds.firstOrNull;
+      final contact = peerId == null ? null : _contactByDeviceId(peerId);
+      if (contact == null ||
+          _messageById(peerId!, session.messageId) == null ||
+          session.attachment.fileHashBase64.isEmpty) {
+        continue;
+      }
+      if (session.direction == TransferDirection.outbound) {
+        final sourcePath = session.sourceKind == TransferSourceKind.originalPath
+            ? session.sourcePath
+            : p.join(root.path, session.relativePath);
+        if (sourcePath == null || !await File(sourcePath).exists()) continue;
+        final stat = await File(sourcePath).stat();
+        if (stat.size != session.attachment.sizeBytes ||
+            (session.sourceKind == TransferSourceKind.originalPath &&
+                session.sourceModifiedAt != null &&
+                stat.modified != session.sourceModifiedAt)) {
+          continue;
+        }
+        _outboundAttachments[session.id] = _OutboundAttachmentState(
+          messageId: session.messageId,
+          peerDeviceId: peerId,
+          sourcePath: sourcePath,
+          sourceKind: session.sourceKind,
+          descriptor: session.attachment,
+          requiresLan: session.requiresLan,
+        );
+        _locallyAvailableAttachments.add(session.id);
+        _enqueueOutbound(contact, session.id);
+        retainedSessions.add(session);
+      } else {
+        final partialPath = session.relativePath.isEmpty
+            ? null
+            : p.join(root.path, session.relativePath);
+        if (partialPath != null) {
+          final partial = File(partialPath);
+          if (!await partial.exists() ||
+              await partial.length() != session.attachment.sizeBytes) {
+            continue;
+          }
+        }
+        final awaitingAcceptance =
+            session.requiresLan &&
+            session.relativePath.isEmpty &&
+            session.state == TransferState.pending;
+        _inboundAttachments[session.id] = _InboundAttachmentState(
+          messageId: session.messageId,
+          peerDeviceId: peerId,
+          descriptor: session.attachment,
+          partialPath: partialPath,
+          awaitingAcceptance: awaitingAcceptance,
+          accepted: !awaitingAcceptance,
+          receivedChunks: session.completedChunks,
+        );
+        retainedSessions.add(session);
+        if (partialPath != null) {
+          _scheduleAttachmentRetry(session.id);
+          _topUpInboundWindow(_inboundAttachments[session.id]!, contact);
+        }
+      }
+    }
+    if (retainedSessions.length != _snapshot.transferSessions.length) {
+      _snapshot = _snapshot.copyWith(transferSessions: retainedSessions);
+      await _saveSnapshotSilently(notify: false);
     }
   }
 
@@ -997,13 +1367,9 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> _probeDefaultRelay(PeerEndpoint endpoint) async {
     try {
-      await _relayClient.inspectHealth(
-        host: endpoint.host,
-        port: endpoint.port,
-        protocol: endpoint.protocol,
-        timeout: const Duration(seconds: 4),
-        expectedIdentityPublicKeyBase64:
-            _snapshot.pinnedRelayIdentityKeys[endpoint.routeKey],
+      await _checkRouteHealth(
+        endpoint,
+        relayTimeout: const Duration(seconds: 4),
       );
     } catch (_) {
       // Failure surfaces via the scoring shim already; the relay falls
@@ -1591,7 +1957,7 @@ class MessengerController extends ChangeNotifier {
     }
 
     try {
-      final payload = _inviteForIdentity(me).encodePayload();
+      final payload = (await _inviteForIdentity(me)).encodePayload();
       final decoded = ContactInvite.decodePayload(payload);
       final code = currentPairingCodeSnapshotForPayload(payload).codephrase;
       final pairingCodes = pairingCodephrasesForPayload(payload);
@@ -2288,6 +2654,11 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> updateAndroidBackgroundRuntimeEnabled(bool enabled) async {
+    if (enabled && !experimentalAndroidBackgroundRuntimeAvailable) {
+      throw StateError(
+        'Android background receive is experimental and unavailable in this build.',
+      );
+    }
     final me = _requireIdentity();
     _snapshot = _snapshot.copyWith(
       identity: me.copyWith(androidBackgroundRuntimeEnabled: enabled),
@@ -2320,7 +2691,18 @@ class MessengerController extends ChangeNotifier {
     GlobalConnectivityPreferences prefs,
   ) async {
     final me = _requireIdentity();
+    prefs = prefs.copyWith(
+      irohRelayUrls: normalizeIrohRelayUrls(prefs.irohRelayUrls),
+    );
+    final restartNative =
+        me.connectivity.irohRelayEnabled != prefs.irohRelayEnabled ||
+        !listEquals(me.connectivity.irohRelayUrls, prefs.irohRelayUrls) ||
+        me.connectivity.policyFor(TransportKind.iroh) !=
+            prefs.policyFor(TransportKind.iroh);
     _snapshot = _snapshot.copyWith(identity: me.copyWith(connectivity: prefs));
+    if (restartNative) {
+      await _stopTransportRegistry();
+    }
     await _applyGlobalConnectivityState();
     _markRuntimeActivity();
     final label = switch ((prefs.lanEnabled, prefs.onlineEnabled)) {
@@ -2363,8 +2745,10 @@ class MessengerController extends ChangeNotifier {
       await _stopPairingBeacon().timeout(stopTimeout, onTimeout: () {});
     }
     if (global.onlineEnabled) {
+      await _startTransportRegistry();
       unawaited(_startLongPollIfEnabled());
     } else {
+      await _stopTransportRegistry();
       _stopLongPoll();
     }
   }
@@ -2620,8 +3004,14 @@ class MessengerController extends ChangeNotifier {
     if (decoded.length != 32) {
       throw ArgumentError('newKeyBase64 must decode to 32 bytes.');
     }
+    final oldKey = _snapshot.pinnedRelayIdentityKeys[id];
     final updated = Map<String, String>.from(_snapshot.pinnedRelayIdentityKeys)
       ..[id] = key;
+    if (oldKey != null) {
+      for (final entry in updated.entries.toList(growable: false)) {
+        if (entry.value == oldKey) updated[entry.key] = key;
+      }
+    }
     _snapshot = _snapshot.copyWith(pinnedRelayIdentityKeys: updated);
     _announcedRelayIdentityKeys.remove(id);
     await _persist('Trusted new identity for relay $id.');
@@ -2639,6 +3029,12 @@ class MessengerController extends ChangeNotifier {
     if (notifyPeer && removed != null) {
       remoteNotified = await _sendContactRemoval(removed);
     }
+    final attachmentIds = <String>{
+      for (final conversation in _snapshot.conversations)
+        if (conversation.peerDeviceId == deviceId)
+          for (final message in conversation.messages)
+            if (message.attachment != null) message.attachment!.id,
+    };
     final contacts = _snapshot.contacts
         .where((contact) => contact.deviceId != deviceId)
         .toList();
@@ -2650,6 +3046,13 @@ class MessengerController extends ChangeNotifier {
       conversations: conversations,
     );
     _reachability.remove(deviceId);
+    for (final attachmentId in attachmentIds) {
+      _outboundAttachments.remove(attachmentId);
+      _inboundAttachments.remove(attachmentId)?.retryTimer?.cancel();
+      _assembledAttachments.remove(attachmentId);
+      _removeTransferSession(attachmentId);
+      unawaited(_deleteAttachmentArtifacts(attachmentId));
+    }
     _routeHealthTracker.healthMap.removeWhere((key, _) {
       final contact = removed;
       if (contact == null) {
@@ -2691,6 +3094,18 @@ class MessengerController extends ChangeNotifier {
         .timeout(platformCallTimeout, onTimeout: () {});
     await _stopPairingBeacon().timeout(platformCallTimeout, onTimeout: () {});
     await _localRelayNode.stop().timeout(platformCallTimeout, onTimeout: () {});
+    await _stopTransportRegistry().timeout(
+      platformCallTimeout,
+      onTimeout: () {},
+    );
+    try {
+      final attachmentRoot = await _attachmentRoot();
+      if (await attachmentRoot.exists()) {
+        await attachmentRoot.delete(recursive: true);
+      }
+    } catch (error) {
+      appendDebugLog('Attachment cache reset failed: $error');
+    }
     await _vaultStore.clear();
     _snapshot = VaultSnapshot.empty();
     _rebuildSeenEnvelopeIdSet();
@@ -2708,6 +3123,21 @@ class MessengerController extends ChangeNotifier {
     _debugProbeAcknowledgements.clear();
     _debugTwoWayReplies.clear();
     _locallyDeletedMessageIds.clear();
+    for (final state in _inboundAttachments.values) {
+      state.retryTimer?.cancel();
+    }
+    for (final timer in _outboundStallTimers.values) {
+      timer.cancel();
+    }
+    _inboundAttachments.clear();
+    _outboundAttachments.clear();
+    _assembledAttachments.clear();
+    _locallyAvailableAttachments.clear();
+    _videoPosters.clear();
+    _outboundQueueByContact.clear();
+    _activeOutboundByContact.clear();
+    _outboundStallTimers.clear();
+    _peerLanDirect.clear();
     notifyListeners();
     if (onPostReset != null) {
       try {
@@ -2731,6 +3161,7 @@ class MessengerController extends ChangeNotifier {
     final keyPairData = await keyPair.extract();
     final publicKey = await keyPair.extractPublicKey();
     final publicKeyBase64 = base64Encode(publicKey.bytes);
+    final signingIdentity = await _crypto.createSigningIdentity();
     final accountId = _randomId('acc');
     final deviceId = _randomId('dev');
     final lanAddresses = await _lanAddressProvider();
@@ -2765,8 +3196,14 @@ class MessengerController extends ChangeNotifier {
       lanAddresses: lanAddresses,
       safetyNumber: safetyNumber,
       createdAt: DateTime.now().toUtc(),
+      signingPublicKeyBase64: signingIdentity.publicKeyBase64,
+      signingPrivateKeyBase64: signingIdentity.privateKeyBase64,
+      irohEndpointId: _crypto.irohEndpointIdForSigningKey(
+        signingIdentity.publicKeyBase64,
+      ),
     );
     _snapshot = _snapshot.copyWith(identity: created);
+    await _startTransportRegistry();
     await _ingestSignedDefaultRelaysIfNeeded();
     await _ensureLocalRelayRunning();
     await _ensurePairingBeaconRunning();
@@ -2786,6 +3223,223 @@ class MessengerController extends ChangeNotifier {
     await _sendPairingRouteBeacon();
     await _announcePairingAvailabilityIfNeeded(force: true);
     return _inviteForIdentity(_requireIdentity());
+  }
+
+  /// Prepares an explicitly untrusted public optical transfer. It is signed
+  /// so corruption and a stable sender key can be shown, but it never inherits
+  /// contact trust and receivers must approve the final import.
+  Future<PreparedBeamTransfer> preparePublicBeam({
+    required Uint8List bytes,
+    required String fileName,
+    required String mimeType,
+  }) => _prepareBeam(
+    mode: BeamMode.public,
+    cleartext: bytes,
+    fileName: fileName,
+    mimeType: mimeType,
+  );
+
+  /// Prepares an optical transfer encrypted with the same pairwise secret as
+  /// normal Conest attachments. The recipient identity is bound into the AEAD
+  /// associated data so a frame stream shown to the wrong contact cannot be
+  /// decrypted or silently imported.
+  Future<PreparedBeamTransfer> prepareContactBeam({
+    required ContactRecord contact,
+    required Uint8List bytes,
+    required String fileName,
+    required String mimeType,
+  }) {
+    if (!contact.canSendOutbound || !contact.hasPinnedIrohIdentity) {
+      throw StateError(
+        'Contact-encrypted Beam requires a verified ci6 contact identity.',
+      );
+    }
+    return _prepareBeam(
+      mode: BeamMode.contactEncrypted,
+      cleartext: bytes,
+      fileName: fileName,
+      mimeType: mimeType,
+      contact: contact,
+    );
+  }
+
+  Future<PreparedBeamTransfer> prepareInviteBeam() async {
+    final invite = await buildInvite();
+    return _prepareBeam(
+      mode: BeamMode.contactInvite,
+      cleartext: Uint8List.fromList(utf8.encode(invite.encodePayload())),
+      fileName: 'conest-contact.ci6',
+      mimeType: 'application/vnd.conest.invite',
+    );
+  }
+
+  Future<PreparedBeamTransfer> _prepareBeam({
+    required BeamMode mode,
+    required Uint8List cleartext,
+    required String fileName,
+    required String mimeType,
+    ContactRecord? contact,
+  }) async {
+    if (cleartext.isEmpty || cleartext.length > conestBeamMaximumPayloadBytes) {
+      throw ArgumentError(
+        'Beam v1 payloads must be between 1 byte and 64 MiB.',
+      );
+    }
+    final safeName = sanitizeAttachmentFileName(fileName);
+    final safeMime = sanitizeAttachmentMimeType(mimeType);
+    final me = _requireIdentity();
+    final signingKey = me.signingPublicKeyBase64;
+    if (signingKey == null || signingKey.isEmpty) {
+      throw StateError('The installation signing identity is unavailable.');
+    }
+    final random = Random.secure();
+    final transferId = List<int>.generate(
+      16,
+      (_) => random.nextInt(256),
+    ).map((value) => value.toRadixString(16).padLeft(2, '0')).join();
+    var encodedPayload = cleartext;
+    String? encryptionMetadata;
+    if (mode == BeamMode.contactEncrypted) {
+      if (contact == null) {
+        throw ArgumentError('An encrypted Beam requires a contact.');
+      }
+      final encrypted = await _crypto.encryptBeamPayload(
+        contact: contact,
+        transferId: transferId,
+        plaintext: cleartext,
+      );
+      encodedPayload = encrypted.ciphertext;
+      encryptionMetadata = encrypted.metadataBase64;
+    }
+    var manifest = BeamManifest(
+      transferId: transferId,
+      mode: mode,
+      fileName: safeName,
+      mimeType: safeMime,
+      sizeBytes: encodedPayload.length,
+      sha256Base64: base64Encode(
+        dart_crypto.sha256.convert(encodedPayload).bytes,
+      ),
+      createdAt: _now(),
+      senderFingerprint: _beamFingerprintForSigningKey(signingKey),
+      senderSigningPublicKeyBase64: signingKey,
+      encryptionMetadataBase64: encryptionMetadata,
+    );
+    manifest = await _crypto.signBeamManifest(manifest);
+    final package = BeamPackage(manifest: manifest, payload: encodedPayload);
+    return PreparedBeamTransfer(
+      package: package,
+      encoder: BeamEncoder(package: package),
+      recipientDeviceId: contact?.deviceId,
+    );
+  }
+
+  /// Verifies a decoded Beam before the UI is allowed to offer an import.
+  /// Public transfers stay untrusted even when their self-signature is valid.
+  Future<BeamImportResult> inspectBeamPackage(BeamPackage package) async {
+    final manifest = package.manifest;
+    if (manifest.fileName != sanitizeAttachmentFileName(manifest.fileName) ||
+        !isValidAttachmentMimeType(manifest.mimeType)) {
+      throw const FormatException('Beam attachment metadata is unsafe.');
+    }
+    final signingKey = manifest.senderSigningPublicKeyBase64;
+    if (signingKey == null || signingKey.isEmpty) {
+      throw const FormatException('Beam sender signing key is missing.');
+    }
+    final expectedFingerprint = _beamFingerprintForSigningKey(signingKey);
+    if (manifest.senderFingerprint != expectedFingerprint ||
+        !await _crypto.verifyBeamManifest(
+          manifest: manifest,
+          signingPublicKeyBase64: signingKey,
+        )) {
+      throw const FormatException('Beam manifest signature is invalid.');
+    }
+    ContactRecord? sender;
+    for (final candidate in _snapshot.contacts) {
+      if (candidate.signingPublicKeyBase64 == signingKey &&
+          candidate.transportIdentityVerifiedAt != null &&
+          !candidate.pendingVerification) {
+        sender = candidate;
+        break;
+      }
+    }
+    if (manifest.mode == BeamMode.contactEncrypted) {
+      if (sender == null) {
+        throw const FormatException(
+          'Encrypted Beam sender is not a verified contact.',
+        );
+      }
+      final metadata = manifest.encryptionMetadataBase64;
+      if (metadata == null || metadata.isEmpty) {
+        throw const FormatException('Beam encryption metadata is missing.');
+      }
+      final bytes = await _crypto.decryptBeamPayload(
+        contact: sender,
+        transferId: manifest.transferId,
+        encrypted: BeamEncryptedPayload(
+          ciphertext: package.payload,
+          metadataBase64: metadata,
+        ),
+      );
+      return BeamImportResult(
+        manifest: manifest,
+        bytes: bytes,
+        senderVerified: true,
+        contactTrusted: true,
+        senderDeviceId: sender.deviceId,
+      );
+    }
+    if (manifest.mode == BeamMode.contactInvite) {
+      final invite = ContactInvite.decodePayload(utf8.decode(package.payload));
+      if (!invite.usesSignedFormat ||
+          invite.signingPublicKeyBase64 != signingKey ||
+          !await _crypto.verifyContactInvite(invite)) {
+        throw const FormatException('Beam contact invite is invalid.');
+      }
+      return BeamImportResult(
+        manifest: manifest,
+        bytes: package.payload,
+        senderVerified: true,
+        contactTrusted: false,
+        invite: invite,
+      );
+    }
+    return BeamImportResult(
+      manifest: manifest,
+      bytes: package.payload,
+      senderVerified: true,
+      contactTrusted: false,
+      senderDeviceId: sender?.deviceId,
+    );
+  }
+
+  /// Persists a Beam only after an explicit UI acceptance. It is deliberately
+  /// kept outside conversations: public optical data never acquires contact
+  /// trust merely because its signature and content hash are valid.
+  Future<File> persistAcceptedBeam(BeamImportResult result) async {
+    if (result.invite != null) {
+      throw StateError('Contact invites are not attachment files.');
+    }
+    final root = await _attachmentRoot();
+    final capacity = await _storageCapacityProvider(root.path);
+    if (capacity != null && !capacity.canAllocate(result.bytes.length)) {
+      throw StateError(
+        'Not enough storage is available while preserving the safety reserve.',
+      );
+    }
+    final directory = Directory(p.join(root.path, 'beam', 'accepted'));
+    if (!await directory.exists()) await directory.create(recursive: true);
+    final safeName = sanitizeAttachmentFileName(result.manifest.fileName);
+    final target = File(
+      p.join(directory.path, '${result.manifest.transferId}-$safeName'),
+    );
+    if (await target.exists()) return target;
+    final temporary = File('${target.path}.part');
+    await temporary.writeAsBytes(result.bytes, flush: true);
+    await restrictFileToOwner(temporary);
+    await temporary.rename(target.path);
+    await restrictFileToOwner(target);
+    return target;
   }
 
   Future<ContactAdditionResult> addContactFromInvite({
@@ -2824,6 +3478,9 @@ class MessengerController extends ChangeNotifier {
     bool attemptReciprocalExchange = true,
   }) async {
     final me = _requireIdentity();
+    if (invite.version >= 6 && !await _crypto.verifyContactInvite(invite)) {
+      throw const FormatException('Contact invite signature is invalid.');
+    }
     if (invite.deviceId == me.deviceId) {
       throw ArgumentError('This invite belongs to the current device.');
     }
@@ -2863,6 +3520,10 @@ class MessengerController extends ChangeNotifier {
       pendingVerification: isPending,
       replacesDeviceId: predecessor?.deviceId,
       unverifiedPublicKeyBase64: isPending ? invite.publicKeyBase64 : null,
+      signingPublicKeyBase64: invite.signingPublicKeyBase64,
+      irohEndpointId: invite.irohEndpointId,
+      capabilities: invite.capabilities,
+      transportIdentityVerifiedAt: invite.version >= 6 ? _now() : null,
     );
     final conversations = List<ConversationRecord>.from(_snapshot.conversations)
       ..add(
@@ -3041,6 +3702,48 @@ class MessengerController extends ChangeNotifier {
   List<HeldEnvelope> get heldUnverifiedEnvelopes =>
       List.unmodifiable(_snapshot.heldUnverifiedEnvelopes);
 
+  List<PendingContactRequest> get pendingContactRequests =>
+      List.unmodifiable(_snapshot.pendingContactRequests);
+
+  Future<ContactAdditionResult> approvePendingContactRequest(
+    String requestId, {
+    String? alias,
+  }) async {
+    final request = _snapshot.pendingContactRequests
+        .where((entry) => entry.id == requestId)
+        .firstOrNull;
+    if (request == null) {
+      throw ArgumentError('Contact request is no longer available.');
+    }
+    final invite = ContactInvite.decodePayload(request.invitePayload);
+    if (invite.deviceId != request.senderDeviceId ||
+        invite.accountId != request.senderAccountId) {
+      throw const FormatException('Contact request identity mismatch.');
+    }
+    final result = await _trustInvite(
+      invite: invite,
+      alias: alias?.trim().isNotEmpty == true
+          ? alias!.trim()
+          : invite.displayName,
+    );
+    _snapshot = _snapshot.copyWith(
+      pendingContactRequests: _snapshot.pendingContactRequests
+          .where((entry) => entry.id != requestId)
+          .toList(growable: false),
+    );
+    await _saveSnapshotSilently(notify: true);
+    return result;
+  }
+
+  Future<void> rejectPendingContactRequest(String requestId) async {
+    final filtered = _snapshot.pendingContactRequests
+        .where((entry) => entry.id != requestId)
+        .toList(growable: false);
+    if (filtered.length == _snapshot.pendingContactRequests.length) return;
+    _snapshot = _snapshot.copyWith(pendingContactRequests: filtered);
+    await _persist('Contact request rejected.');
+  }
+
   Future<void> sendMessage({
     required ContactRecord contact,
     required String body,
@@ -3070,7 +3773,7 @@ class MessengerController extends ChangeNotifier {
       body: trimmed,
       outbound: true,
       state: DeliveryState.pending,
-      createdAt: DateTime.now().toUtc(),
+      createdAt: _now().toUtc(),
       replyToMessageId: replyTo?.id,
       replySnippet: replyTo == null ? null : _replySnippetForMessage(replyTo),
       replySenderDeviceId: replyTo?.senderDeviceId,
@@ -3095,11 +3798,9 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  /// Hard limit for v0.3.2 attachments per [notes/PLAN.md] — "small files".
-  /// Larger transfers are deferred to v0.3.3 chunk-cache work.
-  /// Hard cap for a single v0.3.2 attachment. Bumped from 8 MB → 30 MB
-  /// alongside zero-copy slicing and a smaller 32 KB chunk size. Larger
-  /// transfers wait for v0.3.3 chunk-cache work per notes/PLAN.md.
+  /// Files at or below this boundary may use ordinary relay-capable routes.
+  /// Anything larger is marked LAN-direct-only and can never fall back to a
+  /// relay for chunk bytes.
   static const int maxAttachmentSizeBytes = 30 * 1024 * 1024;
 
   /// 32 KB chunks keep each pairwise-encrypted envelope well under the
@@ -3120,7 +3821,7 @@ class MessengerController extends ChangeNotifier {
   /// When the only route to a contact is LAN, the size cap lifts to this
   /// value — LAN bandwidth + chunk size aren't constrained by the relay's
   /// envelope cap, and the user explicitly opted into LAN-only mode.
-  static const int _lanUnlimitedAttachmentCap = 2 * 1024 * 1024 * 1024;
+  static const int maxLanAttachmentSizeBytes = 2 * 1024 * 1024 * 1024;
 
   /// Returns the cap that applies to attachments destined for [contact]
   /// given its current effective routes. If LAN is the ONLY transport in
@@ -3129,17 +3830,17 @@ class MessengerController extends ChangeNotifier {
   /// LAN-unlimited cap applies. Otherwise the standard 30 MB cap holds.
   int effectiveMaxAttachmentSizeFor(ContactRecord contact) {
     final effective = _effectiveTransports(contact);
-    if (!effective.lan) return maxAttachmentSizeBytes;
-    if (!effective.online) return _lanUnlimitedAttachmentCap;
-    // nightly.10: when both LAN + online are enabled, normally we hold to
-    // the 30 MB cap because the path may fall through to relay. BUT if
-    // we have a fresh cached LAN-direct endpoint for this peer, we KNOW
-    // direct PUT is on the table and the relay-envelope cap is irrelevant.
-    final ep = _peerLanDirect[contact.deviceId];
-    if (ep != null && _lanDirectEndpointUsable(ep)) {
-      return _lanUnlimitedAttachmentCap;
-    }
-    return maxAttachmentSizeBytes;
+    final policies = _effectiveTransportPolicies(contact);
+    final irohAllowed =
+        _transportRegistry?.adapterFor(TransportKind.iroh) != null &&
+        contact.hasPinnedIrohIdentity &&
+        (policies[TransportKind.iroh] == TransportPolicy.automatic ||
+            policies[TransportKind.iroh] == TransportPolicy.preferred);
+    if (!effective.lan && !irohAllowed) return maxAttachmentSizeBytes;
+    // Selection is allowed while LAN is enabled even if the direct endpoint
+    // is temporarily absent. Large sessions enter waitingForLan and never
+    // leak file chunks through the online/relay fallback.
+    return maxLanAttachmentSizeBytes;
   }
 
   /// Picks the chunk size to use when slicing a new outbound attachment.
@@ -3190,17 +3891,40 @@ class MessengerController extends ChangeNotifier {
     String? albumId,
     Uint8List? poster,
   }) async {
+    return sendAttachmentSource(
+      contact: contact,
+      source: StagedAttachment(
+        id: _randomId('stage'),
+        fileName: fileName,
+        mimeType: mimeType,
+        sizeBytes: bytes.length,
+        bytes: bytes,
+        poster: poster,
+        caption: caption,
+      ),
+      caption: caption,
+      albumId: albumId,
+    );
+  }
+
+  Future<void> sendAttachmentSource({
+    required ContactRecord contact,
+    required StagedAttachment source,
+    String caption = '',
+    String? albumId,
+    bool allowOriginalFallback = false,
+  }) async {
     final me = _requireIdentity();
     if (!contact.canSendOutbound) {
       throw StateError(
         'Cannot send to ${contact.alias} until the identity is verified.',
       );
     }
-    if (bytes.isEmpty) {
+    if (source.sizeBytes <= 0) {
       throw ArgumentError('Cannot send an empty file.');
     }
     final perContactCap = effectiveMaxAttachmentSizeFor(contact);
-    if (bytes.length > perContactCap) {
+    if (source.sizeBytes > perContactCap) {
       final mb = perContactCap ~/ (1024 * 1024);
       throw ArgumentError(
         'Attachment exceeds the $mb MB cap for this contact.',
@@ -3208,31 +3932,17 @@ class MessengerController extends ChangeNotifier {
     }
 
     final attachmentId = _randomId('att');
-    final chunkSize = _effectiveChunkSizeFor(contact);
-    final chunkBytes = <Uint8List>[];
-    final chunkHashes = <ChunkHash>[];
-    for (var offset = 0; offset < bytes.length; offset += chunkSize) {
-      final end = (offset + chunkSize > bytes.length)
-          ? bytes.length
-          : offset + chunkSize;
-      // Zero-copy view into the original buffer. Previously
-      // `Uint8List.fromList(bytes.sublist(...))` allocated per-chunk
-      // copies — for a 30 MB file that's ~960 transient allocations and
-      // ~60 MB peak memory, enough to OOM low-RAM Android.
-      final slice = Uint8List.view(
-        bytes.buffer,
-        bytes.offsetInBytes + offset,
-        end - offset,
-      );
-      chunkBytes.add(slice);
-      final digest = await Sha256().hash(slice);
-      chunkHashes.add(
-        ChunkHash(
-          index: chunkBytes.length - 1,
-          hashBase64: base64Encode(digest.bytes),
-        ),
-      );
-    }
+    final requiresLan = source.sizeBytes > maxAttachmentSizeBytes;
+    final chunkSize = requiresLan
+        ? _lanAttachmentChunkSize
+        : _effectiveChunkSizeFor(contact);
+    final prepared = await _prepareOutboundAttachmentSource(
+      attachmentId: attachmentId,
+      source: source,
+      allowOriginalFallback: allowOriginalFallback,
+    );
+    _locallyAvailableAttachments.add(attachmentId);
+    final chunkCount = (prepared.sizeBytes + chunkSize - 1) ~/ chunkSize;
 
     // Per-attachment key; chunks travel inside pairwise-encrypted envelopes
     // today, so this is forward compatibility for v0.3.3 when relays cache
@@ -3240,11 +3950,13 @@ class MessengerController extends ChangeNotifier {
     final attachmentKey = SecretKeyData.random(length: 32);
     final descriptor = AttachmentDescriptor(
       id: attachmentId,
-      fileName: fileName,
-      mimeType: mimeType,
-      sizeBytes: bytes.length,
+      fileName: sanitizeAttachmentFileName(source.fileName),
+      mimeType: sanitizeAttachmentMimeType(source.mimeType),
+      sizeBytes: prepared.sizeBytes,
       chunkSize: chunkSize,
-      chunkHashes: chunkHashes,
+      chunkHashes: const <ChunkHash>[],
+      chunkCount: chunkCount,
+      fileHashBase64: prepared.fileHashBase64,
       encryptionKeyBase64: base64Encode(await attachmentKey.extractBytes()),
       createdAt: DateTime.now().toUtc(),
     );
@@ -3254,7 +3966,7 @@ class MessengerController extends ChangeNotifier {
       conversationId: _crypto.conversationIdFor(contact.deviceId),
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
-      body: caption,
+      body: caption.length <= 4096 ? caption : caption.substring(0, 4096),
       outbound: true,
       state: DeliveryState.pending,
       createdAt: DateTime.now().toUtc(),
@@ -3265,29 +3977,177 @@ class MessengerController extends ChangeNotifier {
     _outboundAttachments[attachmentId] = _OutboundAttachmentState(
       messageId: message.id,
       peerDeviceId: contact.deviceId,
-      chunks: chunkBytes,
+      sourcePath: prepared.path,
+      sourceKind: prepared.sourceKind,
       descriptor: descriptor,
+      requiresLan: requiresLan,
     );
-    // Sender keeps a copy so the chat bubble can render the image / file
-    // preview without waiting for the recipient's complete envelope.
-    _assembledAttachments[attachmentId] = bytes;
     // Stash the video poster (if any) so the sender's own bubble can
     // render the same thumbnail the receiver sees.
-    if (poster != null && poster.isNotEmpty) {
-      _videoPosters[attachmentId] = poster;
+    if (source.poster != null && source.poster!.isNotEmpty) {
+      _videoPosters[attachmentId] = source.poster!;
     }
-    // Persist asynchronously so the bubble survives an app restart on
-    // the sender side too — no point keeping a transfer-state bubble
-    // when we have the original right here.
-    unawaited(_persistAttachmentBytes(attachmentId, bytes));
+    _upsertTransferSession(
+      TransferSession(
+        id: attachmentId,
+        attachment: descriptor,
+        peerDeviceIds: <String>[contact.deviceId],
+        state: requiresLan && !_hasUsableLargeDirectTransport(contact)
+            ? TransferState.waitingForLan
+            : TransferState.pending,
+        completedChunks: const <int>[],
+        createdAt: descriptor.createdAt,
+        updatedAt: _now().toUtc(),
+        direction: TransferDirection.outbound,
+        messageId: message.id,
+        relativePath: prepared.relativePath,
+        sourceKind: prepared.sourceKind,
+        sourcePath: prepared.sourceKind == TransferSourceKind.originalPath
+            ? prepared.path
+            : null,
+        sourceSizeBytes: prepared.sizeBytes,
+        sourceModifiedAt: prepared.sourceModifiedAt,
+        requiresLan: requiresLan,
+      ),
+    );
     _markRuntimeActivity();
-    notifyListeners();
+    await _saveSnapshotSilently(notify: true);
 
     // Enqueue for this contact's serial transfer worker. The worker
     // dispatches the offer envelope when the previous outbound for the
     // same contact finishes — or immediately if the queue was empty.
     _enqueueOutbound(contact, attachmentId);
     _pumpOutboundQueue(contact);
+  }
+
+  Future<_PreparedAttachmentSource> _prepareOutboundAttachmentSource({
+    required String attachmentId,
+    required StagedAttachment source,
+    required bool allowOriginalFallback,
+  }) async {
+    final root = await _attachmentRoot();
+    final spoolDir = Directory(p.join(root.path, 'spool'));
+    await spoolDir.create(recursive: true);
+    final storageKey = attachmentStorageKey(attachmentId);
+    final relativePath = p.join('spool', '$storageKey.bin');
+    final target = File(p.join(root.path, relativePath));
+    final capacity = await _storageCapacityProvider(root.path);
+    final canSpool = capacity?.canAllocate(source.sizeBytes) ?? false;
+    Object? spoolError;
+    if (canSpool) {
+      final temporary = File('${target.path}.tmp');
+      try {
+        var written = 0;
+        await temporary.create(recursive: true);
+        await restrictFileToOwner(temporary);
+        final sink = temporary.openWrite(mode: FileMode.writeOnly);
+        try {
+          await for (final chunk in source.openRead()) {
+            written += chunk.length;
+            if (written > source.sizeBytes) {
+              throw const FormatException(
+                'Attachment source grew while copying.',
+              );
+            }
+            sink.add(chunk);
+          }
+          await sink.flush();
+        } finally {
+          await sink.close();
+        }
+        if (written != source.sizeBytes) {
+          throw const FormatException(
+            'Attachment source size changed while copying.',
+          );
+        }
+        await temporary.rename(target.path);
+        final digest = await dart_crypto.sha256.bind(target.openRead()).first;
+        return _PreparedAttachmentSource(
+          path: target.path,
+          relativePath: relativePath,
+          sourceKind: TransferSourceKind.privateSpool,
+          sizeBytes: written,
+          fileHashBase64: base64Encode(digest.bytes),
+          sourceModifiedAt: await target.lastModified(),
+        );
+      } catch (error) {
+        spoolError = error;
+        try {
+          if (await temporary.exists()) await temporary.delete();
+        } catch (_) {}
+      }
+    }
+    final originalPath = source.filePath;
+    if (!allowOriginalFallback || originalPath == null) {
+      throw AttachmentSpoolException(
+        canSpool
+            ? 'Could not create a private attachment spool: $spoolError'
+            : 'Not enough storage to keep the required 10% free-space reserve.',
+        canUseOriginal: originalPath != null,
+      );
+    }
+    final original = File(originalPath);
+    final stat = await original.stat();
+    if (stat.type != FileSystemEntityType.file ||
+        stat.size != source.sizeBytes) {
+      throw AttachmentSpoolException('The selected source file changed.');
+    }
+    final digest = await dart_crypto.sha256.bind(original.openRead()).first;
+    return _PreparedAttachmentSource(
+      path: original.path,
+      relativePath: '',
+      sourceKind: TransferSourceKind.originalPath,
+      sizeBytes: stat.size,
+      fileHashBase64: base64Encode(digest.bytes),
+      sourceModifiedAt: stat.modified,
+    );
+  }
+
+  bool _hasUsableLanDirectEndpoint(String deviceId) {
+    final endpoint = _peerLanDirect[deviceId];
+    return endpoint != null && _lanDirectEndpointUsable(endpoint);
+  }
+
+  void _upsertTransferSession(TransferSession session) {
+    final sessions = List<TransferSession>.from(_snapshot.transferSessions);
+    final index = sessions.indexWhere((entry) => entry.id == session.id);
+    if (index < 0) {
+      sessions.add(session);
+    } else {
+      sessions[index] = session;
+    }
+    _snapshot = _snapshot.copyWith(transferSessions: sessions);
+  }
+
+  TransferSession? _transferSessionById(String attachmentId) => _snapshot
+      .transferSessions
+      .where((entry) => entry.id == attachmentId)
+      .firstOrNull;
+
+  void _setTransferSessionState(
+    String attachmentId,
+    TransferState state, {
+    String? error,
+  }) {
+    final session = _transferSessionById(attachmentId);
+    if (session == null) return;
+    _upsertTransferSession(
+      session.copyWith(
+        state: state,
+        updatedAt: _now().toUtc(),
+        lastError: error,
+        clearLastError: error == null,
+      ),
+    );
+    unawaited(_saveSnapshotSilently(notify: true, debounce: true));
+  }
+
+  void _removeTransferSession(String attachmentId) {
+    _snapshot = _snapshot.copyWith(
+      transferSessions: _snapshot.transferSessions
+          .where((entry) => entry.id != attachmentId)
+          .toList(growable: false),
+    );
   }
 
   /// Pushes an attachmentId onto the contact's serial-send queue. Idempotent
@@ -3376,12 +4236,19 @@ class MessengerController extends ChangeNotifier {
       createdAt: message.createdAt,
     );
     try {
-      await _deliverToContact(
+      final route = await _deliverToContact(
         contact: contact,
         recipientDeviceId: contact.deviceId,
         envelope: envelope,
       );
-      _updateMessageState(contact.deviceId, message.id, DeliveryState.relayed);
+      _updateMessageState(
+        contact.deviceId,
+        message.id,
+        route.kind == PeerRouteKind.lan
+            ? DeliveryState.local
+            : DeliveryState.relayed,
+        route: route,
+      );
     } catch (error) {
       _statusMessage = 'Attachment offer delivery failed: $error';
       _updateMessageState(contact.deviceId, message.id, DeliveryState.failed);
@@ -3495,7 +4362,7 @@ class MessengerController extends ChangeNotifier {
     if (_activeOutboundByContact[state.peerDeviceId] != attachmentId) {
       return null;
     }
-    final total = state.descriptor.chunkHashes.length;
+    final total = state.descriptor.effectiveChunkCount;
     if (total <= 0) return null;
     // Prefer the receiver-reported count (`peerReceivedCount`) so the
     // sender's bubble shows the SAME percentage as the receiver's — fixes
@@ -3547,6 +4414,11 @@ class MessengerController extends ChangeNotifier {
     return null;
   }
 
+  /// Whether a complete local source/cache exists even when it is too large
+  /// to materialize in memory. Large-file UI should use path-based open/save.
+  bool attachmentAvailableLocally(String attachmentId) =>
+      _locallyAvailableAttachments.contains(attachmentId);
+
   /// Public accessor for the on-disk attachment root. Used by UI code that
   /// needs to stage temp files alongside the assembled attachments — e.g.
   /// the clipboard-cache directory the image-copy path writes a stable
@@ -3554,25 +4426,11 @@ class MessengerController extends ChangeNotifier {
   Future<Directory> attachmentRoot() => _attachmentRoot();
 
   Future<Directory> _attachmentRoot() async {
-    final dir = await _attachmentRootProvider();
+    final dir = await (_attachmentRootFuture ??= _attachmentRootProvider());
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
     return dir;
-  }
-
-  Future<void> _persistAttachmentBytes(
-    String attachmentId,
-    Uint8List bytes,
-  ) async {
-    try {
-      final dir = await _attachmentRoot();
-      final file = File(p.join(dir.path, attachmentId));
-      await file.writeAsBytes(bytes, flush: true);
-    } catch (error) {
-      // Persisting is best-effort; the in-memory copy still renders.
-      _statusMessage = 'Could not cache attachment to disk: $error';
-    }
   }
 
   final Set<String> _attachmentDiskLoadInFlight = <String>{};
@@ -3584,11 +4442,12 @@ class MessengerController extends ChangeNotifier {
     }
     _attachmentDiskLoadInFlight.add(attachmentId);
     try {
-      final dir = await _attachmentRoot();
-      final file = File(p.join(dir.path, attachmentId));
+      final file = await _attachmentCacheFile(attachmentId);
       if (!await file.exists()) {
         return;
       }
+      final size = await file.length();
+      if (size > 8 * 1024 * 1024) return;
       final bytes = await file.readAsBytes();
       _assembledAttachments[attachmentId] = bytes;
       notifyListeners();
@@ -3617,11 +4476,55 @@ class MessengerController extends ChangeNotifier {
     if (state == null) {
       return null;
     }
-    if (state.descriptor.chunkHashes.isEmpty) {
+    if (state.descriptor.effectiveChunkCount <= 0) {
       return 0;
     }
-    final received = state.received.where((chunk) => chunk != null).length;
-    return received / state.descriptor.chunkHashes.length;
+    return state.received.length / state.descriptor.effectiveChunkCount;
+  }
+
+  bool attachmentAwaitingAcceptance(String attachmentId) =>
+      _inboundAttachments[attachmentId]?.awaitingAcceptance ?? false;
+
+  Future<void> acceptIncomingAttachment(String attachmentId) async {
+    final state = _inboundAttachments[attachmentId];
+    if (state == null || !state.awaitingAcceptance) return;
+    final partialPath = await _createInboundPartialFile(state.descriptor);
+    if (partialPath == null) {
+      _setTransferSessionState(
+        attachmentId,
+        TransferState.waitingForStorage,
+        error: 'Storage reserve unavailable.',
+      );
+      return;
+    }
+    state
+      ..partialPath = partialPath
+      ..accepted = true
+      ..awaitingAcceptance = false;
+    final contact = _contactByDeviceId(state.peerDeviceId);
+    final lanAvailable = _hasUsableLanDirectEndpoint(state.peerDeviceId);
+    _setTransferSessionState(
+      attachmentId,
+      lanAvailable ? TransferState.transferring : TransferState.waitingForLan,
+    );
+    if (contact != null && lanAvailable) {
+      _scheduleAttachmentRetry(attachmentId);
+      _topUpInboundWindow(state, contact);
+    }
+    notifyListeners();
+  }
+
+  Future<void> rejectIncomingAttachment(String attachmentId) async {
+    final state = _inboundAttachments[attachmentId];
+    if (state == null) return;
+    final contact = _contactByDeviceId(state.peerDeviceId);
+    if (contact != null) {
+      unawaited(_sendAttachmentCancel(contact, attachmentId));
+    }
+    _deleteMessage(state.peerDeviceId, state.messageId);
+    await _deleteAttachmentArtifacts(attachmentId);
+    _removeTransferSession(attachmentId);
+    await _saveSnapshotSilently(notify: true);
   }
 
   /// Resolves the on-disk cache path for a completed attachment so the
@@ -3630,14 +4533,58 @@ class MessengerController extends ChangeNotifier {
   /// still in flight or the disk write failed).
   Future<String?> attachmentCachePathFor(String attachmentId) async {
     try {
-      final dir = await _attachmentRoot();
-      final file = File(p.join(dir.path, attachmentId));
+      final file = await _attachmentCacheFile(attachmentId);
       if (!await file.exists()) {
+        final outbound = _outboundAttachments[attachmentId];
+        if (outbound != null && await File(outbound.sourcePath).exists()) {
+          return outbound.sourcePath;
+        }
+        final session = _transferSessionById(attachmentId);
+        final originalPath =
+            session?.sourceKind == TransferSourceKind.originalPath
+            ? session?.sourcePath
+            : null;
+        if (originalPath != null && await File(originalPath).exists()) {
+          return originalPath;
+        }
         return null;
       }
       return file.path;
     } catch (_) {
       return null;
+    }
+  }
+
+  Future<File> _attachmentCacheFile(String attachmentId) async {
+    final root = await _attachmentRoot();
+    final cache = Directory(p.join(root.path, 'cache'));
+    if (!await cache.exists()) await cache.create(recursive: true);
+    return File(p.join(cache.path, attachmentStorageKey(attachmentId)));
+  }
+
+  Future<void> _deleteAttachmentArtifacts(String attachmentId) async {
+    _locallyAvailableAttachments.remove(attachmentId);
+    try {
+      final root = await _attachmentRoot();
+      final key = attachmentStorageKey(attachmentId);
+      final candidates = <String>{
+        p.join(root.path, 'cache', key),
+        p.join(root.path, 'cache', '$key.tmp'),
+        p.join(root.path, 'spool', '$key.bin'),
+        p.join(root.path, 'spool', '$key.bin.tmp'),
+        p.join(root.path, 'partial', '$key.part'),
+      };
+      final session = _transferSessionById(attachmentId);
+      if (session != null && session.relativePath.isNotEmpty) {
+        candidates.add(p.join(root.path, session.relativePath));
+      }
+      for (final path in candidates) {
+        if (!isContainedPath(root.path, path)) continue;
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+      }
+    } catch (error) {
+      appendDebugLog('Attachment cleanup failed for $attachmentId: $error');
     }
   }
 
@@ -4199,6 +5146,11 @@ class MessengerController extends ChangeNotifier {
   Future<void> sendStagedBundle({
     required ContactRecord contact,
     String caption = '',
+    Future<bool> Function(
+      StagedAttachment attachment,
+      AttachmentSpoolException error,
+    )?
+    confirmOriginalSourceFallback,
   }) async {
     final staged = _stagedAttachments[contact.deviceId];
     if (staged == null || staged.isEmpty) return;
@@ -4241,18 +5193,34 @@ class MessengerController extends ChangeNotifier {
       for (var i = 0; i < album.length; i++) {
         final entry = album[i];
         try {
-          final bytes = await entry.readBytes();
-          await sendAttachment(
+          await sendAttachmentSource(
             contact: contact,
-            bytes: bytes,
-            fileName: entry.fileName,
-            mimeType: entry.mimeType,
+            source: entry,
             caption: album.length == 1
                 ? entry.caption
                 : (i == 0 ? entry.caption : ''),
             albumId: albumId,
-            poster: entry.poster,
           );
+        } on AttachmentSpoolException catch (error) {
+          final useOriginal =
+              error.canUseOriginal &&
+              confirmOriginalSourceFallback != null &&
+              await confirmOriginalSourceFallback(entry, error);
+          if (useOriginal) {
+            await sendAttachmentSource(
+              contact: contact,
+              source: entry,
+              caption: album.length == 1
+                  ? entry.caption
+                  : (i == 0 ? entry.caption : ''),
+              albumId: albumId,
+              allowOriginalFallback: true,
+            );
+          } else {
+            appendDebugLog(
+              'sendStagedBundle: ${entry.fileName} not sent — $error',
+            );
+          }
         } catch (error) {
           appendDebugLog('sendStagedBundle: ${entry.fileName} failed — $error');
         }
@@ -4283,6 +5251,23 @@ class MessengerController extends ChangeNotifier {
     appendDebugLog(
       'Connectivity changed ($label) — kicking active transfers + polling.',
     );
+    _routeHealthTracker.clearBackoffWindows();
+    // An address learned on the old interface is no longer trusted as a LAN
+    // destination. Both peers exchange fresh, authenticated endpoint hints.
+    _peerLanDirect.clear();
+    for (final state in _outboundAttachments.values.where(
+      (entry) => entry.requiresLan,
+    )) {
+      final peer = _contactByDeviceId(state.peerDeviceId);
+      if (peer == null || !_hasUsableLargeDirectTransport(peer)) {
+        _setTransferSessionState(
+          state.descriptor.id,
+          TransferState.waitingForLan,
+          error: 'Waiting for a direct route after connectivity changed.',
+        );
+      }
+    }
+    unawaited(_refreshAndAdvertiseLanDirectRoutes());
     // Cancel inbound retry timers so the next re-request fires immediately
     // through the (possibly different) route instead of waiting out the
     // original interval against a stale interface.
@@ -4301,6 +5286,26 @@ class MessengerController extends ChangeNotifier {
     }
     // Drain whatever queued at the relay during the interface flap.
     unawaited(pollNow());
+  }
+
+  Future<void> _refreshAndAdvertiseLanDirectRoutes() async {
+    try {
+      _localLanAddressesCache = (await _lanAddressProvider())
+          .where(isValidLanDirectHost)
+          .take(4)
+          .toList(growable: false);
+    } catch (_) {
+      _localLanAddressesCache = const <String>[];
+    }
+    for (final contact in _snapshot.contacts.where(
+      (entry) => entry.canSendOutbound,
+    )) {
+      await _sendRouteUpdate(
+        contact,
+        requestReply: true,
+        reason: 'connectivity_change',
+      );
+    }
   }
 
   /// nightly.11: cancel an outbound transfer by attachmentId. Walks the
@@ -4367,6 +5372,8 @@ class MessengerController extends ChangeNotifier {
       final inboundState = _inboundAttachments.remove(attachmentId);
       inboundState?.retryTimer?.cancel();
       _assembledAttachments.remove(attachmentId);
+      _removeTransferSession(attachmentId);
+      unawaited(_deleteAttachmentArtifacts(attachmentId));
     }
     _clearOutboundAttempt(contact.deviceId, messageId);
     _deleteMessage(contact.deviceId, messageId);
@@ -4514,6 +5521,7 @@ class MessengerController extends ChangeNotifier {
     final payload = Map<String, dynamic>.from(signablePayload)
       ..['signatureBase64'] = base64Encode(signature.bytes);
     final envelope = RelayEnvelope(
+      protocolVersion: 1,
       kind: 'lan_lobby_message',
       messageId: messageId,
       conversationId: _lanLobbyConversationId,
@@ -4565,15 +5573,18 @@ class MessengerController extends ChangeNotifier {
 
   Future<bool> _sendReciprocalContactExchange(ContactRecord contact) async {
     final me = _requireIdentity();
-    final payload = _inviteForIdentity(me).encodePayload();
+    final payload = (await _inviteForIdentity(me)).encodePayload();
+    // Bootstrap is an untrusted v1 request because the recipient may not
+    // know our public key yet. It has no effects until explicit approval.
     final exchange = RelayEnvelope(
+      protocolVersion: 1,
       kind: 'contact_exchange',
       messageId: _randomId('xchg'),
       conversationId: 'contact-exchange-${contact.deviceId}',
       senderAccountId: me.accountId,
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
-      createdAt: DateTime.now().toUtc(),
+      createdAt: _now().toUtc(),
       payloadBase64: base64Encode(utf8.encode(payload)),
     );
     try {
@@ -4588,83 +5599,22 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  /// In-memory rate-limit for orphan-removal notices. When we receive an
-  /// envelope from a sender we no longer know, we send one
-  /// `contact_remove` back so the peer (whose original contact_remove
-  /// got lost in transit, or who never thought we were a contact) can
-  /// drop us. Without this throttle, every retry from the peer would
-  /// echo back another notice and spam the relay.
-  final Map<String, DateTime> _orphanRemovalNoticesSentAt =
-      <String, DateTime>{};
-  static const Duration _orphanRemovalNoticeCooldown = Duration(minutes: 5);
-
-  Future<void> _maybeSendOrphanContactRemoval({
-    required String senderDeviceId,
-  }) async {
-    if (senderDeviceId.isEmpty || !hasIdentity) {
-      return;
-    }
-    // Global Online disabled → no relay traffic, including this echo.
-    if (!_snapshot.identity!.connectivity.onlineEnabled) {
-      return;
-    }
-    // Already in contacts (or being verified) → not an orphan.
-    if (_contactByDeviceId(senderDeviceId) != null) {
-      return;
-    }
-    // Group member → handled by group flow.
-    for (final group in _snapshot.groups) {
-      if (group.activeMemberDeviceIds.contains(senderDeviceId)) {
-        return;
-      }
-    }
-    final me = _requireIdentity();
-    if (senderDeviceId == me.deviceId) {
-      return;
-    }
-    final now = _now();
-    final lastSent = _orphanRemovalNoticesSentAt[senderDeviceId];
-    if (lastSent != null &&
-        now.difference(lastSent) < _orphanRemovalNoticeCooldown) {
-      return;
-    }
-    _orphanRemovalNoticesSentAt[senderDeviceId] = now;
-    final removal = RelayEnvelope(
-      kind: 'contact_remove',
-      messageId: _randomId('rmorph'),
-      conversationId: 'contact-remove-$senderDeviceId',
-      senderAccountId: me.accountId,
-      senderDeviceId: me.deviceId,
-      recipientDeviceId: senderDeviceId,
-      createdAt: DateTime.now().toUtc(),
-    );
-    final relayRoutes = me.configuredRelays
-        .where((r) => r.kind == PeerRouteKind.relay)
-        .toList(growable: false);
-    if (relayRoutes.isEmpty) {
-      return;
-    }
-    try {
-      await _deliverAcrossRoutes(
-        routes: relayRoutes,
-        recipientDeviceId: senderDeviceId,
-        envelope: removal,
-      );
-    } catch (_) {
-      // Best-effort; receiver may not share a relay with us.
-    }
-  }
-
   Future<bool> _sendContactRemoval(ContactRecord contact) async {
     final me = _requireIdentity();
-    final removal = RelayEnvelope(
+    final removedAt = DateTime.now().toUtc();
+    final removal = await _crypto.encryptPayloadEnvelope(
       kind: 'contact_remove',
       messageId: _randomId('rm'),
       conversationId: _crypto.conversationIdFor(contact.deviceId),
       senderAccountId: me.accountId,
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
-      createdAt: DateTime.now().toUtc(),
+      contact: contact,
+      plaintext: jsonEncode({
+        'removedDeviceId': contact.deviceId,
+        'removedAt': removedAt.toIso8601String(),
+      }),
+      createdAt: removedAt,
     );
     try {
       await _deliverToContact(
@@ -4711,6 +5661,7 @@ class MessengerController extends ChangeNotifier {
         recipientDeviceId: contact.deviceId,
         contact: contact,
         plaintext: payload,
+        createdAt: now.toUtc(),
       );
       // Enqueue BEFORE attempting delivery so a failure (or a crash mid-send)
       // doesn't lose the obligation. The retry loop drains this queue
@@ -4866,6 +5817,7 @@ class MessengerController extends ChangeNotifier {
         recipientDeviceId: contact.deviceId,
         contact: contact,
         plaintext: payload,
+        createdAt: now.toUtc(),
       );
       _enqueuePendingMembershipDelivery(
         entry.copyWith(
@@ -4908,6 +5860,7 @@ class MessengerController extends ChangeNotifier {
       recipientDeviceId: original.senderDeviceId,
       contact: sender,
       plaintext: payload,
+      createdAt: _now().toUtc(),
       acknowledgedMessageId: original.messageId,
     );
     try {
@@ -5022,24 +5975,26 @@ class MessengerController extends ChangeNotifier {
         probeId ?? (requestReply ? _randomId('probe') : null);
     final effectiveSentAt = sentAt ?? _now();
     final routeUpdatePayload = <String, dynamic>{
-      'invitePayload': _inviteForIdentity(me).encodePayload(),
+      'invitePayload': (await _inviteForIdentity(me)).encodePayload(),
       'requestReply': requestReply,
       'reason': reason,
       'sentAt': effectiveSentAt.toIso8601String(),
+      ..._localLanDirectHintPayload(),
     };
     if (effectiveProbeId != null) {
       routeUpdatePayload['probeId'] = effectiveProbeId;
     }
     final payload = jsonEncode(routeUpdatePayload);
-    final update = RelayEnvelope(
+    final update = await _crypto.encryptPayloadEnvelope(
       kind: 'route_update',
       messageId: _randomId('route'),
       conversationId: 'route-update-${contact.deviceId}',
       senderAccountId: me.accountId,
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
+      contact: contact,
+      plaintext: payload,
       createdAt: effectiveSentAt,
-      payloadBase64: base64Encode(utf8.encode(payload)),
     );
     try {
       if (requestReply && effectiveProbeId != null) {
@@ -5189,11 +6144,13 @@ class MessengerController extends ChangeNotifier {
           }
           _fetchCallCount++;
           final stopwatch = Stopwatch()..start();
+          final expectedRelayKey = await _requireOperationalRelayPin(route);
           final envelopes = await _relayClient.fetchEnvelopes(
             host: route.host,
             port: route.port,
             protocol: route.protocol,
             recipientDeviceId: me.deviceId,
+            expectedIdentityPublicKeyBase64: expectedRelayKey,
             timeout: route.kind == PeerRouteKind.lan
                 ? const Duration(milliseconds: 900)
                 : const Duration(seconds: 4),
@@ -5314,12 +6271,14 @@ class MessengerController extends ChangeNotifier {
       final stopwatch = Stopwatch()..start();
       List<RelayEnvelope> envelopes = const [];
       try {
+        final expectedRelayKey = await _requireOperationalRelayPin(route);
         envelopes = await _relayClient.fetchEnvelopes(
           host: route.host,
           port: route.port,
           protocol: route.protocol,
           recipientDeviceId: me.deviceId,
           waitFor: const Duration(seconds: 25),
+          expectedIdentityPublicKeyBase64: expectedRelayKey,
         );
         stopwatch.stop();
         _routeHealthTracker.recordSuccess(
@@ -5574,7 +6533,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _ensurePairingBeaconRunning() async {
-    if (kIsWeb || _pairingBeaconSocket != null) {
+    if (!_pairingBeaconEnabled || kIsWeb || _pairingBeaconSocket != null) {
       return;
     }
     if (_snapshot.identity?.connectivity.lanEnabled == false) {
@@ -5889,7 +6848,7 @@ class MessengerController extends ChangeNotifier {
       _notificationsDeferredDepth--;
       if (_notificationsDeferredDepth == 0 && _deferredNotificationPending) {
         _deferredNotificationPending = false;
-        super.notifyListeners();
+        if (!_disposed) super.notifyListeners();
       }
     }
     return processed;
@@ -5907,6 +6866,14 @@ class MessengerController extends ChangeNotifier {
         return leftPriority.compareTo(rightPriority);
       });
     for (final envelope in orderedEnvelopes) {
+      if (!_isValidInboundEnvelope(envelope)) {
+        appendDebugLog(
+          'Rejected malformed or incompatible envelope '
+          '${_boundedLogValue(envelope.messageId)} '
+          'kind=${_boundedLogValue(envelope.kind)}.',
+        );
+        continue;
+      }
       if (_seenEnvelopeIdSet.contains(envelope.messageId)) {
         await _replayAckForSeenEnvelope(envelope);
         continue;
@@ -5930,9 +6897,15 @@ class MessengerController extends ChangeNotifier {
         // while pending), but short-circuiting here keeps logs quiet and
         // ensures inbound state stays consistent with confirm/reject.
         final senderContact = _contactByDeviceId(envelope.senderDeviceId);
+        if (senderContact != null &&
+            senderContact.accountId != envelope.senderAccountId) {
+          appendDebugLog(
+            'Rejected sender account mismatch for ${senderContact.deviceId}.',
+          );
+          continue;
+        }
         if (senderContact != null && senderContact.pendingVerification) {
           _enqueueHeldEnvelope(senderContact.deviceId, envelope);
-          _markSeen(envelope.messageId);
           continue;
         }
         // Connectivity mode is bidirectional: if the sender contact's
@@ -5952,34 +6925,7 @@ class MessengerController extends ChangeNotifier {
         }
         processed++;
         if (envelope.kind == 'ack') {
-          _reachability.noteTwoWaySuccess(envelope.senderDeviceId);
-          if (_groupById(envelope.conversationId) != null) {
-            _updateGroupRecipientState(
-              envelope.conversationId,
-              envelope.acknowledgedMessageId ?? '',
-              envelope.senderDeviceId,
-              _isReadReceiptAck(envelope)
-                  ? DeliveryState.read
-                  : DeliveryState.delivered,
-            );
-          } else {
-            if (_isReadReceiptAck(envelope)) {
-              _markMessagesReadThroughMessage(
-                envelope.senderDeviceId,
-                envelope.acknowledgedMessageId ?? '',
-              );
-            } else {
-              _updateMessageState(
-                envelope.senderDeviceId,
-                envelope.acknowledgedMessageId ?? '',
-                DeliveryState.delivered,
-              );
-              _clearOutboundAttempt(
-                envelope.senderDeviceId,
-                envelope.acknowledgedMessageId ?? '',
-              );
-            }
-          }
+          await _handleAck(envelope);
           _markSeen(envelope.messageId);
           continue;
         }
@@ -6063,9 +7009,7 @@ class MessengerController extends ChangeNotifier {
         }
 
         if (kDebugMode && envelope.kind == 'debug_probe_ack') {
-          _debugProbeAcknowledgements.add(
-            envelope.acknowledgedMessageId ?? envelope.messageId,
-          );
+          await _handleDebugAcknowledgement(envelope, twoWay: false);
           _markSeen(envelope.messageId);
           continue;
         }
@@ -6077,9 +7021,7 @@ class MessengerController extends ChangeNotifier {
         }
 
         if (kDebugMode && envelope.kind == 'debug_two_way_reply') {
-          _debugTwoWayReplies.add(
-            envelope.acknowledgedMessageId ?? envelope.messageId,
-          );
+          await _handleDebugAcknowledgement(envelope, twoWay: true);
           _markSeen(envelope.messageId);
           continue;
         }
@@ -6092,16 +7034,9 @@ class MessengerController extends ChangeNotifier {
           }
         }
         if (contact == null) {
-          // The peer thinks we're a contact but we don't think they are.
-          // The likely cause is that our earlier contact_remove envelope
-          // never reached them (relay down / both peers offline at
-          // different times). Echo one contact_remove back so they can
-          // catch up. Rate-limited to once per cooldown per sender.
-          unawaited(
-            _maybeSendOrphanContactRemoval(
-              senderDeviceId: envelope.senderDeviceId,
-            ),
-          );
+          // Strict v2 cannot authenticate an orphan response after the key
+          // has been forgotten. Silently ignore instead of emitting a
+          // forgeable contact-removal control.
           continue;
         }
 
@@ -6137,6 +7072,11 @@ class MessengerController extends ChangeNotifier {
         _reachability.noteAnySignal(contact.deviceId, at: envelope.createdAt);
         await _sendAck(contact: contact, envelope: envelope);
         _markSeen(envelope.messageId);
+      } catch (error) {
+        appendDebugLog(
+          'Dropped envelope ${_boundedLogValue(envelope.messageId)} after '
+          'processing error: ${_boundedLogValue(error.toString(), 180)}',
+        );
       } finally {
         _inFlightEnvelopeIds.remove(envelope.messageId);
       }
@@ -6173,17 +7113,121 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  bool _isReadReceiptAck(RelayEnvelope envelope) {
-    final rawPayload = envelope.payloadBase64;
-    if (rawPayload == null || rawPayload.isEmpty) {
+  String _boundedLogValue(Object? value, [int maxLength = 80]) {
+    final text = value?.toString() ?? '';
+    return text.length <= maxLength ? text : '${text.substring(0, maxLength)}…';
+  }
+
+  bool _isValidInboundEnvelope(RelayEnvelope envelope) {
+    final me = _snapshot.identity;
+    if (me == null) return false;
+    bool bounded(String value, int max) =>
+        value.isNotEmpty &&
+        value.length <= max &&
+        !RegExp(r'[\x00-\x1f\x7f]').hasMatch(value);
+    if (!bounded(envelope.kind, 64) ||
+        !bounded(envelope.messageId, 160) ||
+        !bounded(envelope.conversationId, 256) ||
+        !bounded(envelope.senderAccountId, 160) ||
+        !bounded(envelope.senderDeviceId, 160) ||
+        !bounded(envelope.recipientDeviceId, 160)) {
+      return false;
+    }
+    final now = _now().toUtc();
+    final createdAt = envelope.createdAt.toUtc();
+    if (createdAt.isAfter(now.add(const Duration(days: 1))) ||
+        createdAt.isBefore(now.subtract(const Duration(days: 30)))) {
+      return false;
+    }
+    if (envelope.kind == 'lan_lobby_message') {
+      if (envelope.protocolVersion != 1 ||
+          envelope.recipientDeviceId != _lanLobbyMailboxId ||
+          envelope.payloadBase64 == null) {
+        return false;
+      }
+      try {
+        return base64Decode(envelope.payloadBase64!).length <=
+            _maxLanLobbyPayloadBytes;
+      } catch (_) {
+        return false;
+      }
+    }
+    if (envelope.recipientDeviceId != me.deviceId ||
+        envelope.senderDeviceId == me.deviceId) {
+      return false;
+    }
+    if (envelope.protocolVersion == 1) {
+      if (envelope.kind != 'contact_exchange' ||
+          _contactByDeviceId(envelope.senderDeviceId) != null ||
+          envelope.payloadBase64 == null) {
+        return false;
+      }
+      try {
+        return base64Decode(envelope.payloadBase64!).length <=
+            _maxBootstrapPayloadBytes;
+      } catch (_) {
+        return false;
+      }
+    }
+    if (envelope.protocolVersion != 2 ||
+        !_v2PairwiseKinds.contains(envelope.kind) ||
+        envelope.payloadBase64 != null ||
+        envelope.nonceBase64 == null ||
+        envelope.ciphertextBase64 == null ||
+        envelope.macBase64 == null) {
       return false;
     }
     try {
-      final decoded = jsonDecode(utf8.decode(base64Decode(rawPayload)));
-      return decoded is Map<String, dynamic> && decoded['receipt'] == 'read';
+      return base64Decode(envelope.nonceBase64!).length == 12 &&
+          base64Decode(envelope.macBase64!).length == 16 &&
+          base64Decode(envelope.ciphertextBase64!).length <=
+              _maxEncryptedEnvelopeCiphertextBytes;
     } catch (_) {
       return false;
     }
+  }
+
+  Future<void> _handleAck(RelayEnvelope envelope) async {
+    final contact = _contactByDeviceId(envelope.senderDeviceId);
+    if (contact == null || contact.accountId != envelope.senderAccountId) {
+      return;
+    }
+    final decoded = jsonDecode(
+      await _crypto.decryptMessage(contact: contact, envelope: envelope),
+    );
+    if (decoded is! Map<String, dynamic>) return;
+    final receipt = decoded['receipt'] as String?;
+    final target = decoded['acknowledgedMessageId'] as String?;
+    if ((receipt != 'read' && receipt != 'delivered') ||
+        target == null ||
+        target.isEmpty ||
+        target != envelope.acknowledgedMessageId) {
+      return;
+    }
+    final group = _groupById(envelope.conversationId);
+    if (group != null) {
+      if (!group.hasActiveMember(contact.deviceId)) return;
+      _updateGroupRecipientState(
+        group.groupId,
+        target,
+        contact.deviceId,
+        receipt == 'read' ? DeliveryState.read : DeliveryState.delivered,
+      );
+    } else {
+      if (envelope.conversationId !=
+          _crypto.conversationIdFor(contact.deviceId)) {
+        return;
+      }
+      final message = _messageById(contact.deviceId, target);
+      if (message == null || !message.outbound) return;
+      if (receipt == 'read') {
+        _markMessagesReadThroughMessage(contact.deviceId, target);
+      } else {
+        _updateMessageState(contact.deviceId, target, DeliveryState.delivered);
+        _clearOutboundAttempt(contact.deviceId, target);
+      }
+    }
+    _reachability.noteTwoWaySuccess(contact.deviceId);
   }
 
   /// Receiver-side dispatcher for the five v0.3.2 attachment envelope
@@ -6221,7 +7265,7 @@ class MessengerController extends ChangeNotifier {
         await _handleAttachmentChunk(contact, payload);
         return;
       case 'attachment_complete':
-        _handleAttachmentComplete(contact, payload);
+        await _handleAttachmentComplete(contact, payload);
         return;
       case 'attachment_cancel':
         _handleAttachmentCancel(payload);
@@ -6250,18 +7294,10 @@ class MessengerController extends ChangeNotifier {
     }
     final AttachmentDescriptor descriptor;
     try {
-      descriptor = AttachmentDescriptor.fromJson(descriptorJson);
+      descriptor = _validateIncomingAttachmentDescriptor(
+        AttachmentDescriptor.fromJson(descriptorJson),
+      );
     } catch (_) {
-      return;
-    }
-    // Defensive validation — a malformed descriptor used to slip through and
-    // produce blank bubbles with a stuck "Transferring 0%" status. Reject
-    // the offer outright if any required field is missing or out-of-range.
-    if (descriptor.fileName.isEmpty ||
-        descriptor.chunkHashes.isEmpty ||
-        descriptor.sizeBytes <= 0 ||
-        descriptor.chunkSize <= 0 ||
-        descriptor.sizeBytes > maxAttachmentSizeBytes) {
       _setTransientStatus(
         'Rejected malformed attachment offer from ${sender.alias}.',
       );
@@ -6290,48 +7326,104 @@ class MessengerController extends ChangeNotifier {
       );
       return;
     }
+    final rawCaptionValue = payload['caption'];
+    final rawCaption = rawCaptionValue ?? '';
+    final rawAlbumId = payload['albumId'];
+    final parentMessageId = payload['parentMessageId'];
+    if (rawCaption is! String ||
+        rawCaption.length > 4096 ||
+        rawAlbumId != null &&
+            (rawAlbumId is! String ||
+                rawAlbumId.length > 160 ||
+                RegExp(r'[\x00-\x1f\x7f]').hasMatch(rawAlbumId)) ||
+        parentMessageId != null &&
+            (parentMessageId is! String ||
+                parentMessageId.isEmpty ||
+                parentMessageId.length > 160)) {
+      _setTransientStatus('Rejected invalid attachment metadata.');
+      return;
+    }
+    Uint8List? posterBytes;
+    final posterValue = payload['posterBase64'];
+    if (posterValue != null) {
+      if (posterValue is! String || posterValue.isEmpty) return;
+      try {
+        posterBytes = base64Decode(posterValue);
+      } catch (_) {
+        return;
+      }
+      if (posterBytes.length > 32 * 1024) return;
+    }
     final me = _requireIdentity();
     final message = ChatMessage(
       id: _randomId('msg'),
       conversationId: _crypto.conversationIdFor(sender.deviceId),
       senderDeviceId: sender.deviceId,
       recipientDeviceId: me.deviceId,
-      body: (payload['caption'] as String?) ?? '',
+      body: rawCaption,
       outbound: false,
       state: DeliveryState.pending,
       createdAt: envelope.createdAt,
       senderDisplayName: sender.alias,
       attachment: descriptor,
-      albumId: payload['albumId'] as String?,
+      albumId: rawAlbumId as String?,
     );
     _upsertMessage(sender.deviceId, message);
     // Decode + cache the video poster (if any) so the bubble can render
     // a thumbnail before the full bytes finish transferring.
-    final posterBase64 = payload['posterBase64'] as String?;
-    if (posterBase64 != null && posterBase64.isNotEmpty) {
-      try {
-        final posterBytes = base64Decode(posterBase64);
-        if (posterBytes.length <= 64 * 1024) {
-          _videoPosters[descriptor.id] = posterBytes;
-        }
-      } catch (_) {
-        // Bad poster bytes — non-fatal; just skip the preview.
-      }
+    if (posterBytes != null) {
+      _videoPosters[descriptor.id] = posterBytes;
     }
     final wasIdle = !hasActiveTransfer;
+    final requiresLan = descriptor.sizeBytes > maxAttachmentSizeBytes;
+    final directAvailable = _hasUsableLargeDirectTransport(sender);
+    final awaitingAcceptance = requiresLan && !directAvailable;
+    final partialPath = awaitingAcceptance
+        ? null
+        : await _createInboundPartialFile(descriptor);
     final inboundState = _InboundAttachmentState(
       messageId: message.id,
       peerDeviceId: sender.deviceId,
       descriptor: descriptor,
+      partialPath: partialPath,
+      awaitingAcceptance: awaitingAcceptance,
+      accepted: !awaitingAcceptance,
     );
     _inboundAttachments[descriptor.id] = inboundState;
+    _upsertTransferSession(
+      TransferSession(
+        id: descriptor.id,
+        attachment: descriptor,
+        peerDeviceIds: <String>[sender.deviceId],
+        state: awaitingAcceptance
+            ? TransferState.pending
+            : partialPath == null
+            ? TransferState.waitingForStorage
+            : requiresLan && !directAvailable
+            ? TransferState.waitingForLan
+            : TransferState.transferring,
+        completedChunks: const <int>[],
+        createdAt: descriptor.createdAt,
+        updatedAt: _now().toUtc(),
+        direction: TransferDirection.inbound,
+        messageId: message.id,
+        relativePath: partialPath == null
+            ? ''
+            : p.relative(partialPath, from: (await _attachmentRoot()).path),
+        sourceKind: TransferSourceKind.partialFile,
+        requiresLan: requiresLan,
+      ),
+    );
+    await _saveSnapshotSilently(notify: false);
     // Active transfer just started — boost the poll cadence so chunk
     // envelopes that fall back to relay polling get picked up in 1 s
     // instead of the idle 15 s.
     if (wasIdle) _reschedulePolling();
     // Schedule a retry timer that re-requests the next missing chunk if no
     // chunk arrives within 5 s. Caps at 12 retries before giving up.
-    _scheduleAttachmentRetry(descriptor.id);
+    if (partialPath != null && !awaitingAcceptance) {
+      _scheduleAttachmentRetry(descriptor.id);
+    }
     notifyListeners();
     // Prime the chunk-request window as a microtask so it lands AFTER the
     // current `_processEnvelopes` batch commits its state. Without this,
@@ -6339,7 +7431,86 @@ class MessengerController extends ChangeNotifier {
     // request could fire before file 1's `_outboundAttachments` entry on
     // the sender side was visible to the chunk-request handler that
     // bounces through the local-relay loopback.
-    Future.microtask(() => _topUpInboundWindow(inboundState, sender));
+    if (partialPath != null && !awaitingAcceptance) {
+      Future.microtask(() => _topUpInboundWindow(inboundState, sender));
+    }
+  }
+
+  AttachmentDescriptor _validateIncomingAttachmentDescriptor(
+    AttachmentDescriptor descriptor,
+  ) {
+    final now = _now().toUtc();
+    final createdAt = descriptor.createdAt.toUtc();
+    final safeFileName = sanitizeAttachmentFileName(descriptor.fileName);
+    if (descriptor.id.isEmpty ||
+        descriptor.id.length > 160 ||
+        RegExp(r'[\x00-\x1f\x7f]').hasMatch(descriptor.id) ||
+        descriptor.sizeBytes <= 0 ||
+        descriptor.sizeBytes > maxLanAttachmentSizeBytes ||
+        descriptor.chunkCount <= 0 ||
+        descriptor.chunkHashes.isNotEmpty ||
+        (descriptor.chunkSize != _attachmentChunkSize &&
+            descriptor.chunkSize != _lanAttachmentChunkSize) ||
+        descriptor.effectiveChunkCount <= 0 ||
+        descriptor.effectiveChunkCount > 4096 ||
+        descriptor.effectiveChunkCount !=
+            (descriptor.sizeBytes + descriptor.chunkSize - 1) ~/
+                descriptor.chunkSize ||
+        descriptor.fileHashBase64.isEmpty ||
+        descriptor.fileName != safeFileName ||
+        !isValidAttachmentMimeType(descriptor.mimeType) ||
+        createdAt.isAfter(now.add(const Duration(days: 1))) ||
+        createdAt.isBefore(now.subtract(const Duration(days: 30)))) {
+      throw const FormatException('Attachment descriptor is out of range.');
+    }
+    if (descriptor.sizeBytes > maxAttachmentSizeBytes &&
+        descriptor.chunkSize != _lanAttachmentChunkSize) {
+      throw const FormatException('Large attachments require LAN chunks.');
+    }
+    if (base64Decode(descriptor.fileHashBase64).length != 32 ||
+        base64Decode(descriptor.encryptionKeyBase64).length != 32) {
+      throw const FormatException('Attachment descriptor keys are invalid.');
+    }
+    return AttachmentDescriptor(
+      id: descriptor.id,
+      fileName: safeFileName,
+      mimeType: descriptor.mimeType,
+      sizeBytes: descriptor.sizeBytes,
+      chunkSize: descriptor.chunkSize,
+      chunkHashes: const <ChunkHash>[],
+      chunkCount: descriptor.effectiveChunkCount,
+      fileHashBase64: descriptor.fileHashBase64,
+      encryptionKeyBase64: descriptor.encryptionKeyBase64,
+      createdAt: createdAt,
+    );
+  }
+
+  Future<String?> _createInboundPartialFile(
+    AttachmentDescriptor descriptor,
+  ) async {
+    final root = await _attachmentRoot();
+    final capacity = await _storageCapacityProvider(root.path);
+    if (capacity == null || !capacity.canAllocate(descriptor.sizeBytes)) {
+      _setTransientStatus(
+        'Not enough storage to receive ${descriptor.fileName} while keeping 10% free.',
+      );
+      return null;
+    }
+    final partialDir = Directory(p.join(root.path, 'partial'));
+    await partialDir.create(recursive: true);
+    final file = File(
+      p.join(partialDir.path, '${attachmentStorageKey(descriptor.id)}.part'),
+    );
+    await file.create(recursive: true);
+    await restrictFileToOwner(file);
+    final handle = await file.open(mode: FileMode.write);
+    try {
+      await handle.truncate(descriptor.sizeBytes);
+      await handle.flush();
+    } finally {
+      await handle.close();
+    }
+    return file.path;
   }
 
   Future<void> _sendAttachmentChunkRequest(
@@ -6348,6 +7519,11 @@ class MessengerController extends ChangeNotifier {
     int index,
   ) async {
     final me = _requireIdentity();
+    final inbound = _inboundAttachments[attachmentId];
+    if (inbound == null || !inbound.accepted || inbound.partialPath == null) {
+      return;
+    }
+    final requiresLan = inbound.descriptor.sizeBytes > maxAttachmentSizeBytes;
     // nightly.9: piggy-back our LAN-direct endpoint hint so the sender
     // can PUT subsequent chunks directly to our HTTP server instead of
     // round-tripping through the relay envelope shape.
@@ -6393,6 +7569,9 @@ class MessengerController extends ChangeNotifier {
       );
       if (ok) {
         _onLanDirectPutSuccess(peer.deviceId);
+        if (requiresLan) {
+          _setTransferSessionState(attachmentId, TransferState.transferring);
+        }
         return;
       }
       unawaited(_onLanDirectPutFailure(peer.deviceId));
@@ -6446,15 +7625,60 @@ class MessengerController extends ChangeNotifier {
     if (state.paused) {
       return;
     }
-    if (index < 0 || index >= state.chunks.length) {
+    if (index < 0 || index >= state.descriptor.effectiveChunkCount) {
       return;
     }
-    final chunkBytes = state.chunks[index];
-    final hash = state.descriptor.chunkHashes[index].hashBase64;
+    if (state.requiresLan && !_hasUsableLargeDirectTransport(requester)) {
+      _setTransferSessionState(
+        attachmentId,
+        TransferState.waitingForLan,
+        error: 'Waiting for LAN or direct Iroh; relay use is not automatic.',
+      );
+      return;
+    }
+    final Uint8List chunkBytes;
+    try {
+      chunkBytes = await _readOutboundAttachmentChunk(state, index);
+    } catch (error) {
+      _setTransferSessionState(
+        attachmentId,
+        TransferState.failed,
+        error: error.toString(),
+      );
+      _updateMessageState(
+        state.peerDeviceId,
+        state.messageId,
+        DeliveryState.failed,
+      );
+      return;
+    }
+    final digest = await Sha256().hash(chunkBytes);
+    final hash = base64Encode(digest.bytes);
+    final chunkCipher = Chacha20.poly1305Aead();
+    final random = Random.secure();
+    final chunkNonce = List<int>.generate(
+      chunkCipher.nonceLength,
+      (_) => random.nextInt(256),
+    );
+    final encryptedChunk = await chunkCipher.encrypt(
+      chunkBytes,
+      secretKey: SecretKey(base64Decode(state.descriptor.encryptionKeyBase64)),
+      nonce: chunkNonce,
+      aad: _attachmentChunkAssociatedData(
+        attachmentId,
+        index,
+        chunkBytes.length,
+      ),
+    );
+    final packedChunk = <int>[
+      ...encryptedChunk.nonce,
+      ...encryptedChunk.cipherText,
+      ...encryptedChunk.mac.bytes,
+    ];
     final chunk = AttachmentChunk(
       attachmentId: attachmentId,
       index: index,
-      ciphertextBase64: base64Encode(chunkBytes),
+      ciphertextBase64: base64Encode(packedChunk),
       hashBase64: hash,
     );
     final me = _requireIdentity();
@@ -6508,14 +7732,26 @@ class MessengerController extends ChangeNotifier {
       }
       unawaited(_onLanDirectPutFailure(requester.deviceId));
       appendDebugLog(
-        'LAN-direct PUT to ${requester.alias} failed; falling back to relay.',
+        state.requiresLan
+            ? 'LAN-direct PUT to ${requester.alias} failed; waiting for LAN.'
+            : 'LAN-direct PUT to ${requester.alias} failed; falling back to relay.',
       );
+    }
+    if (state.requiresLan && !_hasUsableLargeDirectTransport(requester)) {
+      _setTransferSessionState(
+        attachmentId,
+        TransferState.waitingForLan,
+        error: 'Direct delivery unavailable; relay use is not automatic.',
+      );
+      return;
     }
     try {
       final deliveredVia = await _deliverToContact(
         contact: requester,
         recipientDeviceId: requester.deviceId,
         envelope: envelope,
+        allowRelayedPaths: !state.requiresLan,
+        allowLegacyRoutes: !state.requiresLan,
       );
       // Sender progress + stall-timer activity refresh. Only advance if
       // this is the active outbound for this contact (the receiver could
@@ -6526,7 +7762,16 @@ class MessengerController extends ChangeNotifier {
         }
         state.lastChunkAt = DateTime.now().toUtc();
         state.consecutiveChunkFailures = 0;
-        state.lastDeliveryRoute = OutboundDeliveryRoute.relay;
+        state.lastDeliveryRoute = switch ((
+          deliveredVia.transportKind,
+          deliveredVia.path,
+        )) {
+          (TransportKind.iroh, TransportPathKind.direct) =>
+            OutboundDeliveryRoute.irohDirect,
+          (TransportKind.iroh, TransportPathKind.relayed) =>
+            OutboundDeliveryRoute.irohRelay,
+          _ => OutboundDeliveryRoute.conestRelay,
+        };
         // If the delivered route is NOT the preferred primary, surface
         // "Rerouting · X%" on the bubble for the next few seconds so the
         // user sees the fallback is working.
@@ -6552,11 +7797,60 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  Future<Uint8List> _readOutboundAttachmentChunk(
+    _OutboundAttachmentState state,
+    int index,
+  ) async {
+    final file = File(state.sourcePath);
+    final stat = await file.stat();
+    if (stat.type != FileSystemEntityType.file ||
+        stat.size != state.descriptor.sizeBytes) {
+      throw const FormatException('Attachment source is missing or changed.');
+    }
+    if (state.sourceKind == TransferSourceKind.originalPath) {
+      final session = _transferSessionById(state.descriptor.id);
+      final expectedModified = session?.sourceModifiedAt;
+      if (expectedModified != null && stat.modified != expectedModified) {
+        throw const FormatException('Original attachment source was modified.');
+      }
+    }
+    final offset = index * state.descriptor.chunkSize;
+    final expectedLength = min(
+      state.descriptor.chunkSize,
+      state.descriptor.sizeBytes - offset,
+    );
+    if (offset < 0 || expectedLength <= 0) {
+      throw const FormatException('Attachment chunk offset is invalid.');
+    }
+    final handle = await file.open();
+    try {
+      await handle.setPosition(offset);
+      final bytes = await handle.read(expectedLength);
+      if (bytes.length != expectedLength) {
+        throw const FormatException('Attachment source ended unexpectedly.');
+      }
+      return bytes;
+    } finally {
+      await handle.close();
+    }
+  }
+
   Future<void> _handleAttachmentChunk(
     ContactRecord sender,
     Map<String, dynamic> payload,
   ) async {
     final chunk = AttachmentChunk.fromJson(payload);
+    if (chunk.attachmentId.isEmpty ||
+        chunk.attachmentId.length > 160 ||
+        chunk.ciphertextBase64.length > 700 * 1024 ||
+        chunk.hashBase64.length > 64) {
+      return;
+    }
+    try {
+      if (base64Decode(chunk.hashBase64).length != 32) return;
+    } catch (_) {
+      return;
+    }
     final state = _inboundAttachments[chunk.attachmentId];
     if (state == null || state.peerDeviceId != sender.deviceId) {
       return;
@@ -6571,13 +7865,57 @@ class MessengerController extends ChangeNotifier {
       if (!hasActiveTransfer) _reschedulePolling();
       return;
     }
-    if (chunk.index < 0 || chunk.index >= state.received.length) {
+    if (!state.accepted ||
+        state.partialPath == null ||
+        chunk.index < 0 ||
+        chunk.index >= state.descriptor.effectiveChunkCount) {
       return;
     }
-    final bytes = Uint8List.fromList(base64Decode(chunk.ciphertextBase64));
+    final offset = chunk.index * state.descriptor.chunkSize;
+    final expectedLength = min(
+      state.descriptor.chunkSize,
+      state.descriptor.sizeBytes - offset,
+    );
+    final packedBytes = base64Decode(chunk.ciphertextBase64);
+    final cipher = Chacha20.poly1305Aead();
+    if (packedBytes.length !=
+        cipher.nonceLength + expectedLength + cipher.macAlgorithm.macLength) {
+      state.requestedInFlight.remove(chunk.index);
+      return;
+    }
+    final nonceEnd = cipher.nonceLength;
+    final macStart = packedBytes.length - cipher.macAlgorithm.macLength;
+    final Uint8List bytes;
+    try {
+      bytes = Uint8List.fromList(
+        await cipher.decrypt(
+          SecretBox(
+            packedBytes.sublist(nonceEnd, macStart),
+            nonce: packedBytes.sublist(0, nonceEnd),
+            mac: Mac(packedBytes.sublist(macStart)),
+          ),
+          secretKey: SecretKey(
+            base64Decode(state.descriptor.encryptionKeyBase64),
+          ),
+          aad: _attachmentChunkAssociatedData(
+            chunk.attachmentId,
+            chunk.index,
+            expectedLength,
+          ),
+        ),
+      );
+    } catch (_) {
+      state.requestedInFlight.remove(chunk.index);
+      await _sendAttachmentChunkRequest(
+        sender,
+        chunk.attachmentId,
+        chunk.index,
+      );
+      return;
+    }
     final digest = await Sha256().hash(bytes);
-    final expectedHash = state.descriptor.chunkHashes[chunk.index].hashBase64;
-    if (base64Encode(digest.bytes) != expectedHash) {
+    final actualHash = base64Encode(digest.bytes);
+    if (actualHash != chunk.hashBase64) {
       // Hash mismatch — re-request this specific index. Leave it on the
       // requestedInFlight set so the window doesn't double-request.
       await _sendAttachmentChunkRequest(
@@ -6587,7 +7925,37 @@ class MessengerController extends ChangeNotifier {
       );
       return;
     }
-    state.received[chunk.index] = bytes;
+    if (!state.received.contains(chunk.index)) {
+      final partial = File(state.partialPath!);
+      // append is the non-truncating read/write RandomAccessFile mode;
+      // setPosition then supports sparse and out-of-order chunk writes.
+      final handle = await partial.open(mode: FileMode.append);
+      try {
+        await handle.setPosition(offset);
+        await handle.writeFrom(bytes);
+        await handle.flush();
+      } finally {
+        await handle.close();
+      }
+      state.received.add(chunk.index);
+      final session = _transferSessionById(chunk.attachmentId);
+      if (session != null) {
+        final completed = state.received.toList()..sort();
+        _upsertTransferSession(
+          session.copyWith(
+            state: TransferState.transferring,
+            completedChunks: completed,
+            bytesTransferred: min(
+              state.descriptor.sizeBytes,
+              completed.length * state.descriptor.chunkSize,
+            ),
+            updatedAt: _now().toUtc(),
+            clearLastError: true,
+          ),
+        );
+        unawaited(_saveSnapshotSilently(notify: false, debounce: true));
+      }
+    }
     // Whatever the path was, this index is no longer outstanding.
     state.requestedInFlight.remove(chunk.index);
     // Reset the retry budget on any successful chunk arrival; the transfer
@@ -6605,17 +7973,37 @@ class MessengerController extends ChangeNotifier {
     _maybeSendAttachmentProgress(state, sender, force: state.isComplete);
     if (state.isComplete) {
       state.retryTimer?.cancel();
-      final builder = BytesBuilder();
-      for (final part in state.received) {
-        builder.add(part!);
+      final partial = File(state.partialPath!);
+      final wholeDigest = await dart_crypto.sha256
+          .bind(partial.openRead())
+          .first;
+      if (base64Encode(wholeDigest.bytes) != state.descriptor.fileHashBase64) {
+        _setTransferSessionState(
+          chunk.attachmentId,
+          TransferState.failed,
+          error: 'Whole-file integrity verification failed.',
+        );
+        await _deleteAttachmentArtifacts(chunk.attachmentId);
+        _inboundAttachments.remove(chunk.attachmentId);
+        _updateMessageState(
+          sender.deviceId,
+          state.messageId,
+          DeliveryState.failed,
+        );
+        unawaited(_sendAttachmentCancel(sender, chunk.attachmentId));
+        notifyListeners();
+        return;
       }
-      final assembled = builder.toBytes();
-      _assembledAttachments[chunk.attachmentId] = assembled;
-      // Persist so the receiver bubble survives an app restart instead
-      // of regressing to "transferring" once _assembledAttachments goes
-      // away with the controller.
-      unawaited(_persistAttachmentBytes(chunk.attachmentId, assembled));
+      final cacheFile = await _attachmentCacheFile(chunk.attachmentId);
+      if (await cacheFile.exists()) await cacheFile.delete();
+      await partial.rename(cacheFile.path);
+      _locallyAvailableAttachments.add(chunk.attachmentId);
+      if (state.descriptor.sizeBytes <= 8 * 1024 * 1024) {
+        _assembledAttachments[chunk.attachmentId] = await cacheFile
+            .readAsBytes();
+      }
       _inboundAttachments.remove(chunk.attachmentId);
+      _removeTransferSession(chunk.attachmentId);
       if (!hasActiveTransfer) _reschedulePolling();
       _updateMessageState(
         sender.deviceId,
@@ -6623,6 +8011,7 @@ class MessengerController extends ChangeNotifier {
         DeliveryState.delivered,
       );
       await _sendAttachmentComplete(sender, chunk.attachmentId);
+      await _saveSnapshotSilently(notify: false);
       notifyListeners();
     } else if (state.paused) {
       // Paused mid-transfer — sit on the chunks we have. The owner-only
@@ -6657,7 +8046,12 @@ class MessengerController extends ChangeNotifier {
     _InboundAttachmentState state,
     ContactRecord sender,
   ) {
-    if (state.paused) return;
+    if (state.paused ||
+        !state.accepted ||
+        state.awaitingAcceptance ||
+        state.partialPath == null) {
+      return;
+    }
     while (state.requestedInFlight.length < _inboundChunkWindow) {
       final next = state.nextUnrequestedIndex();
       if (next < 0) break;
@@ -6675,7 +8069,10 @@ class MessengerController extends ChangeNotifier {
     if (state == null) return;
     // Don't burn retry budget while the transfer is paused — the owner
     // will rearm explicitly on resume.
-    if (state.paused) {
+    if (state.paused ||
+        !state.accepted ||
+        state.awaitingAcceptance ||
+        state.partialPath == null) {
       state.retryTimer?.cancel();
       return;
     }
@@ -6683,7 +8080,7 @@ class MessengerController extends ChangeNotifier {
     state.retryTimer = Timer(_inboundRetryDelay, () {
       final s = _inboundAttachments[attachmentId];
       if (s == null) return;
-      if (s.paused) {
+      if (s.paused || !s.accepted || s.partialPath == null) {
         // Became paused during the wait — drop without escalating.
         return;
       }
@@ -6928,13 +8325,13 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     state.lastProgressSentAt = now;
-    final received = state.received.where((c) => c != null).length;
+    final received = state.received.length;
     unawaited(
       _sendAttachmentProgress(
         sender,
         attachmentId: state.descriptor.id,
         received: received,
-        total: state.descriptor.chunkHashes.length,
+        total: state.descriptor.effectiveChunkCount,
       ),
     );
   }
@@ -6988,10 +8385,10 @@ class MessengerController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _handleAttachmentComplete(
+  Future<void> _handleAttachmentComplete(
     ContactRecord sender,
     Map<String, dynamic> payload,
-  ) {
+  ) async {
     final attachmentId = payload['attachmentId'] as String?;
     if (attachmentId == null) {
       return;
@@ -7005,12 +8402,41 @@ class MessengerController extends ChangeNotifier {
       _pumpOutboundQueue(sender);
       return;
     }
+    final session = _transferSessionById(attachmentId);
+    if (state.sourceKind == TransferSourceKind.privateSpool) {
+      try {
+        final source = File(state.sourcePath);
+        final cache = await _attachmentCacheFile(attachmentId);
+        if (await cache.exists()) await cache.delete();
+        if (await source.exists()) await source.rename(cache.path);
+        if (await cache.exists()) {
+          _locallyAvailableAttachments.add(attachmentId);
+        }
+        if (state.descriptor.sizeBytes <= 8 * 1024 * 1024 &&
+            await cache.exists()) {
+          _assembledAttachments[attachmentId] = await cache.readAsBytes();
+        }
+        _removeTransferSession(attachmentId);
+      } catch (error) {
+        appendDebugLog('Could not finalize outbound attachment: $error');
+      }
+    } else if (session != null) {
+      _upsertTransferSession(
+        session.copyWith(
+          state: TransferState.completed,
+          updatedAt: _now().toUtc(),
+          bytesTransferred: state.descriptor.sizeBytes,
+          clearLastError: true,
+        ),
+      );
+    }
     _updateMessageState(
       sender.deviceId,
       state.messageId,
       DeliveryState.delivered,
     );
     _clearActiveOutbound(sender.deviceId, attachmentId);
+    await _saveSnapshotSilently(notify: false);
     notifyListeners();
     _pumpOutboundQueue(sender);
   }
@@ -7028,6 +8454,9 @@ class MessengerController extends ChangeNotifier {
     inboundState?.retryTimer?.cancel();
     final outboundState = _outboundAttachments.remove(attachmentId);
     _assembledAttachments.remove(attachmentId);
+    _locallyAvailableAttachments.remove(attachmentId);
+    _removeTransferSession(attachmentId);
+    unawaited(_deleteAttachmentArtifacts(attachmentId));
     // If the peer canceled an attachment we were actively shipping, free
     // the queue slot so the next item dispatches.
     if (outboundState != null) {
@@ -7092,35 +8521,77 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _handleContactExchange(RelayEnvelope envelope) async {
-    final rawPayload = envelope.payloadBase64;
-    if (rawPayload == null || rawPayload.isEmpty) {
-      return;
+    final existing = _contactByDeviceId(envelope.senderDeviceId);
+    final String payload;
+    if (envelope.protocolVersion == 1) {
+      if (existing != null) return;
+      final rawPayload = envelope.payloadBase64;
+      if (rawPayload == null || rawPayload.isEmpty) return;
+      payload = utf8.decode(base64Decode(rawPayload));
+    } else {
+      if (existing == null || existing.pendingVerification) return;
+      payload = await _crypto.decryptMessage(
+        contact: existing,
+        envelope: envelope,
+      );
     }
-    final payload = utf8.decode(base64Decode(rawPayload));
     final invite = ContactInvite.tryDecodePayload(payload);
-    if (invite == null) {
+    if (invite == null ||
+        invite.deviceId != envelope.senderDeviceId ||
+        invite.accountId != envelope.senderAccountId) {
       return;
     }
-    final updated = await _updateExistingContactFromInvite(
-      invite,
-      statusBuilder: (contact) =>
-          'Updated ${contact.alias} profile and route hints.',
-    );
-    if (updated != null) {
+    if (invite.version >= 6 && !await _crypto.verifyContactInvite(invite)) {
+      appendDebugLog(
+        'Rejected contact_exchange with an invalid ci6 signature from '
+        '${envelope.senderDeviceId}.',
+      );
       return;
     }
-    try {
-      final result = await _trustInvite(
-        invite: invite,
-        alias: invite.displayName,
-        attemptReciprocalExchange: false,
+    if (existing != null) {
+      if (invite.publicKeyBase64 != existing.publicKeyBase64 ||
+          invite.accountId != existing.accountId ||
+          (existing.signingPublicKeyBase64 != null &&
+              invite.signingPublicKeyBase64 !=
+                  existing.signingPublicKeyBase64) ||
+          (existing.irohEndpointId != null &&
+              invite.irohEndpointId != existing.irohEndpointId)) {
+        appendDebugLog(
+          'Rejected contact_exchange identity replacement for '
+          '${existing.deviceId}.',
+        );
+        return;
+      }
+      await _updateExistingContactFromInvite(
+        invite,
+        statusBuilder: (contact) =>
+            'Updated ${contact.alias} profile and route hints.',
       );
-      await _persist(
-        '${result.contact.alias} appeared automatically after they added you.',
-      );
-    } catch (_) {
-      // Ignore malformed or duplicate reciprocal contact exchange requests.
+      return;
     }
+    final cutoff = _now().subtract(_pendingContactRequestTtl);
+    final pending =
+        _snapshot.pendingContactRequests
+            .where(
+              (entry) =>
+                  entry.receivedAt.isAfter(cutoff) &&
+                  entry.senderDeviceId != invite.deviceId,
+            )
+            .toList(growable: true)
+          ..add(
+            PendingContactRequest(
+              id: envelope.messageId,
+              senderAccountId: invite.accountId,
+              senderDeviceId: invite.deviceId,
+              invitePayload: payload,
+              receivedAt: _now().toUtc(),
+            ),
+          );
+    if (pending.length > _maxPendingContactRequests) {
+      pending.removeRange(0, pending.length - _maxPendingContactRequests);
+    }
+    _snapshot = _snapshot.copyWith(pendingContactRequests: pending);
+    await _persist('New contact request from ${invite.displayName}.');
   }
 
   Future<void> _handleRouteUpdate(RelayEnvelope envelope) async {
@@ -7128,19 +8599,20 @@ class MessengerController extends ChangeNotifier {
     if (sender == null) {
       return;
     }
-    final rawPayload = envelope.payloadBase64;
-    if (rawPayload == null || rawPayload.isEmpty) {
-      return;
-    }
-    final decodedPayload = utf8.decode(base64Decode(rawPayload));
+    final decodedPayload = await _crypto.decryptMessage(
+      contact: sender,
+      envelope: envelope,
+    );
     String? invitePayload;
     var requestReply = false;
     var reason = 'rediscovery';
     String? probeId;
     DateTime? sentAt;
+    Map<String, dynamic>? routePayload;
     try {
       final decoded = jsonDecode(decodedPayload);
       if (decoded is Map<String, dynamic>) {
+        routePayload = decoded;
         invitePayload = decoded['invitePayload'] as String?;
         requestReply = decoded['requestReply'] == true;
         reason = decoded['reason'] as String? ?? reason;
@@ -7154,8 +8626,30 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final invite = ContactInvite.tryDecodePayload(invitePayload);
-    if (invite == null || invite.deviceId != envelope.senderDeviceId) {
+    if (invite == null ||
+        invite.deviceId != envelope.senderDeviceId ||
+        invite.accountId != sender.accountId ||
+        invite.publicKeyBase64 != sender.publicKeyBase64) {
       return;
+    }
+    if (invite.version >= 6 && !await _crypto.verifyContactInvite(invite)) {
+      appendDebugLog(
+        'Rejected route_update with an invalid ci6 signature from '
+        '${sender.deviceId}.',
+      );
+      return;
+    }
+    if ((sender.signingPublicKeyBase64 != null &&
+            sender.signingPublicKeyBase64 != invite.signingPublicKeyBase64) ||
+        (sender.irohEndpointId != null &&
+            sender.irohEndpointId != invite.irohEndpointId)) {
+      appendDebugLog(
+        'Blocked an unexpected transport identity change for ${sender.alias}.',
+      );
+      return;
+    }
+    if (routePayload != null) {
+      _cachePeerLanDirectFromPayload(sender.deviceId, routePayload);
     }
     _reachability.noteAnySignal(
       sender.deviceId,
@@ -7306,6 +8800,13 @@ class MessengerController extends ChangeNotifier {
         return;
       }
     } else {
+      if (!_preservesExistingGroupMemberIdentities(existing, incoming)) {
+        appendDebugLog(
+          'Rejected group membership identity replacement for '
+          '${incoming.groupId}.',
+        );
+        return;
+      }
       if (incoming.membershipVersion <= existing.membershipVersion) {
         return;
       }
@@ -7464,11 +8965,30 @@ class MessengerController extends ChangeNotifier {
     }
     final contacts = List<ContactRecord>.from(_snapshot.contacts);
     final existing = contacts[existingIndex];
+    if (invite.version >= 6 && !await _crypto.verifyContactInvite(invite)) {
+      return null;
+    }
+    if ((existing.signingPublicKeyBase64 != null &&
+            existing.signingPublicKeyBase64 != invite.signingPublicKeyBase64) ||
+        (existing.irohEndpointId != null &&
+            existing.irohEndpointId != invite.irohEndpointId)) {
+      appendDebugLog(
+        'Blocked transport identity rotation for ${existing.alias}; '
+        'explicit verification is required.',
+      );
+      return null;
+    }
     final updated = existing.copyWith(
       displayName: invite.displayName,
       bio: invite.bio.isEmpty ? existing.bio : invite.bio,
       relayCapable: invite.relayCapable,
       routeHints: prunePeerEndpointsByKind(invite.routeHints),
+      signingPublicKeyBase64: invite.signingPublicKeyBase64,
+      irohEndpointId: invite.irohEndpointId,
+      capabilities: invite.capabilities,
+      transportIdentityVerifiedAt: invite.version >= 6
+          ? (existing.transportIdentityVerifiedAt ?? _now())
+          : existing.transportIdentityVerifiedAt,
     );
     contacts[existingIndex] = updated;
     _snapshot = _snapshot.copyWith(contacts: contacts);
@@ -7484,8 +9004,27 @@ class MessengerController extends ChangeNotifier {
     if (contact == null) {
       return;
     }
-    await removeContact(contact.deviceId, notifyPeer: false);
-    await _persist('${contact.alias} removed you, so the contact was removed.');
+    final decoded = jsonDecode(
+      await _crypto.decryptMessage(contact: contact, envelope: envelope),
+    );
+    if (decoded is! Map<String, dynamic> ||
+        decoded['removedDeviceId'] != identity?.deviceId) {
+      return;
+    }
+    final removedAt =
+        DateTime.tryParse(decoded['removedAt'] as String? ?? '')?.toUtc() ??
+        envelope.createdAt.toUtc();
+    final index = _snapshot.contacts.indexWhere(
+      (candidate) => candidate.deviceId == contact.deviceId,
+    );
+    if (index < 0) return;
+    final contacts = List<ContactRecord>.from(_snapshot.contacts);
+    contacts[index] = contact.copyWith(remoteRemovedAt: removedAt);
+    _snapshot = _snapshot.copyWith(contacts: contacts);
+    _reachability.remove(contact.deviceId);
+    await _persist(
+      '${contact.alias} removed you. The conversation remains archived locally.',
+    );
   }
 
   Future<void> _handleMessageEdit(RelayEnvelope envelope) async {
@@ -7666,15 +9205,17 @@ class MessengerController extends ChangeNotifier {
     if (contact == null) {
       return;
     }
+    await _crypto.decryptMessage(contact: contact, envelope: envelope);
     final me = _requireIdentity();
-    final ack = RelayEnvelope(
+    final ack = await _crypto.encryptPayloadEnvelope(
       kind: 'debug_probe_ack',
       messageId: _randomId('dbgack'),
       conversationId: envelope.conversationId,
       senderAccountId: me.accountId,
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
-      createdAt: DateTime.now().toUtc(),
+      contact: contact,
+      plaintext: jsonEncode({'acknowledgedMessageId': envelope.messageId}),
       acknowledgedMessageId: envelope.messageId,
     );
     // nightly.12: route the probe ack through the unified outbox so it
@@ -7691,26 +9232,23 @@ class MessengerController extends ChangeNotifier {
     if (contact == null) {
       return;
     }
+    await _crypto.decryptMessage(contact: contact, envelope: envelope);
     final me = _requireIdentity();
-    final reply = RelayEnvelope(
+    final reply = await _crypto.encryptPayloadEnvelope(
       kind: 'debug_two_way_reply',
       messageId: _randomId('dbgreply'),
       conversationId: envelope.conversationId,
       senderAccountId: me.accountId,
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
-      createdAt: DateTime.now().toUtc(),
+      contact: contact,
       acknowledgedMessageId: envelope.messageId,
-      payloadBase64: base64Encode(
-        utf8.encode(
-          jsonEncode({
-            'replyFrom': me.deviceId,
-            'displayName': me.displayName,
-            'receivedMessageId': envelope.messageId,
-            'sentAt': DateTime.now().toUtc().toIso8601String(),
-          }),
-        ),
-      ),
+      plaintext: jsonEncode({
+        'replyFrom': me.deviceId,
+        'displayName': me.displayName,
+        'receivedMessageId': envelope.messageId,
+        'sentAt': DateTime.now().toUtc().toIso8601String(),
+      }),
     );
     // nightly.12: route the two-way reply through the unified outbox.
     await _enqueueAndDeliverEnvelope(
@@ -7720,19 +9258,45 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  Future<void> _handleDebugAcknowledgement(
+    RelayEnvelope envelope, {
+    required bool twoWay,
+  }) async {
+    final contact = _contactByDeviceId(envelope.senderDeviceId);
+    if (contact == null) return;
+    final decoded = jsonDecode(
+      await _crypto.decryptMessage(contact: contact, envelope: envelope),
+    );
+    if (decoded is! Map<String, dynamic>) return;
+    final target = twoWay
+        ? decoded['receivedMessageId'] as String?
+        : decoded['acknowledgedMessageId'] as String?;
+    if (target == null || target != envelope.acknowledgedMessageId) return;
+    if (twoWay) {
+      _debugTwoWayReplies.add(target);
+    } else {
+      _debugProbeAcknowledgements.add(target);
+    }
+  }
+
   Future<void> _sendAck({
     required ContactRecord contact,
     required RelayEnvelope envelope,
   }) async {
     final me = _requireIdentity();
-    final ack = RelayEnvelope(
+    final ack = await _crypto.encryptPayloadEnvelope(
       kind: 'ack',
       messageId: _randomId('ack'),
       conversationId: envelope.conversationId,
       senderAccountId: me.accountId,
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
-      createdAt: DateTime.now().toUtc(),
+      contact: contact,
+      plaintext: jsonEncode({
+        'receipt': 'delivered',
+        'acknowledgedMessageId': envelope.messageId,
+      }),
+      createdAt: _now().toUtc(),
       acknowledgedMessageId: envelope.messageId,
     );
     // Enqueue first so a crash mid-send doesn't lose the obligation; the
@@ -7777,16 +9341,20 @@ class MessengerController extends ChangeNotifier {
     if (me.suppressReadReceipts) {
       return;
     }
-    final receipt = RelayEnvelope(
+    final receipt = await _crypto.encryptPayloadEnvelope(
       kind: 'ack',
       messageId: _randomId('read'),
       conversationId: conversationId,
       senderAccountId: me.accountId,
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
-      createdAt: DateTime.now().toUtc(),
+      contact: contact,
+      plaintext: jsonEncode({
+        'receipt': 'read',
+        'acknowledgedMessageId': acknowledgedMessageId,
+      }),
+      createdAt: _now().toUtc(),
       acknowledgedMessageId: acknowledgedMessageId,
-      payloadBase64: base64Encode(utf8.encode(jsonEncode({'receipt': 'read'}))),
     );
     _enqueuePendingAckDelivery(
       PendingAckDelivery(
@@ -7828,10 +9396,14 @@ class MessengerController extends ChangeNotifier {
   /// these back into the inbound pipeline; reject discards them.
   void _enqueueHeldEnvelope(String senderDeviceId, RelayEnvelope envelope) {
     final encoded = jsonEncode(envelope.toJson());
+    if (utf8.encode(encoded).length > 384 * 1024) return;
+    final now = _now().toUtc();
+    final cutoff = now.subtract(const Duration(days: 7));
     final existing =
         _snapshot.heldUnverifiedEnvelopes
             .where(
               (entry) =>
+                  entry.receivedAt.isAfter(cutoff) &&
                   !(entry.senderDeviceId == senderDeviceId &&
                       entry.envelopeJson == encoded),
             )
@@ -7841,9 +9413,26 @@ class MessengerController extends ChangeNotifier {
               senderDeviceId: senderDeviceId,
               conversationId: envelope.conversationId,
               envelopeJson: encoded,
-              receivedAt: DateTime.now().toUtc(),
+              receivedAt: now,
             ),
           );
+    final senderEntries = existing
+        .where((entry) => entry.senderDeviceId == senderDeviceId)
+        .toList(growable: false);
+    if (senderEntries.length > 64) {
+      final evict = senderEntries
+          .take(senderEntries.length - 64)
+          .map((entry) => entry.envelopeJson)
+          .toSet();
+      existing.removeWhere(
+        (entry) =>
+            entry.senderDeviceId == senderDeviceId &&
+            evict.contains(entry.envelopeJson),
+      );
+    }
+    if (existing.length > 256) {
+      existing.removeRange(0, existing.length - 256);
+    }
     _snapshot = _snapshot.copyWith(heldUnverifiedEnvelopes: existing);
     unawaited(_saveSnapshotSilently(notify: true));
   }
@@ -7861,6 +9450,31 @@ class MessengerController extends ChangeNotifier {
             .toList(growable: true)
           ..add(entry);
     _snapshot = _snapshot.copyWith(pendingAckDeliveries: filtered);
+  }
+
+  bool _markLegacyQueuedControlsIncompatible() {
+    var changed = false;
+    final entries = _snapshot.pendingAckDeliveries
+        .map((entry) {
+          if (!entry.kind.carriesEnvelope ||
+              entry.envelopeJson == null ||
+              entry.requiresPeerUpdate) {
+            return entry;
+          }
+          try {
+            final envelope = RelayEnvelope.fromJson(entry.envelopeJson!);
+            if (envelope.protocolVersion == 2) return entry;
+          } catch (_) {
+            // Corrupt and legacy controls are both unsafe to replay.
+          }
+          changed = true;
+          return entry.copyWith(requiresPeerUpdate: true);
+        })
+        .toList(growable: false);
+    if (changed) {
+      _snapshot = _snapshot.copyWith(pendingAckDeliveries: entries);
+    }
+    return changed;
   }
 
   void _clearPendingAckDelivery({
@@ -7950,6 +9564,9 @@ class MessengerController extends ChangeNotifier {
       _snapshot.pendingAckDeliveries,
     );
     for (final entry in pending) {
+      if (entry.requiresPeerUpdate) {
+        continue;
+      }
       if (entry.attempts >= maxAttempts) {
         continue;
       }
@@ -7995,7 +9612,7 @@ class MessengerController extends ChangeNotifier {
           continue;
         }
       } else {
-        envelope = RelayEnvelope(
+        envelope = await _crypto.encryptPayloadEnvelope(
           kind: 'ack',
           messageId: _randomId(
             entry.kind == PendingAckKind.read ? 'read' : 'ack',
@@ -8004,11 +9621,12 @@ class MessengerController extends ChangeNotifier {
           senderAccountId: me.accountId,
           senderDeviceId: me.deviceId,
           recipientDeviceId: contact.deviceId,
-          createdAt: DateTime.now().toUtc(),
+          contact: contact,
+          plaintext: jsonEncode({
+            'receipt': entry.kind == PendingAckKind.read ? 'read' : 'delivered',
+            'acknowledgedMessageId': entry.acknowledgedMessageId,
+          }),
           acknowledgedMessageId: entry.acknowledgedMessageId,
-          payloadBase64: entry.kind == PendingAckKind.read
-              ? base64Encode(utf8.encode(jsonEncode({'receipt': 'read'})))
-              : null,
         );
       }
       _enqueuePendingAckDelivery(
@@ -8041,23 +9659,19 @@ class MessengerController extends ChangeNotifier {
       return null;
     }
     final me = _requireIdentity();
-    final probe = RelayEnvelope(
+    final probe = await _crypto.encryptPayloadEnvelope(
       kind: 'debug_probe',
       messageId: _randomId('dbg'),
       conversationId: 'debug-${me.deviceId}-${contact.deviceId}',
       senderAccountId: me.accountId,
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
-      createdAt: DateTime.now().toUtc(),
-      payloadBase64: base64Encode(
-        utf8.encode(
-          jsonEncode({
-            'deviceId': me.deviceId,
-            'displayName': me.displayName,
-            'sentAt': DateTime.now().toUtc().toIso8601String(),
-          }),
-        ),
-      ),
+      contact: contact,
+      plaintext: jsonEncode({
+        'deviceId': me.deviceId,
+        'displayName': me.displayName,
+        'sentAt': DateTime.now().toUtc().toIso8601String(),
+      }),
     );
     final checks =
         rankedChecks ??
@@ -8117,24 +9731,20 @@ class MessengerController extends ChangeNotifier {
       return null;
     }
     final me = _requireIdentity();
-    final probe = RelayEnvelope(
+    final probe = await _crypto.encryptPayloadEnvelope(
       kind: 'debug_two_way_message',
       messageId: _randomId('dbgtwoway'),
       conversationId: 'debug-two-way-${me.deviceId}-${contact.deviceId}',
       senderAccountId: me.accountId,
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
-      createdAt: DateTime.now().toUtc(),
-      payloadBase64: base64Encode(
-        utf8.encode(
-          jsonEncode({
-            'from': me.deviceId,
-            'displayName': me.displayName,
-            'sentAt': DateTime.now().toUtc().toIso8601String(),
-            'expectReply': true,
-          }),
-        ),
-      ),
+      contact: contact,
+      plaintext: jsonEncode({
+        'from': me.deviceId,
+        'displayName': me.displayName,
+        'sentAt': DateTime.now().toUtc().toIso8601String(),
+        'expectReply': true,
+      }),
     );
     final checks =
         rankedChecks ??
@@ -8714,6 +10324,7 @@ class MessengerController extends ChangeNotifier {
     final mailbox = 'debug-${me.deviceId}-${_randomId('loop')}';
     final messageId = _randomId('dbgloop');
     final envelope = RelayEnvelope(
+      protocolVersion: 1,
       kind: 'debug_loopback',
       messageId: messageId,
       conversationId: 'debug-loopback',
@@ -8724,12 +10335,16 @@ class MessengerController extends ChangeNotifier {
       payloadBase64: base64Encode(utf8.encode('relay loopback')),
     );
     try {
+      final expectedRelayKey = await _requireOperationalRelayPin(
+        selected.route,
+      );
       await _relayClient.storeEnvelope(
         host: selected.route.host,
         port: selected.route.port,
         protocol: selected.route.protocol,
         recipientDeviceId: mailbox,
         envelope: envelope,
+        expectedIdentityPublicKeyBase64: expectedRelayKey,
         timeout: fast
             ? _debugRelayOperationTimeout
             : const Duration(seconds: 4),
@@ -8740,6 +10355,7 @@ class MessengerController extends ChangeNotifier {
         protocol: selected.route.protocol,
         recipientDeviceId: mailbox,
         limit: 8,
+        expectedIdentityPublicKeyBase64: expectedRelayKey,
         timeout: fast
             ? _debugRelayOperationTimeout
             : const Duration(seconds: 4),
@@ -8798,6 +10414,7 @@ class MessengerController extends ChangeNotifier {
     final mailbox = 'pair-debug-${_randomId('mail')}';
     final messageId = _randomId('pairdbg');
     final envelope = RelayEnvelope(
+      protocolVersion: 1,
       kind: 'pairing_announcement',
       messageId: messageId,
       conversationId: 'debug-pairing-reuse',
@@ -8806,16 +10423,20 @@ class MessengerController extends ChangeNotifier {
       recipientDeviceId: mailbox,
       createdAt: DateTime.now().toUtc(),
       payloadBase64: base64Encode(
-        utf8.encode(_inviteForIdentity(me).encodePayload()),
+        utf8.encode((await _inviteForIdentity(me)).encodePayload()),
       ),
     );
     try {
+      final expectedRelayKey = await _requireOperationalRelayPin(
+        selected.route,
+      );
       await _relayClient.storeEnvelope(
         host: selected.route.host,
         port: selected.route.port,
         protocol: selected.route.protocol,
         recipientDeviceId: mailbox,
         envelope: envelope,
+        expectedIdentityPublicKeyBase64: expectedRelayKey,
         timeout: fast
             ? _debugRelayOperationTimeout
             : const Duration(seconds: 4),
@@ -8826,6 +10447,7 @@ class MessengerController extends ChangeNotifier {
         protocol: selected.route.protocol,
         recipientDeviceId: mailbox,
         limit: 4,
+        expectedIdentityPublicKeyBase64: expectedRelayKey,
         timeout: fast
             ? _debugRelayOperationTimeout
             : const Duration(seconds: 4),
@@ -8836,6 +10458,7 @@ class MessengerController extends ChangeNotifier {
         protocol: selected.route.protocol,
         recipientDeviceId: mailbox,
         limit: 4,
+        expectedIdentityPublicKeyBase64: expectedRelayKey,
         timeout: fast
             ? _debugRelayOperationTimeout
             : const Duration(seconds: 4),
@@ -8872,7 +10495,7 @@ class MessengerController extends ChangeNotifier {
       await _ensureLocalRelayRunning();
       await _announcePairingAvailabilityIfNeeded(force: true);
       final current = _requireIdentity();
-      final payload = _inviteForIdentity(current).encodePayload();
+      final payload = (await _inviteForIdentity(current)).encodePayload();
       final codephrase = currentPairingCodeSnapshotForPayload(
         payload,
       ).codephrase;
@@ -9002,14 +10625,12 @@ class MessengerController extends ChangeNotifier {
       final state = route.kind == PeerRouteKind.lan
           ? DeliveryState.local
           : DeliveryState.relayed;
-      _updateMessageState(contact.deviceId, message.id, state);
-      _lastRelayStatus = route.kind == PeerRouteKind.lan
-          ? 'LAN delivered via ${route.host}:${route.port}'
-          : 'relay accepted via ${route.host}:${route.port}';
+      _updateMessageState(contact.deviceId, message.id, state, route: route);
+      _lastRelayStatus = '${route.label} accepted';
       await _persist(
-        route.kind == PeerRouteKind.lan
-            ? 'Delivered directly over LAN to ${contact.alias}.'
-            : 'Encrypted message handed to relay for ${contact.alias}.',
+        route.path == TransportPathKind.storeForward
+            ? 'Encrypted message stored for ${contact.alias} via ${route.label}.'
+            : 'Delivered to ${contact.alias} via ${route.label}.',
       );
       return true;
     } catch (error) {
@@ -9043,11 +10664,11 @@ class MessengerController extends ChangeNotifier {
         envelope: envelope,
       );
       _reachability.noteAvailablePath(contact.deviceId);
-      if (route.kind == PeerRouteKind.lan) {
+      if (route.endpoint?.kind == PeerRouteKind.lan) {
         await _rememberLanRoutesForGroupMember(
           groupId: group.groupId,
           deviceId: contact.deviceId,
-          routes: [route],
+          routes: [route.endpoint!],
         );
       }
       final state = route.kind == PeerRouteKind.lan
@@ -9059,9 +10680,7 @@ class MessengerController extends ChangeNotifier {
         contact.deviceId,
         state,
       );
-      _lastRelayStatus = route.kind == PeerRouteKind.lan
-          ? 'group LAN delivery via ${route.host}:${route.port}'
-          : 'group relay accepted via ${route.host}:${route.port}';
+      _lastRelayStatus = 'group delivery via ${route.label}';
       await _saveSnapshotSilently(debounce: true);
       return true;
     } catch (error) {
@@ -9197,10 +10816,12 @@ class MessengerController extends ChangeNotifier {
     _outboundAttemptedAt.remove(_outboundAttemptKey(peerDeviceId, messageId));
   }
 
-  Future<PeerEndpoint> _deliverToContact({
+  Future<_DeliveryRoute> _deliverToContact({
     required ContactRecord contact,
     required String recipientDeviceId,
     required RelayEnvelope envelope,
+    bool allowRelayedPaths = true,
+    bool allowLegacyRoutes = true,
   }) async {
     // Defense in depth: the crypto layer already can't derive a shared
     // secret for a pending or archived contact (publicKeyBase64 is empty
@@ -9218,72 +10839,220 @@ class MessengerController extends ChangeNotifier {
       );
     }
     final effective = _effectiveTransports(contact);
+    final policies = _effectiveTransportPolicies(contact);
     final candidateRoutes =
         dedupePeerEndpoints(_candidateRoutesForContact(contact))
-            .where((route) => _routeAllowedByTransports(route, effective))
+            .where((route) => _legacyRouteAllowed(route, effective, policies))
+            .where((_) => allowLegacyRoutes)
+            .where(
+              (route) => allowRelayedPaths || route.kind != PeerRouteKind.relay,
+            )
             .toList(growable: false);
-    if (candidateRoutes.isEmpty) {
+    final canTryRegistry =
+        _transportRegistry != null &&
+        policies.values.any(
+          (policy) =>
+              policy == TransportPolicy.automatic ||
+              policy == TransportPolicy.preferred,
+        );
+    if (candidateRoutes.isEmpty && !canTryRegistry) {
       throw StateError(
         'Connectivity is disabled for ${contact.alias} — no allowed routes.',
       );
     }
-    final preferredRoutes = _preferredRoutesForContact(contact);
+    final preferredRoutes = _preferredRoutesForContact(contact)
+        .where(
+          (route) =>
+              candidateRoutes.any((entry) => entry.routeKey == route.routeKey),
+        )
+        .toList(growable: false);
     Object? lastError;
-    PeerEndpoint? deliveredVia;
-    final relayOnlyCandidates =
-        candidateRoutes.isNotEmpty &&
-        candidateRoutes.every((route) => route.kind == PeerRouteKind.relay);
-    final shouldFreshRankPreferred =
-        relayOnlyCandidates &&
-        preferredRoutes.isNotEmpty &&
-        preferredRoutes.every((route) => route.kind == PeerRouteKind.relay);
-    if (preferredRoutes.isNotEmpty && !shouldFreshRankPreferred) {
+    _DeliveryRoute? deliveredVia;
+    final attemptedRouteKeys = <String>{};
+
+    Future<void> tryLegacy(Iterable<PeerEndpoint> routes) async {
+      if (deliveredVia != null) return;
+      final untried = routes
+          .where((route) => attemptedRouteKeys.add(route.routeKey))
+          .toList(growable: false);
+      if (untried.isEmpty) return;
       try {
-        deliveredVia = await _deliverAcrossRoutes(
-          routes: preferredRoutes,
+        final endpoint = await _deliverAcrossRoutes(
+          routes: untried,
           recipientDeviceId: recipientDeviceId,
           envelope: envelope,
+        );
+        deliveredVia = _DeliveryRoute.legacy(endpoint);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    Future<void> tryUnifiedTransports() async {
+      if (deliveredVia != null || !canTryRegistry) return;
+      try {
+        deliveredVia = await _deliverViaTransportRegistry(
+          contact: contact,
+          envelope: envelope,
+          policies: policies,
+          allowRelay: allowRelayedPaths,
         );
       } catch (error) {
         lastError = error;
       }
     }
+
+    final preferIroh =
+        policies[TransportKind.iroh] == TransportPolicy.preferred ||
+        (effective.online &&
+            effective.preferred == RoutingPreference.online &&
+            policies[TransportKind.iroh] != TransportPolicy.disabled);
+    final preferredLan = preferredRoutes.where(
+      (route) => route.kind == PeerRouteKind.lan,
+    );
+    final preferredOnline = preferredRoutes.where(
+      (route) => route.kind != PeerRouteKind.lan,
+    );
+    if (preferIroh) {
+      await tryUnifiedTransports();
+      await tryLegacy(preferredOnline);
+      await tryLegacy(preferredLan);
+    } else {
+      await tryLegacy(preferredLan);
+      await tryUnifiedTransports();
+      await tryLegacy(preferredOnline);
+    }
     if (deliveredVia == null) {
-      final triedKeys = preferredRoutes.map((route) => route.routeKey).toSet();
-      final remainingRoutes = shouldFreshRankPreferred
-          ? candidateRoutes
-          : candidateRoutes
-                .where((route) => !triedKeys.contains(route.routeKey))
-                .toList(growable: false);
-      if (remainingRoutes.isNotEmpty) {
-        final rankedRoutes = await _rankRoutesForDelivery(remainingRoutes);
-        deliveredVia = await _deliverAcrossRoutes(
-          routes: rankedRoutes,
-          recipientDeviceId: recipientDeviceId,
-          envelope: envelope,
-        );
+      // Rank the complete advertised set, including a route whose first
+      // store just failed. Its signed health response carries the stable
+      // relay instance id that lets ranking discover a healthier configured
+      // alias for the same relay. [tryLegacy] still filters already-attempted
+      // route keys, so no failed store is repeated in this delivery pass.
+      // A route already in backoff from an earlier delivery remains excluded;
+      // only a route attempted in this pass may bypass that gate for the
+      // signed relay-identity lookup.
+      final rankCandidates = candidateRoutes
+          .where(
+            (route) =>
+                (route.kind == PeerRouteKind.relay &&
+                    attemptedRouteKeys.contains(route.routeKey)) ||
+                _routeHealthTracker.isEligibleNow(route),
+          )
+          .toList(growable: false);
+      if (rankCandidates.isNotEmpty) {
+        // Probing a just-failed relay is only for stable relay-id alias
+        // discovery. Preserve its store-failure backoff even when the
+        // relay's lighter health endpoint answers successfully.
+        final preserveFailureFor = rankCandidates
+            .where(
+              (route) =>
+                  route.kind == PeerRouteKind.relay &&
+                  attemptedRouteKeys.contains(route.routeKey),
+            )
+            .toList(growable: false);
+        final runtimeBefore = <String, RouteRuntimeState?>{
+          for (final route in preserveFailureFor)
+            route.routeKey: _routeHealthTracker.runtimeFor(route)?.clone(),
+        };
+        final healthBefore = <String, PeerRouteHealth?>{
+          for (final route in preserveFailureFor)
+            route.routeKey: _routeHealthTracker.healthFor(route),
+        };
+        List<PeerRouteHealth> rankedChecks;
+        try {
+          rankedChecks = await _rankRouteHealthForDelivery(rankCandidates);
+        } finally {
+          for (final route in preserveFailureFor) {
+            final runtime = runtimeBefore[route.routeKey];
+            if (runtime == null) {
+              _routeHealthTracker.runtimeMap.remove(route.routeKey);
+            } else {
+              _routeHealthTracker.runtimeMap[route.routeKey] = runtime;
+            }
+            final health = healthBefore[route.routeKey];
+            if (health == null) {
+              _routeHealthTracker.healthMap.remove(route.routeKey);
+            } else {
+              _routeHealthTracker.healthMap[route.routeKey] = health;
+            }
+          }
+        }
+        final rankedRoutes = rankedChecks.map((check) => check.route);
+        await tryLegacy(rankedRoutes);
       }
     }
-    if (deliveredVia == null) {
+    final result = deliveredVia;
+    if (result == null) {
       throw lastError ?? StateError('No reachable route for recipient.');
     }
-    if (deliveredVia.kind == PeerRouteKind.lan) {
+    final deliveredEndpoint = result.endpoint;
+    if (deliveredEndpoint?.kind == PeerRouteKind.lan) {
       await _rememberLanRoutesForContact(
         deviceId: contact.deviceId,
-        routes: [deliveredVia],
+        routes: [deliveredEndpoint!],
       );
     }
-    return deliveredVia;
+    return result;
   }
 
-  Future<List<PeerEndpoint>> _rankRoutesForDelivery(
-    List<PeerEndpoint> routes,
-  ) async {
-    final eligibleRoutes = routes
-        .where(_routeHealthTracker.isEligibleNow)
-        .toList(growable: false);
-    final checks = await _rankRouteHealthForDelivery(eligibleRoutes);
-    return checks.map((check) => check.route).toList(growable: false);
+  Map<TransportKind, TransportPolicy> _effectiveTransportPolicies(
+    ContactRecord contact,
+  ) {
+    final global =
+        _snapshot.identity?.connectivity ??
+        const GlobalConnectivityPreferences();
+    return {
+      for (final kind in TransportKind.values)
+        kind: contact.routing.effectivePolicy(kind, global),
+    };
+  }
+
+  bool _legacyRouteAllowed(
+    PeerEndpoint route,
+    ({bool lan, bool online, RoutingPreference preferred}) effective,
+    Map<TransportKind, TransportPolicy> policies,
+  ) {
+    final kind = route.kind == PeerRouteKind.lan
+        ? TransportKind.lan
+        : TransportKind.conestRelay;
+    final policy = policies[kind] ?? TransportPolicy.disabled;
+    if (policy == TransportPolicy.disabled ||
+        policy == TransportPolicy.askBeforeUse) {
+      return false;
+    }
+    return _routeAllowedByTransports(route, effective);
+  }
+
+  Future<_DeliveryRoute> _deliverViaTransportRegistry({
+    required ContactRecord contact,
+    required RelayEnvelope envelope,
+    required Map<TransportKind, TransportPolicy> policies,
+    bool allowRelay = true,
+  }) async {
+    final registry = _transportRegistry;
+    final global = _snapshot.identity?.connectivity;
+    if (registry == null || global == null) {
+      throw StateError('No unified transport adapter is running.');
+    }
+    final result = await registry.deliverEnvelope(
+      peer: TransportPeer(
+        deviceId: contact.deviceId,
+        transportIdentity: contact.irohEndpointId,
+        identityPinned: contact.hasPinnedIrohIdentity,
+        allowRelay:
+            allowRelay &&
+            global.irohRelayEnabled &&
+            contact.routing.irohRelayEnabled,
+      ),
+      envelope: TransportEnvelope(
+        id: envelope.messageId,
+        recipientDeviceId: envelope.recipientDeviceId,
+        bytes: Uint8List.fromList(utf8.encode(jsonEncode(envelope.toJson()))),
+        createdAt: envelope.createdAt,
+      ),
+      policies: policies,
+    );
+    return _DeliveryRoute.transport(result.receipt);
   }
 
   Future<List<PeerRouteHealth>> _rankRouteHealthForDelivery(
@@ -9472,6 +11241,15 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  bool _hasUsableLargeDirectTransport(ContactRecord contact) {
+    if (_hasUsableLanDirectEndpoint(contact.deviceId)) return true;
+    final iroh = _transportRegistry?.adapterFor(TransportKind.iroh);
+    if (iroh == null || !contact.hasPinnedIrohIdentity) return false;
+    final policy = _effectiveTransportPolicies(contact)[TransportKind.iroh];
+    return policy == TransportPolicy.automatic ||
+        policy == TransportPolicy.preferred;
+  }
+
   bool _routeAllowedByTransports(
     PeerEndpoint route,
     ({bool lan, bool online, RoutingPreference preferred}) effective,
@@ -9641,11 +11419,7 @@ class MessengerController extends ChangeNotifier {
     };
     try {
       final stopwatch = Stopwatch()..start();
-      final cachedRelayId =
-          _routeHealthTracker.healthMap[route.routeKey]?.relayInstanceId;
-      final expectedKey = cachedRelayId == null
-          ? null
-          : _snapshot.pinnedRelayIdentityKeys[cachedRelayId];
+      final expectedKey = _pinnedIdentityKeyForRoute(route);
       final info = await _relayClient.inspectHealth(
         host: route.host,
         port: route.port,
@@ -9656,6 +11430,12 @@ class MessengerController extends ChangeNotifier {
       stopwatch.stop();
       if (!info.ok) {
         throw StateError('Route health check failed.');
+      }
+      if (route.kind == PeerRouteKind.relay &&
+          (!info.signatureVerified ||
+              info.relayInstanceId == null ||
+              info.identityPublicKeyBase64 == null)) {
+        throw StateError('Unknown relay did not complete signed TOFU health.');
       }
       // TOFU: if this relay_id has no pin yet and the response carried a
       // self-announced + signature-verified identity key, pin it. Mismatch
@@ -9668,10 +11448,12 @@ class MessengerController extends ChangeNotifier {
         final existing = _snapshot.pinnedRelayIdentityKeys[relayId];
         if (existing == null) {
           if (info.signatureVerified) {
-            final updated = Map<String, String>.from(
-              _snapshot.pinnedRelayIdentityKeys,
-            )..[relayId] = announced;
+            final updated =
+                Map<String, String>.from(_snapshot.pinnedRelayIdentityKeys)
+                  ..[relayId] = announced
+                  ..[route.routeKey] = announced;
             _snapshot = _snapshot.copyWith(pinnedRelayIdentityKeys: updated);
+            unawaited(_saveSnapshotSilently(notify: false, debounce: true));
           }
         } else if (info.pinnedKeyMismatch ||
             (info.signatureVerified == false && announced != existing)) {
@@ -9684,6 +11466,13 @@ class MessengerController extends ChangeNotifier {
           // Pinned key still matches; clear any stale "trust new key"
           // surface so the UI banner goes away.
           _announcedRelayIdentityKeys.remove(relayId);
+          if (_snapshot.pinnedRelayIdentityKeys[route.routeKey] != existing) {
+            final updated = Map<String, String>.from(
+              _snapshot.pinnedRelayIdentityKeys,
+            )..[route.routeKey] = existing;
+            _snapshot = _snapshot.copyWith(pinnedRelayIdentityKeys: updated);
+            unawaited(_saveSnapshotSilently(notify: false, debounce: true));
+          }
         }
       }
       final health = PeerRouteHealth(
@@ -9709,13 +11498,48 @@ class MessengerController extends ChangeNotifier {
         notify: false,
       );
       _routeHealthTracker.recordFailure(route, error: error.toString());
-      final health = _routeHealthTracker.healthMap[route.routeKey]!;
-      return health;
+      return _routeHealthTracker.healthMap[route.routeKey] ??
+          PeerRouteHealth(
+            route: route,
+            available: false,
+            latency: null,
+            checkedAt: _now().toUtc(),
+            error: error.toString(),
+          );
     } catch (error) {
       _routeHealthTracker.recordFailure(route, error: error.toString());
-      final health = _routeHealthTracker.healthMap[route.routeKey]!;
-      return health;
+      return _routeHealthTracker.healthMap[route.routeKey] ??
+          PeerRouteHealth(
+            route: route,
+            available: false,
+            latency: null,
+            checkedAt: _now().toUtc(),
+            error: error.toString(),
+          );
     }
+  }
+
+  String? _pinnedIdentityKeyForRoute(PeerEndpoint route) {
+    final direct = _snapshot.pinnedRelayIdentityKeys[route.routeKey];
+    if (direct != null) return direct;
+    final relayId =
+        _routeHealthTracker.healthMap[route.routeKey]?.relayInstanceId;
+    return relayId == null ? null : _snapshot.pinnedRelayIdentityKeys[relayId];
+  }
+
+  Future<String?> _requireOperationalRelayPin(PeerEndpoint route) async {
+    if (route.kind != PeerRouteKind.relay) return null;
+    var key = _pinnedIdentityKeyForRoute(route);
+    if (key != null) return key;
+    final health = await _checkRouteHealth(route);
+    if (!health.available) {
+      throw StateError('Relay has no verified identity pin.');
+    }
+    key = _pinnedIdentityKeyForRoute(route);
+    if (key == null) {
+      throw StateError('Relay health succeeded without a persisted pin.');
+    }
+    return key;
   }
 
   Future<PeerEndpoint> _deliverAcrossRoutes({
@@ -9729,6 +11553,7 @@ class MessengerController extends ChangeNotifier {
     Object? lastError;
     for (final route in routes) {
       try {
+        final expectedRelayKey = await _requireOperationalRelayPin(route);
         _storeCallCount++;
         final stopwatch = Stopwatch()..start();
         final stored = await _relayClient.storeEnvelope(
@@ -9737,6 +11562,7 @@ class MessengerController extends ChangeNotifier {
           protocol: route.protocol,
           recipientDeviceId: recipientDeviceId,
           envelope: envelope,
+          expectedIdentityPublicKeyBase64: expectedRelayKey,
           timeout: route.kind == PeerRouteKind.lan
               ? lanTimeout ?? const Duration(milliseconds: 900)
               : route.kind == PeerRouteKind.directInternet
@@ -9845,12 +11671,14 @@ class MessengerController extends ChangeNotifier {
   }) async {
     try {
       _fetchCallCount++;
+      final expectedRelayKey = await _requireOperationalRelayPin(route);
       final envelopes = await _relayClient.fetchEnvelopes(
         host: route.host,
         port: route.port,
         protocol: route.protocol,
         recipientDeviceId: mailboxId,
         limit: 4,
+        expectedIdentityPublicKeyBase64: expectedRelayKey,
         timeout: route.kind == PeerRouteKind.lan
             ? lanTimeout
             : const Duration(seconds: 2),
@@ -10335,20 +12163,9 @@ class MessengerController extends ChangeNotifier {
   /// concurrent LAN + relay arrivals still coalesce into one notify.
   Future<void> _handleLanDirectEnvelope(RelayEnvelope envelope) async {
     if (_disposed) return;
-    _notificationsDeferredDepth++;
-    try {
-      // Reuse the existing crypto + dispatch path. _handleAttachmentEnvelope
-      // already verifies the sender is a known non-pending contact, decrypts
-      // the payload, and routes by kind — so an attacker on the LAN who
-      // sends garbage just gets dropped at the crypto layer.
-      await _handleAttachmentEnvelope(envelope);
-    } finally {
-      _notificationsDeferredDepth--;
-      if (_notificationsDeferredDepth == 0 && _deferredNotificationPending) {
-        _deferredNotificationPending = false;
-        super.notifyListeners();
-      }
-    }
+    await _processEnvelopes(<RelayEnvelope>[
+      envelope,
+    ], ingressKind: PeerRouteKind.lan);
   }
 
   /// Public getter so the host (main.dart) and tests can read the bound
@@ -10362,11 +12179,12 @@ class MessengerController extends ChangeNotifier {
   Map<String, dynamic> _localLanDirectHintPayload() {
     final port = _lanDirectChannel?.localPort;
     if (port == null) return const <String, dynamic>{};
-    if (_localLanAddressesCache.isEmpty) return const <String, dynamic>{};
-    return {
-      'senderLanDirectPort': port,
-      'senderLanAddresses': _localLanAddressesCache,
-    };
+    final addresses = _localLanAddressesCache
+        .where(isValidLanDirectHost)
+        .take(4)
+        .toList(growable: false);
+    if (addresses.isEmpty) return const <String, dynamic>{};
+    return {'senderLanDirectPort': port, 'senderLanAddresses': addresses};
   }
 
   /// Test-only view of which peer endpoints we have cached. Used by
@@ -10415,16 +12233,35 @@ class MessengerController extends ChangeNotifier {
   ) {
     final port = payload['senderLanDirectPort'];
     final addresses = payload['senderLanAddresses'];
-    if (port is! int || addresses is! List || addresses.isEmpty) {
+    if (port is! int ||
+        !isValidPeerEndpointPort(port) ||
+        addresses is! List ||
+        addresses.isEmpty ||
+        addresses.length > 4 ||
+        addresses.any(
+          (value) => value is! String || !isValidLanDirectHost(value),
+        )) {
       return;
     }
-    final host = addresses.first;
-    if (host is! String || host.isEmpty) return;
+    final host = addresses.first as String;
     _peerLanDirect[peerDeviceId] = LanDirectEndpoint(
       host: host,
       port: port,
       cachedAt: DateTime.now().toUtc(),
     );
+    final contact = _contactByDeviceId(peerDeviceId);
+    for (final state in _inboundAttachments.values.where(
+      (entry) => entry.peerDeviceId == peerDeviceId && entry.accepted,
+    )) {
+      state.requestedInFlight.clear();
+      _setTransferSessionState(state.descriptor.id, TransferState.transferring);
+      if (contact != null) {
+        _scheduleAttachmentRetry(state.descriptor.id);
+        _topUpInboundWindow(state, contact);
+      }
+    }
+    if (contact != null) _pumpOutboundQueue(contact);
+    notifyListeners();
   }
 
   /// Records a PUT failure and demotes the peer to relay-only after the
@@ -10611,9 +12448,13 @@ class MessengerController extends ChangeNotifier {
     return dedupePeerEndpoints(routes);
   }
 
-  ContactInvite _inviteForIdentity(IdentityRecord identity) {
-    return ContactInvite(
-      version: 4,
+  Future<ContactInvite> _inviteForIdentity(IdentityRecord identity) async {
+    if (!identity.hasTransportIdentity ||
+        identity.irohEndpointId?.isNotEmpty != true) {
+      throw StateError('Transport identity has not been initialized.');
+    }
+    final unsigned = ContactInvite(
+      version: 6,
       accountId: identity.accountId,
       deviceId: identity.deviceId,
       displayName: identity.displayName,
@@ -10623,6 +12464,17 @@ class MessengerController extends ChangeNotifier {
       relayCapable: identity.relayModeEnabled,
       publicKeyBase64: identity.publicKeyBase64,
       routeHints: _inviteRouteHintsForIdentity(identity),
+      signingPublicKeyBase64: identity.signingPublicKeyBase64,
+      irohEndpointId: identity.irohEndpointId,
+      capabilities: const [
+        TransportKind.lan,
+        TransportKind.iroh,
+        TransportKind.conestRelay,
+        TransportKind.optical,
+      ],
+    );
+    return unsigned.copyWithSignature(
+      await _crypto.signContactInvite(unsigned),
     );
   }
 
@@ -10731,7 +12583,7 @@ class MessengerController extends ChangeNotifier {
     if (!force && !_isPairingSessionActive()) {
       return;
     }
-    final invite = _inviteForIdentity(me);
+    final invite = await _inviteForIdentity(me);
     final payload = invite.encodePayload();
     final mailboxIds = pairingCodephrasesForPayload(
       payload,
@@ -10749,9 +12601,17 @@ class MessengerController extends ChangeNotifier {
 
     final stores = <Future<void>>[];
     for (final route in _announcementRoutesForIdentity(me)) {
+      String? expectedRelayKey;
+      try {
+        expectedRelayKey = await _requireOperationalRelayPin(route);
+      } catch (error) {
+        _routeHealthTracker.recordFailure(route, error: error.toString());
+        continue;
+      }
       for (final mailboxId in mailboxIds) {
         _storeCallCount++;
         final announcement = RelayEnvelope(
+          protocolVersion: 1,
           kind: 'pairing_announcement',
           messageId: _randomId('pair'),
           conversationId: 'pairing',
@@ -10769,6 +12629,7 @@ class MessengerController extends ChangeNotifier {
                 protocol: route.protocol,
                 recipientDeviceId: mailboxId,
                 envelope: announcement,
+                expectedIdentityPublicKeyBase64: expectedRelayKey,
                 timeout: route.kind == PeerRouteKind.lan
                     ? const Duration(milliseconds: 500)
                     : const Duration(seconds: 2),
@@ -11172,6 +13033,32 @@ class MessengerController extends ChangeNotifier {
     return incoming.copyWith(memberProfiles: profiles);
   }
 
+  bool _preservesExistingGroupMemberIdentities(
+    GroupRecord existing,
+    GroupRecord incoming,
+  ) {
+    final incomingByDevice = <String, GroupMemberProfile>{
+      for (final profile in incoming.memberProfiles) profile.deviceId: profile,
+    };
+    for (final prior in existing.memberProfiles) {
+      final next = incomingByDevice[prior.deviceId];
+      if (next == null) continue;
+      if (next.accountId != prior.accountId ||
+          next.publicKeyBase64 != prior.publicKeyBase64) {
+        return false;
+      }
+    }
+    for (final contact in _snapshot.contacts) {
+      final next = incomingByDevice[contact.deviceId];
+      if (next == null) continue;
+      if (next.accountId != contact.accountId ||
+          next.publicKeyBase64 != contact.publicKeyBase64) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   bool _sameGroupMemberProfiles(GroupRecord left, GroupRecord right) {
     final leftEncoded = left.memberProfiles.map((profile) {
       final routeKeys =
@@ -11556,8 +13443,9 @@ class MessengerController extends ChangeNotifier {
   void _updateMessageState(
     String peerDeviceId,
     String messageId,
-    DeliveryState state,
-  ) {
+    DeliveryState state, {
+    _DeliveryRoute? route,
+  }) {
     if (messageId.isEmpty) {
       return;
     }
@@ -11584,7 +13472,12 @@ class MessengerController extends ChangeNotifier {
           state != DeliveryState.read) {
         return message;
       }
-      return message.copyWith(state: state);
+      return message.copyWith(
+        state: state,
+        transportKind: route?.transportKind,
+        transportPath: route?.path,
+        transportDetail: route?.label,
+      );
     }).toList();
     conversations[conversationIndex] = conversations[conversationIndex]
         .copyWith(messages: updatedMessages);
@@ -11783,6 +13676,8 @@ class MessengerController extends ChangeNotifier {
       final inbound = _inboundAttachments.remove(attachmentId);
       inbound?.retryTimer?.cancel();
       _assembledAttachments.remove(attachmentId);
+      _removeTransferSession(attachmentId);
+      unawaited(_deleteAttachmentArtifacts(attachmentId));
       // If this was the active outbound for the peer, free the slot and
       // pump the queue so the next pending attachment can dispatch. The
       // helper also drops poll cadence back to idle when the last
@@ -11963,6 +13858,20 @@ class MessengerController extends ChangeNotifier {
     return '$prefix-$suffix';
   }
 
+  String _beamFingerprintForSigningKey(String signingKeyBase64) {
+    final digest = dart_crypto.sha256
+        .convert(base64Decode(signingKeyBase64))
+        .bytes
+        .take(12);
+    final compact = digest
+        .map((value) => value.toRadixString(16).padLeft(2, '0'))
+        .join();
+    return [
+      for (var index = 0; index < compact.length; index += 4)
+        compact.substring(index, min(index + 4, compact.length)),
+    ].join('-');
+  }
+
   /// Public helper for fresh, collision-resistant album ids. Previously
   /// `_sendMultipleAttachments` minted ids from `DateTime.now().micros…`,
   /// which collided when two consecutive batches dispatched within the
@@ -12057,7 +13966,8 @@ class MessengerController extends ChangeNotifier {
     }
     unawaited(
       _platformBridge.setAndroidBackgroundRuntimeEnabled(
-        me.androidBackgroundRuntimeEnabled,
+        experimentalAndroidBackgroundRuntimeAvailable &&
+            me.androidBackgroundRuntimeEnabled,
       ),
     );
   }
@@ -12092,6 +14002,7 @@ class MessengerController extends ChangeNotifier {
     unawaited(_platformBridge.setAndroidBackgroundRuntimeEnabled(false));
     unawaited(_localRelayNode.stop());
     unawaited(_lanDirectChannel?.stop());
+    unawaited(_stopTransportRegistry());
     super.dispose();
   }
 }
@@ -12101,6 +14012,56 @@ class _PairingBeaconRoute {
 
   final PeerEndpoint route;
   final DateTime seenAt;
+}
+
+class _DeliveryRoute {
+  const _DeliveryRoute({
+    required this.transportKind,
+    required this.path,
+    required this.label,
+    required this.routeKey,
+    this.endpoint,
+  });
+
+  factory _DeliveryRoute.legacy(PeerEndpoint endpoint) => _DeliveryRoute(
+    transportKind: endpoint.kind == PeerRouteKind.lan
+        ? TransportKind.lan
+        : TransportKind.conestRelay,
+    path: endpoint.kind == PeerRouteKind.lan
+        ? TransportPathKind.local
+        : endpoint.kind == PeerRouteKind.directInternet
+        ? TransportPathKind.direct
+        : TransportPathKind.storeForward,
+    label: endpoint.kind == PeerRouteKind.lan
+        ? 'LAN ${endpoint.label}'
+        : 'Conest relay ${endpoint.label}',
+    routeKey: endpoint.routeKey,
+    endpoint: endpoint,
+  );
+
+  factory _DeliveryRoute.transport(DeliveryReceipt receipt) => _DeliveryRoute(
+    transportKind: receipt.route.transport,
+    path: receipt.route.path,
+    label: receipt.route.label,
+    routeKey: receipt.route.routeId,
+  );
+
+  final TransportKind transportKind;
+  final TransportPathKind path;
+  final String label;
+  final String routeKey;
+  final PeerEndpoint? endpoint;
+
+  PeerRouteKind get kind => switch (path) {
+    TransportPathKind.local => PeerRouteKind.lan,
+    TransportPathKind.direct => PeerRouteKind.directInternet,
+    TransportPathKind.relayed ||
+    TransportPathKind.storeForward ||
+    TransportPathKind.manual => PeerRouteKind.relay,
+  };
+
+  String get host => endpoint?.host ?? label;
+  int get port => endpoint?.port ?? 0;
 }
 
 class _PendingRouteUpdateProbe {
@@ -12126,14 +14087,18 @@ class _OutboundAttachmentState {
   _OutboundAttachmentState({
     required this.messageId,
     required this.peerDeviceId,
-    required this.chunks,
+    required this.sourcePath,
+    required this.sourceKind,
     required this.descriptor,
+    required this.requiresLan,
   });
 
   final String messageId;
   final String peerDeviceId;
-  final List<Uint8List> chunks;
+  final String sourcePath;
+  final TransferSourceKind sourceKind;
   final AttachmentDescriptor descriptor;
+  final bool requiresLan;
 
   /// Highest chunk index the receiver has successfully pulled. Drives the
   /// sender-side progress bar. Reset to -1 on entry, advanced by every
@@ -12191,21 +14156,52 @@ class _OutboundAttachmentState {
   OutboundDeliveryRoute lastDeliveryRoute = OutboundDeliveryRoute.unknown;
 }
 
+class _PreparedAttachmentSource {
+  const _PreparedAttachmentSource({
+    required this.path,
+    required this.relativePath,
+    required this.sourceKind,
+    required this.sizeBytes,
+    required this.fileHashBase64,
+    required this.sourceModifiedAt,
+  });
+
+  final String path;
+  final String relativePath;
+  final TransferSourceKind sourceKind;
+  final int sizeBytes;
+  final String fileHashBase64;
+  final DateTime sourceModifiedAt;
+}
+
 /// Channel that carried the most recent successful chunk delivery for
 /// an outbound attachment.
-enum OutboundDeliveryRoute { unknown, lanDirect, relay }
+enum OutboundDeliveryRoute {
+  unknown,
+  lanDirect,
+  irohDirect,
+  irohRelay,
+  conestRelay,
+}
 
 class _InboundAttachmentState {
   _InboundAttachmentState({
     required this.messageId,
     required this.peerDeviceId,
     required this.descriptor,
-  }) : received = List<Uint8List?>.filled(descriptor.chunkHashes.length, null);
+    this.partialPath,
+    this.awaitingAcceptance = false,
+    this.accepted = true,
+    Iterable<int> receivedChunks = const <int>[],
+  }) : received = <int>{...receivedChunks};
 
   final String messageId;
   final String peerDeviceId;
   final AttachmentDescriptor descriptor;
-  final List<Uint8List?> received;
+  final Set<int> received;
+  String? partialPath;
+  bool awaitingAcceptance;
+  bool accepted;
 
   /// Re-request timer that fires if no chunk has arrived for ~5 s. Reset on
   /// every received chunk; cancelled on completion or cancel/delete.
@@ -12232,8 +14228,8 @@ class _InboundAttachmentState {
   DateTime? lastProgressSentAt;
 
   int get nextMissingIndex {
-    for (var i = 0; i < received.length; i++) {
-      if (received[i] == null) {
+    for (var i = 0; i < descriptor.effectiveChunkCount; i++) {
+      if (!received.contains(i)) {
         return i;
       }
     }
@@ -12244,15 +14240,15 @@ class _InboundAttachmentState {
   /// request out for. Used by the windowed top-up loop to avoid asking
   /// for the same chunk twice.
   int nextUnrequestedIndex() {
-    for (var i = 0; i < received.length; i++) {
-      if (received[i] == null && !requestedInFlight.contains(i)) {
+    for (var i = 0; i < descriptor.effectiveChunkCount; i++) {
+      if (!received.contains(i) && !requestedInFlight.contains(i)) {
         return i;
       }
     }
     return -1;
   }
 
-  bool get isComplete => received.every((chunk) => chunk != null);
+  bool get isComplete => received.length == descriptor.effectiveChunkCount;
 }
 
 enum _RuntimeMode {

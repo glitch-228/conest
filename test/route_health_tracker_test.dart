@@ -88,5 +88,18 @@ void main() {
       expect(tracker.healthMap, isEmpty);
       expect(tracker.runtimeMap, isEmpty);
     });
+
+    test('connectivity reset clears backoff without discarding history', () {
+      tracker.recordSuccess(lanRoute, fetch: true);
+      tracker.recordFailure(lanRoute);
+      expect(tracker.isBackedOff(lanRoute), isTrue);
+
+      tracker.clearBackoffWindows();
+
+      expect(tracker.isEligibleNow(lanRoute), isTrue);
+      expect(tracker.healthFor(lanRoute), isNotNull);
+      expect(tracker.runtimeFor(lanRoute)?.failureStreak, 0);
+      expect(tracker.runtimeFor(lanRoute)?.lastFetchSuccessAt, isNotNull);
+    });
   });
 }

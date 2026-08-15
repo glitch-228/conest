@@ -1,20 +1,27 @@
 # Conest
 
-Conest is a phased secure text-exchange app. This repository now contains the first working `v0.1` implementation cut:
+Conest is a phased secure messenger and transfer app. The repository contains:
 
 - Flutter client for Linux, Windows, and Android.
-- QR invite export plus Android QR scanning and a full-screen QR view.
+- Signed `ci6` invites plus backward-compatible `ci5` import.
 - QR-import-only and codephrase-only contact pairing.
 - Encrypted local vault for identity, contacts, and message history.
-- LAN-first direct text delivery with TCP/UDP route variants, relay fallback, and queued offline delivery.
+- A shared transport policy/orchestration layer over encrypted LAN delivery,
+  authenticated Iroh QUIC, visible Iroh relay fallback, and Conest's offline relay.
+- Resumable, hash-verified attachment transfer with route-boundary migration.
+- Conest Beam optical transfer for public files, contact-encrypted files, and
+  contact invites.
 - Invite-only trusted groups with pairwise encrypted text fanout.
-- Rust workspace with a standalone relay binary and a desktop updater helper.
+- Rust workspace with the native transport/camera library, standalone relay,
+  and desktop updater.
 
 ## What Is Implemented Now
 
 - One account on one device.
 - Direct text conversations and invite-only trusted groups up to 16 members.
-- Compact `ci5` invite payloads with ranked LAN and relay route hints.
+- Signed compact `ci6` invite payloads carrying Ed25519/X25519 keys, pinned
+  Iroh endpoint identity, capabilities, and bounded route hints; `ci5` remains
+  accepted for migration.
 - Route hints carry both route kind and protocol, currently `tcp`, `udp`, `http`, or `https`.
 - Rotating pairing code derived from the payload in 120-second windows.
 - Desktop-style relay behavior enabled by default through the app's local LAN node.
@@ -22,14 +29,40 @@ Conest is a phased secure text-exchange app. This repository now contains the fi
 - Nearby pairing and messaging that try LAN routes first, then continue through internet relay routes when available.
 - Codephrase discovery over LAN beacons, bounded nearby LAN scans, or the configured shared relay.
 - Relay polling, outbound queueing, duplicate suppression, and ack-based delivery state updates.
-- Protocol shapes reserved for groups, LAN routes, attachments, and multi-device enrollment.
+- Global and per-contact automatic/preferred/disabled/ask-before-use transport
+  policy, with the actual path shown on messages and transfers.
+- Visible Iroh relay fallback with global/contact opt-outs and an optional
+  persisted list of up to eight custom HTTPS relay URLs (blank uses N0).
+- Persistent, verified attachment ranges, pause/cancel, restart recovery, and a
+  30 MiB default store-forward relay cap. Larger files require LAN or direct
+  Iroh and pause instead of silently consuming relay capacity.
+- Conest Beam v1 systematic LT fountain frames with CRC32C, a signed manifest,
+  final SHA-256 verification, a 64 MiB limit, and explicit acceptance for
+  public/untrusted imports.
+- Android camera scanning and a Linux/Windows native scanner based on Nokhwa
+  and RXing, with manual frame input retained as a backend fallback.
+- Native compact-envelope, expiry/replay protection, and bounded trusted
+  courier queue primitives for the Reticulum-inspired mode.
 
 ## What Is Not Complete Yet
 
-- Direct hole punching and libp2p route selection.
-- Desktop tray persistence and Android foreground service lifecycle.
-- File/image transfer, automatic LAN discovery beyond current interface enumeration, and multi-device identity sync.
-- Production-hardening items such as signed relay lists, relay federation, audited abuse controls, secure key rotation, and a Double Ratchet implementation.
+- Multi-provider group attachment swarming and multi-device identity sync.
+- Delta Chat account integration and explicit fingerprint-verified contact
+  linking.
+- Full LocalSend v2 compatibility (the existing LAN HTTP path is Conest's
+  encrypted transfer path, not a LocalSend trust domain).
+- Optional official RNS/LXMF interoperability sidecar and its redistribution,
+  Android-runtime, and all-platform qualification work.
+- Production enablement of courier forwarding, which remains off by default
+  until queue persistence, quota UI, and adversarial tests are complete.
+- Beam receive-session persistence across an application restart. Completed
+  files are verified and saved privately, but an interrupted optical scan must
+  currently be restarted.
+- Physical camera qualification across the supported Linux/Windows backends;
+  manual Beam frame entry remains available when native capture is absent.
+- Forced-Iroh-relay/offline integration qualification and native cancellation
+  of an already-open QUIC stream; controller cancellation already stops later
+  verified ranges from being issued.
 
 ## Run The Relay
 
@@ -99,9 +132,12 @@ On first launch:
 ## Rust Workspace
 
 - `native/conest_relay`: TCP/UDP/HTTP JSON relay with queued offline delivery.
+- `native/conest_native`: persistent Iroh endpoint, stable C ABI / FRB API, and
+  Linux/Windows Beam camera decoder.
 - `native/conest_updater`: desktop helper that swaps a staged update bundle into the running app's install directory and relaunches the app.
 
-The Flutter client implements all protocol and cryptography logic in Dart; there is no FFI back into Rust today.
+Linux and Windows CMake builds compile and bundle `conest_native`. Android's
+Gradle build invokes `cargo ndk` and packages the generated JNI libraries.
 
 ## Tests
 

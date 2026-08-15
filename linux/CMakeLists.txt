@@ -81,6 +81,23 @@ add_custom_target(conest_updater ALL
 )
 add_dependencies(${BINARY_NAME} conest_updater)
 
+set(CONEST_NATIVE_MANIFEST
+  "${CMAKE_CURRENT_SOURCE_DIR}/../native/conest_native/Cargo.toml")
+set(CONEST_NATIVE_TARGET_DIR
+  "${CMAKE_CURRENT_BINARY_DIR}/conest_native_target")
+set(CONEST_NATIVE_LIBRARY
+  "${CONEST_NATIVE_TARGET_DIR}/release/libconest_native.so")
+add_custom_target(conest_native ALL
+  COMMAND "${CARGO_EXECUTABLE}" build
+          --manifest-path "${CONEST_NATIVE_MANIFEST}"
+          --target-dir "${CONEST_NATIVE_TARGET_DIR}"
+          --release
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+  BYPRODUCTS "${CONEST_NATIVE_LIBRARY}"
+  VERBATIM
+)
+add_dependencies(${BINARY_NAME} conest_native)
+
 # Only the install-generated bundle's copy of the executable will launch
 # correctly, since the resources must in the right relative locations. To avoid
 # people trying to run the unbundled copy, put it in a subdirectory instead of
@@ -122,6 +139,9 @@ install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 
 install(PROGRAMS "${CONEST_UPDATER_BINARY}" DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+
+install(FILES "${CONEST_NATIVE_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 
 foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})

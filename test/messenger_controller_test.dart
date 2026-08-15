@@ -7,6 +7,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 
 import 'package:conest/main.dart' as app;
 import 'package:conest/main.dart' show sniffImageMimeType;
@@ -20,7 +21,10 @@ import 'package:conest/src/relay_client.dart'
     show RelayClient, RelayHealthInfo, RelayIdentityMismatchException;
 import 'package:conest/src/relay_defaults.dart';
 import 'package:conest/src/storage.dart';
+import 'package:conest/src/storage_capacity.dart';
 import 'package:conest/src/update_service.dart';
+
+const _fakeRelayIdentityKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
 
 /// nightly.9 in-process LAN-direct channel that bypasses real HTTP — the
 /// Flutter test binding intercepts every HttpClient request and returns
@@ -51,6 +55,11 @@ class _InProcessLanDirectChannel implements LanDirectChannel {
   /// even when the destination channel is registered. Consumed FIFO. Use
   /// to simulate a single chunk hiccup without taking the channel down.
   int transientFailureCount = 0;
+
+  /// Receiver-side cutoff used by restart/resume tests. Once this channel
+  /// has accepted the configured number of envelopes, later PUTs fail until
+  /// a replacement channel is started after the simulated restart.
+  int? rejectAfterAcceptedEnvelopes;
 
   @override
   int? get localPort => _port;
@@ -104,6 +113,10 @@ class _InProcessLanDirectChannel implements LanDirectChannel {
     // probe-before-demote gate.
     if (transientFailureCount > 0) {
       transientFailureCount--;
+      return false;
+    }
+    final cutoff = target.rejectAfterAcceptedEnvelopes;
+    if (cutoff != null && target.acceptedEnvelopes >= cutoff) {
       return false;
     }
     final handler = target._handler;
@@ -492,6 +505,9 @@ class _FakeRelayClient extends RelayClient {
     return RelayHealthInfo(
       ok: true,
       relayInstanceId: _relayIdFor(host, port, protocol),
+      identityPublicKeyBase64:
+          expectedIdentityPublicKeyBase64 ?? _fakeRelayIdentityKey,
+      signatureVerified: true,
     );
   }
 }
@@ -603,7 +619,13 @@ class _HostScopedFakeRelayClient extends RelayClient {
     if (!ok) {
       throw StateError('Route unavailable for ${_key(host, port, protocol)}');
     }
-    return RelayHealthInfo(ok: true, relayInstanceId: 'fake-relay-$host:$port');
+    return RelayHealthInfo(
+      ok: true,
+      relayInstanceId: 'fake-relay-$host:$port',
+      identityPublicKeyBase64:
+          expectedIdentityPublicKeyBase64 ?? _fakeRelayIdentityKey,
+      signatureVerified: true,
+    );
   }
 }
 
@@ -621,6 +643,7 @@ Future<MessengerController> _createController({
   Future<Directory> Function()? attachmentRootProvider,
   PlatformBridge? platformBridge,
   LanDirectChannel? lanDirectChannel,
+  StorageCapacityProvider? storageCapacityProvider,
 }) async {
   final controller = MessengerController(
     vaultStore: vaultStore ?? _MemoryVaultStore(),
@@ -630,8 +653,15 @@ Future<MessengerController> _createController({
     nowProvider: nowProvider,
     signedRelayDefaultsLoader: signedRelayDefaultsLoader,
     enableLongPoll: enableLongPoll,
+    enablePairingBeacon: false,
     platformBridge: platformBridge,
     lanDirectChannel: lanDirectChannel,
+    storageCapacityProvider:
+        storageCapacityProvider ??
+        (_) async => const StorageCapacity(
+          freeBytes: 100 * 1024 * 1024 * 1024,
+          totalBytes: 120 * 1024 * 1024 * 1024,
+        ),
     attachmentRootProvider:
         attachmentRootProvider ??
         () async {
@@ -692,6 +722,14 @@ Future<void> _pairControllers(
     codephrase: '',
   );
   await second.pollNow();
+  if (!second.contacts.any(
+    (contact) => contact.deviceId == first.identity!.deviceId,
+  )) {
+    final request = second.pendingContactRequests.singleWhere(
+      (entry) => entry.senderDeviceId == first.identity!.deviceId,
+    );
+    await second.approvePendingContactRequest(request.id);
+  }
   expect(
     second.contacts.any(
       (contact) => contact.deviceId == first.identity!.deviceId,
@@ -855,7 +893,9 @@ void main() {
       hasLength(lessThanOrEqualTo(2)),
     );
     expect(payload.length, lessThan(900));
-    expect(payload, startsWith('ci5|'));
+    expect(payload, startsWith('ci6|'));
+    expect(invite.usesSignedFormat, isTrue);
+    expect(invite.irohEndpointId, isNotEmpty);
   });
 
   test('hotspot gateway addresses are treated as LAN discovery addresses', () {
@@ -975,7 +1015,7 @@ void main() {
   });
 
   test(
-    'adding a contact auto-exchanges so the other side appears later',
+    'adding a contact creates a pending request on the other side',
     () async {
       final relayClient = _FakeRelayClient();
       final alice = await _createController(
@@ -992,9 +1032,13 @@ void main() {
         payload: (await bob.buildInvite()).encodePayload(),
         codephrase: '',
       );
-
       expect(result.exchangeStatus, ContactExchangeStatus.automatic);
       await bob.pollNow();
+      expect(bob.contacts, isEmpty);
+      expect(bob.pendingContactRequests, hasLength(1));
+      await bob.approvePendingContactRequest(
+        bob.pendingContactRequests.single.id,
+      );
       expect(
         bob.contacts.any(
           (contact) => contact.deviceId == alice.identity!.deviceId,
@@ -1137,7 +1181,7 @@ void main() {
   test('group offline member stays pending and retries later', () async {
     late String carolDeviceId;
     var failCarolGroupMessages = true;
-    var now = DateTime.utc(2026, 4, 25, 12);
+    var now = DateTime.utc(2026, 7, 13, 12);
     final relayClient = _FakeRelayClient(
       shouldFailStore: (_, _, _, recipientDeviceId, envelope) =>
           failCarolGroupMessages &&
@@ -1152,10 +1196,12 @@ void main() {
     final bob = await _createController(
       relayClient: relayClient,
       displayName: 'Bob',
+      nowProvider: () => now,
     );
     final carol = await _createController(
       relayClient: relayClient,
       displayName: 'Carol',
+      nowProvider: () => now,
     );
     carolDeviceId = carol.identity!.deviceId;
     addTearDown(alice.dispose);
@@ -2237,6 +2283,9 @@ void main() {
         codephrase: '',
       );
       await alice.pollNow();
+      await alice.approvePendingContactRequest(
+        alice.pendingContactRequests.single.id,
+      );
 
       await alice.updateLocalRelayPort(8777);
       expect(
@@ -2423,32 +2472,47 @@ void main() {
     expect(bob.lanLobbyMessages.single.untrusted, isTrue);
   });
 
-  test('removing a contact sends a reciprocal removal notice', () async {
-    final relayClient = _FakeRelayClient();
-    final alice = await _createController(
-      relayClient: relayClient,
-      displayName: 'Alice',
-    );
-    final bob = await _createController(
-      relayClient: relayClient,
-      displayName: 'Bob',
-    );
+  test(
+    'unknown exchange requires approval and remote removal archives history',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
 
-    await alice.addContactFromInvite(
-      alias: 'Bob',
-      payload: (await bob.buildInvite()).encodePayload(),
-      codephrase: '',
-    );
-    await bob.pollNow();
-    expect(alice.contacts, hasLength(1));
-    expect(bob.contacts, hasLength(1));
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await bob.pollNow();
+      expect(alice.contacts, hasLength(1));
+      expect(bob.contacts, isEmpty);
+      expect(bob.pendingContactRequests, hasLength(1));
+      await bob.approvePendingContactRequest(
+        bob.pendingContactRequests.single.id,
+      );
+      expect(bob.contacts, hasLength(1));
 
-    await alice.removeContact(bob.identity!.deviceId);
-    await bob.pollNow();
+      await alice.sendMessage(contact: alice.contacts.single, body: 'keep me');
+      await bob.pollNow();
+      expect(bob.messagesFor(bob.contacts.single.deviceId), hasLength(1));
 
-    expect(alice.contacts, isEmpty);
-    expect(bob.contacts, isEmpty);
-  });
+      await alice.removeContact(bob.identity!.deviceId);
+      await bob.pollNow();
+
+      expect(alice.contacts, isEmpty);
+      expect(bob.contacts, hasLength(1));
+      expect(bob.contacts.single.remoteRemovedAt, isNotNull);
+      expect(bob.contacts.single.canSendOutbound, isFalse);
+      expect(bob.messagesFor(bob.contacts.single.deviceId), hasLength(1));
+    },
+  );
 
   test(
     'contact profile bio can be stored and route checks are sorted',
@@ -2692,7 +2756,7 @@ void main() {
   test(
     'failed route backoff expires and delivery retries the LAN path',
     () async {
-      var now = DateTime.utc(2026, 4, 21, 9);
+      var now = DateTime.utc(2026, 7, 13, 9);
       final relayClient = _FakeRelayClient(
         allowedHosts: <String>{'192.168.1.25:7667', 'relay.example:7667'},
         storeFailingHosts: <String>{'192.168.1.25:7667'},
@@ -2766,12 +2830,7 @@ void main() {
       displayName: 'Bob',
     );
 
-    await alice.addContactFromInvite(
-      alias: 'Bob',
-      payload: (await bob.buildInvite()).encodePayload(),
-      codephrase: '',
-    );
-    await bob.pollNow();
+    await _pairControllers(alice, bob);
     final bobContactForAlice = bob.contacts.single;
     final aliceContactForBob = alice.contacts.single;
 
@@ -2804,12 +2863,7 @@ void main() {
     addTearDown(alice.dispose);
     addTearDown(bob.dispose);
 
-    await alice.addContactFromInvite(
-      alias: 'Bob',
-      payload: (await bob.buildInvite()).encodePayload(),
-      codephrase: '',
-    );
-    await bob.pollNow();
+    await _pairControllers(alice, bob);
     final bobContactForAlice = bob.contacts.single;
     final aliceContactForBob = alice.contacts.single;
 
@@ -2853,12 +2907,7 @@ void main() {
         displayName: 'Bob',
       );
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
+      await _pairControllers(alice, bob);
       final bobContactForAlice = bob.contacts.single;
       final aliceContactForBob = alice.contacts.single;
 
@@ -2908,12 +2957,7 @@ void main() {
       addTearDown(alice.dispose);
       addTearDown(bob.dispose);
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
+      await _pairControllers(alice, bob);
       final bobContactForAlice = bob.contacts.single;
 
       await alice.sendMessage(contact: alice.contacts.single, body: 'hello');
@@ -2938,7 +2982,7 @@ void main() {
   );
 
   test('heartbeat round-trip marks a contact online', () async {
-    var now = DateTime.utc(2026, 4, 18, 12);
+    var now = DateTime.utc(2026, 7, 13, 12);
     final relayClient = _FakeRelayClient();
     final alice = await _createController(
       relayClient: relayClient,
@@ -2953,12 +2997,7 @@ void main() {
     addTearDown(alice.dispose);
     addTearDown(bob.dispose);
 
-    await alice.addContactFromInvite(
-      alias: 'Bob',
-      payload: (await bob.buildInvite()).encodePayload(),
-      codephrase: '',
-    );
-    await bob.pollNow();
+    await _pairControllers(alice, bob);
     final aliceContactForBob = alice.contacts.single;
 
     await alice.runHeartbeatPassNow();
@@ -2975,7 +3014,7 @@ void main() {
   });
 
   test('outbound ack marks a contact online', () async {
-    var now = DateTime.utc(2026, 4, 18, 13);
+    var now = DateTime.utc(2026, 7, 13, 13);
     final relayClient = _FakeRelayClient();
     final alice = await _createController(
       relayClient: relayClient,
@@ -2990,12 +3029,7 @@ void main() {
     addTearDown(alice.dispose);
     addTearDown(bob.dispose);
 
-    await alice.addContactFromInvite(
-      alias: 'Bob',
-      payload: (await bob.buildInvite()).encodePayload(),
-      codephrase: '',
-    );
-    await bob.pollNow();
+    await _pairControllers(alice, bob);
     final aliceContactForBob = alice.contacts.single;
 
     await alice.sendMessage(contact: aliceContactForBob, body: 'ping');
@@ -3011,7 +3045,7 @@ void main() {
   test(
     'reachability decays from online to seen recently to known to unknown',
     () async {
-      var now = DateTime.utc(2026, 4, 18, 14);
+      var now = DateTime.utc(2026, 7, 13, 14);
       final relayClient = _FakeRelayClient();
       final alice = await _createController(
         relayClient: relayClient,
@@ -3026,12 +3060,7 @@ void main() {
       addTearDown(alice.dispose);
       addTearDown(bob.dispose);
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
+      await _pairControllers(alice, bob);
       final aliceContactForBob = alice.contacts.single;
 
       await alice.sendMessage(contact: aliceContactForBob, body: 'fresh');
@@ -3066,7 +3095,7 @@ void main() {
   test(
     'checking paths alone does not upgrade an unknown contact to seen recently',
     () async {
-      var now = DateTime.utc(2026, 4, 18, 15);
+      var now = DateTime.utc(2026, 7, 13, 15);
       final relayClient = _FakeRelayClient();
       final alice = await _createController(
         relayClient: relayClient,
@@ -3081,12 +3110,7 @@ void main() {
       addTearDown(alice.dispose);
       addTearDown(bob.dispose);
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
+      await _pairControllers(alice, bob);
       final aliceContactForBob = alice.contacts.single;
 
       await alice.sendMessage(contact: aliceContactForBob, body: 'hello');
@@ -3118,7 +3142,7 @@ void main() {
   test(
     'heartbeat failure does not falsely mark a known contact online',
     () async {
-      var now = DateTime.utc(2026, 4, 18, 16);
+      var now = DateTime.utc(2026, 7, 13, 16);
       final failingRoutes = <String>{};
       final relayClient = _FakeRelayClient(
         failingHosts: failingRoutes,
@@ -3137,12 +3161,7 @@ void main() {
       addTearDown(alice.dispose);
       addTearDown(bob.dispose);
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
+      await _pairControllers(alice, bob);
       final aliceContactForBob = alice.contacts.single;
 
       await alice.sendMessage(contact: aliceContactForBob, body: 'known');
@@ -3180,7 +3199,7 @@ void main() {
   test(
     'heartbeat pass skips contacts with very recent two-way traffic',
     () async {
-      var now = DateTime.utc(2026, 4, 18, 17);
+      var now = DateTime.utc(2026, 7, 13, 17);
       final relayClient = _FakeRelayClient();
       final alice = await _createController(
         relayClient: relayClient,
@@ -3195,12 +3214,7 @@ void main() {
       addTearDown(alice.dispose);
       addTearDown(bob.dispose);
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
+      await _pairControllers(alice, bob);
       final aliceContactForBob = alice.contacts.single;
 
       await alice.sendMessage(contact: aliceContactForBob, body: 'fresh');
@@ -3240,12 +3254,7 @@ void main() {
         displayName: 'Bob',
       );
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
+      await _pairControllers(alice, bob);
       final bobContactForAlice = bob.contacts.single;
       final aliceContactForBob = alice.contacts.single;
 
@@ -3351,12 +3360,7 @@ void main() {
       displayName: 'Bob',
     );
 
-    await alice.addContactFromInvite(
-      alias: 'Bob',
-      payload: (await bob.buildInvite()).encodePayload(),
-      codephrase: '',
-    );
-    await bob.pollNow();
+    await _pairControllers(alice, bob);
     final bobContactForAlice = bob.contacts.single;
     final aliceContactForBob = alice.contacts.single;
 
@@ -3394,12 +3398,7 @@ void main() {
         displayName: 'Bob',
       );
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
+      await _pairControllers(alice, bob);
       final bobContactForAlice = bob.contacts.single;
       final aliceContactForBob = alice.contacts.single;
 
@@ -3441,12 +3440,7 @@ void main() {
         displayName: 'Bob',
       );
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
+      await _pairControllers(alice, bob);
       final bobContactForAlice = bob.contacts.single;
       final aliceContactForBob = alice.contacts.single;
 
@@ -3491,12 +3485,7 @@ void main() {
       displayName: 'Bob',
     );
 
-    await alice.addContactFromInvite(
-      alias: 'Bob',
-      payload: (await bob.buildInvite()).encodePayload(),
-      codephrase: '',
-    );
-    await bob.pollNow();
+    await _pairControllers(alice, bob);
     final bobContactForAlice = bob.contacts.single;
     final aliceContactForBob = alice.contacts.single;
 
@@ -3534,12 +3523,7 @@ void main() {
         displayName: 'Bob',
       );
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
+      await _pairControllers(alice, bob);
       final bobContactForAlice = bob.contacts.single;
       final aliceContactForBob = alice.contacts.single;
 
@@ -3584,12 +3568,7 @@ void main() {
           displayName: 'Bob',
         );
 
-        await alice.addContactFromInvite(
-          alias: 'Bob',
-          payload: (await bob.buildInvite()).encodePayload(),
-          codephrase: '',
-        );
-        await bob.pollNow();
+        await _pairControllers(alice, bob);
         final bobContactForAlice = bob.contacts.single;
         await bob.sendMessage(
           contact: bobContactForAlice,
@@ -3654,12 +3633,7 @@ void main() {
         displayName: 'Bob',
       );
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
+      await _pairControllers(alice, bob);
       final aliceContactForBob = alice.contacts.single;
       await alice.sendMessage(
         contact: aliceContactForBob,
@@ -3738,12 +3712,7 @@ void main() {
         displayName: 'Bob',
       );
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
+      await _pairControllers(alice, bob);
       final aliceContactForBob = alice.contacts.single;
       await alice.sendMessage(
         contact: aliceContactForBob,
@@ -3808,7 +3777,7 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      var now = DateTime.utc(2026, 4, 18, 18);
+      var now = DateTime.utc(2026, 7, 13, 18);
       late MessengerController alice;
       late MessengerController bob;
       await tester.runAsync(() async {
@@ -3824,12 +3793,7 @@ void main() {
           nowProvider: () => now,
         );
 
-        await alice.addContactFromInvite(
-          alias: 'Bob',
-          payload: (await bob.buildInvite()).encodePayload(),
-          codephrase: '',
-        );
-        await bob.pollNow();
+        await _pairControllers(alice, bob);
         final aliceContactForBob = alice.contacts.single;
 
         await alice.sendMessage(
@@ -3894,12 +3858,7 @@ void main() {
         displayName: 'Bob',
       );
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
+      await _pairControllers(alice, bob);
       final bobContactForAlice = bob.contacts.single;
       aliceContactForBob = alice.contacts.single;
       await bob.sendMessage(contact: bobContactForAlice, body: 'fresh unread');
@@ -4040,12 +3999,7 @@ void main() {
       addTearDown(alice.dispose);
       addTearDown(bob.dispose);
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
+      await _pairControllers(alice, bob);
 
       await alice.runDebugSelfTest();
       await bob.pollNow();
@@ -4106,18 +4060,8 @@ void main() {
       addTearDown(bob.dispose);
       addTearDown(carol.dispose);
 
-      await alice.addContactFromInvite(
-        alias: 'Bob',
-        payload: (await bob.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await alice.addContactFromInvite(
-        alias: 'Carol',
-        payload: (await carol.buildInvite()).encodePayload(),
-        codephrase: '',
-      );
-      await bob.pollNow();
-      await carol.pollNow();
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
 
       final delayedPeerPolls = Future<void>(() async {
         await Future<void>.delayed(const Duration(milliseconds: 1200));
@@ -4170,12 +4114,7 @@ void main() {
     addTearDown(alice.dispose);
     addTearDown(bob.dispose);
 
-    await alice.addContactFromInvite(
-      alias: 'Bob',
-      payload: (await bob.buildInvite()).encodePayload(),
-      codephrase: '',
-    );
-    await bob.pollNow();
+    await _pairControllers(alice, bob);
 
     await alice.runDebugSelfTest();
     await bob.pollNow();
@@ -4377,7 +4316,7 @@ void main() {
   test(
     'adaptive scheduler switches between active and idle intervals',
     () async {
-      var now = DateTime.utc(2026, 4, 21, 11);
+      var now = DateTime.utc(2026, 7, 13, 11);
       final relayClient = _FakeRelayClient();
       final controller = await _createController(
         relayClient: relayClient,
@@ -4446,7 +4385,7 @@ void main() {
   test(
     'pairing session activates for invite actions and expires after two minutes',
     () async {
-      var now = DateTime.utc(2026, 4, 21, 12);
+      var now = DateTime.utc(2026, 7, 13, 12);
       final relayClient = _FakeRelayClient();
       final controller = await _createController(
         relayClient: relayClient,
@@ -4773,21 +4712,10 @@ void main() {
       // The fake relay refuses to store the read receipt the first time
       // (e.g. transient route hiccup). The controller must keep the
       // pending entry around and clear it after a successful re-send.
-      var dropReceipts = true;
+      var dropReceipts = false;
       final relayClient = _FakeRelayClient(
         shouldFailStore: (host, port, protocol, recipientDeviceId, envelope) {
-          if (envelope.kind != 'ack') return false;
-          if (envelope.payloadBase64 == null) return false;
-          if (!dropReceipts) return false;
-          try {
-            final decoded = jsonDecode(
-              utf8.decode(base64Decode(envelope.payloadBase64!)),
-            );
-            return decoded is Map<String, dynamic> &&
-                decoded['receipt'] == 'read';
-          } catch (_) {
-            return false;
-          }
+          return dropReceipts && envelope.kind == 'ack';
         },
       );
       final alice = await _createController(
@@ -4810,6 +4738,7 @@ void main() {
       final inbound = bob
           .messagesFor(alice.identity!.deviceId)
           .firstWhere((message) => !message.outbound);
+      dropReceipts = true;
       await bob.markConversationReadThroughMessage(
         alice.identity!.deviceId,
         inbound,
@@ -5003,7 +4932,7 @@ void main() {
         pairingNonce: 'bob-reinstall-nonce',
         pairingEpochMs: originalInvite.pairingEpochMs + 1,
         relayCapable: originalInvite.relayCapable,
-        publicKeyBase64: 'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
+        publicKeyBase64: 'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
         routeHints: originalInvite.routeHints,
       );
       await alice.addContactFromInvite(
@@ -5022,7 +4951,7 @@ void main() {
       expect(newBob.publicKeyBase64, isEmpty);
       expect(
         newBob.unverifiedPublicKeyBase64,
-        'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
+        'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
       );
 
       // sendMessage to the pending contact must throw, AND nothing should
@@ -5046,7 +4975,7 @@ void main() {
       expect(refreshed.canSendOutbound, isTrue);
       expect(
         refreshed.publicKeyBase64,
-        'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
+        'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
         reason: 'Unverified key was promoted to active.',
       );
       expect(refreshed.unverifiedPublicKeyBase64, isNull);
@@ -5070,7 +4999,7 @@ void main() {
         'bio': '',
         'relayCapable': true,
         // Nightly.2 shape: pending=true AND publicKeyBase64 populated.
-        'publicKeyBase64': 'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
+        'publicKeyBase64': 'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
         'routeHints': const <Map<String, dynamic>>[],
         'safetyNumber': 'safe-1234',
         'trustedAt': DateTime.utc(2026, 5, 16).toIso8601String(),
@@ -5086,7 +5015,7 @@ void main() {
       );
       expect(
         migrated.unverifiedPublicKeyBase64,
-        'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
+        'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
         reason: 'Migration must stash the real key in the unverified slot.',
       );
     },
@@ -5115,7 +5044,7 @@ void main() {
       pairingNonce: 'imposter-nonce',
       pairingEpochMs: invite.pairingEpochMs + 2,
       relayCapable: invite.relayCapable,
-      publicKeyBase64: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+      publicKeyBase64: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=',
       routeHints: invite.routeHints,
     );
     await alice.addContactFromInvite(
@@ -5294,38 +5223,154 @@ void main() {
     expect(outbound.state, DeliveryState.delivered);
   });
 
-  test('sendAttachment rejects a file above the 30 MB cap', () async {
-    final relayClient = _FakeRelayClient();
-    final alice = await _createController(
-      relayClient: relayClient,
-      displayName: 'Alice',
-    );
-    final bob = await _createController(
-      relayClient: relayClient,
-      displayName: 'Bob',
-    );
-    addTearDown(alice.dispose);
-    addTearDown(bob.dispose);
+  test(
+    'attachment routing enforces exact 30 MiB and 2 GiB boundaries',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
 
-    await _pairControllers(alice, bob);
-    final aliceContactForBob = alice.contacts.single;
+      await _pairControllers(alice, bob);
+      final aliceContactForBob = alice.contacts.single;
 
-    expect(
-      MessengerController.maxAttachmentSizeBytes,
-      30 * 1024 * 1024,
-      reason: 'v0.3.2 cap was bumped from 8 MB to 30 MB',
-    );
+      expect(
+        MessengerController.maxAttachmentSizeBytes,
+        30 * 1024 * 1024,
+        reason: 'v0.3.2 cap was bumped from 8 MB to 30 MB',
+      );
 
-    final tooBig = Uint8List(MessengerController.maxAttachmentSizeBytes + 1);
-    await expectLater(
-      alice.sendAttachment(
-        contact: aliceContactForBob,
-        bytes: tooBig,
-        fileName: 'huge.bin',
-      ),
-      throwsArgumentError,
-    );
-  });
+      expect(
+        MessengerController.maxLanAttachmentSizeBytes,
+        2 * 1024 * 1024 * 1024,
+      );
+      expect(
+        alice.effectiveMaxAttachmentSizeFor(aliceContactForBob),
+        MessengerController.maxLanAttachmentSizeBytes,
+      );
+
+      final aboveLanCap = StagedAttachment(
+        id: 'above-lan-cap',
+        fileName: 'too-large.bin',
+        mimeType: 'application/octet-stream',
+        sizeBytes: MessengerController.maxLanAttachmentSizeBytes + 1,
+        filePath: p.join(Directory.systemTemp.path, 'not-opened.bin'),
+      );
+      await expectLater(
+        alice.sendAttachmentSource(
+          contact: aliceContactForBob,
+          source: aboveLanCap,
+        ),
+        throwsArgumentError,
+      );
+
+      await alice.updateContactRoutingPreferences(
+        aliceContactForBob.deviceId,
+        const ContactRoutingPreferences(lanEnabled: false, onlineEnabled: true),
+      );
+      final relayOnlyContact = alice.contacts.single;
+      expect(
+        alice.effectiveMaxAttachmentSizeFor(relayOnlyContact),
+        MessengerController.maxAttachmentSizeBytes,
+      );
+      final aboveRelayCap = StagedAttachment(
+        id: 'above-relay-cap',
+        fileName: 'lan-only.bin',
+        mimeType: 'application/octet-stream',
+        sizeBytes: MessengerController.maxAttachmentSizeBytes + 1,
+        filePath: p.join(Directory.systemTemp.path, 'not-opened.bin'),
+      );
+      await expectLater(
+        alice.sendAttachmentSource(
+          contact: relayOnlyContact,
+          source: aboveRelayCap,
+        ),
+        throwsArgumentError,
+      );
+    },
+  );
+
+  test(
+    'spool reserve failure offers original fallback and detects source change',
+    () async {
+      final sourceDir = Directory.systemTemp.createTempSync(
+        'conest_original_fallback_',
+      );
+      addTearDown(() {
+        try {
+          sourceDir.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final source = File(p.join(sourceDir.path, 'original.bin'));
+      await source.writeAsBytes(List<int>.generate(64, (i) => i));
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        storageCapacityProvider: (_) async => null,
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobOnAlice = alice.contacts.single;
+      final staged = StagedAttachment(
+        id: 'original-source',
+        fileName: 'original.bin',
+        mimeType: 'application/octet-stream',
+        sizeBytes: 64,
+        filePath: source.path,
+      );
+
+      await expectLater(
+        alice.sendAttachmentSource(contact: bobOnAlice, source: staged),
+        throwsA(
+          isA<AttachmentSpoolException>().having(
+            (error) => error.canUseOriginal,
+            'canUseOriginal',
+            isTrue,
+          ),
+        ),
+      );
+      expect(alice.messagesFor(bobOnAlice.deviceId), isEmpty);
+
+      await alice.sendAttachmentSource(
+        contact: bobOnAlice,
+        source: staged,
+        allowOriginalFallback: true,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await source.writeAsBytes(
+        List<int>.generate(64, (i) => 255 - i),
+        flush: true,
+      );
+      for (var step = 0; step < 12; step++) {
+        await bob.pollNow();
+        await alice.pollNow();
+      }
+
+      expect(
+        alice.messagesFor(bobOnAlice.deviceId).single.state,
+        DeliveryState.failed,
+      );
+      expect(
+        bob.attachmentBytesFor(
+          alice.messagesFor(bobOnAlice.deviceId).single.attachment!.id,
+        ),
+        isNull,
+      );
+    },
+  );
 
   test(
     'attachment bytes survive an in-memory cache eviction via the disk cache',
@@ -5391,6 +5436,29 @@ void main() {
       );
     },
   );
+
+  test('attachment root provider is resolved once per controller', () async {
+    var calls = 0;
+    final root = Directory.systemTemp.createTempSync('conest_root_once_');
+    addTearDown(() {
+      try {
+        root.deleteSync(recursive: true);
+      } catch (_) {}
+    });
+    final controller = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Alice',
+      attachmentRootProvider: () async {
+        calls++;
+        return root;
+      },
+    );
+    addTearDown(controller.dispose);
+
+    expect(await controller.attachmentRoot(), same(root));
+    expect(await controller.attachmentRoot(), same(root));
+    expect(calls, 1);
+  });
 
   test('sendAttachment round-trips a 1 MB file with 32 KB chunks', () async {
     final relayClient = _FakeRelayClient();
@@ -5609,19 +5677,20 @@ void main() {
     );
     addTearDown(controller.dispose);
 
-    RelayEnvelope ackEnvelope(int index) => RelayEnvelope(
-      kind: 'ack',
-      messageId: 'cap-ack-$index',
-      conversationId: 'conv-cap',
-      senderAccountId: 'acc-peer',
-      senderDeviceId: 'dev-peer',
+    RelayEnvelope bootstrapEnvelope(int index) => RelayEnvelope(
+      protocolVersion: 1,
+      kind: 'contact_exchange',
+      messageId: 'cap-bootstrap-$index',
+      conversationId: 'contact-exchange-dev-bob',
+      senderAccountId: 'acc-bob',
+      senderDeviceId: 'dev-bob',
       recipientDeviceId: controller.identity!.deviceId,
       createdAt: DateTime.now().toUtc(),
-      acknowledgedMessageId: 'msg-$index',
+      payloadBase64: base64Encode(utf8.encode(_bobInvite().encodePayload())),
     );
 
     for (var index = 0; index < 60; index++) {
-      await controller.processEnvelopesForTesting([ackEnvelope(index)]);
+      await controller.processEnvelopesForTesting([bootstrapEnvelope(index)]);
     }
     expect(
       controller.seenEnvelopeCount,
@@ -5629,11 +5698,17 @@ void main() {
       reason: 'ledger must stay within the cap instead of growing forever',
     );
     // Recent ids must still dedupe (processed == 0 → replay path taken).
-    expect(await controller.processEnvelopesForTesting([ackEnvelope(59)]), 0);
+    expect(
+      await controller.processEnvelopesForTesting([bootstrapEnvelope(59)]),
+      0,
+    );
     // The oldest ids were evicted — in production they are long past every
     // relay queue TTL, so re-delivery cannot occur; re-processing here just
     // demonstrates the eviction order.
-    expect(await controller.processEnvelopesForTesting([ackEnvelope(0)]), 1);
+    expect(
+      await controller.processEnvelopesForTesting([bootstrapEnvelope(0)]),
+      1,
+    );
   });
 
   group('connectivity preferences', () {
@@ -6292,6 +6367,7 @@ void main() {
 
         // Bob comes back online.
         relayClient.shouldFailStore = null;
+        alice.onConnectivityChanged(interfaceLabel: 'test-online');
         // Force the outbox to drain on the next poll.
         for (var step = 0; step < 8; step++) {
           await alice.retryPendingAckDeliveriesForTesting(force: true);
@@ -6551,8 +6627,8 @@ void main() {
         // double that still exercises the full controller integration
         // (hint embedding + caching + fast-path routing + JSON wire
         // format round-trip).
-        final aliceChannel = _InProcessLanDirectChannel(host: '127.0.0.1');
-        final bobChannel = _InProcessLanDirectChannel(host: '127.0.0.1');
+        final aliceChannel = _InProcessLanDirectChannel(host: '192.168.50.10');
+        final bobChannel = _InProcessLanDirectChannel(host: '192.168.50.11');
         addTearDown(aliceChannel.stop);
         addTearDown(bobChannel.stop);
 
@@ -6560,13 +6636,13 @@ void main() {
         final alice = await _createController(
           relayClient: relayClient,
           displayName: 'Alice',
-          lanAddresses: const ['127.0.0.1'],
+          lanAddresses: const ['192.168.50.10'],
           lanDirectChannel: aliceChannel,
         );
         final bob = await _createController(
           relayClient: relayClient,
           displayName: 'Bob',
-          lanAddresses: const ['127.0.0.1'],
+          lanAddresses: const ['192.168.50.11'],
           lanDirectChannel: bobChannel,
         );
         addTearDown(alice.dispose);
@@ -6615,7 +6691,7 @@ void main() {
           isNotNull,
           reason: 'Alice should have cached Bob\'s LAN-direct endpoint',
         );
-        expect(cachedBobEndpoint!.host, '127.0.0.1');
+        expect(cachedBobEndpoint!.host, '192.168.50.11');
         expect(cachedBobEndpoint.port, bob.lanDirectPort);
 
         // Fast-path actually carried envelopes (not just the relay path).
@@ -6627,6 +6703,261 @@ void main() {
         );
       },
       timeout: const Timeout(Duration(seconds: 30)),
+    );
+
+    test(
+      '31 MiB transfer stays LAN-direct and completes to a disk path',
+      () async {
+        final sourceDir = Directory.systemTemp.createTempSync(
+          'conest_large_source_',
+        );
+        final aliceRoot = Directory.systemTemp.createTempSync(
+          'conest_large_alice_',
+        );
+        final bobRoot = Directory.systemTemp.createTempSync(
+          'conest_large_bob_',
+        );
+        addTearDown(() {
+          for (final directory in [sourceDir, aliceRoot, bobRoot]) {
+            try {
+              directory.deleteSync(recursive: true);
+            } catch (_) {}
+          }
+        });
+        const size = MessengerController.maxAttachmentSizeBytes + 1024 * 1024;
+        final source = File(p.join(sourceDir.path, 'large.bin'));
+        final sourceHandle = await source.open(mode: FileMode.write);
+        try {
+          await sourceHandle.setPosition(size - 1);
+          await sourceHandle.writeByte(0x5a);
+          await sourceHandle.flush();
+        } finally {
+          await sourceHandle.close();
+        }
+
+        final aliceChannel = _InProcessLanDirectChannel(host: '192.168.51.10');
+        final bobChannel = _InProcessLanDirectChannel(host: '192.168.51.11');
+        addTearDown(aliceChannel.stop);
+        addTearDown(bobChannel.stop);
+        final relayClient = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+          lanAddresses: const ['192.168.51.10'],
+          lanDirectChannel: aliceChannel,
+          attachmentRootProvider: () async => aliceRoot,
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+          lanAddresses: const ['192.168.51.11'],
+          lanDirectChannel: bobChannel,
+          attachmentRootProvider: () async => bobRoot,
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final bobOnAlice = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+
+        await alice.sendAttachmentSource(
+          contact: bobOnAlice,
+          source: StagedAttachment(
+            id: 'large-source',
+            fileName: 'large.bin',
+            mimeType: 'application/octet-stream',
+            sizeBytes: size,
+            filePath: source.path,
+          ),
+        );
+
+        ChatMessage? received;
+        for (var step = 0; step < 240; step++) {
+          await bob.pollNow();
+          await alice.pollNow();
+          received = bob
+              .messagesFor(alice.identity!.deviceId)
+              .where((message) => message.attachment?.fileName == 'large.bin')
+              .firstOrNull;
+          if (received?.state == DeliveryState.delivered) break;
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+
+        expect(received, isNotNull);
+        expect(received!.state, DeliveryState.delivered);
+        expect(received.attachment!.chunkSize, 512 * 1024);
+        expect(bob.attachmentBytesFor(received.attachment!.id), isNull);
+        expect(bob.attachmentAvailableLocally(received.attachment!.id), isTrue);
+        final cachePath = await bob.attachmentCachePathFor(
+          received.attachment!.id,
+        );
+        expect(cachePath, isNotNull);
+        expect(await File(cachePath!).length(), size);
+        final cacheHandle = await File(cachePath).open();
+        try {
+          await cacheHandle.setPosition(size - 1);
+          expect(await cacheHandle.readByte(), 0x5a);
+        } finally {
+          await cacheHandle.close();
+        }
+        expect(
+          relayClient.storedEnvelopes.where(
+            (envelope) => envelope.kind == 'attachment_chunk',
+          ),
+          isEmpty,
+          reason: 'large file bytes must never fall back to relay',
+        );
+        expect(aliceChannel.acceptedEnvelopes, greaterThan(0));
+        expect(bobChannel.acceptedEnvelopes, greaterThan(0));
+      },
+      timeout: const Timeout(Duration(seconds: 90)),
+    );
+
+    test(
+      'large transfer resumes missing chunks after both peers restart',
+      () async {
+        final sourceDir = Directory.systemTemp.createTempSync(
+          'conest_resume_source_',
+        );
+        final aliceRoot = Directory.systemTemp.createTempSync(
+          'conest_resume_alice_',
+        );
+        final bobRoot = Directory.systemTemp.createTempSync(
+          'conest_resume_bob_',
+        );
+        addTearDown(() {
+          for (final directory in [sourceDir, aliceRoot, bobRoot]) {
+            try {
+              directory.deleteSync(recursive: true);
+            } catch (_) {}
+          }
+        });
+        const size = MessengerController.maxAttachmentSizeBytes + 1024 * 1024;
+        final source = File(p.join(sourceDir.path, 'resume.bin'));
+        final sourceHandle = await source.open(mode: FileMode.write);
+        try {
+          await sourceHandle.setPosition(size - 1);
+          await sourceHandle.writeByte(0x7c);
+          await sourceHandle.flush();
+        } finally {
+          await sourceHandle.close();
+        }
+
+        final relayClient = _FakeRelayClient();
+        final aliceVault = _MemoryVaultStore();
+        final bobVault = _MemoryVaultStore();
+        final aliceChannel = _InProcessLanDirectChannel(host: '192.168.52.10');
+        final bobChannel = _InProcessLanDirectChannel(host: '192.168.52.11')
+          ..rejectAfterAcceptedEnvelopes = 4;
+        var alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+          lanAddresses: const ['192.168.52.10'],
+          lanDirectChannel: aliceChannel,
+          attachmentRootProvider: () async => aliceRoot,
+          vaultStore: aliceVault,
+        );
+        var bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+          lanAddresses: const ['192.168.52.11'],
+          lanDirectChannel: bobChannel,
+          attachmentRootProvider: () async => bobRoot,
+          vaultStore: bobVault,
+        );
+        await _pairControllers(alice, bob);
+        final bobOnAlice = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+        await alice.sendAttachmentSource(
+          contact: bobOnAlice,
+          source: StagedAttachment(
+            id: 'resume-source',
+            fileName: 'resume.bin',
+            mimeType: 'application/octet-stream',
+            sizeBytes: size,
+            filePath: source.path,
+          ),
+        );
+
+        for (var step = 0; step < 120; step++) {
+          await bob.pollNow();
+          await alice.pollNow();
+          if (bobChannel.acceptedEnvelopes >= 4) break;
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        expect(bobChannel.acceptedEnvelopes, 4);
+        await Future<void>.delayed(const Duration(milliseconds: 2300));
+        final interrupted = await bobVault.load();
+        final interruptedSession = interrupted.transferSessions.single;
+        expect(interruptedSession.direction, TransferDirection.inbound);
+        expect(interruptedSession.completedChunks, isNotEmpty);
+        expect(
+          interruptedSession.completedChunks.length,
+          lessThan(interruptedSession.attachment.effectiveChunkCount),
+        );
+
+        alice.dispose();
+        bob.dispose();
+        await aliceChannel.stop();
+        await bobChannel.stop();
+
+        final resumedAliceChannel = _InProcessLanDirectChannel(
+          host: '192.168.52.10',
+        );
+        final resumedBobChannel = _InProcessLanDirectChannel(
+          host: '192.168.52.11',
+        );
+        addTearDown(resumedAliceChannel.stop);
+        addTearDown(resumedBobChannel.stop);
+        alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'unused',
+          lanAddresses: const ['192.168.52.10'],
+          lanDirectChannel: resumedAliceChannel,
+          attachmentRootProvider: () async => aliceRoot,
+          vaultStore: aliceVault,
+          createIdentity: false,
+        );
+        bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'unused',
+          lanAddresses: const ['192.168.52.11'],
+          lanDirectChannel: resumedBobChannel,
+          attachmentRootProvider: () async => bobRoot,
+          vaultStore: bobVault,
+          createIdentity: false,
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        alice.onConnectivityChanged(interfaceLabel: 'restart');
+        bob.onConnectivityChanged(interfaceLabel: 'restart');
+
+        ChatMessage? received;
+        for (var step = 0; step < 300; step++) {
+          await alice.pollNow();
+          await bob.pollNow();
+          received = bob
+              .messagesFor(alice.identity!.deviceId)
+              .where((message) => message.attachment?.fileName == 'resume.bin')
+              .firstOrNull;
+          if (received?.state == DeliveryState.delivered) break;
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+
+        expect(received, isNotNull);
+        expect(received!.state, DeliveryState.delivered);
+        final cachePath = await bob.attachmentCachePathFor(
+          received.attachment!.id,
+        );
+        expect(cachePath, isNotNull);
+        expect(await File(cachePath!).length(), size);
+        expect(
+          relayClient.storedEnvelopes.where(
+            (envelope) => envelope.kind == 'attachment_chunk',
+          ),
+          isEmpty,
+          reason: 'large restart-resume bytes must remain LAN-only',
+        );
+      },
+      timeout: const Timeout(Duration(seconds: 120)),
     );
   });
 

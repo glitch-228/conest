@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:cross_file/cross_file.dart';
@@ -11,16 +13,22 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_player_media_kit/video_player_media_kit.dart';
+import 'package:path/path.dart' as p;
 
 import 'src/app_storage.dart';
+import 'src/attachment_safety.dart';
 import 'src/build_info.dart';
 import 'src/conest_theme.dart';
+import 'src/desktop_beam_scanner.dart';
 import 'src/lan_direct.dart';
+import 'src/iroh_ffi_bridge.dart';
+import 'src/iroh_transport.dart';
 import 'src/media_picker_sheet.dart';
 import 'src/messenger_controller.dart';
 import 'src/models.dart';
@@ -28,6 +36,7 @@ import 'src/platform_bridge.dart';
 import 'src/qr_scan_screen.dart';
 import 'src/relay_client.dart';
 import 'src/storage.dart';
+import 'src/transport.dart';
 import 'src/ui/seal_avatar.dart';
 import 'src/ui/signature_decoration.dart';
 import 'src/ui/signature_panels.dart';
@@ -121,6 +130,23 @@ Future<void> _runConestWithProfile(
     // chunk delivery. Falls back to relay automatically if the platform
     // can't bind a port or peers don't advertise their endpoint.
     lanDirectChannel: HttpLanDirectChannel(),
+    transportRegistryFactory: (identity) async {
+      final privateKey = identity.signingPrivateKeyBase64;
+      final endpointId = identity.irohEndpointId;
+      final bridge = FfiNativeIrohBridge.tryCreate();
+      if (privateKey == null || endpointId == null || bridge == null) {
+        return null;
+      }
+      return TransportRegistry([
+        IrohTransportAdapter(
+          bridge: bridge,
+          secretKeySeed: Uint8List.fromList(base64Decode(privateKey)),
+          relayEnabled: identity.connectivity.irohRelayEnabled,
+          relayUrls: identity.connectivity.irohRelayUrls,
+          expectedEndpointId: endpointId,
+        ),
+      ]);
+    },
   );
   final updateService = UpdateService(
     buildInfo: buildInfo,
@@ -1433,6 +1459,17 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _showBeam() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) => BeamHubScreen(
+          controller: widget.controller,
+          palette: widget.palette,
+        ),
+      ),
+    );
+  }
+
   Future<void> _showAddContact() async {
     await showDialog<void>(
       context: context,
@@ -1562,7 +1599,11 @@ class _HomeScreenState extends State<HomeScreen> {
     if (staged.isNotEmpty) {
       _composerController.clear();
       setState(() => _replyTarget = null);
-      await widget.controller.sendStagedBundle(contact: contact, caption: body);
+      await widget.controller.sendStagedBundle(
+        contact: contact,
+        caption: body,
+        confirmOriginalSourceFallback: _confirmOriginalSourceFallback,
+      );
       return;
     }
     if (body.isEmpty) return;
@@ -1574,6 +1615,36 @@ class _HomeScreenState extends State<HomeScreen> {
       body: body,
       replyTo: replyTarget,
     );
+  }
+
+  Future<bool> _confirmOriginalSourceFallback(
+    StagedAttachment attachment,
+    AttachmentSpoolException error,
+  ) async {
+    if (!mounted) return false;
+    return await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Send without resumable copy?'),
+            content: Text(
+              '${attachment.fileName} could not be copied into private '
+              'transfer storage.\n\n$error\n\nThe app can read the original '
+              'file directly, but the transfer cannot resume after restart '
+              'if that file moves or its permission expires.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Send from original'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
   }
 
   Future<void> _sendCurrentGroupMessage() async {
@@ -1609,7 +1680,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final items =
         <
           ({
-            Uint8List bytes,
+            Uint8List? bytes,
+            String? filePath,
+            int sizeBytes,
             String fileName,
             String mimeType,
             String caption,
@@ -1618,9 +1691,22 @@ class _HomeScreenState extends State<HomeScreen> {
         >[];
     for (final file in files) {
       try {
-        final bytes = await file.readAsBytes();
+        final path = file.path;
+        final sizeBytes = path.isNotEmpty
+            ? await File(path).length()
+            : await file.length();
+        const maxPathlessDropBytes = 8 * 1024 * 1024;
+        if (path.isEmpty && sizeBytes > maxPathlessDropBytes) {
+          widget.controller.setStatus(
+            'Could not stage ${file.name}: pathless drops are limited to '
+            '8 MB to protect memory.',
+          );
+          continue;
+        }
         items.add((
-          bytes: bytes,
+          bytes: path.isEmpty ? await file.readAsBytes() : null,
+          filePath: path.isEmpty ? null : path,
+          sizeBytes: sizeBytes,
           fileName: file.name,
           mimeType: _guessMimeType(file.name),
           caption: '',
@@ -1684,11 +1770,18 @@ class _HomeScreenState extends State<HomeScreen> {
         reader.getFile(fmt, (file) async {
           try {
             final stream = file.getStream();
-            final chunks = <int>[];
+            const maxClipboardImageBytes = 8 * 1024 * 1024;
+            final builder = BytesBuilder(copy: false);
+            var total = 0;
             await for (final chunk in stream) {
-              chunks.addAll(chunk);
+              total += chunk.length;
+              if (total > maxClipboardImageBytes) {
+                completer.complete(null);
+                return;
+              }
+              builder.add(chunk);
             }
-            completer.complete(Uint8List.fromList(chunks));
+            completer.complete(builder.takeBytes());
           } catch (_) {
             completer.complete(null);
           }
@@ -1716,15 +1809,22 @@ class _HomeScreenState extends State<HomeScreen> {
       if (uri != null) {
         try {
           final file = File.fromUri(uri);
-          final bytes = await file.readAsBytes();
           final name = file.uri.pathSegments.isNotEmpty
               ? file.uri.pathSegments.last
               : 'pasted';
-          await _sendAttachmentBytes(
+          await _stageMultipleAttachments(
             contact: contact,
-            bytes: bytes,
-            fileName: name,
-            mimeType: _guessMimeType(name),
+            items: [
+              (
+                bytes: null,
+                filePath: file.path,
+                sizeBytes: await file.length(),
+                fileName: name,
+                mimeType: _guessMimeType(name),
+                caption: '',
+                poster: null,
+              ),
+            ],
           );
           return true;
         } catch (error) {
@@ -1768,7 +1868,9 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     await _sendAttachmentBytes(
       contact: contact,
-      bytes: result.bytes!,
+      bytes: result.bytes,
+      filePath: result.filePath,
+      sizeBytes: result.sizeBytes!,
       fileName: result.fileName!,
       mimeType: result.mimeType ?? 'application/octet-stream',
     );
@@ -1783,7 +1885,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       picked = await FilePicker.pickFiles(
         type: FileType.any,
-        withData: true,
+        withData: false,
         allowMultiple: true,
       );
     } catch (error) {
@@ -1796,7 +1898,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final items =
         <
           ({
-            Uint8List bytes,
+            Uint8List? bytes,
+            String? filePath,
+            int sizeBytes,
             String fileName,
             String mimeType,
             String caption,
@@ -1804,22 +1908,15 @@ class _HomeScreenState extends State<HomeScreen> {
           })
         >[];
     for (final file in picked.files) {
-      Uint8List? bytes = file.bytes;
-      // Desktop picker often returns a path instead of bytes.
-      if (bytes == null && file.path != null) {
-        try {
-          bytes = await File(file.path!).readAsBytes();
-        } catch (error) {
-          widget.controller.setStatus('Could not read ${file.name}: $error');
-          continue;
-        }
-      }
-      if (bytes == null) {
+      final path = file.path;
+      if (path == null || path.isEmpty) {
         widget.controller.setStatus('${file.name}: picker returned no data.');
         continue;
       }
       items.add((
-        bytes: bytes,
+        bytes: null,
+        filePath: path,
+        sizeBytes: file.size,
         fileName: file.name,
         mimeType: _guessMimeType(file.name),
         caption: '',
@@ -1831,7 +1928,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _sendAttachmentBytes({
     required ContactRecord contact,
-    required Uint8List bytes,
+    Uint8List? bytes,
+    String? filePath,
+    int? sizeBytes,
     required String fileName,
     required String mimeType,
   }) {
@@ -1840,6 +1939,8 @@ class _HomeScreenState extends State<HomeScreen> {
       items: [
         (
           bytes: bytes,
+          filePath: filePath,
+          sizeBytes: sizeBytes ?? bytes?.length ?? 0,
           fileName: fileName,
           mimeType: mimeType,
           caption: '',
@@ -1861,7 +1962,9 @@ class _HomeScreenState extends State<HomeScreen> {
     required ContactRecord contact,
     required List<
       ({
-        Uint8List bytes,
+        Uint8List? bytes,
+        String? filePath,
+        int sizeBytes,
         String fileName,
         String mimeType,
         String caption,
@@ -1884,9 +1987,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final capMb = perContactCap ~/ (1024 * 1024);
     final staged = <StagedAttachment>[];
     for (final item in clamped) {
-      if (item.bytes.length > perContactCap) {
+      if (item.sizeBytes > perContactCap) {
         widget.controller.setStatus(
-          '${item.fileName} skipped: ${(item.bytes.length / (1024 * 1024)).toStringAsFixed(1)} '
+          '${item.fileName} skipped: ${(item.sizeBytes / (1024 * 1024)).toStringAsFixed(1)} '
           'MB exceeds the $capMb MB cap.',
         );
         continue;
@@ -1896,8 +1999,9 @@ class _HomeScreenState extends State<HomeScreen> {
           id: widget.controller.newAlbumId(),
           fileName: item.fileName,
           mimeType: item.mimeType,
-          sizeBytes: item.bytes.length,
+          sizeBytes: item.sizeBytes,
           bytes: item.bytes,
+          filePath: item.filePath,
           poster: item.poster,
           caption: item.caption,
         ),
@@ -2045,6 +2149,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               onAddContact: _showAddContact,
                               onShowSettings: _showSettings,
                               onShowInvite: _showInvite,
+                              onShowBeam: _showBeam,
                             ),
                             ConestShell.garrison => _GarrisonHome(
                               controller: widget.controller,
@@ -2060,6 +2165,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               onCreateGroup: _showCreateGroup,
                               onShowSettings: _showSettings,
                               onShowInvite: _showInvite,
+                              onShowBeam: _showBeam,
                             ),
                             ConestShell.signature => _Sidebar(
                               controller: widget.controller,
@@ -2089,6 +2195,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               onPoll: widget.controller.pollNow,
                               onShowSettings: _showSettings,
                               onShowInvite: _showInvite,
+                              onShowBeam: _showBeam,
                             ),
                           },
                         ),
@@ -2185,6 +2292,7 @@ class _CourierHome extends StatelessWidget {
     required this.onAddContact,
     required this.onShowSettings,
     required this.onShowInvite,
+    required this.onShowBeam,
   });
 
   final MessengerController controller;
@@ -2198,6 +2306,7 @@ class _CourierHome extends StatelessWidget {
   final VoidCallback onAddContact;
   final Future<void> Function() onShowSettings;
   final Future<void> Function() onShowInvite;
+  final Future<void> Function() onShowBeam;
 
   @override
   Widget build(BuildContext context) {
@@ -2268,6 +2377,11 @@ class _CourierHome extends StatelessWidget {
                 ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
               ),
               const Spacer(),
+              IconButton(
+                tooltip: 'Conest Beam',
+                onPressed: () => unawaited(onShowBeam()),
+                icon: const Icon(Icons.center_focus_strong),
+              ),
               IconButton(
                 tooltip: 'My invite',
                 onPressed: () => unawaited(onShowInvite()),
@@ -2529,6 +2643,7 @@ class _GarrisonHome extends StatefulWidget {
     required this.onCreateGroup,
     required this.onShowSettings,
     required this.onShowInvite,
+    required this.onShowBeam,
   });
 
   final MessengerController controller;
@@ -2544,6 +2659,7 @@ class _GarrisonHome extends StatefulWidget {
   final VoidCallback onCreateGroup;
   final Future<void> Function() onShowSettings;
   final Future<void> Function() onShowInvite;
+  final Future<void> Function() onShowBeam;
 
   @override
   State<_GarrisonHome> createState() => _GarrisonHomeState();
@@ -2705,6 +2821,11 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
               ),
               const Spacer(),
               IconButton(
+                tooltip: 'Conest Beam',
+                onPressed: () => unawaited(widget.onShowBeam()),
+                icon: const Icon(Icons.center_focus_strong),
+              ),
+              IconButton(
                 tooltip: 'My invite',
                 onPressed: () => unawaited(widget.onShowInvite()),
                 icon: const Icon(Icons.qr_code_2),
@@ -2730,6 +2851,13 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
                 selected: widget.lanLobbySelected,
                 onTap: widget.onLanLobbySelected,
               ),
+              for (final request in controller.pendingContactRequests)
+                _PendingContactRequestCard(
+                  controller: controller,
+                  palette: palette,
+                  request: request,
+                  compact: true,
+                ),
               if (controller.contacts.isEmpty)
                 Padding(
                   padding: const EdgeInsets.all(16),
@@ -2856,6 +2984,7 @@ class _Sidebar extends StatelessWidget {
     required this.onPoll,
     required this.onShowSettings,
     required this.onShowInvite,
+    required this.onShowBeam,
     this.onShowDebug,
   });
 
@@ -2875,6 +3004,7 @@ class _Sidebar extends StatelessWidget {
   final Future<void> Function() onPoll;
   final Future<void> Function() onShowSettings;
   final Future<void> Function() onShowInvite;
+  final Future<void> Function() onShowBeam;
   final Future<void> Function()? onShowDebug;
 
   /// Classic layout — a compact one-line list row per contact (seal · name ·
@@ -3236,6 +3366,15 @@ class _Sidebar extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: onShowBeam,
+                    icon: const Icon(Icons.center_focus_strong),
+                    label: const Text('Conest Beam'),
+                  ),
+                ),
+                const SizedBox(height: 4),
                 TextButton.icon(
                   onPressed: onPoll,
                   icon: const Icon(Icons.sync),
@@ -3432,6 +3571,14 @@ class _Sidebar extends StatelessWidget {
             ),
           ],
         const SizedBox(height: 16),
+        for (final request in controller.pendingContactRequests) ...[
+          _PendingContactRequestCard(
+            controller: controller,
+            palette: palette,
+            request: request,
+          ),
+          const SizedBox(height: 10),
+        ],
         // The "Contacts · 0" header above an empty-state card is redundant —
         // show the header only when there is something to count.
         if (controller.contacts.isEmpty)
@@ -4338,7 +4485,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     return selected.any((m) {
       final att = m.attachment;
       if (att == null) return false;
-      return controller.attachmentBytesFor(att.id) != null;
+      return controller.attachmentAvailableLocally(att.id);
     });
   }
 
@@ -4372,7 +4519,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       all,
     ).where((m) => m.attachment != null).toList();
     final ready = selected
-        .where((m) => controller.attachmentBytesFor(m.attachment!.id) != null)
+        .where((m) => controller.attachmentAvailableLocally(m.attachment!.id))
         .toList();
     if (ready.isEmpty) {
       controller.setStatus(
@@ -4380,10 +4527,11 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       );
       return;
     }
-    controller.setStatus(
-      'Bulk save coming next phase — saving ${ready.length} sequentially.',
-    );
     _clearMessageSelection();
+    await bulkSaveAttachments(
+      controller,
+      ready.map((message) => message.attachment!).toList(growable: false),
+    );
   }
 
   @override
@@ -5147,7 +5295,7 @@ class _ChatPanelState extends State<_ChatPanel> {
     return selected.any((m) {
       final att = m.attachment;
       if (att == null) return false;
-      return controller.attachmentBytesFor(att.id) != null;
+      return controller.attachmentAvailableLocally(att.id);
     });
   }
 
@@ -5194,7 +5342,7 @@ class _ChatPanelState extends State<_ChatPanel> {
       all,
     ).where((m) => m.attachment != null).toList();
     final ready = selected
-        .where((m) => controller.attachmentBytesFor(m.attachment!.id) != null)
+        .where((m) => controller.attachmentAvailableLocally(m.attachment!.id))
         .toList();
     if (ready.isEmpty) {
       controller.setStatus(
@@ -5202,15 +5350,11 @@ class _ChatPanelState extends State<_ChatPanel> {
       );
       return;
     }
-    final items = [
-      for (final m in ready)
-        (
-          descriptor: m.attachment!,
-          bytes: controller.attachmentBytesFor(m.attachment!.id)!,
-        ),
-    ];
     _clearMessageSelection();
-    await bulkSaveAttachments(controller, items);
+    await bulkSaveAttachments(
+      controller,
+      ready.map((message) => message.attachment!).toList(growable: false),
+    );
   }
 
   @override
@@ -5582,6 +5726,10 @@ class _ChatPanelState extends State<_ChatPanel> {
                             : palette.inboundMeta,
                       ),
                     ),
+                  ],
+                  if (outbound && message.transportKind != null) ...[
+                    const SizedBox(width: 8),
+                    _MessageRouteChip(message: message),
                   ],
                   if (outbound) ...[
                     const SizedBox(width: 8),
@@ -7180,6 +7328,797 @@ class _InviteScreenState extends State<InviteScreen> {
   }
 }
 
+class BeamHubScreen extends StatefulWidget {
+  const BeamHubScreen({
+    super.key,
+    required this.controller,
+    required this.palette,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+
+  @override
+  State<BeamHubScreen> createState() => _BeamHubScreenState();
+}
+
+class _BeamHubScreenState extends State<BeamHubScreen> {
+  bool _busy = false;
+  String? _error;
+
+  Future<({Uint8List bytes, String name, String mime})?> _pickBeamFile() async {
+    final picked = await FilePicker.pickFiles(
+      type: FileType.any,
+      allowMultiple: false,
+      withData: false,
+    );
+    if (picked == null || picked.files.isEmpty) return null;
+    final platformFile = picked.files.single;
+    if (platformFile.size <= 0 ||
+        platformFile.size > conestBeamMaximumPayloadBytes) {
+      throw ArgumentError('Conest Beam v1 accepts files up to 64 MiB.');
+    }
+    final Uint8List bytes;
+    if (platformFile.path != null) {
+      bytes = await File(platformFile.path!).readAsBytes();
+    } else if (platformFile.bytes != null) {
+      bytes = platformFile.bytes!;
+    } else {
+      throw StateError('The file picker did not provide readable file data.');
+    }
+    if (bytes.length != platformFile.size ||
+        bytes.length > conestBeamMaximumPayloadBytes) {
+      throw StateError('The selected file changed or exceeded 64 MiB.');
+    }
+    return (
+      bytes: bytes,
+      name: platformFile.name,
+      mime: _beamMimeType(platformFile.name),
+    );
+  }
+
+  Future<ContactRecord?> _chooseContact() => showDialog<ContactRecord>(
+    context: context,
+    builder: (context) => SimpleDialog(
+      title: const Text('Encrypt for contact'),
+      children: [
+        for (final contact in widget.controller.contacts.where(
+          (entry) => entry.canSendOutbound && entry.hasPinnedIrohIdentity,
+        ))
+          SimpleDialogOption(
+            onPressed: () => Navigator.of(context).pop(contact),
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: SealAvatar(
+                seed: contact.deviceId,
+                label: contact.alias,
+                palette: widget.palette,
+                size: 36,
+              ),
+              title: Text(contact.alias),
+              subtitle: Text('Pinned · ${contact.shortSafetyNumber}'),
+            ),
+          ),
+        if (!widget.controller.contacts.any(
+          (entry) => entry.canSendOutbound && entry.hasPinnedIrohIdentity,
+        ))
+          const Padding(
+            padding: EdgeInsets.all(20),
+            child: Text('No verified ci6 contacts are available yet.'),
+          ),
+      ],
+    ),
+  );
+
+  Future<void> _preparePublic() async {
+    final allowed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Public optical transfer'),
+        content: const Text(
+          'Anyone who can see the display may reconstruct this file. It is '
+          'signed for integrity but it is not confidential.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Choose public file'),
+          ),
+        ],
+      ),
+    );
+    if (allowed != true) return;
+    await _runPreparation(() async {
+      final file = await _pickBeamFile();
+      if (file == null) return null;
+      return widget.controller.preparePublicBeam(
+        bytes: file.bytes,
+        fileName: file.name,
+        mimeType: file.mime,
+      );
+    });
+  }
+
+  Future<void> _prepareEncrypted() async {
+    final contact = await _chooseContact();
+    if (contact == null || !mounted) return;
+    await _runPreparation(() async {
+      final file = await _pickBeamFile();
+      if (file == null) return null;
+      return widget.controller.prepareContactBeam(
+        contact: contact,
+        bytes: file.bytes,
+        fileName: file.name,
+        mimeType: file.mime,
+      );
+    });
+  }
+
+  Future<void> _prepareInvite() =>
+      _runPreparation(widget.controller.prepareInviteBeam);
+
+  Future<void> _runPreparation(
+    Future<PreparedBeamTransfer?> Function() prepare,
+  ) async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final transfer = await prepare();
+      if (transfer == null || !mounted) return;
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          fullscreenDialog: true,
+          builder: (context) =>
+              BeamSenderScreen(transfer: transfer, palette: widget.palette),
+        ),
+      );
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _receive() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) => BeamReceiverScreen(
+          controller: widget.controller,
+          palette: widget.palette,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = widget.palette;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Conest Beam')),
+      body: DecoratedBox(
+        decoration: BoxDecoration(gradient: palette.appGradient),
+        child: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            Text(
+              'Close-up transfer',
+              style: Theme.of(
+                context,
+              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'A looping LT fountain stream survives missed, duplicate, and '
+              'out-of-order QR frames. The final file is hash-checked before '
+              'you can accept it.',
+              style: TextStyle(color: palette.inkSoft),
+            ),
+            const SizedBox(height: 20),
+            _BeamActionCard(
+              palette: palette,
+              icon: Icons.download_outlined,
+              title: 'Receive Beam',
+              detail: widget.controller.supportsScanner
+                  ? 'Scan animated frames and review before import.'
+                  : 'Uses the native desktop camera when bundled, with manual cb1 input as a fallback.',
+              onTap: _busy ? null : _receive,
+            ),
+            _BeamActionCard(
+              palette: palette,
+              icon: Icons.lock_outline,
+              title: 'Send encrypted file',
+              detail: 'Pairwise encrypted for a verified ci6 contact.',
+              onTap: _busy ? null : _prepareEncrypted,
+            ),
+            _BeamActionCard(
+              palette: palette,
+              icon: Icons.public,
+              title: 'Send public file',
+              detail: 'Not confidential. The receiver must explicitly accept.',
+              warning: true,
+              onTap: _busy ? null : _preparePublic,
+            ),
+            _BeamActionCard(
+              palette: palette,
+              icon: Icons.person_add_alt_1,
+              title: 'Beam contact invite',
+              detail: 'Signed ci6 invite with a fingerprint comparison.',
+              onTap: _busy ? null : _prepareInvite,
+            ),
+            if (_busy) ...[
+              const SizedBox(height: 12),
+              const Center(child: CircularProgressIndicator()),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BeamActionCard extends StatelessWidget {
+  const _BeamActionCard({
+    required this.palette,
+    required this.icon,
+    required this.title,
+    required this.detail,
+    required this.onTap,
+    this.warning = false,
+  });
+
+  final ConestPalette palette;
+  final IconData icon;
+  final String title;
+  final String detail;
+  final VoidCallback? onTap;
+  final bool warning;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    color: palette.paperStrong,
+    child: ListTile(
+      onTap: onTap,
+      leading: Icon(
+        icon,
+        color: warning ? Theme.of(context).colorScheme.error : palette.primary,
+      ),
+      title: Text(title),
+      subtitle: Text(detail),
+      trailing: const Icon(Icons.chevron_right),
+    ),
+  );
+}
+
+class BeamSenderScreen extends StatefulWidget {
+  const BeamSenderScreen({
+    super.key,
+    required this.transfer,
+    required this.palette,
+  });
+
+  final PreparedBeamTransfer transfer;
+  final ConestPalette palette;
+
+  @override
+  State<BeamSenderScreen> createState() => _BeamSenderScreenState();
+}
+
+class _BeamSenderScreenState extends State<BeamSenderScreen> {
+  late String _frame = widget.transfer.encoder.nextFrame().encodeText();
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 125), (_) {
+      if (!mounted) return;
+      setState(() {
+        _frame = widget.transfer.encoder.nextFrame().encodeText();
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final manifest = widget.transfer.package.manifest;
+    final public = manifest.mode == BeamMode.public;
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        title: Text(manifest.fileName),
+      ),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final qrSize = math.max(
+            260.0,
+            math.min(constraints.maxWidth - 32, constraints.maxHeight - 240),
+          );
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                RepaintBoundary(
+                  child: QrImageView(
+                    data: _frame,
+                    version: QrVersions.auto,
+                    size: qrSize,
+                    gapless: true,
+                    eyeStyle: const QrEyeStyle(color: Colors.black),
+                    dataModuleStyle: const QrDataModuleStyle(
+                      color: Colors.black,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  public
+                      ? 'PUBLIC · visible to anyone nearby'
+                      : manifest.mode == BeamMode.contactEncrypted
+                      ? 'CONTACT ENCRYPTED'
+                      : 'SIGNED CONTACT INVITE',
+                  style: TextStyle(
+                    color: public ? Colors.red.shade700 : Colors.black87,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Frame ${widget.transfer.encoder.frameIndex} · '
+                  '${widget.transfer.encoder.sourceBlockCount} source blocks · '
+                  '${manifest.senderFingerprint}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.black54,
+                    fontFamily: ConestPalette.monoFont,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Keep this screen visible until the receiver reports 100%.',
+                  style: TextStyle(color: Colors.black87),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class BeamReceiverScreen extends StatefulWidget {
+  const BeamReceiverScreen({
+    super.key,
+    required this.controller,
+    required this.palette,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+
+  @override
+  State<BeamReceiverScreen> createState() => _BeamReceiverScreenState();
+}
+
+class _BeamReceiverScreenState extends State<BeamReceiverScreen> {
+  final BeamDecoder _decoder = BeamDecoder();
+  final TextEditingController _frameController = TextEditingController();
+  final TextEditingController _aliasController = TextEditingController();
+  MobileScannerController? _scanner;
+  FfiDesktopBeamScanner? _desktopScanner;
+  StreamSubscription<String>? _desktopScannerSubscription;
+  bool _desktopCameraActive = false;
+  BeamDecodeProgress _progress = const BeamDecodeProgress(
+    solvedBlocks: 0,
+    sourceBlockCount: 0,
+    distinctFrames: 0,
+    complete: false,
+  );
+  BeamImportResult? _result;
+  bool _finishing = false;
+  bool _saving = false;
+  bool _fingerprintCompared = false;
+  int _invalidFrames = 0;
+  String? _error;
+  String? _savedPath;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.controller.supportsScanner) {
+      _scanner = MobileScannerController(
+        detectionSpeed: DetectionSpeed.noDuplicates,
+      );
+    } else {
+      unawaited(_startDesktopScanner());
+    }
+  }
+
+  Future<void> _startDesktopScanner() async {
+    final scanner = FfiDesktopBeamScanner.tryCreate();
+    if (scanner == null) return;
+    _desktopScanner = scanner;
+    _desktopScannerSubscription = scanner.frames.listen(
+      _addFrame,
+      onError: (Object error, StackTrace stackTrace) {
+        if (!mounted) return;
+        setState(() {
+          _desktopCameraActive = false;
+          _error = 'Desktop camera unavailable: $error';
+        });
+      },
+    );
+    try {
+      await scanner.start();
+      if (mounted) setState(() => _desktopCameraActive = true);
+    } catch (error) {
+      await _desktopScannerSubscription?.cancel();
+      _desktopScannerSubscription = null;
+      await scanner.dispose();
+      _desktopScanner = null;
+      if (mounted) {
+        setState(() {
+          _desktopCameraActive = false;
+          _error = 'Desktop camera unavailable: $error';
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _scanner?.dispose();
+    unawaited(_desktopScannerSubscription?.cancel());
+    unawaited(_desktopScanner?.dispose());
+    _frameController.dispose();
+    _aliasController.dispose();
+    super.dispose();
+  }
+
+  void _onDetect(BarcodeCapture capture) {
+    for (final barcode in capture.barcodes) {
+      final value = barcode.rawValue?.trim();
+      if (value != null && value.startsWith('cb1:')) {
+        _addFrame(value);
+      }
+    }
+  }
+
+  void _addFrame(String value) {
+    if (_finishing || _result != null) return;
+    try {
+      final progress = _decoder.addFrame(BeamFrame.decodeText(value.trim()));
+      setState(() {
+        _progress = progress;
+        _error = null;
+      });
+      if (progress.complete) {
+        _finishing = true;
+        _scanner?.stop();
+        unawaited(_desktopScanner?.close());
+        unawaited(_inspectComplete());
+      }
+    } catch (error) {
+      setState(() {
+        _invalidFrames++;
+        _error = 'Ignored frame: $error';
+      });
+    }
+  }
+
+  Future<void> _inspectComplete() async {
+    try {
+      final result = await widget.controller.inspectBeamPackage(
+        _decoder.package!,
+      );
+      if (!mounted) return;
+      setState(() {
+        _result = result;
+        _aliasController.text = result.invite?.displayName ?? '';
+      });
+    } catch (error) {
+      if (mounted) setState(() => _error = 'Beam rejected: $error');
+    }
+  }
+
+  Future<void> _saveAccepted() async {
+    final result = _result;
+    if (result == null) return;
+    setState(() => _saving = true);
+    try {
+      final file = await widget.controller.persistAcceptedBeam(result);
+      if (mounted) setState(() => _savedPath = file.path);
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _acceptInvite() async {
+    final result = _result;
+    final invite = result?.invite;
+    if (invite == null || !_fingerprintCompared) return;
+    setState(() => _saving = true);
+    try {
+      await widget.controller.addContactFromInvite(
+        alias: _aliasController.text.trim(),
+        payload: invite.encodePayload(),
+        codephrase: '',
+      );
+      if (mounted) Navigator.of(context).pop();
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final result = _result;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Receive Conest Beam')),
+      body: result == null
+          ? Column(
+              children: [
+                if (_scanner != null)
+                  Expanded(
+                    child: MobileScanner(
+                      controller: _scanner,
+                      onDetect: _onDetect,
+                    ),
+                  )
+                else if (_desktopCameraActive)
+                  Expanded(
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.videocam_outlined,
+                              size: 64,
+                              color: widget.palette.primary,
+                            ),
+                            const SizedBox(height: 16),
+                            const Text(
+                              'Desktop camera active',
+                              style: TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Point this camera at the animated Beam QR. '
+                              'Only decoded cb1 frames leave the native scanner.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: widget.palette.inkSoft),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  Expanded(
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          'Native desktop camera capture is unavailable. Paste '
+                          'cb1 frames below; the protocol decoder and '
+                          'verification path are identical.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: widget.palette.inkSoft),
+                        ),
+                      ),
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      LinearProgressIndicator(value: _progress.fraction),
+                      const SizedBox(height: 8),
+                      Text(
+                        '${_progress.solvedBlocks}/${_progress.sourceBlockCount} '
+                        'blocks · ${_progress.distinctFrames} frames · '
+                        '$_invalidFrames invalid',
+                      ),
+                      if (_scanner == null) ...[
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: _frameController,
+                          minLines: 2,
+                          maxLines: 4,
+                          decoration: const InputDecoration(
+                            labelText: 'Paste one cb1 frame',
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        FilledButton(
+                          onPressed: () {
+                            _addFrame(_frameController.text);
+                            _frameController.clear();
+                          },
+                          child: const Text('Add frame'),
+                        ),
+                      ],
+                      if (_error != null) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          _error!,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            )
+          : _BeamApprovalView(
+              result: result,
+              aliasController: _aliasController,
+              fingerprintCompared: _fingerprintCompared,
+              saving: _saving,
+              savedPath: _savedPath,
+              error: _error,
+              onFingerprintChanged: (value) =>
+                  setState(() => _fingerprintCompared = value),
+              onAcceptInvite: _acceptInvite,
+              onSave: _saveAccepted,
+            ),
+    );
+  }
+}
+
+class _BeamApprovalView extends StatelessWidget {
+  const _BeamApprovalView({
+    required this.result,
+    required this.aliasController,
+    required this.fingerprintCompared,
+    required this.saving,
+    required this.savedPath,
+    required this.error,
+    required this.onFingerprintChanged,
+    required this.onAcceptInvite,
+    required this.onSave,
+  });
+
+  final BeamImportResult result;
+  final TextEditingController aliasController;
+  final bool fingerprintCompared;
+  final bool saving;
+  final String? savedPath;
+  final String? error;
+  final ValueChanged<bool> onFingerprintChanged;
+  final VoidCallback onAcceptInvite;
+  final VoidCallback onSave;
+
+  @override
+  Widget build(BuildContext context) {
+    final manifest = result.manifest;
+    final invite = result.invite;
+    final public = manifest.mode == BeamMode.public;
+    return ListView(
+      padding: const EdgeInsets.all(24),
+      children: [
+        Icon(
+          public ? Icons.warning_amber_rounded : Icons.verified_user_outlined,
+          size: 54,
+          color: public
+              ? Theme.of(context).colorScheme.error
+              : Theme.of(context).colorScheme.primary,
+        ),
+        const SizedBox(height: 12),
+        Text(
+          invite != null ? 'Signed contact invite' : manifest.fileName,
+          textAlign: TextAlign.center,
+          style: Theme.of(
+            context,
+          ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          public
+              ? 'PUBLIC / UNTRUSTED. The signature proves that all frames '
+                    'came from one key; it does not prove who owns that key.'
+              : result.contactTrusted
+              ? 'Encrypted and authenticated as a pinned Conest contact.'
+              : 'Signature valid. Compare the fingerprint in person.',
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 12),
+        SelectableText(
+          manifest.senderFingerprint ?? 'fingerprint unavailable',
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            fontFamily: ConestPalette.monoFont,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        if (invite != null) ...[
+          const SizedBox(height: 18),
+          TextField(
+            controller: aliasController,
+            decoration: const InputDecoration(labelText: 'Contact alias'),
+          ),
+          CheckboxListTile(
+            value: fingerprintCompared,
+            onChanged: (value) => onFingerprintChanged(value ?? false),
+            title: const Text('We compared this fingerprint in person'),
+            contentPadding: EdgeInsets.zero,
+          ),
+          FilledButton.icon(
+            onPressed: saving || !fingerprintCompared ? null : onAcceptInvite,
+            icon: const Icon(Icons.person_add_alt_1),
+            label: const Text('Trust and add contact'),
+          ),
+        ] else ...[
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            onPressed: saving || savedPath != null ? null : onSave,
+            icon: const Icon(Icons.save_alt),
+            label: Text(public ? 'Accept and save public file' : 'Save file'),
+          ),
+        ],
+        if (savedPath != null) ...[
+          const SizedBox(height: 12),
+          const Text('Saved in private Conest storage:'),
+          SelectableText(savedPath!),
+        ],
+        if (error != null) ...[
+          const SizedBox(height: 12),
+          Text(
+            error!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+String _beamMimeType(String fileName) {
+  final extension = p.extension(fileName).toLowerCase();
+  return switch (extension) {
+    '.jpg' || '.jpeg' => 'image/jpeg',
+    '.png' => 'image/png',
+    '.gif' => 'image/gif',
+    '.webp' => 'image/webp',
+    '.pdf' => 'application/pdf',
+    '.txt' => 'text/plain',
+    '.mp4' => 'video/mp4',
+    '.webm' => 'video/webm',
+    '.zip' => 'application/zip',
+    _ => 'application/octet-stream',
+  };
+}
+
 class FullscreenQrScreen extends StatelessWidget {
   const FullscreenQrScreen({
     super.key,
@@ -7296,6 +8235,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     text: '$defaultRelayPort',
   );
   late final TextEditingController _localRelayPortController;
+  late final TextEditingController _irohRelayUrlsController;
   bool _busy = false;
   String? _error;
 
@@ -7310,6 +8250,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _localRelayPortController = TextEditingController(
       text: '${identity?.localRelayPort ?? defaultRelayPort}',
     );
+    _irohRelayUrlsController = TextEditingController(
+      text: identity?.connectivity.irohRelayUrls.join('\n') ?? '',
+    );
   }
 
   @override
@@ -7319,6 +8262,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _relayHostController.dispose();
     _relayPortController.dispose();
     _localRelayPortController.dispose();
+    _irohRelayUrlsController.dispose();
     super.dispose();
   }
 
@@ -7340,6 +8284,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
           _displayNameController.text = identity.displayName;
           _bioController.text = identity.bio;
           _localRelayPortController.text = '${identity.localRelayPort}';
+          _irohRelayUrlsController.text = identity.connectivity.irohRelayUrls
+              .join('\n');
         }
         setState(() {
           _busy = false;
@@ -7347,6 +8293,19 @@ class _SettingsDialogState extends State<SettingsDialog> {
       }
     }
   }
+
+  Future<void> _setGlobalTransportPolicy(
+    TransportKind kind,
+    TransportPolicy policy,
+  ) => _run(() async {
+    final identity = widget.controller.identity!;
+    final policies = Map<TransportKind, TransportPolicy>.from(
+      identity.connectivity.transportPolicies,
+    )..[kind] = policy;
+    await widget.controller.updateGlobalConnectivity(
+      identity.connectivity.copyWith(transportPolicies: policies),
+    );
+  });
 
   Future<void> _confirmReset() async {
     final confirmed = await showDialog<bool>(
@@ -7483,9 +8442,13 @@ class _SettingsDialogState extends State<SettingsDialog> {
                           ),
                           if (!kIsWeb && Platform.isAndroid)
                             SwitchListTile.adaptive(
-                              value: identity.androidBackgroundRuntimeEnabled,
+                              value:
+                                  experimentalAndroidBackgroundRuntimeAvailable &&
+                                  identity.androidBackgroundRuntimeEnabled,
                               contentPadding: EdgeInsets.zero,
-                              onChanged: _busy
+                              onChanged:
+                                  _busy ||
+                                      !experimentalAndroidBackgroundRuntimeAvailable
                                   ? null
                                   : (value) => _run(
                                       () => widget.controller
@@ -7493,9 +8456,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             value,
                                           ),
                                     ),
-                              title: const Text('Android background runtime'),
+                              title: const Text(
+                                'Experimental Android background receive',
+                              ),
                               subtitle: const Text(
-                                'Keeps foreground runtime active. If Android blocks background access, notifications can be late or never arrive.',
+                                'Disabled in release builds: the foreground service does not yet host a headless Flutter receiver.',
                               ),
                             ),
                           if (kDebugMode)
@@ -7570,6 +8535,92 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               'Relay polling, internet/relay delivery, auto-imported contact relays.',
                             ),
                           ),
+                          SwitchListTile.adaptive(
+                            value: identity.connectivity.irohRelayEnabled,
+                            contentPadding: EdgeInsets.zero,
+                            onChanged:
+                                _busy || !identity.connectivity.onlineEnabled
+                                ? null
+                                : (value) => _run(
+                                    () => widget.controller
+                                        .updateGlobalConnectivity(
+                                          identity.connectivity.copyWith(
+                                            irohRelayEnabled: value,
+                                          ),
+                                        ),
+                                  ),
+                            title: const Text('Iroh relay fallback'),
+                            subtitle: const Text(
+                              'Visible relay path used only while both peers are online.',
+                            ),
+                          ),
+                          Wrap(
+                            spacing: 12,
+                            runSpacing: 8,
+                            crossAxisAlignment: WrapCrossAlignment.end,
+                            children: [
+                              SizedBox(
+                                width: 440,
+                                child: TextField(
+                                  controller: _irohRelayUrlsController,
+                                  enabled:
+                                      !_busy &&
+                                      identity.connectivity.irohRelayEnabled,
+                                  minLines: 1,
+                                  maxLines: 4,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Custom Iroh relay URLs',
+                                    helperText:
+                                        'One HTTPS URL per line; blank uses the standard N0 relay set.',
+                                  ),
+                                ),
+                              ),
+                              FilledButton.tonal(
+                                onPressed:
+                                    _busy ||
+                                        !identity.connectivity.irohRelayEnabled
+                                    ? null
+                                    : () => _run(() async {
+                                        final current =
+                                            widget.controller.identity!;
+                                        final values = _irohRelayUrlsController
+                                            .text
+                                            .split(RegExp(r'[\s,]+'))
+                                            .where((value) => value.isNotEmpty);
+                                        await widget.controller
+                                            .updateGlobalConnectivity(
+                                              current.connectivity.copyWith(
+                                                irohRelayUrls: values.toList(),
+                                              ),
+                                            );
+                                      }),
+                                child: const Text('Save Iroh relays'),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Transport policy',
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 6),
+                          for (final kind in const [
+                            TransportKind.lan,
+                            TransportKind.iroh,
+                            TransportKind.conestRelay,
+                            TransportKind.optical,
+                            TransportKind.deltaChat,
+                            TransportKind.reticulum,
+                            TransportKind.localSend,
+                          ])
+                            _TransportPolicySelector(
+                              kind: kind,
+                              value: identity.connectivity.policyFor(kind),
+                              enabled: !_busy,
+                              onChanged: (value) =>
+                                  _setGlobalTransportPolicy(kind, value),
+                            ),
                           const SizedBox(height: 8),
                           Text(
                             identity.connectivity.anyEnabled
@@ -8064,6 +9115,123 @@ class _RelayIdentityMismatchBanner extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _PendingContactRequestCard extends StatelessWidget {
+  const _PendingContactRequestCard({
+    required this.controller,
+    required this.palette,
+    required this.request,
+    this.compact = false,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+  final PendingContactRequest request;
+  final bool compact;
+
+  ContactInvite? get _invite =>
+      ContactInvite.tryDecodePayload(request.invitePayload);
+
+  Future<void> _approve(BuildContext context) async {
+    final invite = _invite;
+    if (invite == null) return;
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Add ${invite.displayName}?'),
+        content: const Text(
+          'This request is not authenticated by an existing contact. Verify '
+          'the person and compare the safety number through another channel '
+          'before accepting.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Add contact'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true) return;
+    try {
+      await controller.approvePendingContactRequest(request.id);
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not add contact: $error')));
+    }
+  }
+
+  Future<void> _reject(BuildContext context) async {
+    await controller.rejectPendingContactRequest(request.id);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Contact request rejected.')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final invite = _invite;
+    final name = invite?.displayName.trim().isNotEmpty == true
+        ? invite!.displayName.trim()
+        : 'Unknown device';
+    return Container(
+      margin: compact ? const EdgeInsets.fromLTRB(8, 6, 8, 0) : EdgeInsets.zero,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.tertiaryContainer,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: palette.stroke),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.person_add_alt_1_outlined, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Contact request from $name',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Unverified · ${request.senderDeviceId.length > 12 ? request.senderDeviceId.substring(0, 12) : request.senderDeviceId}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: [
+              FilledButton.tonal(
+                onPressed: invite == null ? null : () => _approve(context),
+                child: const Text('Review'),
+              ),
+              TextButton(
+                onPressed: () => _reject(context),
+                child: const Text('Reject'),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -9981,13 +11149,20 @@ class _ConnectivityDialog extends StatefulWidget {
 class _ConnectivityDialogState extends State<_ConnectivityDialog> {
   late bool _lan = widget.initial.lanEnabled;
   late bool _online = widget.initial.onlineEnabled;
+  late bool _irohRelay = widget.initial.irohRelayEnabled;
   late RoutingPreference _preferred = widget.initial.preferred;
+  late final Map<TransportKind, TransportPolicy> _policies =
+      Map<TransportKind, TransportPolicy>.from(
+        widget.initial.transportPolicies,
+      );
 
   String _resolvedLabel() {
     final effective = ContactRoutingPreferences(
       lanEnabled: _lan,
       onlineEnabled: _online,
       preferred: _preferred,
+      irohRelayEnabled: _irohRelay,
+      transportPolicies: _policies,
     ).effectiveMode(widget.global);
     switch (effective) {
       case EffectiveRoutingMode.lanFirst:
@@ -10025,6 +11200,35 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
                 : const Text('Disabled by global setting'),
             contentPadding: EdgeInsets.zero,
           ),
+          SwitchListTile.adaptive(
+            value: _irohRelay,
+            onChanged: _online && widget.global.irohRelayEnabled
+                ? (value) => setState(() => _irohRelay = value)
+                : null,
+            title: const Text('Allow Iroh relay fallback'),
+            subtitle: widget.global.irohRelayEnabled
+                ? const Text(
+                    'Visible and online-only; direct Iroh is preferred.',
+                  )
+                : const Text('Disabled by global setting'),
+            contentPadding: EdgeInsets.zero,
+          ),
+          const SizedBox(height: 8),
+          for (final kind in const [
+            TransportKind.lan,
+            TransportKind.iroh,
+            TransportKind.conestRelay,
+            TransportKind.optical,
+            TransportKind.deltaChat,
+            TransportKind.reticulum,
+          ])
+            _TransportPolicySelector(
+              kind: kind,
+              value: _policies[kind] ?? TransportPolicy.disabled,
+              enabled:
+                  widget.global.policyFor(kind) != TransportPolicy.disabled,
+              onChanged: (value) => setState(() => _policies[kind] = value),
+            ),
           CheckboxListTile(
             value: _online,
             onChanged: widget.global.onlineEnabled
@@ -10070,6 +11274,8 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
                       lanEnabled: _lan,
                       onlineEnabled: _online,
                       preferred: _preferred,
+                      irohRelayEnabled: _irohRelay,
+                      transportPolicies: Map.unmodifiable(_policies),
                     ),
                   );
                   Navigator.of(context).pop();
@@ -10080,6 +11286,50 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
       ],
     );
   }
+}
+
+class _TransportPolicySelector extends StatelessWidget {
+  const _TransportPolicySelector({
+    required this.kind,
+    required this.value,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final TransportKind kind;
+  final TransportPolicy value;
+  final bool enabled;
+  final ValueChanged<TransportPolicy> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 3),
+    child: Row(
+      children: [
+        Expanded(child: Text(kind.label)),
+        DropdownButton<TransportPolicy>(
+          value: value,
+          onChanged: enabled
+              ? (next) {
+                  if (next != null) onChanged(next);
+                }
+              : null,
+          items: [
+            for (final policy in TransportPolicy.values)
+              DropdownMenuItem(
+                value: policy,
+                child: Text(switch (policy) {
+                  TransportPolicy.automatic => 'Automatic',
+                  TransportPolicy.preferred => 'Preferred',
+                  TransportPolicy.disabled => 'Disabled',
+                  TransportPolicy.askBeforeUse => 'Ask first',
+                }),
+              ),
+          ],
+        ),
+      ],
+    ),
+  );
 }
 
 /// Returns true when `messages[chronoIndex]` is the second-or-later member
@@ -10208,28 +11458,77 @@ String _saveKindForMime(String mimeType) {
 /// `~/Downloads/conest`) and writes each file into it with its original
 /// filename. The caller's selection should already have filtered to entries
 /// where `attachmentBytesFor != null`.
+Future<File> _collisionSafeSaveTarget(
+  Directory directory,
+  String requestedName,
+) async {
+  final safeName = sanitizeAttachmentFileName(requestedName);
+  final extension = p.extension(safeName);
+  final stem = p.basenameWithoutExtension(safeName).isEmpty
+      ? 'attachment'
+      : p.basenameWithoutExtension(safeName);
+  for (var suffix = 0; suffix < 10000; suffix++) {
+    final candidateName = suffix == 0 ? safeName : '$stem ($suffix)$extension';
+    final candidate = File(p.join(directory.path, candidateName));
+    if (!isContainedPath(directory.path, candidate.path)) {
+      throw const FileSystemException('Unsafe attachment save path.');
+    }
+    if (!await candidate.exists() && !await Link(candidate.path).exists()) {
+      return candidate;
+    }
+  }
+  throw const FileSystemException('Could not allocate a unique save name.');
+}
+
+Future<void> _streamCopyFile(File source, File target) async {
+  final output = await target.open(mode: FileMode.write);
+  try {
+    await for (final chunk in source.openRead()) {
+      await output.writeFrom(chunk);
+    }
+    await output.flush();
+  } finally {
+    await output.close();
+  }
+}
+
 Future<void> bulkSaveAttachments(
   MessengerController controller,
-  List<({AttachmentDescriptor descriptor, Uint8List bytes})> items,
+  List<AttachmentDescriptor> items,
 ) async {
   if (items.isEmpty) return;
   if (!kIsWeb && Platform.isAndroid) {
     var saved = 0;
     final errors = <String>[];
-    for (final item in items) {
-      final kind = _saveKindForMime(item.descriptor.mimeType);
+    for (final descriptor in items) {
+      final kind = _saveKindForMime(descriptor.mimeType);
       try {
-        final uri = await controller.platformBridge.saveMediaToGallery(
-          bytes: item.bytes,
-          fileName: item.descriptor.fileName,
-          mimeType: item.descriptor.mimeType,
-          kind: kind,
-        );
+        final bytes = controller.attachmentBytesFor(descriptor.id);
+        final sourcePath = bytes == null
+            ? await controller.attachmentCachePathFor(descriptor.id)
+            : null;
+        final uri = bytes != null
+            ? await controller.platformBridge.saveMediaToGallery(
+                bytes: bytes,
+                fileName: sanitizeAttachmentFileName(descriptor.fileName),
+                mimeType: descriptor.mimeType,
+                kind: kind,
+              )
+            : sourcePath == null
+            ? null
+            : await controller.platformBridge.saveMediaFileToGallery(
+                sourcePath: sourcePath,
+                fileName: sanitizeAttachmentFileName(descriptor.fileName),
+                mimeType: descriptor.mimeType,
+                kind: kind,
+              );
         if (uri != null) {
           saved++;
+        } else {
+          errors.add('${descriptor.fileName}: file is no longer available');
         }
       } catch (error) {
-        errors.add('${item.descriptor.fileName}: $error');
+        errors.add('${descriptor.fileName}: $error');
       }
     }
     final summary = errors.isEmpty
@@ -10255,15 +11554,33 @@ Future<void> bulkSaveAttachments(
   }
   var saved = 0;
   final errors = <String>[];
-  for (final item in items) {
-    final target = File(
-      '$picked${Platform.pathSeparator}${item.descriptor.fileName}',
-    );
+  final destination = Directory(picked);
+  for (final descriptor in items) {
+    File? target;
     try {
-      await target.writeAsBytes(item.bytes, flush: true);
+      target = await _collisionSafeSaveTarget(destination, descriptor.fileName);
+      final bytes = controller.attachmentBytesFor(descriptor.id);
+      if (bytes != null) {
+        await target.writeAsBytes(bytes, flush: true);
+      } else {
+        final sourcePath = await controller.attachmentCachePathFor(
+          descriptor.id,
+        );
+        if (sourcePath == null) {
+          throw const FileSystemException(
+            'The attachment file is no longer available.',
+          );
+        }
+        await _streamCopyFile(File(sourcePath), target);
+      }
       saved++;
     } catch (error) {
-      errors.add('${item.descriptor.fileName}: $error');
+      if (target != null) {
+        try {
+          if (await target.exists()) await target.delete();
+        } catch (_) {}
+      }
+      errors.add('${descriptor.fileName}: $error');
     }
   }
   final summary = errors.isEmpty
@@ -10645,12 +11962,13 @@ class _AttachmentRow extends StatelessWidget {
     String fileName,
     String mimeType,
   ) async {
+    final safeFileName = sanitizeAttachmentFileName(fileName);
     final kind = _saveKindFor(mimeType);
     if (!kIsWeb && Platform.isAndroid) {
       try {
         final saved = await controller.platformBridge.saveMediaToGallery(
           bytes: bytes,
-          fileName: fileName,
+          fileName: safeFileName,
           mimeType: mimeType,
           kind: kind,
         );
@@ -10660,10 +11978,10 @@ class _AttachmentRow extends StatelessWidget {
             'video' => 'Movies/conest',
             _ => 'Download/conest',
           };
-          controller.setStatus('Saved $fileName to $relPath.');
+          controller.setStatus('Saved $safeFileName to $relPath.');
           unawaited(
             controller.platformBridge.showToast(
-              'Saved $fileName → $relPath',
+              'Saved $safeFileName → $relPath',
               long: true,
             ),
           );
@@ -10678,8 +11996,8 @@ class _AttachmentRow extends StatelessWidget {
     try {
       final defaultDir = await _conestDownloadsDir();
       final path = await FilePicker.saveFile(
-        dialogTitle: 'Save $fileName',
-        fileName: fileName,
+        dialogTitle: 'Save $safeFileName',
+        fileName: safeFileName,
         bytes: bytes,
         initialDirectory: defaultDir?.path,
       );
@@ -10687,9 +12005,9 @@ class _AttachmentRow extends StatelessWidget {
       if (!Platform.isLinux && !Platform.isMacOS && !Platform.isWindows) {
         await File(path).writeAsBytes(bytes);
       }
-      controller.setStatus('Saved $fileName to $path.');
+      controller.setStatus('Saved $safeFileName to $path.');
       unawaited(
-        controller.platformBridge.showToast('Saved $fileName', long: true),
+        controller.platformBridge.showToast('Saved $safeFileName', long: true),
       );
     } catch (error) {
       controller.setStatus('Save failed: $error');
@@ -10698,6 +12016,43 @@ class _AttachmentRow extends StatelessWidget {
 
   Future<void> _saveToDisk(BuildContext context, Uint8List bytes) =>
       _saveToDiskFor(context, bytes, descriptor.fileName, descriptor.mimeType);
+
+  Future<void> _saveLocalFileToDisk() async {
+    final sourcePath = await controller.attachmentCachePathFor(descriptor.id);
+    if (sourcePath == null) {
+      controller.setStatus('The attachment file is not available locally.');
+      return;
+    }
+    final safeFileName = sanitizeAttachmentFileName(descriptor.fileName);
+    try {
+      if (!kIsWeb && Platform.isAndroid) {
+        final saved = await controller.platformBridge.saveMediaFileToGallery(
+          sourcePath: sourcePath,
+          fileName: safeFileName,
+          mimeType: descriptor.mimeType,
+          kind: _saveKindFor(descriptor.mimeType),
+        );
+        if (saved != null) {
+          controller.setStatus('Saved $safeFileName.');
+          return;
+        }
+      }
+      final targetPath = await FilePicker.saveFile(
+        dialogTitle: 'Save $safeFileName',
+        fileName: safeFileName,
+        initialDirectory: (await _conestDownloadsDir())?.path,
+      );
+      if (targetPath == null) return;
+      final source = File(sourcePath);
+      final target = File(targetPath);
+      if (source.absolute.path != target.absolute.path) {
+        await _streamCopyFile(source, target);
+      }
+      controller.setStatus('Saved $safeFileName to $targetPath.');
+    } catch (error) {
+      controller.setStatus('Save failed: $error');
+    }
+  }
 
   Future<void> _copyImageBytesFor(Uint8List bytes, String filename) async {
     // Always put the filename on the OS text clipboard first as the
@@ -10815,9 +12170,15 @@ class _AttachmentRow extends StatelessWidget {
       if (!await cacheDir.exists()) {
         await cacheDir.create(recursive: true);
       }
-      final ext = _extensionFor(descriptor.fileName) ?? 'bin';
-      final target = File('${cacheDir.path}$sep${descriptor.id}.$ext');
+      final rawExtension = _extensionFor(descriptor.fileName) ?? 'bin';
+      final ext = RegExp(r'^[a-z0-9]{1,16}$').hasMatch(rawExtension)
+          ? rawExtension
+          : 'bin';
+      final target = File(
+        '${cacheDir.path}$sep${attachmentStorageKey(descriptor.id)}.$ext',
+      );
       await target.writeAsBytes(bytes, flush: true);
+      await restrictFileToOwner(target);
       return target.uri;
     } catch (_) {
       return null;
@@ -10846,6 +12207,7 @@ class _AttachmentRow extends StatelessWidget {
   Future<void> _showContextMenu(BuildContext context, Offset globalPos) async {
     final bytes = controller.attachmentBytesFor(descriptor.id);
     final hasBytes = bytes != null;
+    final hasLocalFile = controller.attachmentAvailableLocally(descriptor.id);
     final inFlight =
         controller.attachmentTransferProgress(descriptor.id) != null ||
         controller.outboundAttachmentProgress(descriptor.id) != null;
@@ -10862,8 +12224,9 @@ class _AttachmentRow extends StatelessWidget {
       items: [
         if (hasBytes && _isImage)
           const PopupMenuItem(value: 'copy_image', child: Text('Copy')),
-        if (hasBytes) const PopupMenuItem(value: 'save', child: Text('Save')),
-        if (hasBytes)
+        if (hasLocalFile)
+          const PopupMenuItem(value: 'save', child: Text('Save')),
+        if (hasLocalFile)
           const PopupMenuItem(
             value: 'copy_path',
             child: Text('Copy cache path'),
@@ -10885,6 +12248,8 @@ class _AttachmentRow extends StatelessWidget {
       case 'save':
         if (bytes != null) {
           await _saveToDisk(context, bytes);
+        } else {
+          await _saveLocalFileToDisk();
         }
         break;
       case 'copy_path':
@@ -10941,7 +12306,9 @@ class _AttachmentRow extends StatelessWidget {
           cachePath: path,
           title: descriptor.fileName,
           palette: palette,
-          onSave: bytes == null ? null : () => _saveToDisk(context, bytes),
+          onSave: () => bytes == null
+              ? _saveLocalFileToDisk()
+              : _saveToDisk(context, bytes),
         ),
       ),
     );
@@ -11000,7 +12367,10 @@ class _AttachmentRow extends StatelessWidget {
     // Defensive guard: a malformed descriptor used to surface as a blank
     // attachment bubble. Reject early so the user sees an explicit error
     // rather than an empty card.
-    if (descriptor.fileName.isEmpty || descriptor.chunkHashes.isEmpty) {
+    if (descriptor.fileName.isEmpty ||
+        descriptor.effectiveChunkCount <= 0 ||
+        descriptor.fileHashBase64.isEmpty ||
+        descriptor.encryptionKeyBase64.isEmpty) {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
@@ -11036,9 +12406,56 @@ class _AttachmentRow extends StatelessWidget {
     final textColor = outbound ? palette.outboundText : palette.inboundText;
     final metaColor = outbound ? palette.outboundMeta : palette.inboundMeta;
     final hasBytes = bytes != null;
+    final hasLocalFile = controller.attachmentAvailableLocally(descriptor.id);
     final showImage = _isImage && hasBytes;
     final transferInFlight =
         outboundProgress != null || inboundProgress != null;
+
+    if (!outbound && controller.attachmentAwaitingAcceptance(descriptor.id)) {
+      final sizeMb = descriptor.sizeBytes / (1024 * 1024);
+      return Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: palette.paperStrong,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: palette.stroke),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              descriptor.fileName,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: textColor, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${sizeMb.toStringAsFixed(1)} MB · LAN-direct only',
+              style: TextStyle(color: metaColor),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              children: [
+                FilledButton.tonal(
+                  onPressed: () => unawaited(
+                    controller.acceptIncomingAttachment(descriptor.id),
+                  ),
+                  child: const Text('Accept'),
+                ),
+                TextButton(
+                  onPressed: () => unawaited(
+                    controller.rejectIncomingAttachment(descriptor.id),
+                  ),
+                  child: const Text('Reject'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
 
     if (showImage) {
       // nightly.10: Copy / Save moved into the full-screen viewer's AppBar to
@@ -11105,7 +12522,7 @@ class _AttachmentRow extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(14),
-          onTap: hasBytes
+          onTap: hasLocalFile
               ? () => unawaited(_openVideoPlayer(context))
               : () => controller.setStatus(
                   'Video still transferring (${(progress ?? 0) * 100 ~/ 1}%).',
@@ -11183,7 +12600,7 @@ class _AttachmentRow extends StatelessWidget {
                   ),
                   child: tile,
                 ),
-                if (!hasBytes) ...[
+                if (!hasLocalFile) ...[
                   const SizedBox(height: 6),
                   Text(
                     progress != null
@@ -11215,7 +12632,7 @@ class _AttachmentRow extends StatelessWidget {
             color: Colors.transparent,
             child: InkWell(
               borderRadius: BorderRadius.circular(14),
-              onTap: hasBytes
+              onTap: hasLocalFile
                   ? () => unawaited(_openVideoPlayer(context))
                   : () => controller.setStatus(
                       'Video still transferring '
@@ -11294,7 +12711,7 @@ class _AttachmentRow extends StatelessWidget {
       statusLine =
           'Failed · ${_formatBytes(descriptor.sizeBytes)}'
           '${outbound ? " · tap to retry" : ""}';
-    } else if (hasBytes && !outbound) {
+    } else if (hasLocalFile && !outbound) {
       statusLine = _formatBytes(descriptor.sizeBytes);
     } else if (outbound && outboundProgress != null) {
       final reroutePrefix = controller.isOutboundReroutingFor(descriptor.id)
@@ -11306,7 +12723,7 @@ class _AttachmentRow extends StatelessWidget {
     } else if (outbound && queuePosition > 0) {
       statusLine =
           'Queued · #$queuePosition · ${_formatBytes(descriptor.sizeBytes)}';
-    } else if (hasBytes) {
+    } else if (hasLocalFile) {
       statusLine = _formatBytes(descriptor.sizeBytes);
     } else if (progress != null) {
       statusLine =
@@ -11861,6 +13278,28 @@ class _RouteChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final info = switch (route) {
+      OutboundDeliveryRoute.lanDirect => (
+        label: 'LAN',
+        color: const Color(0xFF4ADE80),
+      ),
+      OutboundDeliveryRoute.irohDirect => (
+        label: 'direct',
+        color: const Color(0xFF22D3EE),
+      ),
+      OutboundDeliveryRoute.irohRelay => (
+        label: 'Iroh relay',
+        color: const Color(0xFFC084FC),
+      ),
+      OutboundDeliveryRoute.conestRelay => (
+        label: 'relay',
+        color: const Color(0xFFFBBF24),
+      ),
+      OutboundDeliveryRoute.unknown => (
+        label: 'routing',
+        color: const Color(0xFF94A3B8),
+      ),
+    };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
@@ -11874,15 +13313,13 @@ class _RouteChip extends StatelessWidget {
             width: 6,
             height: 6,
             decoration: BoxDecoration(
-              color: route == OutboundDeliveryRoute.lanDirect
-                  ? const Color(0xFF4ADE80) // green
-                  : const Color(0xFFFBBF24), // amber
+              color: info.color,
               shape: BoxShape.circle,
             ),
           ),
           const SizedBox(width: 4),
           Text(
-            route == OutboundDeliveryRoute.lanDirect ? 'LAN' : 'relay',
+            info.label,
             style: const TextStyle(
               color: Colors.white,
               fontSize: 10,
@@ -11891,6 +13328,45 @@ class _RouteChip extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _MessageRouteChip extends StatelessWidget {
+  const _MessageRouteChip({required this.message});
+
+  final ChatMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    final kind = message.transportKind;
+    final path = message.transportPath;
+    if (kind == null || path == null) return const SizedBox.shrink();
+    final label = switch ((kind, path)) {
+      (TransportKind.lan, _) => 'LAN',
+      (TransportKind.iroh, TransportPathKind.direct) => 'direct',
+      (TransportKind.iroh, TransportPathKind.relayed) => 'Iroh relay',
+      (TransportKind.conestRelay, TransportPathKind.storeForward) =>
+        'Conest relay',
+      (TransportKind.optical, _) => 'optical',
+      (TransportKind.deltaChat, _) => 'Delta',
+      (TransportKind.reticulum, _) => 'Reticulum',
+      (TransportKind.localSend, _) => 'LocalSend',
+      _ => kind.label,
+    };
+    return Tooltip(
+      message: message.transportDetail ?? label,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.white.withValues(alpha: 0.42)),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600),
+        ),
       ),
     );
   }

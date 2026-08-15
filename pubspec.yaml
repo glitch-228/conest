@@ -1,7 +1,7 @@
 name: conest
 description: "Cross-platform secure text exchange prototype."
 publish_to: 'none'
-version: 0.3.3+29
+version: 0.3.4+30
 
 environment:
   sdk: ^3.11.4
@@ -19,8 +19,10 @@ dependencies:
   package_info_plus: ^8.0.2
   path: ^1.9.1
   path_provider: ^2.1.5
+  pub_semver: ^2.2.0
   qr_flutter: ^4.1.0
   file_picker: ^11.0.2
+  ffi: ^2.2.0
   super_clipboard: ^0.9.1
   photo_manager: ^3.6.0
   image: ^4.5.0
@@ -30,6 +32,9 @@ dependencies:
   video_player: ^2.9.2
   connectivity_plus: ^6.0.5
   video_player_media_kit: ^2.0.0
+  # Pinned because transfer admission relies on platform-specific free-space
+  # reporting and should not change underneath a security release.
+  disk_space_2: 1.0.12
 
 dev_dependencies:
   flutter_test:

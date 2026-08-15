@@ -14,14 +14,28 @@ import 'conest_theme.dart';
 /// file-picker flow.
 class MediaPickerResult {
   MediaPickerResult.send({
-    required this.bytes,
+    required Uint8List bytes,
     required this.fileName,
     required this.mimeType,
-  }) : fallbackToFilePicker = false,
+  }) : bytes = bytes,
+       fallbackToFilePicker = false,
+       filePath = null,
+       sizeBytes = bytes.length,
+       items = null;
+
+  MediaPickerResult.sendFile({
+    required this.filePath,
+    required this.sizeBytes,
+    required this.fileName,
+    required this.mimeType,
+  }) : bytes = null,
+       fallbackToFilePicker = false,
        items = null;
 
   MediaPickerResult.sendMultiple({required this.items})
     : bytes = null,
+      filePath = null,
+      sizeBytes = null,
       fileName = null,
       mimeType = null,
       fallbackToFilePicker = false;
@@ -30,18 +44,24 @@ class MediaPickerResult {
 
   MediaPickerResult.fallback()
     : bytes = null,
+      filePath = null,
+      sizeBytes = null,
       fileName = null,
       mimeType = null,
       fallbackToFilePicker = true,
       items = null;
 
   final Uint8List? bytes;
+  final String? filePath;
+  final int? sizeBytes;
   final String? fileName;
   final String? mimeType;
   final bool fallbackToFilePicker;
   final List<
     ({
-      Uint8List bytes,
+      Uint8List? bytes,
+      String? filePath,
+      int sizeBytes,
       String fileName,
       String mimeType,
       String caption,
@@ -242,7 +262,9 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
     final items =
         <
           ({
-            Uint8List bytes,
+            Uint8List? bytes,
+            String? filePath,
+            int sizeBytes,
             String fileName,
             String mimeType,
             String caption,
@@ -255,7 +277,6 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
       try {
         final file = await asset.file;
         if (file == null) continue;
-        final bytes = await file.readAsBytes();
         final fileName = asset.title ?? 'media-${asset.id}';
         // For videos, photo_manager already generates a thumbnail —
         // reuse it as the offer-envelope poster so the receiver sees a
@@ -275,7 +296,9 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
           }
         }
         items.add((
-          bytes: bytes,
+          bytes: null,
+          filePath: file.path,
+          sizeBytes: await file.length(),
           fileName: fileName,
           mimeType: _mimeForAsset(asset, fileName),
           caption: _captionsById[id]?.trim() ?? '',
@@ -296,11 +319,39 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
     }
     final file = await asset.file;
     if (file == null || !mounted) return;
-    final bytes = await file.readAsBytes();
-    if (!mounted) return;
     final fileName = asset.title ?? 'media-${asset.id}';
     final mime = _mimeForAsset(asset, fileName);
     if (asset.type == AssetType.image) {
+      final sizeBytes = await file.length();
+      if (!mounted) return;
+      if (sizeBytes > widget.maxBytes) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Image is larger than the '
+              '${widget.maxBytes ~/ (1024 * 1024)} MB cap.',
+            ),
+          ),
+        );
+        return;
+      }
+      // The editor is intentionally an inline-only surface. Large images
+      // bypass it and remain path-backed so selecting one cannot consume an
+      // unbounded amount of heap; the chat renders a generic card unless a
+      // bounded poster is available.
+      if (sizeBytes > 8 * 1024 * 1024) {
+        Navigator.of(context).pop(
+          MediaPickerResult.sendFile(
+            filePath: file.path,
+            sizeBytes: sizeBytes,
+            fileName: fileName,
+            mimeType: mime,
+          ),
+        );
+        return;
+      }
+      final bytes = await file.readAsBytes();
+      if (!mounted) return;
       // Editor pops with edited bytes ONLY on explicit Send. Back / cancel
       // (with or without dirty edits) pops with null — never silently
       // sends the unedited original. The previous `edited ?? bytes`
@@ -333,25 +384,29 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
           mimeType: 'image/jpeg',
         ),
       );
-    } else {
-      if (bytes.length > widget.maxBytes) {
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(
-            content: Text(
-              'Video is larger than the ${widget.maxBytes ~/ (1024 * 1024)} MB cap.',
-            ),
+      return;
+    }
+    final sizeBytes = await file.length();
+    if (sizeBytes > widget.maxBytes) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text(
+            'File is larger than the ${widget.maxBytes ~/ (1024 * 1024)} MB cap.',
           ),
-        );
-        return;
-      }
-      Navigator.of(context).pop(
-        MediaPickerResult.send(
-          bytes: bytes,
-          fileName: fileName,
-          mimeType: mime,
         ),
       );
+      return;
     }
+    if (!mounted) return;
+    Navigator.of(context).pop(
+      MediaPickerResult.sendFile(
+        filePath: file.path,
+        sizeBytes: sizeBytes,
+        fileName: fileName,
+        mimeType: mime,
+      ),
+    );
   }
 
   @override

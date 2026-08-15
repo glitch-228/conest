@@ -14,6 +14,15 @@ class RouteRuntimeState {
   DateTime? lastFailureAt;
   int failureStreak = 0;
   DateTime? backoffUntil;
+
+  RouteRuntimeState clone() {
+    return RouteRuntimeState()
+      ..lastFetchSuccessAt = lastFetchSuccessAt
+      ..lastStoreSuccessAt = lastStoreSuccessAt
+      ..lastFailureAt = lastFailureAt
+      ..failureStreak = failureStreak
+      ..backoffUntil = backoffUntil;
+  }
 }
 
 /// Owns per-route health caches, runtime state, and backoff scheduling.
@@ -46,6 +55,16 @@ class RouteHealthTracker {
   void clear() {
     _health.clear();
     _runtime.clear();
+  }
+
+  /// A network-interface transition invalidates old retry delays. Preserve
+  /// latency and success history, but allow every route to be tried
+  /// immediately on the new interface.
+  void clearBackoffWindows() {
+    for (final state in _runtime.values) {
+      state.failureStreak = 0;
+      state.backoffUntil = null;
+    }
   }
 
   void replaceHealth(PeerRouteHealth health) {

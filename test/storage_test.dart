@@ -123,6 +123,87 @@ void main() {
     },
   );
 
+  test(
+    'concurrent vault saves serialize and preserve the newest snapshot',
+    () async {
+      final root = await createTempRoot('conest_vault_concurrent_');
+      final vaultFile = File(p.join(root.path, 'conest.vault'));
+      final keyFile = File(p.join(root.path, 'conest.key'));
+      final store = VaultStore(
+        vaultFileProvider: () async => vaultFile,
+        keyProvider: FileVaultKeyProvider(fileProvider: () async => keyFile),
+      );
+
+      final saves = <Future<void>>[];
+      for (var index = 0; index < 12; index++) {
+        saves.add(
+          store.save(
+            VaultSnapshot.empty().copyWith(
+              seenEnvelopeIds: <String>['snapshot-$index'],
+            ),
+          ),
+        );
+      }
+      await Future.wait(saves);
+
+      final loaded = await store.load();
+      expect(loaded.seenEnvelopeIds, const <String>['snapshot-11']);
+    },
+  );
+
+  test(
+    'vault recovers the last-good backup after primary corruption',
+    () async {
+      final root = await createTempRoot('conest_vault_recovery_');
+      final vaultFile = File(p.join(root.path, 'conest.vault'));
+      final keyFile = File(p.join(root.path, 'conest.key'));
+      VaultStore createStore() => VaultStore(
+        vaultFileProvider: () async => vaultFile,
+        keyProvider: FileVaultKeyProvider(fileProvider: () async => keyFile),
+      );
+      final store = createStore();
+      await store.save(
+        VaultSnapshot.empty().copyWith(
+          seenEnvelopeIds: const <String>['last-good'],
+        ),
+      );
+      await store.save(
+        VaultSnapshot.empty().copyWith(
+          seenEnvelopeIds: const <String>['new-primary'],
+        ),
+      );
+      expect(await File('${vaultFile.path}.bak').exists(), isTrue);
+
+      await vaultFile.writeAsString('interrupted write', flush: true);
+      final recovered = await createStore().load();
+
+      expect(recovered.seenEnvelopeIds, const <String>['last-good']);
+      expect(
+        (await createStore().load()).seenEnvelopeIds,
+        const <String>['last-good'],
+        reason: 'recovery must restore a readable primary atomically',
+      );
+    },
+  );
+
+  test('a corrupt backup never replaces a readable primary', () async {
+    final root = await createTempRoot('conest_vault_bad_backup_');
+    final vaultFile = File(p.join(root.path, 'conest.vault'));
+    final keyFile = File(p.join(root.path, 'conest.key'));
+    final store = VaultStore(
+      vaultFileProvider: () async => vaultFile,
+      keyProvider: FileVaultKeyProvider(fileProvider: () async => keyFile),
+    );
+    await store.save(
+      VaultSnapshot.empty().copyWith(
+        seenEnvelopeIds: const <String>['primary'],
+      ),
+    );
+    await File('${vaultFile.path}.bak').writeAsString('corrupt', flush: true);
+
+    expect((await store.load()).seenEnvelopeIds, const <String>['primary']);
+  });
+
   group('nightly.11 AppInstanceLock stale-PID recovery', () {
     test('acquire steals a lock recorded by a long-dead PID', () async {
       final dir = await createTempRoot('conest_lock_test_');

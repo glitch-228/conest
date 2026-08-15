@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
@@ -8,6 +9,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:pub_semver/pub_semver.dart';
 
 import 'build_info.dart';
 import 'platform_bridge.dart';
@@ -97,6 +99,12 @@ typedef DesktopUpdaterLauncher =
 
 const _releaseManifestName = 'RELEASE-MANIFEST.json';
 const _releaseManifestSignatureName = 'RELEASE-MANIFEST.ed25519.sig';
+const int _maxMetadataBytes = 1024 * 1024;
+const int _maxManifestBytes = 512 * 1024;
+const int _maxManifestSignatureBytes = 4096;
+const int _maxUpdateAssetBytes = 1024 * 1024 * 1024;
+const Duration _metadataTimeout = Duration(seconds: 15);
+const Duration _assetTimeout = Duration(minutes: 10);
 const _releaseManifestPublicKeyFromEnvironment = String.fromEnvironment(
   'CONEST_RELEASE_MANIFEST_PUBLIC_KEY',
 );
@@ -119,10 +127,13 @@ class ReleaseManifestAsset {
     if (name.isEmpty) {
       throw const FormatException('Release manifest asset name is empty.');
     }
+    if (name.length > 160 || p.basename(name) != name) {
+      throw const FormatException('Release manifest asset name is unsafe.');
+    }
     if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(sha256Hex)) {
       throw FormatException('Release manifest has invalid sha256 for $name.');
     }
-    if (size != null && size < 0) {
+    if (size == null || size <= 0 || size > _maxUpdateAssetBytes) {
       throw FormatException('Release manifest has invalid size for $name.');
     }
     return ReleaseManifestAsset(
@@ -160,6 +171,9 @@ class ReleaseManifest {
       throw const FormatException('Release manifest tagName is empty.');
     }
     final assetValues = json['assets'] as List<dynamic>? ?? const [];
+    if (tagName.length > 128 || assetValues.length > 128) {
+      throw const FormatException('Release manifest metadata is too large.');
+    }
     final assets = <String, ReleaseManifestAsset>{};
     for (final value in assetValues) {
       if (value is! Map<String, dynamic>) {
@@ -179,6 +193,9 @@ class ReleaseManifest {
       throw const FormatException('Release manifest has no assets.');
     }
     final rawNotes = json['releaseNotes'];
+    if (rawNotes is String && rawNotes.length > 64 * 1024) {
+      throw const FormatException('Release notes are too large.');
+    }
     final notes = rawNotes is String && rawNotes.trim().isNotEmpty
         ? rawNotes
         : null;
@@ -197,10 +214,8 @@ class ReleaseManifest {
         'Release manifest for $tagName does not include ${asset.name}.',
       );
     }
-    final expectedSize = manifestAsset.sizeBytes;
-    if (expectedSize != null &&
-        asset.sizeBytes > 0 &&
-        expectedSize != asset.sizeBytes) {
+    final expectedSize = manifestAsset.sizeBytes!;
+    if (asset.sizeBytes <= 0 || expectedSize != asset.sizeBytes) {
       throw StateError(
         'Release manifest size mismatch for ${asset.name}: expected $expectedSize, GitHub reported ${asset.sizeBytes}.',
       );
@@ -226,6 +241,21 @@ Map<String, String> parseSha256Sums(String content) {
     values[match.group(2)!] = match.group(1)!.toLowerCase();
   }
   return values;
+}
+
+@visibleForTesting
+bool isReleaseTagNewerThan(String releaseTag, String currentTag) {
+  String normalize(String value) {
+    final trimmed = value.trim().toLowerCase();
+    return trimmed.startsWith('v') ? trimmed.substring(1) : trimmed;
+  }
+
+  try {
+    return Version.parse(normalize(releaseTag)) >
+        Version.parse(normalize(currentTag));
+  } catch (_) {
+    return false;
+  }
 }
 
 class UpdateService extends ChangeNotifier {
@@ -361,7 +391,7 @@ class UpdateService extends ChangeNotifier {
         _statusMessage = 'No ${buildInfo.channelLabel} releases found.';
         return false;
       }
-      if (_matchesCurrentBuild(selected.tagName)) {
+      if (!_isNewerThanCurrentBuild(selected.tagName)) {
         _availableUpdate = null;
         _statusMessage =
             'Already on the latest ${buildInfo.channelLabel} build.';
@@ -428,6 +458,7 @@ class UpdateService extends ChangeNotifier {
         available.asset.downloadUri,
         archiveFile,
         expectedSha256Hex: available.sha256Hex,
+        expectedSizeBytes: available.asset.sizeBytes,
       );
       if (_targetPlatform == UpdateTargetPlatform.android) {
         await _platformBridge.installDownloadedApk(archiveFile.path);
@@ -454,28 +485,51 @@ class UpdateService extends ChangeNotifier {
       _apiBaseUri.resolve('/repos/$_repositoryOwner/$_repositoryName/releases'),
     );
     final list = response as List<dynamic>;
+    if (list.length > 128) {
+      throw const FormatException(
+        'Release metadata contains too many entries.',
+      );
+    }
     return list.whereType<Map<String, dynamic>>().map(_releaseFromJson).toList()
       ..sort((left, right) => right.publishedAt.compareTo(left.publishedAt));
   }
 
   GithubReleaseInfo _releaseFromJson(Map<String, dynamic> json) {
-    final assets = (json['assets'] as List<dynamic>? ?? const [])
-        .whereType<Map<String, dynamic>>()
-        .map(
-          (assetJson) => GithubReleaseAsset(
-            name: assetJson['name'] as String,
-            downloadUri: Uri.parse(assetJson['browser_download_url'] as String),
-            sizeBytes: assetJson['size'] as int? ?? 0,
-          ),
-        )
-        .toList();
+    final rawAssets = json['assets'] as List<dynamic>? ?? const [];
+    if (rawAssets.length > 128) {
+      throw const FormatException('Release has too many assets.');
+    }
+    final assets = rawAssets.whereType<Map<String, dynamic>>().map((assetJson) {
+      final name = assetJson['name'] as String;
+      final size = assetJson['size'] as int? ?? 0;
+      if (name.isEmpty ||
+          name.length > 160 ||
+          p.basename(name) != name ||
+          size <= 0 ||
+          size > _maxUpdateAssetBytes) {
+        throw const FormatException('Release asset metadata is invalid.');
+      }
+      return GithubReleaseAsset(
+        name: name,
+        downloadUri: Uri.parse(assetJson['browser_download_url'] as String),
+        sizeBytes: size,
+      );
+    }).toList();
     final rawBody = json['body'];
-    final body = rawBody is String && rawBody.trim().isNotEmpty
+    final body =
+        rawBody is String &&
+            rawBody.length <= 64 * 1024 &&
+            rawBody.trim().isNotEmpty
         ? rawBody
         : null;
+    final tagName = json['tag_name'] as String? ?? '';
+    final releaseName = json['name'] as String? ?? '';
+    if (tagName.length > 128 || releaseName.length > 256) {
+      throw const FormatException('Release metadata fields are too large.');
+    }
     return GithubReleaseInfo(
-      tagName: json['tag_name'] as String? ?? '',
-      name: json['name'] as String? ?? '',
+      tagName: tagName,
+      name: releaseName,
       htmlUri: Uri.parse(
         json['html_url'] as String? ??
             'https://github.com/$_repositoryOwner/$_repositoryName',
@@ -491,17 +545,25 @@ class UpdateService extends ChangeNotifier {
   }
 
   GithubReleaseInfo? _selectRelease(List<GithubReleaseInfo> releases) {
-    final filtered = releases.where((release) {
-      if (release.draft) {
-        return false;
-      }
-      return switch (buildInfo.channel) {
-        UpdateChannel.nightly =>
-          release.prerelease &&
-              release.tagName.toLowerCase().contains('nightly'),
-        UpdateChannel.stable => !release.prerelease,
-      };
-    });
+    final filtered = releases
+        .where((release) {
+          if (release.draft) {
+            return false;
+          }
+          return switch (buildInfo.channel) {
+            UpdateChannel.nightly =>
+              release.prerelease &&
+                  release.tagName.toLowerCase().contains('nightly'),
+            UpdateChannel.stable => !release.prerelease,
+          };
+        })
+        .where((release) => _versionForTag(release.tagName) != null)
+        .toList();
+    filtered.sort(
+      (left, right) => _versionForTag(
+        right.tagName,
+      )!.compareTo(_versionForTag(left.tagName)!),
+    );
     return filtered.isEmpty ? null : filtered.first;
   }
 
@@ -551,16 +613,22 @@ class UpdateService extends ChangeNotifier {
     return null;
   }
 
-  bool _matchesCurrentBuild(String releaseTag) {
-    final normalizedRelease = _normalizeReleaseIdentity(releaseTag);
+  bool _isNewerThanCurrentBuild(String releaseTag) {
     final currentTag = buildInfo.buildTag;
-    if (currentTag != null && currentTag.trim().isNotEmpty) {
-      return _normalizeReleaseIdentity(currentTag) == normalizedRelease;
+    return isReleaseTagNewerThan(
+      releaseTag,
+      currentTag != null && currentTag.trim().isNotEmpty
+          ? currentTag
+          : buildInfo.version,
+    );
+  }
+
+  Version? _versionForTag(String value) {
+    try {
+      return Version.parse(_normalizeReleaseIdentity(value));
+    } catch (_) {
+      return null;
     }
-    if (buildInfo.channel == UpdateChannel.stable) {
-      return _normalizeReleaseIdentity(buildInfo.version) == normalizedRelease;
-    }
-    return false;
   }
 
   String _normalizeReleaseIdentity(String value) {
@@ -569,31 +637,51 @@ class UpdateService extends ChangeNotifier {
   }
 
   Future<dynamic> _requestJson(Uri uri) async {
-    final text = await _downloadText(uri);
+    final text = await _downloadText(uri, maxBytes: _maxMetadataBytes);
     return jsonDecode(text);
   }
 
-  Future<String> _downloadText(Uri uri) async {
-    return utf8.decode(await _downloadBytes(uri));
+  Future<String> _downloadText(Uri uri, {required int maxBytes}) async {
+    return utf8.decode(await _downloadBytes(uri, maxBytes: maxBytes));
   }
 
-  Future<List<int>> _downloadBytes(Uri uri) async {
+  Future<List<int>> _downloadBytes(
+    Uri uri, {
+    required int maxBytes,
+    Duration timeout = _metadataTimeout,
+  }) async {
+    _validateUpdateUri(uri);
     final client = _httpClientFactory();
     try {
-      final request = await client.getUrl(uri);
+      client.connectionTimeout = timeout;
+      final request = await client.getUrl(uri).timeout(timeout);
       request.headers.set(HttpHeaders.userAgentHeader, _userAgent);
       request.headers.set(
         HttpHeaders.acceptHeader,
         'application/vnd.github+json',
       );
-      final response = await request.close();
+      final response = await request.close().timeout(timeout);
       if (response.statusCode >= 400) {
         throw HttpException(
           'HTTP ${response.statusCode} while requesting $uri',
           uri: uri,
         );
       }
-      return await consolidateHttpClientResponseBytes(response);
+      if (response.contentLength > maxBytes) {
+        throw StateError('Update response exceeds the allowed size.');
+      }
+      final builder = BytesBuilder(copy: false);
+      var received = 0;
+      await (() async {
+        await for (final chunk in response.timeout(timeout)) {
+          received += chunk.length;
+          if (received > maxBytes) {
+            throw StateError('Update response exceeds the allowed size.');
+          }
+          builder.add(chunk);
+        }
+      })().timeout(timeout);
+      return builder.takeBytes();
     } finally {
       client.close(force: true);
     }
@@ -613,12 +701,27 @@ class UpdateService extends ChangeNotifier {
       release,
       _releaseManifestSignatureName,
     );
-    final manifestBytes = await _downloadBytes(manifestAsset.downloadUri);
+    if (manifestAsset.sizeBytes > _maxManifestBytes ||
+        signatureAsset.sizeBytes > _maxManifestSignatureBytes) {
+      throw StateError('Release trust metadata exceeds the allowed size.');
+    }
+    final manifestBytes = await _downloadBytes(
+      manifestAsset.downloadUri,
+      maxBytes: _maxManifestBytes,
+    );
     final signatureText = utf8.decode(
-      await _downloadBytes(signatureAsset.downloadUri),
+      await _downloadBytes(
+        signatureAsset.downloadUri,
+        maxBytes: _maxManifestSignatureBytes,
+      ),
     );
     final publicKeyBytes = _decodeBase64Flexible(publicKeyText);
     final signatureBytes = _decodeBase64Flexible(signatureText.trim());
+    if (publicKeyBytes.length != 32 || signatureBytes.length != 64) {
+      throw const FormatException(
+        'Release signing key or signature is invalid.',
+      );
+    }
     final algorithm = Ed25519();
     final verified = await algorithm.verify(
       manifestBytes,
@@ -671,37 +774,54 @@ class UpdateService extends ChangeNotifier {
     Uri uri,
     File destination, {
     required String expectedSha256Hex,
+    required int expectedSizeBytes,
   }) async {
+    _validateUpdateUri(uri);
+    if (expectedSizeBytes <= 0 || expectedSizeBytes > _maxUpdateAssetBytes) {
+      throw StateError('Update asset size is missing or exceeds the limit.');
+    }
     final client = _httpClientFactory();
+    final partial = File('${destination.path}.part');
     try {
-      final request = await client.getUrl(uri);
+      client.connectionTimeout = _metadataTimeout;
+      final request = await client.getUrl(uri).timeout(_metadataTimeout);
       request.headers.set(HttpHeaders.userAgentHeader, _userAgent);
       request.headers.set(HttpHeaders.acceptHeader, 'application/octet-stream');
-      final response = await request.close();
+      final response = await request.close().timeout(_metadataTimeout);
       if (response.statusCode >= 400) {
         throw HttpException(
           'HTTP ${response.statusCode} while downloading $uri',
           uri: uri,
         );
       }
+      if (response.contentLength > 0 &&
+          response.contentLength != expectedSizeBytes) {
+        throw StateError('Update Content-Length does not match the manifest.');
+      }
       await destination.parent.create(recursive: true);
-      final sink = destination.openWrite();
-      final contentLength = response.contentLength;
+      if (await partial.exists()) await partial.delete();
+      final sink = partial.openWrite();
       var received = 0;
       try {
-        await for (final chunk in response) {
-          sink.add(chunk);
-          received += chunk.length;
-          if (contentLength > 0) {
-            _downloadProgress = received / contentLength;
+        await (() async {
+          await for (final chunk in response.timeout(_metadataTimeout)) {
+            received += chunk.length;
+            if (received > expectedSizeBytes ||
+                received > _maxUpdateAssetBytes) {
+              throw StateError('Update download exceeded its signed size.');
+            }
+            sink.add(chunk);
+            _downloadProgress = received / expectedSizeBytes;
             notifyListeners();
           }
-        }
+        })().timeout(_assetTimeout);
       } finally {
         await sink.close();
       }
-      final digest = sha256
-          .convert(await destination.readAsBytes())
+      if (received != expectedSizeBytes) {
+        throw StateError('Update download ended before its signed size.');
+      }
+      final digest = (await sha256.bind(partial.openRead()).first)
           .toString()
           .toLowerCase();
       if (digest != expectedSha256Hex.toLowerCase()) {
@@ -709,11 +829,25 @@ class UpdateService extends ChangeNotifier {
           'SHA256 mismatch for ${destination.path}: expected $expectedSha256Hex, got $digest.',
         );
       }
+      if (await destination.exists()) await destination.delete();
+      await partial.rename(destination.path);
       _downloadProgress = 1;
       notifyListeners();
+    } catch (_) {
+      try {
+        if (await partial.exists()) await partial.delete();
+      } catch (_) {}
+      rethrow;
     } finally {
       client.close(force: true);
     }
+  }
+
+  void _validateUpdateUri(Uri uri) {
+    if (uri.scheme == 'https') return;
+    final address = InternetAddress.tryParse(uri.host);
+    if (uri.scheme == 'http' && address?.isLoopback == true) return;
+    throw StateError('Update downloads require HTTPS.');
   }
 
   Future<void> _prepareAndApplyDesktopUpdate({
@@ -729,6 +863,14 @@ class UpdateService extends ChangeNotifier {
     }
     await stagingRoot.create(recursive: true);
     final archive = ZipDecoder().decodeBytes(await archiveFile.readAsBytes());
+    var expandedBytes = 0;
+    for (final entry in archive) {
+      if (!entry.isFile) continue;
+      expandedBytes += entry.size;
+      if (entry.size < 0 || expandedBytes > 2 * _maxUpdateAssetBytes) {
+        throw StateError('Update archive expands beyond the allowed size.');
+      }
+    }
     await _extractArchive(archive, stagingRoot);
     final sourceRoot = await _resolveArchiveRoot(stagingRoot);
     final appExecutable = File(Platform.resolvedExecutable);

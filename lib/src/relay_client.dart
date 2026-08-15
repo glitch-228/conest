@@ -53,17 +53,19 @@ class _RelayCallResult {
     required this.body,
     this.announcedIdentityPublicKeyBase64,
     this.signatureVerified = false,
-    this.pinnedKeyMismatch = false,
   });
 
   final Map<String, dynamic> body;
   final String? announcedIdentityPublicKeyBase64;
   final bool signatureVerified;
-  final bool pinnedKeyMismatch;
 }
 
 class RelayClient {
   const RelayClient();
+
+  static const int _controlResponseLimit = 1024 * 1024;
+  static const int _absoluteFetchResponseLimit = 40 * 1024 * 1024;
+  static const int _httpHeaderLimit = 64 * 1024;
 
   Future<Duration> probe({
     required String host,
@@ -141,11 +143,21 @@ class RelayClient {
     );
     final rawMessages = (result.body['messages'] as List<dynamic>? ?? const [])
         .cast<dynamic>();
-    return rawMessages
-        .map(
-          (message) => RelayEnvelope.fromJson(message as Map<String, dynamic>),
-        )
-        .toList();
+    final envelopes = <RelayEnvelope>[];
+    for (final message in rawMessages) {
+      try {
+        if (message is Map<String, dynamic>) {
+          envelopes.add(RelayEnvelope.fromJson(message));
+        } else if (message is Map) {
+          envelopes.add(
+            RelayEnvelope.fromJson(Map<String, dynamic>.from(message)),
+          );
+        }
+      } catch (_) {
+        // A malformed batch item must not hide otherwise valid envelopes.
+      }
+    }
+    return envelopes;
   }
 
   Future<bool> health({
@@ -189,7 +201,7 @@ class RelayClient {
       relayInstanceId: relayId,
       identityPublicKeyBase64: result.announcedIdentityPublicKeyBase64,
       signatureVerified: result.signatureVerified,
-      pinnedKeyMismatch: result.pinnedKeyMismatch,
+      pinnedKeyMismatch: false,
     );
   }
 
@@ -207,6 +219,7 @@ class RelayClient {
     final nonceBytes = _secureRandomBytes(16);
     final nonceBase64 = base64Encode(nonceBytes);
     final action = (request['action'] as String?) ?? '';
+    final maxResponseBytes = _responseLimitFor(request);
     final signedRequest = <String, dynamic>{
       ...request,
       'nonce': nonceBase64,
@@ -223,12 +236,14 @@ class RelayClient {
         port: endpoint.port,
         timeout: timeout,
         request: signedRequest,
+        maxResponseBytes: maxResponseBytes,
       ),
       PeerRouteProtocol.udp => _sendUdpRequest(
         host: endpoint.host,
         port: endpoint.port,
         timeout: timeout,
         request: signedRequest,
+        maxResponseBytes: maxResponseBytes,
       ),
       PeerRouteProtocol.http => _sendHttpRequest(
         scheme: 'http',
@@ -236,6 +251,7 @@ class RelayClient {
         port: endpoint.port,
         timeout: timeout,
         request: signedRequest,
+        maxResponseBytes: maxResponseBytes,
       ),
       PeerRouteProtocol.https => _sendHttpRequest(
         scheme: 'https',
@@ -243,6 +259,7 @@ class RelayClient {
         port: endpoint.port,
         timeout: timeout,
         request: signedRequest,
+        maxResponseBytes: maxResponseBytes,
       ),
     };
     return _verifyResponseSignature(
@@ -284,13 +301,22 @@ class RelayClient {
     final signatureBase64 = body['signature'] as String?;
     final nonceEcho = body['nonce_echo'] as String?;
     if (signatureBase64 == null || nonceEcho == null) {
+      if (_hasExpectedPin(expectedIdentityPublicKeyBase64)) {
+        throw RelayIdentityMismatchException(
+          'Pinned relay returned an unsigned response.',
+        );
+      }
       return _RelayCallResult(
         body: body,
         announcedIdentityPublicKeyBase64: announcedKey,
       );
     }
     if (nonceEcho != nonceBase64) {
-      // Replay / mismatch — refuse to credit the signature.
+      if (_hasExpectedPin(expectedIdentityPublicKeyBase64)) {
+        throw RelayIdentityMismatchException(
+          'Pinned relay response nonce did not match the request.',
+        );
+      }
       return _RelayCallResult(
         body: body,
         announcedIdentityPublicKeyBase64: announcedKey,
@@ -319,11 +345,8 @@ class RelayClient {
       // (otherwise a malicious relay could swap keys mid-conversation).
       if (announcedKey != null &&
           announcedKey != expectedIdentityPublicKeyBase64) {
-        return _RelayCallResult(
-          body: body,
-          announcedIdentityPublicKeyBase64: announcedKey,
-          signatureVerified: true,
-          pinnedKeyMismatch: true,
+        throw RelayIdentityMismatchException(
+          'Relay announced a different identity than its pinned key.',
         );
       }
       return _RelayCallResult(
@@ -387,8 +410,13 @@ class RelayClient {
     if (signatureBase64 == null ||
         nonceEcho == null ||
         nonceEcho != nonceBase64) {
-      // Missing signature or replay/mismatch — refuse to credit the
-      // signature; the caller decides what an unsigned response is worth.
+      if (_hasExpectedPin(expectedIdentityPublicKeyBase64)) {
+        throw RelayIdentityMismatchException(
+          signatureBase64 == null || nonceEcho == null
+              ? 'Pinned relay returned an unsigned detached response.'
+              : 'Pinned relay response nonce did not match the request.',
+        );
+      }
       return _RelayCallResult(
         body: body,
         announcedIdentityPublicKeyBase64: announcedKey,
@@ -415,11 +443,8 @@ class RelayClient {
       }
       if (announcedKey != null &&
           announcedKey != expectedIdentityPublicKeyBase64) {
-        return _RelayCallResult(
-          body: body,
-          announcedIdentityPublicKeyBase64: announcedKey,
-          signatureVerified: true,
-          pinnedKeyMismatch: true,
+        throw RelayIdentityMismatchException(
+          'Relay announced a different identity than its pinned key.',
         );
       }
       return _RelayCallResult(
@@ -491,6 +516,15 @@ class RelayClient {
     return List<int>.generate(length, (_) => random.nextInt(256));
   }
 
+  bool _hasExpectedPin(String? value) => value?.trim().isNotEmpty ?? false;
+
+  int _responseLimitFor(Map<String, dynamic> request) {
+    if (request['action'] != 'fetch') return _controlResponseLimit;
+    final requested = request['limit'] is int ? request['limit'] as int : 64;
+    final limit = requested.clamp(1, 128);
+    return min(_absoluteFetchResponseLimit, 64 * 1024 + limit * 768 * 1024);
+  }
+
   _ValidatedRelayEndpoint _validateEndpoint({
     required String host,
     required int port,
@@ -508,6 +542,7 @@ class RelayClient {
     required int port,
     required Duration timeout,
     required Map<String, dynamic> request,
+    required int maxResponseBytes,
   }) async {
     // Socket.connect's `timeout:` parameter governs the TCP handshake,
     // but Dart's implementation has historically been flaky on Android +
@@ -523,12 +558,10 @@ class RelayClient {
     try {
       socket.writeln(jsonEncode(request));
       await socket.flush();
-      final line = await socket
-          .cast<List<int>>()
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .first
-          .timeout(timeout);
+      final line = await _readLineBounded(
+        socket,
+        maxResponseBytes,
+      ).timeout(timeout);
       return _decodeResponse(line);
     } finally {
       await socket.close();
@@ -540,6 +573,7 @@ class RelayClient {
     required int port,
     required Duration timeout,
     required Map<String, dynamic> request,
+    required int maxResponseBytes,
   }) async {
     final requestBytes = utf8.encode(jsonEncode(request));
     if (requestBytes.length > 60 * 1024) {
@@ -588,6 +622,9 @@ class RelayClient {
           socket.send(requestBytes, address, port);
           try {
             final datagram = await responseFuture;
+            if (datagram.data.length > maxResponseBytes) {
+              throw StateError('Relay response exceeded the allowed size.');
+            }
             return _decodeResponse(utf8.decode(datagram.data));
           } catch (error) {
             lastError = error;
@@ -621,6 +658,7 @@ class RelayClient {
     required int port,
     required Duration timeout,
     required Map<String, dynamic> request,
+    required int maxResponseBytes,
   }) async {
     // Belt-and-suspenders timeout wrap mirrors _sendTcpRequest above —
     // see the comment there for the nightly.6 25 s observation that
@@ -649,10 +687,14 @@ class RelayClient {
       socket.add(utf8.encode(requestHead));
       socket.add(requestBody);
       await socket.flush();
-      final responseBytes = await socket
-          .fold<List<int>>(<int>[], (buffer, chunk) => buffer..addAll(chunk))
-          .timeout(timeout);
-      final response = _decodeHttpResponse(responseBytes);
+      final responseBytes = await _collectBounded(
+        socket,
+        maxResponseBytes + _httpHeaderLimit,
+      ).timeout(timeout);
+      final response = _decodeHttpResponse(
+        responseBytes,
+        maxBodyBytes: maxResponseBytes,
+      );
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw StateError(
           'HTTP relay returned ${response.statusCode}: ${_shortBody(response.body)}',
@@ -671,10 +713,16 @@ class RelayClient {
     return '$escapedHost:$port';
   }
 
-  _HttpRelayResponse _decodeHttpResponse(List<int> bytes) {
+  _HttpRelayResponse _decodeHttpResponse(
+    List<int> bytes, {
+    required int maxBodyBytes,
+  }) {
     final headerEnd = _httpHeaderEnd(bytes);
     if (headerEnd == null) {
       throw const FormatException('HTTP relay response has no headers.');
+    }
+    if (headerEnd.headerBytes > _httpHeaderLimit) {
+      throw const FormatException('HTTP relay response headers are too large.');
     }
     final headerText = latin1.decode(
       bytes.take(headerEnd.headerBytes).toList(),
@@ -685,7 +733,20 @@ class RelayClient {
     final statusCode = statusParts.length >= 2
         ? int.tryParse(statusParts[1]) ?? 0
         : 0;
-    final body = utf8.decode(bytes.sublist(headerEnd.totalHeaderBytes));
+    final bodyBytes = bytes.sublist(headerEnd.totalHeaderBytes);
+    if (bodyBytes.length > maxBodyBytes) {
+      throw StateError('Relay response exceeded the allowed size.');
+    }
+    final contentLengthMatch = RegExp(
+      r'(?:^|\r?\n)content-length:\s*(\d+)',
+      caseSensitive: false,
+    ).firstMatch(headerText);
+    final declaredLength = int.tryParse(contentLengthMatch?.group(1) ?? '');
+    if (declaredLength != null &&
+        (declaredLength > maxBodyBytes || declaredLength != bodyBytes.length)) {
+      throw const FormatException('Invalid HTTP relay Content-Length.');
+    }
+    final body = utf8.decode(bodyBytes);
     return _HttpRelayResponse(statusCode: statusCode, body: body);
   }
 
@@ -732,6 +793,41 @@ class RelayClient {
       throw StateError(response['error'] as String? ?? 'Relay request failed.');
     }
     return response;
+  }
+
+  Future<String> _readLineBounded(
+    Stream<List<int>> stream,
+    int maxBytes,
+  ) async {
+    final bytes = <int>[];
+    await for (final chunk in stream) {
+      for (final byte in chunk) {
+        if (byte == 10) {
+          if (bytes.isNotEmpty && bytes.last == 13) bytes.removeLast();
+          return utf8.decode(bytes);
+        }
+        bytes.add(byte);
+        if (bytes.length > maxBytes) {
+          throw StateError('Relay response exceeded the allowed size.');
+        }
+      }
+    }
+    if (bytes.isEmpty) throw StateError('Relay closed without a response.');
+    return utf8.decode(bytes);
+  }
+
+  Future<List<int>> _collectBounded(
+    Stream<List<int>> stream,
+    int maxBytes,
+  ) async {
+    final bytes = <int>[];
+    await for (final chunk in stream) {
+      if (bytes.length + chunk.length > maxBytes) {
+        throw StateError('Relay response exceeded the allowed size.');
+      }
+      bytes.addAll(chunk);
+    }
+    return bytes;
   }
 }
 

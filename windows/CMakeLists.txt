@@ -70,6 +70,23 @@ add_custom_target(conest_updater ALL
 )
 add_dependencies(${BINARY_NAME} conest_updater)
 
+set(CONEST_NATIVE_MANIFEST
+  "${CMAKE_CURRENT_SOURCE_DIR}/../native/conest_native/Cargo.toml")
+set(CONEST_NATIVE_TARGET_DIR
+  "${CMAKE_CURRENT_BINARY_DIR}/conest_native_target")
+set(CONEST_NATIVE_LIBRARY
+  "${CONEST_NATIVE_TARGET_DIR}/release/conest_native.dll")
+add_custom_target(conest_native ALL
+  COMMAND "${CARGO_EXECUTABLE}" build
+          --manifest-path "${CONEST_NATIVE_MANIFEST}"
+          --target-dir "${CONEST_NATIVE_TARGET_DIR}"
+          --release
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+  BYPRODUCTS "${CONEST_NATIVE_LIBRARY}"
+  VERBATIM
+)
+add_dependencies(${BINARY_NAME} conest_native)
+
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
@@ -100,6 +117,9 @@ install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 
 install(PROGRAMS "${CONEST_UPDATER_BINARY}" DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+
+install(FILES "${CONEST_NATIVE_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 
 if(PLUGIN_BUNDLED_LIBRARIES)
