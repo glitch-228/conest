@@ -18,7 +18,11 @@ import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/platform_bridge.dart';
 import 'package:conest/src/relay_client.dart'
-    show RelayClient, RelayHealthInfo, RelayIdentityMismatchException;
+    show
+        RelayClient,
+        RelayFetchBatch,
+        RelayHealthInfo,
+        RelayIdentityMismatchException;
 import 'package:conest/src/relay_defaults.dart';
 import 'package:conest/src/storage.dart';
 import 'package:conest/src/storage_capacity.dart';
@@ -248,6 +252,41 @@ class _FakeRelayClient extends RelayClient {
   final List<RelayEnvelope> storedEnvelopes = <RelayEnvelope>[];
   final Map<String, List<RelayEnvelope>> _queues =
       <String, List<RelayEnvelope>>{};
+
+  @override
+  Future<RelayFetchBatch> fetchLeasedEnvelopes({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    int limit = 64,
+    Duration timeout = const Duration(seconds: 4),
+    Duration waitFor = Duration.zero,
+    Duration leaseFor = const Duration(seconds: 60),
+    String? expectedIdentityPublicKeyBase64,
+  }) async => RelayFetchBatch(
+    envelopes: await fetchEnvelopes(
+      host: host,
+      port: port,
+      protocol: protocol,
+      recipientDeviceId: recipientDeviceId,
+      limit: limit,
+      timeout: timeout,
+      waitFor: waitFor,
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    ),
+  );
+
+  @override
+  Future<void> acknowledgeLease({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    required String leaseId,
+    Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
+  }) async {}
 
   // ---- nightly.9 aggressive simulator knobs ----
   //
@@ -512,6 +551,53 @@ class _FakeRelayClient extends RelayClient {
   }
 }
 
+class _BlockingFetchRelayClient extends _FakeRelayClient {
+  Completer<void>? _fetchEntered;
+  Completer<void>? _releaseFetch;
+
+  Future<void> blockNextFetch() {
+    _fetchEntered = Completer<void>();
+    _releaseFetch = Completer<void>();
+    return _fetchEntered!.future;
+  }
+
+  void releaseBlockedFetch() {
+    final release = _releaseFetch;
+    if (release != null && !release.isCompleted) release.complete();
+  }
+
+  @override
+  Future<List<RelayEnvelope>> fetchEnvelopes({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    int limit = 64,
+    Duration timeout = const Duration(seconds: 4),
+    Duration waitFor = Duration.zero,
+    String? expectedIdentityPublicKeyBase64,
+  }) async {
+    final entered = _fetchEntered;
+    final release = _releaseFetch;
+    if (entered != null && release != null && !entered.isCompleted) {
+      entered.complete();
+      await release.future;
+      _fetchEntered = null;
+      _releaseFetch = null;
+    }
+    return super.fetchEnvelopes(
+      host: host,
+      port: port,
+      protocol: protocol,
+      recipientDeviceId: recipientDeviceId,
+      limit: limit,
+      timeout: timeout,
+      waitFor: waitFor,
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    );
+  }
+}
+
 ConestBuildInfo _createBuildInfo() {
   return ConestBuildInfo(
     appName: 'Conest',
@@ -539,6 +625,41 @@ class _HostScopedFakeRelayClient extends RelayClient {
 
   String _key(String host, int port, PeerRouteProtocol protocol) =>
       '${protocol.name}://$host:$port';
+
+  @override
+  Future<RelayFetchBatch> fetchLeasedEnvelopes({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    int limit = 64,
+    Duration timeout = const Duration(seconds: 4),
+    Duration waitFor = Duration.zero,
+    Duration leaseFor = const Duration(seconds: 60),
+    String? expectedIdentityPublicKeyBase64,
+  }) async => RelayFetchBatch(
+    envelopes: await fetchEnvelopes(
+      host: host,
+      port: port,
+      protocol: protocol,
+      recipientDeviceId: recipientDeviceId,
+      limit: limit,
+      timeout: timeout,
+      waitFor: waitFor,
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    ),
+  );
+
+  @override
+  Future<void> acknowledgeLease({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    required String leaseId,
+    Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
+  }) async {}
 
   @override
   Future<bool> storeEnvelope({
@@ -2715,7 +2836,14 @@ void main() {
       relayClient.storeAttempts.clear();
       await controller.sendMessage(contact: contact, body: 'same relay alias');
 
-      expect(relayClient.storeAttempts, contains('192.168.3.9:7667'));
+      expect(
+        relayClient.storeAttempts,
+        contains('192.168.3.9:7667'),
+        reason:
+            'status=${controller.statusMessage}; '
+            'debug=${controller.recentDebugLog.join(" || ")}; '
+            'snapshot=${controller.buildDebugSnapshotText()}',
+      );
       expect(
         controller.messagesFor(contact.deviceId).single.state,
         DeliveryState.relayed,
@@ -4382,6 +4510,34 @@ void main() {
     },
   );
 
+  test('overlapping pollNow callers await the active mailbox pass', () async {
+    final relayClient = _BlockingFetchRelayClient();
+    final controller = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+      internetRelayHost: null,
+    );
+    addTearDown(controller.dispose);
+
+    final entered = relayClient.blockNextFetch();
+    final firstPoll = controller.pollNow();
+    await entered.timeout(const Duration(seconds: 2));
+    var secondCompleted = false;
+    final secondPoll = controller.pollNow().then((_) {
+      secondCompleted = true;
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      secondCompleted,
+      isFalse,
+      reason: 'a refresh must not report completion while mailbox work runs',
+    );
+    relayClient.releaseBlockedFetch();
+    await Future.wait([firstPoll, secondPoll]);
+    expect(secondCompleted, isTrue);
+  });
+
   test(
     'pairing session activates for invite actions and expires after two minutes',
     () async {
@@ -5183,7 +5339,7 @@ void main() {
     await _pairControllers(alice, bob);
     final aliceContactForBob = alice.contacts.single;
 
-    // 192KB payload spans multiple 64KB chunks (3 chunks).
+    // 192 KiB payload spans two protocol-v2 128 KiB blocks.
     final original = Uint8List.fromList(
       List<int>.generate(192 * 1024, (index) => index & 0xff),
     );
@@ -5209,7 +5365,14 @@ void main() {
     expect(received.attachment!.fileName, 'sample.bin');
     expect(received.attachment!.sizeBytes, original.length);
     expect(received.body, 'here you go');
-    expect(received.state, DeliveryState.delivered);
+    expect(
+      received.state,
+      DeliveryState.delivered,
+      reason:
+          'inbound=${bob.inboundTransferDebugForTesting(received.attachment!.id)}; '
+          'bob=${bob.recentDebugLog.join(" || ")}; '
+          'alice=${alice.recentDebugLog.join(" || ")}',
+    );
 
     final assembled = bob.attachmentBytesFor(received.attachment!.id);
     expect(assembled, isNotNull);
@@ -5460,7 +5623,7 @@ void main() {
     expect(calls, 1);
   });
 
-  test('sendAttachment round-trips a 1 MB file with 32 KB chunks', () async {
+  test('sendAttachment round-trips a 1 MB file with 128 KiB blocks', () async {
     final relayClient = _FakeRelayClient();
     final alice = await _createController(
       relayClient: relayClient,
@@ -5476,8 +5639,8 @@ void main() {
     await _pairControllers(alice, bob);
     final aliceContactForBob = alice.contacts.single;
 
-    // 1 MB at 32 KB chunks = 32 chunks, exercising the post-Phase-3
-    // chunk size + zero-copy slice path without overlong test time.
+    // One MiB spans eight protocol-v2 blocks and exercises the pipelined
+    // request window without overlong test time.
     final original = Uint8List.fromList(
       List<int>.generate(1024 * 1024, (index) => index & 0xff),
     );
@@ -5502,6 +5665,10 @@ void main() {
                 .messagesFor(aliceContactForBob.deviceId)
                 .firstWhere((m) => m.hasAttachment),
           );
+      if (!received.outbound &&
+          bob.attachmentAwaitingAcceptance(received.attachment!.id)) {
+        await bob.acceptIncomingAttachment(received.attachment!.id);
+      }
       if (received.state == DeliveryState.delivered &&
           bob.attachmentBytesFor(received.attachment!.id) != null) {
         break;
@@ -5513,7 +5680,14 @@ void main() {
         .messagesFor(bobContactForAlice.deviceId)
         .firstWhere((message) => message.hasAttachment);
     expect(received.attachment!.sizeBytes, original.length);
-    expect(received.state, DeliveryState.delivered);
+    expect(
+      received.state,
+      DeliveryState.delivered,
+      reason:
+          'inbound=${bob.inboundTransferDebugForTesting(received.attachment!.id)}; '
+          'bob=${bob.recentDebugLog.join(" || ")}; '
+          'alice=${alice.recentDebugLog.join(" || ")}',
+    );
     final assembled = bob.attachmentBytesFor(received.attachment!.id);
     expect(assembled, equals(original));
   });
@@ -5909,7 +6083,7 @@ void main() {
   group('multi-file batch send', () {
     test('maxAttachmentsPerSend exposes the cap', () {
       expect(MessengerController.maxAttachmentsPerSend, 30);
-      expect(MessengerController.maxAttachmentsPerAlbum, 6);
+      expect(MessengerController.maxAttachmentsPerAlbum, 10);
     });
 
     test('three sendAttachment calls produce three distinct outbound '
@@ -6771,20 +6945,24 @@ void main() {
         );
 
         ChatMessage? received;
-        for (var step = 0; step < 240; step++) {
+        for (var step = 0; step < 1200; step++) {
           await bob.pollNow();
           await alice.pollNow();
           received = bob
               .messagesFor(alice.identity!.deviceId)
               .where((message) => message.attachment?.fileName == 'large.bin')
               .firstOrNull;
+          if (received != null &&
+              bob.attachmentAwaitingAcceptance(received.attachment!.id)) {
+            await bob.acceptIncomingAttachment(received.attachment!.id);
+          }
           if (received?.state == DeliveryState.delivered) break;
           await Future<void>.delayed(const Duration(milliseconds: 20));
         }
 
         expect(received, isNotNull);
         expect(received!.state, DeliveryState.delivered);
-        expect(received.attachment!.chunkSize, 512 * 1024);
+        expect(received.attachment!.chunkSize, 128 * 1024);
         expect(bob.attachmentBytesFor(received.attachment!.id), isNull);
         expect(bob.attachmentAvailableLocally(received.attachment!.id), isTrue);
         final cachePath = await bob.attachmentCachePathFor(
@@ -6880,6 +7058,14 @@ void main() {
         for (var step = 0; step < 120; step++) {
           await bob.pollNow();
           await alice.pollNow();
+          final received = bob
+              .messagesFor(alice.identity!.deviceId)
+              .where((message) => message.attachment?.fileName == 'resume.bin')
+              .firstOrNull;
+          if (received != null &&
+              bob.attachmentAwaitingAcceptance(received.attachment!.id)) {
+            await bob.acceptIncomingAttachment(received.attachment!.id);
+          }
           if (bobChannel.acceptedEnvelopes >= 4) break;
           await Future<void>.delayed(const Duration(milliseconds: 20));
         }
@@ -6931,7 +7117,7 @@ void main() {
         bob.onConnectivityChanged(interfaceLabel: 'restart');
 
         ChatMessage? received;
-        for (var step = 0; step < 300; step++) {
+        for (var step = 0; step < 1200; step++) {
           await alice.pollNow();
           await bob.pollNow();
           received = bob
@@ -6943,7 +7129,18 @@ void main() {
         }
 
         expect(received, isNotNull);
-        expect(received!.state, DeliveryState.delivered);
+        expect(
+          received!.state,
+          DeliveryState.delivered,
+          reason:
+              'resumedBobAccepted=${resumedBobChannel.acceptedEnvelopes}; '
+              'resumedAliceAccepted=${resumedAliceChannel.acceptedEnvelopes}; '
+              'inbound=${bob.inboundTransferDebugForTesting(received.attachment!.id)}; '
+              'bob=${bob.transferSnapshots.map((s) => '${s.phase.name}:${s.bytesTransferred}/${s.totalBytes}:${s.error}').join(',')}; '
+              'alice=${alice.transferSnapshots.map((s) => '${s.phase.name}:${s.bytesTransferred}/${s.totalBytes}:${s.error}').join(',')}; '
+              'bobLog=${bob.recentDebugLog.reversed.take(8).join(' | ')}; '
+              'aliceLog=${alice.recentDebugLog.reversed.take(8).join(' | ')}',
+        );
         final cachePath = await bob.attachmentCachePathFor(
           received.attachment!.id,
         );

@@ -36,6 +36,18 @@ Conest is a phased secure messenger and transfer app. The repository contains:
 - Persistent, verified attachment ranges, pause/cancel, restart recovery, and a
   30 MiB default store-forward relay cap. Larger files require LAN or direct
   Iroh and pause instead of silently consuming relay capacity.
+- Attachment protocol v2 manifests, 128 KiB authenticated blocks, exact
+  durable-byte progress, resumable private partial files, foreground Android
+  transfer controls, and a content-addressed managed cache. The protocol and
+  storage guards accept 1:1 attachments up to 2 GiB.
+- Preparing/queued/waiting/reconnecting/verifying transfer bubbles, a global
+  Transfers screen, batch/album staging and reordering, media/file presentation
+  modes, priority controls, retry, keep-offline, save, and cache eviction.
+- SQLite-WAL relay mailboxes with deduplication, TTL/quota enforcement, and
+  lease/ack fetching so unacknowledged deliveries survive relay restarts.
+- A Linux/Windows relay supervisor with signed channel-aware updates,
+  maintenance-window application, identity/database continuity checks, and
+  automatic rollback after a failed health gate.
 - Conest Beam v1 systematic LT fountain frames with CRC32C, a signed manifest,
   final SHA-256 verification, a 64 MiB limit, and explicit acceptance for
   public/untrusted imports.
@@ -63,6 +75,13 @@ Conest is a phased secure messenger and transfer app. The repository contains:
 - Forced-Iroh-relay/offline integration qualification and native cancellation
   of an already-open QUIC stream; controller cancellation already stops later
   verified ranges from being issued.
+- Moving the remaining Dart attachment orchestration onto the native Rust
+  transfer primitives and replacing the current LAN block envelopes with a
+  fully binary long-lived session.
+- Platform media transcoding/EXIF stripping, verified-range streaming proxy
+  playback, and seek-driven range prioritization.
+- Repeated physical 2 GiB/device certification on Android, Linux, and Windows;
+  the automated boundary tests do not substitute for that release gate.
 
 ## Run The Relay
 
@@ -115,6 +134,33 @@ Useful environment variables mirror the CLI flags: `CONEST_RELAY_BIND`, `CONEST_
 
 Use a stable `--relay-id` or `CONEST_RELAY_ID` on public relays. Clients use that id to recognize that a LAN IP and a public domain are different endpoints for the same relay, then keep both routes while preferring the fastest available endpoint.
 
+For durable storage, provide stable paths outside the versioned binary bundle:
+
+```bash
+./target/release/conest_relay 0.0.0.0:7667 \
+  --identity-seed-path /var/lib/conest-relay/relay-identity.seed \
+  --database-path /var/lib/conest-relay/relay.sqlite3
+```
+
+The optional supervisor installs a system service and preserves those paths
+while updating only the relay binary. The manifest URL must point directly to
+the signed `RELEASE-MANIFEST.json`; its signature must be available beside it.
+
+```bash
+cargo build --release -p conest_relay_supervisor
+sudo ./target/release/conest_relay_supervisor install \
+  --data-dir /var/lib/conest-relay \
+  --bundle-dir /opt/conest-relay \
+  --bind 0.0.0.0:7667 \
+  --channel nightly \
+  --manifest-url https://example.invalid/nightly/RELEASE-MANIFEST.json \
+  --release-public-key '<base64-ed25519-public-key>'
+```
+
+The same executable supports `uninstall`, `start`, `stop`, `status`,
+`update-now`, `rollback`, and `serve`. Install the matching `conest_relay`
+binary in the bundle directory before starting the service.
+
 ## Run The App
 
 ```bash
@@ -135,6 +181,8 @@ On first launch:
 - `native/conest_native`: persistent Iroh endpoint, stable C ABI / FRB API, and
   Linux/Windows Beam camera decoder.
 - `native/conest_updater`: desktop helper that swaps a staged update bundle into the running app's install directory and relaunches the app.
+- `native/conest_relay_supervisor`: Linux/Windows service wrapper for durable,
+  signed relay updates and health-gated rollback.
 
 Linux and Windows CMake builds compile and bundle `conest_native`. Android's
 Gradle build invokes `cargo ndk` and packages the generated JNI libraries.
@@ -175,17 +223,24 @@ CONEST_RELEASE_MANIFEST_PRIVATE_KEY=<base64-32-byte-seed> \
   dart run tool/release_manifest.dart v0.2.0-nightly.20260425.1
 ```
 
-Minimal manifest shape:
+Minimal rollout-compatible signed manifest shape (v1 discriminator with
+additive relay metadata):
 
 ```json
 {
   "version": 1,
   "tagName": "v0.2.0-nightly.20260425.1",
+  "releaseVersion": "0.2.0-nightly.20260425.1",
+  "channel": "nightly",
+  "minimumSupervisorVersion": "0.1.0",
   "assets": [
     {
       "name": "conest-linux-x64-v0.2.0-nightly.20260425.1.zip",
       "sha256": "64 lowercase hex characters",
-      "sizeBytes": 123
+      "sizeBytes": 123,
+      "role": "app",
+      "platform": "linux",
+      "architecture": "x86_64"
     }
   ]
 }

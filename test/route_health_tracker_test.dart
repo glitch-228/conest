@@ -67,6 +67,16 @@ void main() {
       expect(tracker.hasRecentRouteSuccess(lanRoute), isTrue);
     });
 
+    test('recordFailure preserves a verified relay instance binding', () {
+      tracker.recordSuccess(relayRoute, relayInstanceId: 'relay-instance-1');
+
+      tracker.recordFailure(relayRoute, error: 'temporarily unavailable');
+
+      final health = tracker.healthFor(relayRoute);
+      expect(health?.available, isFalse);
+      expect(health?.relayInstanceId, 'relay-instance-1');
+    });
+
     test('health cache expires after the kind-specific TTL', () {
       tracker.recordSuccess(lanRoute);
       // LAN cache TTL = 15s.

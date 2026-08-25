@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'models.dart' show AttachmentPresentation;
+
 /// nightly.10 central staging model: every input pipeline (media picker,
 /// drag-and-drop, clipboard paste, Ctrl+V) builds these and hands them to
 /// `MessengerController.stageAttachments`. The composer renders the
@@ -24,6 +26,7 @@ class StagedAttachment {
     String? filePath,
     this.poster,
     this.caption = '',
+    this.presentation = AttachmentPresentation.media,
   }) : _bytes = bytes,
        _filePath = filePath {
     if (sizeBytes <= 0 || (bytes == null && filePath == null)) {
@@ -50,6 +53,7 @@ class StagedAttachment {
   final String? _filePath;
   final Uint8List? poster;
   final String caption;
+  final AttachmentPresentation presentation;
 
   /// True when the bytes are already resident (picker, clipboard paste).
   /// False when only the file path is known (drag-drop, file picker).
@@ -77,7 +81,10 @@ class StagedAttachment {
 
   /// Returns a copy with [caption] replaced. Bytes / file path / poster
   /// are shared (not copied) — cheap.
-  StagedAttachment copyWith({String? caption}) {
+  StagedAttachment copyWith({
+    String? caption,
+    AttachmentPresentation? presentation,
+  }) {
     return StagedAttachment(
       id: id,
       fileName: fileName,
@@ -87,6 +94,7 @@ class StagedAttachment {
       filePath: _filePath,
       poster: poster,
       caption: caption ?? this.caption,
+      presentation: presentation ?? this.presentation,
     );
   }
 }

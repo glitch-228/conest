@@ -54,6 +54,7 @@ abstract interface class NativeIrohBridge {
   Future<IrohBridgeReceipt> sendEnvelope({
     required String remoteEndpointId,
     required Uint8List bytes,
+    required bool allowRelay,
   });
   Stream<IrohBridgeInbound> get inbound;
   Future<void> close();
@@ -184,6 +185,7 @@ class IrohTransportAdapter implements TransportAdapter {
     final result = await _bridge.sendEnvelope(
       remoteEndpointId: endpoint,
       bytes: envelope.bytes,
+      allowRelay: peer.allowRelay,
     );
     if (result.endpointId != endpoint) {
       throw StateError('Iroh peer identity changed during delivery.');

@@ -55,6 +55,15 @@ Future<void> main(List<String> args) async {
   }
 
   final tagName = positional.first;
+  final normalizedTag = tagName.toLowerCase();
+  final channel =
+      normalizedTag.contains('nightly') ||
+          normalizedTag.contains('beta') ||
+          normalizedTag.contains('alpha') ||
+          normalizedTag.contains('dev') ||
+          normalizedTag.contains('rc')
+      ? 'nightly'
+      : 'stable';
   final distDir = Directory(distPath);
   if (!await distDir.exists()) {
     stderr.writeln('${distDir.path} does not exist.');
@@ -108,8 +117,16 @@ Future<void> main(List<String> args) async {
   }
 
   final manifest = <String, dynamic>{
+    // Keep the v1 wire discriminator for the first additive-schema rollout.
+    // Existing updaters ignore the new signed fields; current ones require and
+    // validate them. A future release can cut over to the v2 discriminator.
     'version': 1,
     'tagName': tagName,
+    'releaseVersion': tagName.startsWith('v') ? tagName.substring(1) : tagName,
+    'channel': channel,
+    'minimumSupervisorVersion':
+        Platform.environment['CONEST_MINIMUM_SUPERVISOR_VERSION']?.trim() ??
+        '0.1.0',
     'releaseNotes': ?releaseNotesText,
     'assets': [
       for (final file in assetFiles)
@@ -117,6 +134,7 @@ Future<void> main(List<String> args) async {
           'name': file.uri.pathSegments.last,
           'sha256': sha256.convert(await file.readAsBytes()).toString(),
           'sizeBytes': await file.length(),
+          ..._assetTarget(file.uri.pathSegments.last),
         },
     ],
   };
@@ -142,6 +160,31 @@ Future<void> main(List<String> args) async {
   stdout.writeln(
     'CONEST_RELEASE_MANIFEST_PUBLIC_KEY=${base64Encode(publicKey.bytes)}',
   );
+}
+
+Map<String, String> _assetTarget(String name) {
+  final lower = name.toLowerCase();
+  final role =
+      lower.contains('relay-supervisor') || lower.contains('relay_supervisor')
+      ? 'relay-supervisor'
+      : lower.contains('conest-relay') || lower.contains('conest_relay')
+      ? 'relay'
+      : lower.contains('updater')
+      ? 'app-updater'
+      : 'app';
+  final platform = lower.contains('windows') || lower.endsWith('.exe')
+      ? 'windows'
+      : lower.contains('android') || lower.endsWith('.apk')
+      ? 'android'
+      : lower.contains('linux')
+      ? 'linux'
+      : 'any';
+  final architecture = lower.contains('arm64') || lower.contains('aarch64')
+      ? 'arm64'
+      : lower.contains('x64') || lower.contains('x86_64')
+      ? 'x86_64'
+      : 'any';
+  return {'role': role, 'platform': platform, 'architecture': architecture};
 }
 
 bool _isReleaseMetadata(String name) {

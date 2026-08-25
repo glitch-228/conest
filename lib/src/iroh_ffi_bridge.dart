@@ -15,9 +15,15 @@ typedef _StartDart = int Function(Pointer<Uint8>, int, bool, Pointer<Utf8>);
 typedef _StatusNative = Pointer<Utf8> Function(Uint64);
 typedef _StatusDart = Pointer<Utf8> Function(int);
 typedef _SendNative =
-    Pointer<Utf8> Function(Uint64, Pointer<Utf8>, Pointer<Uint8>, UintPtr);
+    Pointer<Utf8> Function(
+      Uint64,
+      Pointer<Utf8>,
+      Pointer<Uint8>,
+      UintPtr,
+      Bool,
+    );
 typedef _SendDart =
-    Pointer<Utf8> Function(int, Pointer<Utf8>, Pointer<Uint8>, int);
+    Pointer<Utf8> Function(int, Pointer<Utf8>, Pointer<Uint8>, int, bool);
 typedef _NextNative = Pointer<Utf8> Function(Uint64);
 typedef _NextDart = Pointer<Utf8> Function(int);
 typedef _CloseNative = Void Function(Uint64);
@@ -35,7 +41,9 @@ class _NativeIrohBindings {
       status = library.lookupFunction<_StatusNative, _StatusDart>(
         'conest_iroh_status',
       ),
-      send = library.lookupFunction<_SendNative, _SendDart>('conest_iroh_send'),
+      send = library.lookupFunction<_SendNative, _SendDart>(
+        'conest_iroh_send_v2',
+      ),
       next = library.lookupFunction<_NextNative, _NextDart>('conest_iroh_next'),
       close = library.lookupFunction<_CloseNative, _CloseDart>(
         'conest_iroh_close',
@@ -128,11 +136,18 @@ class FfiNativeIrohBridge implements NativeIrohBridge {
   Future<IrohBridgeReceipt> sendEnvelope({
     required String remoteEndpointId,
     required Uint8List bytes,
+    required bool allowRelay,
   }) async {
     final handle = _handle;
     if (handle == null) throw StateError('Iroh bridge is not running.');
     final value = await Isolate.run(
-      () => _sendNative(_libraryPath, handle, remoteEndpointId, bytes),
+      () => _sendNative(
+        _libraryPath,
+        handle,
+        remoteEndpointId,
+        bytes,
+        allowRelay,
+      ),
     );
     return IrohBridgeReceipt(
       endpointId: value['endpoint_id'] as String,
@@ -223,6 +238,7 @@ Map<String, dynamic> _sendNative(
   int handle,
   String endpoint,
   Uint8List bytes,
+  bool allowRelay,
 ) {
   final bindings = _NativeIrohBindings(DynamicLibrary.open(libraryPath));
   final endpointPointer = endpoint.toNativeUtf8();
@@ -231,7 +247,13 @@ Map<String, dynamic> _sendNative(
     bytesPointer.asTypedList(bytes.length).setAll(0, bytes);
     return _decodeObject(
       bindings.takeString(
-        bindings.send(handle, endpointPointer, bytesPointer, bytes.length),
+        bindings.send(
+          handle,
+          endpointPointer,
+          bytesPointer,
+          bytes.length,
+          allowRelay,
+        ),
       ),
     );
   } finally {

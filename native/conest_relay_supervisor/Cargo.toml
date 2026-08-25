@@ -1,0 +1,19 @@
+[package]
+name = "conest_relay_supervisor"
+version = "0.1.0"
+edition = "2024"
+description = "Cross-platform Conest relay service and signed-update supervisor."
+license = "MPL-2.0"
+repository = "https://github.com/glitch-228/conest"
+readme = "../../README.md"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"

@@ -73,9 +73,13 @@ jobs:
         with:
           key: relay-${{ matrix.target.label }}
       - name: Build relay
+        env:
+          CONEST_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
         run: cargo build --release -p conest_relay --target ${{ matrix.target.triple }} --locked
       - name: Build updater
         run: cargo build --release -p conest_updater --target ${{ matrix.target.triple }} --locked
+      - name: Build relay supervisor
+        run: cargo build --release -p conest_relay_supervisor --target ${{ matrix.target.triple }} --locked
       - name: Stage binaries
         shell: bash
         run: |
@@ -84,15 +88,18 @@ jobs:
           ext="${{ matrix.target.ext }}"
           relay_src="target/${{ matrix.target.triple }}/release/conest_relay${ext}"
           updater_src="target/${{ matrix.target.triple }}/release/conest_updater${ext}"
+          supervisor_src="target/${{ matrix.target.triple }}/release/conest_relay_supervisor${ext}"
           tag="${{ needs.prepare.outputs.tag }}"
           cp "$relay_src" "artifacts/conest_relay-${{ matrix.target.label }}-${tag}${ext}"
           cp "$updater_src" "artifacts/conest_updater-${{ matrix.target.label }}-${tag}${ext}"
+          cp "$supervisor_src" "artifacts/conest_relay_supervisor-${{ matrix.target.label }}-${tag}${ext}"
       - uses: actions/upload-artifact@v4
         with:
           name: relay-${{ matrix.target.label }}
           path: |
             artifacts/conest_relay-*
             artifacts/conest_updater-*
+            artifacts/conest_relay_supervisor-*
           if-no-files-found: error
           retention-days: 7
 
@@ -337,6 +344,8 @@ jobs:
           find downloads/relay-windows-x64 -name "conest_relay-windows-x64-*" -exec cp -v {} dist/ \;
           find downloads/relay-linux-x64 -name "conest_updater-linux-x64-*" -exec cp -v {} dist/ \;
           find downloads/relay-windows-x64 -name "conest_updater-windows-x64-*" -exec cp -v {} dist/ \;
+          find downloads/relay-linux-x64 -name "conest_relay_supervisor-linux-x64-*" -exec cp -v {} dist/ \;
+          find downloads/relay-windows-x64 -name "conest_relay_supervisor-windows-x64-*" -exec cp -v {} dist/ \;
           ls -la dist/
       - name: Generate signed release manifest
         env:
@@ -352,6 +361,9 @@ jobs:
           if [ "${{ needs.prepare.outputs.channel }}" = "stable" ] && [ -f RELEASE_NOTES.md ]; then
             notes_args+=(--release-notes RELEASE_NOTES.md)
             echo "Embedding RELEASE_NOTES.md into the signed manifest."
+          elif [ "${{ needs.prepare.outputs.channel }}" = "nightly" ] && [ -f NIGHTLY_RELEASE_NOTES.md ]; then
+            notes_args+=(--release-notes NIGHTLY_RELEASE_NOTES.md)
+            echo "Embedding NIGHTLY_RELEASE_NOTES.md into the signed manifest."
           fi
           dart run tool/release_manifest.dart \
             --dist dist \
@@ -383,6 +395,15 @@ jobs:
             echo
             if [ "$channel" = "stable" ] && [ -f RELEASE_NOTES.md ]; then
               cat RELEASE_NOTES.md
+            elif [ "$channel" = "nightly" ] && [ -f NIGHTLY_RELEASE_NOTES.md ]; then
+              cat NIGHTLY_RELEASE_NOTES.md
+              echo
+              prev_tag="$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)"
+              if [ -n "$prev_tag" ]; then
+                echo "Changes since \`$prev_tag\`:"
+                echo
+                git log --no-merges --format='- %s' "$prev_tag..$tag"
+              fi
             else
               prev_tag="$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)"
               if [ -n "$prev_tag" ]; then
@@ -415,6 +436,8 @@ jobs:
             dist/conest_relay-windows-x64-*
             dist/conest_updater-linux-x64-*
             dist/conest_updater-windows-x64-*
+            dist/conest_relay_supervisor-linux-x64-*
+            dist/conest_relay_supervisor-windows-x64-*
             dist/RELEASE-MANIFEST.json
             dist/RELEASE-MANIFEST.ed25519.sig
             dist/SHA256SUMS.txt

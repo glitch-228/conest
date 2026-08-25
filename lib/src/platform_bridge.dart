@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -5,9 +6,30 @@ import 'package:flutter/services.dart';
 
 class PlatformBridge {
   PlatformBridge({MethodChannel? channel})
-    : _channel = channel ?? const MethodChannel('dev.conest.conest/system');
+    : _channel = channel ?? const MethodChannel('dev.conest.conest/system') {
+    // Some pure-Dart unit tests construct PlatformBridge without a Flutter
+    // binding. Production bootstrap initializes the binding first; in a
+    // binding-less process there cannot be native callbacks, so skipping the
+    // handler is both safe and avoids MethodChannel's messenger assertion.
+    try {
+      _channel.setMethodCallHandler((call) async {
+        if (call.method == 'transferControl') {
+          final action = call.arguments is Map
+              ? (call.arguments as Map)['action'] as String?
+              : null;
+          if (action != null) _transferControls.add(action);
+        }
+      });
+    } on AssertionError {
+      // No BinaryMessenger is active.
+    }
+  }
 
   final MethodChannel _channel;
+  final StreamController<String> _transferControls =
+      StreamController<String>.broadcast();
+
+  Stream<String> get transferControlEvents => _transferControls.stream;
 
   bool get _supportsAndroidSystemCalls => !kIsWeb && Platform.isAndroid;
 
@@ -19,6 +41,34 @@ class PlatformBridge {
       await _channel.invokeMethod<void>('setBackgroundRuntimeEnabled', {
         'enabled': enabled,
       });
+    } on MissingPluginException {
+      return;
+    }
+  }
+
+  Future<void> updateTransferForeground({
+    required String title,
+    required int transferredBytes,
+    required int totalBytes,
+    required bool paused,
+  }) async {
+    if (!_supportsAndroidSystemCalls) return;
+    try {
+      await _channel.invokeMethod<void>('updateTransferForeground', {
+        'title': title,
+        'transferredBytes': transferredBytes,
+        'totalBytes': totalBytes,
+        'paused': paused,
+      });
+    } on MissingPluginException {
+      return;
+    }
+  }
+
+  Future<void> stopTransferForeground() async {
+    if (!_supportsAndroidSystemCalls) return;
+    try {
+      await _channel.invokeMethod<void>('stopTransferForeground');
     } on MissingPluginException {
       return;
     }

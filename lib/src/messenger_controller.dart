@@ -55,21 +55,60 @@ Future<Directory> _defaultAttachmentRootProvider() async {
   return Directory(p.join(root.path, 'attachments'));
 }
 
+class _SingleDigestSink implements Sink<dart_crypto.Digest> {
+  dart_crypto.Digest? value;
+
+  @override
+  void add(dart_crypto.Digest data) {
+    value = data;
+  }
+
+  @override
+  void close() {}
+}
+
 const int _maxInviteRouteHints = 4;
 const int _maxInviteLanHosts = 1;
 
 List<int> _attachmentChunkAssociatedData(
-  String attachmentId,
+  AttachmentDescriptor descriptor,
   int index,
   int plaintextLength,
 ) => utf8.encode(
   jsonEncode(<String, Object>{
     'version': 2,
-    'attachmentId': attachmentId,
+    'attachmentId': descriptor.id,
+    'fileHashBase64': descriptor.fileHashBase64,
+    'sizeBytes': descriptor.sizeBytes,
+    'blockSize': descriptor.chunkSize,
     'index': index,
     'plaintextLength': plaintextLength,
   }),
 );
+
+List<int> _attachmentBlockNonce(AttachmentDescriptor descriptor, int index) {
+  final prefix = base64Decode(descriptor.noncePrefixBase64);
+  if (prefix.length != 16 || index < 0) {
+    throw const FormatException('Attachment v2 nonce geometry is invalid.');
+  }
+  final nonce = Uint8List(24)..setRange(0, 16, prefix);
+  ByteData.sublistView(nonce).setUint64(16, index, Endian.big);
+  return nonce;
+}
+
+int _verifiedBytesFor(
+  AttachmentDescriptor descriptor,
+  Iterable<int> completedBlocks,
+) {
+  var total = 0;
+  for (final index in completedBlocks) {
+    if (index < 0 || index >= descriptor.effectiveChunkCount) continue;
+    final offset = index * descriptor.chunkSize;
+    total += min(descriptor.chunkSize, descriptor.sizeBytes - offset);
+  }
+  return total.clamp(0, descriptor.sizeBytes);
+}
+
 const int _maxInviteRelayRoutes = 2;
 const int _maxLanPairingScanHostsPerAddress = 64;
 const int _maxLanRediscoveryScanHostsPerAddress = 16;
@@ -220,6 +259,9 @@ class MessengerController extends ChangeNotifier {
       onAttempt: _recordRelayAttemptFromShim,
       nowProvider: () => (nowProvider ?? DateTime.now)(),
     );
+    _transferControlSubscription = _platformBridge.transferControlEvents.listen(
+      _handleNativeTransferControl,
+    );
     _crypto = CryptoService(identityProvider: _requireIdentity);
     _reachability = ReachabilityTracker(
       recordsProvider: () => _snapshot.reachabilityRecords,
@@ -237,6 +279,8 @@ class MessengerController extends ChangeNotifier {
   late final CryptoService _crypto;
   late final ReachabilityTracker _reachability;
   late final RouteHealthTracker _routeHealthTracker;
+  late final StreamSubscription<String> _transferControlSubscription;
+  Timer? _transferNotificationTimer;
   final bool _longPollEnabled;
   final bool _pairingBeaconEnabled;
   bool _longPollRunning = false;
@@ -338,8 +382,9 @@ class MessengerController extends ChangeNotifier {
   final Set<String> _inFlightEnvelopeIds = <String>{};
   Timer? _pollTimer;
   bool _ready = false;
-  bool _polling = false;
+  Completer<void>? _pollCompleter;
   bool _appInForeground = true;
+  NetworkCostClass _networkCostClass = NetworkCostClass.unmetered;
   String? _statusMessage;
   String _lastRelayStatus = 'relay not checked yet';
   String? _lastPairingAnnouncementMailboxId;
@@ -386,6 +431,8 @@ class MessengerController extends ChangeNotifier {
   // synchronous index lets widgets distinguish "ready on disk" from an
   // in-flight transfer without probing the filesystem during build.
   final Set<String> _locallyAvailableAttachments = <String>{};
+  final Map<String, int> _preparationProgressBytes = <String, int>{};
+  final Set<String> _dismissedTransferIds = <String>{};
 
   // Small JPEG posters shipped alongside video offers so the receiver
   // can render a thumbnail BEFORE the full bytes finish transferring.
@@ -1100,13 +1147,74 @@ class MessengerController extends ChangeNotifier {
       partialDir.create(recursive: true),
     ]);
 
-    final cacheAttachmentIds = <String, String>{
-      for (final conversation in _snapshot.conversations)
-        for (final message in conversation.messages)
-          if (message.attachment != null)
-            attachmentStorageKey(message.attachment!.id):
-                message.attachment!.id,
-    };
+    // Attachment v2 is a deliberate hard cut-over. Completed history and
+    // cache files remain readable, but a v1 partial cannot be made safe under
+    // the v2 nonce/journal rules. Mark its bubble canceled, remove only the
+    // app-owned partial/spool and retain any original user-selected source.
+    final legacyIncomplete = _snapshot.transferSessions
+        .where(
+          (session) =>
+              session.attachment.protocolVersion < 2 &&
+              session.state != TransferState.completed &&
+              session.state != TransferState.canceled,
+        )
+        .toList(growable: false);
+    if (legacyIncomplete.isNotEmpty) {
+      for (final session in legacyIncomplete) {
+        final peerId = session.peerDeviceIds.firstOrNull;
+        if (peerId != null && session.messageId.isNotEmpty) {
+          _updateMessageState(
+            peerId,
+            session.messageId,
+            DeliveryState.canceled,
+          );
+        }
+        if (session.sourceKind != TransferSourceKind.originalPath &&
+            session.relativePath.isNotEmpty) {
+          final ownedPath = p.normalize(
+            p.join(root.path, session.relativePath),
+          );
+          if (isContainedPath(root.path, ownedPath)) {
+            try {
+              final file = File(ownedPath);
+              if (await file.exists()) await file.delete();
+            } catch (_) {}
+          }
+        }
+        appendDebugLog(
+          'Canceled legacy attachment ${session.id} during protocol-v2 migration; resend required.',
+        );
+      }
+      final legacyIds = legacyIncomplete.map((entry) => entry.id).toSet();
+      _snapshot = _snapshot.copyWith(
+        transferSessions: _snapshot.transferSessions
+            .where((entry) => !legacyIds.contains(entry.id))
+            .toList(growable: false),
+      );
+      await _saveSnapshotSilently(notify: false);
+    }
+
+    // Both the pre-v2 id-based name and the v2 content-addressed name are
+    // legitimate references. A prior startup janitor only knew about the id
+    // form and could delete a completed v2 cache entry on the next launch.
+    final cacheAttachmentIds = <String, Set<String>>{};
+    for (final conversation in _snapshot.conversations) {
+      for (final message in conversation.messages) {
+        final attachment = message.attachment;
+        if (attachment == null) continue;
+        cacheAttachmentIds
+            .putIfAbsent(attachmentStorageKey(attachment.id), () => <String>{})
+            .add(attachment.id);
+        if (attachment.fileHashBase64.isNotEmpty) {
+          cacheAttachmentIds
+              .putIfAbsent(
+                attachmentStorageKey('sha256:${attachment.fileHashBase64}'),
+                () => <String>{},
+              )
+              .add(attachment.id);
+        }
+      }
+    }
     final referencedCacheKeys = cacheAttachmentIds.keys.toSet();
     final referencedInternalPaths = <String>{
       for (final session in _snapshot.transferSessions)
@@ -1130,9 +1238,9 @@ class MessengerController extends ChangeNotifier {
             await entity.delete();
           } catch (_) {}
         } else if (cache) {
-          final attachmentId = cacheAttachmentIds[basename];
-          if (attachmentId != null) {
-            _locallyAvailableAttachments.add(attachmentId);
+          final attachmentIds = cacheAttachmentIds[basename];
+          if (attachmentIds != null) {
+            _locallyAvailableAttachments.addAll(attachmentIds);
           }
         }
       }
@@ -1154,6 +1262,16 @@ class MessengerController extends ChangeNotifier {
 
     final retainedSessions = <TransferSession>[];
     for (final session in _snapshot.transferSessions) {
+      if (session.state == TransferState.preparing) {
+        final peerId = session.peerDeviceIds.firstOrNull;
+        if (peerId != null && session.messageId.isNotEmpty) {
+          _updateMessageState(peerId, session.messageId, DeliveryState.failed);
+        }
+        appendDebugLog(
+          'Preparation for ${session.id} was interrupted; source was not sent.',
+        );
+        continue;
+      }
       if (session.state == TransferState.completed &&
           session.sourceKind == TransferSourceKind.originalPath) {
         final path = session.sourcePath;
@@ -1225,6 +1343,33 @@ class MessengerController extends ChangeNotifier {
     }
     if (retainedSessions.length != _snapshot.transferSessions.length) {
       _snapshot = _snapshot.copyWith(transferSessions: retainedSessions);
+      await _saveSnapshotSilently(notify: false);
+    }
+    final validAttachmentIds = <String>{
+      for (final conversation in _snapshot.conversations)
+        for (final message in conversation.messages)
+          if (message.attachment != null) message.attachment!.id,
+    };
+    final originalCacheReferenceCount =
+        _snapshot.attachmentCacheReferences.length;
+    final retainedCacheReferences = _snapshot.attachmentCacheReferences
+        .where((entry) => validAttachmentIds.contains(entry.attachmentId))
+        .toList(growable: true);
+    _snapshot = _snapshot.copyWith(
+      attachmentCacheReferences: retainedCacheReferences,
+    );
+    var cacheReferencesChanged =
+        retainedCacheReferences.length != originalCacheReferenceCount;
+    for (final attachmentId in _locallyAvailableAttachments) {
+      if (!retainedCacheReferences.any(
+        (entry) => entry.attachmentId == attachmentId,
+      )) {
+        _recordAttachmentCacheReference(attachmentId);
+        cacheReferencesChanged = true;
+      }
+    }
+    await _evictManagedCacheIfNeeded(root);
+    if (cacheReferencesChanged) {
       await _saveSnapshotSilently(notify: false);
     }
   }
@@ -3109,7 +3254,6 @@ class MessengerController extends ChangeNotifier {
     await _vaultStore.clear();
     _snapshot = VaultSnapshot.empty();
     _rebuildSeenEnvelopeIdSet();
-    _polling = false;
     _pairingSessionActiveUntil = null;
     _lastPairingBeaconSentAt = null;
     _runtimeActiveUntil = null;
@@ -3808,7 +3952,7 @@ class MessengerController extends ChangeNotifier {
   /// + base64 chunk ciphertext + ChaCha20 overhead + JSON wrap ≈ 100 KB).
   /// For a worst-case 30 MB file this means ~960 chunks; SHA-256 across
   /// them is sub-second on modern devices.
-  static const int _attachmentChunkSize = 32 * 1024;
+  static const int _attachmentChunkSize = 128 * 1024;
 
   /// LAN-friendly chunk size used when the only route to a contact is
   /// LAN. The relay's 256 KB envelope cap doesn't apply to LAN-loopback
@@ -3816,7 +3960,7 @@ class MessengerController extends ChangeNotifier {
   /// Bumped from 256 KB → 512 KB in nightly.8: with the window=8
   /// pipeline a 10 MB transfer is now ~20 chunks ÷ 8 in flight ≈ 3
   /// LAN round-trips.
-  static const int _lanAttachmentChunkSize = 512 * 1024;
+  static const int _lanAttachmentChunkSize = 128 * 1024;
 
   /// When the only route to a contact is LAN, the size cap lifts to this
   /// value — LAN bandwidth + chunk size aren't constrained by the relay's
@@ -3864,7 +4008,7 @@ class MessengerController extends ChangeNotifier {
   /// Telegram-style media-group cap: a group of uncaptioned images sent
   /// together renders as one album bubble. Larger batches are split into
   /// multiple albums of this size each.
-  static const int maxAttachmentsPerAlbum = 6;
+  static const int maxAttachmentsPerAlbum = 10;
 
   /// Pause between attachment_offer envelopes WITHIN one album, in ms.
   /// Spreads sender CPU + relay store-rate over the wire so a 6-photo
@@ -3936,32 +4080,33 @@ class MessengerController extends ChangeNotifier {
     final chunkSize = requiresLan
         ? _lanAttachmentChunkSize
         : _effectiveChunkSizeFor(contact);
-    final prepared = await _prepareOutboundAttachmentSource(
-      attachmentId: attachmentId,
-      source: source,
-      allowOriginalFallback: allowOriginalFallback,
-    );
-    _locallyAvailableAttachments.add(attachmentId);
-    final chunkCount = (prepared.sizeBytes + chunkSize - 1) ~/ chunkSize;
-
-    // Per-attachment key; chunks travel inside pairwise-encrypted envelopes
-    // today, so this is forward compatibility for v0.3.3 when relays cache
-    // chunks and need them opaque without the descriptor.
+    final chunkCount = (source.sizeBytes + chunkSize - 1) ~/ chunkSize;
     final attachmentKey = SecretKeyData.random(length: 32);
-    final descriptor = AttachmentDescriptor(
+    final noncePrefix = Uint8List.fromList(
+      List<int>.generate(16, (_) => Random.secure().nextInt(256)),
+    );
+    final createdAt = DateTime.now().toUtc();
+    final provisionalDescriptor = AttachmentDescriptor(
       id: attachmentId,
       fileName: sanitizeAttachmentFileName(source.fileName),
       mimeType: sanitizeAttachmentMimeType(source.mimeType),
-      sizeBytes: prepared.sizeBytes,
+      sizeBytes: source.sizeBytes,
       chunkSize: chunkSize,
       chunkHashes: const <ChunkHash>[],
       chunkCount: chunkCount,
-      fileHashBase64: prepared.fileHashBase64,
+      fileHashBase64: base64Encode(Uint8List(32)),
       encryptionKeyBase64: base64Encode(await attachmentKey.extractBytes()),
-      createdAt: DateTime.now().toUtc(),
+      protocolVersion: 2,
+      noncePrefixBase64: base64Encode(noncePrefix),
+      presentation: source.presentation,
+      thumbnailBase64:
+          source.poster != null && source.poster!.length <= 32 * 1024
+          ? base64Encode(source.poster!)
+          : null,
+      createdAt: createdAt,
     );
 
-    final message = ChatMessage(
+    var message = ChatMessage(
       id: _randomId('msg'),
       conversationId: _crypto.conversationIdFor(contact.deviceId),
       senderDeviceId: me.deviceId,
@@ -3969,10 +4114,67 @@ class MessengerController extends ChangeNotifier {
       body: caption.length <= 4096 ? caption : caption.substring(0, 4096),
       outbound: true,
       state: DeliveryState.pending,
-      createdAt: DateTime.now().toUtc(),
-      attachment: descriptor,
+      createdAt: createdAt,
+      attachment: provisionalDescriptor,
       albumId: albumId,
     );
+    _upsertMessage(contact.deviceId, message);
+    _preparationProgressBytes[attachmentId] = 0;
+    _upsertTransferSession(
+      TransferSession(
+        id: attachmentId,
+        attachment: provisionalDescriptor,
+        peerDeviceIds: <String>[contact.deviceId],
+        state: TransferState.preparing,
+        completedChunks: const <int>[],
+        createdAt: createdAt,
+        updatedAt: _now().toUtc(),
+        direction: TransferDirection.outbound,
+        messageId: message.id,
+        sourceKind: TransferSourceKind.privateSpool,
+        sourceSizeBytes: source.sizeBytes,
+        requiresLan: requiresLan,
+      ),
+    );
+    await _saveSnapshotSilently(notify: true);
+
+    final _PreparedAttachmentSource prepared;
+    try {
+      prepared = await _prepareOutboundAttachmentSource(
+        attachmentId: attachmentId,
+        source: source,
+        allowOriginalFallback: allowOriginalFallback,
+        onProgress: (bytes) {
+          _preparationProgressBytes[attachmentId] = bytes;
+          notifyListeners();
+        },
+      );
+    } catch (_) {
+      _preparationProgressBytes.remove(attachmentId);
+      _removeTransferSession(attachmentId);
+      _deleteMessage(contact.deviceId, message.id);
+      await _saveSnapshotSilently(notify: true);
+      rethrow;
+    }
+    _preparationProgressBytes.remove(attachmentId);
+    _locallyAvailableAttachments.add(attachmentId);
+    final descriptor = AttachmentDescriptor(
+      id: provisionalDescriptor.id,
+      fileName: provisionalDescriptor.fileName,
+      mimeType: provisionalDescriptor.mimeType,
+      sizeBytes: prepared.sizeBytes,
+      chunkSize: provisionalDescriptor.chunkSize,
+      chunkHashes: const <ChunkHash>[],
+      chunkCount: provisionalDescriptor.chunkCount,
+      fileHashBase64: prepared.fileHashBase64,
+      encryptionKeyBase64: provisionalDescriptor.encryptionKeyBase64,
+      protocolVersion: 2,
+      noncePrefixBase64: provisionalDescriptor.noncePrefixBase64,
+      presentation: provisionalDescriptor.presentation,
+      thumbnailBase64: provisionalDescriptor.thumbnailBase64,
+      createdAt: createdAt,
+    );
+    message = message.copyWith(attachment: descriptor);
     _upsertMessage(contact.deviceId, message);
     _outboundAttachments[attachmentId] = _OutboundAttachmentState(
       messageId: message.id,
@@ -4024,6 +4226,7 @@ class MessengerController extends ChangeNotifier {
     required String attachmentId,
     required StagedAttachment source,
     required bool allowOriginalFallback,
+    void Function(int bytes)? onProgress,
   }) async {
     final root = await _attachmentRoot();
     final spoolDir = Directory(p.join(root.path, 'spool'));
@@ -4038,6 +4241,10 @@ class MessengerController extends ChangeNotifier {
       final temporary = File('${target.path}.tmp');
       try {
         var written = 0;
+        final digestOutput = _SingleDigestSink();
+        final digestInput = dart_crypto.sha256.startChunkedConversion(
+          digestOutput,
+        );
         await temporary.create(recursive: true);
         await restrictFileToOwner(temporary);
         final sink = temporary.openWrite(mode: FileMode.writeOnly);
@@ -4050,10 +4257,13 @@ class MessengerController extends ChangeNotifier {
               );
             }
             sink.add(chunk);
+            digestInput.add(chunk);
+            onProgress?.call(written);
           }
           await sink.flush();
         } finally {
           await sink.close();
+          digestInput.close();
         }
         if (written != source.sizeBytes) {
           throw const FormatException(
@@ -4061,7 +4271,10 @@ class MessengerController extends ChangeNotifier {
           );
         }
         await temporary.rename(target.path);
-        final digest = await dart_crypto.sha256.bind(target.openRead()).first;
+        final digest = digestOutput.value;
+        if (digest == null) {
+          throw const FormatException('Attachment hashing did not complete.');
+        }
         return _PreparedAttachmentSource(
           path: target.path,
           relativePath: relativePath,
@@ -4250,16 +4463,12 @@ class MessengerController extends ChangeNotifier {
         route: route,
       );
     } catch (error) {
-      _statusMessage = 'Attachment offer delivery failed: $error';
-      _updateMessageState(contact.deviceId, message.id, DeliveryState.failed);
-      _outboundAttachments.remove(descriptor.id);
-      _clearActiveOutbound(contact.deviceId, descriptor.id);
+      _statusMessage = 'Attachment is waiting for a route: $error';
       appendDebugLog(
         'sendAttachment offer failed for ${descriptor.id} '
         '(${descriptor.fileName}): $error',
       );
-      notifyListeners();
-      _pumpOutboundQueue(contact);
+      _scheduleOutboundReconnect(contact, state, error.toString());
     }
   }
 
@@ -4271,10 +4480,47 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
-  /// How many times the stall escape hatch will silently re-enqueue a
-  /// failed outbound while the contact is still reachable. After the cap
-  /// the bubble flips to Failed and waits for a manual tap-to-retry.
-  static const int _outboundAutoRetryLimit = 3;
+  static const List<Duration> _transferRetryBackoff = <Duration>[
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+    Duration(seconds: 5),
+    Duration(seconds: 10),
+    Duration(seconds: 30),
+    Duration(minutes: 1),
+    Duration(minutes: 5),
+  ];
+
+  void _scheduleOutboundReconnect(
+    ContactRecord contact,
+    _OutboundAttachmentState state,
+    String reason,
+  ) {
+    state.autoRetries = min(state.autoRetries + 1, 1 << 20);
+    final delay =
+        _transferRetryBackoff[min(
+          state.autoRetries - 1,
+          _transferRetryBackoff.length - 1,
+        )];
+    state.nextRetryAt = DateTime.now().toUtc().add(delay);
+    _setTransferSessionState(
+      state.descriptor.id,
+      TransferState.reconnecting,
+      error: reason,
+    );
+    _updateMessageState(
+      contact.deviceId,
+      state.messageId,
+      DeliveryState.pending,
+    );
+    _clearActiveOutbound(contact.deviceId, state.descriptor.id);
+    _enqueueOutbound(contact, state.descriptor.id);
+    _outboundStallTimers[contact.deviceId]?.cancel();
+    _outboundStallTimers[contact.deviceId] = Timer(delay, () {
+      state.nextRetryAt = null;
+      _pumpOutboundQueue(contact);
+    });
+    notifyListeners();
+  }
 
   void _onOutboundStall(ContactRecord contact) {
     final activeId = _activeOutboundByContact[contact.deviceId];
@@ -4291,44 +4537,16 @@ class MessengerController extends ChangeNotifier {
       _armOutboundStallTimer(contact);
       return;
     }
-    // Auto-retry while the contact remains reachable: re-enqueue silently
-    // up to [_outboundAutoRetryLimit] times before surfacing a Failed
-    // bubble. Reset on a future successful complete.
-    if (state.autoRetries < _outboundAutoRetryLimit) {
-      final reach = reachabilityStateFor(contact.deviceId);
-      if (reach == ContactReachabilityState.online ||
-          reach == ContactReachabilityState.seenRecently) {
-        state.autoRetries++;
-        appendDebugLog(
-          'Auto-retrying ${state.descriptor.id} '
-          '(${state.descriptor.fileName}) attempt '
-          '${state.autoRetries}/$_outboundAutoRetryLimit — contact reachable.',
-        );
-        _clearActiveOutbound(contact.deviceId, activeId);
-        // Reset transient progress markers so the next pump starts fresh.
-        state.activatedAt = null;
-        state.lastChunkAt = null;
-        state.highestChunkSent = -1;
-        state.peerReceivedCount = null;
-        _enqueueOutbound(contact, activeId);
-        _pumpOutboundQueue(contact);
-        return;
-      }
-    }
     appendDebugLog(
       'Outbound stall for ${state.descriptor.id} '
       '(${state.descriptor.fileName}) after ${_outboundStallTimeout.inSeconds}s; '
-      'marking failed and advancing queue.',
+      'keeping the resumable session and backing off.',
     );
-    _updateMessageState(
-      contact.deviceId,
-      state.messageId,
-      DeliveryState.failed,
+    _scheduleOutboundReconnect(
+      contact,
+      state,
+      'No verified block acknowledgement for ${_outboundStallTimeout.inSeconds} seconds.',
     );
-    _outboundAttachments.remove(activeId);
-    _clearActiveOutbound(contact.deviceId, activeId);
-    notifyListeners();
-    _pumpOutboundQueue(contact);
   }
 
   void _clearActiveOutbound(String peerDeviceId, String attachmentId) {
@@ -4368,9 +4586,276 @@ class MessengerController extends ChangeNotifier {
     // sender's bubble shows the SAME percentage as the receiver's — fixes
     // the nightly.7 desync. Fall back to our own ship-count for very
     // small transfers that finish before the first progress envelope.
+    final peerBytes = state.peerReceivedBytes;
+    if (peerBytes != null) {
+      return peerBytes / state.descriptor.sizeBytes;
+    }
     final peer = state.peerReceivedCount;
     if (peer != null) return peer / total;
     return (state.highestChunkSent + 1) / total;
+  }
+
+  TransferSnapshot? transferSnapshotFor(String attachmentId) {
+    ChatMessage? message;
+    for (final conversation in _snapshot.conversations) {
+      message = conversation.messages
+          .where((entry) => entry.attachment?.id == attachmentId)
+          .firstOrNull;
+      if (message != null) break;
+    }
+    if (message == null || message.attachment == null) return null;
+    final descriptor = message.attachment!;
+    final session = _transferSessionById(attachmentId);
+    final outbound = _outboundAttachments[attachmentId];
+    final inbound = _inboundAttachments[attachmentId];
+    final pause = pauseStateFor(attachmentId);
+    final int bytes =
+        _preparationProgressBytes[attachmentId] ??
+        outbound?.peerReceivedBytes ??
+        inbound?.receivedBytes ??
+        session?.bytesTransferred ??
+        (attachmentAvailableLocally(attachmentId) ? descriptor.sizeBytes : 0);
+    final speed = outbound?.bytesPerSecond ?? inbound?.bytesPerSecond;
+    final remaining = max(0, descriptor.sizeBytes - bytes);
+    final eta = speed != null && speed > 1
+        ? Duration(seconds: (remaining / speed).ceil())
+        : null;
+    final route = outbound?.lastDeliveryRoute;
+    final (transport, path, routeLabel) = switch (route) {
+      OutboundDeliveryRoute.lanDirect => (
+        TransportKind.lan,
+        TransportPathKind.local,
+        'LAN',
+      ),
+      OutboundDeliveryRoute.irohDirect => (
+        TransportKind.iroh,
+        TransportPathKind.direct,
+        'Direct online',
+      ),
+      OutboundDeliveryRoute.irohRelay => (
+        TransportKind.iroh,
+        TransportPathKind.relayed,
+        'Iroh relay',
+      ),
+      OutboundDeliveryRoute.conestRelay => (
+        TransportKind.conestRelay,
+        TransportPathKind.storeForward,
+        'Conest relay',
+      ),
+      _ => (
+        message.transportKind,
+        message.transportPath,
+        message.transportDetail,
+      ),
+    };
+    final phase = pause != null && (pause.pausedByMe || pause.pausedByPeer)
+        ? TransferPhase.paused
+        : inbound?.awaitingAcceptance == true
+        ? TransferPhase.awaitingApproval
+        : switch (session?.state) {
+            TransferState.preparing => TransferPhase.preparing,
+            TransferState.queued => TransferPhase.queued,
+            TransferState.transferring => TransferPhase.transferring,
+            TransferState.reconnecting => TransferPhase.reconnecting,
+            TransferState.paused => TransferPhase.paused,
+            TransferState.completed => TransferPhase.completed,
+            TransferState.failed => TransferPhase.failed,
+            TransferState.canceled => TransferPhase.canceled,
+            TransferState.waitingForLan ||
+            TransferState.pending => TransferPhase.waitingForPeer,
+            TransferState.waitingForStorage => TransferPhase.awaitingApproval,
+            null when attachmentAvailableLocally(attachmentId) =>
+              TransferPhase.completed,
+            null when message.state == DeliveryState.failed =>
+              TransferPhase.failed,
+            null when message.state == DeliveryState.canceled =>
+              TransferPhase.canceled,
+            null => TransferPhase.unavailable,
+          };
+    return TransferSnapshot(
+      id: attachmentId,
+      phase: phase,
+      direction: message.outbound
+          ? TransferDirection.outbound
+          : TransferDirection.inbound,
+      bytesTransferred: bytes,
+      totalBytes: descriptor.sizeBytes,
+      bytesPerSecond: speed,
+      eta: eta,
+      queuePriority: outboundQueuePositionFor(attachmentId),
+      transport: transport,
+      path: path,
+      routeLabel: routeLabel,
+      pausedByMe: pause?.pausedByMe ?? false,
+      pausedByPeer: pause?.pausedByPeer ?? false,
+      retryAt: outbound?.nextRetryAt ?? inbound?.nextRetryAt,
+      error: session?.lastError,
+    );
+  }
+
+  List<TransferSnapshot> get transferSnapshots {
+    final seen = <String>{};
+    final snapshots = <TransferSnapshot>[];
+    for (final conversation in _snapshot.conversations) {
+      for (final message in conversation.messages.reversed) {
+        final id = message.attachment?.id;
+        if (id == null || _dismissedTransferIds.contains(id) || !seen.add(id)) {
+          continue;
+        }
+        final snapshot = transferSnapshotFor(id);
+        if (snapshot != null) snapshots.add(snapshot);
+      }
+    }
+    return List.unmodifiable(snapshots);
+  }
+
+  ChatMessage? messageForAttachment(String attachmentId) {
+    for (final conversation in _snapshot.conversations) {
+      final message = conversation.messages
+          .where((entry) => entry.attachment?.id == attachmentId)
+          .firstOrNull;
+      if (message != null) return message;
+    }
+    return null;
+  }
+
+  AttachmentDescriptor? attachmentDescriptorFor(String attachmentId) =>
+      messageForAttachment(attachmentId)?.attachment;
+
+  @visibleForTesting
+  String inboundTransferDebugForTesting(String attachmentId) {
+    final state = _inboundAttachments[attachmentId];
+    if (state == null) return 'missing';
+    return 'accepted=${state.accepted},awaiting=${state.awaitingAcceptance},'
+        'partial=${state.partialPath},received=${state.received.length},'
+        'requested=${state.requestedInFlight.length},paused=${state.paused},'
+        'retry=${state.retryAttempts}';
+  }
+
+  String? peerDeviceIdForAttachment(String attachmentId) {
+    final message = messageForAttachment(attachmentId);
+    if (message == null) return null;
+    return message.outbound
+        ? message.recipientDeviceId
+        : message.senderDeviceId;
+  }
+
+  String transferConversationLabel(String attachmentId) {
+    final peerId = peerDeviceIdForAttachment(attachmentId);
+    if (peerId == null) return 'Conversation';
+    return _contactByDeviceId(peerId)?.alias ?? 'Conversation';
+  }
+
+  Future<void> pauseAllTransfers() async {
+    final ids = transferSnapshots
+        .where((entry) => entry.phase.isActive && !entry.pausedByPeer)
+        .map((entry) => entry.id)
+        .toList(growable: false);
+    for (final id in ids) {
+      await pauseAttachment(id);
+    }
+  }
+
+  Future<void> resumeAllTransfers() async {
+    final ids = transferSnapshots
+        .where((entry) => entry.pausedByMe)
+        .map((entry) => entry.id)
+        .toList(growable: false);
+    for (final id in ids) {
+      await resumeAttachment(id);
+    }
+  }
+
+  void prioritizeTransfer(String attachmentId) {
+    for (final entry in _outboundQueueByContact.entries) {
+      final index = entry.value.indexOf(attachmentId);
+      if (index <= 0) continue;
+      entry.value
+        ..removeAt(index)
+        ..insert(0, attachmentId);
+      _setTransferSessionState(attachmentId, TransferState.queued);
+      notifyListeners();
+      return;
+    }
+  }
+
+  bool _managedIrohRelayAllowsBulk() {
+    final connectivity = _snapshot.identity?.connectivity;
+    return connectivity != null &&
+        connectivity.irohRelayEnabled &&
+        connectivity.irohRelayUrls.isNotEmpty &&
+        connectivity.irohCustomRelaysBulkCapable;
+  }
+
+  bool _largeIrohRelayAllowed(String attachmentId) {
+    final session = _transferSessionById(attachmentId);
+    return session?.allowIrohRelay == true || _managedIrohRelayAllowsBulk();
+  }
+
+  /// Whether the transfer manager should offer an explicit, per-transfer
+  /// override for an unknown/free Iroh relay. Durable Conest relays remain
+  /// excluded for payload blocks above their 30 MiB attachment cap.
+  bool canContinueLargeTransferOverIrohRelay(String attachmentId) {
+    final outbound = _outboundAttachments[attachmentId];
+    final session = _transferSessionById(attachmentId);
+    if (outbound == null ||
+        session == null ||
+        !outbound.requiresLan ||
+        session.allowIrohRelay ||
+        _managedIrohRelayAllowsBulk()) {
+      return false;
+    }
+    final contact = _contactByDeviceId(outbound.peerDeviceId);
+    if (contact == null || !contact.hasPinnedIrohIdentity) return false;
+    final global = _snapshot.identity?.connectivity;
+    if (global == null ||
+        !global.onlineEnabled ||
+        !global.irohRelayEnabled ||
+        !contact.routing.onlineEnabled ||
+        !contact.routing.irohRelayEnabled ||
+        _transportRegistry?.adapterFor(TransportKind.iroh) == null) {
+      return false;
+    }
+    final policy = _effectiveTransportPolicies(contact)[TransportKind.iroh];
+    return policy == TransportPolicy.automatic ||
+        policy == TransportPolicy.preferred;
+  }
+
+  Future<void> continueLargeTransferOverIrohRelay(String attachmentId) async {
+    if (!canContinueLargeTransferOverIrohRelay(attachmentId)) return;
+    final state = _outboundAttachments[attachmentId]!;
+    final session = _transferSessionById(attachmentId)!;
+    final peer = _contactByDeviceId(state.peerDeviceId);
+    if (peer == null) return;
+    _upsertTransferSession(
+      session.copyWith(
+        state: TransferState.reconnecting,
+        allowIrohRelay: true,
+        updatedAt: _now().toUtc(),
+        clearLastError: true,
+      ),
+    );
+    state
+      ..consecutiveChunkFailures = 0
+      ..nextRetryAt = null;
+    await _saveSnapshotSilently(notify: true);
+    // A resume control makes the receiver immediately refill its request
+    // window instead of waiting for the next exponential-retry deadline.
+    await _sendAttachmentPauseControl(
+      peer: peer,
+      attachmentId: attachmentId,
+      paused: false,
+    );
+  }
+
+  void clearCompletedTransfers() {
+    for (final snapshot in transferSnapshots) {
+      if (snapshot.phase == TransferPhase.completed ||
+          snapshot.phase == TransferPhase.canceled) {
+        _dismissedTransferIds.add(snapshot.id);
+      }
+    }
+    notifyListeners();
   }
 
   /// nightly.11: the channel that carried the most recent successful
@@ -4479,7 +4964,7 @@ class MessengerController extends ChangeNotifier {
     if (state.descriptor.effectiveChunkCount <= 0) {
       return 0;
     }
-    return state.received.length / state.descriptor.effectiveChunkCount;
+    return state.receivedBytes / state.descriptor.sizeBytes;
   }
 
   bool attachmentAwaitingAcceptance(String attachmentId) =>
@@ -4502,14 +4987,35 @@ class MessengerController extends ChangeNotifier {
       ..accepted = true
       ..awaitingAcceptance = false;
     final contact = _contactByDeviceId(state.peerDeviceId);
-    final lanAvailable = _hasUsableLanDirectEndpoint(state.peerDeviceId);
-    _setTransferSessionState(
-      attachmentId,
-      lanAvailable ? TransferState.transferring : TransferState.waitingForLan,
-    );
-    if (contact != null && lanAvailable) {
+    if (contact == null) {
+      _setTransferSessionState(
+        attachmentId,
+        TransferState.failed,
+        error: 'Attachment sender is no longer a contact.',
+      );
+      return;
+    }
+    final requiresDirect = state.descriptor.sizeBytes > maxAttachmentSizeBytes;
+    final routeAvailable =
+        !requiresDirect || _hasUsableLargeDirectTransport(contact);
+    final session = _transferSessionById(attachmentId);
+    if (session != null) {
+      final root = await _attachmentRoot();
+      _upsertTransferSession(
+        session.copyWith(
+          state: routeAvailable
+              ? TransferState.transferring
+              : TransferState.waitingForLan,
+          relativePath: p.relative(partialPath, from: root.path),
+          updatedAt: _now().toUtc(),
+          clearLastError: true,
+        ),
+      );
+      await _saveSnapshotSilently(notify: false);
+    }
+    if (routeAvailable) {
       _scheduleAttachmentRetry(attachmentId);
-      _topUpInboundWindow(state, contact);
+      await _topUpInboundWindow(state, contact);
     }
     notifyListeners();
   }
@@ -4517,6 +5023,7 @@ class MessengerController extends ChangeNotifier {
   Future<void> rejectIncomingAttachment(String attachmentId) async {
     final state = _inboundAttachments[attachmentId];
     if (state == null) return;
+    await state.closeFile();
     final contact = _contactByDeviceId(state.peerDeviceId);
     if (contact != null) {
       unawaited(_sendAttachmentCancel(contact, attachmentId));
@@ -4549,6 +5056,8 @@ class MessengerController extends ChangeNotifier {
         }
         return null;
       }
+      _recordAttachmentCacheReference(attachmentId);
+      unawaited(_saveSnapshotSilently(notify: false, debounce: true));
       return file.path;
     } catch (_) {
       return null;
@@ -4559,7 +5068,211 @@ class MessengerController extends ChangeNotifier {
     final root = await _attachmentRoot();
     final cache = Directory(p.join(root.path, 'cache'));
     if (!await cache.exists()) await cache.create(recursive: true);
-    return File(p.join(cache.path, attachmentStorageKey(attachmentId)));
+    final legacy = File(p.join(cache.path, attachmentStorageKey(attachmentId)));
+    final descriptor = attachmentDescriptorFor(attachmentId);
+    final hash = descriptor?.fileHashBase64;
+    if (hash == null || hash.isEmpty) return legacy;
+    final managed = File(
+      p.join(cache.path, attachmentStorageKey('sha256:$hash')),
+    );
+    if (!await managed.exists() && await legacy.exists()) {
+      try {
+        await legacy.rename(managed.path);
+      } catch (_) {
+        return legacy;
+      }
+    }
+    return managed;
+  }
+
+  int _cacheReferenceCount(String fileHashBase64) {
+    var references = 0;
+    for (final conversation in _snapshot.conversations) {
+      for (final message in conversation.messages) {
+        if (message.attachment?.fileHashBase64 == fileHashBase64) {
+          references++;
+        }
+      }
+    }
+    return references;
+  }
+
+  AttachmentCacheReference? cacheReferenceFor(String attachmentId) => _snapshot
+      .attachmentCacheReferences
+      .where((entry) => entry.attachmentId == attachmentId)
+      .firstOrNull;
+
+  bool attachmentKeptOffline(String attachmentId) =>
+      cacheReferenceFor(attachmentId)?.keepOffline ?? false;
+
+  void _recordAttachmentCacheReference(
+    String attachmentId, {
+    bool? keepOffline,
+    bool? explicitlySaved,
+    DateTime? accessedAt,
+  }) {
+    final descriptor = attachmentDescriptorFor(attachmentId);
+    if (descriptor == null || descriptor.fileHashBase64.isEmpty) return;
+    final records = _snapshot.attachmentCacheReferences.toList();
+    final index = records.indexWhere(
+      (entry) => entry.attachmentId == attachmentId,
+    );
+    final now = (accessedAt ?? _now()).toUtc();
+    if (index < 0) {
+      records.add(
+        AttachmentCacheReference(
+          attachmentId: attachmentId,
+          fileHashBase64: descriptor.fileHashBase64,
+          lastAccessedAt: now,
+          keepOffline: keepOffline ?? false,
+          explicitlySaved: explicitlySaved ?? false,
+        ),
+      );
+    } else {
+      records[index] = records[index].copyWith(
+        lastAccessedAt: now,
+        keepOffline: keepOffline,
+        explicitlySaved: explicitlySaved,
+      );
+    }
+    _snapshot = _snapshot.copyWith(attachmentCacheReferences: records);
+  }
+
+  Future<void> setAttachmentKeepOffline(
+    String attachmentId,
+    bool keepOffline,
+  ) async {
+    if (!attachmentAvailableLocally(attachmentId) && keepOffline) {
+      throw StateError('Download the attachment before keeping it offline.');
+    }
+    _recordAttachmentCacheReference(attachmentId, keepOffline: keepOffline);
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  Future<void> markAttachmentExplicitlySaved(String attachmentId) async {
+    _recordAttachmentCacheReference(attachmentId, explicitlySaved: true);
+    await _saveSnapshotSilently(notify: false, debounce: true);
+  }
+
+  Future<void> evictAttachment(String attachmentId) async {
+    final descriptor = attachmentDescriptorFor(attachmentId);
+    if (descriptor == null) return;
+    final sameContent = <String>{
+      for (final conversation in _snapshot.conversations)
+        for (final message in conversation.messages)
+          if (message.attachment?.fileHashBase64 == descriptor.fileHashBase64)
+            message.attachment!.id,
+    };
+    final protected = _snapshot.attachmentCacheReferences.any(
+      (entry) =>
+          sameContent.contains(entry.attachmentId) &&
+          (entry.keepOffline || entry.explicitlySaved),
+    );
+    final active = _snapshot.transferSessions.any(
+      (entry) =>
+          sameContent.contains(entry.id) &&
+          entry.state != TransferState.completed &&
+          entry.state != TransferState.canceled &&
+          entry.state != TransferState.failed,
+    );
+    if (protected || active) {
+      throw StateError('This attachment is protected from cache eviction.');
+    }
+    final cache = await _attachmentCacheFile(attachmentId);
+    if (await cache.exists()) await cache.delete();
+    for (final id in sameContent) {
+      _locallyAvailableAttachments.remove(id);
+      _assembledAttachments.remove(id);
+    }
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  int get _managedCacheLimitBytes => !kIsWeb && Platform.isAndroid
+      ? 2 * 1024 * 1024 * 1024
+      : 10 * 1024 * 1024 * 1024;
+
+  Duration get _managedCacheMaximumAge => !kIsWeb && Platform.isAndroid
+      ? const Duration(days: 30)
+      : const Duration(days: 90);
+
+  Future<void> _evictManagedCacheIfNeeded(Directory root) async {
+    final cache = Directory(p.join(root.path, 'cache'));
+    if (!await cache.exists()) return;
+    final now = _now().toUtc();
+    final recordsByHash = <String, List<AttachmentCacheReference>>{};
+    for (final record in _snapshot.attachmentCacheReferences) {
+      recordsByHash
+          .putIfAbsent(
+            record.fileHashBase64,
+            () => <AttachmentCacheReference>[],
+          )
+          .add(record);
+    }
+    final candidates =
+        <({File file, int size, DateTime lastAccess, Set<String> ids})>[];
+    var total = 0;
+    await for (final entity in cache.list(followLinks: false)) {
+      if (entity is! File) continue;
+      final stat = await entity.stat();
+      total += stat.size;
+      final matching = <AttachmentCacheReference>[];
+      for (final entry in recordsByHash.entries) {
+        if (attachmentStorageKey('sha256:${entry.key}') ==
+            p.basename(entity.path)) {
+          matching.addAll(entry.value);
+          break;
+        }
+      }
+      final ids = matching.map((entry) => entry.attachmentId).toSet();
+      final protected = matching.any(
+        (entry) => entry.keepOffline || entry.explicitlySaved,
+      );
+      final active = _snapshot.transferSessions.any(
+        (entry) =>
+            ids.contains(entry.id) &&
+            entry.state != TransferState.completed &&
+            entry.state != TransferState.canceled &&
+            entry.state != TransferState.failed,
+      );
+      if (protected || active) continue;
+      final lastAccess = matching.isEmpty
+          ? stat.modified.toUtc()
+          : matching
+                .map((entry) => entry.lastAccessedAt)
+                .reduce((left, right) => left.isAfter(right) ? left : right);
+      candidates.add((
+        file: entity,
+        size: stat.size,
+        lastAccess: lastAccess,
+        ids: ids,
+      ));
+    }
+    candidates.sort(
+      (left, right) => left.lastAccess.compareTo(right.lastAccess),
+    );
+    final capacity = await _storageCapacityProvider(root.path);
+    final reserve = capacity == null ? 0 : (capacity.totalBytes * 0.10).ceil();
+    var projectedFree = capacity?.freeBytes ?? (1 << 62);
+    for (final candidate in candidates) {
+      final expired =
+          now.difference(candidate.lastAccess) > _managedCacheMaximumAge;
+      final overLimit = total > _managedCacheLimitBytes;
+      final belowReserve = projectedFree < reserve;
+      if (!expired && !overLimit && !belowReserve) continue;
+      try {
+        if (await candidate.file.exists()) await candidate.file.delete();
+        total -= candidate.size;
+        projectedFree += candidate.size;
+        for (final id in candidate.ids) {
+          _locallyAvailableAttachments.remove(id);
+          _assembledAttachments.remove(id);
+        }
+      } catch (error) {
+        appendDebugLog(
+          'Cache eviction failed for ${candidate.file.path}: $error',
+        );
+      }
+    }
   }
 
   Future<void> _deleteAttachmentArtifacts(String attachmentId) async {
@@ -4574,6 +5287,13 @@ class MessengerController extends ChangeNotifier {
         p.join(root.path, 'spool', '$key.bin.tmp'),
         p.join(root.path, 'partial', '$key.part'),
       };
+      final descriptor = attachmentDescriptorFor(attachmentId);
+      final hash = descriptor?.fileHashBase64;
+      if (hash != null && hash.isNotEmpty && _cacheReferenceCount(hash) <= 1) {
+        candidates.add(
+          p.join(root.path, 'cache', attachmentStorageKey('sha256:$hash')),
+        );
+      }
       final session = _transferSessionById(attachmentId);
       if (session != null && session.relativePath.isNotEmpty) {
         candidates.add(p.join(root.path, session.relativePath));
@@ -5128,6 +5848,32 @@ class MessengerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void reorderStaged({
+    required String deviceId,
+    required int oldIndex,
+    required int newIndex,
+  }) {
+    final list = _stagedAttachments[deviceId];
+    if (list == null || oldIndex < 0 || oldIndex >= list.length) return;
+    final target = newIndex.clamp(0, list.length - 1);
+    final item = list.removeAt(oldIndex);
+    list.insert(target, item);
+    notifyListeners();
+  }
+
+  void setStagedPresentation({
+    required String deviceId,
+    required String stagedId,
+    required AttachmentPresentation presentation,
+  }) {
+    final list = _stagedAttachments[deviceId];
+    if (list == null) return;
+    final index = list.indexWhere((entry) => entry.id == stagedId);
+    if (index < 0 || list[index].presentation == presentation) return;
+    list[index] = list[index].copyWith(presentation: presentation);
+    notifyListeners();
+  }
+
   /// Wipe the bucket — used after a successful `sendStagedBundle` and
   /// when the user navigates away from the contact and explicitly
   /// abandons the bundle.
@@ -5171,7 +5917,8 @@ class MessengerController extends ChangeNotifier {
       final effective = effectiveCaption == item.caption
           ? item
           : item.copyWith(caption: effectiveCaption);
-      if (effective.caption.isNotEmpty) {
+      if (effective.caption.isNotEmpty ||
+          effective.presentation == AttachmentPresentation.file) {
         if (current.isNotEmpty) {
           albums.add(current);
           current = <StagedAttachment>[];
@@ -5248,6 +5995,12 @@ class MessengerController extends ChangeNotifier {
   /// timer (the symptom the user reported when toggling VPN mid-transfer).
   void onConnectivityChanged({String? interfaceLabel}) {
     final label = interfaceLabel ?? 'unknown';
+    final normalizedLabel = label.toLowerCase();
+    _networkCostClass = normalizedLabel.contains('none')
+        ? NetworkCostClass.offline
+        : normalizedLabel.contains('mobile')
+        ? NetworkCostClass.metered
+        : NetworkCostClass.unmetered;
     appendDebugLog(
       'Connectivity changed ($label) — kicking active transfers + polling.',
     );
@@ -5273,8 +6026,10 @@ class MessengerController extends ChangeNotifier {
     // original interval against a stale interface.
     for (final state in _inboundAttachments.values) {
       state.retryTimer?.cancel();
+      state.requestedInFlight.clear();
       final peer = _contactByDeviceId(state.peerDeviceId);
       if (peer == null) continue;
+      _scheduleAttachmentRetry(state.descriptor.id);
       _topUpInboundWindow(state, peer);
     }
     // Kick every outbound queue — the new interface may have a viable
@@ -5321,6 +6076,7 @@ class MessengerController extends ChangeNotifier {
     unawaited(_sendAttachmentCancel(contact, attachmentId));
     _clearOutboundAttempt(contact.deviceId, state.messageId);
     _outboundAttachments.remove(attachmentId);
+    unawaited(state.closeFile());
     _activeOutboundByContact.remove(contact.deviceId);
     _outboundQueueByContact[contact.deviceId]?.remove(attachmentId);
     _updateMessageState(
@@ -5331,18 +6087,55 @@ class MessengerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> cancelTransfer(String attachmentId) async {
+    if (_outboundAttachments.containsKey(attachmentId)) {
+      cancelAttachmentById(attachmentId);
+      return;
+    }
+    final state = _inboundAttachments.remove(attachmentId);
+    if (state == null) return;
+    state.retryTimer?.cancel();
+    await state.closeFile();
+    final contact = _contactByDeviceId(state.peerDeviceId);
+    if (contact != null) {
+      unawaited(_sendAttachmentCancel(contact, attachmentId));
+    }
+    _setTransferSessionState(attachmentId, TransferState.canceled);
+    _updateMessageState(
+      state.peerDeviceId,
+      state.messageId,
+      DeliveryState.canceled,
+    );
+    await _deleteAttachmentArtifacts(attachmentId);
+    await _saveSnapshotSilently(notify: true);
+  }
+
   /// User-initiated retry of a Failed attachment. Resets the auto-retry
   /// counter, clears in-flight chunk progress so the queue worker starts
   /// fresh, flips the parent message back to `sending`, and re-enqueues.
   /// Invoked by the bubble's "tap to retry" InkWell (nightly.9).
   void retryAttachment(String attachmentId) {
     final state = _outboundAttachments[attachmentId];
-    if (state == null) return;
+    if (state == null) {
+      final inbound = _inboundAttachments[attachmentId];
+      if (inbound == null || inbound.awaitingAcceptance) return;
+      final contact = _contactByDeviceId(inbound.peerDeviceId);
+      if (contact == null) return;
+      inbound
+        ..retryAttempts = 0
+        ..nextRetryAt = null
+        ..requestedInFlight.clear();
+      _setTransferSessionState(attachmentId, TransferState.reconnecting);
+      _topUpInboundWindow(inbound, contact);
+      notifyListeners();
+      return;
+    }
     final contact = _contactByDeviceId(state.peerDeviceId);
     if (contact == null) return;
     state.autoRetries = 0;
     state.highestChunkSent = -1;
     state.peerReceivedCount = null;
+    state.peerReceivedBytes = null;
     state.peerProgressAt = null;
     _updateMessageState(
       state.peerDeviceId,
@@ -5371,6 +6164,7 @@ class MessengerController extends ChangeNotifier {
       // firing chunk_requests for a message that no longer exists.
       final inboundState = _inboundAttachments.remove(attachmentId);
       inboundState?.retryTimer?.cancel();
+      if (inboundState != null) unawaited(inboundState.closeFile());
       _assembledAttachments.remove(attachmentId);
       _removeTransferSession(attachmentId);
       unawaited(_deleteAttachmentArtifacts(attachmentId));
@@ -6116,10 +6910,16 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> pollNow() async {
-    if (_polling || !hasIdentity) {
+    if (!hasIdentity) {
       return;
     }
-    _polling = true;
+    final activePoll = _pollCompleter;
+    if (activePoll != null) {
+      await activePoll.future;
+      return;
+    }
+    final pollCompleter = Completer<void>();
+    _pollCompleter = pollCompleter;
     notifyListeners();
     try {
       await _ensureLocalRelayRunning();
@@ -6145,7 +6945,7 @@ class MessengerController extends ChangeNotifier {
           _fetchCallCount++;
           final stopwatch = Stopwatch()..start();
           final expectedRelayKey = await _requireOperationalRelayPin(route);
-          final envelopes = await _relayClient.fetchEnvelopes(
+          final batch = await _relayClient.fetchLeasedEnvelopes(
             host: route.host,
             port: route.port,
             protocol: route.protocol,
@@ -6155,6 +6955,7 @@ class MessengerController extends ChangeNotifier {
                 ? const Duration(milliseconds: 900)
                 : const Duration(seconds: 4),
           );
+          final envelopes = batch.envelopes;
           stopwatch.stop();
           _routeHealthTracker.recordSuccess(
             route,
@@ -6165,6 +6966,16 @@ class MessengerController extends ChangeNotifier {
             relaySuccess = true;
           }
           processed += await _processEnvelopes(envelopes);
+          if (batch.leaseId case final leaseId?) {
+            await _relayClient.acknowledgeLease(
+              host: route.host,
+              port: route.port,
+              protocol: route.protocol,
+              recipientDeviceId: me.deviceId,
+              leaseId: leaseId,
+              expectedIdentityPublicKeyBase64: expectedRelayKey,
+            );
+          }
           if (envelopes.isNotEmpty) {
             routeNotes.add('${route.kind.name}:${route.host}');
           }
@@ -6198,7 +7009,10 @@ class MessengerController extends ChangeNotifier {
       _statusMessage = 'Route poll failed: $error';
       notifyListeners();
     } finally {
-      _polling = false;
+      if (identical(_pollCompleter, pollCompleter)) {
+        _pollCompleter = null;
+      }
+      if (!pollCompleter.isCompleted) pollCompleter.complete();
       _reschedulePolling();
       notifyListeners();
     }
@@ -6269,10 +7083,10 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
       final stopwatch = Stopwatch()..start();
-      List<RelayEnvelope> envelopes = const [];
+      RelayFetchBatch batch = const RelayFetchBatch(envelopes: []);
       try {
         final expectedRelayKey = await _requireOperationalRelayPin(route);
-        envelopes = await _relayClient.fetchEnvelopes(
+        batch = await _relayClient.fetchLeasedEnvelopes(
           host: route.host,
           port: route.port,
           protocol: route.protocol,
@@ -6292,8 +7106,26 @@ class MessengerController extends ChangeNotifier {
         await Future<void>.delayed(const Duration(seconds: 2));
         continue;
       }
+      final envelopes = batch.envelopes;
       if (envelopes.isNotEmpty) {
         await _processEnvelopes(envelopes);
+        if (batch.leaseId case final leaseId?) {
+          try {
+            await _relayClient.acknowledgeLease(
+              host: route.host,
+              port: route.port,
+              protocol: route.protocol,
+              recipientDeviceId: me.deviceId,
+              leaseId: leaseId,
+              expectedIdentityPublicKeyBase64:
+                  await _requireOperationalRelayPin(route),
+            );
+          } catch (error) {
+            // The lease expires and replays. Message-id deduplication makes
+            // that safe, while preserving at-least-once delivery.
+            appendDebugLog('Relay lease acknowledgement failed: $error');
+          }
+        }
         _markRuntimeActivity();
         notifyListeners();
       } else if (stopwatch.elapsed < const Duration(seconds: 1)) {
@@ -6834,6 +7666,65 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     super.notifyListeners();
+    _scheduleTransferForegroundSync();
+  }
+
+  void _scheduleTransferForegroundSync() {
+    if (_transferNotificationTimer?.isActive == true) return;
+    _transferNotificationTimer = Timer(
+      const Duration(milliseconds: 500),
+      _syncTransferForeground,
+    );
+  }
+
+  Future<void> _syncTransferForeground() async {
+    final active = transferSnapshots
+        .where(
+          (entry) =>
+              entry.phase.isActive || entry.phase == TransferPhase.paused,
+        )
+        .toList(growable: false);
+    if (active.isEmpty) {
+      await _platformBridge.stopTransferForeground();
+      return;
+    }
+    final transferred = active.fold<int>(
+      0,
+      (value, entry) => value + entry.bytesTransferred,
+    );
+    final total = active.fold<int>(
+      0,
+      (value, entry) => value + entry.totalBytes,
+    );
+    await _platformBridge.updateTransferForeground(
+      title: active.length == 1
+          ? attachmentDescriptorFor(active.first.id)?.fileName ??
+                'Conest transfer'
+          : '${active.length} Conest transfers',
+      transferredBytes: transferred,
+      totalBytes: total,
+      paused: active.every((entry) => entry.phase == TransferPhase.paused),
+    );
+  }
+
+  void _handleNativeTransferControl(String action) {
+    switch (action) {
+      case 'pause_all':
+        unawaited(pauseAllTransfers());
+      case 'resume_all':
+        unawaited(resumeAllTransfers());
+      case 'cancel_all':
+        final ids = transferSnapshots
+            .where(
+              (entry) =>
+                  entry.phase.isActive || entry.phase == TransferPhase.paused,
+            )
+            .map((entry) => entry.id)
+            .toList(growable: false);
+        for (final id in ids) {
+          unawaited(cancelTransfer(id));
+        }
+    }
   }
 
   Future<int> _processEnvelopes(
@@ -7344,8 +8235,17 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     Uint8List? posterBytes;
+    final manifestThumbnail = descriptor.thumbnailBase64;
+    if (manifestThumbnail != null) {
+      try {
+        posterBytes = base64Decode(manifestThumbnail);
+      } catch (_) {
+        return;
+      }
+      if (posterBytes.length > 32 * 1024) return;
+    }
     final posterValue = payload['posterBase64'];
-    if (posterValue != null) {
+    if (posterBytes == null && posterValue != null) {
       if (posterValue is! String || posterValue.isEmpty) return;
       try {
         posterBytes = base64Decode(posterValue);
@@ -7377,7 +8277,17 @@ class MessengerController extends ChangeNotifier {
     final wasIdle = !hasActiveTransfer;
     final requiresLan = descriptor.sizeBytes > maxAttachmentSizeBytes;
     final directAvailable = _hasUsableLargeDirectTransport(sender);
-    final awaitingAcceptance = requiresLan && !directAvailable;
+    final autoDownload =
+        (_snapshot.identity?.connectivity.autoDownloadPreset ??
+                AutoDownloadPreset.medium)
+            .allows(
+              mimeType: descriptor.mimeType,
+              sizeBytes: descriptor.sizeBytes,
+              network: _networkCostClass,
+              verifiedContact: sender.canSendOutbound,
+            );
+    final awaitingAcceptance =
+        !autoDownload || (requiresLan && !directAvailable);
     final partialPath = awaitingAcceptance
         ? null
         : await _createInboundPartialFile(descriptor);
@@ -7448,11 +8358,12 @@ class MessengerController extends ChangeNotifier {
         descriptor.sizeBytes <= 0 ||
         descriptor.sizeBytes > maxLanAttachmentSizeBytes ||
         descriptor.chunkCount <= 0 ||
+        descriptor.protocolVersion != 2 ||
         descriptor.chunkHashes.isNotEmpty ||
         (descriptor.chunkSize != _attachmentChunkSize &&
             descriptor.chunkSize != _lanAttachmentChunkSize) ||
         descriptor.effectiveChunkCount <= 0 ||
-        descriptor.effectiveChunkCount > 4096 ||
+        descriptor.effectiveChunkCount > 16384 ||
         descriptor.effectiveChunkCount !=
             (descriptor.sizeBytes + descriptor.chunkSize - 1) ~/
                 descriptor.chunkSize ||
@@ -7468,7 +8379,10 @@ class MessengerController extends ChangeNotifier {
       throw const FormatException('Large attachments require LAN chunks.');
     }
     if (base64Decode(descriptor.fileHashBase64).length != 32 ||
-        base64Decode(descriptor.encryptionKeyBase64).length != 32) {
+        base64Decode(descriptor.encryptionKeyBase64).length != 32 ||
+        base64Decode(descriptor.noncePrefixBase64).length != 16 ||
+        (descriptor.thumbnailBase64 != null &&
+            base64Decode(descriptor.thumbnailBase64!).length > 32 * 1024)) {
       throw const FormatException('Attachment descriptor keys are invalid.');
     }
     return AttachmentDescriptor(
@@ -7481,6 +8395,10 @@ class MessengerController extends ChangeNotifier {
       chunkCount: descriptor.effectiveChunkCount,
       fileHashBase64: descriptor.fileHashBase64,
       encryptionKeyBase64: descriptor.encryptionKeyBase64,
+      protocolVersion: descriptor.protocolVersion,
+      noncePrefixBase64: descriptor.noncePrefixBase64,
+      presentation: descriptor.presentation,
+      thumbnailBase64: descriptor.thumbnailBase64,
       createdAt: createdAt,
     );
   }
@@ -7582,9 +8500,14 @@ class MessengerController extends ChangeNotifier {
         recipientDeviceId: peer.deviceId,
         envelope: envelope,
       );
-    } catch (_) {
+    } catch (error) {
       // Retry on next poll cycle; the receiver still has the inbound
       // state, so the request will be re-issued.
+      appendDebugLog(
+        'chunk_req route failed → ${peer.alias} idx=$index '
+        'attachmentId=$attachmentId: $error',
+      );
+      inbound.requestedInFlight.remove(index);
     }
   }
 
@@ -7628,7 +8551,11 @@ class MessengerController extends ChangeNotifier {
     if (index < 0 || index >= state.descriptor.effectiveChunkCount) {
       return;
     }
-    if (state.requiresLan && !_hasUsableLargeDirectTransport(requester)) {
+    final allowLargeIrohRelay =
+        state.requiresLan && _largeIrohRelayAllowed(attachmentId);
+    if (state.requiresLan &&
+        !allowLargeIrohRelay &&
+        !_hasUsableLargeDirectTransport(requester)) {
       _setTransferSessionState(
         attachmentId,
         TransferState.waitingForLan,
@@ -7654,24 +8581,19 @@ class MessengerController extends ChangeNotifier {
     }
     final digest = await Sha256().hash(chunkBytes);
     final hash = base64Encode(digest.bytes);
-    final chunkCipher = Chacha20.poly1305Aead();
-    final random = Random.secure();
-    final chunkNonce = List<int>.generate(
-      chunkCipher.nonceLength,
-      (_) => random.nextInt(256),
-    );
+    final chunkCipher = Xchacha20.poly1305Aead();
+    final chunkNonce = _attachmentBlockNonce(state.descriptor, index);
     final encryptedChunk = await chunkCipher.encrypt(
       chunkBytes,
       secretKey: SecretKey(base64Decode(state.descriptor.encryptionKeyBase64)),
       nonce: chunkNonce,
       aad: _attachmentChunkAssociatedData(
-        attachmentId,
+        state.descriptor,
         index,
         chunkBytes.length,
       ),
     );
     final packedChunk = <int>[
-      ...encryptedChunk.nonce,
       ...encryptedChunk.cipherText,
       ...encryptedChunk.mac.bytes,
     ];
@@ -7737,7 +8659,9 @@ class MessengerController extends ChangeNotifier {
             : 'LAN-direct PUT to ${requester.alias} failed; falling back to relay.',
       );
     }
-    if (state.requiresLan && !_hasUsableLargeDirectTransport(requester)) {
+    if (state.requiresLan &&
+        !allowLargeIrohRelay &&
+        !_hasUsableLargeDirectTransport(requester)) {
       _setTransferSessionState(
         attachmentId,
         TransferState.waitingForLan,
@@ -7750,8 +8674,11 @@ class MessengerController extends ChangeNotifier {
         contact: requester,
         recipientDeviceId: requester.deviceId,
         envelope: envelope,
-        allowRelayedPaths: !state.requiresLan,
+        allowRelayedPaths: !state.requiresLan || allowLargeIrohRelay,
         allowLegacyRoutes: !state.requiresLan,
+        allowedUnifiedKinds: state.requiresLan
+            ? const <TransportKind>{TransportKind.iroh}
+            : null,
       );
       // Sender progress + stall-timer activity refresh. Only advance if
       // this is the active outbound for this contact (the receiver could
@@ -7794,6 +8721,20 @@ class MessengerController extends ChangeNotifier {
         state.lastRouteFallbackAt = DateTime.now().toUtc();
         notifyListeners();
       }
+      if (state.requiresLan && !allowLargeIrohRelay) {
+        _setTransferSessionState(
+          attachmentId,
+          TransferState.waitingForLan,
+          error:
+              'Direct route unavailable. Continue over Iroh relay or wait for direct.',
+        );
+      } else {
+        _setTransferSessionState(
+          attachmentId,
+          TransferState.reconnecting,
+          error: 'Transfer route failed; retrying without losing progress.',
+        );
+      }
     }
   }
 
@@ -7822,17 +8763,11 @@ class MessengerController extends ChangeNotifier {
     if (offset < 0 || expectedLength <= 0) {
       throw const FormatException('Attachment chunk offset is invalid.');
     }
-    final handle = await file.open();
-    try {
-      await handle.setPosition(offset);
-      final bytes = await handle.read(expectedLength);
-      if (bytes.length != expectedLength) {
-        throw const FormatException('Attachment source ended unexpectedly.');
-      }
-      return bytes;
-    } finally {
-      await handle.close();
+    final bytes = await state.readChunk(offset, expectedLength);
+    if (bytes.length != expectedLength) {
+      throw const FormatException('Attachment source ended unexpectedly.');
     }
+    return bytes;
   }
 
   Future<void> _handleAttachmentChunk(
@@ -7877,28 +8812,26 @@ class MessengerController extends ChangeNotifier {
       state.descriptor.sizeBytes - offset,
     );
     final packedBytes = base64Decode(chunk.ciphertextBase64);
-    final cipher = Chacha20.poly1305Aead();
-    if (packedBytes.length !=
-        cipher.nonceLength + expectedLength + cipher.macAlgorithm.macLength) {
+    final cipher = Xchacha20.poly1305Aead();
+    if (packedBytes.length != expectedLength + cipher.macAlgorithm.macLength) {
       state.requestedInFlight.remove(chunk.index);
       return;
     }
-    final nonceEnd = cipher.nonceLength;
     final macStart = packedBytes.length - cipher.macAlgorithm.macLength;
     final Uint8List bytes;
     try {
       bytes = Uint8List.fromList(
         await cipher.decrypt(
           SecretBox(
-            packedBytes.sublist(nonceEnd, macStart),
-            nonce: packedBytes.sublist(0, nonceEnd),
+            packedBytes.sublist(0, macStart),
+            nonce: _attachmentBlockNonce(state.descriptor, chunk.index),
             mac: Mac(packedBytes.sublist(macStart)),
           ),
           secretKey: SecretKey(
             base64Decode(state.descriptor.encryptionKeyBase64),
           ),
           aad: _attachmentChunkAssociatedData(
-            chunk.attachmentId,
+            state.descriptor,
             chunk.index,
             expectedLength,
           ),
@@ -7926,34 +8859,16 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     if (!state.received.contains(chunk.index)) {
-      final partial = File(state.partialPath!);
-      // append is the non-truncating read/write RandomAccessFile mode;
-      // setPosition then supports sparse and out-of-order chunk writes.
-      final handle = await partial.open(mode: FileMode.append);
-      try {
-        await handle.setPosition(offset);
-        await handle.writeFrom(bytes);
-        await handle.flush();
-      } finally {
-        await handle.close();
-      }
+      await state.writeChunk(offset, bytes);
       state.received.add(chunk.index);
-      final session = _transferSessionById(chunk.attachmentId);
-      if (session != null) {
-        final completed = state.received.toList()..sort();
-        _upsertTransferSession(
-          session.copyWith(
-            state: TransferState.transferring,
-            completedChunks: completed,
-            bytesTransferred: min(
-              state.descriptor.sizeBytes,
-              completed.length * state.descriptor.chunkSize,
-            ),
-            updatedAt: _now().toUtc(),
-            clearLastError: true,
-          ),
-        );
-        unawaited(_saveSnapshotSilently(notify: false, debounce: true));
+      state.recordProgress();
+      // Persist only crash-safe checkpoints. The old path flushed, closed and
+      // rewrote the encrypted vault for every block, which made large files
+      // progressively slower. A crash can now replay at most 8 MiB / 2 s.
+      if (state.shouldCheckpoint || state.isComplete) {
+        await _checkpointInboundTransfer(chunk.attachmentId, state);
+      } else {
+        _scheduleInboundCheckpoint(chunk.attachmentId, state);
       }
     }
     // Whatever the path was, this index is no longer outstanding.
@@ -7961,6 +8876,7 @@ class MessengerController extends ChangeNotifier {
     // Reset the retry budget on any successful chunk arrival; the transfer
     // is making forward progress so we don't need to escalate.
     state.retryAttempts = 0;
+    state.nextRetryAt = null;
     appendDebugLog(
       'chunk_resp rx ← ${sender.alias} idx=${chunk.index} '
       '${bytes.length}B attachmentId=${chunk.attachmentId}',
@@ -7973,6 +8889,8 @@ class MessengerController extends ChangeNotifier {
     _maybeSendAttachmentProgress(state, sender, force: state.isComplete);
     if (state.isComplete) {
       state.retryTimer?.cancel();
+      await state.checkpoint();
+      await state.closeFile();
       final partial = File(state.partialPath!);
       final wholeDigest = await dart_crypto.sha256
           .bind(partial.openRead())
@@ -7998,6 +8916,7 @@ class MessengerController extends ChangeNotifier {
       if (await cacheFile.exists()) await cacheFile.delete();
       await partial.rename(cacheFile.path);
       _locallyAvailableAttachments.add(chunk.attachmentId);
+      _recordAttachmentCacheReference(chunk.attachmentId);
       if (state.descriptor.sizeBytes <= 8 * 1024 * 1024) {
         _assembledAttachments[chunk.attachmentId] = await cacheFile
             .readAsBytes();
@@ -8024,35 +8943,84 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  /// Re-requests the next missing chunk after a 5 s silence. Bounded by
-  /// [_inboundRetryLimit]; after that the inbound state is dropped so the
-  /// bubble can transition out of the spinner via the existing UI guards.
-  static const Duration _inboundRetryDelay = Duration(seconds: 5);
-  // Bumped from 5 to 12 in nightly.6 — large files over flaky LAN often
-  // need more than 5 stalls before the network steadies. 12 retries × 5 s
-  // = 60 s of glitching tolerated before the receiver abandons.
-  static const int _inboundRetryLimit = 12;
+  /// A stalled receive remains resumable. Connectivity outages use bounded
+  /// exponential retry instead of turning a valid large transfer into a
+  /// permanent failure after sixty seconds.
 
-  /// How many chunk requests the receiver keeps outstanding at any one
-  /// time. Strict request-response (window = 1) made every chunk wait for
-  /// a full RTT; window = 4 cut wall-clock 4×. Bumped to 8 in nightly.8
-  /// — 10 MB transfers on LAN now run in ~3 round-trips end-to-end.
+  void _scheduleInboundCheckpoint(
+    String attachmentId,
+    _InboundAttachmentState state,
+  ) {
+    state.checkpointTimer ??= Timer(
+      _InboundAttachmentState.checkpointInterval,
+      () async {
+        state.checkpointTimer = null;
+        if (!identical(_inboundAttachments[attachmentId], state) ||
+            state.received.isEmpty) {
+          return;
+        }
+        try {
+          await _checkpointInboundTransfer(attachmentId, state);
+        } catch (error) {
+          appendDebugLog(
+            'Checkpoint failed for $attachmentId; the last interval may be '
+            'requested again after restart: $error',
+          );
+        }
+      },
+    );
+  }
+
+  Future<void> _checkpointInboundTransfer(
+    String attachmentId,
+    _InboundAttachmentState state,
+  ) async {
+    state.checkpointTimer?.cancel();
+    state.checkpointTimer = null;
+    await state.checkpoint();
+    if (!identical(_inboundAttachments[attachmentId], state) &&
+        !state.isComplete) {
+      return;
+    }
+    final session = _transferSessionById(attachmentId);
+    if (session == null) return;
+    final completed = state.received.toList()..sort();
+    _upsertTransferSession(
+      session.copyWith(
+        state: TransferState.transferring,
+        completedChunks: completed,
+        bytesTransferred: _verifiedBytesFor(state.descriptor, completed),
+        updatedAt: _now().toUtc(),
+        clearLastError: true,
+      ),
+    );
+    await _saveSnapshotSilently(notify: false);
+  }
+
+  /// How many block requests the receiver keeps outstanding. Relay-sized
+  /// transfers stay conservatively bounded while direct-only large files use
+  /// a wider 4 MiB window and rely on LAN/QUIC backpressure.
   static const int _inboundChunkWindow = 8;
+  static const int _largeDirectInboundChunkWindow = 32;
 
   /// Tops up the inbound chunk-request window for [state] so up to
   /// [_inboundChunkWindow] requests are in flight. Idempotent — call after
   /// every chunk arrival, on offer accept, and on resume.
-  void _topUpInboundWindow(
+  Future<void> _topUpInboundWindow(
     _InboundAttachmentState state,
     ContactRecord sender,
-  ) {
+  ) async {
     if (state.paused ||
         !state.accepted ||
         state.awaitingAcceptance ||
         state.partialPath == null) {
       return;
     }
-    while (state.requestedInFlight.length < _inboundChunkWindow) {
+    final window = state.descriptor.sizeBytes > maxAttachmentSizeBytes
+        ? _largeDirectInboundChunkWindow
+        : _inboundChunkWindow;
+    final requests = <Future<void>>[];
+    while (state.requestedInFlight.length < window) {
       final next = state.nextUnrequestedIndex();
       if (next < 0) break;
       state.requestedInFlight.add(next);
@@ -8060,8 +9028,11 @@ class MessengerController extends ChangeNotifier {
         'chunk_req tx → ${sender.alias} idx=$next '
         'attachmentId=${state.descriptor.id}',
       );
-      unawaited(_sendAttachmentChunkRequest(sender, state.descriptor.id, next));
+      requests.add(
+        _sendAttachmentChunkRequest(sender, state.descriptor.id, next),
+      );
     }
+    await Future.wait(requests);
   }
 
   void _scheduleAttachmentRetry(String attachmentId) {
@@ -8077,7 +9048,13 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     state.retryTimer?.cancel();
-    state.retryTimer = Timer(_inboundRetryDelay, () {
+    final delay =
+        _transferRetryBackoff[min(
+          state.retryAttempts,
+          _transferRetryBackoff.length - 1,
+        )];
+    state.nextRetryAt = DateTime.now().toUtc().add(delay);
+    state.retryTimer = Timer(delay, () {
       final s = _inboundAttachments[attachmentId];
       if (s == null) return;
       if (s.paused || !s.accepted || s.partialPath == null) {
@@ -8086,25 +9063,19 @@ class MessengerController extends ChangeNotifier {
       }
       final peer = _contactByDeviceId(s.peerDeviceId);
       if (peer == null) return;
-      if (s.retryAttempts >= _inboundRetryLimit) {
-        appendDebugLog(
-          'Stuck transfer $attachmentId exceeded $_inboundRetryLimit '
-          'retries; abandoning.',
-        );
-        _inboundAttachments.remove(attachmentId);
-        if (!hasActiveTransfer) _reschedulePolling();
-        _updateMessageState(s.peerDeviceId, s.messageId, DeliveryState.failed);
-        notifyListeners();
-        return;
-      }
-      s.retryAttempts++;
+      s.nextRetryAt = null;
+      s.retryAttempts = min(s.retryAttempts + 1, 1 << 20);
+      s.requestedInFlight.clear();
+      _setTransferSessionState(
+        attachmentId,
+        TransferState.reconnecting,
+        error: 'Waiting for the next verified block.',
+      );
       appendDebugLog(
         'Re-requesting chunk ${s.nextMissingIndex} for $attachmentId '
-        '(retry ${s.retryAttempts}/$_inboundRetryLimit).',
+        '(retry ${s.retryAttempts}).',
       );
-      unawaited(
-        _sendAttachmentChunkRequest(peer, attachmentId, s.nextMissingIndex),
-      );
+      _topUpInboundWindow(s, peer);
       _scheduleAttachmentRetry(attachmentId);
     });
   }
@@ -8326,12 +9297,15 @@ class MessengerController extends ChangeNotifier {
     }
     state.lastProgressSentAt = now;
     final received = state.received.length;
+    final receivedBytes = state.receivedBytes;
     unawaited(
       _sendAttachmentProgress(
         sender,
         attachmentId: state.descriptor.id,
         received: received,
         total: state.descriptor.effectiveChunkCount,
+        receivedBytes: receivedBytes,
+        totalBytes: state.descriptor.sizeBytes,
       ),
     );
   }
@@ -8341,6 +9315,8 @@ class MessengerController extends ChangeNotifier {
     required String attachmentId,
     required int received,
     required int total,
+    required int receivedBytes,
+    required int totalBytes,
   }) async {
     if (!hasIdentity) return;
     final me = _requireIdentity();
@@ -8357,6 +9333,8 @@ class MessengerController extends ChangeNotifier {
           'attachmentId': attachmentId,
           'received': received,
           'total': total,
+          'receivedBytes': receivedBytes,
+          'totalBytes': totalBytes,
         }),
       );
       await _deliverToContact(
@@ -8380,8 +9358,20 @@ class MessengerController extends ChangeNotifier {
     if (attachmentId == null || received == null) return;
     final state = _outboundAttachments[attachmentId];
     if (state == null || state.peerDeviceId != sender.deviceId) return;
+    if (received < 0 || received > state.descriptor.effectiveChunkCount) {
+      return;
+    }
     state.peerReceivedCount = received;
-    state.peerProgressAt = DateTime.now().toUtc();
+    final exactBytes = (payload['receivedBytes'] as num?)?.toInt();
+    if (exactBytes != null &&
+        (exactBytes < 0 || exactBytes > state.descriptor.sizeBytes)) {
+      return;
+    }
+    state.recordPeerProgress(
+      exactBytes ??
+          _verifiedBytesFor(state.descriptor, Iterable<int>.generate(received)),
+      DateTime.now().toUtc(),
+    );
     notifyListeners();
   }
 
@@ -8403,6 +9393,7 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final session = _transferSessionById(attachmentId);
+    await state.closeFile();
     if (state.sourceKind == TransferSourceKind.privateSpool) {
       try {
         final source = File(state.sourcePath);
@@ -8411,6 +9402,7 @@ class MessengerController extends ChangeNotifier {
         if (await source.exists()) await source.rename(cache.path);
         if (await cache.exists()) {
           _locallyAvailableAttachments.add(attachmentId);
+          _recordAttachmentCacheReference(attachmentId);
         }
         if (state.descriptor.sizeBytes <= 8 * 1024 * 1024 &&
             await cache.exists()) {
@@ -8453,6 +9445,8 @@ class MessengerController extends ChangeNotifier {
     final inboundState = _inboundAttachments.remove(attachmentId);
     inboundState?.retryTimer?.cancel();
     final outboundState = _outboundAttachments.remove(attachmentId);
+    if (inboundState != null) unawaited(inboundState.closeFile());
+    if (outboundState != null) unawaited(outboundState.closeFile());
     _assembledAttachments.remove(attachmentId);
     _locallyAvailableAttachments.remove(attachmentId);
     _removeTransferSession(attachmentId);
@@ -10822,6 +11816,7 @@ class MessengerController extends ChangeNotifier {
     required RelayEnvelope envelope,
     bool allowRelayedPaths = true,
     bool allowLegacyRoutes = true,
+    Set<TransportKind>? allowedUnifiedKinds,
   }) async {
     // Defense in depth: the crypto layer already can't derive a shared
     // secret for a pending or archived contact (publicKeyBase64 is empty
@@ -10891,10 +11886,18 @@ class MessengerController extends ChangeNotifier {
     Future<void> tryUnifiedTransports() async {
       if (deliveredVia != null || !canTryRegistry) return;
       try {
+        final registryPolicies = allowedUnifiedKinds == null
+            ? policies
+            : <TransportKind, TransportPolicy>{
+                for (final entry in policies.entries)
+                  entry.key: allowedUnifiedKinds.contains(entry.key)
+                      ? entry.value
+                      : TransportPolicy.disabled,
+              };
         deliveredVia = await _deliverViaTransportRegistry(
           contact: contact,
           envelope: envelope,
-          policies: policies,
+          policies: registryPolicies,
           allowRelay: allowRelayedPaths,
         );
       } catch (error) {
@@ -10902,26 +11905,32 @@ class MessengerController extends ChangeNotifier {
       }
     }
 
-    final preferIroh =
-        policies[TransportKind.iroh] == TransportPolicy.preferred ||
-        (effective.online &&
-            effective.preferred == RoutingPreference.online &&
-            policies[TransportKind.iroh] != TransportPolicy.disabled);
     final preferredLan = preferredRoutes.where(
       (route) => route.kind == PeerRouteKind.lan,
     );
-    final preferredOnline = preferredRoutes.where(
-      (route) => route.kind != PeerRouteKind.lan,
+    final preferredDirectInternet = preferredRoutes.where(
+      (route) => route.kind == PeerRouteKind.directInternet,
     );
-    if (preferIroh) {
-      await tryUnifiedTransports();
-      await tryLegacy(preferredOnline);
-      await tryLegacy(preferredLan);
-    } else {
-      await tryLegacy(preferredLan);
-      await tryUnifiedTransports();
-      await tryLegacy(preferredOnline);
-    }
+    final preferredConestRelays = preferredRoutes.where(
+      (route) => route.kind == PeerRouteKind.relay,
+    );
+
+    // Attachment protocol v2 has one deterministic route order on every
+    // platform. In particular, an Iroh relay is still an Iroh path and must
+    // be exhausted before the durable Conest store-forward relay. This keeps
+    // the latter an offline-delivery route instead of accidentally making it
+    // the hot path when an old online preference is present after migration.
+    await tryLegacy(preferredLan);
+    await tryUnifiedTransports();
+    await tryLegacy(preferredDirectInternet);
+    await tryLegacy(preferredConestRelays);
+    // A contact can advertise one public endpoint while the user has
+    // configured a faster/private endpoint for the same signed relay. If the
+    // advertised endpoint is currently backed off, it will not enter the
+    // health-ranking pass below. Reuse only aliases that were already proven
+    // to carry the same stable relay instance id and are still explicitly in
+    // the user's configured/contact-trusted relay set.
+    await tryLegacy(_knownHealthyRelayAliasesFor(candidateRoutes));
     if (deliveredVia == null) {
       // Rank the complete advertised set, including a route whose first
       // store just failed. Its signed health response carries the stable
@@ -10963,6 +11972,9 @@ class MessengerController extends ChangeNotifier {
           rankedChecks = await _rankRouteHealthForDelivery(rankCandidates);
         } finally {
           for (final route in preserveFailureFor) {
+            final observedRelayInstanceId = _routeHealthTracker
+                .healthFor(route)
+                ?.relayInstanceId;
             final runtime = runtimeBefore[route.routeKey];
             if (runtime == null) {
               _routeHealthTracker.runtimeMap.remove(route.routeKey);
@@ -10973,7 +11985,15 @@ class MessengerController extends ChangeNotifier {
             if (health == null) {
               _routeHealthTracker.healthMap.remove(route.routeKey);
             } else {
-              _routeHealthTracker.healthMap[route.routeKey] = health;
+              _routeHealthTracker.healthMap[route.routeKey] = PeerRouteHealth(
+                route: health.route,
+                available: health.available,
+                latency: health.latency,
+                checkedAt: health.checkedAt,
+                relayInstanceId:
+                    health.relayInstanceId ?? observedRelayInstanceId,
+                error: health.error,
+              );
             }
           }
         }
@@ -10993,6 +12013,43 @@ class MessengerController extends ChangeNotifier {
       );
     }
     return result;
+  }
+
+  List<PeerEndpoint> _knownHealthyRelayAliasesFor(
+    List<PeerEndpoint> advertisedRoutes,
+  ) {
+    final me = identity;
+    if (me == null) return const <PeerEndpoint>[];
+    final relayIds = advertisedRoutes
+        .where((route) => route.kind == PeerRouteKind.relay)
+        .map(_routeHealthTracker.healthFor)
+        .whereType<PeerRouteHealth>()
+        .map((health) => health.relayInstanceId)
+        .whereType<String>()
+        .toSet();
+    if (relayIds.isEmpty) return const <PeerEndpoint>[];
+
+    final advertisedKeys = advertisedRoutes
+        .map((route) => route.routeKey)
+        .toSet();
+    final trustedRoutes = _effectiveRelayRoutesForIdentity(me);
+    final matches = <PeerRouteHealth>[];
+    for (final route in trustedRoutes) {
+      if (advertisedKeys.contains(route.routeKey) ||
+          !_routeHealthTracker.isEligibleNow(route)) {
+        continue;
+      }
+      final health = _routeHealthTracker.healthFor(route);
+      if (health == null ||
+          !health.available ||
+          health.relayInstanceId == null ||
+          !relayIds.contains(health.relayInstanceId)) {
+        continue;
+      }
+      matches.add(health);
+    }
+    matches.sort(_routeHealthTracker.compareHealth);
+    return matches.map((health) => health.route).toList(growable: false);
   }
 
   Map<TransportKind, TransportPolicy> _effectiveTransportPolicies(
@@ -13997,12 +15054,22 @@ class MessengerController extends ChangeNotifier {
     _stopLongPoll();
     _pollTimer?.cancel();
     _pendingSaveTimer?.cancel();
+    _transferNotificationTimer?.cancel();
+    unawaited(_transferControlSubscription.cancel());
+    unawaited(_platformBridge.stopTransferForeground());
     _localRelayNode.onEnvelopeStored = null;
     unawaited(_stopPairingBeacon());
     unawaited(_platformBridge.setAndroidBackgroundRuntimeEnabled(false));
     unawaited(_localRelayNode.stop());
     unawaited(_lanDirectChannel?.stop());
     unawaited(_stopTransportRegistry());
+    for (final state in _outboundAttachments.values) {
+      unawaited(state.closeFile());
+    }
+    for (final state in _inboundAttachments.values) {
+      state.retryTimer?.cancel();
+      unawaited(state.closeFile());
+    }
     super.dispose();
   }
 }
@@ -14100,6 +15167,32 @@ class _OutboundAttachmentState {
   final AttachmentDescriptor descriptor;
   final bool requiresLan;
 
+  RandomAccessFile? _sourceHandle;
+  Future<void> _sourceIo = Future<void>.value();
+
+  /// Serializes seeks on one long-lived descriptor. Multiple receiver
+  /// requests may arrive concurrently, but RandomAccessFile has one cursor.
+  Future<Uint8List> readChunk(int offset, int length) {
+    final completer = Completer<Uint8List>();
+    _sourceIo = _sourceIo.catchError((_) {}).then((_) async {
+      try {
+        final handle = _sourceHandle ??= await File(sourcePath).open();
+        await handle.setPosition(offset);
+        completer.complete(Uint8List.fromList(await handle.read(length)));
+      } catch (error, stackTrace) {
+        completer.completeError(error, stackTrace);
+      }
+    });
+    return completer.future;
+  }
+
+  Future<void> closeFile() async {
+    await _sourceIo.catchError((_) {});
+    final handle = _sourceHandle;
+    _sourceHandle = null;
+    await handle?.close();
+  }
+
   /// Highest chunk index the receiver has successfully pulled. Drives the
   /// sender-side progress bar. Reset to -1 on entry, advanced by every
   /// `_handleAttachmentChunkRequest` that we honour.
@@ -14127,13 +15220,35 @@ class _OutboundAttachmentState {
   /// shows — fixes the nightly.7 desync where each side computed its
   /// own value (LocalSend-style).
   int? peerReceivedCount;
+  int? peerReceivedBytes;
   DateTime? peerProgressAt;
+  DateTime? _rateSampleAt;
+  int _rateSampleBytes = 0;
+  double? bytesPerSecond;
+
+  void recordPeerProgress(int bytes, DateTime at) {
+    final previousAt = _rateSampleAt;
+    if (previousAt != null && bytes >= _rateSampleBytes) {
+      final seconds = at.difference(previousAt).inMicroseconds / 1000000;
+      if (seconds > 0) {
+        final instant = (bytes - _rateSampleBytes) / seconds;
+        bytesPerSecond = bytesPerSecond == null
+            ? instant
+            : bytesPerSecond! * 0.7 + instant * 0.3;
+      }
+    }
+    _rateSampleAt = at;
+    _rateSampleBytes = bytes;
+    peerReceivedBytes = bytes;
+    peerProgressAt = at;
+  }
 
   /// Number of automatic re-enqueues fired by the stall escape hatch
   /// while the contact stayed reachable. Capped at
   /// [MessengerController._outboundAutoRetryLimit]; after that the
   /// bubble flips to Failed and waits for a manual tap.
   int autoRetries = 0;
+  DateTime? nextRetryAt;
 
   /// Set whenever a chunk is delivered via a NON-primary route — the
   /// preferred route (usually LAN) failed and the rotation inside
@@ -14202,14 +15317,86 @@ class _InboundAttachmentState {
   String? partialPath;
   bool awaitingAcceptance;
   bool accepted;
+  RandomAccessFile? _partialHandle;
+  Future<void> _partialIo = Future<void>.value();
+  int _bytesSinceCheckpoint = 0;
+  DateTime _lastCheckpointAt = DateTime.now().toUtc();
+  DateTime? _rateSampleAt;
+  int _rateSampleBytes = 0;
+  double? bytesPerSecond;
+
+  static const int checkpointBytes = 8 * 1024 * 1024;
+  static const Duration checkpointInterval = Duration(seconds: 2);
+
+  Future<void> writeChunk(int offset, Uint8List bytes) {
+    final completer = Completer<void>();
+    _partialIo = _partialIo.catchError((_) {}).then((_) async {
+      try {
+        final path = partialPath;
+        if (path == null) throw StateError('Partial attachment path is gone.');
+        final handle = _partialHandle ??= await File(
+          path,
+        ).open(mode: FileMode.append);
+        await handle.setPosition(offset);
+        await handle.writeFrom(bytes);
+        _bytesSinceCheckpoint += bytes.length;
+        completer.complete();
+      } catch (error, stackTrace) {
+        completer.completeError(error, stackTrace);
+      }
+    });
+    return completer.future;
+  }
+
+  bool get shouldCheckpoint =>
+      _bytesSinceCheckpoint >= checkpointBytes ||
+      DateTime.now().toUtc().difference(_lastCheckpointAt) >=
+          checkpointInterval;
+
+  Future<void> checkpoint() async {
+    await _partialIo;
+    await _partialHandle?.flush();
+    _bytesSinceCheckpoint = 0;
+    _lastCheckpointAt = DateTime.now().toUtc();
+  }
+
+  Future<void> closeFile() async {
+    checkpointTimer?.cancel();
+    checkpointTimer = null;
+    await _partialIo.catchError((_) {});
+    final handle = _partialHandle;
+    _partialHandle = null;
+    await handle?.close();
+  }
+
+  int get receivedBytes => _verifiedBytesFor(descriptor, received);
+
+  void recordProgress() {
+    final now = DateTime.now().toUtc();
+    final bytes = receivedBytes;
+    final previousAt = _rateSampleAt;
+    if (previousAt != null && bytes >= _rateSampleBytes) {
+      final seconds = now.difference(previousAt).inMicroseconds / 1000000;
+      if (seconds > 0) {
+        final instant = (bytes - _rateSampleBytes) / seconds;
+        bytesPerSecond = bytesPerSecond == null
+            ? instant
+            : bytesPerSecond! * 0.7 + instant * 0.3;
+      }
+    }
+    _rateSampleAt = now;
+    _rateSampleBytes = bytes;
+  }
 
   /// Re-request timer that fires if no chunk has arrived for ~5 s. Reset on
   /// every received chunk; cancelled on completion or cancel/delete.
   Timer? retryTimer;
+  Timer? checkpointTimer;
 
   /// Number of consecutive timer-triggered re-requests. Capped to avoid an
   /// unbounded loop on a permanently-broken peer.
   int retryAttempts = 0;
+  DateTime? nextRetryAt;
 
   /// Bilateral pause state mirrors the outbound side.
   bool pausedByMe = false;
@@ -14398,6 +15585,62 @@ class _ScoringRelayClient implements RelayClient {
         limit: limit,
         timeout: timeout,
         waitFor: waitFor,
+        expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+      ),
+    );
+  }
+
+  @override
+  Future<RelayFetchBatch> fetchLeasedEnvelopes({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    int limit = 64,
+    Duration timeout = const Duration(seconds: 4),
+    Duration waitFor = Duration.zero,
+    Duration leaseFor = const Duration(seconds: 60),
+    String? expectedIdentityPublicKeyBase64,
+  }) {
+    return _track(
+      host: host,
+      port: port,
+      protocol: protocol,
+      action: () => inner.fetchLeasedEnvelopes(
+        host: host,
+        port: port,
+        protocol: protocol,
+        recipientDeviceId: recipientDeviceId,
+        limit: limit,
+        timeout: timeout,
+        waitFor: waitFor,
+        leaseFor: leaseFor,
+        expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+      ),
+    );
+  }
+
+  @override
+  Future<void> acknowledgeLease({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    required String leaseId,
+    Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
+  }) {
+    return _track(
+      host: host,
+      port: port,
+      protocol: protocol,
+      action: () => inner.acknowledgeLease(
+        host: host,
+        port: port,
+        protocol: protocol,
+        recipientDeviceId: recipientDeviceId,
+        leaseId: leaseId,
+        timeout: timeout,
         expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
       ),
     );

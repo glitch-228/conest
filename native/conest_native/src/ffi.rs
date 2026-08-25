@@ -189,6 +189,41 @@ pub unsafe extern "C" fn conest_iroh_send(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_iroh_send_v2(
+    handle: u64,
+    remote_endpoint_id: *const c_char,
+    bytes: *const u8,
+    bytes_len: usize,
+    allow_relay: bool,
+) -> *mut c_char {
+    let Some(transport) = transport(handle) else {
+        record_error("unknown native transport handle");
+        return std::ptr::null_mut();
+    };
+    if remote_endpoint_id.is_null() || bytes.is_null() {
+        record_error("null Iroh send argument");
+        return std::ptr::null_mut();
+    }
+    // SAFETY: pointers are borrowed only for this call and validated above.
+    let endpoint = match unsafe { CStr::from_ptr(remote_endpoint_id) }.to_str() {
+        Ok(value) => value.to_owned(),
+        Err(error) => {
+            record_error(error);
+            return std::ptr::null_mut();
+        }
+    };
+    // SAFETY: Dart provides a readable buffer of exactly `bytes_len` bytes.
+    let payload = unsafe { slice::from_raw_parts(bytes, bytes_len) }.to_vec();
+    match RUNTIME.block_on(transport.send_envelope_with_policy(endpoint, payload, allow_relay)) {
+        Ok(receipt) => json_string(&receipt),
+        Err(error) => {
+            record_error(error);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn conest_iroh_next(handle: u64) -> *mut c_char {
     let Some(transport) = transport(handle) else {
         record_error("unknown native transport handle");

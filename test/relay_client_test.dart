@@ -215,6 +215,78 @@ void main() {
     expect(pushed.messageId, 'msg-push');
   });
 
+  test('durable relay fetch returns a lease and acknowledges it', () async {
+    final actions = <String>[];
+    const leaseId = 'lease-0123456789abcdef';
+    final envelope = RelayEnvelope(
+      kind: 'direct_message',
+      messageId: 'msg-leased',
+      conversationId: 'conv-leased',
+      senderAccountId: 'acc-a',
+      senderDeviceId: 'dev-a',
+      recipientDeviceId: 'dev-b',
+      createdAt: DateTime.utc(2026, 8, 16),
+      payloadBase64: 'aGVsbG8=',
+    );
+    final server = await _startRawLineRelay((request) {
+      final action = request['action'] as String;
+      actions.add(action);
+      if (action == 'fetch_leased') {
+        expect(request['lease_ms'], 45000);
+        return jsonEncode({
+          'ok': true,
+          'messages': [envelope.toJson()],
+          'lease_id': leaseId,
+        });
+      }
+      expect(action, 'ack_lease');
+      expect(request['lease_id'], leaseId);
+      return jsonEncode({'ok': true, 'acked': true});
+    });
+    addTearDown(server.close);
+
+    const client = RelayClient();
+    final batch = await client.fetchLeasedEnvelopes(
+      host: InternetAddress.loopbackIPv4.address,
+      port: server.port,
+      recipientDeviceId: 'dev-b',
+      leaseFor: const Duration(seconds: 45),
+    );
+    expect(batch.requiresAcknowledgement, isTrue);
+    expect(batch.envelopes.single.messageId, 'msg-leased');
+    await client.acknowledgeLease(
+      host: InternetAddress.loopbackIPv4.address,
+      port: server.port,
+      recipientDeviceId: 'dev-b',
+      leaseId: batch.leaseId!,
+    );
+    expect(actions, ['fetch_leased', 'ack_lease']);
+  });
+
+  test('durable fetch falls back safely for a legacy relay', () async {
+    final actions = <String>[];
+    final server = await _startRawLineRelay((request) {
+      final action = request['action'] as String;
+      actions.add(action);
+      if (action == 'fetch_leased') {
+        return jsonEncode({'ok': false, 'error': 'unknown action'});
+      }
+      expect(action, 'fetch');
+      return jsonEncode({'ok': true, 'messages': <Object>[]});
+    });
+    addTearDown(server.close);
+
+    const client = RelayClient();
+    final batch = await client.fetchLeasedEnvelopes(
+      host: InternetAddress.loopbackIPv4.address,
+      port: server.port,
+      recipientDeviceId: 'dev-b',
+    );
+    expect(batch.requiresAcknowledgement, isFalse);
+    expect(batch.envelopes, isEmpty);
+    expect(actions, ['fetch_leased', 'fetch']);
+  });
+
   test('local relay validates mailbox ids and clamps fetch limits', () async {
     final reserved = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = reserved.port;

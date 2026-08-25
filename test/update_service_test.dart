@@ -126,6 +126,16 @@ List<Map<String, dynamic>> _releaseTrustAssets({
 }
 
 void main() {
+  test('nightly updates prefer signed manifest notes over release body', () {
+    expect(
+      resolveReleaseNotes(
+        manifestNotes: 'Signed attachment migration warning.',
+        releaseBody: 'Unsigned release body.',
+      ),
+      'Signed attachment migration warning.',
+    );
+  });
+
   test('automatic startup checks can be disabled for ghost mode', () async {
     var requestCount = 0;
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

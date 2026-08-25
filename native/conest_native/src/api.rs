@@ -1,8 +1,11 @@
-use std::{str::FromStr, sync::Arc};
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail};
 use flutter_rust_bridge::frb;
-use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMap, RelayMode, SecretKey, endpoint::presets};
+use iroh::{
+    Endpoint, EndpointAddr, EndpointId, RelayMap, RelayMode, SecretKey,
+    endpoint::{Connection, presets},
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc};
 
@@ -42,6 +45,10 @@ pub struct NativeInboundEnvelope {
 pub struct NativeTransport {
     endpoint: Endpoint,
     inbox: Arc<Mutex<mpsc::Receiver<NativeInboundEnvelope>>>,
+    /// QUIC is designed to multiplex streams. Keeping the established
+    /// connection here avoids a full discovery/NAT/TLS handshake for every
+    /// message or attachment block.
+    connections: Arc<Mutex<HashMap<EndpointId, Connection>>>,
     relay_enabled: bool,
 }
 
@@ -93,10 +100,16 @@ impl NativeTransport {
         }
         let endpoint = builder.bind().await.context("bind Iroh endpoint")?;
         let (inbox_tx, inbox_rx) = mpsc::channel(INBOX_CAPACITY);
-        tokio::spawn(run_accept_loop(endpoint.clone(), inbox_tx));
+        let connections = Arc::new(Mutex::new(HashMap::new()));
+        tokio::spawn(run_accept_loop(
+            endpoint.clone(),
+            inbox_tx,
+            Arc::clone(&connections),
+        ));
         Ok(Self {
             endpoint,
             inbox: Arc::new(Mutex::new(inbox_rx)),
+            connections,
             relay_enabled,
         })
     }
@@ -122,7 +135,17 @@ impl NativeTransport {
         remote_endpoint_id: String,
         bytes: Vec<u8>,
     ) -> Result<NativeDeliveryReceipt, String> {
-        self.send_to(remote_endpoint_id, bytes)
+        self.send_envelope_with_policy(remote_endpoint_id, bytes, true)
+            .await
+    }
+
+    pub async fn send_envelope_with_policy(
+        &self,
+        remote_endpoint_id: String,
+        bytes: Vec<u8>,
+        allow_relay: bool,
+    ) -> Result<NativeDeliveryReceipt, String> {
+        self.send_to(remote_endpoint_id, bytes, allow_relay)
             .await
             .map_err(|error| format!("{error:#}"))
     }
@@ -131,33 +154,84 @@ impl NativeTransport {
         &self,
         remote_endpoint_id: String,
         bytes: Vec<u8>,
+        allow_relay: bool,
     ) -> Result<NativeDeliveryReceipt> {
         let endpoint_id =
             EndpointId::from_str(&remote_endpoint_id).context("parse remote Iroh EndpointId")?;
-        self.send_to_addr(EndpointAddr::new(endpoint_id), bytes)
+        self.send_to_addr_with_policy(EndpointAddr::new(endpoint_id), bytes, allow_relay)
             .await
     }
 
-    async fn send_to_addr(
+    async fn send_to_addr_with_policy(
         &self,
         remote_addr: EndpointAddr,
         bytes: Vec<u8>,
+        allow_relay: bool,
     ) -> Result<NativeDeliveryReceipt> {
         if bytes.is_empty() || bytes.len() > MAX_ENVELOPE_BYTES {
             bail!("Iroh envelope size is outside the allowed range");
         }
         let endpoint_id = remote_addr.id;
+        let connection = self.connection_for(remote_addr.clone()).await?;
+        match self
+            .send_on_connection(endpoint_id, &connection, &bytes, allow_relay)
+            .await
+        {
+            Ok(receipt) => Ok(receipt),
+            Err(first_error) => {
+                // A pooled connection may have closed between lookup and
+                // open_bi. Evict it and retry exactly once on a fresh QUIC
+                // connection; higher layers retain their normal route retry.
+                self.connections.lock().await.remove(&endpoint_id);
+                let fresh = self
+                    .endpoint
+                    .connect(remote_addr, CONEST_ALPN)
+                    .await
+                    .with_context(|| {
+                        format!("reconnect after pooled Iroh failure: {first_error:#}")
+                    })?;
+                self.connections
+                    .lock()
+                    .await
+                    .insert(endpoint_id, fresh.clone());
+                self.send_on_connection(endpoint_id, &fresh, &bytes, allow_relay)
+                    .await
+            }
+        }
+    }
+
+    async fn connection_for(&self, remote_addr: EndpointAddr) -> Result<Connection> {
+        let endpoint_id = remote_addr.id;
+        if let Some(connection) = self.connections.lock().await.get(&endpoint_id).cloned()
+            && connection.close_reason().is_none()
+        {
+            return Ok(connection);
+        }
         let connection = self
             .endpoint
             .connect(remote_addr, CONEST_ALPN)
             .await
             .context("connect to Iroh peer")?;
-        let path = path_kind(&connection);
-        if !self.relay_enabled && path == NativePathKind::Relayed {
+        self.connections
+            .lock()
+            .await
+            .insert(endpoint_id, connection.clone());
+        Ok(connection)
+    }
+
+    async fn send_on_connection(
+        &self,
+        endpoint_id: EndpointId,
+        connection: &Connection,
+        bytes: &[u8],
+        allow_relay: bool,
+    ) -> Result<NativeDeliveryReceipt> {
+        let path = path_kind(connection);
+        if (!self.relay_enabled || !allow_relay) && path == NativePathKind::Relayed {
             bail!("Iroh relay path is disabled by policy");
         }
         let (mut send, mut recv) = connection.open_bi().await.context("open stream")?;
-        send.write_all(&bytes).await.context("write envelope")?;
+        send.write_all(bytes).await.context("write envelope")?;
         send.finish().context("finish envelope stream")?;
         let response = recv
             .read_to_end(1)
@@ -184,19 +258,29 @@ impl NativeTransport {
 
     #[frb]
     pub async fn close(&self) {
+        self.connections.lock().await.clear();
         self.endpoint.close().await;
     }
 }
 
-async fn run_accept_loop(endpoint: Endpoint, inbox: mpsc::Sender<NativeInboundEnvelope>) {
+async fn run_accept_loop(
+    endpoint: Endpoint,
+    inbox: mpsc::Sender<NativeInboundEnvelope>,
+    connections: Arc<Mutex<HashMap<EndpointId, Connection>>>,
+) {
     while let Some(incoming) = endpoint.accept().await {
         let inbox = inbox.clone();
+        let connections = Arc::clone(&connections);
         tokio::spawn(async move {
             let Ok(connection) = incoming.await else {
                 return;
             };
-            let sender_endpoint_id = connection.remote_id().to_string();
-            let path = path_kind(&connection);
+            let sender_endpoint = connection.remote_id();
+            let sender_endpoint_id = sender_endpoint.to_string();
+            connections
+                .lock()
+                .await
+                .insert(sender_endpoint, connection.clone());
             loop {
                 let Ok((mut send, mut recv)) = connection.accept_bi().await else {
                     break;
@@ -211,7 +295,7 @@ async fn run_accept_loop(endpoint: Endpoint, inbox: mpsc::Sender<NativeInboundEn
                     .send(NativeInboundEnvelope {
                         sender_endpoint_id: sender_endpoint_id.clone(),
                         bytes,
-                        path,
+                        path: path_kind(&connection),
                     })
                     .await
                     .is_ok();
@@ -220,6 +304,7 @@ async fn run_accept_loop(endpoint: Endpoint, inbox: mpsc::Sender<NativeInboundEn
                     let _ = send.finish();
                 }
             }
+            connections.lock().await.remove(&sender_endpoint);
         });
     }
 }
@@ -298,7 +383,7 @@ mod tests {
 
         let receipt = tokio::time::timeout(
             Duration::from_secs(10),
-            sender.send_to_addr(receiver_addr, b"direct integration".to_vec()),
+            sender.send_to_addr_with_policy(receiver_addr, b"direct integration".to_vec(), true),
         )
         .await
         .expect("direct Iroh send timed out")
@@ -313,6 +398,13 @@ mod tests {
         assert_eq!(inbound.bytes, b"direct integration");
         assert_eq!(inbound.sender_endpoint_id, sender.endpoint.id().to_string());
         assert_eq!(inbound.path, NativePathKind::Direct);
+
+        let second = sender
+            .send_to_addr_with_policy(receiver.endpoint.addr(), b"same connection".to_vec(), true)
+            .await
+            .unwrap();
+        assert!(second.accepted);
+        assert_eq!(sender.connections.lock().await.len(), 1);
 
         sender.close().await;
         receiver.close().await;

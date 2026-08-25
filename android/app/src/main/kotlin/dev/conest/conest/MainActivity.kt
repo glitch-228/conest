@@ -24,12 +24,16 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
 class MainActivity : FlutterActivity() {
+    private var systemChannel: MethodChannel? = null
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(
+        val channel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             CHANNEL
-        ).setMethodCallHandler { call, result ->
+        )
+        systemChannel = channel
+        channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "setBackgroundRuntimeEnabled" -> {
                     val enabled = call.argument<Boolean>("enabled") == true
@@ -38,6 +42,33 @@ class MainActivity : FlutterActivity() {
                 }
                 "requestNotificationPermission" -> {
                     requestNotificationPermissionIfNeeded()
+                    result.success(null)
+                }
+                "updateTransferForeground" -> {
+                    val transferred = (call.argument<Number>("transferredBytes"))?.toLong() ?: 0L
+                    val total = (call.argument<Number>("totalBytes"))?.toLong() ?: 0L
+                    val serviceIntent = Intent(this, ConestBackgroundService::class.java).apply {
+                        action = ConestBackgroundService.ACTION_UPDATE_TRANSFER
+                        putExtra(
+                            ConestBackgroundService.EXTRA_TITLE,
+                            call.argument<String>("title") ?: "Transferring files"
+                        )
+                        putExtra(ConestBackgroundService.EXTRA_TRANSFERRED, transferred)
+                        putExtra(ConestBackgroundService.EXTRA_TOTAL, total)
+                        putExtra(
+                            ConestBackgroundService.EXTRA_PAUSED,
+                            call.argument<Boolean>("paused") == true
+                        )
+                    }
+                    startConestForegroundService(serviceIntent)
+                    result.success(null)
+                }
+                "stopTransferForeground" -> {
+                    startService(
+                        Intent(this, ConestBackgroundService::class.java).apply {
+                            action = ConestBackgroundService.ACTION_STOP_TRANSFER
+                        }
+                    )
                     result.success(null)
                 }
                 "showMessageNotification" -> {
@@ -155,19 +186,40 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        dispatchTransferControl(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        dispatchTransferControl(intent)
+    }
+
+    private fun dispatchTransferControl(intent: Intent?) {
+        val action = intent?.getStringExtra(ConestBackgroundService.EXTRA_TRANSFER_CONTROL)
+            ?: return
+        intent.removeExtra(ConestBackgroundService.EXTRA_TRANSFER_CONTROL)
+        systemChannel?.invokeMethod("transferControl", mapOf("action" to action))
     }
 
     private fun setBackgroundRuntimeEnabled(enabled: Boolean) {
-        val intent = Intent(this, ConestBackgroundService::class.java)
+        val intent = Intent(this, ConestBackgroundService::class.java).apply {
+            action = ConestBackgroundService.ACTION_BACKGROUND
+            putExtra(ConestBackgroundService.EXTRA_ENABLED, enabled)
+        }
         if (enabled) {
-            ensureNotificationChannel()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(intent)
-            } else {
-                startService(intent)
-            }
+            startConestForegroundService(intent)
         } else {
-            stopService(intent)
+            startService(intent)
+        }
+    }
+
+    private fun startConestForegroundService(intent: Intent) {
+        ensureNotificationChannel()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
         }
     }
 

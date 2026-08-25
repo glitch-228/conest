@@ -203,6 +203,7 @@ class RouteHealthTracker {
 
   void recordFailure(PeerEndpoint route, {DateTime? at, String? error}) {
     final timestamp = (at ?? _nowProvider()).toUtc();
+    final relayInstanceId = _health[route.routeKey]?.relayInstanceId;
     final state = ensureRuntime(route.routeKey);
     state.lastFailureAt = timestamp;
     state.failureStreak += 1;
@@ -217,6 +218,7 @@ class RouteHealthTracker {
       latency: null,
       checkedAt: timestamp,
       error: error,
+      relayInstanceId: relayInstanceId,
     );
   }
 }

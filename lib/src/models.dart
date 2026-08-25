@@ -544,12 +544,127 @@ List<String> normalizeIrohRelayUrls(
   return List.unmodifiable(result);
 }
 
+enum AutoDownloadPreset { low, medium, high, custom }
+
+enum NetworkCostClass { unmetered, metered, roaming, offline }
+
+enum DownloadMediaKind { photo, video, audio, document }
+
+extension AutoDownloadPresetPolicy on AutoDownloadPreset {
+  bool allows({
+    required String mimeType,
+    required int sizeBytes,
+    required NetworkCostClass network,
+    required bool verifiedContact,
+  }) {
+    if (!verifiedContact ||
+        sizeBytes <= 0 ||
+        network == NetworkCostClass.offline) {
+      return false;
+    }
+    final kind = mimeType.startsWith('image/')
+        ? DownloadMediaKind.photo
+        : mimeType.startsWith('video/')
+        ? DownloadMediaKind.video
+        : mimeType.startsWith('audio/')
+        ? DownloadMediaKind.audio
+        : DownloadMediaKind.document;
+    const mib = 1024 * 1024;
+    final limitMiB = switch ((this, network, kind)) {
+      (
+        AutoDownloadPreset.low,
+        NetworkCostClass.unmetered,
+        DownloadMediaKind.photo || DownloadMediaKind.audio,
+      ) =>
+        2,
+      (
+        AutoDownloadPreset.low,
+        NetworkCostClass.unmetered,
+        DownloadMediaKind.document,
+      ) =>
+        1,
+      (
+        AutoDownloadPreset.medium,
+        NetworkCostClass.unmetered,
+        DownloadMediaKind.photo || DownloadMediaKind.audio,
+      ) =>
+        10,
+      (
+        AutoDownloadPreset.medium,
+        NetworkCostClass.unmetered,
+        DownloadMediaKind.video,
+      ) =>
+        20,
+      (
+        AutoDownloadPreset.medium,
+        NetworkCostClass.unmetered,
+        DownloadMediaKind.document,
+      ) =>
+        5,
+      (
+        AutoDownloadPreset.medium,
+        NetworkCostClass.metered,
+        DownloadMediaKind.photo,
+      ) =>
+        2,
+      (
+        AutoDownloadPreset.medium,
+        NetworkCostClass.metered,
+        DownloadMediaKind.video || DownloadMediaKind.audio,
+      ) =>
+        5,
+      (
+        AutoDownloadPreset.medium,
+        NetworkCostClass.metered,
+        DownloadMediaKind.document,
+      ) =>
+        1,
+      (
+        AutoDownloadPreset.high,
+        NetworkCostClass.unmetered,
+        DownloadMediaKind.photo ||
+            DownloadMediaKind.audio ||
+            DownloadMediaKind.document,
+      ) =>
+        50,
+      (
+        AutoDownloadPreset.high,
+        NetworkCostClass.unmetered,
+        DownloadMediaKind.video,
+      ) =>
+        100,
+      (
+        AutoDownloadPreset.high,
+        NetworkCostClass.metered,
+        DownloadMediaKind.photo || DownloadMediaKind.document,
+      ) =>
+        10,
+      (
+        AutoDownloadPreset.high,
+        NetworkCostClass.metered,
+        DownloadMediaKind.video || DownloadMediaKind.audio,
+      ) =>
+        20,
+      (
+        AutoDownloadPreset.high,
+        NetworkCostClass.roaming,
+        DownloadMediaKind.photo,
+      ) =>
+        1,
+      _ => 0,
+    };
+    return limitMiB > 0 && sizeBytes <= limitMiB * mib;
+  }
+}
+
 class GlobalConnectivityPreferences {
   const GlobalConnectivityPreferences({
     this.lanEnabled = true,
     this.onlineEnabled = true,
     this.irohRelayEnabled = true,
     this.irohRelayUrls = const [],
+    this.irohCustomRelaysBulkCapable = false,
+    this.autoDownloadPreset = AutoDownloadPreset.medium,
     this.transportPolicies = const {
       TransportKind.lan: TransportPolicy.automatic,
       TransportKind.iroh: TransportPolicy.automatic,
@@ -567,6 +682,12 @@ class GlobalConnectivityPreferences {
 
   /// Empty uses Iroh's standard N0 relay set. A non-empty list replaces it.
   final List<String> irohRelayUrls;
+
+  /// The user has explicitly confirmed that every configured custom relay
+  /// permits bulk attachment traffic. Public/default relays never inherit
+  /// this setting implicitly.
+  final bool irohCustomRelaysBulkCapable;
+  final AutoDownloadPreset autoDownloadPreset;
   final Map<TransportKind, TransportPolicy> transportPolicies;
 
   bool get anyEnabled => lanEnabled || onlineEnabled;
@@ -590,6 +711,8 @@ class GlobalConnectivityPreferences {
     bool? onlineEnabled,
     bool? irohRelayEnabled,
     List<String>? irohRelayUrls,
+    bool? irohCustomRelaysBulkCapable,
+    AutoDownloadPreset? autoDownloadPreset,
     Map<TransportKind, TransportPolicy>? transportPolicies,
   }) {
     return GlobalConnectivityPreferences(
@@ -597,6 +720,9 @@ class GlobalConnectivityPreferences {
       onlineEnabled: onlineEnabled ?? this.onlineEnabled,
       irohRelayEnabled: irohRelayEnabled ?? this.irohRelayEnabled,
       irohRelayUrls: irohRelayUrls ?? this.irohRelayUrls,
+      irohCustomRelaysBulkCapable:
+          irohCustomRelaysBulkCapable ?? this.irohCustomRelaysBulkCapable,
+      autoDownloadPreset: autoDownloadPreset ?? this.autoDownloadPreset,
       transportPolicies: transportPolicies ?? this.transportPolicies,
     );
   }
@@ -606,6 +732,8 @@ class GlobalConnectivityPreferences {
     'onlineEnabled': onlineEnabled,
     'irohRelayEnabled': irohRelayEnabled,
     'irohRelayUrls': irohRelayUrls,
+    'irohCustomRelaysBulkCapable': irohCustomRelaysBulkCapable,
+    'autoDownloadPreset': autoDownloadPreset.name,
     'transportPolicies': transportPoliciesToJson(transportPolicies),
   };
 
@@ -636,6 +764,13 @@ class GlobalConnectivityPreferences {
             .whereType<String>(),
         rejectInvalid: false,
       ),
+      irohCustomRelaysBulkCapable:
+          json['irohCustomRelaysBulkCapable'] as bool? ?? false,
+      autoDownloadPreset:
+          AutoDownloadPreset.values
+              .where((value) => value.name == json['autoDownloadPreset'])
+              .firstOrNull ??
+          AutoDownloadPreset.medium,
       transportPolicies: transportPoliciesFromJson(
         json['transportPolicies'],
         defaults: defaults,
@@ -2442,6 +2577,10 @@ class AttachmentDescriptor {
     required this.createdAt,
     this.chunkCount = 0,
     this.fileHashBase64 = '',
+    this.protocolVersion = 2,
+    this.noncePrefixBase64 = '',
+    this.presentation = AttachmentPresentation.media,
+    this.thumbnailBase64,
   });
 
   final String id;
@@ -2454,6 +2593,13 @@ class AttachmentDescriptor {
   final DateTime createdAt;
   final int chunkCount;
   final String fileHashBase64;
+
+  /// Attachment wire protocol. Missing values decode as v1 so the startup
+  /// migration can safely cancel incomplete legacy transfers.
+  final int protocolVersion;
+  final String noncePrefixBase64;
+  final AttachmentPresentation presentation;
+  final String? thumbnailBase64;
 
   int get effectiveChunkCount =>
       chunkCount > 0 ? chunkCount : chunkHashes.length;
@@ -2468,6 +2614,10 @@ class AttachmentDescriptor {
       'chunkHashes': chunkHashes.map((hash) => hash.toJson()).toList(),
       'chunkCount': effectiveChunkCount,
       if (fileHashBase64.isNotEmpty) 'fileHashBase64': fileHashBase64,
+      'protocolVersion': protocolVersion,
+      if (noncePrefixBase64.isNotEmpty) 'noncePrefixBase64': noncePrefixBase64,
+      'presentation': presentation.name,
+      if (thumbnailBase64 != null) 'thumbnailBase64': thumbnailBase64,
       'encryptionKeyBase64': encryptionKeyBase64,
       'createdAt': createdAt.toIso8601String(),
     };
@@ -2486,10 +2636,73 @@ class AttachmentDescriptor {
           .toList(),
       chunkCount: (json['chunkCount'] as num?)?.toInt() ?? 0,
       fileHashBase64: json['fileHashBase64'] as String? ?? '',
+      protocolVersion: (json['protocolVersion'] as num?)?.toInt() ?? 1,
+      noncePrefixBase64: json['noncePrefixBase64'] as String? ?? '',
+      presentation:
+          AttachmentPresentation.values
+              .where((value) => value.name == json['presentation'])
+              .firstOrNull ??
+          AttachmentPresentation.media,
+      thumbnailBase64: json['thumbnailBase64'] as String?,
       encryptionKeyBase64: json['encryptionKeyBase64'] as String,
       createdAt: DateTime.parse(json['createdAt'] as String),
     );
   }
+}
+
+enum AttachmentPresentation { media, file }
+
+/// Persistent reference metadata for one message attachment backed by the
+/// content-addressed managed cache. The bytes may be absent after eviction;
+/// the immutable attachment manifest remains in message history so the user
+/// can explicitly request them again.
+class AttachmentCacheReference {
+  const AttachmentCacheReference({
+    required this.attachmentId,
+    required this.fileHashBase64,
+    required this.lastAccessedAt,
+    this.keepOffline = false,
+    this.explicitlySaved = false,
+  });
+
+  final String attachmentId;
+  final String fileHashBase64;
+  final DateTime lastAccessedAt;
+  final bool keepOffline;
+  final bool explicitlySaved;
+
+  AttachmentCacheReference copyWith({
+    DateTime? lastAccessedAt,
+    bool? keepOffline,
+    bool? explicitlySaved,
+  }) => AttachmentCacheReference(
+    attachmentId: attachmentId,
+    fileHashBase64: fileHashBase64,
+    lastAccessedAt: lastAccessedAt ?? this.lastAccessedAt,
+    keepOffline: keepOffline ?? this.keepOffline,
+    explicitlySaved: explicitlySaved ?? this.explicitlySaved,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'attachmentId': attachmentId,
+    'fileHashBase64': fileHashBase64,
+    'lastAccessedAt': lastAccessedAt.toUtc().toIso8601String(),
+    'keepOffline': keepOffline,
+    'explicitlySaved': explicitlySaved,
+  };
+
+  factory AttachmentCacheReference.fromJson(Map<String, dynamic> json) =>
+      AttachmentCacheReference(
+        attachmentId: json['attachmentId'] as String,
+        fileHashBase64: json['fileHashBase64'] as String? ?? '',
+        lastAccessedAt:
+            DateTime.tryParse(
+              json['lastAccessedAt'] as String? ?? '',
+            )?.toUtc() ??
+            DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+        keepOffline: json['keepOffline'] as bool? ?? false,
+        explicitlySaved: json['explicitlySaved'] as bool? ?? false,
+      );
 }
 
 class AttachmentChunk {
@@ -2525,14 +2738,85 @@ class AttachmentChunk {
 }
 
 enum TransferState {
+  preparing,
+  queued,
   pending,
   transferring,
+  reconnecting,
   paused,
   completed,
   failed,
   canceled,
   waitingForLan,
   waitingForStorage,
+}
+
+/// User-facing transfer phases are deliberately independent from message
+/// delivery state. A sent offer is not the same thing as a delivered file.
+enum TransferPhase {
+  preparing,
+  queued,
+  awaitingApproval,
+  waitingForPeer,
+  transferring,
+  reconnecting,
+  paused,
+  verifying,
+  completed,
+  failed,
+  canceled,
+  unavailable,
+}
+
+extension TransferPhaseX on TransferPhase {
+  bool get isActive => switch (this) {
+    TransferPhase.preparing ||
+    TransferPhase.queued ||
+    TransferPhase.waitingForPeer ||
+    TransferPhase.transferring ||
+    TransferPhase.reconnecting ||
+    TransferPhase.verifying => true,
+    _ => false,
+  };
+}
+
+class TransferSnapshot {
+  const TransferSnapshot({
+    required this.id,
+    required this.phase,
+    required this.direction,
+    required this.bytesTransferred,
+    required this.totalBytes,
+    this.bytesPerSecond,
+    this.eta,
+    this.queuePriority = 0,
+    this.transport,
+    this.path,
+    this.routeLabel,
+    this.pausedByMe = false,
+    this.pausedByPeer = false,
+    this.retryAt,
+    this.error,
+  });
+
+  final String id;
+  final TransferPhase phase;
+  final TransferDirection direction;
+  final int bytesTransferred;
+  final int totalBytes;
+  final double? bytesPerSecond;
+  final Duration? eta;
+  final int queuePriority;
+  final TransportKind? transport;
+  final TransportPathKind? path;
+  final String? routeLabel;
+  final bool pausedByMe;
+  final bool pausedByPeer;
+  final DateTime? retryAt;
+  final String? error;
+
+  double get progress =>
+      totalBytes <= 0 ? 0 : (bytesTransferred / totalBytes).clamp(0.0, 1.0);
 }
 
 enum TransferDirection { outbound, inbound }
@@ -2556,6 +2840,7 @@ class TransferSession {
     this.sourceSizeBytes,
     this.sourceModifiedAt,
     this.requiresLan = false,
+    this.allowIrohRelay = false,
     this.bytesTransferred = 0,
     this.lastError,
   });
@@ -2575,6 +2860,7 @@ class TransferSession {
   final int? sourceSizeBytes;
   final DateTime? sourceModifiedAt;
   final bool requiresLan;
+  final bool allowIrohRelay;
   final int bytesTransferred;
   final String? lastError;
 
@@ -2582,6 +2868,8 @@ class TransferSession {
     TransferState? state,
     List<int>? completedChunks,
     DateTime? updatedAt,
+    String? relativePath,
+    bool? allowIrohRelay,
     int? bytesTransferred,
     String? lastError,
     bool clearLastError = false,
@@ -2596,12 +2884,13 @@ class TransferSession {
       updatedAt: updatedAt ?? this.updatedAt,
       direction: direction,
       messageId: messageId,
-      relativePath: relativePath,
+      relativePath: relativePath ?? this.relativePath,
       sourceKind: sourceKind,
       sourcePath: sourcePath,
       sourceSizeBytes: sourceSizeBytes,
       sourceModifiedAt: sourceModifiedAt,
       requiresLan: requiresLan,
+      allowIrohRelay: allowIrohRelay ?? this.allowIrohRelay,
       bytesTransferred: bytesTransferred ?? this.bytesTransferred,
       lastError: clearLastError ? null : (lastError ?? this.lastError),
     );
@@ -2625,6 +2914,7 @@ class TransferSession {
       if (sourceModifiedAt != null)
         'sourceModifiedAt': sourceModifiedAt!.toUtc().toIso8601String(),
       'requiresLan': requiresLan,
+      'allowIrohRelay': allowIrohRelay,
       'bytesTransferred': bytesTransferred,
       if (lastError != null) 'lastError': lastError,
     };
@@ -2661,6 +2951,7 @@ class TransferSession {
         json['sourceModifiedAt'] as String? ?? '',
       )?.toUtc(),
       requiresLan: json['requiresLan'] as bool? ?? false,
+      allowIrohRelay: json['allowIrohRelay'] as bool? ?? false,
       bytesTransferred: (json['bytesTransferred'] as num?)?.toInt() ?? 0,
       lastError: json['lastError'] as String?,
     );
@@ -3065,6 +3356,7 @@ class VaultSnapshot {
     this.heldUnverifiedEnvelopes = const <HeldEnvelope>[],
     this.pendingContactRequests = const <PendingContactRequest>[],
     this.transferSessions = const <TransferSession>[],
+    this.attachmentCacheReferences = const <AttachmentCacheReference>[],
   });
 
   final IdentityRecord? identity;
@@ -3136,6 +3428,7 @@ class VaultSnapshot {
   /// local approval decision.
   final List<PendingContactRequest> pendingContactRequests;
   final List<TransferSession> transferSessions;
+  final List<AttachmentCacheReference> attachmentCacheReferences;
 
   factory VaultSnapshot.empty() {
     return VaultSnapshot(
@@ -3158,6 +3451,7 @@ class VaultSnapshot {
       heldUnverifiedEnvelopes: const <HeldEnvelope>[],
       pendingContactRequests: const <PendingContactRequest>[],
       transferSessions: const <TransferSession>[],
+      attachmentCacheReferences: const <AttachmentCacheReference>[],
     );
   }
 
@@ -3181,6 +3475,7 @@ class VaultSnapshot {
     List<HeldEnvelope>? heldUnverifiedEnvelopes,
     List<PendingContactRequest>? pendingContactRequests,
     List<TransferSession>? transferSessions,
+    List<AttachmentCacheReference>? attachmentCacheReferences,
     bool clearIdentity = false,
   }) {
     return VaultSnapshot(
@@ -3211,6 +3506,8 @@ class VaultSnapshot {
       pendingContactRequests:
           pendingContactRequests ?? this.pendingContactRequests,
       transferSessions: transferSessions ?? this.transferSessions,
+      attachmentCacheReferences:
+          attachmentCacheReferences ?? this.attachmentCacheReferences,
     );
   }
 
@@ -3251,6 +3548,9 @@ class VaultSnapshot {
           .map((entry) => entry.toJson())
           .toList(),
       'transferSessions': transferSessions
+          .map((entry) => entry.toJson())
+          .toList(),
+      'attachmentCacheReferences': attachmentCacheReferences
           .map((entry) => entry.toJson())
           .toList(),
       'pinnedRelayIdentityKeys': pinnedRelayIdentityKeys,
@@ -3342,6 +3642,11 @@ class VaultSnapshot {
           .whereType<Map<String, dynamic>>()
           .map(TransferSession.fromJson)
           .toList(),
+      attachmentCacheReferences:
+          (json['attachmentCacheReferences'] as List<dynamic>? ?? const [])
+              .whereType<Map<String, dynamic>>()
+              .map(AttachmentCacheReference.fromJson)
+              .toList(),
     );
   }
 }

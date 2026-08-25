@@ -98,12 +98,16 @@ void main() {
         'https://relay.example.test',
         'https://backup.example.test/',
       ]);
-      final prefs = GlobalConnectivityPreferences(irohRelayUrls: urls);
+      final prefs = GlobalConnectivityPreferences(
+        irohRelayUrls: urls,
+        irohCustomRelaysBulkCapable: true,
+      );
       final restored = GlobalConnectivityPreferences.fromJson(prefs.toJson());
       expect(restored.irohRelayUrls, [
         'https://relay.example.test',
         'https://backup.example.test/',
       ]);
+      expect(restored.irohCustomRelaysBulkCapable, isTrue);
       expect(
         () => normalizeIrohRelayUrls(['http://relay.example.test']),
         throwsArgumentError,
@@ -151,6 +155,7 @@ void main() {
         ),
         throwsStateError,
       );
+      expect(bridge.lastAllowRelay, isFalse);
       await adapter.stop();
     },
   );
@@ -235,6 +240,7 @@ class _FakeIrohBridge implements NativeIrohBridge {
   final String endpointId;
   final bool relayed;
   bool closed = false;
+  bool? lastAllowRelay;
 
   @override
   Stream<IrohBridgeInbound> get inbound => const Stream.empty();
@@ -254,11 +260,15 @@ class _FakeIrohBridge implements NativeIrohBridge {
   Future<IrohBridgeReceipt> sendEnvelope({
     required String remoteEndpointId,
     required Uint8List bytes,
-  }) async => IrohBridgeReceipt(
-    endpointId: remoteEndpointId,
-    relayed: relayed,
-    accepted: true,
-  );
+    required bool allowRelay,
+  }) async {
+    lastAllowRelay = allowRelay;
+    return IrohBridgeReceipt(
+      endpointId: remoteEndpointId,
+      relayed: relayed,
+      accepted: true,
+    );
+  }
 
   @override
   Future<void> close() async => closed = true;

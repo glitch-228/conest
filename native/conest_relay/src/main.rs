@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use ed25519_dalek::{Signer, SigningKey};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -26,6 +27,9 @@ const DEFAULT_MAX_BYTES_PER_MAILBOX_PER_MINUTE: u64 = 10 * 1024 * 1024;
 const DEFAULT_SOFT_BAN_THRESHOLD: u32 = 5;
 const DEFAULT_SOFT_BAN_SECONDS: u64 = 300;
 const DEFAULT_MAX_CONNECTIONS: usize = 1024;
+const DEFAULT_DATABASE_PATH: &str = "conest_relay.sqlite3";
+const DEFAULT_MAX_MAILBOX_BYTES: u64 = 64 * 1024 * 1024;
+const DEFAULT_LEASE_MILLIS: u64 = 30_000;
 // `senderDeviceId` is client-controlled, so the dedup-by-sender pass alone
 // cannot bound pairing announcements in a mailbox: a flood of announcements
 // with random sender ids would otherwise bypass the byte quota (pairing is
@@ -50,6 +54,8 @@ struct RelayConfig {
     soft_ban_threshold: u32,
     soft_ban_duration: Duration,
     max_connections: usize,
+    database_path: PathBuf,
+    max_mailbox_bytes: u64,
 }
 
 impl RelayConfig {
@@ -90,6 +96,10 @@ impl RelayConfig {
                 DEFAULT_SOFT_BAN_SECONDS,
             )),
             max_connections: env_usize("CONEST_RELAY_MAX_CONNECTIONS", DEFAULT_MAX_CONNECTIONS),
+            database_path: env::var("CONEST_RELAY_DATABASE_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from(DEFAULT_DATABASE_PATH)),
+            max_mailbox_bytes: env_u64("CONEST_RELAY_MAX_MAILBOX_BYTES", DEFAULT_MAX_MAILBOX_BYTES),
         };
 
         let mut args = env::args().skip(1).peekable();
@@ -136,6 +146,12 @@ impl RelayConfig {
                 "--max-connections" => {
                     config.max_connections = parse_next_usize(&mut args, &arg)?;
                 }
+                "--database-path" => {
+                    config.database_path = PathBuf::from(parse_next_string(&mut args, &arg)?);
+                }
+                "--max-mailbox-bytes" => {
+                    config.max_mailbox_bytes = parse_next_u64(&mut args, &arg)?;
+                }
                 value if value.starts_with('-') => {
                     return Err(format!("unknown option: {value}\n\n{}", usage()));
                 }
@@ -161,6 +177,9 @@ impl RelayConfig {
         if config.max_connections == 0 {
             return Err("max connections must be greater than zero".to_owned());
         }
+        if config.max_mailbox_bytes == 0 {
+            return Err("max mailbox bytes must be greater than zero".to_owned());
+        }
         Ok(config)
     }
 }
@@ -183,6 +202,19 @@ enum RelayRequest {
         /// behaves exactly like before for them.
         wait_ms: Option<u64>,
     },
+    /// Durable v2 fetch. Messages remain in SQLite under a lease until the
+    /// client explicitly acknowledges the returned lease id. A relay restart
+    /// releases all outstanding leases back to their mailboxes.
+    FetchLeased {
+        recipient_device_id: String,
+        limit: Option<usize>,
+        wait_ms: Option<u64>,
+        lease_ms: Option<u64>,
+    },
+    AckLease {
+        recipient_device_id: String,
+        lease_id: String,
+    },
     Health,
 }
 
@@ -192,8 +224,11 @@ const LONG_POLL_MAX_WAIT_MS: u64 = 25_000;
 #[cfg_attr(test, derive(Deserialize))]
 struct RelayStats {
     relay_id: String,
+    version: String,
     queue_count: usize,
     queued_envelope_count: usize,
+    queued_bytes: u64,
+    active_leases: usize,
     ttl_seconds: u64,
     max_queue_per_mailbox: usize,
     max_fetch_limit: usize,
@@ -307,6 +342,8 @@ struct RelayResponse {
     nonce_echo: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     signature: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lease_id: Option<String>,
 }
 
 impl RelayResponse {
@@ -319,6 +356,7 @@ impl RelayResponse {
             stats,
             nonce_echo: None,
             signature: None,
+            lease_id: None,
         }
     }
 
@@ -331,6 +369,7 @@ impl RelayResponse {
             stats: None,
             nonce_echo: None,
             signature: None,
+            lease_id: None,
         }
     }
 
@@ -343,6 +382,7 @@ impl RelayResponse {
             stats: None,
             nonce_echo: None,
             signature: None,
+            lease_id: None,
         }
     }
 
@@ -355,14 +395,22 @@ impl RelayResponse {
             stats: None,
             nonce_echo: None,
             signature: None,
+            lease_id: None,
         }
     }
-}
 
-#[derive(Clone)]
-struct QueueEntry {
-    queued_at_millis: u64,
-    envelope: Value,
+    fn leased(messages: Vec<Value>, lease_id: Option<String>) -> Self {
+        Self {
+            ok: true,
+            stored: false,
+            messages,
+            error: None,
+            stats: None,
+            nonce_echo: None,
+            signature: None,
+            lease_id,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -400,7 +448,7 @@ type MailboxNotifier = Arc<(Mutex<MailboxSignal>, Condvar)>;
 #[derive(Clone)]
 struct RelayState {
     config: RelayConfig,
-    queues: Arc<Mutex<HashMap<String, VecDeque<QueueEntry>>>>,
+    database: Arc<Mutex<Connection>>,
     notifiers: Arc<Mutex<HashMap<String, MailboxNotifier>>>,
     rate_buckets: Arc<Mutex<HashMap<String, RateBucket>>>,
     mailbox_bytes: Arc<Mutex<HashMap<String, MailboxByteWindow>>>,
@@ -409,16 +457,70 @@ struct RelayState {
 }
 
 impl RelayState {
+    #[cfg(test)]
     fn new(config: RelayConfig, identity: RelayIdentity) -> Self {
-        Self {
+        Self::try_new(config, identity).expect("relay database should initialize")
+    }
+
+    fn try_new(config: RelayConfig, identity: RelayIdentity) -> Result<Self, String> {
+        if config.database_path.as_path() != std::path::Path::new(":memory:")
+            && let Some(parent) = config.database_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "creating relay database directory {}: {error}",
+                    parent.display()
+                )
+            })?;
+        }
+        let database = Connection::open(&config.database_path).map_err(|error| {
+            format!(
+                "opening relay database at {}: {error}",
+                config.database_path.display()
+            )
+        })?;
+        database
+            .busy_timeout(Duration::from_secs(5))
+            .map_err(|error| format!("configuring relay database timeout: {error}"))?;
+        database
+            .execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 PRAGMA synchronous=FULL;
+                 PRAGMA foreign_keys=ON;
+                 CREATE TABLE IF NOT EXISTS queue_entries (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   mailbox TEXT NOT NULL,
+                   queued_at_millis INTEGER NOT NULL,
+                   envelope_json TEXT NOT NULL,
+                   envelope_bytes INTEGER NOT NULL,
+                   kind TEXT,
+                   sender_device_id TEXT,
+                   dedup_key TEXT,
+                   lease_id TEXT,
+                   lease_until_millis INTEGER
+                 );
+                 CREATE INDEX IF NOT EXISTS queue_mailbox_ready
+                   ON queue_entries(mailbox, lease_id, id);
+                 CREATE UNIQUE INDEX IF NOT EXISTS queue_mailbox_dedup
+                   ON queue_entries(mailbox, dedup_key)
+                   WHERE dedup_key IS NOT NULL;
+                 CREATE INDEX IF NOT EXISTS queue_lease
+                   ON queue_entries(lease_id);
+                 UPDATE queue_entries
+                    SET lease_id = NULL, lease_until_millis = NULL
+                  WHERE lease_id IS NOT NULL;",
+            )
+            .map_err(|error| format!("initializing relay database: {error}"))?;
+        Ok(Self {
             config,
-            queues: Arc::new(Mutex::new(HashMap::new())),
+            database: Arc::new(Mutex::new(database)),
             notifiers: Arc::new(Mutex::new(HashMap::new())),
             rate_buckets: Arc::new(Mutex::new(HashMap::new())),
             mailbox_bytes: Arc::new(Mutex::new(HashMap::new())),
             banned_peers: Arc::new(Mutex::new(HashMap::new())),
             identity: Arc::new(identity),
-        }
+        })
     }
 
     fn notifier_for(&self, mailbox: &str) -> MailboxNotifier {
@@ -599,59 +701,136 @@ impl RelayState {
         {
             return Err("mailbox throughput quota exceeded".to_owned());
         }
-
-        let mut queues = self
-            .queues
+        let kind = envelope_kind(&envelope).map(str::to_owned);
+        let sender = envelope_sender_device_id(&envelope).map(str::to_owned);
+        let dedup_key = envelope
+            .get("messageId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty() && value.len() <= 256)
+            .map(str::to_owned);
+        let encoded = String::from_utf8(envelope_bytes)
+            .map_err(|_| "serialized envelope was not UTF-8".to_owned())?;
+        let encoded_len = encoded.len() as u64;
+        let now = now_millis();
+        let cutoff = now.saturating_sub(self.config.ttl.as_millis() as u64);
+        let mut database = self
+            .database
             .lock()
-            .expect("relay queue lock should not poison");
-        self.cleanup_locked(&mut queues);
-        let queue = queues.entry(recipient_device_id.clone()).or_default();
+            .expect("relay database lock should not poison");
+        let transaction = database
+            .transaction()
+            .map_err(|error| format!("beginning relay enqueue: {error}"))?;
+        transaction
+            .execute(
+                "DELETE FROM queue_entries WHERE queued_at_millis < ?1",
+                params![cutoff],
+            )
+            .map_err(|error| format!("cleaning relay queue: {error}"))?;
 
-        if envelope_kind(&envelope) == Some("pairing_announcement") {
-            if let Some(sender) = envelope_sender_device_id(&envelope) {
-                queue.retain(|entry| {
-                    envelope_kind(&entry.envelope) != Some("pairing_announcement")
-                        || envelope_sender_device_id(&entry.envelope) != Some(sender)
-                });
+        if let Some(key) = &dedup_key {
+            let already_present: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM queue_entries
+                                    WHERE mailbox = ?1 AND dedup_key = ?2)",
+                    params![&recipient_device_id, key],
+                    |row| row.get(0),
+                )
+                .map_err(|error| format!("checking relay deduplication: {error}"))?;
+            if already_present {
+                transaction
+                    .commit()
+                    .map_err(|error| format!("committing relay deduplication: {error}"))?;
+                return Ok(());
             }
-            // Enforce the per-mailbox pairing cap by evicting the oldest
-            // pairing entry (never a real message): a legit announcement
-            // that gets crowded out is re-posted by its sender on the next
-            // beacon, while reject-new would let a one-shot flood block
-            // discovery until TTL expiry.
-            while queue
-                .iter()
-                .filter(|entry| envelope_kind(&entry.envelope) == Some("pairing_announcement"))
-                .count()
-                >= MAX_PAIRING_PER_MAILBOX
-            {
-                let Some(index) = queue.iter().position(|entry| {
-                    envelope_kind(&entry.envelope) == Some("pairing_announcement")
-                }) else {
+        }
+
+        if kind.as_deref() == Some("pairing_announcement") {
+            if let Some(sender) = &sender {
+                transaction
+                    .execute(
+                        "DELETE FROM queue_entries
+                          WHERE mailbox = ?1 AND kind = 'pairing_announcement'
+                            AND sender_device_id = ?2",
+                        params![&recipient_device_id, sender],
+                    )
+                    .map_err(|error| format!("deduplicating pairing announcement: {error}"))?;
+            }
+            loop {
+                let pairing_count: usize = transaction
+                    .query_row(
+                        "SELECT COUNT(*) FROM queue_entries
+                          WHERE mailbox = ?1 AND kind = 'pairing_announcement'",
+                        params![&recipient_device_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| format!("counting pairing announcements: {error}"))?;
+                if pairing_count < MAX_PAIRING_PER_MAILBOX {
                     break;
-                };
-                queue.remove(index);
+                }
+                transaction
+                    .execute(
+                        "DELETE FROM queue_entries WHERE id = (
+                           SELECT id FROM queue_entries
+                            WHERE mailbox = ?1 AND kind = 'pairing_announcement'
+                            ORDER BY id LIMIT 1
+                         )",
+                        params![&recipient_device_id],
+                    )
+                    .map_err(|error| format!("evicting pairing announcement: {error}"))?;
             }
         }
 
-        while queue.len() >= self.config.max_queue_per_mailbox {
-            if let Some(index) = queue
-                .iter()
-                .position(|entry| envelope_kind(&entry.envelope) != Some("pairing_announcement"))
+        loop {
+            let (count, bytes): (usize, u64) = transaction
+                .query_row(
+                    "SELECT COUNT(*), COALESCE(SUM(envelope_bytes), 0)
+                       FROM queue_entries WHERE mailbox = ?1",
+                    params![&recipient_device_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(|error| format!("measuring relay mailbox: {error}"))?;
+            if count < self.config.max_queue_per_mailbox
+                && bytes.saturating_add(encoded_len) <= self.config.max_mailbox_bytes
             {
-                queue.remove(index);
-            } else {
-                queue.pop_front();
+                break;
+            }
+            let removed = transaction
+                .execute(
+                    "DELETE FROM queue_entries WHERE id = COALESCE(
+                       (SELECT id FROM queue_entries
+                         WHERE mailbox = ?1 AND kind != 'pairing_announcement'
+                         ORDER BY id LIMIT 1),
+                       (SELECT id FROM queue_entries
+                         WHERE mailbox = ?1 ORDER BY id LIMIT 1)
+                     )",
+                    params![&recipient_device_id],
+                )
+                .map_err(|error| format!("evicting over-quota relay envelope: {error}"))?;
+            if removed == 0 {
+                return Err("envelope exceeds mailbox byte quota".to_owned());
             }
         }
 
-        queue.push_back(QueueEntry {
-            queued_at_millis: now_millis(),
-            envelope,
-        });
-        // Release the queue lock before notifying so a waiting fetch can
-        // immediately re-acquire it.
-        drop(queues);
+        transaction
+            .execute(
+                "INSERT INTO queue_entries
+                   (mailbox, queued_at_millis, envelope_json, envelope_bytes,
+                    kind, sender_device_id, dedup_key)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    &recipient_device_id,
+                    now,
+                    encoded,
+                    encoded_len,
+                    kind,
+                    sender,
+                    dedup_key
+                ],
+            )
+            .map_err(|error| format!("persisting relay envelope: {error}"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("committing relay envelope: {error}"))?;
         if let Some(notifier) = self.existing_notifier(&recipient_device_id) {
             let mut signal = notifier.0.lock().expect("notifier mutex should not poison");
             signal.generation = signal.generation.wrapping_add(1);
@@ -682,7 +861,7 @@ impl RelayState {
                 .expect("notifier mutex should not poison")
                 .generation
         });
-        let first = self.drain_queue(recipient_device_id, limit);
+        let first = self.drain_queue_result(recipient_device_id, limit)?;
         if !first.is_empty() {
             if let Some(notifier) = &notifier {
                 self.prune_notifier(recipient_device_id, notifier);
@@ -707,57 +886,241 @@ impl RelayState {
             guard.waiters = guard.waiters.saturating_sub(1);
         }
         drop(guard);
-        let result = self.drain_queue(recipient_device_id, limit);
+        let result = self.drain_queue_result(recipient_device_id, limit)?;
         self.prune_notifier(recipient_device_id, &notifier);
         Ok(result)
     }
 
+    #[cfg(test)]
     fn drain_queue(&self, recipient_device_id: &str, limit: usize) -> Vec<Value> {
-        let mut queues = self
-            .queues
+        self.drain_queue_result(recipient_device_id, limit)
+            .unwrap_or_default()
+    }
+
+    fn drain_queue_result(
+        &self,
+        recipient_device_id: &str,
+        limit: usize,
+    ) -> Result<Vec<Value>, String> {
+        self.take_queue(recipient_device_id, limit, None)
+            .map(|(messages, _)| messages)
+    }
+
+    fn fetch_leased(
+        &self,
+        recipient_device_id: &str,
+        limit: Option<usize>,
+        wait_ms: Option<u64>,
+        lease_ms: Option<u64>,
+    ) -> Result<(Vec<Value>, Option<String>), String> {
+        validate_mailbox_id(recipient_device_id)?;
+        let limit = limit
+            .unwrap_or(self.config.max_fetch_limit)
+            .clamp(1, self.config.max_fetch_limit);
+        let lease_ms = lease_ms
+            .unwrap_or(DEFAULT_LEASE_MILLIS)
+            .clamp(5_000, 300_000);
+        let wait_ms = match wait_ms {
+            Some(value) if value > 0 => Some(value.min(LONG_POLL_MAX_WAIT_MS)),
+            _ => None,
+        };
+        let notifier = wait_ms.map(|_| self.notifier_for(recipient_device_id));
+        let observed_generation = notifier.as_ref().map(|notifier| {
+            notifier
+                .0
+                .lock()
+                .expect("notifier mutex should not poison")
+                .generation
+        });
+        let first = self.take_queue(recipient_device_id, limit, Some(lease_ms))?;
+        if !first.0.is_empty() {
+            if let Some(notifier) = &notifier {
+                self.prune_notifier(recipient_device_id, notifier);
+            }
+            return Ok(first);
+        }
+        let Some(wait_ms) = wait_ms else {
+            return Ok(first);
+        };
+        let notifier = notifier.expect("wait duration implies notifier");
+        let observed_generation = observed_generation.expect("wait duration implies generation");
+        let mut guard = notifier.0.lock().expect("notifier mutex should not poison");
+        if guard.generation == observed_generation {
+            guard.waiters += 1;
+            let (returned, _) = notifier
+                .1
+                .wait_timeout_while(guard, Duration::from_millis(wait_ms), |signal| {
+                    signal.generation == observed_generation
+                })
+                .expect("notifier condvar should not poison");
+            guard = returned;
+            guard.waiters = guard.waiters.saturating_sub(1);
+        }
+        drop(guard);
+        let result = self.take_queue(recipient_device_id, limit, Some(lease_ms));
+        self.prune_notifier(recipient_device_id, &notifier);
+        result
+    }
+
+    fn take_queue(
+        &self,
+        recipient_device_id: &str,
+        limit: usize,
+        lease_ms: Option<u64>,
+    ) -> Result<(Vec<Value>, Option<String>), String> {
+        let now = now_millis();
+        let cutoff = now.saturating_sub(self.config.ttl.as_millis() as u64);
+        let lease_id = lease_ms.map(|_| {
+            use rand::RngCore;
+            let mut bytes = [0_u8; 18];
+            rand::rngs::OsRng.fill_bytes(&mut bytes);
+            BASE64_STANDARD.encode(bytes)
+        });
+        let mut database = self
+            .database
             .lock()
-            .expect("relay queue lock should not poison");
-        self.cleanup_locked(&mut queues);
-        let queue = queues.entry(recipient_device_id.to_owned()).or_default();
-        let entries: Vec<QueueEntry> = queue.drain(..).collect();
-        let mut messages = Vec::new();
-        for entry in entries {
-            if messages.len() < limit {
-                messages.push(entry.envelope.clone());
-                if envelope_kind(&entry.envelope) == Some("pairing_announcement") {
-                    queue.push_back(entry);
+            .expect("relay database lock should not poison");
+        let transaction = database
+            .transaction()
+            .map_err(|error| format!("beginning relay fetch: {error}"))?;
+        transaction
+            .execute(
+                "DELETE FROM queue_entries WHERE queued_at_millis < ?1",
+                params![cutoff],
+            )
+            .map_err(|error| format!("cleaning relay queue: {error}"))?;
+        transaction
+            .execute(
+                "UPDATE queue_entries
+                    SET lease_id = NULL, lease_until_millis = NULL
+                  WHERE lease_until_millis IS NOT NULL AND lease_until_millis <= ?1",
+                params![now],
+            )
+            .map_err(|error| format!("releasing expired relay leases: {error}"))?;
+        let rows: Vec<(i64, String, Option<String>)> = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT id, envelope_json, kind FROM queue_entries
+                      WHERE mailbox = ?1 AND lease_id IS NULL
+                      ORDER BY id LIMIT ?2",
+                )
+                .map_err(|error| format!("preparing relay fetch: {error}"))?;
+            let selected = statement
+                .query_map(params![recipient_device_id, limit], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })
+                .map_err(|error| format!("querying relay fetch: {error}"))?;
+            selected
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| format!("reading relay fetch: {error}"))?
+        };
+        let mut messages = Vec::with_capacity(rows.len());
+        for (id, encoded, kind) in &rows {
+            match serde_json::from_str::<Value>(encoded) {
+                Ok(envelope) => messages.push(envelope),
+                Err(_) => {
+                    transaction
+                        .execute("DELETE FROM queue_entries WHERE id = ?1", params![id])
+                        .map_err(|error| format!("dropping corrupt relay row: {error}"))?;
+                    continue;
                 }
+            }
+            if kind.as_deref() == Some("pairing_announcement") {
+                continue;
+            }
+            if let (Some(lease_id), Some(lease_ms)) = (&lease_id, lease_ms) {
+                transaction
+                    .execute(
+                        "UPDATE queue_entries
+                            SET lease_id = ?1, lease_until_millis = ?2
+                          WHERE id = ?3",
+                        params![lease_id, now.saturating_add(lease_ms), id],
+                    )
+                    .map_err(|error| format!("leasing relay envelope: {error}"))?;
             } else {
-                queue.push_back(entry);
+                transaction
+                    .execute("DELETE FROM queue_entries WHERE id = ?1", params![id])
+                    .map_err(|error| format!("acknowledging legacy relay fetch: {error}"))?;
             }
         }
-        messages
+        transaction
+            .commit()
+            .map_err(|error| format!("committing relay fetch: {error}"))?;
+        let returned_lease = if rows
+            .iter()
+            .any(|(_, _, kind)| kind.as_deref() != Some("pairing_announcement"))
+        {
+            lease_id
+        } else {
+            None
+        };
+        Ok((messages, returned_lease))
+    }
+
+    fn acknowledge_lease(&self, recipient_device_id: &str, lease_id: &str) -> Result<(), String> {
+        validate_mailbox_id(recipient_device_id)?;
+        if lease_id.len() < 16 || lease_id.len() > 128 {
+            return Err("lease id has an invalid length".to_owned());
+        }
+        let database = self
+            .database
+            .lock()
+            .expect("relay database lock should not poison");
+        database
+            .execute(
+                "DELETE FROM queue_entries WHERE mailbox = ?1 AND lease_id = ?2",
+                params![recipient_device_id, lease_id],
+            )
+            .map_err(|error| format!("acknowledging relay lease: {error}"))?;
+        Ok(())
     }
 
     fn stats(&self) -> RelayStats {
-        let mut queues = self
-            .queues
+        let now = now_millis();
+        let cutoff = now.saturating_sub(self.config.ttl.as_millis() as u64);
+        let database = self
+            .database
             .lock()
-            .expect("relay queue lock should not poison");
-        self.cleanup_locked(&mut queues);
+            .expect("relay database lock should not poison");
+        let _ = database.execute(
+            "DELETE FROM queue_entries WHERE queued_at_millis < ?1",
+            params![cutoff],
+        );
+        let (queue_count, queued_envelope_count, queued_bytes): (usize, usize, u64) = database
+            .query_row(
+                "SELECT COUNT(DISTINCT mailbox), COUNT(*),
+                        COALESCE(SUM(envelope_bytes), 0)
+                   FROM queue_entries",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap_or_default();
+        let active_leases = database
+            .query_row(
+                "SELECT COUNT(DISTINCT lease_id) FROM queue_entries
+                  WHERE lease_id IS NOT NULL AND lease_until_millis > ?1",
+                params![now],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
         RelayStats {
             relay_id: self.config.relay_id.clone(),
-            queue_count: queues.len(),
-            queued_envelope_count: queues.values().map(VecDeque::len).sum(),
+            // Release builds inject the signed manifest version so the
+            // supervisor can prove that the staged binary, rather than an
+            // older process, passed its post-update health gate. Local builds
+            // retain the Cargo package version.
+            version: option_env!("CONEST_BUILD_VERSION")
+                .unwrap_or(env!("CARGO_PKG_VERSION"))
+                .to_owned(),
+            queue_count,
+            queued_envelope_count,
+            queued_bytes,
+            active_leases,
             ttl_seconds: self.config.ttl.as_secs(),
             max_queue_per_mailbox: self.config.max_queue_per_mailbox,
             max_fetch_limit: self.config.max_fetch_limit,
             identity_public_key: self.identity.public_key_b64.clone(),
         }
-    }
-
-    fn cleanup_locked(&self, queues: &mut HashMap<String, VecDeque<QueueEntry>>) {
-        let ttl_millis = self.config.ttl.as_millis() as u64;
-        let now = now_millis();
-        queues.retain(|_, queue| {
-            queue.retain(|entry| now.saturating_sub(entry.queued_at_millis) <= ttl_millis);
-            !queue.is_empty()
-        });
     }
 }
 
@@ -784,7 +1147,13 @@ fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind(&config.bind)?;
     let udp_socket = UdpSocket::bind(&config.bind)?;
     let identity_public_key = identity.public_key_b64.clone();
-    let state = RelayState::new(config.clone(), identity);
+    let state = match RelayState::try_new(config.clone(), identity) {
+        Ok(state) => state,
+        Err(message) => {
+            eprintln!("relay database setup failed: {message}");
+            std::process::exit(2);
+        }
+    };
     println!(
         "conest relay listening on tcp+udp {} id={} ttl={}s max_queue={} max_fetch={} max_envelope={}B max_rate={}/min identity_pub={}",
         config.bind,
@@ -1260,6 +1629,22 @@ fn handle_request(request: RelayRequest, state: &RelayState) -> RelayResponse {
             Ok(messages) => RelayResponse::messages(messages),
             Err(error) => RelayResponse::error(error),
         },
+        RelayRequest::FetchLeased {
+            recipient_device_id,
+            limit,
+            wait_ms,
+            lease_ms,
+        } => match state.fetch_leased(&recipient_device_id, limit, wait_ms, lease_ms) {
+            Ok((messages, lease_id)) => RelayResponse::leased(messages, lease_id),
+            Err(error) => RelayResponse::error(error),
+        },
+        RelayRequest::AckLease {
+            recipient_device_id,
+            lease_id,
+        } => match state.acknowledge_lease(&recipient_device_id, &lease_id) {
+            Ok(()) => RelayResponse::ok(None),
+            Err(error) => RelayResponse::error(error),
+        },
         RelayRequest::Health => RelayResponse::ok(Some(state.stats())),
     }
 }
@@ -1403,6 +1788,8 @@ fn usage() -> String {
            --max-envelope-bytes N\n\
            --max-line-bytes N\n\
            --max-requests-per-minute N\n\
+           --database-path PATH       SQLite WAL queue database\n\
+           --max-mailbox-bytes N      durable mailbox byte quota\n\
            --trust-forwarded-for  trust the leftmost X-Forwarded-For address\n\
                                   for per-IP rate limiting (only safe behind a\n\
                                   trusted proxy or HTTP tunnel)"
@@ -1442,6 +1829,8 @@ mod tests {
             soft_ban_threshold: DEFAULT_SOFT_BAN_THRESHOLD,
             soft_ban_duration: Duration::from_secs(DEFAULT_SOFT_BAN_SECONDS),
             max_connections: DEFAULT_MAX_CONNECTIONS,
+            database_path: PathBuf::from(":memory:"),
+            max_mailbox_bytes: DEFAULT_MAX_MAILBOX_BYTES,
         }
     }
 
@@ -1783,8 +2172,11 @@ mod tests {
             error: response.error.clone(),
             stats: response.stats.as_ref().map(|stats| RelayStats {
                 relay_id: stats.relay_id.clone(),
+                version: stats.version.clone(),
                 queue_count: stats.queue_count,
                 queued_envelope_count: stats.queued_envelope_count,
+                queued_bytes: stats.queued_bytes,
+                active_leases: stats.active_leases,
                 ttl_seconds: stats.ttl_seconds,
                 max_queue_per_mailbox: stats.max_queue_per_mailbox,
                 max_fetch_limit: stats.max_fetch_limit,
@@ -1792,6 +2184,7 @@ mod tests {
             }),
             nonce_echo: None,
             signature: None,
+            lease_id: response.lease_id.clone(),
         };
         // The two None fields are already cleared; assigning again is a no-op
         // and reminds the reader why this clone exists.
@@ -2144,6 +2537,84 @@ mod tests {
         assert_ne!(current, observed, "store must advance the wait predicate");
         let messages = state.drain_queue("dev-race", 4);
         assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn leased_fetch_requires_ack_and_ack_is_atomic() {
+        let state = RelayState::new(test_config(), test_identity());
+        state
+            .store(
+                "dev-bob".to_owned(),
+                envelope("direct_message", "msg-leased", "dev-alice"),
+            )
+            .expect("store");
+        let (messages, lease_id) = state
+            .fetch_leased("dev-bob", Some(10), None, Some(30_000))
+            .expect("leased fetch");
+        assert_eq!(messages.len(), 1);
+        let lease_id = lease_id.expect("message fetch has a lease");
+        assert!(
+            state
+                .fetch_leased("dev-bob", Some(10), None, Some(30_000))
+                .expect("second fetch")
+                .0
+                .is_empty(),
+            "an active lease must hide its envelopes"
+        );
+        state
+            .acknowledge_lease("dev-bob", &lease_id)
+            .expect("ack lease");
+        assert_eq!(state.stats().queued_envelope_count, 0);
+        assert_eq!(state.stats().active_leases, 0);
+    }
+
+    #[test]
+    fn restart_requeues_unacknowledged_sqlite_leases_and_preserves_identity_data() {
+        let mut config = test_config();
+        let database_path = std::env::temp_dir().join(format!(
+            "conest-relay-test-{}-{}.sqlite3",
+            std::process::id(),
+            now_millis()
+        ));
+        config.database_path = database_path.clone();
+        {
+            let state = RelayState::new(config.clone(), test_identity());
+            state
+                .store(
+                    "dev-bob".to_owned(),
+                    envelope("direct_message", "msg-restart", "dev-alice"),
+                )
+                .expect("store");
+            let (_, lease_id) = state
+                .fetch_leased("dev-bob", Some(10), None, Some(300_000))
+                .expect("lease");
+            assert!(lease_id.is_some());
+            assert_eq!(state.stats().active_leases, 1);
+        }
+        {
+            let restarted = RelayState::new(config, test_identity());
+            let messages = restarted
+                .fetch("dev-bob", Some(10), None)
+                .expect("fetch after restart");
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0]["messageId"], "msg-restart");
+        }
+        let _ = fs::remove_file(&database_path);
+        let _ = fs::remove_file(database_path.with_extension("sqlite3-wal"));
+        let _ = fs::remove_file(database_path.with_extension("sqlite3-shm"));
+    }
+
+    #[test]
+    fn durable_queue_deduplicates_message_ids() {
+        let state = RelayState::new(test_config(), test_identity());
+        let value = envelope("direct_message", "msg-dedup", "dev-alice");
+        state
+            .store("dev-bob".to_owned(), value.clone())
+            .expect("first store");
+        state
+            .store("dev-bob".to_owned(), value)
+            .expect("duplicate store is idempotent");
+        assert_eq!(state.stats().queued_envelope_count, 1);
     }
 
     #[test]

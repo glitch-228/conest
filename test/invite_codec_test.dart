@@ -255,6 +255,7 @@ void main() {
       peerDeviceIds: const ['dev-a', 'dev-b'],
       state: TransferState.transferring,
       completedChunks: const [0],
+      allowIrohRelay: true,
       createdAt: DateTime.utc(2026, 1, 1),
       updatedAt: DateTime.utc(2026, 1, 1, 0, 1),
     );
@@ -265,6 +266,7 @@ void main() {
     expect(decoded.attachment.chunkHashes.length, 2);
     expect(decoded.state, TransferState.transferring);
     expect(decoded.completedChunks, const [0]);
+    expect(decoded.allowIrohRelay, isTrue);
   });
 
   test('transfer progress is persisted as compact completed ranges', () {

@@ -1549,6 +1549,20 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _showTransfers() async {
+    final peerDeviceId = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
+        builder: (context) => _TransfersScreen(
+          controller: widget.controller,
+          palette: widget.palette,
+        ),
+      ),
+    );
+    if (!mounted || peerDeviceId == null) return;
+    final contact = widget.controller.contactByDeviceId(peerDeviceId);
+    if (contact != null) _selectHomeContact(contact);
+  }
+
   Future<void> _showDebugMenu() async {
     // Channel gating happens at the button (HomeScreen.build), so
     // _showDebugMenu trusts its caller. The old `if (!kDebugMode) return`
@@ -2039,6 +2053,21 @@ class _HomeScreenState extends State<HomeScreen> {
     final lanLobbySelected =
         _lanLobbySelected && selectedContact == null && selectedGroup == null;
     return Scaffold(
+      floatingActionButton: FloatingActionButton.small(
+        heroTag: 'global-transfers',
+        tooltip: 'Transfers',
+        onPressed: _showTransfers,
+        child: Badge(
+          isLabelVisible: widget.controller.transferSnapshots.any(
+            (entry) =>
+                entry.phase.isActive || entry.phase == TransferPhase.paused,
+          ),
+          label: Text(
+            '${widget.controller.transferSnapshots.where((entry) => entry.phase.isActive || entry.phase == TransferPhase.paused).length}',
+          ),
+          child: const Icon(Icons.downloading_outlined),
+        ),
+      ),
       body: DecoratedBox(
         decoration: BoxDecoration(gradient: palette.appGradient),
         child: Stack(
@@ -8554,6 +8583,49 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               'Visible relay path used only while both peers are online.',
                             ),
                           ),
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('Automatic downloads'),
+                            subtitle: const Text(
+                              'Verified contacts only. Limits adapt to Wi-Fi/Ethernet, cellular, and roaming.',
+                            ),
+                            trailing: DropdownButton<AutoDownloadPreset>(
+                              value:
+                                  identity.connectivity.autoDownloadPreset ==
+                                      AutoDownloadPreset.custom
+                                  ? AutoDownloadPreset.medium
+                                  : identity.connectivity.autoDownloadPreset,
+                              onChanged: _busy
+                                  ? null
+                                  : (value) {
+                                      if (value == null) return;
+                                      unawaited(
+                                        _run(
+                                          () => widget.controller
+                                              .updateGlobalConnectivity(
+                                                identity.connectivity.copyWith(
+                                                  autoDownloadPreset: value,
+                                                ),
+                                              ),
+                                        ),
+                                      );
+                                    },
+                              items: const [
+                                DropdownMenuItem(
+                                  value: AutoDownloadPreset.low,
+                                  child: Text('Low'),
+                                ),
+                                DropdownMenuItem(
+                                  value: AutoDownloadPreset.medium,
+                                  child: Text('Medium'),
+                                ),
+                                DropdownMenuItem(
+                                  value: AutoDownloadPreset.high,
+                                  child: Text('High'),
+                                ),
+                              ],
+                            ),
+                          ),
                           Wrap(
                             spacing: 12,
                             runSpacing: 8,
@@ -8591,12 +8663,41 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             .updateGlobalConnectivity(
                                               current.connectivity.copyWith(
                                                 irohRelayUrls: values.toList(),
+                                                irohCustomRelaysBulkCapable:
+                                                    values.isEmpty
+                                                    ? false
+                                                    : null,
                                               ),
                                             );
                                       }),
                                 child: const Text('Save Iroh relays'),
                               ),
                             ],
+                          ),
+                          SwitchListTile.adaptive(
+                            value: identity
+                                .connectivity
+                                .irohCustomRelaysBulkCapable,
+                            contentPadding: EdgeInsets.zero,
+                            onChanged:
+                                _busy ||
+                                    !identity.connectivity.irohRelayEnabled ||
+                                    identity.connectivity.irohRelayUrls.isEmpty
+                                ? null
+                                : (value) => _run(
+                                    () => widget.controller
+                                        .updateGlobalConnectivity(
+                                          identity.connectivity.copyWith(
+                                            irohCustomRelaysBulkCapable: value,
+                                          ),
+                                        ),
+                                  ),
+                            title: const Text(
+                              'Custom relays allow bulk transfers',
+                            ),
+                            subtitle: const Text(
+                              'Trust these self-managed relays to carry files above 30 MiB automatically.',
+                            ),
                           ),
                           const SizedBox(height: 12),
                           Text(
@@ -11524,6 +11625,7 @@ Future<void> bulkSaveAttachments(
               );
         if (uri != null) {
           saved++;
+          await controller.markAttachmentExplicitlySaved(descriptor.id);
         } else {
           errors.add('${descriptor.fileName}: file is no longer available');
         }
@@ -11574,6 +11676,7 @@ Future<void> bulkSaveAttachments(
         await _streamCopyFile(File(sourcePath), target);
       }
       saved++;
+      await controller.markAttachmentExplicitlySaved(descriptor.id);
     } catch (error) {
       if (target != null) {
         try {
@@ -11868,6 +11971,312 @@ class _MessageSelectionBar extends StatelessWidget {
   }
 }
 
+class _TransfersScreen extends StatelessWidget {
+  const _TransfersScreen({required this.controller, required this.palette});
+
+  final MessengerController controller;
+  final ConestPalette palette;
+
+  String _bytes(int value) {
+    if (value < 1024) return '$value B';
+    if (value < 1024 * 1024) return '${(value / 1024).toStringAsFixed(1)} KB';
+    if (value < 1024 * 1024 * 1024) {
+      return '${(value / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    return '${(value / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
+
+  String _phase(TransferPhase phase) => switch (phase) {
+    TransferPhase.preparing => 'Preparing',
+    TransferPhase.queued => 'Queued',
+    TransferPhase.awaitingApproval => 'Waiting for approval',
+    TransferPhase.waitingForPeer => 'Waiting for peer',
+    TransferPhase.transferring => 'Transferring',
+    TransferPhase.reconnecting => 'Reconnecting',
+    TransferPhase.paused => 'Paused',
+    TransferPhase.verifying => 'Verifying',
+    TransferPhase.completed => 'Complete',
+    TransferPhase.failed => 'Failed',
+    TransferPhase.canceled => 'Canceled',
+    TransferPhase.unavailable => 'Unavailable',
+  };
+
+  String _eta(Duration value) {
+    if (value.inHours > 0) {
+      return '${value.inHours}h ${value.inMinutes.remainder(60)}m';
+    }
+    if (value.inMinutes > 0) {
+      return '${value.inMinutes}m ${value.inSeconds.remainder(60)}s';
+    }
+    return '${value.inSeconds}s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final snapshots = controller.transferSnapshots;
+        final active = snapshots
+            .where(
+              (entry) =>
+                  entry.phase.isActive ||
+                  entry.phase == TransferPhase.paused ||
+                  entry.phase == TransferPhase.awaitingApproval,
+            )
+            .toList(growable: false);
+        final recent = snapshots
+            .where((entry) => !active.contains(entry))
+            .toList(growable: false);
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Transfers'),
+            actions: [
+              IconButton(
+                tooltip: 'Pause all',
+                onPressed:
+                    active.any(
+                      (entry) => entry.phase.isActive && !entry.pausedByPeer,
+                    )
+                    ? () => unawaited(controller.pauseAllTransfers())
+                    : null,
+                icon: const Icon(Icons.pause_circle_outline),
+              ),
+              IconButton(
+                tooltip: 'Resume all',
+                onPressed: active.any((entry) => entry.pausedByMe)
+                    ? () => unawaited(controller.resumeAllTransfers())
+                    : null,
+                icon: const Icon(Icons.play_circle_outline),
+              ),
+              IconButton(
+                tooltip: 'Clear completed',
+                onPressed: recent.isEmpty
+                    ? null
+                    : controller.clearCompletedTransfers,
+                icon: const Icon(Icons.cleaning_services_outlined),
+              ),
+            ],
+          ),
+          body: snapshots.isEmpty
+              ? const Center(child: Text('No transfers yet.'))
+              : ListView(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
+                  children: [
+                    if (active.isNotEmpty) ...[
+                      _TransferSectionLabel(label: 'Active (${active.length})'),
+                      for (final snapshot in active)
+                        _TransferManagerTile(
+                          snapshot: snapshot,
+                          controller: controller,
+                          palette: palette,
+                          bytesLabel: _bytes,
+                          phaseLabel: _phase,
+                          etaLabel: _eta,
+                        ),
+                    ],
+                    if (recent.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      _TransferSectionLabel(label: 'Recent (${recent.length})'),
+                      for (final snapshot in recent)
+                        _TransferManagerTile(
+                          snapshot: snapshot,
+                          controller: controller,
+                          palette: palette,
+                          bytesLabel: _bytes,
+                          phaseLabel: _phase,
+                          etaLabel: _eta,
+                        ),
+                    ],
+                  ],
+                ),
+        );
+      },
+    );
+  }
+}
+
+class _TransferSectionLabel extends StatelessWidget {
+  const _TransferSectionLabel({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(4, 8, 4, 6),
+    child: Text(label, style: Theme.of(context).textTheme.titleSmall),
+  );
+}
+
+class _TransferManagerTile extends StatelessWidget {
+  const _TransferManagerTile({
+    required this.snapshot,
+    required this.controller,
+    required this.palette,
+    required this.bytesLabel,
+    required this.phaseLabel,
+    required this.etaLabel,
+  });
+
+  final TransferSnapshot snapshot;
+  final MessengerController controller;
+  final ConestPalette palette;
+  final String Function(int) bytesLabel;
+  final String Function(TransferPhase) phaseLabel;
+  final String Function(Duration) etaLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final descriptor = controller.attachmentDescriptorFor(snapshot.id);
+    if (descriptor == null) return const SizedBox.shrink();
+    final route = snapshot.routeLabel?.trim();
+    final speed = snapshot.bytesPerSecond;
+    final details = <String>[
+      '${bytesLabel(snapshot.bytesTransferred)} / ${bytesLabel(snapshot.totalBytes)}',
+      if (speed != null && speed > 0) '${bytesLabel(speed.round())}/s',
+      if (snapshot.eta != null) '${etaLabel(snapshot.eta!)} left',
+      if (route != null && route.isNotEmpty) route,
+      if (snapshot.queuePriority > 0) 'queue #${snapshot.queuePriority}',
+    ];
+    final canCancel =
+        snapshot.phase.isActive ||
+        snapshot.phase == TransferPhase.paused ||
+        snapshot.phase == TransferPhase.awaitingApproval;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () {
+          final peer = controller.peerDeviceIdForAttachment(snapshot.id);
+          if (peer != null) Navigator.of(context).pop(peer);
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    snapshot.direction == TransferDirection.outbound
+                        ? Icons.upload_file_outlined
+                        : Icons.download_for_offline_outlined,
+                    color: palette.primary,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          descriptor.fileName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        Text(
+                          '${controller.transferConversationLabel(snapshot.id)} · ${phaseLabel(snapshot.phase)}',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (snapshot.queuePriority > 1)
+                    IconButton(
+                      tooltip: 'Move to top',
+                      onPressed: () =>
+                          controller.prioritizeTransfer(snapshot.id),
+                      icon: const Icon(Icons.vertical_align_top),
+                    ),
+                  if (snapshot.phase == TransferPhase.awaitingApproval &&
+                      snapshot.direction == TransferDirection.inbound)
+                    IconButton(
+                      tooltip: 'Download',
+                      onPressed: () => unawaited(
+                        controller.acceptIncomingAttachment(snapshot.id),
+                      ),
+                      icon: const Icon(Icons.download_outlined),
+                    )
+                  else if (snapshot.pausedByMe)
+                    IconButton(
+                      tooltip: 'Resume',
+                      onPressed: () =>
+                          unawaited(controller.resumeAttachment(snapshot.id)),
+                      icon: const Icon(Icons.play_circle_outline),
+                    )
+                  else if (snapshot.phase.isActive)
+                    IconButton(
+                      tooltip: 'Pause',
+                      onPressed: snapshot.pausedByPeer
+                          ? null
+                          : () => unawaited(
+                              controller.pauseAttachment(snapshot.id),
+                            ),
+                      icon: const Icon(Icons.pause_circle_outline),
+                    ),
+                  if (snapshot.phase == TransferPhase.failed ||
+                      snapshot.phase == TransferPhase.unavailable)
+                    IconButton(
+                      tooltip: 'Retry',
+                      onPressed: () => controller.retryAttachment(snapshot.id),
+                      icon: const Icon(Icons.refresh),
+                    ),
+                  if (canCancel)
+                    IconButton(
+                      tooltip: 'Cancel',
+                      onPressed: () =>
+                          unawaited(controller.cancelTransfer(snapshot.id)),
+                      icon: const Icon(Icons.close),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              LinearProgressIndicator(
+                value:
+                    snapshot.phase == TransferPhase.reconnecting ||
+                        snapshot.phase == TransferPhase.waitingForPeer
+                    ? null
+                    : snapshot.progress,
+                minHeight: 5,
+                borderRadius: BorderRadius.circular(99),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                details.join(' · '),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              if ((snapshot.error ?? '').trim().isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  snapshot.error!,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ],
+              if (controller.canContinueLargeTransferOverIrohRelay(
+                snapshot.id,
+              )) ...[
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: FilledButton.tonalIcon(
+                    onPressed: () => unawaited(
+                      controller.continueLargeTransferOverIrohRelay(
+                        snapshot.id,
+                      ),
+                    ),
+                    icon: const Icon(Icons.cloud_upload_outlined),
+                    label: const Text('Continue over Iroh relay'),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _AttachmentRow extends StatelessWidget {
   const _AttachmentRow({
     required this.descriptor,
@@ -11894,6 +12303,31 @@ class _AttachmentRow extends StatelessWidget {
     if (size < 1024 * 1024) return '${(size / 1024).toStringAsFixed(1)} KB';
     return '${(size / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
+
+  String _formatEta(Duration value) {
+    if (value.inHours > 0) {
+      return '${value.inHours}h ${value.inMinutes.remainder(60)}m';
+    }
+    if (value.inMinutes > 0) {
+      return '${value.inMinutes}m ${value.inSeconds.remainder(60)}s';
+    }
+    return '${value.inSeconds}s';
+  }
+
+  String _phaseLabel(TransferPhase phase) => switch (phase) {
+    TransferPhase.preparing => 'Preparing',
+    TransferPhase.queued => 'Queued',
+    TransferPhase.awaitingApproval => 'Download',
+    TransferPhase.waitingForPeer => 'Waiting',
+    TransferPhase.transferring => 'Transferring',
+    TransferPhase.reconnecting => 'Reconnecting',
+    TransferPhase.paused => 'Paused',
+    TransferPhase.verifying => 'Verifying',
+    TransferPhase.completed => 'Complete',
+    TransferPhase.failed => 'Failed',
+    TransferPhase.canceled => 'Canceled',
+    TransferPhase.unavailable => 'Unavailable',
+  };
 
   bool get _isImage => descriptor.mimeType.startsWith('image/');
   bool get _isVideo => descriptor.mimeType.startsWith('video/');
@@ -11961,6 +12395,7 @@ class _AttachmentRow extends StatelessWidget {
     Uint8List bytes,
     String fileName,
     String mimeType,
+    String descriptorId,
   ) async {
     final safeFileName = sanitizeAttachmentFileName(fileName);
     final kind = _saveKindFor(mimeType);
@@ -11985,6 +12420,7 @@ class _AttachmentRow extends StatelessWidget {
               long: true,
             ),
           );
+          await controller.markAttachmentExplicitlySaved(descriptorId);
           return;
         }
       } catch (error) {
@@ -12006,6 +12442,7 @@ class _AttachmentRow extends StatelessWidget {
         await File(path).writeAsBytes(bytes);
       }
       controller.setStatus('Saved $safeFileName to $path.');
+      await controller.markAttachmentExplicitlySaved(descriptorId);
       unawaited(
         controller.platformBridge.showToast('Saved $safeFileName', long: true),
       );
@@ -12015,7 +12452,13 @@ class _AttachmentRow extends StatelessWidget {
   }
 
   Future<void> _saveToDisk(BuildContext context, Uint8List bytes) =>
-      _saveToDiskFor(context, bytes, descriptor.fileName, descriptor.mimeType);
+      _saveToDiskFor(
+        context,
+        bytes,
+        descriptor.fileName,
+        descriptor.mimeType,
+        descriptor.id,
+      );
 
   Future<void> _saveLocalFileToDisk() async {
     final sourcePath = await controller.attachmentCachePathFor(descriptor.id);
@@ -12034,6 +12477,7 @@ class _AttachmentRow extends StatelessWidget {
         );
         if (saved != null) {
           controller.setStatus('Saved $safeFileName.');
+          await controller.markAttachmentExplicitlySaved(descriptor.id);
           return;
         }
       }
@@ -12049,6 +12493,7 @@ class _AttachmentRow extends StatelessWidget {
         await _streamCopyFile(source, target);
       }
       controller.setStatus('Saved $safeFileName to $targetPath.');
+      await controller.markAttachmentExplicitlySaved(descriptor.id);
     } catch (error) {
       controller.setStatus('Save failed: $error');
     }
@@ -12208,6 +12653,7 @@ class _AttachmentRow extends StatelessWidget {
     final bytes = controller.attachmentBytesFor(descriptor.id);
     final hasBytes = bytes != null;
     final hasLocalFile = controller.attachmentAvailableLocally(descriptor.id);
+    final keptOffline = controller.attachmentKeptOffline(descriptor.id);
     final inFlight =
         controller.attachmentTransferProgress(descriptor.id) != null ||
         controller.outboundAttachmentProgress(descriptor.id) != null;
@@ -12230,6 +12676,16 @@ class _AttachmentRow extends StatelessWidget {
           const PopupMenuItem(
             value: 'copy_path',
             child: Text('Copy cache path'),
+          ),
+        if (hasLocalFile)
+          PopupMenuItem(
+            value: 'keep_offline',
+            child: Text(keptOffline ? 'Stop keeping offline' : 'Keep offline'),
+          ),
+        if (hasLocalFile && !keptOffline && !inFlight)
+          const PopupMenuItem(
+            value: 'evict',
+            child: Text('Free up local space'),
           ),
         if (inFlight)
           const PopupMenuItem(value: 'cancel', child: Text('Cancel')),
@@ -12254,6 +12710,20 @@ class _AttachmentRow extends StatelessWidget {
         break;
       case 'copy_path':
         await _copyCachePath();
+        break;
+      case 'keep_offline':
+        await controller.setAttachmentKeepOffline(descriptor.id, !keptOffline);
+        break;
+      case 'evict':
+        try {
+          await controller.evictAttachment(descriptor.id);
+          controller.setStatus(
+            'Local copy removed. Conest has no permanent cloud copy; '
+            're-download depends on the sender still having it.',
+          );
+        } catch (error) {
+          controller.setStatus('Could not remove the local copy: $error');
+        }
         break;
       case 'cancel':
       case 'delete':
@@ -12355,8 +12825,31 @@ class _AttachmentRow extends StatelessWidget {
           initialIndex: initialIndex,
           palette: palette,
           onCopy: (page) => _copyImageBytesFor(page.bytes, page.fileName),
-          onSave: (page) =>
-              _saveToDiskFor(context, page.bytes, page.fileName, page.mimeType),
+          onSave: (page) => _saveToDiskFor(
+            context,
+            page.bytes,
+            page.fileName,
+            page.mimeType,
+            page.descriptorId,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openPathImage(BuildContext context) async {
+    final navigator = Navigator.of(context);
+    final path = await controller.attachmentCachePathFor(descriptor.id);
+    if (path == null) {
+      controller.setStatus('Image is not available locally.');
+      return;
+    }
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (context) => _PathImageViewerScreen(
+          path: path,
+          title: descriptor.fileName,
+          onSave: _saveLocalFileToDisk,
         ),
       ),
     );
@@ -12398,18 +12891,25 @@ class _AttachmentRow extends StatelessWidget {
     final outboundProgress = outbound
         ? controller.outboundAttachmentProgress(descriptor.id)
         : null;
+    final snapshot = controller.transferSnapshotFor(descriptor.id);
     final queuePosition = outbound
         ? controller.outboundQueuePositionFor(descriptor.id)
         : 0;
-    final progress = outboundProgress ?? inboundProgress;
+    final progress =
+        snapshot != null &&
+            snapshot.phase != TransferPhase.completed &&
+            snapshot.phase != TransferPhase.canceled
+        ? snapshot.progress
+        : outboundProgress ?? inboundProgress;
     final pauseState = controller.pauseStateFor(descriptor.id);
     final textColor = outbound ? palette.outboundText : palette.inboundText;
     final metaColor = outbound ? palette.outboundMeta : palette.inboundMeta;
     final hasBytes = bytes != null;
     final hasLocalFile = controller.attachmentAvailableLocally(descriptor.id);
-    final showImage = _isImage && hasBytes;
+    final showImage = _isImage && (hasBytes || hasLocalFile);
     final transferInFlight =
-        outboundProgress != null || inboundProgress != null;
+        snapshot?.phase.isActive == true ||
+        snapshot?.phase == TransferPhase.paused;
 
     if (!outbound && controller.attachmentAwaitingAcceptance(descriptor.id)) {
       final sizeMb = descriptor.sizeBytes / (1024 * 1024);
@@ -12431,7 +12931,9 @@ class _AttachmentRow extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              '${sizeMb.toStringAsFixed(1)} MB · LAN-direct only',
+              descriptor.sizeBytes > MessengerController.maxAttachmentSizeBytes
+                  ? '${sizeMb.toStringAsFixed(1)} MB · direct route required'
+                  : '${sizeMb.toStringAsFixed(1)} MB · tap to download',
               style: TextStyle(color: metaColor),
             ),
             const SizedBox(height: 10),
@@ -12442,7 +12944,7 @@ class _AttachmentRow extends StatelessWidget {
                   onPressed: () => unawaited(
                     controller.acceptIncomingAttachment(descriptor.id),
                   ),
-                  child: const Text('Accept'),
+                  child: const Text('Download'),
                 ),
                 TextButton(
                   onPressed: () => unawaited(
@@ -12464,18 +12966,41 @@ class _AttachmentRow extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(14),
-          onTap: () => _openFullScreenImage(context, bytes),
+          onTap: () => bytes != null
+              ? _openFullScreenImage(context, bytes)
+              : unawaited(_openPathImage(context)),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(14),
             child: Stack(
               alignment: Alignment.center,
               children: [
-                Image.memory(
-                  bytes,
-                  fit: BoxFit.cover,
-                  gaplessPlayback: true,
-                  cacheWidth: 640,
-                ),
+                if (bytes != null)
+                  Image.memory(
+                    bytes,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                    cacheWidth: 640,
+                  )
+                else
+                  FutureBuilder<String?>(
+                    future: controller.attachmentCachePathFor(descriptor.id),
+                    builder: (context, snapshot) {
+                      final path = snapshot.data;
+                      if (path == null) {
+                        return const SizedBox(
+                          width: 240,
+                          height: 180,
+                          child: Center(child: CircularProgressIndicator()),
+                        );
+                      }
+                      return Image.file(
+                        File(path),
+                        fit: BoxFit.cover,
+                        gaplessPlayback: true,
+                        cacheWidth: 640,
+                      );
+                    },
+                  ),
                 // nightly.10: Telegram-style dim+spinner overlay while the
                 // transfer is in flight so the preview doesn't give a false
                 // "sent" feel. Hidden once the bubble is delivered/read.
@@ -12707,7 +13232,18 @@ class _AttachmentRow extends StatelessWidget {
     // or the sender's 60 s stall flipped the state and the bubble should
     // surface that instead of the indefinite spinner that battle tests
     // surfaced in nightly.6.
-    if (messageState == DeliveryState.failed) {
+    if (snapshot != null && snapshot.phase != TransferPhase.completed) {
+      final details = <String>[
+        _phaseLabel(snapshot.phase),
+        '${(snapshot.progress * 100).toStringAsFixed(0)}%',
+        '${_formatBytes(snapshot.bytesTransferred)} / ${_formatBytes(snapshot.totalBytes)}',
+        if (snapshot.bytesPerSecond != null && snapshot.bytesPerSecond! > 0)
+          '${_formatBytes(snapshot.bytesPerSecond!.round())}/s',
+        if (snapshot.eta != null) '${_formatEta(snapshot.eta!)} left',
+        if ((snapshot.routeLabel ?? '').isNotEmpty) snapshot.routeLabel!,
+      ];
+      statusLine = details.join(' · ');
+    } else if (messageState == DeliveryState.failed) {
       statusLine =
           'Failed · ${_formatBytes(descriptor.sizeBytes)}'
           '${outbound ? " · tap to retry" : ""}';
@@ -12926,10 +13462,14 @@ class _StagedAttachmentTray extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: 12),
           child: SizedBox(
             height: 88,
-            child: ListView.separated(
+            child: ReorderableListView.builder(
               scrollDirection: Axis.horizontal,
               itemCount: staged.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              onReorderItem: (oldIndex, newIndex) => controller.reorderStaged(
+                deviceId: contact.deviceId,
+                oldIndex: oldIndex,
+                newIndex: newIndex,
+              ),
               itemBuilder: (context, i) {
                 final item = staged[i];
                 final isImage = item.mimeType.startsWith('image/');
@@ -12988,40 +13528,109 @@ class _StagedAttachmentTray extends StatelessWidget {
                     ),
                   );
                 }
-                return Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(10),
-                      child: SizedBox(
-                        width: 88,
-                        height: 88,
-                        child: previewChild,
-                      ),
-                    ),
-                    Positioned(
-                      right: -6,
-                      top: -6,
-                      child: InkWell(
-                        onTap: () => controller.removeStaged(
-                          deviceId: contact.deviceId,
-                          stagedId: item.id,
+                return Padding(
+                  key: ValueKey(item.id),
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: SizedBox(
+                          width: 88,
+                          height: 88,
+                          child: previewChild,
                         ),
+                      ),
+                      Positioned(
+                        left: 4,
+                        top: 4,
                         child: Container(
-                          padding: const EdgeInsets.all(2),
+                          width: 22,
+                          height: 22,
+                          alignment: Alignment.center,
                           decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.7),
+                            color: palette.primary,
                             shape: BoxShape.circle,
                           ),
-                          child: const Icon(
-                            Icons.close,
-                            color: Colors.white,
-                            size: 16,
+                          child: Text(
+                            '${i + 1}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  ],
+                      Positioned(
+                        left: 2,
+                        bottom: 2,
+                        child: PopupMenuButton<AttachmentPresentation>(
+                          tooltip: 'Send mode',
+                          initialValue: item.presentation,
+                          onSelected: (presentation) =>
+                              controller.setStagedPresentation(
+                                deviceId: contact.deviceId,
+                                stagedId: item.id,
+                                presentation: presentation,
+                              ),
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(
+                              value: AttachmentPresentation.media,
+                              child: Text('Send as media'),
+                            ),
+                            PopupMenuItem(
+                              value: AttachmentPresentation.file,
+                              child: Text('Send as file'),
+                            ),
+                          ],
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.72),
+                              borderRadius: BorderRadius.circular(7),
+                            ),
+                            child: Text(
+                              item.presentation == AttachmentPresentation.media
+                                  ? 'MEDIA'
+                                  : 'FILE',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 8,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        right: -6,
+                        top: -6,
+                        child: InkWell(
+                          onTap: () => controller.removeStaged(
+                            deviceId: contact.deviceId,
+                            stagedId: item.id,
+                          ),
+                          child: Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.7),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.close,
+                              color: Colors.white,
+                              size: 16,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 );
               },
             ),
@@ -13132,6 +13741,60 @@ class _TransferOverlay extends StatelessWidget {
           if (route != OutboundDeliveryRoute.unknown)
             Positioned(right: 6, bottom: 6, child: _RouteChip(route: route)),
         ],
+      ),
+    );
+  }
+}
+
+class _PathImageViewerScreen extends StatelessWidget {
+  const _PathImageViewerScreen({
+    required this.path,
+    required this.title,
+    required this.onSave,
+  });
+
+  final String path;
+  final String title;
+  final Future<void> Function() onSave;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: Text(title),
+        actions: [
+          IconButton(
+            tooltip: 'Save',
+            onPressed: () => unawaited(onSave()),
+            icon: const Icon(Icons.download_outlined),
+          ),
+        ],
+      ),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final dpr = MediaQuery.of(context).devicePixelRatio.clamp(1.0, 3.0);
+          final cacheWidth = (constraints.maxWidth * dpr).round();
+          return InteractiveViewer(
+            minScale: 0.5,
+            maxScale: 5,
+            child: Center(
+              child: Image.file(
+                File(path),
+                cacheWidth: cacheWidth,
+                fit: BoxFit.contain,
+                errorBuilder: (context, error, stackTrace) => const Center(
+                  child: Text(
+                    'Could not decode this image.',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }

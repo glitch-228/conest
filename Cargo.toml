@@ -2,6 +2,7 @@
 members = [
   "native/conest_native",
   "native/conest_relay",
+  "native/conest_relay_supervisor",
   "native/conest_updater",
 ]
 resolver = "2"

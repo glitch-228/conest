@@ -36,6 +36,14 @@ class RelayHealthInfo {
   final bool pinnedKeyMismatch;
 }
 
+class RelayFetchBatch {
+  const RelayFetchBatch({required this.envelopes, this.leaseId});
+
+  final List<RelayEnvelope> envelopes;
+  final String? leaseId;
+  bool get requiresAcknowledgement => leaseId?.isNotEmpty ?? false;
+}
+
 /// Thrown when a relay response carries a signature that does not verify
 /// against the pinned identity key supplied by the caller. The caller
 /// catches this to surface a security banner without aborting unrelated
@@ -141,7 +149,96 @@ class RelayClient {
       },
       expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
     );
-    final rawMessages = (result.body['messages'] as List<dynamic>? ?? const [])
+    return _decodeEnvelopes(result.body);
+  }
+
+  /// Durable relay fetch. Unlike the legacy destructive fetch, returned
+  /// envelopes remain queued until [acknowledgeLease] succeeds. Callers must
+  /// process and persist the entire batch before acknowledging it.
+  Future<RelayFetchBatch> fetchLeasedEnvelopes({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    int limit = 64,
+    Duration timeout = const Duration(seconds: 4),
+    Duration waitFor = Duration.zero,
+    Duration leaseFor = const Duration(seconds: 60),
+    String? expectedIdentityPublicKeyBase64,
+  }) async {
+    final effectiveTimeout = waitFor > Duration.zero
+        ? waitFor + const Duration(seconds: 4)
+        : timeout;
+    final _RelayCallResult result;
+    try {
+      result = await _sendRequest(
+        host: host,
+        port: port,
+        protocol: protocol,
+        timeout: effectiveTimeout,
+        request: {
+          'action': 'fetch_leased',
+          'recipient_device_id': recipientDeviceId,
+          'limit': limit,
+          if (waitFor > Duration.zero) 'wait_ms': waitFor.inMilliseconds,
+          'lease_ms': leaseFor.inMilliseconds,
+        },
+        expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+      );
+    } on StateError catch (error) {
+      final detail = error.message.toString().toLowerCase();
+      final unsupported =
+          detail.contains('unknown variant') ||
+          detail.contains('unknown action') ||
+          detail.contains('invalid request');
+      if (!unsupported) rethrow;
+      return RelayFetchBatch(
+        envelopes: await fetchEnvelopes(
+          host: host,
+          port: port,
+          protocol: protocol,
+          recipientDeviceId: recipientDeviceId,
+          limit: limit,
+          timeout: timeout,
+          waitFor: waitFor,
+          expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+        ),
+      );
+    }
+    return RelayFetchBatch(
+      envelopes: _decodeEnvelopes(result.body),
+      leaseId: result.body['lease_id'] as String?,
+    );
+  }
+
+  Future<void> acknowledgeLease({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    required String leaseId,
+    Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
+  }) async {
+    if (leaseId.length < 16 || leaseId.length > 128) {
+      throw ArgumentError('Relay lease id is invalid.');
+    }
+    await _sendRequest(
+      host: host,
+      port: port,
+      protocol: protocol,
+      timeout: timeout,
+      request: {
+        'action': 'ack_lease',
+        'recipient_device_id': recipientDeviceId,
+        'lease_id': leaseId,
+      },
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    );
+  }
+
+  List<RelayEnvelope> _decodeEnvelopes(Map<String, dynamic> body) {
+    final rawMessages = (body['messages'] as List<dynamic>? ?? const [])
         .cast<dynamic>();
     final envelopes = <RelayEnvelope>[];
     for (final message in rawMessages) {
@@ -519,7 +616,9 @@ class RelayClient {
   bool _hasExpectedPin(String? value) => value?.trim().isNotEmpty ?? false;
 
   int _responseLimitFor(Map<String, dynamic> request) {
-    if (request['action'] != 'fetch') return _controlResponseLimit;
+    if (request['action'] != 'fetch' && request['action'] != 'fetch_leased') {
+      return _controlResponseLimit;
+    }
     final requested = request['limit'] is int ? request['limit'] as int : 64;
     final limit = requested.clamp(1, 128);
     return min(_absoluteFetchResponseLimit, 64 * 1024 + limit * 768 * 1024);

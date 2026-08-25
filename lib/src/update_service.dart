@@ -88,9 +88,8 @@ class UpdateAvailability {
   final String sha256Hex;
 
   /// Resolved release notes text. Manifest-baked notes are preferred (signed,
-  /// tamper-proof); the GitHub release body is consulted as a fallback for
-  /// stable releases when the manifest does not embed notes. Null when the
-  /// channel skips notes (nightlies) or no source produced text.
+  /// tamper-proof); the GitHub release body is consulted as a fallback when
+  /// the manifest does not embed notes. Null when no source produced text.
   final String? releaseNotes;
 }
 
@@ -114,13 +113,22 @@ class ReleaseManifestAsset {
     required this.name,
     required this.sha256Hex,
     required this.sizeBytes,
+    this.role,
+    this.platform,
+    this.architecture,
   });
 
   final String name;
   final String sha256Hex;
   final int? sizeBytes;
+  final String? role;
+  final String? platform;
+  final String? architecture;
 
-  factory ReleaseManifestAsset.fromJson(Map<String, dynamic> json) {
+  factory ReleaseManifestAsset.fromJson(
+    Map<String, dynamic> json, {
+    bool requireTargetMetadata = false,
+  }) {
     final name = json['name'] as String? ?? '';
     final sha256Hex = (json['sha256'] as String? ?? '').toLowerCase();
     final size = json['sizeBytes'] as int?;
@@ -136,10 +144,24 @@ class ReleaseManifestAsset {
     if (size == null || size <= 0 || size > _maxUpdateAssetBytes) {
       throw FormatException('Release manifest has invalid size for $name.');
     }
+    final role = json['role'] as String?;
+    final platform = json['platform'] as String?;
+    final architecture = json['architecture'] as String?;
+    if (requireTargetMetadata &&
+        ((role?.isEmpty ?? true) ||
+            (platform?.isEmpty ?? true) ||
+            (architecture?.isEmpty ?? true))) {
+      throw FormatException(
+        'Release manifest target metadata is missing for $name.',
+      );
+    }
     return ReleaseManifestAsset(
       name: name,
       sha256Hex: sha256Hex,
       sizeBytes: size,
+      role: role,
+      platform: platform,
+      architecture: architecture,
     );
   }
 }
@@ -150,6 +172,9 @@ class ReleaseManifest {
     required this.tagName,
     required this.assets,
     this.releaseNotes,
+    this.releaseVersion,
+    this.channel,
+    this.minimumSupervisorVersion,
   });
 
   final int version;
@@ -160,10 +185,13 @@ class ReleaseManifest {
   /// Empty or null on nightlies and on legacy manifests; renders as the
   /// "What's new" section in the update prompt when present.
   final String? releaseNotes;
+  final String? releaseVersion;
+  final String? channel;
+  final String? minimumSupervisorVersion;
 
   factory ReleaseManifest.fromJson(Map<String, dynamic> json) {
     final version = json['version'] as int? ?? 0;
-    if (version != 1) {
+    if (version != 1 && version != 2) {
       throw FormatException('Unsupported release manifest version: $version.');
     }
     final tagName = json['tagName'] as String? ?? '';
@@ -181,7 +209,10 @@ class ReleaseManifest {
           'Release manifest asset must be an object.',
         );
       }
-      final asset = ReleaseManifestAsset.fromJson(value);
+      final asset = ReleaseManifestAsset.fromJson(
+        value,
+        requireTargetMetadata: version >= 2,
+      );
       if (assets.containsKey(asset.name)) {
         throw FormatException(
           'Release manifest has duplicate asset ${asset.name}.',
@@ -199,11 +230,26 @@ class ReleaseManifest {
     final notes = rawNotes is String && rawNotes.trim().isNotEmpty
         ? rawNotes
         : null;
+    final releaseVersion = json['releaseVersion'] as String?;
+    final channel = json['channel'] as String?;
+    final minimumSupervisorVersion =
+        json['minimumSupervisorVersion'] as String?;
+    if (version >= 2 &&
+        ((releaseVersion?.isEmpty ?? true) ||
+            (channel != 'stable' && channel != 'nightly') ||
+            (minimumSupervisorVersion?.isEmpty ?? true))) {
+      throw const FormatException(
+        'Release manifest v2 metadata is incomplete.',
+      );
+    }
     return ReleaseManifest(
       version: version,
       tagName: tagName,
       assets: assets,
       releaseNotes: notes,
+      releaseVersion: releaseVersion,
+      channel: channel,
+      minimumSupervisorVersion: minimumSupervisorVersion,
     );
   }
 
@@ -256,6 +302,20 @@ bool isReleaseTagNewerThan(String releaseTag, String currentTag) {
   } catch (_) {
     return false;
   }
+}
+
+@visibleForTesting
+String? resolveReleaseNotes({
+  required String? manifestNotes,
+  required String? releaseBody,
+}) {
+  if (manifestNotes != null && manifestNotes.trim().isNotEmpty) {
+    return manifestNotes;
+  }
+  if (releaseBody != null && releaseBody.trim().isNotEmpty) {
+    return releaseBody;
+  }
+  return null;
 }
 
 class UpdateService extends ChangeNotifier {
@@ -591,7 +651,7 @@ class UpdateService extends ChangeNotifier {
   /// Returns the resolved release notes for an available update.
   ///
   /// Order of precedence:
-  ///   1. Stable channels prefer `manifest.releaseNotes` — signed,
+  ///   1. Every channel prefers `manifest.releaseNotes` — signed,
   ///      tamper-proof, baked in at build time.
   ///   2. Both channels fall back to the GitHub release `body`, which the
   ///      release workflow populates with `RELEASE_NOTES.md` (stable) or
@@ -599,19 +659,10 @@ class UpdateService extends ChangeNotifier {
   String? _resolveReleaseNotes({
     required ReleaseManifest manifest,
     required GithubReleaseInfo release,
-  }) {
-    if (buildInfo.channel == UpdateChannel.stable) {
-      final manifestNotes = manifest.releaseNotes;
-      if (manifestNotes != null && manifestNotes.trim().isNotEmpty) {
-        return manifestNotes;
-      }
-    }
-    final bodyNotes = release.body;
-    if (bodyNotes != null && bodyNotes.trim().isNotEmpty) {
-      return bodyNotes;
-    }
-    return null;
-  }
+  }) => resolveReleaseNotes(
+    manifestNotes: manifest.releaseNotes,
+    releaseBody: release.body,
+  );
 
   bool _isNewerThanCurrentBuild(String releaseTag) {
     final currentTag = buildInfo.buildTag;
