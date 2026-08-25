@@ -390,7 +390,7 @@ fn load_journal_records(path: &Path, key: &[u8; 32]) -> Result<BTreeSet<u32>> {
             .with_context(|| format!("truncate incomplete journal {}", path.display()))?;
     }
     let mut durable = BTreeSet::new();
-    for record in bytes.chunks_exact(JOURNAL_RECORD_LEN) {
+    for record in bytes.as_chunks::<JOURNAL_RECORD_LEN>().0 {
         let prefix = &record[..JOURNAL_RECORD_LEN - 32];
         let tag = &record[JOURNAL_RECORD_LEN - 32..];
         if &prefix[..4] != JOURNAL_MAGIC

@@ -13465,7 +13465,7 @@ class _StagedAttachmentTray extends StatelessWidget {
             child: ReorderableListView.builder(
               scrollDirection: Axis.horizontal,
               itemCount: staged.length,
-              onReorderItem: (oldIndex, newIndex) => controller.reorderStaged(
+              onReorder: (oldIndex, newIndex) => controller.reorderStaged(
                 deviceId: contact.deviceId,
                 oldIndex: oldIndex,
                 newIndex: newIndex,

@@ -99,7 +99,9 @@ fn capture_loop(camera_index: u32, stop: &AtomicBool, sender: &SyncSender<String
             return Err(anyhow!("desktop camera returned an invalid RGB frame"));
         }
         let luma = raw
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|pixel| {
                 // Integer BT.601 luma, rounded and bounded to u8.
                 ((77_u32 * pixel[0] as u32
