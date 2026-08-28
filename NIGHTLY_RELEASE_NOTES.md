@@ -1,18 +1,21 @@
-## File and media system v2 testing preview
+## File and media system v2 stability nightly
 
-- Adds attachment-protocol-v2 manifests, 128 KiB authenticated blocks,
-  durable range journals, exact progress/speed/ETA snapshots, restart resume,
-  priority controls, and a content-addressed managed cache.
-- Adds Preparing, Queued, Waiting, Reconnecting, Verifying, Failed, and
-  Complete transfer UX; a global Transfers screen; multi-file/album staging;
-  media/file presentation modes; and improved save/view/retry controls.
-- Keeps the transfer route order LAN, Iroh direct, visible Iroh relay, then the
-  Conest offline relay. Conest relay storage remains capped at 30 MiB per
-  attachment, and large Iroh-relay use requires consent unless the configured
-  relay is marked bulk-capable.
-- Moves Conest relay queues into SQLite WAL storage with quotas, deduplication,
-  expiry, and lease/ack delivery. Adds a signed-update relay supervisor for
-  Linux and Windows with maintenance windows and health-gated rollback.
+- Fixes Android-to-Linux LAN transfers stalling around 15 MiB by replacing the
+  old 120-request and 64 MiB per-minute ceilings with bounded limits sized for
+  attachment protocol v2 and its 2 GiB target.
+- Reuses LAN keep-alive connections and dispatches encrypted envelopes through
+  a bounded asynchronous queue, avoiding connection churn and nested response
+  deadlocks during bidirectional transfers.
+- Makes concurrent attachment streams share one pinned Iroh QUIC connection
+  instead of racing duplicate handshakes.
+- Persists relay-delivered transfer state before acknowledging leased rows and
+  prevents mailbox quota eviction from deleting active leases.
+- Restores manual-download approval and bilateral pause state after restart.
+- Retains exact progress, speed, ETA, restart resume, priority controls, the
+  global Transfers screen, multi-file staging, and media/file presentation.
+- Keeps the route order LAN, Iroh direct, visible Iroh relay, then Conest
+  offline store-forward. Conest relay storage remains capped at 30 MiB per
+  attachment.
 
 ### Attachment compatibility and migration
 
@@ -21,7 +24,15 @@ On first launch, every incomplete legacy attachment transfer is canceled with
 history are preserved, and original user files are never deleted. Both peers
 must run an attachment-v2 build to exchange files; older peers can still text.
 
-### Preview limits
+### Testing focus
+
+- Update both peers; attachment-v2 builds are required on both sides.
+- Test Android and Linux in both directions with 1 MiB, 16 MiB, 31 MiB, and
+  larger direct transfers, plus pause/resume and app restart.
+- Test LAN loss and recovery. The route badge and transfer details should show
+  every transition without losing verified progress.
+
+### Remaining preview limits
 
 This nightly is for interoperability and large-file testing, not the final v2
 acceptance build. Native Rust block/journal primitives are included, while the
