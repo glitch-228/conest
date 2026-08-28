@@ -2842,6 +2842,8 @@ class TransferSession {
     this.requiresLan = false,
     this.allowIrohRelay = false,
     this.bytesTransferred = 0,
+    this.pausedByMe = false,
+    this.pausedByPeer = false,
     this.lastError,
   });
 
@@ -2862,6 +2864,8 @@ class TransferSession {
   final bool requiresLan;
   final bool allowIrohRelay;
   final int bytesTransferred;
+  final bool pausedByMe;
+  final bool pausedByPeer;
   final String? lastError;
 
   TransferSession copyWith({
@@ -2871,6 +2875,8 @@ class TransferSession {
     String? relativePath,
     bool? allowIrohRelay,
     int? bytesTransferred,
+    bool? pausedByMe,
+    bool? pausedByPeer,
     String? lastError,
     bool clearLastError = false,
   }) {
@@ -2892,6 +2898,8 @@ class TransferSession {
       requiresLan: requiresLan,
       allowIrohRelay: allowIrohRelay ?? this.allowIrohRelay,
       bytesTransferred: bytesTransferred ?? this.bytesTransferred,
+      pausedByMe: pausedByMe ?? this.pausedByMe,
+      pausedByPeer: pausedByPeer ?? this.pausedByPeer,
       lastError: clearLastError ? null : (lastError ?? this.lastError),
     );
   }
@@ -2916,6 +2924,8 @@ class TransferSession {
       'requiresLan': requiresLan,
       'allowIrohRelay': allowIrohRelay,
       'bytesTransferred': bytesTransferred,
+      'pausedByMe': pausedByMe,
+      'pausedByPeer': pausedByPeer,
       if (lastError != null) 'lastError': lastError,
     };
   }
@@ -2953,6 +2963,8 @@ class TransferSession {
       requiresLan: json['requiresLan'] as bool? ?? false,
       allowIrohRelay: json['allowIrohRelay'] as bool? ?? false,
       bytesTransferred: (json['bytesTransferred'] as num?)?.toInt() ?? 0,
+      pausedByMe: json['pausedByMe'] as bool? ?? false,
+      pausedByPeer: json['pausedByPeer'] as bool? ?? false,
       lastError: json['lastError'] as String?,
     );
   }

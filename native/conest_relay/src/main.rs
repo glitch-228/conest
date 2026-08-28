@@ -772,6 +772,7 @@ impl RelayState {
                         "DELETE FROM queue_entries WHERE id = (
                            SELECT id FROM queue_entries
                             WHERE mailbox = ?1 AND kind = 'pairing_announcement'
+                              AND lease_id IS NULL
                             ORDER BY id LIMIT 1
                          )",
                         params![&recipient_device_id],
@@ -798,10 +799,12 @@ impl RelayState {
                 .execute(
                     "DELETE FROM queue_entries WHERE id = COALESCE(
                        (SELECT id FROM queue_entries
-                         WHERE mailbox = ?1 AND kind != 'pairing_announcement'
+                         WHERE mailbox = ?1 AND lease_id IS NULL
+                           AND kind != 'pairing_announcement'
                          ORDER BY id LIMIT 1),
                        (SELECT id FROM queue_entries
-                         WHERE mailbox = ?1 ORDER BY id LIMIT 1)
+                         WHERE mailbox = ?1 AND lease_id IS NULL
+                         ORDER BY id LIMIT 1)
                      )",
                     params![&recipient_device_id],
                 )
@@ -2566,6 +2569,38 @@ mod tests {
             .expect("ack lease");
         assert_eq!(state.stats().queued_envelope_count, 0);
         assert_eq!(state.stats().active_leases, 0);
+    }
+
+    #[test]
+    fn mailbox_quota_never_evicts_an_active_lease() {
+        let mut config = test_config();
+        config.max_queue_per_mailbox = 1;
+        let state = RelayState::new(config, test_identity());
+        state
+            .store(
+                "dev-bob".to_owned(),
+                envelope("direct_message", "msg-leased", "dev-alice"),
+            )
+            .expect("store leased message");
+        let (_, lease_id) = state
+            .fetch_leased("dev-bob", Some(1), None, Some(30_000))
+            .expect("lease message");
+        let lease_id = lease_id.expect("non-pairing message has a lease");
+
+        assert!(
+            state
+                .store(
+                    "dev-bob".to_owned(),
+                    envelope("direct_message", "msg-new", "dev-alice"),
+                )
+                .is_err(),
+            "a full mailbox with only leased rows must reject, not evict"
+        );
+        assert_eq!(state.stats().queued_envelope_count, 1);
+        assert_eq!(state.stats().active_leases, 1);
+        state
+            .acknowledge_lease("dev-bob", &lease_id)
+            .expect("leased row remains acknowledgeable");
     }
 
     #[test]

@@ -155,6 +155,19 @@ class _MemoryVaultStore extends VaultStore {
   }
 }
 
+class _FailingVaultStore extends _MemoryVaultStore {
+  bool failNextSave = false;
+
+  @override
+  Future<void> save(VaultSnapshot snapshot) async {
+    if (failNextSave) {
+      failNextSave = false;
+      throw const FileSystemException('simulated vault save failure');
+    }
+    await super.save(snapshot);
+  }
+}
+
 class _FakeLocalRelayNode extends LocalRelayNode {
   int? _currentPort;
   bool _running = false;
@@ -548,6 +561,51 @@ class _FakeRelayClient extends RelayClient {
           expectedIdentityPublicKeyBase64 ?? _fakeRelayIdentityKey,
       signatureVerified: true,
     );
+  }
+}
+
+class _LeasedFakeRelayClient extends _FakeRelayClient {
+  int acknowledgementCount = 0;
+
+  @override
+  Future<RelayFetchBatch> fetchLeasedEnvelopes({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    int limit = 64,
+    Duration timeout = const Duration(seconds: 4),
+    Duration waitFor = Duration.zero,
+    Duration leaseFor = const Duration(seconds: 60),
+    String? expectedIdentityPublicKeyBase64,
+  }) async {
+    final envelopes = await fetchEnvelopes(
+      host: host,
+      port: port,
+      protocol: protocol,
+      recipientDeviceId: recipientDeviceId,
+      limit: limit,
+      timeout: timeout,
+      waitFor: waitFor,
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    );
+    return RelayFetchBatch(
+      envelopes: envelopes,
+      leaseId: envelopes.isEmpty ? null : 'lease-0123456789abcdef',
+    );
+  }
+
+  @override
+  Future<void> acknowledgeLease({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    required String leaseId,
+    Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
+  }) async {
+    acknowledgementCount++;
   }
 }
 
@@ -4539,6 +4597,37 @@ void main() {
   });
 
   test(
+    'relay lease is not acknowledged when envelope persistence fails',
+    () async {
+      final relayClient = _LeasedFakeRelayClient();
+      final bobVault = _FailingVaultStore();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        vaultStore: bobVault,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      relayClient.acknowledgementCount = 0;
+
+      await alice.sendMessage(contact: alice.contacts.single, body: 'durable');
+      bobVault.failNextSave = true;
+      await bob.pollNow();
+
+      expect(
+        relayClient.acknowledgementCount,
+        0,
+        reason: 'the relay must replay after the vault commit recovers',
+      );
+    },
+  );
+
+  test(
     'pairing session activates for invite actions and expires after two minutes',
     () async {
       var now = DateTime.utc(2026, 7, 13, 12);
@@ -5385,6 +5474,100 @@ void main() {
         .firstWhere((message) => message.hasAttachment);
     expect(outbound.state, DeliveryState.delivered);
   });
+
+  test(
+    'manual small download remains acceptable after receiver restart',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final bobVault = _MemoryVaultStore();
+      final aliceRoot = Directory.systemTemp.createTempSync(
+        'conest_manual_restart_alice_',
+      );
+      final bobRoot = Directory.systemTemp.createTempSync(
+        'conest_manual_restart_bob_',
+      );
+      addTearDown(() {
+        for (final directory in <Directory>[aliceRoot, bobRoot]) {
+          try {
+            directory.deleteSync(recursive: true);
+          } catch (_) {}
+        }
+      });
+      final aliceChannel = _InProcessLanDirectChannel(host: '192.168.62.10');
+      final bobChannel = _InProcessLanDirectChannel(host: '192.168.62.11');
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        lanAddresses: const <String>['192.168.62.10'],
+        lanDirectChannel: aliceChannel,
+        attachmentRootProvider: () async => aliceRoot,
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        lanAddresses: const <String>['192.168.62.11'],
+        lanDirectChannel: bobChannel,
+        attachmentRootProvider: () async => bobRoot,
+        vaultStore: bobVault,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(aliceChannel.stop);
+      await _pairControllers(alice, bob);
+      await bob.updateGlobalConnectivity(
+        bob.identity!.connectivity.copyWith(
+          autoDownloadPreset: AutoDownloadPreset.custom,
+        ),
+      );
+
+      final original = Uint8List.fromList(
+        List<int>.generate(192 * 1024, (index) => (index * 7) & 0xff),
+      );
+      await alice.sendAttachment(
+        contact: alice.contacts.single,
+        bytes: original,
+        fileName: 'tap-after-restart.bin',
+      );
+      await bob.pollNow();
+      final offered = bob
+          .messagesFor(bob.contacts.single.deviceId)
+          .singleWhere((message) => message.hasAttachment);
+      expect(bob.attachmentAwaitingAcceptance(offered.attachment!.id), isTrue);
+
+      bob.dispose();
+      await bobChannel.stop();
+      final resumedBobChannel = _InProcessLanDirectChannel(
+        host: '192.168.62.11',
+      );
+      final resumedBob = await _createController(
+        relayClient: relayClient,
+        displayName: 'unused',
+        lanAddresses: const <String>['192.168.62.11'],
+        lanDirectChannel: resumedBobChannel,
+        attachmentRootProvider: () async => bobRoot,
+        vaultStore: bobVault,
+        createIdentity: false,
+      );
+      addTearDown(resumedBob.dispose);
+      addTearDown(resumedBobChannel.stop);
+      expect(
+        resumedBob.attachmentAwaitingAcceptance(offered.attachment!.id),
+        isTrue,
+      );
+
+      await resumedBob.acceptIncomingAttachment(offered.attachment!.id);
+      for (var round = 0; round < 12; round++) {
+        await alice.pollNow();
+        await resumedBob.pollNow();
+        if (resumedBob.attachmentAvailableLocally(offered.attachment!.id)) {
+          break;
+        }
+      }
+      expect(
+        resumedBob.attachmentBytesFor(offered.attachment!.id),
+        equals(original),
+      );
+    },
+  );
 
   test(
     'attachment routing enforces exact 30 MiB and 2 GiB boundaries',

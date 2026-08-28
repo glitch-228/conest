@@ -13465,6 +13465,9 @@ class _StagedAttachmentTray extends StatelessWidget {
             child: ReorderableListView.builder(
               scrollDirection: Axis.horizontal,
               itemCount: staged.length,
+              // Flutter 3.41.9 (the pinned release toolchain) requires this
+              // callback; 3.44 deprecates it in favor of onReorderItem.
+              // ignore: deprecated_member_use
               onReorder: (oldIndex, newIndex) => controller.reorderStaged(
                 deviceId: contact.deviceId,
                 oldIndex: oldIndex,

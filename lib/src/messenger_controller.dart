@@ -1299,7 +1299,7 @@ class MessengerController extends ChangeNotifier {
                 stat.modified != session.sourceModifiedAt)) {
           continue;
         }
-        _outboundAttachments[session.id] = _OutboundAttachmentState(
+        final outboundState = _OutboundAttachmentState(
           messageId: session.messageId,
           peerDeviceId: peerId,
           sourcePath: sourcePath,
@@ -1307,8 +1307,18 @@ class MessengerController extends ChangeNotifier {
           descriptor: session.attachment,
           requiresLan: session.requiresLan,
         );
+        final legacyPaused =
+            session.state == TransferState.paused &&
+            !session.pausedByMe &&
+            !session.pausedByPeer;
+        outboundState
+          ..pausedByMe = session.pausedByMe || legacyPaused
+          ..pausedByPeer = session.pausedByPeer;
+        _outboundAttachments[session.id] = outboundState;
         _locallyAvailableAttachments.add(session.id);
-        _enqueueOutbound(contact, session.id);
+        if (!outboundState.paused) {
+          _enqueueOutbound(contact, session.id);
+        }
         retainedSessions.add(session);
       } else {
         final partialPath = session.relativePath.isEmpty
@@ -1321,11 +1331,8 @@ class MessengerController extends ChangeNotifier {
             continue;
           }
         }
-        final awaitingAcceptance =
-            session.requiresLan &&
-            session.relativePath.isEmpty &&
-            session.state == TransferState.pending;
-        _inboundAttachments[session.id] = _InboundAttachmentState(
+        final awaitingAcceptance = session.relativePath.isEmpty;
+        final inboundState = _InboundAttachmentState(
           messageId: session.messageId,
           peerDeviceId: peerId,
           descriptor: session.attachment,
@@ -1334,10 +1341,18 @@ class MessengerController extends ChangeNotifier {
           accepted: !awaitingAcceptance,
           receivedChunks: session.completedChunks,
         );
+        final legacyPaused =
+            session.state == TransferState.paused &&
+            !session.pausedByMe &&
+            !session.pausedByPeer;
+        inboundState
+          ..pausedByMe = session.pausedByMe || legacyPaused
+          ..pausedByPeer = session.pausedByPeer;
+        _inboundAttachments[session.id] = inboundState;
         retainedSessions.add(session);
-        if (partialPath != null) {
+        if (partialPath != null && !inboundState.paused) {
           _scheduleAttachmentRetry(session.id);
-          _topUpInboundWindow(_inboundAttachments[session.id]!, contact);
+          _topUpInboundWindow(inboundState, contact);
         }
       }
     }
@@ -4355,6 +4370,28 @@ class MessengerController extends ChangeNotifier {
     unawaited(_saveSnapshotSilently(notify: true, debounce: true));
   }
 
+  void _setTransferSessionPause(
+    String attachmentId, {
+    bool? pausedByMe,
+    bool? pausedByPeer,
+  }) {
+    final session = _transferSessionById(attachmentId);
+    if (session == null) return;
+    final nextPausedByMe = pausedByMe ?? session.pausedByMe;
+    final nextPausedByPeer = pausedByPeer ?? session.pausedByPeer;
+    _upsertTransferSession(
+      session.copyWith(
+        state: nextPausedByMe || nextPausedByPeer
+            ? TransferState.paused
+            : TransferState.reconnecting,
+        pausedByMe: nextPausedByMe,
+        pausedByPeer: nextPausedByPeer,
+        updatedAt: _now().toUtc(),
+        clearLastError: true,
+      ),
+    );
+  }
+
   void _removeTransferSession(String attachmentId) {
     _snapshot = _snapshot.copyWith(
       transferSessions: _snapshot.transferSessions
@@ -6965,7 +7002,16 @@ class MessengerController extends ChangeNotifier {
           if (route.kind == PeerRouteKind.relay) {
             relaySuccess = true;
           }
-          processed += await _processEnvelopes(envelopes);
+          processed += await _processEnvelopes(
+            envelopes,
+            failOnProcessingError: true,
+          );
+          // The lease is the relay's durability boundary. Persist message,
+          // range-journal and dedupe mutations before deleting its rows so a
+          // process crash can only replay, never lose, an accepted envelope.
+          if (envelopes.isNotEmpty) {
+            await _saveSnapshotSilently(notify: false);
+          }
           if (batch.leaseId case final leaseId?) {
             await _relayClient.acknowledgeLease(
               host: route.host,
@@ -7108,9 +7154,10 @@ class MessengerController extends ChangeNotifier {
       }
       final envelopes = batch.envelopes;
       if (envelopes.isNotEmpty) {
-        await _processEnvelopes(envelopes);
-        if (batch.leaseId case final leaseId?) {
-          try {
+        try {
+          await _processEnvelopes(envelopes, failOnProcessingError: true);
+          await _saveSnapshotSilently(notify: false);
+          if (batch.leaseId case final leaseId?) {
             await _relayClient.acknowledgeLease(
               host: route.host,
               port: route.port,
@@ -7120,11 +7167,15 @@ class MessengerController extends ChangeNotifier {
               expectedIdentityPublicKeyBase64:
                   await _requireOperationalRelayPin(route),
             );
-          } catch (error) {
-            // The lease expires and replays. Message-id deduplication makes
-            // that safe, while preserving at-least-once delivery.
-            appendDebugLog('Relay lease acknowledgement failed: $error');
           }
+        } catch (error) {
+          // The lease expires and replays. Message-id deduplication makes
+          // that safe, while preserving at-least-once delivery. This also
+          // covers a failed vault commit or envelope handler.
+          appendDebugLog(
+            'Relay lease retained after processing/save failure: $error',
+          );
+          continue;
         }
         _markRuntimeActivity();
         notifyListeners();
@@ -7730,11 +7781,12 @@ class MessengerController extends ChangeNotifier {
   Future<int> _processEnvelopes(
     List<RelayEnvelope> envelopes, {
     PeerRouteKind ingressKind = PeerRouteKind.relay,
+    bool failOnProcessingError = false,
   }) async {
     _notificationsDeferredDepth++;
-    var processed = 0;
+    var outcome = const _EnvelopeProcessingOutcome();
     try {
-      processed = await _processEnvelopesInternal(envelopes, ingressKind);
+      outcome = await _processEnvelopesInternal(envelopes, ingressKind);
     } finally {
       _notificationsDeferredDepth--;
       if (_notificationsDeferredDepth == 0 && _deferredNotificationPending) {
@@ -7742,14 +7794,20 @@ class MessengerController extends ChangeNotifier {
         if (!_disposed) super.notifyListeners();
       }
     }
-    return processed;
+    if (failOnProcessingError && outcome.failed > 0) {
+      throw StateError(
+        '${outcome.failed} relay envelope(s) failed during processing.',
+      );
+    }
+    return outcome.processed;
   }
 
-  Future<int> _processEnvelopesInternal(
+  Future<_EnvelopeProcessingOutcome> _processEnvelopesInternal(
     List<RelayEnvelope> envelopes,
     PeerRouteKind ingressKind,
   ) async {
     var processed = 0;
+    var failed = 0;
     final orderedEnvelopes = List<RelayEnvelope>.from(envelopes)
       ..sort((left, right) {
         final leftPriority = _processingPriority(left.kind);
@@ -7964,6 +8022,7 @@ class MessengerController extends ChangeNotifier {
         await _sendAck(contact: contact, envelope: envelope);
         _markSeen(envelope.messageId);
       } catch (error) {
+        failed++;
         appendDebugLog(
           'Dropped envelope ${_boundedLogValue(envelope.messageId)} after '
           'processing error: ${_boundedLogValue(error.toString(), 180)}',
@@ -7972,7 +8031,7 @@ class MessengerController extends ChangeNotifier {
         _inFlightEnvelopeIds.remove(envelope.messageId);
       }
     }
-    return processed;
+    return _EnvelopeProcessingOutcome(processed: processed, failed: failed);
   }
 
   int _processingPriority(String kind) {
@@ -8296,8 +8355,8 @@ class MessengerController extends ChangeNotifier {
       peerDeviceId: sender.deviceId,
       descriptor: descriptor,
       partialPath: partialPath,
-      awaitingAcceptance: awaitingAcceptance,
-      accepted: !awaitingAcceptance,
+      awaitingAcceptance: awaitingAcceptance || partialPath == null,
+      accepted: !awaitingAcceptance && partialPath != null,
     );
     _inboundAttachments[descriptor.id] = inboundState;
     _upsertTransferSession(
@@ -9167,6 +9226,8 @@ class MessengerController extends ChangeNotifier {
         _topUpInboundWindow(inbound, sender);
       }
     }
+    _setTransferSessionPause(attachmentId, pausedByPeer: paused);
+    unawaited(_saveSnapshotSilently(notify: false, debounce: true));
     appendDebugLog(
       'Peer ${sender.alias} ${paused ? "paused" : "resumed"} '
       'attachment $attachmentId.',
@@ -9190,6 +9251,8 @@ class MessengerController extends ChangeNotifier {
       inbound.pausedByMe = true;
       inbound.retryTimer?.cancel();
     }
+    _setTransferSessionPause(attachmentId, pausedByMe: true);
+    await _saveSnapshotSilently(notify: false);
     notifyListeners();
     await _sendAttachmentPauseControl(
       peer: peer,
@@ -9221,6 +9284,8 @@ class MessengerController extends ChangeNotifier {
         _topUpInboundWindow(inbound, peer);
       }
     }
+    _setTransferSessionPause(attachmentId, pausedByMe: false);
+    await _saveSnapshotSilently(notify: false);
     notifyListeners();
     await _sendAttachmentPauseControl(
       peer: peer,
@@ -15079,6 +15144,13 @@ class _PairingBeaconRoute {
 
   final PeerEndpoint route;
   final DateTime seenAt;
+}
+
+class _EnvelopeProcessingOutcome {
+  const _EnvelopeProcessingOutcome({this.processed = 0, this.failed = 0});
+
+  final int processed;
+  final int failed;
 }
 
 class _DeliveryRoute {

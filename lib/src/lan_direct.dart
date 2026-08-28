@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -61,15 +62,27 @@ abstract class LanDirectChannel {
 /// port (web). Tests inject a fake.
 class HttpLanDirectChannel implements LanDirectChannel {
   static const int _maxRequestBytes = 2 * 1024 * 1024;
-  static const int _maxConcurrentHandlers = 8;
-  static const int _maxRequestsPerMinutePerIp = 120;
-  static const int _maxBytesPerMinutePerIp = 64 * 1024 * 1024;
+  static const int _maxConcurrentHandlers = 32;
+  static const int _maxConcurrentEnvelopeHandlers = 8;
+  static const int _maxQueuedEnvelopes = 64;
+
+  // A v2 attachment uses one request per 128 KiB block in each direction.
+  // The old 120 request / 64 MiB limits therefore throttled every real LAN
+  // transfer after roughly 15 MiB and made it look as if the route had died.
+  // Body and concurrency bounds remain the primary LAN DoS controls; these
+  // generous per-minute ceilings accommodate the supported 2 GiB payload.
+  static const int _maxRequestsPerMinutePerIp = 20 * 1024;
+  static const int _maxBytesPerMinutePerIp = 4 * 1024 * 1024 * 1024;
   static const Duration _readTimeout = Duration(seconds: 15);
 
   HttpServer? _server;
+  HttpClient? _outboundClient;
   Future<void> Function(RelayEnvelope envelope)? _handler;
   final Map<String, _LanRateBucket> _rateBuckets = <String, _LanRateBucket>{};
+  final Queue<_QueuedLanEnvelope> _pendingEnvelopes =
+      Queue<_QueuedLanEnvelope>();
   int _activeHandlers = 0;
+  int _activeEnvelopeHandlers = 0;
 
   @override
   int? get localPort => _server?.port;
@@ -99,6 +112,9 @@ class HttpLanDirectChannel implements LanDirectChannel {
   Future<void> stop() async {
     final s = _server;
     _server = null;
+    _pendingEnvelopes.clear();
+    _outboundClient?.close(force: true);
+    _outboundClient = null;
     if (s != null) {
       try {
         await s.close(force: true);
@@ -152,13 +168,20 @@ class HttpLanDirectChannel implements LanDirectChannel {
         await req.response.close();
         return;
       }
-      // Crypto failures (unknown sender / MAC mismatch) are absorbed
-      // by the handler; an HTTP 200 just means "we received your bytes".
-      // The peer learns whether the chunk actually landed via the next
-      // attachment_progress / chunk_request retry.
-      await handler(envelope);
-      req.response.statusCode = HttpStatus.ok;
+      if (_pendingEnvelopes.length >= _maxQueuedEnvelopes) {
+        req.response.statusCode = HttpStatus.serviceUnavailable;
+        await req.response.close();
+        return;
+      }
+      _pendingEnvelopes.add(_QueuedLanEnvelope(envelope, handler));
+      // A request handler may synchronously send a response envelope back to
+      // the caller. Awaiting it here occupied every HTTP handler and caused a
+      // nested PUT deadlock (especially with the 32-block large-file window).
+      // A 202 means the bounded processing queue accepted the encrypted
+      // envelope; protocol progress/retry confirms its eventual application.
+      req.response.statusCode = HttpStatus.accepted;
       await req.response.close();
+      _drainEnvelopeQueue();
     } on _LanRequestTooLarge {
       try {
         req.response.statusCode = HttpStatus.requestEntityTooLarge;
@@ -181,6 +204,23 @@ class HttpLanDirectChannel implements LanDirectChannel {
       } catch (_) {}
     } finally {
       _activeHandlers--;
+    }
+  }
+
+  void _drainEnvelopeQueue() {
+    while (_server != null &&
+        _activeEnvelopeHandlers < _maxConcurrentEnvelopeHandlers &&
+        _pendingEnvelopes.isNotEmpty) {
+      final queued = _pendingEnvelopes.removeFirst();
+      _activeEnvelopeHandlers++;
+      unawaited(
+        Future<void>.sync(
+          () => queued.handler(queued.envelope),
+        ).catchError((_) {}).whenComplete(() {
+          _activeEnvelopeHandlers--;
+          _drainEnvelopeQueue();
+        }),
+      );
     }
   }
 
@@ -251,8 +291,13 @@ class HttpLanDirectChannel implements LanDirectChannel {
     if (!isValidLanDirectHost(host) || !isValidPeerEndpointPort(port)) {
       return false;
     }
-    final client = HttpClient();
-    client.connectionTimeout = const Duration(milliseconds: 1500);
+    // Reuse HTTP/1.1 connections for the whole LAN session. Creating and
+    // force-closing a client for every 128 KiB block caused socket churn and
+    // ephemeral-port pressure on Android during sustained transfers.
+    final client = _outboundClient ??= HttpClient()
+      ..connectionTimeout = const Duration(milliseconds: 1500)
+      ..idleTimeout = const Duration(seconds: 30)
+      ..maxConnectionsPerHost = 16;
     try {
       final uri = Uri(
         scheme: 'http',
@@ -271,8 +316,6 @@ class HttpLanDirectChannel implements LanDirectChannel {
       return resp.statusCode >= 200 && resp.statusCode < 300;
     } catch (_) {
       return false;
-    } finally {
-      client.close(force: true);
     }
   }
 }
@@ -309,6 +352,13 @@ class _LanRateBucket {
     requests = 0;
     bytes = 0;
   }
+}
+
+class _QueuedLanEnvelope {
+  const _QueuedLanEnvelope(this.envelope, this.handler);
+
+  final RelayEnvelope envelope;
+  final Future<void> Function(RelayEnvelope envelope) handler;
 }
 
 class _LanRequestTooLarge implements Exception {

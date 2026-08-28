@@ -256,6 +256,8 @@ void main() {
       state: TransferState.transferring,
       completedChunks: const [0],
       allowIrohRelay: true,
+      pausedByMe: true,
+      pausedByPeer: false,
       createdAt: DateTime.utc(2026, 1, 1),
       updatedAt: DateTime.utc(2026, 1, 1, 0, 1),
     );
@@ -267,6 +269,8 @@ void main() {
     expect(decoded.state, TransferState.transferring);
     expect(decoded.completedChunks, const [0]);
     expect(decoded.allowIrohRelay, isTrue);
+    expect(decoded.pausedByMe, isTrue);
+    expect(decoded.pausedByPeer, isFalse);
   });
 
   test('transfer progress is persisted as compact completed ranges', () {

@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -49,6 +51,8 @@ pub struct NativeTransport {
     /// connection here avoids a full discovery/NAT/TLS handshake for every
     /// message or attachment block.
     connections: Arc<Mutex<HashMap<EndpointId, Connection>>>,
+    #[cfg(test)]
+    connection_attempts: Arc<AtomicUsize>,
     relay_enabled: bool,
 }
 
@@ -110,6 +114,8 @@ impl NativeTransport {
             endpoint,
             inbox: Arc::new(Mutex::new(inbox_rx)),
             connections,
+            #[cfg(test)]
+            connection_attempts: Arc::new(AtomicUsize::new(0)),
             relay_enabled,
         })
     }
@@ -182,18 +188,10 @@ impl NativeTransport {
                 // A pooled connection may have closed between lookup and
                 // open_bi. Evict it and retry exactly once on a fresh QUIC
                 // connection; higher layers retain their normal route retry.
-                self.connections.lock().await.remove(&endpoint_id);
-                let fresh = self
-                    .endpoint
-                    .connect(remote_addr, CONEST_ALPN)
-                    .await
-                    .with_context(|| {
-                        format!("reconnect after pooled Iroh failure: {first_error:#}")
-                    })?;
-                self.connections
-                    .lock()
-                    .await
-                    .insert(endpoint_id, fresh.clone());
+                self.evict_if_same(endpoint_id, &connection).await;
+                let fresh = self.connection_for(remote_addr).await.with_context(|| {
+                    format!("reconnect after pooled Iroh failure: {first_error:#}")
+                })?;
                 self.send_on_connection(endpoint_id, &fresh, &bytes, allow_relay)
                     .await
             }
@@ -202,21 +200,36 @@ impl NativeTransport {
 
     async fn connection_for(&self, remote_addr: EndpointAddr) -> Result<Connection> {
         let endpoint_id = remote_addr.id;
-        if let Some(connection) = self.connections.lock().await.get(&endpoint_id).cloned()
+        // Hold the per-installation pool lock through connect. This makes a
+        // burst of attachment streams single-flight instead of allowing all
+        // callers to observe a miss and perform duplicate NAT/TLS handshakes.
+        // The lock is released before any stream I/O, so established peers
+        // still multiplex concurrently.
+        let mut connections = self.connections.lock().await;
+        if let Some(connection) = connections.get(&endpoint_id).cloned()
             && connection.close_reason().is_none()
         {
             return Ok(connection);
         }
+        #[cfg(test)]
+        self.connection_attempts.fetch_add(1, Ordering::Relaxed);
         let connection = self
             .endpoint
             .connect(remote_addr, CONEST_ALPN)
             .await
             .context("connect to Iroh peer")?;
-        self.connections
-            .lock()
-            .await
-            .insert(endpoint_id, connection.clone());
+        connections.insert(endpoint_id, connection.clone());
         Ok(connection)
+    }
+
+    async fn evict_if_same(&self, endpoint_id: EndpointId, failed: &Connection) {
+        let mut connections = self.connections.lock().await;
+        if connections
+            .get(&endpoint_id)
+            .is_some_and(|pooled| pooled.stable_id() == failed.stable_id())
+        {
+            connections.remove(&endpoint_id);
+        }
     }
 
     async fn send_on_connection(
@@ -406,6 +419,37 @@ mod tests {
         assert!(second.accepted);
         assert_eq!(sender.connections.lock().await.len(), 1);
 
+        sender.close().await;
+        receiver.close().await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_streams_share_one_connection_attempt() {
+        let sender = Arc::new(
+            NativeTransport::start_inner(vec![31; 32], false, vec![])
+                .await
+                .unwrap(),
+        );
+        let receiver = NativeTransport::start_inner(vec![32; 32], false, vec![])
+            .await
+            .unwrap();
+        let receiver_addr = receiver.endpoint.addr();
+        let mut sends = tokio::task::JoinSet::new();
+        for index in 0..16_u8 {
+            let sender = Arc::clone(&sender);
+            let receiver_addr = receiver_addr.clone();
+            sends.spawn(async move {
+                sender
+                    .send_to_addr_with_policy(receiver_addr, vec![index], true)
+                    .await
+            });
+        }
+        while let Some(result) = sends.join_next().await {
+            assert!(result.expect("send task").expect("send stream").accepted);
+        }
+
+        assert_eq!(sender.connection_attempts.load(Ordering::Relaxed), 1);
+        assert_eq!(sender.connections.lock().await.len(), 1);
         sender.close().await;
         receiver.close().await;
     }

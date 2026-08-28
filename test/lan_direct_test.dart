@@ -1,9 +1,34 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:conest/src/lan_direct.dart';
+import 'package:conest/src/models.dart';
+
+RelayEnvelope _envelope(int index) => RelayEnvelope(
+  kind: 'attachment_chunk',
+  messageId: 'chunk-$index',
+  conversationId: 'conversation',
+  senderAccountId: 'account-a',
+  senderDeviceId: 'device-a',
+  recipientDeviceId: 'device-b',
+  createdAt: DateTime.utc(2026),
+  payloadBase64: base64Encode(<int>[index & 0xff]),
+);
+
+Future<int> _putRaw(int port, RelayEnvelope envelope, HttpClient client) async {
+  final request = await client.putUrl(
+    Uri.parse('http://127.0.0.1:$port/v1/chunk'),
+  );
+  final body = utf8.encode(jsonEncode(envelope.toJson()));
+  request.contentLength = body.length;
+  request.add(body);
+  final response = await request.close();
+  await response.drain<void>();
+  return response.statusCode;
+}
 
 void main() {
   test('LAN-direct accepts only private or link-local literal addresses', () {
@@ -53,6 +78,49 @@ void main() {
       await response.drain<void>();
 
       expect(response.statusCode, HttpStatus.requestEntityTooLarge);
+    },
+  );
+
+  test(
+    'LAN-direct accepts a pipelined block window without handler starvation',
+    () async {
+      final channel = HttpLanDirectChannel();
+      addTearDown(channel.stop);
+      channel.onEnvelope = (_) async {
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+      };
+      final port = await channel.start();
+      expect(port, isNotNull);
+
+      final client = HttpClient()..maxConnectionsPerHost = 64;
+      addTearDown(() => client.close(force: true));
+      final statuses = await Future.wait(<Future<int>>[
+        for (var index = 0; index < 32; index++)
+          _putRaw(port!, _envelope(index), client),
+      ]).timeout(const Duration(seconds: 5));
+
+      expect(statuses, everyElement(HttpStatus.accepted));
+    },
+  );
+
+  test(
+    'LAN-direct rate ceiling does not cut off a normal block stream',
+    () async {
+      final channel = HttpLanDirectChannel();
+      addTearDown(channel.stop);
+      channel.onEnvelope = (_) async {};
+      final port = await channel.start();
+      expect(port, isNotNull);
+
+      final client = HttpClient()..maxConnectionsPerHost = 32;
+      addTearDown(() => client.close(force: true));
+      for (var start = 0; start < 256; start += 32) {
+        final statuses = await Future.wait(<Future<int>>[
+          for (var index = start; index < start + 32; index++)
+            _putRaw(port!, _envelope(index), client),
+        ]);
+        expect(statuses, everyElement(HttpStatus.accepted));
+      }
     },
   );
 }
