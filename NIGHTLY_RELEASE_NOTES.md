@@ -1,21 +1,23 @@
-## File and media system v2 stability nightly
+## High-throughput attachment transport nightly
 
-- Fixes Android-to-Linux LAN transfers stalling around 15 MiB by replacing the
-  old 120-request and 64 MiB per-minute ceilings with bounded limits sized for
-  attachment protocol v2 and its 2 GiB target.
-- Reuses LAN keep-alive connections and dispatches encrypted envelopes through
-  a bounded asynchronous queue, avoiding connection churn and nested response
-  deadlocks during bidirectional transfers.
-- Makes concurrent attachment streams share one pinned Iroh QUIC connection
-  instead of racing duplicate handshakes.
-- Persists relay-delivered transfer state before acknowledging leased rows and
-  prevents mailbox quota eviction from deleting active leases.
-- Restores manual-download approval and bilateral pause state after restart.
-- Retains exact progress, speed, ETA, restart resume, priority controls, the
-  global Transfers screen, multi-file staging, and media/file presentation.
+- Moves direct attachment data from 128 KiB JSON/base64 envelopes to 4 MiB
+  authenticated binary blocks while preserving per-block XChaCha20-Poly1305
+  encryption, hashes, exact durable progress, and resumable range journals.
+- Reuses LAN HTTP connections and allows a bounded 16 MiB transfer window so
+  secure local transfers can use the network efficiently without buffering an
+  entire file in Flutter memory.
+- Pools pinned Iroh QUIC connections and four persistent send workers instead
+  of opening an isolate, connection, and stream for every block. Binary Iroh
+  ranges are capability-gated for attachment-v2 peers.
+- Adds signed direct Iroh address hints to `ci6` invitations and contact
+  bindings while retaining endpoint-ID pinning and end-to-end application
+  encryption.
+- Fixes the incoming Download action, serializes receiver file writes and
+  finalization, and restores accepted transfers after restart so completed
+  ranges remain reusable.
 - Keeps the route order LAN, Iroh direct, visible Iroh relay, then Conest
-  offline store-forward. Conest relay storage remains capped at 30 MiB per
-  attachment.
+  offline store-forward. Direct LAN/Iroh ranges bypass the 30 MiB Conest relay
+  payload path; the Conest relay itself remains capped at 30 MiB.
 
 ### Attachment compatibility and migration
 
@@ -24,19 +26,28 @@ On first launch, every incomplete legacy attachment transfer is canceled with
 history are preserved, and original user files are never deleted. Both peers
 must run an attachment-v2 build to exchange files; older peers can still text.
 
-### Testing focus
+### Validation performed
 
-- Update both peers; attachment-v2 builds are required on both sides.
-- Test Android and Linux in both directions with 1 MiB, 16 MiB, 31 MiB, and
-  larger direct transfers, plus pause/resume and app restart.
-- Test LAN loss and recovery. The route badge and transfer details should show
-  every transition without losing verified progress.
+- The real HTTP LAN harness completed exact-hash transfers at 5, 15, 30, 125,
+  1000, and 2000 MiB with bounded memory.
+- A 250 MiB direct-Iroh controller transfer completed over the pooled native
+  path with an exact cache result and no Conest attachment-chunk fallback.
+- Focused restart/resume, LAN protocol, transport, native block-crypto, Rust
+  workspace, Clippy, and Dart analysis checks pass.
+
+### Device testing focus
+
+- Update both peers; this build's binary range capability is required on both
+  sides for the new fast path.
+- Re-test Android and Linux in both directions, especially Download approval,
+  pause/resume, app restart, Wi-Fi loss/recovery, and 125 MiB or larger files.
+- Confirm the visible route remains LAN or direct Iroh and durable progress is
+  not lost when the route changes.
 
 ### Remaining preview limits
 
-This nightly is for interoperability and large-file testing, not the final v2
-acceptance build. Native Rust block/journal primitives are included, while the
-remaining Dart transfer orchestration and LAN binary-session migration are
-still being completed. Platform transcoding, verified-range streaming/seek,
-group multi-provider transfer, physical 2 GiB certification, and Windows
-device soak testing remain release gates.
+This nightly is for interoperability and throughput testing, not the final v2
+acceptance build. The automated large-file runs use local test transports;
+physical Android/Linux/Windows 2 GiB certification is still required.
+Platform transcoding, verified-range media streaming/seek, group
+multi-provider transfer, and Windows device soak testing remain release gates.
