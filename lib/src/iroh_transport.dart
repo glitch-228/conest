@@ -1,8 +1,98 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'transport.dart';
 import 'transport_models.dart';
+
+const List<int> _irohAttachmentRangeMagic = <int>[0x43, 0x49, 0x32, 0x00];
+const int _irohAttachmentRangeHeaderBytes = 4 + 1 + 2 + 8 + 4 + 32;
+const int _maxIrohAttachmentRangeBytes = 5 * 1024 * 1024;
+
+class IrohAttachmentRangeFrame {
+  const IrohAttachmentRangeFrame({
+    required this.attachmentId,
+    required this.offset,
+    required this.bytes,
+    required this.sha256,
+  });
+
+  final String attachmentId;
+  final int offset;
+  final Uint8List bytes;
+  final Uint8List sha256;
+}
+
+/// Returns `null` for an ordinary Conest JSON envelope and throws for a frame
+/// that claims to be a binary attachment range but is malformed.
+IrohAttachmentRangeFrame? decodeIrohAttachmentRangeFrame(Uint8List frame) {
+  if (frame.length < 4 ||
+      frame[0] != _irohAttachmentRangeMagic[0] ||
+      frame[1] != _irohAttachmentRangeMagic[1] ||
+      frame[2] != _irohAttachmentRangeMagic[2] ||
+      frame[3] != _irohAttachmentRangeMagic[3]) {
+    return null;
+  }
+  if (frame.length < _irohAttachmentRangeHeaderBytes ||
+      frame.length > _maxIrohAttachmentRangeBytes) {
+    throw const FormatException('Invalid Iroh attachment range length.');
+  }
+  final data = ByteData.sublistView(frame);
+  if (data.getUint8(4) != 1) {
+    throw const FormatException('Unsupported Iroh attachment range version.');
+  }
+  final idLength = data.getUint16(5, Endian.big);
+  final offset = data.getUint64(7, Endian.big);
+  final bytesLength = data.getUint32(15, Endian.big);
+  final expectedLength =
+      _irohAttachmentRangeHeaderBytes + idLength + bytesLength;
+  if (idLength <= 0 ||
+      idLength > 160 ||
+      bytesLength <= 0 ||
+      expectedLength != frame.length) {
+    throw const FormatException('Invalid Iroh attachment range geometry.');
+  }
+  final idStart = _irohAttachmentRangeHeaderBytes;
+  final attachmentId = utf8.decode(
+    Uint8List.sublistView(frame, idStart, idStart + idLength),
+  );
+  if (attachmentId.isEmpty ||
+      RegExp(r'[\x00-\x1f\x7f]').hasMatch(attachmentId)) {
+    throw const FormatException('Invalid Iroh attachment range identifier.');
+  }
+  return IrohAttachmentRangeFrame(
+    attachmentId: attachmentId,
+    offset: offset,
+    sha256: Uint8List.sublistView(frame, 19, 51),
+    bytes: Uint8List.sublistView(frame, idStart + idLength),
+  );
+}
+
+Uint8List _encodeIrohAttachmentRangeFrame(AttachmentRange range) {
+  final id = utf8.encode(range.attachmentId);
+  final hash = base64Decode(range.sha256Base64);
+  final totalLength =
+      _irohAttachmentRangeHeaderBytes + id.length + range.bytes.length;
+  if (id.isEmpty ||
+      id.length > 160 ||
+      range.offset < 0 ||
+      range.bytes.isEmpty ||
+      hash.length != 32 ||
+      totalLength > _maxIrohAttachmentRangeBytes) {
+    throw const FormatException('Invalid Iroh attachment range.');
+  }
+  final frame = Uint8List(totalLength);
+  frame.setRange(0, 4, _irohAttachmentRangeMagic);
+  final data = ByteData.sublistView(frame);
+  data.setUint8(4, 1);
+  data.setUint16(5, id.length, Endian.big);
+  data.setUint64(7, range.offset, Endian.big);
+  data.setUint32(15, range.bytes.length, Endian.big);
+  frame.setRange(19, 51, hash);
+  frame.setRange(51, 51 + id.length, id);
+  frame.setRange(51 + id.length, totalLength, range.bytes);
+  return frame;
+}
 
 class IrohBridgeStatus {
   const IrohBridgeStatus({
@@ -55,6 +145,7 @@ abstract interface class NativeIrohBridge {
     required String remoteEndpointId,
     required Uint8List bytes,
     required bool allowRelay,
+    List<String> directAddresses = const <String>[],
   });
   Stream<IrohBridgeInbound> get inbound;
   Future<void> close();
@@ -186,6 +277,7 @@ class IrohTransportAdapter implements TransportAdapter {
       remoteEndpointId: endpoint,
       bytes: envelope.bytes,
       allowRelay: peer.allowRelay,
+      directAddresses: peer.directAddresses,
     );
     if (result.endpointId != endpoint) {
       throw StateError('Iroh peer identity changed during delivery.');
@@ -226,7 +318,7 @@ class IrohTransportAdapter implements TransportAdapter {
     final operation = TransportEnvelope(
       id: '${range.attachmentId}:${range.offset}',
       recipientDeviceId: peer.deviceId,
-      bytes: range.bytes,
+      bytes: _encodeIrohAttachmentRangeFrame(range),
       createdAt: DateTime.now().toUtc(),
     );
     return sendEnvelope(peer: peer, route: route, envelope: operation);

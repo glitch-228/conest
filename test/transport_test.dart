@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:conest/src/iroh_transport.dart';
@@ -128,6 +129,42 @@ void main() {
   });
 
   test(
+    'Iroh attachment ranges use a bounded binary authenticated frame',
+    () async {
+      final bridge = _FakeIrohBridge(endpointId: 'endpoint-peer');
+      final adapter = IrohTransportAdapter(
+        bridge: bridge,
+        secretKeySeed: Uint8List(32),
+        relayEnabled: false,
+        expectedEndpointId: 'endpoint-peer',
+      );
+      await adapter.start();
+      final hash = Uint8List.fromList(List<int>.generate(32, (index) => index));
+      await adapter.sendAttachmentRange(
+        peer: peer,
+        route: _route(TransportKind.iroh, TransportPathKind.direct),
+        range: AttachmentRange(
+          attachmentId: 'attachment-1',
+          offset: 8 * 1024 * 1024,
+          bytes: Uint8List.fromList([4, 5, 6, 7]),
+          sha256Base64: base64Encode(hash),
+        ),
+      );
+      final decoded = decodeIrohAttachmentRangeFrame(bridge.lastBytes!);
+      expect(decoded, isNotNull);
+      expect(decoded!.attachmentId, 'attachment-1');
+      expect(decoded.offset, 8 * 1024 * 1024);
+      expect(decoded.bytes, [4, 5, 6, 7]);
+      expect(decoded.sha256, hash);
+      expect(
+        decodeIrohAttachmentRangeFrame(Uint8List.fromList([0x7b, 0x7d])),
+        isNull,
+      );
+      await adapter.stop();
+    },
+  );
+
+  test(
     'Iroh relay result is rejected when contact relay use is disabled',
     () async {
       final bridge = _FakeIrohBridge(
@@ -149,6 +186,7 @@ void main() {
             transportIdentity: 'endpoint-peer',
             identityPinned: true,
             allowRelay: false,
+            directAddresses: ['192.0.2.10:45837'],
           ),
           route: route,
           envelope: _envelope(),
@@ -156,6 +194,7 @@ void main() {
         throwsStateError,
       );
       expect(bridge.lastAllowRelay, isFalse);
+      expect(bridge.lastDirectAddresses, ['192.0.2.10:45837']);
       await adapter.stop();
     },
   );
@@ -241,6 +280,8 @@ class _FakeIrohBridge implements NativeIrohBridge {
   final bool relayed;
   bool closed = false;
   bool? lastAllowRelay;
+  List<String> lastDirectAddresses = const <String>[];
+  Uint8List? lastBytes;
 
   @override
   Stream<IrohBridgeInbound> get inbound => const Stream.empty();
@@ -261,8 +302,11 @@ class _FakeIrohBridge implements NativeIrohBridge {
     required String remoteEndpointId,
     required Uint8List bytes,
     required bool allowRelay,
+    List<String> directAddresses = const <String>[],
   }) async {
     lastAllowRelay = allowRelay;
+    lastDirectAddresses = List<String>.from(directAddresses);
+    lastBytes = Uint8List.fromList(bytes);
     return IrohBridgeReceipt(
       endpointId: remoteEndpointId,
       relayed: relayed,

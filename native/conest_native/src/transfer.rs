@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 
 pub const ATTACHMENT_PROTOCOL_VERSION: u16 = 2;
 pub const ATTACHMENT_BLOCK_SIZE: u32 = 128 * 1024;
+pub const ATTACHMENT_LAN_BLOCK_SIZE: u32 = 4 * 1024 * 1024;
 pub const MAX_ATTACHMENT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub const JOURNAL_CHECKPOINT_BYTES: u64 = 8 * 1024 * 1024;
 pub const JOURNAL_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(2);
@@ -125,8 +126,9 @@ impl TransferManifest {
         if self.size_bytes == 0 || self.size_bytes > MAX_ATTACHMENT_BYTES {
             bail!("attachment size is outside the allowed range");
         }
-        if self.block_size != ATTACHMENT_BLOCK_SIZE {
-            bail!("attachment v2 requires 128 KiB blocks");
+        if self.block_size != ATTACHMENT_BLOCK_SIZE && self.block_size != ATTACHMENT_LAN_BLOCK_SIZE
+        {
+            bail!("attachment v2 requires 128 KiB or 4 MiB blocks");
         }
         let expected = self.size_bytes.div_ceil(self.block_size as u64);
         if self.block_count == 0 || self.block_count as u64 != expected {
@@ -608,6 +610,20 @@ mod tests {
         *tampered.last_mut().unwrap() ^= 1;
         let decoded = AttachmentBlockFrame::decode(&tampered).unwrap();
         assert!(decoded.decrypt(&manifest, &key).is_err());
+    }
+
+    #[test]
+    fn four_mib_direct_block_geometry_is_supported() {
+        let bytes = vec![0x3c; ATTACHMENT_LAN_BLOCK_SIZE as usize + 17];
+        let mut manifest = manifest(&bytes);
+        manifest.block_size = ATTACHMENT_LAN_BLOCK_SIZE;
+        manifest.block_count = bytes.len().div_ceil(ATTACHMENT_LAN_BLOCK_SIZE as usize) as u32;
+        manifest.validate().unwrap();
+        assert_eq!(
+            manifest.expected_plaintext_len(0).unwrap(),
+            ATTACHMENT_LAN_BLOCK_SIZE
+        );
+        assert_eq!(manifest.expected_plaintext_len(1).unwrap(), 17);
     }
 
     #[test]

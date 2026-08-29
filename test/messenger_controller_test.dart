@@ -12,10 +12,13 @@ import 'package:path/path.dart' as p;
 import 'package:conest/main.dart' as app;
 import 'package:conest/main.dart' show sniffImageMimeType;
 import 'package:conest/src/build_info.dart';
+import 'package:conest/src/iroh_ffi_bridge.dart';
+import 'package:conest/src/iroh_transport.dart';
 import 'package:conest/src/lan_direct.dart';
 import 'package:conest/src/local_relay_node.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/models.dart';
+import 'package:conest/src/native_attachment_crypto.dart';
 import 'package:conest/src/platform_bridge.dart';
 import 'package:conest/src/relay_client.dart'
     show
@@ -26,16 +29,31 @@ import 'package:conest/src/relay_client.dart'
 import 'package:conest/src/relay_defaults.dart';
 import 'package:conest/src/storage.dart';
 import 'package:conest/src/storage_capacity.dart';
+import 'package:conest/src/transport.dart';
 import 'package:conest/src/update_service.dart';
 
 const _fakeRelayIdentityKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
+
+Future<String> _realPrivateLanHost() async {
+  final interfaces = await NetworkInterface.list(
+    includeLoopback: false,
+    type: InternetAddressType.any,
+  );
+  for (final interface in interfaces) {
+    for (final address in interface.addresses) {
+      if (isValidLanDirectHost(address.address)) return address.address;
+    }
+  }
+  throw StateError('No private or link-local interface is available.');
+}
 
 /// nightly.9 in-process LAN-direct channel that bypasses real HTTP — the
 /// Flutter test binding intercepts every HttpClient request and returns
 /// 400, which would defeat any real-network test. This double routes
 /// envelopes by a synthetic "host:port" registry so the controller-side
 /// integration (hint flow + cache + fast-path) can be exercised end-to-end.
-class _InProcessLanDirectChannel implements LanDirectChannel {
+class _InProcessLanDirectChannel
+    implements LanDirectChannel, BinaryLanDirectChannel {
   _InProcessLanDirectChannel({required this.host});
 
   static final Map<String, _InProcessLanDirectChannel> _registry = {};
@@ -44,6 +62,7 @@ class _InProcessLanDirectChannel implements LanDirectChannel {
   final String host;
   int? _port;
   Future<void> Function(RelayEnvelope envelope)? _handler;
+  Future<void> Function(LanAttachmentBlock block)? _blockHandler;
 
   /// Number of envelopes this channel has accepted. Tests assert > 0 to
   /// confirm the fast-path actually carried traffic.
@@ -65,6 +84,10 @@ class _InProcessLanDirectChannel implements LanDirectChannel {
   /// a replacement channel is started after the simulated restart.
   int? rejectAfterAcceptedEnvelopes;
 
+  /// Optional test barrier for proving UI/controller operations don't await
+  /// a slow LAN request. Complete it to release queued PUTs.
+  Completer<void>? blockPutsUntil;
+
   @override
   int? get localPort => _port;
 
@@ -74,6 +97,13 @@ class _InProcessLanDirectChannel implements LanDirectChannel {
   @override
   set onEnvelope(Future<void> Function(RelayEnvelope envelope) handler) {
     _handler = handler;
+  }
+
+  @override
+  set onAttachmentBlock(
+    Future<void> Function(LanAttachmentBlock block) handler,
+  ) {
+    _blockHandler = handler;
   }
 
   @override
@@ -98,6 +128,8 @@ class _InProcessLanDirectChannel implements LanDirectChannel {
     required int port,
     Duration timeout = const Duration(milliseconds: 500),
   }) async {
+    final barrier = blockPutsUntil;
+    if (barrier != null) await barrier.future;
     final target = _registry['$host:$port'];
     if (target == null) return false;
     return target.simulatedReachable;
@@ -132,6 +164,35 @@ class _InProcessLanDirectChannel implements LanDirectChannel {
       jsonDecode(jsonEncode(envelope.toJson())) as Map<String, dynamic>,
     );
     await handler(roundTripped);
+    return true;
+  }
+
+  @override
+  Future<bool> putAttachmentBlock({
+    required String host,
+    required int port,
+    required LanAttachmentBlock block,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final target = _registry['$host:$port'];
+    if (target == null) return false;
+    if (transientFailureCount > 0) {
+      transientFailureCount--;
+      return false;
+    }
+    final cutoff = target.rejectAfterAcceptedEnvelopes;
+    if (cutoff != null && target.acceptedEnvelopes >= cutoff) return false;
+    final handler = target._blockHandler;
+    if (handler == null) return false;
+    target.acceptedEnvelopes++;
+    await handler(
+      LanAttachmentBlock(
+        attachmentId: block.attachmentId,
+        index: block.index,
+        hash: Uint8List.fromList(block.hash),
+        ciphertext: Uint8List.fromList(block.ciphertext),
+      ),
+    );
     return true;
   }
 }
@@ -823,6 +884,8 @@ Future<MessengerController> _createController({
   PlatformBridge? platformBridge,
   LanDirectChannel? lanDirectChannel,
   StorageCapacityProvider? storageCapacityProvider,
+  Future<TransportRegistry?> Function(IdentityRecord identity)?
+  transportRegistryFactory,
 }) async {
   final controller = MessengerController(
     vaultStore: vaultStore ?? _MemoryVaultStore(),
@@ -835,6 +898,7 @@ Future<MessengerController> _createController({
     enablePairingBeacon: false,
     platformBridge: platformBridge,
     lanDirectChannel: lanDirectChannel,
+    transportRegistryFactory: transportRegistryFactory,
     storageCapacityProvider:
         storageCapacityProvider ??
         (_) async => const StorageCapacity(
@@ -915,6 +979,25 @@ Future<void> _pairControllers(
     ),
     isTrue,
   );
+}
+
+Future<TransportRegistry?> _directNativeIrohRegistry(
+  IdentityRecord identity,
+) async {
+  final privateKey = identity.signingPrivateKeyBase64;
+  final endpointId = identity.irohEndpointId;
+  final bridge = FfiNativeIrohBridge.tryCreate();
+  if (privateKey == null || endpointId == null || bridge == null) {
+    throw StateError('The native Iroh bridge is unavailable.');
+  }
+  return TransportRegistry(<TransportAdapter>[
+    IrohTransportAdapter(
+      bridge: bridge,
+      secretKeySeed: Uint8List.fromList(base64Decode(privateKey)),
+      relayEnabled: false,
+      expectedEndpointId: endpointId,
+    ),
+  ]);
 }
 
 void main() {
@@ -5570,6 +5653,199 @@ void main() {
   );
 
   test(
+    'manual Download returns before a blocked route and exposes progress',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final aliceRoot = Directory.systemTemp.createTempSync(
+        'conest_accept_immediate_alice_',
+      );
+      final bobRoot = Directory.systemTemp.createTempSync(
+        'conest_accept_immediate_bob_',
+      );
+      addTearDown(() {
+        for (final directory in <Directory>[aliceRoot, bobRoot]) {
+          try {
+            directory.deleteSync(recursive: true);
+          } catch (_) {}
+        }
+      });
+      final aliceChannel = _InProcessLanDirectChannel(host: '192.168.63.10');
+      final bobChannel = _InProcessLanDirectChannel(host: '192.168.63.11');
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        lanAddresses: const <String>['192.168.63.10'],
+        lanDirectChannel: aliceChannel,
+        attachmentRootProvider: () async => aliceRoot,
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        lanAddresses: const <String>['192.168.63.11'],
+        lanDirectChannel: bobChannel,
+        attachmentRootProvider: () async => bobRoot,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      addTearDown(aliceChannel.stop);
+      addTearDown(bobChannel.stop);
+      await _pairControllers(alice, bob);
+      await bob.updateGlobalConnectivity(
+        bob.identity!.connectivity.copyWith(
+          autoDownloadPreset: AutoDownloadPreset.custom,
+        ),
+      );
+
+      await alice.sendAttachment(
+        contact: alice.contacts.single,
+        bytes: Uint8List(256 * 1024),
+        fileName: 'tap-now.bin',
+      );
+      await bob.pollNow();
+      final offered = bob
+          .messagesFor(bob.contacts.single.deviceId)
+          .singleWhere((message) => message.hasAttachment);
+      final attachmentId = offered.attachment!.id;
+      expect(bob.attachmentAwaitingAcceptance(attachmentId), isTrue);
+
+      final barrier = Completer<void>();
+      bobChannel.blockPutsUntil = barrier;
+      await bob
+          .acceptIncomingAttachment(attachmentId)
+          .timeout(const Duration(seconds: 1));
+
+      expect(bob.attachmentAcceptanceInProgress(attachmentId), isFalse);
+      expect(bob.attachmentAwaitingAcceptance(attachmentId), isFalse);
+      expect(
+        bob.transferSnapshotFor(attachmentId)?.phase,
+        anyOf(TransferPhase.transferring, TransferPhase.reconnecting),
+      );
+      barrier.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    },
+  );
+
+  test('manual Download storage failure stays visible and retryable', () async {
+    var storageAvailable = true;
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+      storageCapacityProvider: (_) async => storageAvailable
+          ? const StorageCapacity(
+              freeBytes: 10 * 1024 * 1024 * 1024,
+              totalBytes: 12 * 1024 * 1024 * 1024,
+            )
+          : null,
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await _pairControllers(alice, bob);
+    await bob.updateGlobalConnectivity(
+      bob.identity!.connectivity.copyWith(
+        autoDownloadPreset: AutoDownloadPreset.custom,
+      ),
+    );
+    await alice.sendAttachment(
+      contact: alice.contacts.single,
+      bytes: Uint8List(64 * 1024),
+      fileName: 'no-space.bin',
+    );
+    await bob.pollNow();
+    final attachmentId = bob
+        .messagesFor(bob.contacts.single.deviceId)
+        .singleWhere((message) => message.hasAttachment)
+        .attachment!
+        .id;
+
+    storageAvailable = false;
+    await bob.acceptIncomingAttachment(attachmentId);
+
+    expect(bob.attachmentAcceptanceInProgress(attachmentId), isFalse);
+    expect(bob.attachmentAwaitingAcceptance(attachmentId), isTrue);
+    final snapshot = bob.transferSnapshotFor(attachmentId);
+    expect(snapshot?.phase, TransferPhase.awaitingApproval);
+    expect(snapshot?.error, contains('Not enough storage'));
+  });
+
+  test(
+    'missing inbound partial after restart returns to Download state',
+    () async {
+      final relayClient = _FakeRelayClient();
+      final bobVault = _MemoryVaultStore();
+      final aliceRoot = Directory.systemTemp.createTempSync(
+        'conest_missing_partial_alice_',
+      );
+      final bobRoot = Directory.systemTemp.createTempSync(
+        'conest_missing_partial_bob_',
+      );
+      addTearDown(() {
+        for (final directory in <Directory>[aliceRoot, bobRoot]) {
+          try {
+            directory.deleteSync(recursive: true);
+          } catch (_) {}
+        }
+      });
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        attachmentRootProvider: () async => aliceRoot,
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        attachmentRootProvider: () async => bobRoot,
+        vaultStore: bobVault,
+      );
+      addTearDown(alice.dispose);
+      await _pairControllers(alice, bob);
+      await bob.updateGlobalConnectivity(
+        bob.identity!.connectivity.copyWith(
+          autoDownloadPreset: AutoDownloadPreset.custom,
+        ),
+      );
+      await alice.sendAttachment(
+        contact: alice.contacts.single,
+        bytes: Uint8List(192 * 1024),
+        fileName: 'restart-download.bin',
+      );
+      await bob.pollNow();
+      final attachmentId = bob
+          .messagesFor(bob.contacts.single.deviceId)
+          .singleWhere((message) => message.hasAttachment)
+          .attachment!
+          .id;
+      await bob.acceptIncomingAttachment(attachmentId);
+      bob.dispose();
+
+      final partialDir = Directory(p.join(bobRoot.path, 'partial'));
+      final partial = partialDir.listSync().whereType<File>().singleWhere(
+        (file) => file.path.endsWith('.part'),
+      );
+      await partial.writeAsBytes(<int>[1, 2, 3], flush: true);
+
+      final resumedBob = await _createController(
+        relayClient: relayClient,
+        displayName: 'unused',
+        attachmentRootProvider: () async => bobRoot,
+        vaultStore: bobVault,
+        createIdentity: false,
+      );
+      addTearDown(resumedBob.dispose);
+
+      expect(resumedBob.attachmentAwaitingAcceptance(attachmentId), isTrue);
+      final snapshot = resumedBob.transferSnapshotFor(attachmentId);
+      expect(snapshot?.phase, TransferPhase.awaitingApproval);
+      expect(snapshot?.error, contains('Tap Download to restart'));
+      expect(await partial.exists(), isFalse);
+    },
+  );
+
+  test(
     'attachment routing enforces exact 30 MiB and 2 GiB boundaries',
     () async {
       final relayClient = _FakeRelayClient();
@@ -6977,6 +7253,241 @@ void main() {
     });
 
     test(
+      'real HTTP channels complete and hash-verify a 5 MiB LAN diagnostic',
+      () async {
+        final previousHttpOverrides = HttpOverrides.current;
+        HttpOverrides.global = null;
+        addTearDown(() => HttpOverrides.global = previousHttpOverrides);
+        final host = await _realPrivateLanHost();
+        final aliceRoot = Directory.systemTemp.createTempSync(
+          'conest_real_http_alice_',
+        );
+        final bobRoot = Directory.systemTemp.createTempSync(
+          'conest_real_http_bob_',
+        );
+        addTearDown(() {
+          for (final directory in <Directory>[aliceRoot, bobRoot]) {
+            try {
+              directory.deleteSync(recursive: true);
+            } catch (_) {}
+          }
+        });
+        final aliceChannel = HttpLanDirectChannel();
+        final bobChannel = HttpLanDirectChannel();
+        final relayClient = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+          lanAddresses: <String>[host],
+          lanDirectChannel: aliceChannel,
+          attachmentRootProvider: () async => aliceRoot,
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+          lanAddresses: <String>[host],
+          lanDirectChannel: bobChannel,
+          attachmentRootProvider: () async => bobRoot,
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        addTearDown(aliceChannel.stop);
+        addTearDown(bobChannel.stop);
+        await _pairControllers(alice, bob);
+
+        await alice.runLanAttachmentDiagnostic(
+          contact: alice.contacts.single,
+          sizeMiB: 5,
+        );
+        ChatMessage? received;
+        for (var step = 0; step < 1200; step++) {
+          await bob.pollNow();
+          await alice.pollNow();
+          received = bob
+              .messagesFor(bob.contacts.single.deviceId)
+              .where(
+                (message) =>
+                    message.attachment?.mimeType ==
+                    'application/x-conest-transfer-test',
+              )
+              .firstOrNull;
+          if (received != null &&
+              bob.attachmentAwaitingAcceptance(received.attachment!.id)) {
+            await bob.acceptIncomingAttachment(received.attachment!.id);
+          }
+          if (received?.state == DeliveryState.delivered &&
+              bob.attachmentAvailableLocally(received!.attachment!.id)) {
+            break;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+
+        expect(received, isNotNull);
+        expect(received!.state, DeliveryState.delivered);
+        expect(received.attachment!.sizeBytes, 5 * 1024 * 1024);
+        expect(aliceChannel.successfulAttachmentChunkPutCount, greaterThan(0));
+        expect(bobChannel.acceptedAttachmentChunkCount, greaterThan(0));
+        expect(
+          alice.recentDebugLog.any(
+            (entry) =>
+                entry.contains('LAN-binary PUT chunk[') &&
+                entry.contains('result=ok'),
+          ),
+          isTrue,
+          reason:
+              'the binary AEAD block path must replace JSON chunk envelopes',
+        );
+        final cachePath = await bob.attachmentCachePathFor(
+          received.attachment!.id,
+        );
+        expect(cachePath, isNotNull);
+        expect(await File(cachePath!).length(), 5 * 1024 * 1024);
+        expect(
+          relayClient.storedEnvelopes.where(
+            (envelope) => envelope.kind == 'attachment_chunk',
+          ),
+          isEmpty,
+          reason: 'LAN diagnostic payload blocks must never use a relay',
+        );
+      },
+      timeout: const Timeout(Duration(minutes: 2)),
+    );
+
+    test(
+      'certification matrix transfers 5–2000 MiB over real LAN HTTP',
+      () async {
+        final previousHttpOverrides = HttpOverrides.current;
+        HttpOverrides.global = null;
+        addTearDown(() => HttpOverrides.global = previousHttpOverrides);
+        final host = await _realPrivateLanHost();
+        final matrixRoot = Directory(
+          p.join(
+            Directory.current.path,
+            'build',
+            'lan-cert-${DateTime.now().microsecondsSinceEpoch}',
+          ),
+        );
+        final aliceRoot = Directory(p.join(matrixRoot.path, 'alice'));
+        final bobRoot = Directory(p.join(matrixRoot.path, 'bob'));
+        await aliceRoot.create(recursive: true);
+        await bobRoot.create(recursive: true);
+        addTearDown(() {
+          try {
+            matrixRoot.deleteSync(recursive: true);
+          } catch (_) {}
+        });
+        final aliceChannel = HttpLanDirectChannel();
+        final bobChannel = HttpLanDirectChannel();
+        final relayClient = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+          lanAddresses: <String>[host],
+          lanDirectChannel: aliceChannel,
+          attachmentRootProvider: () async => aliceRoot,
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+          lanAddresses: <String>[host],
+          lanDirectChannel: bobChannel,
+          attachmentRootProvider: () async => bobRoot,
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        addTearDown(aliceChannel.stop);
+        addTearDown(bobChannel.stop);
+        await _pairControllers(alice, bob);
+
+        final configuredSizes =
+            Platform.environment['CONEST_LAN_MATRIX_SIZES']
+                ?.split(',')
+                .map((value) => int.tryParse(value.trim()))
+                .whereType<int>()
+                .where(MessengerController.debugLanTestSizesMiB.contains)
+                .toList(growable: false) ??
+            MessengerController.debugLanTestSizesMiB;
+        expect(configuredSizes, isNotEmpty);
+        for (final sizeMiB in configuredSizes) {
+          final sentChunksBefore =
+              aliceChannel.successfulAttachmentChunkPutCount;
+          final receivedChunksBefore = bobChannel.acceptedAttachmentChunkCount;
+          await alice.runLanAttachmentDiagnostic(
+            contact: alice.contacts.single,
+            sizeMiB: sizeMiB,
+          );
+          final fileName = 'conest-lan-test-${sizeMiB}MiB.bin';
+          ChatMessage? received;
+          for (var step = 0; step < 36000; step++) {
+            if (step % 20 == 0) {
+              await bob.pollNow();
+              await alice.pollNow();
+            }
+            received = bob
+                .messagesFor(bob.contacts.single.deviceId)
+                .where((message) => message.attachment?.fileName == fileName)
+                .firstOrNull;
+            if (received != null &&
+                bob.attachmentAwaitingAcceptance(received.attachment!.id)) {
+              await bob.acceptIncomingAttachment(received.attachment!.id);
+            }
+            if (received?.state == DeliveryState.delivered &&
+                bob.attachmentAvailableLocally(received!.attachment!.id)) {
+              break;
+            }
+            await Future<void>.delayed(const Duration(milliseconds: 50));
+          }
+
+          expect(received, isNotNull, reason: '$sizeMiB MiB offer missing');
+          final attachmentId = received!.attachment!.id;
+          expect(
+            received.state,
+            DeliveryState.delivered,
+            reason:
+                '$sizeMiB MiB: ${bob.inboundTransferDebugForTesting(attachmentId)}',
+          );
+          expect(received.attachment!.sizeBytes, sizeMiB * 1024 * 1024);
+          final cachePath = await bob.attachmentCachePathFor(attachmentId);
+          expect(cachePath, isNotNull);
+          expect(await File(cachePath!).length(), sizeMiB * 1024 * 1024);
+          expect(
+            aliceChannel.successfulAttachmentChunkPutCount - sentChunksBefore,
+            greaterThanOrEqualTo(received.attachment!.effectiveChunkCount),
+          );
+          expect(
+            bobChannel.acceptedAttachmentChunkCount - receivedChunksBefore,
+            greaterThanOrEqualTo(received.attachment!.effectiveChunkCount),
+          );
+          expect(
+            relayClient.storedEnvelopes.where(
+              (envelope) => envelope.kind == 'attachment_chunk',
+            ),
+            isEmpty,
+            reason: '$sizeMiB MiB payload used a relay',
+          );
+          TransferSnapshot? senderSnapshot;
+          for (var step = 0; step < 1500; step++) {
+            senderSnapshot = alice.transferSnapshotFor(attachmentId);
+            if (senderSnapshot?.phase == TransferPhase.completed) break;
+            await alice.pollNow();
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+          }
+          expect(
+            senderSnapshot?.phase,
+            TransferPhase.completed,
+            reason: '$sizeMiB MiB sender did not process attachment completion',
+          );
+          await bob.evictAttachment(attachmentId);
+          await alice.evictAttachment(attachmentId);
+        }
+      },
+      skip: Platform.environment['CONEST_RUN_LAN_SIZE_MATRIX'] == '1'
+          ? false
+          : 'Set CONEST_RUN_LAN_SIZE_MATRIX=1 for the multi-gigabyte certification.',
+      timeout: const Timeout(Duration(minutes: 45)),
+    );
+
+    test(
       'paired channels exchange a chunk envelope and receiver assembles it',
       () async {
         // The Flutter test binding intercepts real HttpClient calls and
@@ -7139,13 +7650,16 @@ void main() {
               bob.attachmentAwaitingAcceptance(received.attachment!.id)) {
             await bob.acceptIncomingAttachment(received.attachment!.id);
           }
-          if (received?.state == DeliveryState.delivered) break;
+          if (received?.state == DeliveryState.delivered &&
+              bob.attachmentAvailableLocally(received!.attachment!.id)) {
+            break;
+          }
           await Future<void>.delayed(const Duration(milliseconds: 20));
         }
 
         expect(received, isNotNull);
         expect(received!.state, DeliveryState.delivered);
-        expect(received.attachment!.chunkSize, 128 * 1024);
+        expect(received.attachment!.chunkSize, 4 * 1024 * 1024);
         expect(bob.attachmentBytesFor(received.attachment!.id), isNull);
         expect(bob.attachmentAvailableLocally(received.attachment!.id), isTrue);
         final cachePath = await bob.attachmentCachePathFor(
@@ -7307,7 +7821,10 @@ void main() {
               .messagesFor(alice.identity!.deviceId)
               .where((message) => message.attachment?.fileName == 'resume.bin')
               .firstOrNull;
-          if (received?.state == DeliveryState.delivered) break;
+          if (received?.state == DeliveryState.delivered &&
+              bob.attachmentAvailableLocally(received!.attachment!.id)) {
+            break;
+          }
           await Future<void>.delayed(const Duration(milliseconds: 20));
         }
 
@@ -7338,6 +7855,210 @@ void main() {
         );
       },
       timeout: const Timeout(Duration(seconds: 120)),
+    );
+  });
+
+  group('native direct-Iroh attachment certification', () {
+    test(
+      '250 MiB file completes over direct Iroh with Conest relay payloads deferred',
+      () async {
+        final sourceRoot = Directory.systemTemp.createTempSync(
+          'conest_iroh_source_',
+        );
+        final aliceRoot = Directory.systemTemp.createTempSync(
+          'conest_iroh_alice_',
+        );
+        final bobRoot = Directory.systemTemp.createTempSync('conest_iroh_bob_');
+        addTearDown(() {
+          for (final directory in <Directory>[sourceRoot, aliceRoot, bobRoot]) {
+            try {
+              directory.deleteSync(recursive: true);
+            } catch (_) {}
+          }
+        });
+        const size = 250 * 1024 * 1024;
+        final directHost = await _realPrivateLanHost();
+        final source = File(p.join(sourceRoot.path, 'iroh-250MiB.bin'));
+        final handle = await source.open(mode: FileMode.write);
+        try {
+          await handle.setPosition(size - 1);
+          await handle.writeByte(0x63);
+          await handle.flush();
+        } finally {
+          await handle.close();
+        }
+
+        final relayClient = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+          lanAddresses: <String>[directHost],
+          lanDirectChannel: null,
+          attachmentRootProvider: () async => aliceRoot,
+          transportRegistryFactory: _directNativeIrohRegistry,
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+          lanAddresses: <String>[directHost],
+          lanDirectChannel: null,
+          attachmentRootProvider: () async => bobRoot,
+          transportRegistryFactory: _directNativeIrohRegistry,
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        await alice.updateContactRoutingPreferences(
+          bob.identity!.deviceId,
+          const ContactRoutingPreferences(
+            lanEnabled: false,
+            onlineEnabled: true,
+            preferred: RoutingPreference.online,
+          ),
+        );
+        await bob.updateContactRoutingPreferences(
+          alice.identity!.deviceId,
+          const ContactRoutingPreferences(
+            lanEnabled: false,
+            onlineEnabled: true,
+            preferred: RoutingPreference.online,
+          ),
+        );
+
+        final bobOnAlice = alice.contacts.single;
+        expect(
+          bobOnAlice.hasPinnedIrohIdentity,
+          isTrue,
+          reason:
+              'contact=${bobOnAlice.toJson()}; '
+              'aliceLog=${alice.recentDebugLog.reversed.take(12).join(' | ')}',
+        );
+        expect(
+          bobOnAlice.directInternetRouteHints.where(
+            (route) => route.protocol == PeerRouteProtocol.udp,
+          ),
+          isNotEmpty,
+          reason:
+              'the signed ci6 invite must carry at least one direct Iroh '
+              'socket hint; contact=${bobOnAlice.toJson()}; '
+              'aliceLog=${alice.recentDebugLog.reversed.take(12).join(' | ')}',
+        );
+        expect(
+          alice.effectiveMaxAttachmentSizeFor(bobOnAlice),
+          MessengerController.maxLanAttachmentSizeBytes,
+          reason:
+              'routing=${bobOnAlice.routing.toJson()}; '
+              'global=${alice.identity!.connectivity.toJson()}; '
+              'aliceLog=${alice.recentDebugLog.reversed.take(12).join(' | ')}',
+        );
+
+        await alice.sendAttachmentSource(
+          contact: bobOnAlice,
+          source: StagedAttachment(
+            id: 'iroh-cert-source',
+            fileName: 'iroh-250MiB.bin',
+            mimeType: 'application/octet-stream',
+            sizeBytes: size,
+            filePath: source.path,
+          ),
+        );
+        final sent = alice
+            .messagesFor(bob.identity!.deviceId)
+            .where(
+              (message) => message.attachment?.fileName == 'iroh-250MiB.bin',
+            )
+            .single;
+        ChatMessage? received;
+        for (var step = 0; step < 1200; step++) {
+          if (step % 20 == 0) {
+            await alice.pollNow();
+            await bob.pollNow();
+          }
+          received = bob
+              .messagesFor(alice.identity!.deviceId)
+              .where(
+                (message) => message.attachment?.fileName == 'iroh-250MiB.bin',
+              )
+              .firstOrNull;
+          if (received != null) break;
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+        expect(
+          received,
+          isNotNull,
+          reason:
+              'alice=${alice.transferSnapshotFor(sent.attachment!.id)?.error}; '
+              'aliceLog=${alice.recentDebugLog.reversed.take(12).join(' | ')}; '
+              'bobLog=${bob.recentDebugLog.reversed.take(12).join(' | ')}',
+        );
+        if (bob.attachmentAwaitingAcceptance(received!.attachment!.id)) {
+          await bob.acceptIncomingAttachment(received.attachment!.id);
+        }
+        for (var step = 0; step < 2400; step++) {
+          if (step % 20 == 0) {
+            await alice.pollNow();
+            await bob.pollNow();
+          }
+          if (bob.attachmentAvailableLocally(received.attachment!.id)) break;
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+        final attachmentId = received.attachment!.id;
+        expect(
+          bob.attachmentAvailableLocally(attachmentId),
+          isTrue,
+          reason:
+              'inbound=${bob.inboundTransferDebugForTesting(attachmentId)}; '
+              'alice=${alice.transferSnapshotFor(attachmentId)?.error}; '
+              'bob=${bob.transferSnapshotFor(attachmentId)?.error}; '
+              'aliceLog=${alice.recentDebugLog.reversed.take(12).join(' | ')}; '
+              'bobLog=${bob.recentDebugLog.reversed.take(12).join(' | ')}',
+        );
+        final cachePath = await bob.attachmentCachePathFor(attachmentId);
+        expect(cachePath, isNotNull);
+        expect(await File(cachePath!).length(), size);
+        final cacheHandle = await File(cachePath).open();
+        try {
+          await cacheHandle.setPosition(size - 1);
+          expect(await cacheHandle.readByte(), 0x63);
+        } finally {
+          await cacheHandle.close();
+        }
+        for (var step = 0; step < 600; step++) {
+          if (alice.transferSnapshotFor(attachmentId)?.phase ==
+              TransferPhase.completed) {
+            break;
+          }
+          if (step % 20 == 0) {
+            await alice.pollNow();
+            await bob.pollNow();
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+        final senderSnapshot = alice.transferSnapshotFor(attachmentId);
+        expect(senderSnapshot?.phase, TransferPhase.completed);
+        expect(senderSnapshot?.transport, TransportKind.iroh);
+        expect(senderSnapshot?.path, TransportPathKind.direct);
+        expect(
+          alice.recentDebugLog.any(
+            (entry) => entry.contains('Iroh-binary stream chunk['),
+          ),
+          isTrue,
+          reason: 'the transfer must avoid JSON/base64 block envelopes',
+        );
+        expect(
+          relayClient.storedEnvelopes.where(
+            (envelope) => envelope.kind == 'attachment_chunk',
+          ),
+          isEmpty,
+          reason: '250 MiB direct-Iroh payload touched a Conest relay',
+        );
+      },
+      skip:
+          Platform.environment['CONEST_RUN_IROH_CONTROLLER_CERT'] == '1' &&
+              NativeAttachmentCrypto.tryCreate() != null
+          ? false
+          : 'Set CONEST_RUN_IROH_CONTROLLER_CERT=1 with conest_native available.',
+      timeout: const Timeout(Duration(minutes: 4)),
     );
   });
 

@@ -58,15 +58,47 @@ abstract class LanDirectChannel {
   });
 }
 
+/// Optional high-throughput extension implemented by the production LAN
+/// channel. Attachment blocks are already XChaCha20-Poly1305 encrypted with
+/// manifest-bound associated data, so wrapping them in another encrypted
+/// JSON/base64 RelayEnvelope on a trusted direct socket only wastes CPU and
+/// bandwidth. Control envelopes continue through [LanDirectChannel].
+abstract class BinaryLanDirectChannel {
+  set onAttachmentBlock(
+    Future<void> Function(LanAttachmentBlock block) handler,
+  );
+
+  Future<bool> putAttachmentBlock({
+    required String host,
+    required int port,
+    required LanAttachmentBlock block,
+    Duration timeout = const Duration(seconds: 10),
+  });
+}
+
+class LanAttachmentBlock {
+  const LanAttachmentBlock({
+    required this.attachmentId,
+    required this.index,
+    required this.hash,
+    required this.ciphertext,
+  });
+
+  final String attachmentId;
+  final int index;
+  final Uint8List hash;
+  final Uint8List ciphertext;
+}
+
 /// Real `dart:io` implementation. Skipped on platforms that can't bind a
 /// port (web). Tests inject a fake.
-class HttpLanDirectChannel implements LanDirectChannel {
-  static const int _maxRequestBytes = 2 * 1024 * 1024;
+class HttpLanDirectChannel implements LanDirectChannel, BinaryLanDirectChannel {
+  static const int _maxRequestBytes = 5 * 1024 * 1024;
   static const int _maxConcurrentHandlers = 32;
   static const int _maxConcurrentEnvelopeHandlers = 8;
   static const int _maxQueuedEnvelopes = 64;
 
-  // A v2 attachment uses one request per 128 KiB block in each direction.
+  // A v2 attachment uses one request per independently verified block.
   // The old 120 request / 64 MiB limits therefore throttled every real LAN
   // transfer after roughly 15 MiB and made it look as if the route had died.
   // Body and concurrency bounds remain the primary LAN DoS controls; these
@@ -78,11 +110,23 @@ class HttpLanDirectChannel implements LanDirectChannel {
   HttpServer? _server;
   HttpClient? _outboundClient;
   Future<void> Function(RelayEnvelope envelope)? _handler;
+  Future<void> Function(LanAttachmentBlock block)? _blockHandler;
   final Map<String, _LanRateBucket> _rateBuckets = <String, _LanRateBucket>{};
   final Queue<_QueuedLanEnvelope> _pendingEnvelopes =
       Queue<_QueuedLanEnvelope>();
+  final Queue<_QueuedLanBlock> _pendingBlocks = Queue<_QueuedLanBlock>();
   int _activeHandlers = 0;
   int _activeEnvelopeHandlers = 0;
+  int _acceptedEnvelopeCount = 0;
+  int _acceptedAttachmentChunkCount = 0;
+  int _successfulAttachmentChunkPutCount = 0;
+
+  /// Lifetime counters used by the nightly diagnostics and real-socket
+  /// integration tests. They contain no peer or payload data.
+  int get acceptedEnvelopeCount => _acceptedEnvelopeCount;
+  int get acceptedAttachmentChunkCount => _acceptedAttachmentChunkCount;
+  int get successfulAttachmentChunkPutCount =>
+      _successfulAttachmentChunkPutCount;
 
   @override
   int? get localPort => _server?.port;
@@ -93,6 +137,13 @@ class HttpLanDirectChannel implements LanDirectChannel {
   @override
   set onEnvelope(Future<void> Function(RelayEnvelope envelope) handler) {
     _handler = handler;
+  }
+
+  @override
+  set onAttachmentBlock(
+    Future<void> Function(LanAttachmentBlock block) handler,
+  ) {
+    _blockHandler = handler;
   }
 
   @override
@@ -113,6 +164,7 @@ class HttpLanDirectChannel implements LanDirectChannel {
     final s = _server;
     _server = null;
     _pendingEnvelopes.clear();
+    _pendingBlocks.clear();
     _outboundClient?.close(force: true);
     _outboundClient = null;
     if (s != null) {
@@ -130,7 +182,9 @@ class HttpLanDirectChannel implements LanDirectChannel {
     }
     _activeHandlers++;
     try {
-      if (req.method != 'PUT' || req.uri.path != '/v1/chunk') {
+      final isEnvelope = req.uri.path == '/v1/chunk';
+      final isBinaryBlock = req.uri.path == '/v2/block';
+      if (req.method != 'PUT' || (!isEnvelope && !isBinaryBlock)) {
         req.response.statusCode = HttpStatus.notFound;
         await req.response.close();
         return;
@@ -148,32 +202,56 @@ class HttpLanDirectChannel implements LanDirectChannel {
         return;
       }
       final body = await _readBodyBounded(req, remoteIp).timeout(_readTimeout);
-      final decoded = jsonDecode(utf8.decode(body));
-      if (decoded is! Map<String, dynamic>) {
-        req.response.statusCode = HttpStatus.badRequest;
-        await req.response.close();
-        return;
-      }
-      RelayEnvelope envelope;
-      try {
-        envelope = RelayEnvelope.fromJson(decoded);
-      } catch (_) {
-        req.response.statusCode = HttpStatus.badRequest;
-        await req.response.close();
-        return;
-      }
-      final handler = _handler;
-      if (handler == null) {
+      if (_pendingEnvelopes.length + _pendingBlocks.length >=
+          _maxQueuedEnvelopes) {
         req.response.statusCode = HttpStatus.serviceUnavailable;
         await req.response.close();
         return;
       }
-      if (_pendingEnvelopes.length >= _maxQueuedEnvelopes) {
-        req.response.statusCode = HttpStatus.serviceUnavailable;
-        await req.response.close();
-        return;
+      if (isEnvelope) {
+        final decoded = jsonDecode(utf8.decode(body));
+        if (decoded is! Map<String, dynamic>) {
+          req.response.statusCode = HttpStatus.badRequest;
+          await req.response.close();
+          return;
+        }
+        final RelayEnvelope envelope;
+        try {
+          envelope = RelayEnvelope.fromJson(decoded);
+        } catch (_) {
+          req.response.statusCode = HttpStatus.badRequest;
+          await req.response.close();
+          return;
+        }
+        final handler = _handler;
+        if (handler == null) {
+          req.response.statusCode = HttpStatus.serviceUnavailable;
+          await req.response.close();
+          return;
+        }
+        _pendingEnvelopes.add(_QueuedLanEnvelope(envelope, handler));
+        _acceptedEnvelopeCount++;
+        if (envelope.kind == 'attachment_chunk') {
+          _acceptedAttachmentChunkCount++;
+        }
+      } else {
+        final LanAttachmentBlock block;
+        try {
+          block = _decodeAttachmentBlock(body);
+        } catch (_) {
+          req.response.statusCode = HttpStatus.badRequest;
+          await req.response.close();
+          return;
+        }
+        final handler = _blockHandler;
+        if (handler == null) {
+          req.response.statusCode = HttpStatus.serviceUnavailable;
+          await req.response.close();
+          return;
+        }
+        _pendingBlocks.add(_QueuedLanBlock(block, handler));
+        _acceptedAttachmentChunkCount++;
       }
-      _pendingEnvelopes.add(_QueuedLanEnvelope(envelope, handler));
       // A request handler may synchronously send a response envelope back to
       // the caller. Awaiting it here occupied every HTTP handler and caused a
       // nested PUT deadlock (especially with the 32-block large-file window).
@@ -210,13 +288,18 @@ class HttpLanDirectChannel implements LanDirectChannel {
   void _drainEnvelopeQueue() {
     while (_server != null &&
         _activeEnvelopeHandlers < _maxConcurrentEnvelopeHandlers &&
-        _pendingEnvelopes.isNotEmpty) {
-      final queued = _pendingEnvelopes.removeFirst();
+        (_pendingEnvelopes.isNotEmpty || _pendingBlocks.isNotEmpty)) {
+      final Future<void> Function() work;
+      if (_pendingBlocks.isNotEmpty) {
+        final queued = _pendingBlocks.removeFirst();
+        work = () => queued.handler(queued.block);
+      } else {
+        final queued = _pendingEnvelopes.removeFirst();
+        work = () => queued.handler(queued.envelope);
+      }
       _activeEnvelopeHandlers++;
       unawaited(
-        Future<void>.sync(
-          () => queued.handler(queued.envelope),
-        ).catchError((_) {}).whenComplete(() {
+        Future<void>.sync(work).catchError((_) {}).whenComplete(() {
           _activeEnvelopeHandlers--;
           _drainEnvelopeQueue();
         }),
@@ -292,7 +375,7 @@ class HttpLanDirectChannel implements LanDirectChannel {
       return false;
     }
     // Reuse HTTP/1.1 connections for the whole LAN session. Creating and
-    // force-closing a client for every 128 KiB block caused socket churn and
+    // force-closing a client for every block caused socket churn and
     // ephemeral-port pressure on Android during sustained transfers.
     final client = _outboundClient ??= HttpClient()
       ..connectionTimeout = const Duration(milliseconds: 1500)
@@ -313,11 +396,105 @@ class HttpLanDirectChannel implements LanDirectChannel {
       req.add(body);
       final resp = await req.close().timeout(timeout);
       await resp.drain<void>();
-      return resp.statusCode >= 200 && resp.statusCode < 300;
+      final accepted = resp.statusCode >= 200 && resp.statusCode < 300;
+      if (accepted && envelope.kind == 'attachment_chunk') {
+        _successfulAttachmentChunkPutCount++;
+      }
+      return accepted;
     } catch (_) {
       return false;
     }
   }
+
+  @override
+  Future<bool> putAttachmentBlock({
+    required String host,
+    required int port,
+    required LanAttachmentBlock block,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    if (!isValidLanDirectHost(host) || !isValidPeerEndpointPort(port)) {
+      return false;
+    }
+    final header = _encodeAttachmentBlockHeader(block);
+    final bodyLength = header.length + block.ciphertext.length;
+    if (bodyLength > _maxRequestBytes) return false;
+    final client = _outboundClient ??= HttpClient()
+      ..connectionTimeout = const Duration(milliseconds: 1500)
+      ..idleTimeout = const Duration(seconds: 30)
+      ..maxConnectionsPerHost = 16;
+    try {
+      final request = await client
+          .putUrl(
+            Uri(scheme: 'http', host: host, port: port, path: '/v2/block'),
+          )
+          .timeout(timeout);
+      request.headers.contentType = ContentType('application', 'octet-stream');
+      request.contentLength = bodyLength;
+      // Keep the 4 MiB ciphertext as its own segment. Building one combined
+      // frame copied every encrypted block before the socket could send it.
+      request.add(header);
+      request.add(block.ciphertext);
+      final response = await request.close().timeout(timeout);
+      await response.drain<void>();
+      final accepted = response.statusCode >= 200 && response.statusCode < 300;
+      if (accepted) _successfulAttachmentChunkPutCount++;
+      return accepted;
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
+const List<int> _binaryBlockMagic = <int>[0x43, 0x42, 0x32, 0x00];
+const int _binaryBlockHeaderBytes = 4 + 1 + 2 + 4 + 4 + 32;
+
+Uint8List _encodeAttachmentBlockHeader(LanAttachmentBlock block) {
+  final id = utf8.encode(block.attachmentId);
+  if (id.isEmpty ||
+      id.length > 160 ||
+      block.index < 0 ||
+      block.hash.length != 32) {
+    throw const FormatException('Invalid binary attachment block.');
+  }
+  final result = Uint8List(_binaryBlockHeaderBytes + id.length);
+  result.setRange(0, 4, _binaryBlockMagic);
+  final data = ByteData.sublistView(result);
+  data.setUint8(4, 1);
+  data.setUint16(5, id.length, Endian.big);
+  data.setUint32(7, block.index, Endian.big);
+  data.setUint32(11, block.ciphertext.length, Endian.big);
+  result.setRange(15, 47, block.hash);
+  result.setRange(47, 47 + id.length, id);
+  return result;
+}
+
+LanAttachmentBlock _decodeAttachmentBlock(Uint8List bytes) {
+  if (bytes.length < _binaryBlockHeaderBytes ||
+      bytes[0] != _binaryBlockMagic[0] ||
+      bytes[1] != _binaryBlockMagic[1] ||
+      bytes[2] != _binaryBlockMagic[2] ||
+      bytes[3] != _binaryBlockMagic[3]) {
+    throw const FormatException('Invalid binary attachment block header.');
+  }
+  final data = ByteData.sublistView(bytes);
+  if (data.getUint8(4) != 1) {
+    throw const FormatException('Unsupported binary attachment block.');
+  }
+  final idLength = data.getUint16(5, Endian.big);
+  final index = data.getUint32(7, Endian.big);
+  final ciphertextLength = data.getUint32(11, Endian.big);
+  final expectedLength = _binaryBlockHeaderBytes + idLength + ciphertextLength;
+  if (idLength <= 0 || idLength > 160 || expectedLength != bytes.length) {
+    throw const FormatException('Invalid binary attachment block length.');
+  }
+  final attachmentId = utf8.decode(bytes.sublist(47, 47 + idLength));
+  return LanAttachmentBlock(
+    attachmentId: attachmentId,
+    index: index,
+    hash: Uint8List.sublistView(bytes, 15, 47),
+    ciphertext: Uint8List.sublistView(bytes, 47 + idLength),
+  );
 }
 
 bool isValidLanDirectHost(String host) {
@@ -361,6 +538,13 @@ class _QueuedLanEnvelope {
   final Future<void> Function(RelayEnvelope envelope) handler;
 }
 
+class _QueuedLanBlock {
+  const _QueuedLanBlock(this.block, this.handler);
+
+  final LanAttachmentBlock block;
+  final Future<void> Function(LanAttachmentBlock block) handler;
+}
+
 class _LanRequestTooLarge implements Exception {
   const _LanRequestTooLarge();
 }
@@ -378,6 +562,7 @@ class LanDirectEndpoint {
     required this.cachedAt,
     this.consecutiveFailures = 0,
     this.demotedUntil,
+    this.binaryBlockVersion = 0,
   });
 
   final String host;
@@ -385,4 +570,5 @@ class LanDirectEndpoint {
   final DateTime cachedAt;
   int consecutiveFailures;
   DateTime? demotedUntil;
+  final int binaryBlockVersion;
 }

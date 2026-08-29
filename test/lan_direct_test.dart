@@ -69,7 +69,7 @@ void main() {
       final request = await client.putUrl(
         Uri.parse('http://127.0.0.1:$port/v1/chunk'),
       );
-      final oversizedLength = 2 * 1024 * 1024 + 1;
+      final oversizedLength = 5 * 1024 * 1024 + 1;
       request.contentLength = oversizedLength;
       request.add(Uint8List(oversizedLength));
       final response = await request.close().timeout(

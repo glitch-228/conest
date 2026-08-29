@@ -1,6 +1,6 @@
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail};
 use flutter_rust_bridge::frb;
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc};
 
 const CONEST_ALPN: &[u8] = b"conest/1";
-const MAX_ENVELOPE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_ENVELOPE_BYTES: usize = 5 * 1024 * 1024;
 const INBOX_CAPACITY: usize = 256;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -156,6 +156,18 @@ impl NativeTransport {
             .map_err(|error| format!("{error:#}"))
     }
 
+    pub async fn send_envelope_with_hints(
+        &self,
+        remote_endpoint_id: String,
+        direct_addresses: Vec<String>,
+        bytes: Vec<u8>,
+        allow_relay: bool,
+    ) -> Result<NativeDeliveryReceipt, String> {
+        self.send_to_with_hints(remote_endpoint_id, direct_addresses, bytes, allow_relay)
+            .await
+            .map_err(|error| format!("{error:#}"))
+    }
+
     async fn send_to(
         &self,
         remote_endpoint_id: String,
@@ -165,6 +177,28 @@ impl NativeTransport {
         let endpoint_id =
             EndpointId::from_str(&remote_endpoint_id).context("parse remote Iroh EndpointId")?;
         self.send_to_addr_with_policy(EndpointAddr::new(endpoint_id), bytes, allow_relay)
+            .await
+    }
+
+    async fn send_to_with_hints(
+        &self,
+        remote_endpoint_id: String,
+        direct_addresses: Vec<String>,
+        bytes: Vec<u8>,
+        allow_relay: bool,
+    ) -> Result<NativeDeliveryReceipt> {
+        if direct_addresses.len() > 8 {
+            bail!("at most eight direct Iroh address hints may be supplied");
+        }
+        let endpoint_id =
+            EndpointId::from_str(&remote_endpoint_id).context("parse remote Iroh EndpointId")?;
+        let mut remote_addr = EndpointAddr::new(endpoint_id);
+        for value in direct_addresses {
+            let address = SocketAddr::from_str(value.trim())
+                .with_context(|| format!("parse direct Iroh address hint {value}"))?;
+            remote_addr = remote_addr.with_ip_addr(address);
+        }
+        self.send_to_addr_with_policy(remote_addr, bytes, allow_relay)
             .await
     }
 
@@ -413,7 +447,12 @@ mod tests {
         assert_eq!(inbound.path, NativePathKind::Direct);
 
         let second = sender
-            .send_to_addr_with_policy(receiver.endpoint.addr(), b"same connection".to_vec(), true)
+            .send_to_with_hints(
+                receiver.endpoint.id().to_string(),
+                receiver.status().direct_addresses,
+                b"same connection".to_vec(),
+                false,
+            )
             .await
             .unwrap();
         assert!(second.accepted);
@@ -452,5 +491,85 @@ mod tests {
         assert_eq!(sender.connections.lock().await.len(), 1);
         sender.close().await;
         receiver.close().await;
+    }
+
+    /// Slow opt-in certification for the requested online attachment target.
+    /// It carries 250 MiB over direct authenticated Iroh/QUIC with relays
+    /// disabled, validates every byte, and keeps only a bounded stream window
+    /// resident. Run with:
+    /// `cargo test direct_iroh_certifies_250_mib -- --ignored`.
+    #[tokio::test]
+    #[ignore = "opt-in 250 MiB direct-Iroh certification"]
+    async fn direct_iroh_certifies_250_mib() {
+        const BLOCK_BYTES: usize = 1024 * 1024;
+        const BLOCK_COUNT: u32 = 250;
+        const STREAM_WINDOW: usize = 8;
+
+        tokio::time::timeout(Duration::from_secs(300), async {
+            let sender = Arc::new(
+                NativeTransport::start_inner(vec![41; 32], false, vec![])
+                    .await
+                    .unwrap(),
+            );
+            let receiver = Arc::new(
+                NativeTransport::start_inner(vec![42; 32], false, vec![])
+                    .await
+                    .unwrap(),
+            );
+            let receiver_addr = receiver.endpoint.addr();
+            let receiving = {
+                let receiver = Arc::clone(&receiver);
+                tokio::spawn(async move {
+                    let mut received = std::collections::BTreeSet::new();
+                    for _ in 0..BLOCK_COUNT {
+                        let envelope = receiver
+                            .next_envelope()
+                            .await
+                            .expect("direct Iroh receiver closed early");
+                        assert_eq!(envelope.path, NativePathKind::Direct);
+                        assert_eq!(envelope.bytes.len(), BLOCK_BYTES);
+                        let index = u32::from_be_bytes(
+                            envelope.bytes[..4].try_into().expect("block index"),
+                        );
+                        assert!(index < BLOCK_COUNT);
+                        let expected = (index.wrapping_mul(31) & 0xff) as u8;
+                        assert!(envelope.bytes[4..].iter().all(|byte| *byte == expected));
+                        assert!(received.insert(index), "duplicate direct Iroh block");
+                    }
+                    received
+                })
+            };
+
+            let permits = Arc::new(tokio::sync::Semaphore::new(STREAM_WINDOW));
+            let mut sends = tokio::task::JoinSet::new();
+            for index in 0..BLOCK_COUNT {
+                let sender = Arc::clone(&sender);
+                let receiver_addr = receiver_addr.clone();
+                let permits = Arc::clone(&permits);
+                sends.spawn(async move {
+                    let _permit = permits.acquire_owned().await.expect("stream permit");
+                    let fill = (index.wrapping_mul(31) & 0xff) as u8;
+                    let mut payload = vec![fill; BLOCK_BYTES];
+                    payload[..4].copy_from_slice(&index.to_be_bytes());
+                    sender
+                        .send_to_addr_with_policy(receiver_addr, payload, false)
+                        .await
+                });
+            }
+            while let Some(result) = sends.join_next().await {
+                let receipt = result
+                    .expect("direct Iroh send task")
+                    .expect("direct Iroh send");
+                assert!(receipt.accepted);
+                assert_eq!(receipt.path, NativePathKind::Direct);
+            }
+            let received = receiving.await.expect("direct Iroh receive task");
+            assert_eq!(received.len(), BLOCK_COUNT as usize);
+            assert_eq!(sender.connection_attempts.load(Ordering::Relaxed), 1);
+            sender.close().await;
+            receiver.close().await;
+        })
+        .await
+        .expect("250 MiB direct Iroh certification timed out");
     }
 }

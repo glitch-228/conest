@@ -2840,6 +2840,7 @@ class TransferSession {
     this.sourceSizeBytes,
     this.sourceModifiedAt,
     this.requiresLan = false,
+    this.lanOnly = false,
     this.allowIrohRelay = false,
     this.bytesTransferred = 0,
     this.pausedByMe = false,
@@ -2862,6 +2863,7 @@ class TransferSession {
   final int? sourceSizeBytes;
   final DateTime? sourceModifiedAt;
   final bool requiresLan;
+  final bool lanOnly;
   final bool allowIrohRelay;
   final int bytesTransferred;
   final bool pausedByMe;
@@ -2896,6 +2898,7 @@ class TransferSession {
       sourceSizeBytes: sourceSizeBytes,
       sourceModifiedAt: sourceModifiedAt,
       requiresLan: requiresLan,
+      lanOnly: lanOnly,
       allowIrohRelay: allowIrohRelay ?? this.allowIrohRelay,
       bytesTransferred: bytesTransferred ?? this.bytesTransferred,
       pausedByMe: pausedByMe ?? this.pausedByMe,
@@ -2922,6 +2925,7 @@ class TransferSession {
       if (sourceModifiedAt != null)
         'sourceModifiedAt': sourceModifiedAt!.toUtc().toIso8601String(),
       'requiresLan': requiresLan,
+      if (lanOnly) 'lanOnly': true,
       'allowIrohRelay': allowIrohRelay,
       'bytesTransferred': bytesTransferred,
       'pausedByMe': pausedByMe,
@@ -2961,6 +2965,7 @@ class TransferSession {
         json['sourceModifiedAt'] as String? ?? '',
       )?.toUtc(),
       requiresLan: json['requiresLan'] as bool? ?? false,
+      lanOnly: json['lanOnly'] as bool? ?? false,
       allowIrohRelay: json['allowIrohRelay'] as bool? ?? false,
       bytesTransferred: (json['bytesTransferred'] as num?)?.toInt() ?? 0,
       pausedByMe: json['pausedByMe'] as bool? ?? false,

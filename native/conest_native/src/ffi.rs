@@ -13,7 +13,12 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use chacha20poly1305::{
+    Tag, XChaCha20Poly1305, XNonce,
+    aead::{AeadInPlace, KeyInit},
+};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use tokio::runtime::Runtime;
 
 use crate::api::{NativeInboundEnvelope, NativeTransport};
@@ -29,6 +34,12 @@ static BEAM_CAMERAS: LazyLock<Mutex<HashMap<u64, DesktopBeamCamera>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static NEXT_HANDLE: LazyLock<Mutex<u64>> = LazyLock::new(|| Mutex::new(1));
 static LAST_ERROR: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
+
+const ATTACHMENT_KEY_LEN: usize = 32;
+const ATTACHMENT_NONCE_LEN: usize = 24;
+const ATTACHMENT_HASH_LEN: usize = 32;
+const ATTACHMENT_TAG_LEN: usize = 16;
+const MAX_FFI_ATTACHMENT_BLOCK_LEN: usize = 4 * 1024 * 1024;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,6 +70,134 @@ fn json_string(value: &impl Serialize) -> *mut c_char {
 
 fn transport(handle: u64) -> Option<Arc<NativeTransport>> {
     TRANSPORTS.lock().ok()?.get(&handle).cloned()
+}
+
+/// Encrypts one already-bounded attachment block without JSON or base64.
+///
+/// The caller owns every buffer. `ciphertext_out` must be exactly
+/// `plaintext_len + 16` bytes and `hash_out` exactly 32 bytes. This narrow ABI
+/// deliberately matches attachment protocol v2's Dart wire format so peers
+/// can upgrade independently while block crypto moves off the Flutter isolate.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_attachment_encrypt_block(
+    key: *const u8,
+    nonce: *const u8,
+    aad: *const u8,
+    aad_len: usize,
+    plaintext: *const u8,
+    plaintext_len: usize,
+    ciphertext_out: *mut u8,
+    ciphertext_out_len: usize,
+    hash_out: *mut u8,
+) -> bool {
+    if key.is_null()
+        || nonce.is_null()
+        || aad.is_null()
+        || plaintext.is_null()
+        || ciphertext_out.is_null()
+        || hash_out.is_null()
+        || aad_len == 0
+        || plaintext_len == 0
+        || plaintext_len > MAX_FFI_ATTACHMENT_BLOCK_LEN
+        || ciphertext_out_len != plaintext_len + ATTACHMENT_TAG_LEN
+    {
+        record_error("invalid native attachment encryption buffers");
+        return false;
+    }
+    // SAFETY: all pointers and exact lengths are supplied by the FFI caller
+    // for this call only and were checked for null/valid protocol bounds.
+    let key = unsafe { slice::from_raw_parts(key, ATTACHMENT_KEY_LEN) };
+    let nonce = unsafe { slice::from_raw_parts(nonce, ATTACHMENT_NONCE_LEN) };
+    let aad = unsafe { slice::from_raw_parts(aad, aad_len) };
+    let plaintext = unsafe { slice::from_raw_parts(plaintext, plaintext_len) };
+    let output = unsafe { slice::from_raw_parts_mut(ciphertext_out, ciphertext_out_len) };
+    output[..plaintext_len].copy_from_slice(plaintext);
+
+    let cipher = match XChaCha20Poly1305::new_from_slice(key) {
+        Ok(cipher) => cipher,
+        Err(error) => {
+            record_error(error);
+            return false;
+        }
+    };
+    let tag = match cipher.encrypt_in_place_detached(
+        XNonce::from_slice(nonce),
+        aad,
+        &mut output[..plaintext_len],
+    ) {
+        Ok(tag) => tag,
+        Err(error) => {
+            record_error(error);
+            return false;
+        }
+    };
+    output[plaintext_len..].copy_from_slice(&tag);
+    let hash: [u8; ATTACHMENT_HASH_LEN] = Sha256::digest(plaintext).into();
+    // SAFETY: `hash_out` is documented as a writable 32-byte caller buffer.
+    unsafe { slice::from_raw_parts_mut(hash_out, ATTACHMENT_HASH_LEN) }.copy_from_slice(&hash);
+    true
+}
+
+/// Authenticates, decrypts, and SHA-256-checks one attachment block.
+/// `plaintext_out` must be exactly `ciphertext_len - 16` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_attachment_decrypt_block(
+    key: *const u8,
+    nonce: *const u8,
+    aad: *const u8,
+    aad_len: usize,
+    ciphertext: *const u8,
+    ciphertext_len: usize,
+    expected_hash: *const u8,
+    plaintext_out: *mut u8,
+    plaintext_out_len: usize,
+) -> bool {
+    if key.is_null()
+        || nonce.is_null()
+        || aad.is_null()
+        || ciphertext.is_null()
+        || expected_hash.is_null()
+        || plaintext_out.is_null()
+        || aad_len == 0
+        || ciphertext_len <= ATTACHMENT_TAG_LEN
+        || ciphertext_len > MAX_FFI_ATTACHMENT_BLOCK_LEN + ATTACHMENT_TAG_LEN
+        || plaintext_out_len != ciphertext_len - ATTACHMENT_TAG_LEN
+    {
+        record_error("invalid native attachment decryption buffers");
+        return false;
+    }
+    // SAFETY: all pointers and exact lengths are supplied by the FFI caller
+    // for this call only and were checked for null/valid protocol bounds.
+    let key = unsafe { slice::from_raw_parts(key, ATTACHMENT_KEY_LEN) };
+    let nonce = unsafe { slice::from_raw_parts(nonce, ATTACHMENT_NONCE_LEN) };
+    let aad = unsafe { slice::from_raw_parts(aad, aad_len) };
+    let ciphertext = unsafe { slice::from_raw_parts(ciphertext, ciphertext_len) };
+    let expected_hash = unsafe { slice::from_raw_parts(expected_hash, ATTACHMENT_HASH_LEN) };
+    let plaintext = unsafe { slice::from_raw_parts_mut(plaintext_out, plaintext_out_len) };
+    plaintext.copy_from_slice(&ciphertext[..plaintext_out_len]);
+
+    let cipher = match XChaCha20Poly1305::new_from_slice(key) {
+        Ok(cipher) => cipher,
+        Err(error) => {
+            record_error(error);
+            return false;
+        }
+    };
+    let tag = Tag::from_slice(&ciphertext[plaintext_out_len..]);
+    if let Err(error) =
+        cipher.decrypt_in_place_detached(XNonce::from_slice(nonce), aad, plaintext, tag)
+    {
+        plaintext.fill(0);
+        record_error(error);
+        return false;
+    }
+    let actual: [u8; ATTACHMENT_HASH_LEN] = Sha256::digest(&*plaintext).into();
+    if actual.as_slice() != expected_hash {
+        plaintext.fill(0);
+        record_error("native attachment block digest mismatch");
+        return false;
+    }
+    true
 }
 
 #[unsafe(no_mangle)]
@@ -224,6 +363,62 @@ pub unsafe extern "C" fn conest_iroh_send_v2(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_iroh_send_v3(
+    handle: u64,
+    remote_endpoint_id: *const c_char,
+    direct_addresses_json: *const c_char,
+    bytes: *const u8,
+    bytes_len: usize,
+    allow_relay: bool,
+) -> *mut c_char {
+    let Some(transport) = transport(handle) else {
+        record_error("unknown native transport handle");
+        return std::ptr::null_mut();
+    };
+    if remote_endpoint_id.is_null() || direct_addresses_json.is_null() || bytes.is_null() {
+        record_error("null Iroh send argument");
+        return std::ptr::null_mut();
+    }
+    // SAFETY: strings are NUL-terminated and buffers remain live for this
+    // synchronous call, as guaranteed by the Dart bridge.
+    let endpoint = match unsafe { CStr::from_ptr(remote_endpoint_id) }.to_str() {
+        Ok(value) => value.to_owned(),
+        Err(error) => {
+            record_error(error);
+            return std::ptr::null_mut();
+        }
+    };
+    let direct_addresses_json = match unsafe { CStr::from_ptr(direct_addresses_json) }.to_str() {
+        Ok(value) => value,
+        Err(error) => {
+            record_error(error);
+            return std::ptr::null_mut();
+        }
+    };
+    let direct_addresses = match serde_json::from_str::<Vec<String>>(direct_addresses_json) {
+        Ok(value) => value,
+        Err(error) => {
+            record_error(error);
+            return std::ptr::null_mut();
+        }
+    };
+    // SAFETY: Dart provides a readable buffer of exactly `bytes_len` bytes.
+    let payload = unsafe { slice::from_raw_parts(bytes, bytes_len) }.to_vec();
+    match RUNTIME.block_on(transport.send_envelope_with_hints(
+        endpoint,
+        direct_addresses,
+        payload,
+        allow_relay,
+    )) {
+        Ok(receipt) => json_string(&receipt),
+        Err(error) => {
+            record_error(error);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn conest_iroh_next(handle: u64) -> *mut c_char {
     let Some(transport) = transport(handle) else {
         record_error("unknown native transport handle");
@@ -342,5 +537,68 @@ pub unsafe extern "C" fn conest_string_free(value: *mut c_char) {
         // SAFETY: This function is only for pointers produced by
         // `CString::into_raw` in this module, and Dart calls it exactly once.
         drop(unsafe { CString::from_raw(value) });
+    }
+}
+
+#[cfg(test)]
+mod attachment_crypto_tests {
+    use super::{conest_attachment_decrypt_block, conest_attachment_encrypt_block};
+
+    #[test]
+    fn binary_ffi_round_trip_and_tamper_rejection() {
+        let key = [0x11_u8; 32];
+        let nonce = [0x22_u8; 24];
+        let aad = b"manifest-bound attachment block";
+        let plaintext: Vec<u8> = (0..128 * 1024).map(|index| index as u8).collect();
+        let mut ciphertext = vec![0_u8; plaintext.len() + 16];
+        let mut hash = [0_u8; 32];
+        // SAFETY: every pointer references the exact live buffer length passed.
+        assert!(unsafe {
+            conest_attachment_encrypt_block(
+                key.as_ptr(),
+                nonce.as_ptr(),
+                aad.as_ptr(),
+                aad.len(),
+                plaintext.as_ptr(),
+                plaintext.len(),
+                ciphertext.as_mut_ptr(),
+                ciphertext.len(),
+                hash.as_mut_ptr(),
+            )
+        });
+        let mut decrypted = vec![0_u8; plaintext.len()];
+        // SAFETY: every pointer references the exact live buffer length passed.
+        assert!(unsafe {
+            conest_attachment_decrypt_block(
+                key.as_ptr(),
+                nonce.as_ptr(),
+                aad.as_ptr(),
+                aad.len(),
+                ciphertext.as_ptr(),
+                ciphertext.len(),
+                hash.as_ptr(),
+                decrypted.as_mut_ptr(),
+                decrypted.len(),
+            )
+        });
+        assert_eq!(decrypted, plaintext);
+
+        ciphertext[123] ^= 0x80;
+        decrypted.fill(0x55);
+        // SAFETY: every pointer references the exact live buffer length passed.
+        assert!(!unsafe {
+            conest_attachment_decrypt_block(
+                key.as_ptr(),
+                nonce.as_ptr(),
+                aad.as_ptr(),
+                aad.len(),
+                ciphertext.as_ptr(),
+                ciphertext.len(),
+                hash.as_ptr(),
+                decrypted.as_mut_ptr(),
+                decrypted.len(),
+            )
+        });
+        assert!(decrypted.iter().all(|byte| *byte == 0));
     }
 }

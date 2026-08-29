@@ -10182,8 +10182,31 @@ class DebugMenuDialog extends StatefulWidget {
 class _DebugMenuDialogState extends State<DebugMenuDialog> {
   DebugRunReport? _report;
   bool _busy = false;
+  bool _fileTestBusy = false;
+  String? _selectedDebugContactId;
+  int _selectedDebugSizeMiB = 5;
   String? _error;
   String? _notice;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedDebugContactId = widget.controller.contacts
+        .where((contact) => contact.canSendOutbound)
+        .firstOrNull
+        ?.deviceId;
+    widget.controller.addListener(_handleControllerUpdate);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_handleControllerUpdate);
+    super.dispose();
+  }
+
+  void _handleControllerUpdate() {
+    if (mounted) setState(() {});
+  }
 
   Future<void> _runTests() async {
     setState(() {
@@ -10215,11 +10238,62 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
     }
   }
 
+  Future<void> _runLanFileTest() async {
+    final deviceId = _selectedDebugContactId;
+    final contact = deviceId == null
+        ? null
+        : widget.controller.contactByDeviceId(deviceId);
+    if (contact == null) {
+      setState(() => _error = 'Select a verified contact first.');
+      return;
+    }
+    setState(() {
+      _fileTestBusy = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      await widget.controller.runLanAttachmentDiagnostic(
+        contact: contact,
+        sizeMiB: _selectedDebugSizeMiB,
+      );
+      if (mounted) {
+        setState(() {
+          _notice =
+              'LAN test queued. On ${contact.alias}, press Download; Complete means the final SHA-256 matched.';
+        });
+      }
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _fileTestBusy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final identity = widget.controller.identity;
     final contacts = widget.controller.contacts;
     final relays = widget.controller.configuredRelays;
+    final selectableContacts = contacts
+        .where((contact) => contact.canSendOutbound)
+        .toList(growable: false);
+    if (_selectedDebugContactId != null &&
+        !selectableContacts.any(
+          (contact) => contact.deviceId == _selectedDebugContactId,
+        )) {
+      _selectedDebugContactId = selectableContacts.firstOrNull?.deviceId;
+    }
+    final diagnosticTransfers = widget.controller.transferSnapshots
+        .where(
+          (snapshot) =>
+              widget.controller
+                  .attachmentDescriptorFor(snapshot.id)
+                  ?.mimeType ==
+              'application/x-conest-transfer-test',
+        )
+        .take(8)
+        .toList(growable: false);
     final platform = kIsWeb ? 'web' : Platform.operatingSystem;
     final report = _report;
     return AlertDialog(
@@ -10309,6 +10383,126 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
                       ],
                       palette: widget.palette,
                     ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'File transfer diagnostics',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Generates a deterministic file, then uses the normal v2 spool, encryption, LAN HTTP, resume journal, and final SHA-256 verification. Payload blocks cannot use Iroh or Conest relays.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: widget.palette.inkSoft,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      widget.controller.nativeAttachmentCryptoAvailable
+                          ? 'Block crypto: native Rust acceleration'
+                          : 'Block crypto: compatible Dart fallback (slower)',
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: widget.controller.nativeAttachmentCryptoAvailable
+                            ? widget.palette.success
+                            : widget.palette.warning,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<String>(
+                      initialValue: _selectedDebugContactId,
+                      decoration: const InputDecoration(
+                        labelText: 'Test contact',
+                      ),
+                      items: [
+                        for (final contact in selectableContacts)
+                          DropdownMenuItem(
+                            value: contact.deviceId,
+                            child: Text(contact.alias),
+                          ),
+                      ],
+                      onChanged: _fileTestBusy
+                          ? null
+                          : (value) =>
+                                setState(() => _selectedDebugContactId = value),
+                    ),
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<int>(
+                      initialValue: _selectedDebugSizeMiB,
+                      decoration: const InputDecoration(labelText: 'File size'),
+                      items: [
+                        for (final size
+                            in MessengerController.debugLanTestSizesMiB)
+                          DropdownMenuItem(
+                            value: size,
+                            child: Text('$size MiB'),
+                          ),
+                      ],
+                      onChanged: _fileTestBusy
+                          ? null
+                          : (value) {
+                              if (value != null) {
+                                setState(() => _selectedDebugSizeMiB = value);
+                              }
+                            },
+                    ),
+                    if (_selectedDebugSizeMiB >= 1000) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        'Large diagnostics need roughly twice the selected size temporarily and can take several minutes.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: widget.palette.warning,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 10),
+                    FilledButton.icon(
+                      onPressed:
+                          _fileTestBusy || _selectedDebugContactId == null
+                          ? null
+                          : _runLanFileTest,
+                      icon: _fileTestBusy
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.lan_outlined),
+                      label: Text(
+                        _fileTestBusy
+                            ? 'Preparing LAN test…'
+                            : 'Send LAN test file',
+                      ),
+                    ),
+                    if (widget.controller.debugFileTestStatus
+                        case final status?) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        status,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                    if (diagnosticTransfers.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      for (final snapshot in diagnosticTransfers)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 6),
+                          child: _DebugInfoBlock(
+                            title:
+                                widget.controller
+                                    .attachmentDescriptorFor(snapshot.id)
+                                    ?.fileName ??
+                                snapshot.id,
+                            lines: [
+                              '${snapshot.direction.name} · ${snapshot.phase.name} · ${(snapshot.progress * 100).toStringAsFixed(1)}%',
+                              '${snapshot.bytesTransferred} / ${snapshot.totalBytes} bytes · ${snapshot.routeLabel}',
+                              if (snapshot.error != null)
+                                'error: ${snapshot.error}',
+                            ],
+                            palette: widget.palette,
+                          ),
+                        ),
+                    ],
                     const SizedBox(height: 12),
                     Text(
                       'Contact route cache',
@@ -12189,11 +12383,23 @@ class _TransferManagerTile extends StatelessWidget {
                   if (snapshot.phase == TransferPhase.awaitingApproval &&
                       snapshot.direction == TransferDirection.inbound)
                     IconButton(
-                      tooltip: 'Download',
-                      onPressed: () => unawaited(
-                        controller.acceptIncomingAttachment(snapshot.id),
-                      ),
-                      icon: const Icon(Icons.download_outlined),
+                      tooltip:
+                          controller.attachmentAcceptanceInProgress(snapshot.id)
+                          ? 'Preparing download'
+                          : 'Download',
+                      onPressed:
+                          controller.attachmentAcceptanceInProgress(snapshot.id)
+                          ? null
+                          : () => unawaited(
+                              controller.acceptIncomingAttachment(snapshot.id),
+                            ),
+                      icon:
+                          controller.attachmentAcceptanceInProgress(snapshot.id)
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.download_outlined),
                     )
                   else if (snapshot.pausedByMe)
                     IconButton(
@@ -12913,6 +13119,9 @@ class _AttachmentRow extends StatelessWidget {
 
     if (!outbound && controller.attachmentAwaitingAcceptance(descriptor.id)) {
       final sizeMb = descriptor.sizeBytes / (1024 * 1024);
+      final accepting = controller.attachmentAcceptanceInProgress(
+        descriptor.id,
+      );
       return Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -12931,25 +13140,48 @@ class _AttachmentRow extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              descriptor.sizeBytes > MessengerController.maxAttachmentSizeBytes
+              accepting
+                  ? '${sizeMb.toStringAsFixed(1)} MB · preparing download…'
+                  : descriptor.sizeBytes >
+                        MessengerController.maxAttachmentSizeBytes
                   ? '${sizeMb.toStringAsFixed(1)} MB · direct route required'
                   : '${sizeMb.toStringAsFixed(1)} MB · tap to download',
               style: TextStyle(color: metaColor),
             ),
+            if (snapshot?.error case final error?) ...[
+              const SizedBox(height: 6),
+              Text(error, style: TextStyle(color: palette.danger)),
+            ],
             const SizedBox(height: 10),
             Wrap(
               spacing: 8,
               children: [
                 FilledButton.tonal(
-                  onPressed: () => unawaited(
-                    controller.acceptIncomingAttachment(descriptor.id),
-                  ),
-                  child: const Text('Download'),
+                  onPressed: accepting
+                      ? null
+                      : () => unawaited(
+                          controller.acceptIncomingAttachment(descriptor.id),
+                        ),
+                  child: accepting
+                      ? const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            SizedBox(width: 8),
+                            Text('Preparing download…'),
+                          ],
+                        )
+                      : const Text('Download'),
                 ),
                 TextButton(
-                  onPressed: () => unawaited(
-                    controller.rejectIncomingAttachment(descriptor.id),
-                  ),
+                  onPressed: accepting
+                      ? null
+                      : () => unawaited(
+                          controller.rejectIncomingAttachment(descriptor.id),
+                        ),
                   child: const Text('Reject'),
                 ),
               ],

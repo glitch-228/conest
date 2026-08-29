@@ -29,12 +29,14 @@ class TransportPeer {
     this.transportIdentity,
     this.identityPinned = false,
     this.allowRelay = true,
+    this.directAddresses = const <String>[],
   });
 
   final String deviceId;
   final String? transportIdentity;
   final bool identityPinned;
   final bool allowRelay;
+  final List<String> directAddresses;
 }
 
 class RouteCandidate {
