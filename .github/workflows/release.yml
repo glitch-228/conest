@@ -16,6 +16,9 @@ env:
 jobs:
   prepare:
     name: Prepare release metadata
+    # Debug builds are workflow artifacts only. Even an accidentally pushed
+    # v*-debug tag must never create a GitHub release or signed updater feed.
+    if: ${{ !contains(github.ref_name, 'debug') }}
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.meta.outputs.tag }}

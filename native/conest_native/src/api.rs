@@ -1,6 +1,12 @@
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    str::FromStr,
+    sync::{Arc, Weak},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 use flutter_rust_bridge::frb;
@@ -14,6 +20,11 @@ use tokio::sync::{Mutex, mpsc};
 const CONEST_ALPN: &[u8] = b"conest/1";
 const MAX_ENVELOPE_BYTES: usize = 5 * 1024 * 1024;
 const INBOX_CAPACITY: usize = 256;
+const STREAM_TIMEOUT: Duration = Duration::from_secs(60);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_INBOUND_STREAMS: usize = 8;
+
+type ConnectionPool = Arc<Mutex<HashMap<EndpointId, Connection>>>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NativeEndpointStatus {
@@ -47,10 +58,12 @@ pub struct NativeInboundEnvelope {
 pub struct NativeTransport {
     endpoint: Endpoint,
     inbox: Arc<Mutex<mpsc::Receiver<NativeInboundEnvelope>>>,
+    inbox_tx: mpsc::Sender<NativeInboundEnvelope>,
     /// QUIC is designed to multiplex streams. Keeping the established
     /// connection here avoids a full discovery/NAT/TLS handshake for every
     /// message or attachment block.
-    connections: Arc<Mutex<HashMap<EndpointId, Connection>>>,
+    connections: ConnectionPool,
+    connect_locks: Mutex<HashMap<EndpointId, Weak<Mutex<()>>>>,
     #[cfg(test)]
     connection_attempts: Arc<AtomicUsize>,
     relay_enabled: bool,
@@ -107,13 +120,15 @@ impl NativeTransport {
         let connections = Arc::new(Mutex::new(HashMap::new()));
         tokio::spawn(run_accept_loop(
             endpoint.clone(),
-            inbox_tx,
+            inbox_tx.clone(),
             Arc::clone(&connections),
         ));
         Ok(Self {
             endpoint,
             inbox: Arc::new(Mutex::new(inbox_rx)),
+            inbox_tx,
             connections,
+            connect_locks: Mutex::new(HashMap::new()),
             #[cfg(test)]
             connection_attempts: Arc::new(AtomicUsize::new(0)),
             relay_enabled,
@@ -234,25 +249,45 @@ impl NativeTransport {
 
     async fn connection_for(&self, remote_addr: EndpointAddr) -> Result<Connection> {
         let endpoint_id = remote_addr.id;
-        // Hold the per-installation pool lock through connect. This makes a
-        // burst of attachment streams single-flight instead of allowing all
-        // callers to observe a miss and perform duplicate NAT/TLS handshakes.
-        // The lock is released before any stream I/O, so established peers
-        // still multiplex concurrently.
-        let mut connections = self.connections.lock().await;
-        if let Some(connection) = connections.get(&endpoint_id).cloned()
+        // Coalesce dials for one peer without blocking other peers or inbound
+        // accepts behind an unreachable endpoint's handshake.
+        let gate = {
+            let mut locks = self.connect_locks.lock().await;
+            locks.retain(|_, gate| gate.strong_count() > 0);
+            if let Some(gate) = locks.get(&endpoint_id).and_then(Weak::upgrade) {
+                gate
+            } else {
+                let gate = Arc::new(Mutex::new(()));
+                locks.insert(endpoint_id, Arc::downgrade(&gate));
+                gate
+            }
+        };
+        let _connecting = gate.lock().await;
+        if let Some(connection) = self.connections.lock().await.get(&endpoint_id).cloned()
             && connection.close_reason().is_none()
         {
             return Ok(connection);
         }
         #[cfg(test)]
         self.connection_attempts.fetch_add(1, Ordering::Relaxed);
-        let connection = self
-            .endpoint
-            .connect(remote_addr, CONEST_ALPN)
+        let connection = tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            self.endpoint.connect(remote_addr, CONEST_ALPN),
+        )
+        .await
+        .context("Iroh connection timed out")?
+        .context("connect to Iroh peer")?;
+        self.connections
+            .lock()
             .await
-            .context("connect to Iroh peer")?;
-        connections.insert(endpoint_id, connection.clone());
+            .insert(endpoint_id, connection.clone());
+        // Both dialed and accepted connections are duplex. The remote can
+        // open reply/control streams on this same pooled connection.
+        tokio::spawn(run_connection(
+            connection.clone(),
+            self.inbox_tx.clone(),
+            Arc::clone(&self.connections),
+        ));
         Ok(connection)
     }
 
@@ -267,6 +302,21 @@ impl NativeTransport {
     }
 
     async fn send_on_connection(
+        &self,
+        endpoint_id: EndpointId,
+        connection: &Connection,
+        bytes: &[u8],
+        allow_relay: bool,
+    ) -> Result<NativeDeliveryReceipt> {
+        tokio::time::timeout(
+            STREAM_TIMEOUT,
+            self.send_stream(endpoint_id, connection, bytes, allow_relay),
+        )
+        .await
+        .context("Iroh stream timed out")?
+    }
+
+    async fn send_stream(
         &self,
         endpoint_id: EndpointId,
         connection: &Connection,
@@ -296,7 +346,10 @@ impl NativeTransport {
 
     #[frb]
     pub async fn next_envelope(&self) -> Option<NativeInboundEnvelope> {
-        self.inbox.lock().await.recv().await
+        tokio::select! {
+            envelope = async { self.inbox.lock().await.recv().await } => envelope,
+            _ = self.endpoint.closed() => None,
+        }
     }
 
     pub(crate) async fn try_next_envelope(&self) -> Option<NativeInboundEnvelope> {
@@ -313,46 +366,68 @@ impl NativeTransport {
 async fn run_accept_loop(
     endpoint: Endpoint,
     inbox: mpsc::Sender<NativeInboundEnvelope>,
-    connections: Arc<Mutex<HashMap<EndpointId, Connection>>>,
+    connections: ConnectionPool,
 ) {
     while let Some(incoming) = endpoint.accept().await {
         let inbox = inbox.clone();
         let connections = Arc::clone(&connections);
         tokio::spawn(async move {
-            let Ok(connection) = incoming.await else {
+            let Ok(Ok(connection)) = tokio::time::timeout(CONNECT_TIMEOUT, incoming).await else {
                 return;
             };
             let sender_endpoint = connection.remote_id();
-            let sender_endpoint_id = sender_endpoint.to_string();
             connections
                 .lock()
                 .await
                 .insert(sender_endpoint, connection.clone());
-            loop {
-                let Ok((mut send, mut recv)) = connection.accept_bi().await else {
-                    break;
-                };
-                let Ok(bytes) = recv.read_to_end(MAX_ENVELOPE_BYTES).await else {
-                    continue;
-                };
-                if bytes.is_empty() {
-                    continue;
-                }
-                let accepted = inbox
-                    .send(NativeInboundEnvelope {
-                        sender_endpoint_id: sender_endpoint_id.clone(),
-                        bytes,
-                        path: path_kind(&connection),
-                    })
-                    .await
-                    .is_ok();
-                let ack = if accepted { 1 } else { 0 };
-                if send.write_all(&[ack]).await.is_ok() {
-                    let _ = send.finish();
-                }
-            }
-            connections.lock().await.remove(&sender_endpoint);
+            run_connection(connection, inbox, connections).await;
         });
+    }
+}
+
+async fn run_connection(
+    connection: Connection,
+    inbox: mpsc::Sender<NativeInboundEnvelope>,
+    connections: ConnectionPool,
+) {
+    let sender_endpoint = connection.remote_id();
+    let mut streams = tokio::task::JoinSet::new();
+    loop {
+        // Bound concurrent buffers while allowing a slow stream to coexist
+        // with control messages and the rest of an attachment's range window.
+        if streams.len() >= MAX_INBOUND_STREAMS {
+            streams.join_next().await;
+            continue;
+        }
+        tokio::select! {
+            _ = streams.join_next(), if !streams.is_empty() => {},
+            incoming = connection.accept_bi() => {
+                let Ok((mut send, mut recv)) = incoming else { break; };
+                let inbox = inbox.clone();
+                let connection = connection.clone();
+                streams.spawn(async move {
+                    let _ = tokio::time::timeout(STREAM_TIMEOUT, async {
+                        let bytes = recv.read_to_end(MAX_ENVELOPE_BYTES).await?;
+                        if bytes.is_empty() { bail!("empty Iroh envelope"); }
+                        let accepted = inbox.send(NativeInboundEnvelope {
+                            sender_endpoint_id: sender_endpoint.to_string(),
+                            bytes,
+                            path: path_kind(&connection),
+                        }).await.is_ok();
+                        send.write_all(&[u8::from(accepted)]).await?;
+                        send.finish()?;
+                        Ok::<(), anyhow::Error>(())
+                    }).await;
+                });
+            }
+        }
+    }
+    let mut pool = connections.lock().await;
+    if pool
+        .get(&sender_endpoint)
+        .is_some_and(|entry| entry.stable_id() == connection.stable_id())
+    {
+        pool.remove(&sender_endpoint);
     }
 }
 
@@ -458,6 +533,29 @@ mod tests {
         assert!(second.accepted);
         assert_eq!(sender.connections.lock().await.len(), 1);
 
+        let reply = tokio::time::timeout(
+            Duration::from_secs(2),
+            receiver.send_to(
+                sender.endpoint.id().to_string(),
+                b"reply on pooled connection".to_vec(),
+                false,
+            ),
+        )
+        .await
+        .expect("reply on the existing connection timed out")
+        .unwrap();
+        assert!(reply.accepted);
+        let inbound = tokio::time::timeout(Duration::from_secs(2), sender.next_envelope())
+            .await
+            .expect("sender inbox timed out")
+            .expect("sender inbox closed");
+        assert_eq!(inbound.bytes, b"reply on pooled connection");
+        assert_eq!(
+            inbound.sender_endpoint_id,
+            receiver.endpoint.id().to_string()
+        );
+        assert_eq!(receiver.connection_attempts.load(Ordering::Relaxed), 0);
+
         sender.close().await;
         receiver.close().await;
     }
@@ -491,6 +589,79 @@ mod tests {
         assert_eq!(sender.connections.lock().await.len(), 1);
         sender.close().await;
         receiver.close().await;
+    }
+
+    #[tokio::test]
+    async fn stalled_stream_does_not_block_control_messages() {
+        let sender = NativeTransport::start_inner(vec![51; 32], false, vec![])
+            .await
+            .unwrap();
+        let receiver = NativeTransport::start_inner(vec![52; 32], false, vec![])
+            .await
+            .unwrap();
+        let connection = sender
+            .connection_for(receiver.endpoint.addr())
+            .await
+            .unwrap();
+        let (mut stalled, _reply) = connection.open_bi().await.unwrap();
+        stalled.write_all(b"unfinished block").await.unwrap();
+        let receipt = tokio::time::timeout(
+            Duration::from_secs(2),
+            sender.send_to(
+                receiver.endpoint.id().to_string(),
+                b"control".to_vec(),
+                false,
+            ),
+        )
+        .await
+        .expect("control message was blocked by a partial stream")
+        .unwrap();
+        assert!(receipt.accepted);
+        assert_eq!(receiver.next_envelope().await.unwrap().bytes, b"control");
+        sender.close().await;
+        receiver.close().await;
+    }
+
+    #[tokio::test]
+    async fn stalled_peer_dial_does_not_lock_other_connections() {
+        let sender = NativeTransport::start_inner(vec![61; 32], false, vec![])
+            .await
+            .unwrap();
+        let receiver = NativeTransport::start_inner(vec![62; 32], false, vec![])
+            .await
+            .unwrap();
+        let stalled_peer = SecretKey::from_bytes(&[63; 32]).public();
+        let blocked_gate = Arc::new(Mutex::new(()));
+        sender
+            .connect_locks
+            .lock()
+            .await
+            .insert(stalled_peer, Arc::downgrade(&blocked_gate));
+        let _blocked = blocked_gate.lock().await;
+        let stalled = sender.connection_for(EndpointAddr::new(stalled_peer));
+        let reachable =
+            sender.send_to_addr_with_policy(receiver.endpoint.addr(), b"reachable".to_vec(), false);
+        tokio::select! {
+            result = stalled => panic!("stalled dial unexpectedly completed: {}", result.is_ok()),
+            receipt = tokio::time::timeout(Duration::from_secs(2), reachable) => {
+                assert!(receipt.expect("another peer's dial blocked delivery").unwrap().accepted);
+            }
+        }
+        sender.close().await;
+        receiver.close().await;
+    }
+
+    #[tokio::test]
+    async fn close_wakes_waiting_inbox_reader() {
+        let endpoint = NativeTransport::start_inner(vec![71; 32], false, vec![])
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let (envelope, ()) = tokio::join!(endpoint.next_envelope(), endpoint.close());
+            assert!(envelope.is_none());
+        })
+        .await
+        .expect("close left the inbox reader blocked");
     }
 
     /// Slow opt-in certification for the requested online attachment target.

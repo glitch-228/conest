@@ -22,6 +22,9 @@ Conest is a phased secure messenger and transfer app. The repository contains:
 - Signed compact `ci6` invite payloads carrying Ed25519/X25519 keys, pinned
   Iroh endpoint identity, capabilities, and bounded route hints; `ci5` remains
   accepted for migration.
+- Contact requests from signed `ci6` invites can arrive over Iroh before a
+  contact is trusted. The invite must match the authenticated endpoint; the
+  receiver approves the request before exchanging encrypted messages.
 - Route hints carry both route kind and protocol, currently `tcp`, `udp`, `http`, or `https`.
 - Rotating pairing code derived from the payload in 120-second windows.
 - Desktop-style relay behavior enabled by default through the app's local LAN node.
@@ -174,6 +177,11 @@ On first launch:
 2. Open `My invite` to show a QR, payload, and current codephrase.
 3. Add the contact by scanning the QR, pasting the payload, or entering only the current codephrase.
 4. Nearby delivery will try LAN routes first and fall back to the internet relay when needed.
+
+With a signed QR/pasted invite, contact pairing also works over Iroh when
+Conest relay and LAN delivery are disabled. The receiving device must be
+online and approve the incoming contact request. Codephrase-only discovery
+still needs LAN discovery or a shared Conest relay to obtain the invite.
 
 ## Rust Workspace
 

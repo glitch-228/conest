@@ -198,6 +198,46 @@ void main() {
       await adapter.stop();
     },
   );
+
+  test(
+    'Iroh retries a direct path after a previous relayed delivery',
+    () async {
+      final bridge = _FakeIrohBridge(endpointId: 'peer', relayed: true);
+      final adapter = IrohTransportAdapter(
+        bridge: bridge,
+        secretKeySeed: Uint8List(32),
+        relayEnabled: true,
+      );
+      await adapter.start();
+      addTearDown(adapter.stop);
+      const relayedPeer = TransportPeer(
+        deviceId: 'peer',
+        transportIdentity: 'peer',
+        identityPinned: true,
+      );
+      await adapter.sendEnvelope(
+        peer: relayedPeer,
+        route: (await adapter.discoverRoutes(relayedPeer)).single,
+        envelope: _envelope(),
+      );
+      const directPeer = TransportPeer(
+        deviceId: 'peer',
+        transportIdentity: 'peer',
+        identityPinned: true,
+        allowRelay: false,
+      );
+      final routes = await adapter.discoverRoutes(directPeer);
+      expect(routes.single.path, TransportPathKind.direct);
+      bridge.relayed = false;
+      final receipt = await adapter.sendEnvelope(
+        peer: directPeer,
+        route: routes.single,
+        envelope: _envelope(),
+      );
+      expect(receipt.accepted, isTrue);
+      expect(bridge.lastAllowRelay, isFalse);
+    },
+  );
 }
 
 TransportEnvelope _envelope() => TransportEnvelope(
@@ -277,7 +317,7 @@ class _FakeIrohBridge implements NativeIrohBridge {
   _FakeIrohBridge({required this.endpointId, this.relayed = false});
 
   final String endpointId;
-  final bool relayed;
+  bool relayed;
   bool closed = false;
   bool? lastAllowRelay;
   List<String> lastDirectAddresses = const <String>[];

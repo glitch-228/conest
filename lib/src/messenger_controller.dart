@@ -222,6 +222,9 @@ const Set<String> _v2PairwiseKinds = <String>{
   'debug_probe_ack',
   'debug_two_way_message',
   'debug_two_way_reply',
+  'debug_file_test_probe',
+  'debug_file_test_probe_ack',
+  'debug_file_test_result',
 };
 
 /// Base URL the "Update default relays" button pulls from. Points at the
@@ -272,6 +275,87 @@ class AttachmentSpoolException implements Exception {
 
 enum DefaultRelaysRefreshStatus { upToDate, updated, error }
 
+class DebugFileTestResult {
+  const DebugFileTestResult({
+    required this.testId,
+    required this.attachmentId,
+    required this.peerDeviceId,
+    required this.sizeMiB,
+    required this.success,
+    required this.startedAt,
+    required this.completedAt,
+    this.bytesVerified = 0,
+    this.sha256Base64,
+    this.detail,
+  });
+
+  final String testId;
+  final String attachmentId;
+  final String peerDeviceId;
+  final int sizeMiB;
+  final bool success;
+  final DateTime startedAt;
+  final DateTime completedAt;
+  final int bytesVerified;
+  final String? sha256Base64;
+  final String? detail;
+
+  Duration get elapsed => completedAt.difference(startedAt);
+
+  double? get mebibytesPerSecond => elapsed.inMilliseconds <= 0
+      ? null
+      : (bytesVerified / (1024 * 1024)) / (elapsed.inMilliseconds / 1000);
+}
+
+class DebugAttachmentTestSpec {
+  const DebugAttachmentTestSpec({
+    required this.testId,
+    required this.buildId,
+    required this.sizeMiB,
+    required this.startedAt,
+  });
+
+  final String testId;
+  final String buildId;
+  final int sizeMiB;
+  final DateTime startedAt;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'protocolVersion': 1,
+    'testId': testId,
+    'buildId': buildId,
+    'sizeMiB': sizeMiB,
+    'startedAt': startedAt.toUtc().toIso8601String(),
+  };
+
+  static DebugAttachmentTestSpec? tryParse(Object? value) {
+    if (value is! Map<String, dynamic> || value['protocolVersion'] != 1) {
+      return null;
+    }
+    final testId = value['testId'];
+    final buildId = value['buildId'];
+    final sizeMiB = value['sizeMiB'];
+    final startedAt = DateTime.tryParse(value['startedAt'] as String? ?? '');
+    if (testId is! String ||
+        testId.isEmpty ||
+        testId.length > 160 ||
+        buildId is! String ||
+        buildId.isEmpty ||
+        buildId.length > 256 ||
+        sizeMiB is! int ||
+        !MessengerController.debugLanTestSizesMiB.contains(sizeMiB) ||
+        startedAt == null) {
+      return null;
+    }
+    return DebugAttachmentTestSpec(
+      testId: testId,
+      buildId: buildId,
+      sizeMiB: sizeMiB,
+      startedAt: startedAt.toUtc(),
+    );
+  }
+}
+
 class MessengerController extends ChangeNotifier {
   MessengerController({
     required VaultStore vaultStore,
@@ -287,6 +371,7 @@ class MessengerController extends ChangeNotifier {
     bool enablePairingBeacon = true,
     LanDirectChannel? lanDirectChannel,
     NativeAttachmentCrypto? attachmentCrypto,
+    String? debugBuildId,
     Future<TransportRegistry?> Function(IdentityRecord identity)?
     transportRegistryFactory,
   }) : _vaultStore = vaultStore,
@@ -304,6 +389,9 @@ class MessengerController extends ChangeNotifier {
        _lanDirectChannel = lanDirectChannel,
        _nativeAttachmentCrypto =
            attachmentCrypto ?? NativeAttachmentCrypto.tryCreate(),
+       _debugBuildId = debugBuildId?.trim().isEmpty == false
+           ? debugBuildId!.trim()
+           : null,
        _transportRegistryFactory = transportRegistryFactory {
     _relayClient = _ScoringRelayClient(
       inner: relayClient,
@@ -370,6 +458,7 @@ class MessengerController extends ChangeNotifier {
   /// sender PUTs chunks directly instead of round-tripping via the relay.
   final LanDirectChannel? _lanDirectChannel;
   final NativeAttachmentCrypto? _nativeAttachmentCrypto;
+  final String? _debugBuildId;
   final Future<TransportRegistry?> Function(IdentityRecord identity)?
   _transportRegistryFactory;
   TransportRegistry? _transportRegistry;
@@ -457,6 +546,16 @@ class MessengerController extends ChangeNotifier {
   final Set<String> _debugProbeAcknowledgements = <String>{};
   final Set<String> _debugTwoWayReplies = <String>{};
   String? _debugFileTestStatus;
+  final List<DebugFileTestResult> _debugFileTestResults =
+      <DebugFileTestResult>[];
+  final Map<String, Completer<bool>> _debugFileProbeCompleters =
+      <String, Completer<bool>>{};
+  final Map<String, Completer<DebugFileTestResult>> _debugFileResultCompleters =
+      <String, Completer<DebugFileTestResult>>{};
+  final Map<String, DebugAttachmentTestSpec> _outboundDebugAttachmentTests =
+      <String, DebugAttachmentTestSpec>{};
+  final Map<String, _AuthorizedDebugFileTest> _authorizedInboundDebugFileTests =
+      <String, _AuthorizedDebugFileTest>{};
   final Set<String> _locallyDeletedMessageIds = <String>{};
   final Map<String, DateTime> _outboundAttemptedAt = <String, DateTime>{};
   final Map<String, _PendingRouteUpdateProbe> _pendingRouteUpdateProbes =
@@ -1057,6 +1156,7 @@ class MessengerController extends ChangeNotifier {
             ? 'Attachment crypto: compatible Dart fallback'
             : 'Attachment crypto: native Rust XChaCha/SHA acceleration',
       );
+      await _discardInterruptedDebugFileTests();
       await _restoreTransferSessionsAndCleanAttachments();
       await _ingestSignedDefaultRelaysIfNeeded();
       if (_snapshot.identity != null) {
@@ -1131,22 +1231,55 @@ class MessengerController extends ChangeNotifier {
               candidate.irohEndpointId == inbound.senderTransportIdentity,
         )
         .firstOrNull;
-    if (contact == null || !contact.hasPinnedIrohIdentity) {
-      appendDebugLog(
-        'Rejected Iroh envelope from an unpinned endpoint identity.',
-      );
-      return;
-    }
     final global = _snapshot.identity?.connectivity;
     if (global == null ||
-        contact.routing.effectivePolicy(TransportKind.iroh, global) ==
+        (contact?.routing.effectivePolicy(TransportKind.iroh, global) ??
+                global.policyFor(TransportKind.iroh)) ==
             TransportPolicy.disabled ||
         (inbound.path == TransportPathKind.relayed &&
-            (!global.irohRelayEnabled || !contact.routing.irohRelayEnabled))) {
-      appendDebugLog('Dropped Iroh ingress disabled for ${contact.alias}.');
+            (!global.irohRelayEnabled ||
+                !(contact?.routing.irohRelayEnabled ?? true)))) {
+      appendDebugLog('Dropped Iroh ingress disabled by connectivity policy.');
       return;
     }
     try {
+      if (contact == null) {
+        // A first contact request cannot have a local pin yet. Authenticate
+        // its signed ci6 binding against QUIC's remote identity, and retain
+        // the existing explicit-approval flow; no messages/files get through.
+        if (inbound.bytes.length > _maxBootstrapPayloadBytes * 2) return;
+        final decoded = jsonDecode(utf8.decode(inbound.bytes));
+        if (decoded is! Map<String, dynamic>) return;
+        final envelope = RelayEnvelope.fromJson(decoded);
+        if (envelope.kind != 'contact_exchange' ||
+            envelope.protocolVersion != 1 ||
+            !_isValidInboundEnvelope(envelope)) {
+          return;
+        }
+        final invite = ContactInvite.tryDecodePayload(
+          utf8.decode(base64Decode(envelope.payloadBase64!)),
+        );
+        if (invite == null ||
+            !invite.usesSignedFormat ||
+            invite.irohEndpointId != inbound.senderTransportIdentity ||
+            invite.deviceId != envelope.senderDeviceId ||
+            invite.accountId != envelope.senderAccountId ||
+            !await _crypto.verifyContactInvite(invite)) {
+          appendDebugLog('Rejected Iroh contact request identity binding.');
+          return;
+        }
+        await _processEnvelopes(
+          [envelope],
+          ingressKind: inbound.path == TransportPathKind.relayed
+              ? PeerRouteKind.relay
+              : PeerRouteKind.directInternet,
+        );
+        return;
+      }
+      if (!contact.hasPinnedIrohIdentity || !contact.canSendOutbound) {
+        appendDebugLog('Rejected Iroh envelope from an untrusted contact.');
+        return;
+      }
       final range = decodeIrohAttachmentRangeFrame(inbound.bytes);
       if (range != null) {
         final state = _inboundAttachments[range.attachmentId];
@@ -1343,6 +1476,10 @@ class MessengerController extends ChangeNotifier {
     final retainedSessions = <TransferSession>[];
     var restoredSessionsChanged = false;
     for (final session in _snapshot.transferSessions) {
+      if (session.state == TransferState.canceled) {
+        retainedSessions.add(session);
+        continue;
+      }
       if (session.state == TransferState.preparing) {
         final peerId = session.peerDeviceIds.firstOrNull;
         if (peerId != null && session.messageId.isNotEmpty) {
@@ -1520,6 +1657,62 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  /// Debug transfer authorizations and result completers are intentionally
+  /// process-local. If a debug artifact was force-stopped mid-test, resuming
+  /// the generated payload as an ordinary user attachment would leave a
+  /// permanent bubble with no runner waiting for its result. Remove only the
+  /// diagnostic MIME type and its app-owned files before normal restoration.
+  Future<void> _discardInterruptedDebugFileTests() async {
+    if (_debugBuildId == null) return;
+    const diagnosticMime = 'application/x-conest-transfer-test';
+    final diagnosticIds = <String>{
+      for (final session in _snapshot.transferSessions)
+        if (session.attachment.mimeType == diagnosticMime) session.id,
+      for (final conversation in _snapshot.conversations)
+        for (final message in conversation.messages)
+          if (message.attachment?.mimeType == diagnosticMime)
+            message.attachment!.id,
+    };
+    if (diagnosticIds.isEmpty) return;
+    for (final attachmentId in diagnosticIds) {
+      await _deleteAttachmentArtifacts(attachmentId);
+    }
+    final conversations = _snapshot.conversations
+        .map(
+          (conversation) => conversation.copyWith(
+            messages: conversation.messages
+                .where(
+                  (message) => !diagnosticIds.contains(message.attachment?.id),
+                )
+                .toList(growable: false),
+          ),
+        )
+        .toList(growable: false);
+    _snapshot = _snapshot.copyWith(
+      conversations: conversations,
+      transferSessions: _snapshot.transferSessions
+          .where((session) => !diagnosticIds.contains(session.id))
+          .toList(growable: false),
+      attachmentCacheReferences: _snapshot.attachmentCacheReferences
+          .where((reference) => !diagnosticIds.contains(reference.attachmentId))
+          .toList(growable: false),
+    );
+    final root = await _attachmentRoot();
+    final diagnostics = Directory(p.join(root.path, 'diagnostics'));
+    if (await diagnostics.exists()) {
+      await for (final entity in diagnostics.list(followLinks: false)) {
+        if (entity is! File) continue;
+        try {
+          await entity.delete();
+        } catch (_) {}
+      }
+    }
+    appendDebugLog(
+      'Removed ${diagnosticIds.length} interrupted automatic file test(s).',
+    );
+    await _saveSnapshotSilently(notify: false);
+  }
+
   void setStatus(String? value) {
     _statusMessage = value;
     notifyListeners();
@@ -1537,6 +1730,13 @@ class MessengerController extends ChangeNotifier {
     _debugLog.add(stamped);
     if (_debugLog.length > _debugLogCapacity) {
       _debugLog.removeAt(0);
+    }
+    // Automatic transfer diagnostics run on physical devices where the
+    // in-app ring buffer is not observable while the UI is busy. Mirror only
+    // exact debug-artifact traces to the platform log; stable/nightly builds
+    // retain the bounded in-memory log without emitting contact metadata.
+    if (_debugBuildId != null) {
+      debugPrint('[ConestDebug] $stamped');
     }
   }
 
@@ -3412,6 +3612,10 @@ class MessengerController extends ChangeNotifier {
     _outboundAttemptedAt.clear();
     _debugProbeAcknowledgements.clear();
     _debugTwoWayReplies.clear();
+    _authorizedInboundDebugFileTests.clear();
+    _outboundDebugAttachmentTests.clear();
+    _debugFileTestResults.clear();
+    _debugFileTestStatus = null;
     _locallyDeletedMessageIds.clear();
     for (final state in _inboundAttachments.values) {
       state.retryTimer?.cancel();
@@ -3766,6 +3970,7 @@ class MessengerController extends ChangeNotifier {
     required ContactInvite invite,
     required String alias,
     bool attemptReciprocalExchange = true,
+    bool recipientKnowsIdentity = false,
   }) async {
     final me = _requireIdentity();
     if (invite.version >= 6 && !await _crypto.verifyContactInvite(invite)) {
@@ -3836,7 +4041,11 @@ class MessengerController extends ChangeNotifier {
     );
     var exchangeStatus = ContactExchangeStatus.manualActionRequired;
     if (attemptReciprocalExchange) {
-      exchangeStatus = await _sendReciprocalContactExchange(contact)
+      exchangeStatus =
+          await _sendReciprocalContactExchange(
+            contact,
+            recipientKnowsIdentity: recipientKnowsIdentity,
+          )
           ? ContactExchangeStatus.automatic
           : ContactExchangeStatus.manualActionRequired;
     }
@@ -4012,6 +4221,7 @@ class MessengerController extends ChangeNotifier {
     }
     final result = await _trustInvite(
       invite: invite,
+      recipientKnowsIdentity: true,
       alias: alias?.trim().isNotEmpty == true
           ? alias!.trim()
           : invite.displayName,
@@ -4121,6 +4331,10 @@ class MessengerController extends ChangeNotifier {
   ];
 
   String? get debugFileTestStatus => _debugFileTestStatus;
+  bool get debugFileBattleTestEnabled => _debugBuildId != null;
+  String? get debugBuildId => _debugBuildId;
+  List<DebugFileTestResult> get debugFileTestResults =>
+      List<DebugFileTestResult>.unmodifiable(_debugFileTestResults);
   bool get nativeAttachmentCryptoAvailable => _nativeAttachmentCrypto != null;
 
   /// Returns the cap that applies to attachments destined for [contact]
@@ -4214,6 +4428,8 @@ class MessengerController extends ChangeNotifier {
     String? albumId,
     bool allowOriginalFallback = false,
     bool forceLanOnly = false,
+    DebugAttachmentTestSpec? debugTest,
+    bool debugUseSourceInPlace = false,
   }) async {
     final me = _requireIdentity();
     if (!contact.canSendOutbound) {
@@ -4223,6 +4439,10 @@ class MessengerController extends ChangeNotifier {
     }
     if (source.sizeBytes <= 0) {
       throw ArgumentError('Cannot send an empty file.');
+    }
+    if ((debugTest != null || debugUseSourceInPlace) &&
+        (_debugBuildId == null || debugTest?.buildId != _debugBuildId)) {
+      throw StateError('Automatic file tests require this exact debug build.');
     }
     final perContactCap = effectiveMaxAttachmentSizeFor(contact);
     if (source.sizeBytes > perContactCap) {
@@ -4303,6 +4523,7 @@ class MessengerController extends ChangeNotifier {
         attachmentId: attachmentId,
         source: source,
         allowOriginalFallback: allowOriginalFallback,
+        preferOriginalSource: debugUseSourceInPlace,
         onProgress: (bytes) {
           _preparationProgressBytes[attachmentId] = bytes;
           notifyListeners();
@@ -4344,6 +4565,9 @@ class MessengerController extends ChangeNotifier {
       requiresLan: requiresLan,
       lanOnly: forceLanOnly,
     );
+    if (debugTest != null) {
+      _outboundDebugAttachmentTests[attachmentId] = debugTest;
+    }
     // Stash the video poster (if any) so the sender's own bubble can
     // render the same thumbnail the receiver sees.
     if (source.poster != null && source.poster!.isNotEmpty) {
@@ -4392,6 +4616,148 @@ class MessengerController extends ChangeNotifier {
     required ContactRecord contact,
     required int sizeMiB,
   }) async {
+    final testId = _randomId('lantest');
+    final target = await _generateDebugAttachmentSource(
+      testId: testId,
+      sizeMiB: sizeMiB,
+      needsSpoolCopy: true,
+    );
+    try {
+      _debugFileTestStatus =
+          'Preparing and hashing $sizeMiB MiB through the normal sender path…';
+      notifyListeners();
+      await sendAttachmentSource(
+        contact: contact,
+        source: StagedAttachment(
+          id: testId,
+          fileName: 'conest-lan-test-${sizeMiB}MiB.bin',
+          mimeType: 'application/x-conest-transfer-test',
+          sizeBytes: sizeMiB * 1024 * 1024,
+          filePath: target.path,
+          caption:
+              'Conest LAN transfer diagnostic · $sizeMiB MiB · final SHA-256 required',
+        ),
+        caption:
+            'Conest LAN transfer diagnostic · $sizeMiB MiB · final SHA-256 required',
+        forceLanOnly: true,
+      );
+      _debugFileTestStatus =
+          '$sizeMiB MiB LAN test queued for ${contact.alias}. '
+          'Press Download on the receiving device.';
+      appendDebugLog(_debugFileTestStatus!);
+    } finally {
+      try {
+        if (await target.exists()) await target.delete();
+      } catch (_) {}
+      notifyListeners();
+    }
+  }
+
+  /// Runs an end-to-end file transfer without receiver interaction. Both
+  /// peers must advertise the exact same debug build token. The receiver
+  /// auto-accepts only this authenticated diagnostic marker, verifies the
+  /// production final SHA-256, reports the result, and deletes test data.
+  Future<DebugFileTestResult> runDebugFileBattleTest({
+    required ContactRecord contact,
+    required int sizeMiB,
+  }) async {
+    final buildId = _debugBuildId;
+    if (buildId == null) {
+      throw StateError('Automatic file battle tests are debug-build only.');
+    }
+    _validateDebugFileTestTarget(contact, sizeMiB);
+    final testId = _randomId('filetest');
+    _debugFileTestStatus =
+        'Checking that ${contact.alias} is on this exact debug build…';
+    notifyListeners();
+    await _probeDebugFileTestPeer(contact, testId, buildId);
+    final startedAt = _now().toUtc();
+    final spec = DebugAttachmentTestSpec(
+      testId: testId,
+      buildId: buildId,
+      sizeMiB: sizeMiB,
+      startedAt: startedAt,
+    );
+    final resultCompleter = Completer<DebugFileTestResult>();
+    _debugFileResultCompleters[testId] = resultCompleter;
+    final target = await _generateDebugAttachmentSource(
+      testId: testId,
+      sizeMiB: sizeMiB,
+      needsSpoolCopy: false,
+    );
+    try {
+      _debugFileTestStatus =
+          'Hashing and sending $sizeMiB MiB to ${contact.alias}; '
+          'the peer will accept and verify automatically…';
+      notifyListeners();
+      await sendAttachmentSource(
+        contact: contact,
+        source: StagedAttachment(
+          id: testId,
+          fileName: 'conest-debug-test-${sizeMiB}MiB.bin',
+          mimeType: 'application/x-conest-transfer-test',
+          sizeBytes: sizeMiB * 1024 * 1024,
+          filePath: target.path,
+          caption: 'Conest automatic debug transfer · $sizeMiB MiB',
+        ),
+        caption: 'Conest automatic debug transfer · $sizeMiB MiB',
+        forceLanOnly: true,
+        debugTest: spec,
+        debugUseSourceInPlace: true,
+      );
+      final timeoutMinutes = max(5, (sizeMiB / 60).ceil() + 2);
+      final result = await resultCompleter.future.timeout(
+        Duration(minutes: timeoutMinutes),
+        onTimeout: () => DebugFileTestResult(
+          testId: testId,
+          attachmentId: '',
+          peerDeviceId: contact.deviceId,
+          sizeMiB: sizeMiB,
+          success: false,
+          startedAt: startedAt,
+          completedAt: _now().toUtc(),
+          detail: 'Timed out waiting for the peer verification result.',
+        ),
+      );
+      if (!_debugFileTestResults.any((entry) => entry.testId == testId)) {
+        _debugFileTestResults.insert(0, result);
+        if (_debugFileTestResults.length > 20) {
+          _debugFileTestResults.removeRange(20, _debugFileTestResults.length);
+        }
+      }
+      _debugFileTestStatus = result.success
+          ? '$sizeMiB MiB passed with exact hash in '
+                '${result.elapsed.inSeconds}s '
+                '(${result.mebibytesPerSecond?.toStringAsFixed(1) ?? "?"} MiB/s).'
+          : '$sizeMiB MiB failed: ${result.detail ?? "unknown error"}';
+      appendDebugLog(_debugFileTestStatus!);
+      await _cleanupOutboundDebugTest(testId);
+      notifyListeners();
+      return result;
+    } finally {
+      _debugFileResultCompleters.remove(testId);
+      try {
+        if (await target.exists()) await target.delete();
+      } catch (_) {}
+    }
+  }
+
+  Future<List<DebugFileTestResult>> runDebugFileBattleTestMatrix({
+    required ContactRecord contact,
+  }) async {
+    final results = <DebugFileTestResult>[];
+    for (final sizeMiB in debugLanTestSizesMiB) {
+      final result = await runDebugFileBattleTest(
+        contact: contact,
+        sizeMiB: sizeMiB,
+      );
+      results.add(result);
+      if (!result.success) break;
+    }
+    return List<DebugFileTestResult>.unmodifiable(results);
+  }
+
+  void _validateDebugFileTestTarget(ContactRecord contact, int sizeMiB) {
     if (!debugLanTestSizesMiB.contains(sizeMiB)) {
       throw ArgumentError('Unsupported LAN diagnostic size: $sizeMiB MiB.');
     }
@@ -4401,25 +4767,32 @@ class MessengerController extends ChangeNotifier {
     if (!_effectiveTransports(contact).lan) {
       throw StateError('LAN is disabled for ${contact.alias}.');
     }
+  }
+
+  Future<File> _generateDebugAttachmentSource({
+    required String testId,
+    required int sizeMiB,
+    required bool needsSpoolCopy,
+  }) async {
     final sizeBytes = sizeMiB * 1024 * 1024;
     if (sizeBytes > maxLanAttachmentSizeBytes) {
       throw ArgumentError('Diagnostic exceeds the 2 GiB LAN limit.');
     }
     final root = await _attachmentRoot();
     final capacity = await _storageCapacityProvider(root.path);
-    // The generated source is copied into the immutable spool by the normal
-    // preparation path. Account for both files until that copy completes.
-    if (capacity == null || !capacity.canAllocate(sizeBytes * 2)) {
+    final requiredBytes = needsSpoolCopy ? sizeBytes * 2 : sizeBytes;
+    if (capacity == null || !capacity.canAllocate(requiredBytes)) {
       throw AttachmentSpoolException(
-        'Not enough storage for the diagnostic source and immutable spool while keeping 10% free.',
+        needsSpoolCopy
+            ? 'Not enough storage for the diagnostic source and immutable spool while keeping 10% free.'
+            : 'Not enough storage for the debug test source while keeping 10% free.',
       );
     }
     final diagnosticDir = Directory(p.join(root.path, 'diagnostics'));
     await diagnosticDir.create(recursive: true);
-    final testId = _randomId('lantest');
     final target = File(p.join(diagnosticDir.path, '$testId.bin'));
     final temporary = File('${target.path}.tmp');
-    _debugFileTestStatus = 'Generating $sizeMiB MiB LAN test file…';
+    _debugFileTestStatus = 'Generating $sizeMiB MiB test file…';
     notifyListeners();
     try {
       await temporary.create(recursive: true);
@@ -4440,7 +4813,7 @@ class MessengerController extends ChangeNotifier {
           written += count;
           if (written == sizeBytes || written % (32 * 1024 * 1024) == 0) {
             _debugFileTestStatus =
-                'Generating $sizeMiB MiB LAN test file: '
+                'Generating $sizeMiB MiB test file: '
                 '${(written * 100 / sizeBytes).toStringAsFixed(0)}%';
             notifyListeners();
           }
@@ -4450,36 +4823,12 @@ class MessengerController extends ChangeNotifier {
         await sink.close();
       }
       await temporary.rename(target.path);
-      _debugFileTestStatus =
-          'Preparing and hashing $sizeMiB MiB through the normal sender path…';
-      notifyListeners();
-      await sendAttachmentSource(
-        contact: contact,
-        source: StagedAttachment(
-          id: testId,
-          fileName: 'conest-lan-test-${sizeMiB}MiB.bin',
-          mimeType: 'application/x-conest-transfer-test',
-          sizeBytes: sizeBytes,
-          filePath: target.path,
-          caption:
-              'Conest LAN transfer diagnostic · $sizeMiB MiB · final SHA-256 required',
-        ),
-        caption:
-            'Conest LAN transfer diagnostic · $sizeMiB MiB · final SHA-256 required',
-        forceLanOnly: true,
-      );
-      _debugFileTestStatus =
-          '$sizeMiB MiB LAN test queued for ${contact.alias}. '
-          'Press Download on the receiving device.';
-      appendDebugLog(_debugFileTestStatus!);
-    } finally {
+      return target;
+    } catch (_) {
       try {
         if (await temporary.exists()) await temporary.delete();
       } catch (_) {}
-      try {
-        if (await target.exists()) await target.delete();
-      } catch (_) {}
-      notifyListeners();
+      rethrow;
     }
   }
 
@@ -4487,6 +4836,7 @@ class MessengerController extends ChangeNotifier {
     required String attachmentId,
     required StagedAttachment source,
     required bool allowOriginalFallback,
+    bool preferOriginalSource = false,
     void Function(int bytes)? onProgress,
   }) async {
     final root = await _attachmentRoot();
@@ -4495,6 +4845,48 @@ class MessengerController extends ChangeNotifier {
     final storageKey = attachmentStorageKey(attachmentId);
     final relativePath = p.join('spool', '$storageKey.bin');
     final target = File(p.join(root.path, relativePath));
+    final originalPath = source.filePath;
+    if (preferOriginalSource && originalPath != null) {
+      final original = File(originalPath);
+      final normalizedRoot = p.normalize(p.absolute(root.path));
+      final normalizedOriginal = p.normalize(p.absolute(original.path));
+      if (!p.isWithin(normalizedRoot, normalizedOriginal)) {
+        throw AttachmentSpoolException(
+          'Debug source-in-place is limited to app-owned storage.',
+        );
+      }
+      final stat = await original.stat();
+      if (stat.type != FileSystemEntityType.file ||
+          stat.size != source.sizeBytes) {
+        throw AttachmentSpoolException('The diagnostic source file changed.');
+      }
+      var hashed = 0;
+      final digestOutput = _SingleDigestSink();
+      final digestInput = dart_crypto.sha256.startChunkedConversion(
+        digestOutput,
+      );
+      await for (final chunk in original.openRead()) {
+        hashed += chunk.length;
+        digestInput.add(chunk);
+        onProgress?.call(hashed);
+      }
+      digestInput.close();
+      final digest = digestOutput.value;
+      if (hashed != stat.size || digest == null) {
+        throw AttachmentSpoolException('The diagnostic source file changed.');
+      }
+      return _PreparedAttachmentSource(
+        path: original.path,
+        relativePath: p.relative(normalizedOriginal, from: normalizedRoot),
+        // Generated diagnostics are immutable app-owned spool data. Treating
+        // them as external originals made a harmless filesystem timestamp
+        // change after process restart permanently fail the transfer.
+        sourceKind: TransferSourceKind.privateSpool,
+        sizeBytes: stat.size,
+        fileHashBase64: base64Encode(digest.bytes),
+        sourceModifiedAt: stat.modified,
+      );
+    }
     final capacity = await _storageCapacityProvider(root.path);
     final canSpool = capacity?.canAllocate(source.sizeBytes) ?? false;
     Object? spoolError;
@@ -4551,7 +4943,6 @@ class MessengerController extends ChangeNotifier {
         } catch (_) {}
       }
     }
-    final originalPath = source.filePath;
     if (!allowOriginalFallback || originalPath == null) {
       throw AttachmentSpoolException(
         canSpool
@@ -4613,7 +5004,43 @@ class MessengerController extends ChangeNotifier {
         clearLastError: error == null,
       ),
     );
+    if (state == TransferState.failed || state == TransferState.canceled) {
+      _completeDebugFileTestFromLocalFailure(
+        attachmentId,
+        error ??
+            (state == TransferState.canceled
+                ? 'The local transfer was canceled.'
+                : 'The local transfer failed.'),
+      );
+    }
     unawaited(_saveSnapshotSilently(notify: true, debounce: true));
+  }
+
+  void _completeDebugFileTestFromLocalFailure(
+    String attachmentId,
+    String detail,
+  ) {
+    final spec = _outboundDebugAttachmentTests[attachmentId];
+    if (spec == null) return;
+    final completer = _debugFileResultCompleters[spec.testId];
+    if (completer == null || completer.isCompleted) return;
+    final outbound = _outboundAttachments[attachmentId];
+    final result = DebugFileTestResult(
+      testId: spec.testId,
+      attachmentId: attachmentId,
+      peerDeviceId: outbound?.peerDeviceId ?? '',
+      sizeMiB: spec.sizeMiB,
+      success: false,
+      startedAt: spec.startedAt,
+      completedAt: _now().toUtc(),
+      detail: detail,
+    );
+    _debugFileTestStatus = '${spec.sizeMiB} MiB failed: $detail';
+    appendDebugLog(
+      'Automatic file test ${spec.testId} failed locally for '
+      '$attachmentId: $detail',
+    );
+    completer.complete(result);
   }
 
   void _setTransferSessionPause(
@@ -4707,6 +5134,7 @@ class MessengerController extends ChangeNotifier {
     // direction. Empty map when the LAN-direct channel isn't available
     // (web, sandboxed CI), so peers gracefully fall back to relay.
     final lanHint = _localLanDirectHintPayload();
+    final debugTest = _outboundDebugAttachmentTests[descriptor.id];
     final envelope = await _crypto.encryptPayloadEnvelope(
       kind: 'attachment_offer',
       messageId: _randomId('aoff'),
@@ -4727,6 +5155,7 @@ class MessengerController extends ChangeNotifier {
         if (_videoPosters[descriptor.id] != null &&
             _videoPosters[descriptor.id]!.length <= 32 * 1024)
           'posterBase64': base64Encode(_videoPosters[descriptor.id]!),
+        if (debugTest != null) 'debugFileTest': debugTest.toJson(),
         ...lanHint,
       }),
       createdAt: message.createdAt,
@@ -4770,6 +5199,19 @@ class MessengerController extends ChangeNotifier {
     Duration(seconds: 10),
     Duration(seconds: 30),
     Duration(minutes: 1),
+    Duration(minutes: 5),
+  ];
+
+  // A 4 MiB authenticated block routinely takes more than one second to
+  // encrypt, upload, decrypt, and journal on older Android devices. The old
+  // generic 1 s retry timer cleared the whole request window while healthy
+  // blocks were still in flight, producing an endless
+  // "downloaded a little → reconnecting" loop.
+  static const List<Duration> _inboundTransferRetryBackoff = <Duration>[
+    Duration(seconds: 30),
+    Duration(seconds: 30),
+    Duration(minutes: 1),
+    Duration(minutes: 2),
     Duration(minutes: 5),
   ];
 
@@ -6386,14 +6828,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _refreshAndAdvertiseLanDirectRoutes() async {
-    try {
-      _localLanAddressesCache = (await _lanAddressProvider())
-          .where(isValidLanDirectHost)
-          .take(4)
-          .toList(growable: false);
-    } catch (_) {
-      _localLanAddressesCache = const <String>[];
-    }
+    await _refreshLocalLanDirectAddressCache();
     for (final contact in _snapshot.contacts.where(
       (entry) => entry.canSendOutbound,
     )) {
@@ -6410,7 +6845,7 @@ class MessengerController extends ChangeNotifier {
   /// clears local state and flips the parent message to canceled. Used
   /// by the context-menu Cancel action where we only have the
   /// attachment id, not the (contact, message) pair.
-  void cancelAttachmentById(String attachmentId) {
+  Future<void> cancelAttachmentById(String attachmentId) async {
     final state = _outboundAttachments[attachmentId];
     if (state == null) return;
     final contact = _contactByDeviceId(state.peerDeviceId);
@@ -6418,20 +6853,24 @@ class MessengerController extends ChangeNotifier {
     unawaited(_sendAttachmentCancel(contact, attachmentId));
     _clearOutboundAttempt(contact.deviceId, state.messageId);
     _outboundAttachments.remove(attachmentId);
-    unawaited(state.closeFile());
-    _activeOutboundByContact.remove(contact.deviceId);
+    _clearActiveOutbound(contact.deviceId, attachmentId);
     _outboundQueueByContact[contact.deviceId]?.remove(attachmentId);
+    _setTransferSessionState(attachmentId, TransferState.canceled);
     _updateMessageState(
       contact.deviceId,
       state.messageId,
       DeliveryState.canceled,
     );
+    _pumpOutboundQueue(contact);
     notifyListeners();
+    await state.closeFile();
+    await _deleteAttachmentArtifacts(attachmentId);
+    await _saveSnapshotSilently(notify: false);
   }
 
   Future<void> cancelTransfer(String attachmentId) async {
     if (_outboundAttachments.containsKey(attachmentId)) {
-      cancelAttachmentById(attachmentId);
+      await cancelAttachmentById(attachmentId);
       return;
     }
     final state = _inboundAttachments.remove(attachmentId);
@@ -6722,22 +7161,37 @@ class MessengerController extends ChangeNotifier {
     return accepted;
   }
 
-  Future<bool> _sendReciprocalContactExchange(ContactRecord contact) async {
+  Future<bool> _sendReciprocalContactExchange(
+    ContactRecord contact, {
+    bool recipientKnowsIdentity = false,
+  }) async {
+    if (!contact.canSendOutbound) return false;
     final me = _requireIdentity();
     final payload = (await _inviteForIdentity(me)).encodePayload();
     // Bootstrap is an untrusted v1 request because the recipient may not
     // know our public key yet. It has no effects until explicit approval.
-    final exchange = RelayEnvelope(
-      protocolVersion: 1,
-      kind: 'contact_exchange',
-      messageId: _randomId('xchg'),
-      conversationId: 'contact-exchange-${contact.deviceId}',
-      senderAccountId: me.accountId,
-      senderDeviceId: me.deviceId,
-      recipientDeviceId: contact.deviceId,
-      createdAt: _now().toUtc(),
-      payloadBase64: base64Encode(utf8.encode(payload)),
-    );
+    final exchange = recipientKnowsIdentity
+        ? await _crypto.encryptPayloadEnvelope(
+            kind: 'contact_exchange',
+            messageId: _randomId('xchg'),
+            conversationId: 'contact-exchange-${contact.deviceId}',
+            senderAccountId: me.accountId,
+            senderDeviceId: me.deviceId,
+            recipientDeviceId: contact.deviceId,
+            contact: contact,
+            plaintext: payload,
+          )
+        : RelayEnvelope(
+            protocolVersion: 1,
+            kind: 'contact_exchange',
+            messageId: _randomId('xchg'),
+            conversationId: 'contact-exchange-${contact.deviceId}',
+            senderAccountId: me.accountId,
+            senderDeviceId: me.deviceId,
+            recipientDeviceId: contact.deviceId,
+            createdAt: _now().toUtc(),
+            payloadBase64: base64Encode(utf8.encode(payload)),
+          );
     try {
       await _deliverToContact(
         contact: contact,
@@ -8299,6 +8753,24 @@ class MessengerController extends ChangeNotifier {
           continue;
         }
 
+        if (envelope.kind == 'debug_file_test_probe') {
+          await _handleDebugFileTestProbe(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'debug_file_test_probe_ack') {
+          await _handleDebugFileTestProbeAck(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'debug_file_test_result') {
+          await _handleDebugFileTestResult(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
         ContactRecord? contact;
         for (final candidate in _snapshot.contacts) {
           if (candidate.deviceId == envelope.senderDeviceId) {
@@ -8381,6 +8853,9 @@ class MessengerController extends ChangeNotifier {
       case 'debug_probe_ack':
       case 'debug_two_way_message':
       case 'debug_two_way_reply':
+      case 'debug_file_test_probe':
+      case 'debug_file_test_probe_ack':
+      case 'debug_file_test_result':
         return 1;
       default:
         return 2;
@@ -8542,7 +9017,7 @@ class MessengerController extends ChangeNotifier {
         await _handleAttachmentComplete(contact, payload);
         return;
       case 'attachment_cancel':
-        _handleAttachmentCancel(payload);
+        _handleAttachmentCancel(contact, payload);
         return;
       case 'attachment_pause_control':
         _handleAttachmentPauseControl(contact, payload);
@@ -8577,26 +9052,43 @@ class MessengerController extends ChangeNotifier {
       );
       return;
     }
+    final rawDebugTest = payload['debugFileTest'];
+    final debugTest = DebugAttachmentTestSpec.tryParse(rawDebugTest);
+    final debugAuthorization = debugTest == null
+        ? null
+        : _authorizedInboundDebugFileTests.remove(debugTest.testId);
+    final debugAuthorized =
+        debugAuthorization != null &&
+        debugAuthorization.peerDeviceId == sender.deviceId &&
+        debugAuthorization.expiresAt.isAfter(_now().toUtc());
+    if (rawDebugTest != null &&
+        (debugTest == null ||
+            _debugBuildId == null ||
+            debugTest.buildId != _debugBuildId ||
+            !debugAuthorized ||
+            descriptor.mimeType != 'application/x-conest-transfer-test' ||
+            descriptor.sizeBytes != debugTest.sizeMiB * 1024 * 1024)) {
+      appendDebugLog(
+        'Rejected automatic file-test offer from ${sender.alias}: '
+        'debug build/protocol mismatch.',
+      );
+      return;
+    }
     // Dedupe: if we already have an inbound ChatMessage with this exact
     // descriptor id, skip — a stray duplicate offer envelope (envelope-seen
     // cache miss, retry, double-poll) would otherwise create a second
     // ghost bubble with the same attachment.
     final existingInbound = _inboundAttachments[descriptor.id];
-    if (existingInbound != null) {
+    if (existingInbound != null ||
+        _outboundAttachments.containsKey(descriptor.id) ||
+        _snapshot.conversations.any(
+          (conversation) => conversation.messages.any(
+            (message) => message.attachment?.id == descriptor.id,
+          ),
+        )) {
       appendDebugLog(
         'Dropping duplicate attachment_offer for ${descriptor.id} '
         'from ${sender.alias}.',
-      );
-      return;
-    }
-    final conversation = _conversationFor(sender.deviceId);
-    final alreadyHave = conversation.messages.any(
-      (m) => m.attachment?.id == descriptor.id,
-    );
-    if (alreadyHave) {
-      appendDebugLog(
-        'Attachment ${descriptor.id} already in the conversation — ignoring '
-        'duplicate offer from ${sender.alias}.',
       );
       return;
     }
@@ -8661,6 +9153,7 @@ class MessengerController extends ChangeNotifier {
     final requiresLan = descriptor.sizeBytes > maxAttachmentSizeBytes;
     final directAvailable = _hasUsableLargeDirectTransport(sender);
     final autoDownload =
+        debugTest != null ||
         (_snapshot.identity?.connectivity.autoDownloadPreset ??
                 AutoDownloadPreset.medium)
             .allows(
@@ -8670,7 +9163,8 @@ class MessengerController extends ChangeNotifier {
               verifiedContact: sender.canSendOutbound,
             );
     final awaitingAcceptance =
-        !autoDownload || (requiresLan && !directAvailable);
+        debugTest == null &&
+        (!autoDownload || (requiresLan && !directAvailable));
     final partialPath = awaitingAcceptance
         ? null
         : await _createInboundPartialFile(descriptor);
@@ -8681,6 +9175,7 @@ class MessengerController extends ChangeNotifier {
       partialPath: partialPath,
       awaitingAcceptance: awaitingAcceptance || partialPath == null,
       accepted: !awaitingAcceptance && partialPath != null,
+      debugTest: debugTest,
     );
     _inboundAttachments[descriptor.id] = inboundState;
     _upsertTransferSession(
@@ -8726,6 +9221,14 @@ class MessengerController extends ChangeNotifier {
     // bounces through the local-relay loopback.
     if (partialPath != null && !awaitingAcceptance) {
       Future.microtask(() => _startInboundRequestWindow(inboundState, sender));
+    } else if (debugTest != null) {
+      Future.microtask(
+        () => _finishRejectedDebugFileTest(
+          sender: sender,
+          state: inboundState,
+          detail: 'Receiver could not allocate the verified partial file.',
+        ),
+      );
     }
   }
 
@@ -8940,6 +9443,8 @@ class MessengerController extends ChangeNotifier {
     if (state.paused) {
       return;
     }
+    bool stillActive() =>
+        identical(_outboundAttachments[attachmentId], state) && !state.paused;
     if (index < 0 || index >= state.descriptor.effectiveChunkCount) {
       return;
     }
@@ -8963,6 +9468,7 @@ class MessengerController extends ChangeNotifier {
     try {
       chunkBytes = await _readOutboundAttachmentChunk(state, index);
     } catch (error) {
+      if (!stillActive()) return;
       _setTransferSessionState(
         attachmentId,
         TransferState.failed,
@@ -8975,11 +9481,13 @@ class MessengerController extends ChangeNotifier {
       );
       return;
     }
+    if (!stillActive()) return;
     final encryptedBlock = await _encryptAttachmentBlock(
       state.descriptor,
       index,
       chunkBytes,
     );
+    if (!stillActive()) return;
     final digestBytes = encryptedBlock.hash;
     final packedChunk = encryptedBlock.ciphertext;
     // Binary LAN v2: the attachment block already has end-to-end AEAD and a
@@ -8994,7 +9502,7 @@ class MessengerController extends ChangeNotifier {
         binaryLanEndpoint != null &&
         binaryLanEndpoint.binaryBlockVersion >= 1 &&
         _lanDirectEndpointUsable(binaryLanEndpoint)) {
-      final ok = await binaryLanChannel.putAttachmentBlock(
+      var ok = await binaryLanChannel.putAttachmentBlock(
         host: binaryLanEndpoint.host,
         port: binaryLanEndpoint.port,
         block: LanAttachmentBlock(
@@ -9003,8 +9511,33 @@ class MessengerController extends ChangeNotifier {
           hash: digestBytes,
           ciphertext: packedChunk,
         ),
-        timeout: const Duration(seconds: 5),
+        timeout: const Duration(seconds: 30),
       );
+      if (!stillActive()) return;
+      if (!ok) {
+        // The block is immutable, independently authenticated, and
+        // idempotent by attachment/index. One quick retry absorbs Wi-Fi
+        // handoff/socket churn without forcing the receiver to wait for its
+        // conservative 30-second durable-range timer.
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        if (!stillActive()) return;
+        ok = await binaryLanChannel.putAttachmentBlock(
+          host: binaryLanEndpoint.host,
+          port: binaryLanEndpoint.port,
+          block: LanAttachmentBlock(
+            attachmentId: attachmentId,
+            index: index,
+            hash: digestBytes,
+            ciphertext: packedChunk,
+          ),
+          timeout: const Duration(seconds: 30),
+        );
+        if (!stillActive()) return;
+        appendDebugLog(
+          'LAN-binary immediate retry chunk[$index] to ${requester.alias} '
+          'result=${ok ? "ok" : "fail"}',
+        );
+      }
       appendDebugLog(
         'LAN-binary PUT chunk[$index] to ${requester.alias} '
         '${binaryLanEndpoint.host}:${binaryLanEndpoint.port} '
@@ -9023,13 +9556,15 @@ class MessengerController extends ChangeNotifier {
         return;
       }
       unawaited(_onLanDirectPutFailure(requester.deviceId));
-      if (state.descriptor.chunkSize > _attachmentChunkSize &&
-          !_hasUsableLargeDirectTransport(requester)) {
+      if (state.descriptor.chunkSize > _attachmentChunkSize) {
         _setTransferSessionState(
           attachmentId,
           TransferState.reconnecting,
           error: 'Binary LAN block failed; retrying without losing progress.',
         );
+        // The peer explicitly advertised binary v1. A failed PUT is a
+        // transient path failure, not evidence of protocol incompatibility;
+        // the receiver's durable-range retry will request this same block.
         return;
       }
     }
@@ -9072,6 +9607,7 @@ class MessengerController extends ChangeNotifier {
           '$error',
         );
       }
+      if (!stillActive()) return;
       if (state.requiresLan) {
         _setTransferSessionState(
           attachmentId,
@@ -9112,6 +9648,7 @@ class MessengerController extends ChangeNotifier {
       contact: requester,
       plaintext: jsonEncode(chunk.toJson()),
     );
+    if (!stillActive()) return;
     final preferredPrimaryKey = _preferredRoutesForContact(
       requester,
     ).firstOrNull?.routeKey;
@@ -9130,6 +9667,7 @@ class MessengerController extends ChangeNotifier {
         envelope: envelope,
         timeout: const Duration(seconds: 5),
       );
+      if (!stillActive()) return;
       // nightly.12: per-attempt route log for chunks too.
       appendDebugLog(
         'LAN-direct PUT chunk[$index] to ${requester.alias} '
@@ -9216,6 +9754,7 @@ class MessengerController extends ChangeNotifier {
         notifyListeners();
       }
     } catch (error) {
+      if (!stillActive()) return;
       state.consecutiveChunkFailures++;
       appendDebugLog(
         'Chunk $index for $attachmentId: all routes failed '
@@ -9434,11 +9973,20 @@ class MessengerController extends ChangeNotifier {
       }
     } catch (_) {
       state.requestedInFlight.remove(index);
+      if (!identical(_inboundAttachments[attachmentId], state) ||
+          state.finalizing) {
+        return;
+      }
       await _sendAttachmentChunkRequest(sender, attachmentId, index);
+      return;
+    }
+    if (!identical(_inboundAttachments[attachmentId], state) ||
+        state.finalizing) {
       return;
     }
     if (!state.received.contains(index)) {
       await state.writeChunk(offset, bytes);
+      if (!identical(_inboundAttachments[attachmentId], state)) return;
       state.received.add(index);
       state.recordProgress();
       // Persist only crash-safe checkpoints. The old path flushed, closed and
@@ -9501,6 +10049,17 @@ class MessengerController extends ChangeNotifier {
           .bind(partial.openRead())
           .first;
       if (base64Encode(wholeDigest.bytes) != state.descriptor.fileHashBase64) {
+        if (state.debugTest != null) {
+          try {
+            await _sendDebugFileTestResult(
+              contact: sender,
+              state: state,
+              success: false,
+              bytesVerified: 0,
+              detail: 'Whole-file SHA-256 mismatch.',
+            );
+          } catch (_) {}
+        }
         _setTransferSessionState(
           attachmentId,
           TransferState.failed,
@@ -9534,11 +10093,51 @@ class MessengerController extends ChangeNotifier {
         DeliveryState.delivered,
       );
       await _sendAttachmentComplete(sender, attachmentId);
+      if (state.debugTest != null) {
+        Object? resultError;
+        for (var attempt = 0; attempt < 3; attempt++) {
+          try {
+            await _sendDebugFileTestResult(
+              contact: sender,
+              state: state,
+              success: true,
+              bytesVerified: state.descriptor.sizeBytes,
+              detail: 'Final SHA-256 and every authenticated block matched.',
+            );
+            resultError = null;
+            break;
+          } catch (error) {
+            resultError = error;
+            if (attempt < 2) {
+              await Future<void>.delayed(Duration(seconds: attempt + 1));
+            }
+          }
+        }
+        if (resultError != null) {
+          appendDebugLog(
+            'Could not return debug file-test result for $attachmentId: '
+            '$resultError',
+          );
+        }
+        await _deleteAttachmentArtifacts(attachmentId);
+        _deleteMessage(state.peerDeviceId, state.messageId);
+      }
       await _saveSnapshotSilently(notify: false);
       notifyListeners();
     } catch (error, stackTrace) {
       state.finalizing = false;
       final detail = 'Could not verify and save the completed file: $error';
+      if (state.debugTest != null) {
+        try {
+          await _sendDebugFileTestResult(
+            contact: sender,
+            state: state,
+            success: false,
+            bytesVerified: state.receivedBytes,
+            detail: detail,
+          );
+        } catch (_) {}
+      }
       appendDebugLog('$detail\n$stackTrace');
       _setTransferSessionState(
         attachmentId,
@@ -9588,17 +10187,18 @@ class MessengerController extends ChangeNotifier {
   ) async {
     state.checkpointTimer?.cancel();
     state.checkpointTimer = null;
+    // Capture the journal before flushing; later writes are not part of this
+    // durability boundary even if they finish while this future resumes.
+    final completed = state.received.toList()..sort();
     await state.checkpoint();
-    if (!identical(_inboundAttachments[attachmentId], state) &&
-        !state.isComplete) {
+    if (!identical(_inboundAttachments[attachmentId], state)) {
       return;
     }
     final session = _transferSessionById(attachmentId);
     if (session == null) return;
-    final completed = state.received.toList()..sort();
     _upsertTransferSession(
       session.copyWith(
-        state: TransferState.transferring,
+        state: state.paused ? TransferState.paused : TransferState.transferring,
         completedChunks: completed,
         bytesTransferred: _verifiedBytesFor(state.descriptor, completed),
         updatedAt: _now().toUtc(),
@@ -9680,9 +10280,9 @@ class MessengerController extends ChangeNotifier {
     }
     state.retryTimer?.cancel();
     final delay =
-        _transferRetryBackoff[min(
+        _inboundTransferRetryBackoff[min(
           state.retryAttempts,
-          _transferRetryBackoff.length - 1,
+          _inboundTransferRetryBackoff.length - 1,
         )];
     state.nextRetryAt = DateTime.now().toUtc().add(delay);
     state.retryTimer = Timer(delay, () {
@@ -9782,10 +10382,15 @@ class MessengerController extends ChangeNotifier {
     if (attachmentId == null || paused == null) return;
     // Mirror on whichever side(s) hold state for this attachment.
     final outbound = _outboundAttachments[attachmentId];
+    final inbound = _inboundAttachments[attachmentId];
+    if ((outbound == null && inbound == null) ||
+        (outbound != null && outbound.peerDeviceId != sender.deviceId) ||
+        (inbound != null && inbound.peerDeviceId != sender.deviceId)) {
+      return;
+    }
     if (outbound != null && outbound.peerDeviceId == sender.deviceId) {
       outbound.pausedByPeer = paused;
     }
-    final inbound = _inboundAttachments[attachmentId];
     if (inbound != null && inbound.peerDeviceId == sender.deviceId) {
       inbound.pausedByPeer = paused;
       if (paused) {
@@ -10020,7 +10625,8 @@ class MessengerController extends ChangeNotifier {
     if (attachmentId == null) {
       return;
     }
-    final state = _outboundAttachments.remove(attachmentId);
+    final state = _outboundAttachments[attachmentId];
+    if (state != null && state.peerDeviceId != sender.deviceId) return;
     if (state == null) {
       // Receiver completed an attachment whose state we already cleared
       // (cancel, delete, stall). Still advance the queue so a later
@@ -10029,6 +10635,7 @@ class MessengerController extends ChangeNotifier {
       _pumpOutboundQueue(sender);
       return;
     }
+    _outboundAttachments.remove(attachmentId);
     final session = _transferSessionById(attachmentId);
     await state.closeFile();
     if (state.sourceKind == TransferSourceKind.privateSpool) {
@@ -10074,9 +10681,19 @@ class MessengerController extends ChangeNotifier {
     _pumpOutboundQueue(sender);
   }
 
-  void _handleAttachmentCancel(Map<String, dynamic> payload) {
+  void _handleAttachmentCancel(
+    ContactRecord sender,
+    Map<String, dynamic> payload,
+  ) {
     final attachmentId = payload['attachmentId'] as String?;
     if (attachmentId == null) {
+      return;
+    }
+    final inbound = _inboundAttachments[attachmentId];
+    final outbound = _outboundAttachments[attachmentId];
+    if ((inbound == null && outbound == null) ||
+        (inbound != null && inbound.peerDeviceId != sender.deviceId) ||
+        (outbound != null && outbound.peerDeviceId != sender.deviceId)) {
       return;
     }
     // Find the inbound parent ChatMessage so the bubble can transition to a
@@ -10860,6 +11477,313 @@ class MessengerController extends ChangeNotifier {
       envelope: ack,
       kind: PendingAckKind.debugProbeAck,
     );
+  }
+
+  Future<void> _probeDebugFileTestPeer(
+    ContactRecord contact,
+    String testId,
+    String buildId,
+  ) async {
+    await _refreshLocalLanDirectAddressCache();
+    final localLanHint = _localLanDirectHintPayload();
+    if (localLanHint['senderLanBinaryVersion'] != 1) {
+      throw StateError(
+        'This device could not advertise a binary LAN endpoint. '
+        'Check Wi-Fi/LAN access and restart Conest Debug.',
+      );
+    }
+    final me = _requireIdentity();
+    final completer = Completer<bool>();
+    _debugFileProbeCompleters[testId] = completer;
+    final probe = await _crypto.encryptPayloadEnvelope(
+      kind: 'debug_file_test_probe',
+      messageId: _randomId('fileprobe'),
+      conversationId: _crypto.conversationIdFor(contact.deviceId),
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: contact.deviceId,
+      contact: contact,
+      plaintext: jsonEncode(<String, dynamic>{
+        'protocolVersion': 1,
+        'testId': testId,
+        'buildId': buildId,
+        ...localLanHint,
+      }),
+    );
+    try {
+      await _deliverToContact(
+        contact: contact,
+        recipientDeviceId: contact.deviceId,
+        envelope: probe,
+      ).timeout(const Duration(seconds: 20));
+      final accepted = await completer.future.timeout(
+        const Duration(seconds: 20),
+        onTimeout: () => false,
+      );
+      if (!accepted) {
+        throw StateError(
+          '${contact.alias} did not confirm the same debug build and '
+          'binary LAN endpoint. '
+          'Install the identical debug artifact on both peers.',
+        );
+      }
+    } finally {
+      _debugFileProbeCompleters.remove(testId);
+    }
+  }
+
+  Future<void> _handleDebugFileTestProbe(RelayEnvelope envelope) async {
+    final contact = _contactByDeviceId(envelope.senderDeviceId);
+    if (contact == null || !contact.canSendOutbound) return;
+    final decoded = jsonDecode(
+      await _crypto.decryptMessage(contact: contact, envelope: envelope),
+    );
+    if (decoded is! Map<String, dynamic> ||
+        decoded['protocolVersion'] != 1 ||
+        decoded['testId'] is! String ||
+        decoded['buildId'] is! String) {
+      return;
+    }
+    final testId = decoded['testId'] as String;
+    final requestedBuild = decoded['buildId'] as String;
+    if (testId.isEmpty ||
+        testId.length > 160 ||
+        requestedBuild.isEmpty ||
+        requestedBuild.length > 256) {
+      return;
+    }
+    _cachePeerLanDirectFromPayload(contact.deviceId, decoded);
+    await _refreshLocalLanDirectAddressCache();
+    final localLanHint = _localLanDirectHintPayload();
+    final localBuild = _debugBuildId;
+    final accepted =
+        localBuild != null &&
+        localBuild == requestedBuild &&
+        localLanHint['senderLanBinaryVersion'] == 1;
+    final now = _now().toUtc();
+    _authorizedInboundDebugFileTests.removeWhere(
+      (_, authorization) => !authorization.expiresAt.isAfter(now),
+    );
+    if (accepted) {
+      // A matching build token alone must not silently allocate a large file.
+      // The offer must follow this authenticated probe from the same verified
+      // contact and consume its short-lived authorization.
+      _authorizedInboundDebugFileTests[testId] = _AuthorizedDebugFileTest(
+        peerDeviceId: contact.deviceId,
+        expiresAt: now.add(const Duration(minutes: 10)),
+      );
+    }
+    final me = _requireIdentity();
+    final acknowledgement = await _crypto.encryptPayloadEnvelope(
+      kind: 'debug_file_test_probe_ack',
+      messageId: _randomId('fileprobeack'),
+      conversationId: envelope.conversationId,
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: contact.deviceId,
+      contact: contact,
+      acknowledgedMessageId: envelope.messageId,
+      plaintext: jsonEncode(<String, dynamic>{
+        'protocolVersion': 1,
+        'testId': testId,
+        'buildId': localBuild ?? '',
+        'accepted': accepted,
+        'probeMessageId': envelope.messageId,
+        ...localLanHint,
+      }),
+    );
+    await _deliverToContact(
+      contact: contact,
+      recipientDeviceId: contact.deviceId,
+      envelope: acknowledgement,
+    );
+  }
+
+  Future<void> _handleDebugFileTestProbeAck(RelayEnvelope envelope) async {
+    final contact = _contactByDeviceId(envelope.senderDeviceId);
+    if (contact == null) return;
+    final decoded = jsonDecode(
+      await _crypto.decryptMessage(contact: contact, envelope: envelope),
+    );
+    if (decoded is! Map<String, dynamic> ||
+        decoded['protocolVersion'] != 1 ||
+        decoded['testId'] is! String ||
+        decoded['buildId'] is! String ||
+        decoded['accepted'] is! bool ||
+        decoded['probeMessageId'] != envelope.acknowledgedMessageId) {
+      return;
+    }
+    _cachePeerLanDirectFromPayload(contact.deviceId, decoded);
+    final peerEndpoint = _peerLanDirect[contact.deviceId];
+    final peerBinaryReady =
+        peerEndpoint != null &&
+        peerEndpoint.binaryBlockVersion >= 1 &&
+        _lanDirectEndpointUsable(peerEndpoint);
+    final completer = _debugFileProbeCompleters[decoded['testId'] as String];
+    if (completer == null || completer.isCompleted) return;
+    completer.complete(
+      decoded['accepted'] == true &&
+          decoded['buildId'] == _debugBuildId &&
+          peerBinaryReady,
+    );
+  }
+
+  Future<void> _handleDebugFileTestResult(RelayEnvelope envelope) async {
+    final contact = _contactByDeviceId(envelope.senderDeviceId);
+    if (contact == null || _debugBuildId == null) return;
+    final decoded = jsonDecode(
+      await _crypto.decryptMessage(contact: contact, envelope: envelope),
+    );
+    if (decoded is! Map<String, dynamic> ||
+        decoded['protocolVersion'] != 1 ||
+        decoded['testId'] is! String ||
+        decoded['attachmentId'] is! String ||
+        decoded['buildId'] != _debugBuildId ||
+        decoded['sizeMiB'] is! int ||
+        decoded['success'] is! bool ||
+        decoded['bytesVerified'] is! int) {
+      return;
+    }
+    final testId = decoded['testId'] as String;
+    final attachmentId = decoded['attachmentId'] as String;
+    final specEntry = _outboundDebugAttachmentTests.entries
+        .where((entry) => entry.value.testId == testId)
+        .firstOrNull;
+    if (specEntry == null || specEntry.key != attachmentId) return;
+    final spec = specEntry.value;
+    final descriptor =
+        _outboundAttachments[attachmentId]?.descriptor ??
+        attachmentDescriptorFor(attachmentId);
+    if (descriptor == null ||
+        decoded['sizeMiB'] != spec.sizeMiB ||
+        decoded['bytesVerified'] is! int) {
+      return;
+    }
+    final reportedSuccess = decoded['success'] == true;
+    final reportedHash = decoded['sha256Base64'] as String?;
+    final bytesVerified = decoded['bytesVerified'] as int;
+    final success =
+        reportedSuccess &&
+        bytesVerified == descriptor.sizeBytes &&
+        reportedHash == descriptor.fileHashBase64;
+    final completedAt =
+        DateTime.tryParse(decoded['completedAt'] as String? ?? '')?.toUtc() ??
+        _now().toUtc();
+    final result = DebugFileTestResult(
+      testId: testId,
+      attachmentId: attachmentId,
+      peerDeviceId: contact.deviceId,
+      sizeMiB: spec.sizeMiB,
+      success: success,
+      startedAt: spec.startedAt,
+      completedAt: completedAt,
+      bytesVerified: bytesVerified,
+      sha256Base64: reportedHash,
+      detail: success
+          ? decoded['detail'] as String?
+          : (decoded['detail'] as String? ??
+                'Peer result did not match the sent manifest.'),
+    );
+    _debugFileTestResults.removeWhere((entry) => entry.testId == testId);
+    _debugFileTestResults.insert(0, result);
+    if (_debugFileTestResults.length > 20) {
+      _debugFileTestResults.removeRange(20, _debugFileTestResults.length);
+    }
+    final completer = _debugFileResultCompleters[testId];
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(result);
+    }
+    notifyListeners();
+  }
+
+  Future<void> _sendDebugFileTestResult({
+    required ContactRecord contact,
+    required _InboundAttachmentState state,
+    required bool success,
+    required int bytesVerified,
+    String? detail,
+  }) async {
+    final spec = state.debugTest;
+    final buildId = _debugBuildId;
+    if (spec == null || buildId == null || spec.buildId != buildId) return;
+    final me = _requireIdentity();
+    final result = await _crypto.encryptPayloadEnvelope(
+      kind: 'debug_file_test_result',
+      messageId: _randomId('filetestresult'),
+      conversationId: _crypto.conversationIdFor(contact.deviceId),
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: contact.deviceId,
+      contact: contact,
+      plaintext: jsonEncode(<String, dynamic>{
+        'protocolVersion': 1,
+        'testId': spec.testId,
+        'attachmentId': state.descriptor.id,
+        'buildId': buildId,
+        'sizeMiB': spec.sizeMiB,
+        'success': success,
+        'bytesVerified': bytesVerified,
+        'sha256Base64': success ? state.descriptor.fileHashBase64 : null,
+        'completedAt': _now().toUtc().toIso8601String(),
+        'detail': ?detail,
+      }),
+    );
+    await _deliverToContact(
+      contact: contact,
+      recipientDeviceId: contact.deviceId,
+      envelope: result,
+    );
+  }
+
+  Future<void> _finishRejectedDebugFileTest({
+    required ContactRecord sender,
+    required _InboundAttachmentState state,
+    required String detail,
+  }) async {
+    try {
+      await _sendDebugFileTestResult(
+        contact: sender,
+        state: state,
+        success: false,
+        bytesVerified: 0,
+        detail: detail,
+      );
+    } finally {
+      _inboundAttachments.remove(state.descriptor.id);
+      _removeTransferSession(state.descriptor.id);
+      await _deleteAttachmentArtifacts(state.descriptor.id);
+      _deleteMessage(state.peerDeviceId, state.messageId);
+      await _saveSnapshotSilently(notify: true);
+    }
+  }
+
+  Future<void> _cleanupOutboundDebugTest(String testId) async {
+    final entry = _outboundDebugAttachmentTests.entries
+        .where((candidate) => candidate.value.testId == testId)
+        .firstOrNull;
+    if (entry == null) return;
+    final attachmentId = entry.key;
+    final state = _outboundAttachments.remove(attachmentId);
+    _outboundDebugAttachmentTests.remove(attachmentId);
+    if (state != null) {
+      await state.closeFile();
+      _outboundStallTimers.remove(state.peerDeviceId)?.cancel();
+      _clearActiveOutbound(state.peerDeviceId, attachmentId);
+      _outboundQueueByContact[state.peerDeviceId]?.remove(attachmentId);
+      await _deleteAttachmentArtifacts(attachmentId);
+      _deleteMessage(state.peerDeviceId, state.messageId);
+      final contact = _contactByDeviceId(state.peerDeviceId);
+      if (contact != null) _pumpOutboundQueue(contact);
+    } else {
+      await _deleteAttachmentArtifacts(attachmentId);
+      final message = messageForAttachment(attachmentId);
+      if (message != null) {
+        final peer = peerDeviceIdForAttachment(attachmentId);
+        if (peer != null) _deleteMessage(peer, message.id);
+      }
+    }
+    _removeTransferSession(attachmentId);
+    await _saveSnapshotSilently(notify: true);
   }
 
   Future<void> _handleDebugTwoWayMessage(RelayEnvelope envelope) async {
@@ -12788,7 +13712,7 @@ class MessengerController extends ChangeNotifier {
       if (!peer.allowRelay && route.path == TransportPathKind.relayed) continue;
       final receipt = await adapter
           .sendAttachmentRange(peer: peer, route: route, range: range)
-          .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 60));
       if (receipt.accepted) return receipt;
     }
     return null;
@@ -13895,9 +14819,17 @@ class MessengerController extends ChangeNotifier {
     } catch (error) {
       appendDebugLog('LAN-direct server failed to start: $error');
     }
+    await _refreshLocalLanDirectAddressCache();
+  }
+
+  Future<void> _refreshLocalLanDirectAddressCache() async {
     try {
-      _localLanAddressesCache = await _lanAddressProvider();
-    } catch (_) {
+      _localLanAddressesCache = (await _lanAddressProvider())
+          .where(isValidLanDirectHost)
+          .take(4)
+          .toList(growable: false);
+    } catch (error) {
+      appendDebugLog('LAN-direct address discovery failed: $error');
       _localLanAddressesCache = const <String>[];
     }
   }
@@ -13939,10 +14871,14 @@ class MessengerController extends ChangeNotifier {
   Map<String, dynamic> _localLanDirectHintPayload() {
     final port = _lanDirectChannel?.localPort;
     if (port == null) return const <String, dynamic>{};
-    final addresses = _localLanAddressesCache
-        .where(isValidLanDirectHost)
-        .take(4)
-        .toList(growable: false);
+    // Identity addresses are the last successfully discovered durable view;
+    // the direct-channel cache is the current runtime view. Unioning them
+    // avoids advertising no endpoint during a transient Android interface
+    // enumeration failure while still filtering to private LAN hosts.
+    final addresses = <String>{
+      ..._localLanAddressesCache,
+      ...?_snapshot.identity?.lanAddresses,
+    }.where(isValidLanDirectHost).take(4).toList(growable: false);
     if (addresses.isEmpty) return const <String, dynamic>{};
     return {
       'senderLanDirectPort': port,
@@ -13957,6 +14893,20 @@ class MessengerController extends ChangeNotifier {
   @visibleForTesting
   LanDirectEndpoint? peerLanDirectEndpointForTesting(String peerDeviceId) =>
       _peerLanDirect[peerDeviceId];
+
+  @visibleForTesting
+  void cachePeerLanDirectHintForTesting(
+    String peerDeviceId,
+    Map<String, dynamic> payload,
+  ) => _cachePeerLanDirectFromPayload(peerDeviceId, payload);
+
+  @visibleForTesting
+  void failTransferForTesting(String attachmentId, String error) =>
+      _setTransferSessionState(
+        attachmentId,
+        TransferState.failed,
+        error: error,
+      );
 
   /// nightly.12 test hook: snapshot of the persistent envelope outbox.
   /// Lets tests assert "this delete was queued for retry" without
@@ -13999,12 +14949,14 @@ class MessengerController extends ChangeNotifier {
     final port = payload['senderLanDirectPort'];
     final addresses = payload['senderLanAddresses'];
     final binaryVersionValue = payload['senderLanBinaryVersion'];
-    final binaryVersion = binaryVersionValue is int ? binaryVersionValue : 0;
+    final incomingBinaryVersion = binaryVersionValue is int
+        ? binaryVersionValue
+        : null;
     if (port is! int ||
         !isValidPeerEndpointPort(port) ||
         (binaryVersionValue != null && binaryVersionValue is! int) ||
-        binaryVersion < 0 ||
-        binaryVersion > 1 ||
+        (incomingBinaryVersion != null &&
+            (incomingBinaryVersion < 0 || incomingBinaryVersion > 1)) ||
         addresses is! List ||
         addresses.isEmpty ||
         addresses.length > 4 ||
@@ -14014,11 +14966,24 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final host = addresses.first as String;
+    final previousBinaryVersion =
+        _peerLanDirect[peerDeviceId]?.binaryBlockVersion ?? 0;
+    // Capability fields were optional on older route/control envelopes. A
+    // later envelope without the field must not downgrade an endpoint that
+    // already proved binary v1 support during the authenticated debug probe.
+    final binaryVersion = max(
+      incomingBinaryVersion ?? 0,
+      previousBinaryVersion,
+    );
     _peerLanDirect[peerDeviceId] = LanDirectEndpoint(
       host: host,
       port: port,
       cachedAt: DateTime.now().toUtc(),
       binaryBlockVersion: binaryVersion,
+    );
+    appendDebugLog(
+      'Cached LAN-direct endpoint for $peerDeviceId: $host:$port '
+      'binary=v$binaryVersion.',
     );
     final contact = _contactByDeviceId(peerDeviceId);
     for (final state in _inboundAttachments.values.where(
@@ -15824,8 +16789,20 @@ class MessengerController extends ChangeNotifier {
       state.retryTimer?.cancel();
       unawaited(state.closeFile());
     }
+    _authorizedInboundDebugFileTests.clear();
+    _outboundDebugAttachmentTests.clear();
     super.dispose();
   }
+}
+
+class _AuthorizedDebugFileTest {
+  const _AuthorizedDebugFileTest({
+    required this.peerDeviceId,
+    required this.expiresAt,
+  });
+
+  final String peerDeviceId;
+  final DateTime expiresAt;
 }
 
 class _PairingBeaconRoute {
@@ -16070,6 +17047,7 @@ class _InboundAttachmentState {
     this.partialPath,
     this.awaitingAcceptance = false,
     this.accepted = true,
+    this.debugTest,
     Iterable<int> receivedChunks = const <int>[],
   }) : received = <int>{...receivedChunks};
 
@@ -16080,6 +17058,7 @@ class _InboundAttachmentState {
   String? partialPath;
   bool awaitingAcceptance;
   bool accepted;
+  final DebugAttachmentTestSpec? debugTest;
   bool finalizing = false;
   RandomAccessFile? _partialHandle;
   Future<void> _partialIo = Future<void>.value();

@@ -12,6 +12,7 @@ import 'package:path/path.dart' as p;
 import 'package:conest/main.dart' as app;
 import 'package:conest/main.dart' show sniffImageMimeType;
 import 'package:conest/src/build_info.dart';
+import 'package:conest/src/crypto_service.dart';
 import 'package:conest/src/iroh_ffi_bridge.dart';
 import 'package:conest/src/iroh_transport.dart';
 import 'package:conest/src/lan_direct.dart';
@@ -87,6 +88,7 @@ class _InProcessLanDirectChannel
   /// Optional test barrier for proving UI/controller operations don't await
   /// a slow LAN request. Complete it to release queued PUTs.
   Completer<void>? blockPutsUntil;
+  Future<bool> Function()? blockPutOverride;
 
   @override
   int? get localPort => _port;
@@ -174,6 +176,8 @@ class _InProcessLanDirectChannel
     required LanAttachmentBlock block,
     Duration timeout = const Duration(seconds: 10),
   }) async {
+    final override = blockPutOverride;
+    if (override != null) return override();
     final target = _registry['$host:$port'];
     if (target == null) return false;
     if (transientFailureCount > 0) {
@@ -886,6 +890,7 @@ Future<MessengerController> _createController({
   StorageCapacityProvider? storageCapacityProvider,
   Future<TransportRegistry?> Function(IdentityRecord identity)?
   transportRegistryFactory,
+  String? debugBuildId,
 }) async {
   final controller = MessengerController(
     vaultStore: vaultStore ?? _MemoryVaultStore(),
@@ -899,6 +904,7 @@ Future<MessengerController> _createController({
     platformBridge: platformBridge,
     lanDirectChannel: lanDirectChannel,
     transportRegistryFactory: transportRegistryFactory,
+    debugBuildId: debugBuildId,
     storageCapacityProvider:
         storageCapacityProvider ??
         (_) async => const StorageCapacity(
@@ -1000,7 +1006,478 @@ Future<TransportRegistry?> _directNativeIrohRegistry(
   ]);
 }
 
+class _InProcessIrohNetwork {
+  _InProcessIrohNetwork({this.relayed = false});
+  final bool relayed;
+  final bridges = <String, _InProcessIrohBridge>{};
+  final envelopes = <RelayEnvelope>[];
+
+  Future<TransportRegistry?> registry(IdentityRecord identity) async {
+    final bridge = _InProcessIrohBridge(this, identity.irohEndpointId!);
+    bridges[bridge.endpointId] = bridge;
+    return TransportRegistry([
+      IrohTransportAdapter(
+        bridge: bridge,
+        secretKeySeed: Uint8List.fromList(
+          base64Decode(identity.signingPrivateKeyBase64!),
+        ),
+        relayEnabled: identity.connectivity.irohRelayEnabled,
+        expectedEndpointId: identity.irohEndpointId,
+      ),
+    ]);
+  }
+
+  void inject(
+    IdentityRecord recipient,
+    String senderEndpoint,
+    RelayEnvelope envelope,
+  ) {
+    bridges[recipient.irohEndpointId]!._inbound.add(
+      IrohBridgeInbound(
+        senderEndpointId: senderEndpoint,
+        bytes: Uint8List.fromList(utf8.encode(jsonEncode(envelope.toJson()))),
+        relayed: relayed,
+      ),
+    );
+  }
+}
+
+class _InProcessIrohBridge implements NativeIrohBridge {
+  _InProcessIrohBridge(this.network, this.endpointId);
+  final _InProcessIrohNetwork network;
+  final String endpointId;
+  final _inbound = StreamController<IrohBridgeInbound>.broadcast();
+  @override
+  Stream<IrohBridgeInbound> get inbound => _inbound.stream;
+  @override
+  Future<IrohBridgeStatus> start({
+    required Uint8List secretKeySeed,
+    required bool relayEnabled,
+    required List<String> relayUrls,
+  }) async => IrohBridgeStatus(
+    endpointId: endpointId,
+    directAddresses: const [],
+    relayEnabled: relayEnabled,
+  );
+  @override
+  Future<IrohBridgeReceipt> sendEnvelope({
+    required String remoteEndpointId,
+    required Uint8List bytes,
+    required bool allowRelay,
+    List<String> directAddresses = const [],
+  }) async {
+    if (network.relayed && !allowRelay) throw StateError('Relay disabled');
+    final recipient = network.bridges[remoteEndpointId];
+    if (recipient == null) throw StateError('Peer offline');
+    if (decodeIrohAttachmentRangeFrame(bytes) == null) {
+      network.envelopes.add(
+        RelayEnvelope.fromJson(
+          jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>,
+        ),
+      );
+    }
+    recipient._inbound.add(
+      IrohBridgeInbound(
+        senderEndpointId: endpointId,
+        bytes: bytes,
+        relayed: network.relayed,
+      ),
+    );
+    return IrohBridgeReceipt(
+      endpointId: remoteEndpointId,
+      relayed: network.relayed,
+      accepted: true,
+    );
+  }
+
+  @override
+  Future<void> close() => _inbound.close();
+}
+
+Future<void> _waitForIroh(bool Function() ready) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 5));
+  while (!ready() && DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+  expect(ready(), isTrue, reason: 'Iroh delivery did not finish');
+}
+
+const _irohOnlyConnectivity = GlobalConnectivityPreferences(
+  lanEnabled: false,
+  transportPolicies: {TransportKind.iroh: TransportPolicy.automatic},
+  autoDownloadPreset: AutoDownloadPreset.custom,
+);
+
 void main() {
+  test(
+    'canceling an in-flight binary block prevents retries and fallback delivery',
+    () async {
+      final relay = _FakeRelayClient();
+      final aliceChannel = _InProcessLanDirectChannel(host: '192.168.70.10');
+      final bobChannel = _InProcessLanDirectChannel(host: '192.168.70.11');
+      final vault = _MemoryVaultStore();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: vault,
+        lanAddresses: [aliceChannel.host],
+        lanDirectChannel: aliceChannel,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        lanAddresses: [bobChannel.host],
+        lanDirectChannel: bobChannel,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      addTearDown(aliceChannel.stop);
+      addTearDown(bobChannel.stop);
+      await _pairControllers(alice, bob);
+      await bob.updateGlobalConnectivity(
+        bob.identity!.connectivity.copyWith(
+          autoDownloadPreset: AutoDownloadPreset.custom,
+        ),
+      );
+      final release = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      var attempts = 0;
+      aliceChannel.blockPutOverride = () async {
+        attempts++;
+        await release.future;
+        return false;
+      };
+      await alice.sendAttachment(
+        contact: alice.contacts.single,
+        bytes: Uint8List.fromList([1, 2, 3]),
+        fileName: 'cancel.bin',
+      );
+      await bob.pollNow();
+      final id = bob
+          .messagesFor(alice.identity!.deviceId)
+          .singleWhere((m) => m.attachment != null)
+          .attachment!
+          .id;
+      await bob.acceptIncomingAttachment(id);
+      await _waitForIroh(() => attempts > 0);
+      await alice.cancelTransfer(id);
+      release.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      expect(attempts, 1);
+      expect(
+        vault._snapshot.transferSessions.single.state,
+        TransferState.canceled,
+      );
+      expect(
+        relay.storedEnvelopes.where((e) => e.kind == 'attachment_chunk'),
+        isEmpty,
+      );
+      expect(
+        alice
+            .messagesFor(bob.identity!.deviceId)
+            .singleWhere((m) => m.attachment?.id == id)
+            .state,
+        DeliveryState.canceled,
+      );
+    },
+  );
+
+  for (final relayed in [false, true]) {
+    test(
+      'Iroh pairing and two-way messages work with relayed=$relayed and legacy routes disabled',
+      () async {
+        final network = _InProcessIrohNetwork(relayed: relayed);
+        final relay = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          transportRegistryFactory: network.registry,
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          transportRegistryFactory: network.registry,
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+        await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+        relay.storedEnvelopes.clear();
+        final result = await alice.addContactFromInvite(
+          alias: 'Bob',
+          payload: (await bob.buildInvite()).encodePayload(),
+          codephrase: '',
+        );
+        expect(result.exchangeStatus, ContactExchangeStatus.automatic);
+        await _waitForIroh(() => bob.pendingContactRequests.isNotEmpty);
+        expect(
+          bob.contacts,
+          isEmpty,
+          reason: 'Bootstrap must still require approval',
+        );
+        await bob.approvePendingContactRequest(
+          bob.pendingContactRequests.single.id,
+        );
+        expect(bob.contacts.single.hasPinnedIrohIdentity, isTrue);
+        await _waitForIroh(
+          () => network.envelopes.any(
+            (e) => e.kind == 'contact_exchange' && e.protocolVersion == 2,
+          ),
+        );
+        await alice.sendMessage(
+          contact: alice.contacts.single,
+          body: 'Hello over Iroh',
+        );
+        await _waitForIroh(
+          () => bob
+              .messagesFor(alice.identity!.deviceId)
+              .any((m) => m.body == 'Hello over Iroh'),
+        );
+        await bob.sendMessage(
+          contact: bob.contacts.single,
+          body: 'Reply over Iroh',
+        );
+        await _waitForIroh(
+          () => alice
+              .messagesFor(bob.identity!.deviceId)
+              .any((m) => m.body == 'Reply over Iroh'),
+        );
+        await _waitForIroh(
+          () => alice
+              .messagesFor(bob.identity!.deviceId)
+              .where((m) => m.outbound)
+              .every((m) => m.state == DeliveryState.delivered),
+        );
+        final bytes = Uint8List.fromList(
+          List<int>.generate(256 * 1024 + 3, (i) => i % 251),
+        );
+        await alice.sendAttachment(
+          contact: alice.contacts.single,
+          bytes: bytes,
+          fileName: 'iroh.bin',
+        );
+        await _waitForIroh(
+          () => bob
+              .messagesFor(alice.identity!.deviceId)
+              .any((m) => m.attachment != null),
+        );
+        final attachmentId = bob
+            .messagesFor(alice.identity!.deviceId)
+            .singleWhere((m) => m.attachment != null)
+            .attachment!
+            .id;
+        await bob.acceptIncomingAttachment(attachmentId);
+        await _waitForIroh(() => bob.attachmentAvailableLocally(attachmentId));
+        expect(bob.attachmentBytesFor(attachmentId), bytes);
+        await _waitForIroh(
+          () =>
+              alice.transferSnapshotFor(attachmentId)?.phase ==
+              TransferPhase.completed,
+        );
+        expect(
+          relay.storedEnvelopes.where((e) => e.kind != 'pairing_announcement'),
+          isEmpty,
+        );
+      },
+    );
+  }
+
+  test(
+    'Iroh bootstrap rejects spoofed endpoint bindings, signatures and unknown messages',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      final invite = await alice.buildInvite();
+      RelayEnvelope request(
+        String id, {
+        ContactInvite? payload,
+        String kind = 'contact_exchange',
+        String? recipient,
+      }) => RelayEnvelope(
+        protocolVersion: 1,
+        kind: kind,
+        messageId: id,
+        conversationId: 'pairing',
+        senderAccountId: alice.identity!.accountId,
+        senderDeviceId: alice.identity!.deviceId,
+        recipientDeviceId: recipient ?? bob.identity!.deviceId,
+        createdAt: DateTime.now().toUtc(),
+        payloadBase64: base64Encode(
+          utf8.encode((payload ?? invite).encodePayload()),
+        ),
+      );
+      network.inject(bob.identity!, 'unrelated-endpoint', request('spoofed'));
+      network.inject(
+        bob.identity!,
+        alice.identity!.irohEndpointId!,
+        request(
+          'tampered',
+          payload: invite.copyWithSignature(
+            base64Encode(List<int>.filled(64, 0)),
+          ),
+        ),
+      );
+      network.inject(
+        bob.identity!,
+        alice.identity!.irohEndpointId!,
+        request('unknown-message', kind: 'message'),
+      );
+      network.inject(
+        bob.identity!,
+        alice.identity!.irohEndpointId!,
+        request('wrong-recipient', recipient: 'somebody-else'),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(bob.pendingContactRequests, isEmpty);
+      expect(bob.contacts, isEmpty);
+      network.inject(
+        bob.identity!,
+        alice.identity!.irohEndpointId!,
+        request('valid'),
+      );
+      await _waitForIroh(() => bob.pendingContactRequests.isNotEmpty);
+      expect(bob.pendingContactRequests.single.id, 'valid');
+    },
+  );
+
+  test(
+    'unrelated contacts cannot control or collide with another peer attachment and cancellation survives restart',
+    () async {
+      final relay = _FakeRelayClient();
+      final aliceVault = _MemoryVaultStore();
+      final aliceRoot = Directory.systemTemp.createTempSync(
+        'conest_cancel_restart_',
+      );
+      addTearDown(() => aliceRoot.deleteSync(recursive: true));
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: aliceVault,
+        attachmentRootProvider: () async => aliceRoot,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      final carol = await _createController(
+        relayClient: relay,
+        displayName: 'Carol',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      addTearDown(carol.dispose);
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      await bob.updateGlobalConnectivity(
+        bob.identity!.connectivity.copyWith(
+          autoDownloadPreset: AutoDownloadPreset.custom,
+        ),
+      );
+      await alice.sendAttachment(
+        contact: alice.contactByDeviceId(bob.identity!.deviceId)!,
+        bytes: Uint8List.fromList([1, 2, 3]),
+        fileName: 'private.bin',
+      );
+      final message = alice
+          .messagesFor(bob.identity!.deviceId)
+          .singleWhere((m) => m.attachment != null);
+      final descriptor = message.attachment!;
+      final crypto = CryptoService(identityProvider: () => carol.identity!);
+      for (final kind in [
+        'attachment_pause_control',
+        'attachment_complete',
+        'attachment_cancel',
+        'attachment_offer',
+      ]) {
+        final forged = await crypto.encryptPayloadEnvelope(
+          kind: kind,
+          messageId: 'forged-$kind',
+          conversationId: crypto.conversationIdFor(alice.identity!.deviceId),
+          senderAccountId: carol.identity!.accountId,
+          senderDeviceId: carol.identity!.deviceId,
+          recipientDeviceId: alice.identity!.deviceId,
+          contact: carol.contacts.single,
+          plaintext: jsonEncode({
+            'attachmentId': descriptor.id,
+            'paused': true,
+            'descriptor': descriptor.toJson(),
+          }),
+        );
+        await relay.storeEnvelope(
+          host: 'relay.example',
+          port: defaultRelayPort,
+          recipientDeviceId: alice.identity!.deviceId,
+          envelope: forged,
+        );
+        await alice.pollNow();
+        expect(alice.pauseStateFor(descriptor.id), (
+          pausedByMe: false,
+          pausedByPeer: false,
+        ), reason: kind);
+        expect(
+          aliceVault._snapshot.transferSessions
+              .singleWhere((s) => s.attachment.id == descriptor.id)
+              .pausedByPeer,
+          isFalse,
+          reason: kind,
+        );
+        expect(
+          alice
+              .messagesFor(carol.identity!.deviceId)
+              .where((m) => m.attachment != null),
+          isEmpty,
+          reason: kind,
+        );
+      }
+      await alice.cancelTransfer(descriptor.id);
+      await _waitForIroh(
+        () =>
+            aliceVault._snapshot.transferSessions
+                .singleWhere((s) => s.attachment.id == descriptor.id)
+                .state ==
+            TransferState.canceled,
+      );
+      expect(
+        alice
+            .messagesFor(bob.identity!.deviceId)
+            .singleWhere((m) => m.id == message.id)
+            .state,
+        DeliveryState.canceled,
+      );
+      final restarted = await _createController(
+        relayClient: relay,
+        displayName: 'unused',
+        createIdentity: false,
+        vaultStore: aliceVault,
+        attachmentRootProvider: () async => aliceRoot,
+      );
+      addTearDown(restarted.dispose);
+      expect(restarted.pauseStateFor(descriptor.id), isNull);
+      expect(
+        restarted
+            .messagesFor(bob.identity!.deviceId)
+            .singleWhere((m) => m.id == message.id)
+            .state,
+        DeliveryState.canceled,
+      );
+      expect(aliceRoot.listSync(recursive: true).whereType<File>(), isEmpty);
+    },
+  );
+
   test('payload alone adds a contact without a codephrase', () async {
     final relayClient = _FakeRelayClient();
     final controller = await _createController(
@@ -7354,6 +7831,291 @@ void main() {
     );
 
     test(
+      'matching debug builds auto-accept, verify, report, and clean a real LAN test',
+      () async {
+        final previousHttpOverrides = HttpOverrides.current;
+        HttpOverrides.global = null;
+        addTearDown(() => HttpOverrides.global = previousHttpOverrides);
+        final host = await _realPrivateLanHost();
+        final aliceRoot = Directory.systemTemp.createTempSync(
+          'conest_auto_debug_alice_',
+        );
+        final bobRoot = Directory.systemTemp.createTempSync(
+          'conest_auto_debug_bob_',
+        );
+        addTearDown(() {
+          for (final directory in <Directory>[aliceRoot, bobRoot]) {
+            try {
+              directory.deleteSync(recursive: true);
+            } catch (_) {}
+          }
+        });
+        final aliceChannel = HttpLanDirectChannel();
+        final bobChannel = HttpLanDirectChannel();
+        final relayClient = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+          lanAddresses: <String>[host],
+          lanDirectChannel: aliceChannel,
+          attachmentRootProvider: () async => aliceRoot,
+          debugBuildId: 'debug-test@same-commit',
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+          lanAddresses: <String>[host],
+          lanDirectChannel: bobChannel,
+          attachmentRootProvider: () async => bobRoot,
+          debugBuildId: 'debug-test@same-commit',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        addTearDown(aliceChannel.stop);
+        addTearDown(bobChannel.stop);
+        await _pairControllers(alice, bob);
+
+        var finished = false;
+        final resultFuture = alice
+            .runDebugFileBattleTest(contact: alice.contacts.single, sizeMiB: 5)
+            .whenComplete(() => finished = true);
+        for (var step = 0; step < 1800 && !finished; step++) {
+          await bob.pollNow();
+          await alice.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        final result = await resultFuture;
+
+        expect(result.success, isTrue, reason: result.detail);
+        expect(result.bytesVerified, 5 * 1024 * 1024);
+        expect(alice.debugFileTestResults.first.success, isTrue);
+        expect(
+          bob
+              .messagesFor(bob.contacts.single.deviceId)
+              .where(
+                (message) =>
+                    message.attachment?.mimeType ==
+                    'application/x-conest-transfer-test',
+              ),
+          isEmpty,
+          reason: 'receiver diagnostics must not pollute the conversation',
+        );
+        expect(
+          relayClient.storedEnvelopes.where(
+            (envelope) => envelope.kind == 'attachment_chunk',
+          ),
+          isEmpty,
+        );
+      },
+      timeout: const Timeout(Duration(minutes: 2)),
+    );
+
+    test(
+      'automatic file test stops before sending when debug builds differ',
+      () async {
+        final relayClient = _FakeRelayClient();
+        final aliceChannel = _InProcessLanDirectChannel(host: '192.168.54.10');
+        final bobChannel = _InProcessLanDirectChannel(host: '192.168.54.11');
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+          lanAddresses: const <String>['192.168.54.10'],
+          lanDirectChannel: aliceChannel,
+          debugBuildId: 'debug-test@alice-commit',
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+          lanAddresses: const <String>['192.168.54.11'],
+          lanDirectChannel: bobChannel,
+          debugBuildId: 'debug-test@bob-commit',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        addTearDown(aliceChannel.stop);
+        addTearDown(bobChannel.stop);
+        await _pairControllers(alice, bob);
+
+        var finished = false;
+        final expectation = expectLater(
+          alice
+              .runDebugFileBattleTest(
+                contact: alice.contacts.single,
+                sizeMiB: 5,
+              )
+              .whenComplete(() => finished = true),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              contains('same debug build'),
+            ),
+          ),
+        );
+        for (var step = 0; step < 500 && !finished; step++) {
+          await bob.pollNow();
+          await alice.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        await expectation;
+
+        expect(
+          alice.messagesFor(alice.contacts.single.deviceId),
+          isEmpty,
+          reason: 'a mismatched peer must be rejected before file generation',
+        );
+      },
+      timeout: const Timeout(Duration(seconds: 30)),
+    );
+
+    test('missing capability fields cannot downgrade binary LAN v1', () async {
+      final channel = _InProcessLanDirectChannel(host: '192.168.55.10');
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        lanAddresses: const <String>['192.168.55.10'],
+        lanDirectChannel: channel,
+      );
+      addTearDown(controller.dispose);
+      addTearDown(channel.stop);
+
+      controller.cachePeerLanDirectHintForTesting('peer', <String, dynamic>{
+        'senderLanDirectPort': 43210,
+        'senderLanAddresses': const <String>['192.168.55.11'],
+        'senderLanBinaryVersion': 1,
+      });
+      controller.cachePeerLanDirectHintForTesting('peer', <String, dynamic>{
+        'senderLanDirectPort': 43211,
+        'senderLanAddresses': const <String>['192.168.55.11'],
+      });
+
+      final endpoint = controller.peerLanDirectEndpointForTesting('peer');
+      expect(endpoint, isNotNull);
+      expect(endpoint!.port, 43211);
+      expect(endpoint.binaryBlockVersion, 1);
+    });
+
+    test(
+      'automatic file test reports a local binary block failure immediately',
+      () async {
+        final relayClient = _FakeRelayClient();
+        final aliceChannel = _InProcessLanDirectChannel(host: '192.168.56.10');
+        final bobChannel = _InProcessLanDirectChannel(host: '192.168.56.11');
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+          lanAddresses: const <String>['192.168.56.10'],
+          lanDirectChannel: aliceChannel,
+          debugBuildId: 'debug-test@same-commit',
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+          lanAddresses: const <String>['192.168.56.11'],
+          lanDirectChannel: bobChannel,
+          debugBuildId: 'debug-test@same-commit',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        addTearDown(aliceChannel.stop);
+        addTearDown(bobChannel.stop);
+        await _pairControllers(alice, bob);
+
+        final resultFuture = alice.runDebugFileBattleTest(
+          contact: alice.contacts.single,
+          sizeMiB: 5,
+        );
+        String? attachmentId;
+        for (var step = 0; step < 600 && attachmentId == null; step++) {
+          await bob.pollNow();
+          await alice.pollNow();
+          final message = alice
+              .messagesFor(alice.contacts.single.deviceId)
+              .where(
+                (entry) =>
+                    entry.attachment?.mimeType ==
+                    'application/x-conest-transfer-test',
+              )
+              .firstOrNull;
+          final candidateId = message?.attachment?.id;
+          if (candidateId != null &&
+              alice.transferSnapshotFor(candidateId)?.phase !=
+                  TransferPhase.preparing) {
+            attachmentId = candidateId;
+            break;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        expect(attachmentId, isNotNull);
+        alice.failTransferForTesting(
+          attachmentId!,
+          'simulated terminal source failure',
+        );
+        final result = await resultFuture;
+
+        expect(result.success, isFalse);
+        expect(result.detail, contains('simulated terminal source failure'));
+        expect(
+          result.elapsed,
+          lessThan(const Duration(seconds: 15)),
+          reason: 'terminal local failures must not wait for test timeout',
+        );
+      },
+      timeout: const Timeout(Duration(seconds: 30)),
+    );
+
+    test(
+      'automatic file test survives one transient binary LAN PUT failure',
+      () async {
+        final relayClient = _FakeRelayClient();
+        final aliceChannel = _InProcessLanDirectChannel(host: '192.168.57.10')
+          ..transientFailureCount = 1;
+        final bobChannel = _InProcessLanDirectChannel(host: '192.168.57.11');
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+          lanAddresses: const <String>['192.168.57.10'],
+          lanDirectChannel: aliceChannel,
+          debugBuildId: 'debug-test@same-commit',
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+          lanAddresses: const <String>['192.168.57.11'],
+          lanDirectChannel: bobChannel,
+          debugBuildId: 'debug-test@same-commit',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        addTearDown(aliceChannel.stop);
+        addTearDown(bobChannel.stop);
+        await _pairControllers(alice, bob);
+
+        var finished = false;
+        final resultFuture = alice
+            .runDebugFileBattleTest(contact: alice.contacts.single, sizeMiB: 5)
+            .whenComplete(() => finished = true);
+        for (var step = 0; step < 1800 && !finished; step++) {
+          await bob.pollNow();
+          await alice.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        final result = await resultFuture;
+
+        expect(result.success, isTrue, reason: result.detail);
+        expect(
+          alice.recentDebugLog.any(
+            (entry) =>
+                entry.contains('LAN-binary immediate retry') &&
+                entry.contains('result=ok'),
+          ),
+          isTrue,
+        );
+      },
+      timeout: const Timeout(Duration(seconds: 30)),
+    );
+
+    test(
       'certification matrix transfers 5–2000 MiB over real LAN HTTP',
       () async {
         final previousHttpOverrides = HttpOverrides.current;
@@ -7907,7 +8669,28 @@ void main() {
         );
         addTearDown(alice.dispose);
         addTearDown(bob.dispose);
-        await _pairControllers(alice, bob);
+        await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+        await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+        relayClient.storedEnvelopes.clear();
+        final pairing = await alice.addContactFromInvite(
+          alias: 'Bob',
+          payload: (await bob.buildInvite()).encodePayload(),
+          codephrase: '',
+        );
+        expect(pairing.exchangeStatus, ContactExchangeStatus.automatic);
+        await _waitForIroh(() => bob.pendingContactRequests.isNotEmpty);
+        await bob.approvePendingContactRequest(
+          bob.pendingContactRequests.single.id,
+        );
+        expect(bob.contacts.single.hasPinnedIrohIdentity, isTrue);
+        expect(
+          relayClient.storedEnvelopes.where(
+            (e) => e.kind == 'contact_exchange',
+          ),
+          isEmpty,
+          reason:
+              'Pairing must use authenticated Iroh, without legacy relay delivery',
+        );
         await alice.updateContactRoutingPreferences(
           bob.identity!.deviceId,
           const ContactRoutingPreferences(

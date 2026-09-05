@@ -379,6 +379,12 @@ class UpdateService extends ChangeNotifier {
   String? _dismissedPromptTagForSession;
 
   bool get supportsUpdates {
+    // Debug builds are CI/local artifacts, never GitHub releases. Keeping
+    // them outside the updater prevents a debug install from silently
+    // replacing itself with a nightly that lacks the diagnostic protocol.
+    if (buildInfo.channel == UpdateChannel.debug) {
+      return false;
+    }
     if (_targetPlatform == UpdateTargetPlatform.unsupported) {
       return false;
     }
@@ -611,6 +617,7 @@ class UpdateService extends ChangeNotifier {
             return false;
           }
           return switch (buildInfo.channel) {
+            UpdateChannel.debug => false,
             UpdateChannel.nightly =>
               release.prerelease &&
                   release.tagName.toLowerCase().contains('nightly'),

@@ -130,6 +130,7 @@ Future<void> _runConestWithProfile(
     // chunk delivery. Falls back to relay automatically if the platform
     // can't bind a port or peers don't advertise their endpoint.
     lanDirectChannel: HttpLanDirectChannel(),
+    debugBuildId: buildInfo.debugProtocolId,
     transportRegistryFactory: (identity) async {
       final privateKey = identity.signingPrivateKeyBase64;
       final endpointId = identity.irohEndpointId;
@@ -791,10 +792,8 @@ class ConestApp extends StatefulWidget {
   final AppInstanceLock instanceLock;
   final ConestThemeController themeController;
 
-  /// Nightly / stable / debug — surfaced so the chrome can gate the
-  /// "Run Debug Tests" button on the nightly channel (the user installs
-  /// nightly builds on real devices for battle testing; stable users
-  /// don't see it).
+  /// Stable / nightly / debug — surfaced so the chrome can expose destructive
+  /// transfer battle tests only in isolated debug artifacts.
   final ConestBuildInfo buildInfo;
 
   /// Wired by `_runConestWithProfile` (in the bootstrap layer). Called by
@@ -1565,9 +1564,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _showDebugMenu() async {
     // Channel gating happens at the button (HomeScreen.build), so
-    // _showDebugMenu trusts its caller. The old `if (!kDebugMode) return`
-    // here defeated the nightly-channel button gate added in the prior
-    // commit: button visible but tap did nothing.
+    // _showDebugMenu trusts its caller. Debug artifacts are isolated from
+    // stable/nightly builds and are the only channel that exposes this UI.
     await showDialog<void>(
       context: context,
       builder: (context) => DebugMenuDialog(
@@ -2210,15 +2208,12 @@ class _HomeScreenState extends State<HomeScreen> {
                               onGroupDetails: _showGroupDetails,
                               onContactSelected: _selectHomeContact,
                               onContactProfile: _showContactProfile,
-                              // Surface the Run Debug Tests button on nightly
-                              // builds (and any debug build) so the user can
-                              // exercise runDebugSelfTest on real hardware
-                              // without rebuilding. Hidden on stable to avoid
-                              // confusing end users.
+                              // Automatic file battle tests can mutate large
+                              // amounts of app-owned storage, so expose them
+                              // only in the isolated debug channel.
                               onShowDebug:
-                                  (widget.buildInfo.channel ==
-                                          UpdateChannel.nightly ||
-                                      kDebugMode)
+                                  widget.buildInfo.channel ==
+                                      UpdateChannel.debug
                                   ? _showDebugMenu
                                   : null,
                               onPoll: widget.controller.pollNow,
@@ -10238,7 +10233,7 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
     }
   }
 
-  Future<void> _runLanFileTest() async {
+  Future<void> _runLanFileTest({bool matrix = false}) async {
     final deviceId = _selectedDebugContactId;
     final contact = deviceId == null
         ? null
@@ -10253,14 +10248,25 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
       _notice = null;
     });
     try {
-      await widget.controller.runLanAttachmentDiagnostic(
-        contact: contact,
-        sizeMiB: _selectedDebugSizeMiB,
-      );
+      final results = matrix
+          ? await widget.controller.runDebugFileBattleTestMatrix(
+              contact: contact,
+            )
+          : <DebugFileTestResult>[
+              await widget.controller.runDebugFileBattleTest(
+                contact: contact,
+                sizeMiB: _selectedDebugSizeMiB,
+              ),
+            ];
       if (mounted) {
+        final passed = results.where((result) => result.success).length;
         setState(() {
-          _notice =
-              'LAN test queued. On ${contact.alias}, press Download; Complete means the final SHA-256 matched.';
+          _notice = matrix
+              ? 'Automatic matrix finished: $passed/${results.length} passed.'
+              : results.single.success
+              ? '${results.single.sizeMiB} MiB passed automatically.'
+              : '${results.single.sizeMiB} MiB failed: '
+                    '${results.single.detail ?? "unknown error"}';
         });
       }
     } catch (error) {
@@ -10294,6 +10300,7 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
         )
         .take(8)
         .toList(growable: false);
+    final debugFileTestsReady = widget.controller.debugFileBattleTestEnabled;
     final platform = kIsWeb ? 'web' : Platform.operatingSystem;
     final report = _report;
     return AlertDialog(
@@ -10313,6 +10320,7 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
                       title: 'Build',
                       lines: [
                         'mode: ${kDebugMode ? 'debug' : 'release'}',
+                        'debug protocol: ${widget.controller.debugBuildId ?? '(disabled)'}',
                         'platform: $platform',
                         'scanner: ${widget.controller.supportsScanner ? 'yes' : 'no'}',
                       ],
@@ -10392,9 +10400,13 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Generates a deterministic file, then uses the normal v2 spool, encryption, LAN HTTP, resume journal, and final SHA-256 verification. Payload blocks cannot use Iroh or Conest relays.',
+                      debugFileTestsReady
+                          ? 'The selected peer must run the exact same debug build. It auto-accepts the encrypted test, verifies every block and the final SHA-256, reports timing, and removes test artifacts on both devices. No visual confirmation is required; payload blocks cannot use Iroh or Conest relays.'
+                          : 'Automatic file tests are disabled because this local build has no exact artifact tag and commit. Use a Debug workflow artifact or build both peers with identical CONEST_BUILD_TAG and CONEST_BUILD_COMMIT values.',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: widget.palette.inkSoft,
+                        color: debugFileTestsReady
+                            ? widget.palette.inkSoft
+                            : widget.palette.warning,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -10459,9 +10471,11 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
                     const SizedBox(height: 10),
                     FilledButton.icon(
                       onPressed:
-                          _fileTestBusy || _selectedDebugContactId == null
+                          _fileTestBusy ||
+                              !debugFileTestsReady ||
+                              _selectedDebugContactId == null
                           ? null
-                          : _runLanFileTest,
+                          : () => _runLanFileTest(),
                       icon: _fileTestBusy
                           ? const SizedBox.square(
                               dimension: 16,
@@ -10470,9 +10484,22 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
                           : const Icon(Icons.lan_outlined),
                       label: Text(
                         _fileTestBusy
-                            ? 'Preparing LAN test…'
-                            : 'Send LAN test file',
+                            ? 'Running automatic test…'
+                            : 'Battle-test selected size',
                       ),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed:
+                          _fileTestBusy ||
+                              !debugFileTestsReady ||
+                              _selectedDebugContactId == null
+                          ? null
+                          : () => _runLanFileTest(matrix: true),
+                      icon: const Icon(
+                        Icons.playlist_add_check_circle_outlined,
+                      ),
+                      label: const Text('Run full 5–2000 MiB matrix'),
                     ),
                     if (widget.controller.debugFileTestStatus
                         case final status?) ...[
@@ -10498,6 +10525,25 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
                               '${snapshot.bytesTransferred} / ${snapshot.totalBytes} bytes · ${snapshot.routeLabel}',
                               if (snapshot.error != null)
                                 'error: ${snapshot.error}',
+                            ],
+                            palette: widget.palette,
+                          ),
+                        ),
+                    ],
+                    if (widget.controller.debugFileTestResults.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      for (final result
+                          in widget.controller.debugFileTestResults.take(8))
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 6),
+                          child: _DebugInfoBlock(
+                            title:
+                                '${result.sizeMiB} MiB · ${result.success ? "PASS" : "FAIL"}',
+                            lines: [
+                              '${result.bytesVerified} verified bytes in ${result.elapsed.inSeconds}s',
+                              if (result.mebibytesPerSecond != null)
+                                '${result.mebibytesPerSecond!.toStringAsFixed(1)} MiB/s',
+                              if (result.detail != null) result.detail!,
                             ],
                             palette: widget.palette,
                           ),

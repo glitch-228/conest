@@ -244,11 +244,12 @@ class IrohTransportAdapter implements TransportAdapter {
       return const [];
     }
     final endpoint = peer.transportIdentity!;
-    final lastPath = _lastPathByEndpoint[endpoint] ?? TransportPathKind.direct;
-    if (lastPath == TransportPathKind.relayed &&
-        (!_relayEnabled || !peer.allowRelay)) {
-      return const [];
-    }
+    // A previous relay receipt is a hint, not proof that a direct route is
+    // unavailable now. Let native policy enforce direct-only sends so a peer
+    // can recover after LAN/NAT changes or after relay use is switched off.
+    final lastPath = !_relayEnabled || !peer.allowRelay
+        ? TransportPathKind.direct
+        : _lastPathByEndpoint[endpoint] ?? TransportPathKind.direct;
     return [
       RouteCandidate(
         transport: TransportKind.iroh,

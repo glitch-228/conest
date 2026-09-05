@@ -46,6 +46,7 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["conestAppLabel"] = "Conest"
     }
 
     signingConfigs {
@@ -60,6 +61,15 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Debug battle-test builds install alongside stable/nightly and
+            // use a separate Android sandbox, identity, cache, and updater
+            // state. They can therefore be installed on physical devices
+            // without overwriting a user's real Conest installation.
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            manifestPlaceholders["conestAppLabel"] = "Conest Debug"
+        }
         release {
             signingConfig = signingConfigs.getByName("release")
         }
