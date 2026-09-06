@@ -8518,6 +8518,25 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     ),
                     const SizedBox(height: 16),
                     _SettingsSection(
+                      title: 'Storage',
+                      palette: widget.palette,
+                      child: SwitchListTile.adaptive(
+                        value: identity.connectivity.storageReserveEnabled,
+                        contentPadding: EdgeInsets.zero,
+                        onChanged: _busy
+                            ? null
+                            : (value) => _run(
+                                () => widget.controller
+                                    .updateStorageReserveEnabled(value),
+                              ),
+                        title: const Text('Keep 10% of storage free'),
+                        subtitle: const Text(
+                          'Reserve free space for other apps. When off, transfers can use this space but must still fit on disk.',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _SettingsSection(
                       title: 'Connectivity',
                       palette: widget.palette,
                       child: Column(
@@ -9823,7 +9842,7 @@ class _SettingsSection extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          child,
+          Material(type: MaterialType.transparency, child: child),
         ],
       ),
     );
@@ -12504,6 +12523,11 @@ class _TransferManagerTile extends StatelessWidget {
                   ),
                 ),
               ],
+              if (controller.canDownloadIgnoringStorageReserve(snapshot.id))
+                _StorageReserveOverrideButton(
+                  controller: controller,
+                  attachmentId: snapshot.id,
+                ),
               if (controller.canContinueLargeTransferOverIrohRelay(
                 snapshot.id,
               )) ...[
@@ -12527,6 +12551,29 @@ class _TransferManagerTile extends StatelessWidget {
       ),
     );
   }
+}
+
+class _StorageReserveOverrideButton extends StatelessWidget {
+  const _StorageReserveOverrideButton({
+    required this.controller,
+    required this.attachmentId,
+  });
+
+  final MessengerController controller;
+  final String attachmentId;
+
+  @override
+  Widget build(BuildContext context) => TextButton(
+    onPressed: controller.attachmentAcceptanceInProgress(attachmentId)
+        ? null
+        : () => unawaited(
+            controller.acceptIncomingAttachment(
+              attachmentId,
+              ignoreStorageReserve: true,
+            ),
+          ),
+    child: const Text('Download anyway'),
+  );
 }
 
 class _AttachmentRow extends StatelessWidget {
@@ -13222,6 +13269,11 @@ class _AttachmentRow extends StatelessWidget {
                         )
                       : const Text('Download'),
                 ),
+                if (controller.canDownloadIgnoringStorageReserve(descriptor.id))
+                  _StorageReserveOverrideButton(
+                    controller: controller,
+                    attachmentId: descriptor.id,
+                  ),
                 TextButton(
                   onPressed: accepting
                       ? null

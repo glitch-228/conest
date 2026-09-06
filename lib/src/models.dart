@@ -665,6 +665,7 @@ class GlobalConnectivityPreferences {
     this.irohRelayUrls = const [],
     this.irohCustomRelaysBulkCapable = false,
     this.autoDownloadPreset = AutoDownloadPreset.medium,
+    this.storageReserveEnabled = true,
     this.transportPolicies = const {
       TransportKind.lan: TransportPolicy.automatic,
       TransportKind.iroh: TransportPolicy.automatic,
@@ -688,6 +689,7 @@ class GlobalConnectivityPreferences {
   /// this setting implicitly.
   final bool irohCustomRelaysBulkCapable;
   final AutoDownloadPreset autoDownloadPreset;
+  final bool storageReserveEnabled;
   final Map<TransportKind, TransportPolicy> transportPolicies;
 
   bool get anyEnabled => lanEnabled || onlineEnabled;
@@ -713,6 +715,7 @@ class GlobalConnectivityPreferences {
     List<String>? irohRelayUrls,
     bool? irohCustomRelaysBulkCapable,
     AutoDownloadPreset? autoDownloadPreset,
+    bool? storageReserveEnabled,
     Map<TransportKind, TransportPolicy>? transportPolicies,
   }) {
     return GlobalConnectivityPreferences(
@@ -723,6 +726,8 @@ class GlobalConnectivityPreferences {
       irohCustomRelaysBulkCapable:
           irohCustomRelaysBulkCapable ?? this.irohCustomRelaysBulkCapable,
       autoDownloadPreset: autoDownloadPreset ?? this.autoDownloadPreset,
+      storageReserveEnabled:
+          storageReserveEnabled ?? this.storageReserveEnabled,
       transportPolicies: transportPolicies ?? this.transportPolicies,
     );
   }
@@ -734,6 +739,7 @@ class GlobalConnectivityPreferences {
     'irohRelayUrls': irohRelayUrls,
     'irohCustomRelaysBulkCapable': irohCustomRelaysBulkCapable,
     'autoDownloadPreset': autoDownloadPreset.name,
+    'storageReserveEnabled': storageReserveEnabled,
     'transportPolicies': transportPoliciesToJson(transportPolicies),
   };
 
@@ -758,6 +764,7 @@ class GlobalConnectivityPreferences {
     return GlobalConnectivityPreferences(
       lanEnabled: lanEnabled,
       onlineEnabled: onlineEnabled,
+      storageReserveEnabled: json['storageReserveEnabled'] as bool? ?? true,
       irohRelayEnabled: json['irohRelayEnabled'] as bool? ?? true,
       irohRelayUrls: normalizeIrohRelayUrls(
         (json['irohRelayUrls'] as List<dynamic>? ?? const [])
@@ -2846,6 +2853,7 @@ class TransferSession {
     this.pausedByMe = false,
     this.pausedByPeer = false,
     this.lastError,
+    this.storageReserveBlocked = false,
   });
 
   final String id;
@@ -2869,6 +2877,7 @@ class TransferSession {
   final bool pausedByMe;
   final bool pausedByPeer;
   final String? lastError;
+  final bool storageReserveBlocked;
 
   TransferSession copyWith({
     TransferState? state,
@@ -2881,6 +2890,7 @@ class TransferSession {
     bool? pausedByPeer,
     String? lastError,
     bool clearLastError = false,
+    bool? storageReserveBlocked,
   }) {
     return TransferSession(
       id: id,
@@ -2904,6 +2914,9 @@ class TransferSession {
       pausedByMe: pausedByMe ?? this.pausedByMe,
       pausedByPeer: pausedByPeer ?? this.pausedByPeer,
       lastError: clearLastError ? null : (lastError ?? this.lastError),
+      storageReserveBlocked: clearLastError
+          ? false
+          : (storageReserveBlocked ?? this.storageReserveBlocked),
     );
   }
 
@@ -2931,6 +2944,7 @@ class TransferSession {
       'pausedByMe': pausedByMe,
       'pausedByPeer': pausedByPeer,
       if (lastError != null) 'lastError': lastError,
+      if (storageReserveBlocked) 'storageReserveBlocked': true,
     };
   }
 
@@ -2971,6 +2985,7 @@ class TransferSession {
       pausedByMe: json['pausedByMe'] as bool? ?? false,
       pausedByPeer: json['pausedByPeer'] as bool? ?? false,
       lastError: json['lastError'] as String?,
+      storageReserveBlocked: json['storageReserveBlocked'] as bool? ?? false,
     );
   }
 }

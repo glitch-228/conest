@@ -43,6 +43,10 @@ Conest is a phased secure messenger and transfer app. The repository contains:
   durable-byte progress, resumable private partial files, foreground Android
   transfer controls, and a content-addressed managed cache. The protocol and
   storage guards accept 1:1 attachments up to 2 GiB.
+- Storage settings keep a 10% free-space reserve by default and allow disabling
+  it. A receive warning offers **Download anyway** when only the reserve blocks
+  a file; this bypass applies to that download and still requires enough actual
+  free space.
 - Preparing/queued/waiting/reconnecting/verifying transfer bubbles, a global
   Transfers screen, batch/album staging and reordering, media/file presentation
   modes, priority controls, retry, keep-offline, save, and cache eviction.

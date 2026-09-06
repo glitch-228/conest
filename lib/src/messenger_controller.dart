@@ -3206,6 +3206,29 @@ class MessengerController extends ChangeNotifier {
     await _persist(label);
   }
 
+  double get _storageReserveFraction =>
+      (_snapshot.identity?.connectivity.storageReserveEnabled ?? true)
+      ? 0.10
+      : 0;
+
+  bool _canAllocateStorage(StorageCapacity? capacity, int bytes) =>
+      capacity?.canAllocate(bytes, reserveFraction: _storageReserveFraction) ??
+      false;
+
+  Future<void> updateStorageReserveEnabled(bool enabled) async {
+    final me = _requireIdentity();
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(
+        connectivity: me.connectivity.copyWith(storageReserveEnabled: enabled),
+      ),
+    );
+    await _persist(
+      enabled
+          ? '10% free-space reserve enabled.'
+          : '10% free-space reserve disabled.',
+    );
+  }
+
   Future<void> updateContactRoutingPreferences(
     String deviceId,
     ContactRoutingPreferences prefs,
@@ -3916,9 +3939,12 @@ class MessengerController extends ChangeNotifier {
     }
     final root = await _attachmentRoot();
     final capacity = await _storageCapacityProvider(root.path);
-    if (capacity != null && !capacity.canAllocate(result.bytes.length)) {
+    if (capacity != null &&
+        !_canAllocateStorage(capacity, result.bytes.length)) {
       throw StateError(
-        'Not enough storage is available while preserving the safety reserve.',
+        _storageReserveFraction > 0
+            ? 'Not enough storage is available while preserving the safety reserve.'
+            : 'Not enough free storage for this file.',
       );
     }
     final directory = Directory(p.join(root.path, 'beam', 'accepted'));
@@ -4781,9 +4807,11 @@ class MessengerController extends ChangeNotifier {
     final root = await _attachmentRoot();
     final capacity = await _storageCapacityProvider(root.path);
     final requiredBytes = needsSpoolCopy ? sizeBytes * 2 : sizeBytes;
-    if (capacity == null || !capacity.canAllocate(requiredBytes)) {
+    if (!_canAllocateStorage(capacity, requiredBytes)) {
       throw AttachmentSpoolException(
-        needsSpoolCopy
+        _storageReserveFraction == 0
+            ? 'Not enough free storage for the diagnostic file.'
+            : needsSpoolCopy
             ? 'Not enough storage for the diagnostic source and immutable spool while keeping 10% free.'
             : 'Not enough storage for the debug test source while keeping 10% free.',
       );
@@ -4888,7 +4916,7 @@ class MessengerController extends ChangeNotifier {
       );
     }
     final capacity = await _storageCapacityProvider(root.path);
-    final canSpool = capacity?.canAllocate(source.sizeBytes) ?? false;
+    final canSpool = _canAllocateStorage(capacity, source.sizeBytes);
     Object? spoolError;
     if (canSpool) {
       final temporary = File('${target.path}.tmp');
@@ -4947,7 +4975,9 @@ class MessengerController extends ChangeNotifier {
       throw AttachmentSpoolException(
         canSpool
             ? 'Could not create a private attachment spool: $spoolError'
-            : 'Not enough storage to keep the required 10% free-space reserve.',
+            : _storageReserveFraction > 0
+            ? 'Not enough storage to keep the required 10% free-space reserve.'
+            : 'Not enough free storage to prepare this file.',
         canUseOriginal: originalPath != null,
       );
     }
@@ -4993,6 +5023,7 @@ class MessengerController extends ChangeNotifier {
     String attachmentId,
     TransferState state, {
     String? error,
+    bool storageReserveBlocked = false,
   }) {
     final session = _transferSessionById(attachmentId);
     if (session == null) return;
@@ -5002,6 +5033,7 @@ class MessengerController extends ChangeNotifier {
         updatedAt: _now().toUtc(),
         lastError: error,
         clearLastError: error == null,
+        storageReserveBlocked: storageReserveBlocked,
       ),
     );
     if (state == TransferState.failed || state == TransferState.canceled) {
@@ -5698,7 +5730,15 @@ class MessengerController extends ChangeNotifier {
   bool attachmentAcceptanceInProgress(String attachmentId) =>
       _acceptingIncomingAttachmentIds.contains(attachmentId);
 
-  Future<void> acceptIncomingAttachment(String attachmentId) async {
+  bool canDownloadIgnoringStorageReserve(String attachmentId) =>
+      _storageReserveFraction > 0 &&
+      attachmentAwaitingAcceptance(attachmentId) &&
+      (_transferSessionById(attachmentId)?.storageReserveBlocked ?? false);
+
+  Future<void> acceptIncomingAttachment(
+    String attachmentId, {
+    bool ignoreStorageReserve = false,
+  }) async {
     final state = _inboundAttachments[attachmentId];
     if (state == null ||
         !state.awaitingAcceptance ||
@@ -5708,13 +5748,17 @@ class MessengerController extends ChangeNotifier {
     appendDebugLog('Accepting incoming attachment $attachmentId.');
     notifyListeners();
     try {
-      final partialPath = await _createInboundPartialFile(state.descriptor);
+      final preparation = await _createInboundPartialFile(
+        state.descriptor,
+        ignoreStorageReserve: ignoreStorageReserve,
+      );
+      final partialPath = preparation.path;
       if (partialPath == null) {
         _setTransferSessionState(
           attachmentId,
           TransferState.waitingForStorage,
-          error:
-              'Not enough storage is available while keeping the 10% free-space reserve.',
+          error: preparation.error,
+          storageReserveBlocked: preparation.reserveBlocked,
         );
         return;
       }
@@ -6035,7 +6079,9 @@ class MessengerController extends ChangeNotifier {
       (left, right) => left.lastAccess.compareTo(right.lastAccess),
     );
     final capacity = await _storageCapacityProvider(root.path);
-    final reserve = capacity == null ? 0 : (capacity.totalBytes * 0.10).ceil();
+    final reserve = capacity == null
+        ? 0
+        : (capacity.totalBytes * _storageReserveFraction).ceil();
     var projectedFree = capacity?.freeBytes ?? (1 << 62);
     for (final candidate in candidates) {
       final expired =
@@ -9165,9 +9211,10 @@ class MessengerController extends ChangeNotifier {
     final awaitingAcceptance =
         debugTest == null &&
         (!autoDownload || (requiresLan && !directAvailable));
-    final partialPath = awaitingAcceptance
-        ? null
+    final preparation = awaitingAcceptance
+        ? (path: null, error: null, reserveBlocked: false)
         : await _createInboundPartialFile(descriptor);
+    final partialPath = preparation.path;
     final inboundState = _InboundAttachmentState(
       messageId: message.id,
       peerDeviceId: sender.deviceId,
@@ -9200,6 +9247,8 @@ class MessengerController extends ChangeNotifier {
             : p.relative(partialPath, from: (await _attachmentRoot()).path),
         sourceKind: TransferSourceKind.partialFile,
         requiresLan: requiresLan,
+        lastError: preparation.error,
+        storageReserveBlocked: preparation.reserveBlocked,
       ),
     );
     await _saveSnapshotSilently(notify: false);
@@ -9289,16 +9338,27 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
-  Future<String?> _createInboundPartialFile(
-    AttachmentDescriptor descriptor,
-  ) async {
+  Future<({String? path, String? error, bool reserveBlocked})>
+  _createInboundPartialFile(
+    AttachmentDescriptor descriptor, {
+    bool ignoreStorageReserve = false,
+  }) async {
     final root = await _attachmentRoot();
     final capacity = await _storageCapacityProvider(root.path);
-    if (capacity == null || !capacity.canAllocate(descriptor.sizeBytes)) {
-      _setTransientStatus(
-        'Not enough storage to receive ${descriptor.fileName} while keeping 10% free.',
-      );
-      return null;
+    final reserve = ignoreStorageReserve ? 0.0 : _storageReserveFraction;
+    if (capacity == null ||
+        !capacity.canAllocate(descriptor.sizeBytes, reserveFraction: reserve)) {
+      final reserveBlocked =
+          capacity != null &&
+          reserve > 0 &&
+          capacity.canAllocate(descriptor.sizeBytes, reserveFraction: 0);
+      final error = capacity == null
+          ? 'Could not check available storage. Try again.'
+          : reserveBlocked
+          ? 'Not enough storage is available while keeping the 10% free-space reserve.'
+          : 'Not enough free storage for this file. Free up space and try again.';
+      _setTransientStatus(error);
+      return (path: null, error: error, reserveBlocked: reserveBlocked);
     }
     final partialDir = Directory(p.join(root.path, 'partial'));
     await partialDir.create(recursive: true);
@@ -9314,7 +9374,7 @@ class MessengerController extends ChangeNotifier {
     } finally {
       await handle.close();
     }
-    return file.path;
+    return (path: file.path, error: null, reserveBlocked: false);
   }
 
   Future<void> _sendAttachmentChunkRequest(

@@ -1109,6 +1109,278 @@ const _irohOnlyConnectivity = GlobalConnectivityPreferences(
 );
 
 void main() {
+  testWidgets(
+    'storage reserve warning offers Download anyway and Settings exposes its switch',
+    (tester) async {
+      tester.view.physicalSize = const Size(1400, 1100);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      late MessengerController alice;
+      late MessengerController bob;
+      late String id;
+      await tester.runAsync(() async {
+        final relay = _FakeRelayClient();
+        alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+        );
+        bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          storageCapacityProvider: (_) async => const StorageCapacity(
+            freeBytes: 512 * 1024,
+            totalBytes: 10 * 1024 * 1024,
+          ),
+        );
+        await _pairControllers(alice, bob);
+        await bob.updateGlobalConnectivity(
+          bob.identity!.connectivity.copyWith(
+            autoDownloadPreset: AutoDownloadPreset.custom,
+          ),
+        );
+        await alice.sendAttachment(
+          contact: alice.contacts.single,
+          bytes: Uint8List(64 * 1024),
+          fileName: 'reserve-ui.bin',
+        );
+        await bob.pollNow();
+        id = bob
+            .messagesFor(alice.identity!.deviceId)
+            .singleWhere((m) => m.attachment != null)
+            .attachment!
+            .id;
+        await bob.acceptIncomingAttachment(id);
+      });
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      final updates = _createUpdateService();
+      final theme = app.ConestThemeController.memory();
+      addTearDown(updates.dispose);
+      addTearDown(theme.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ListenableBuilder(
+            listenable: bob,
+            builder: (context, _) => app.HomeScreen(
+              controller: bob,
+              updateService: updates,
+              buildInfo: _createBuildInfo(),
+              themeController: theme,
+              palette: app.ConestPalette(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('Alice').first);
+      await tester.pump();
+      expect(find.text('Download anyway'), findsOneWidget);
+      expect(find.textContaining('10% free-space reserve'), findsOneWidget);
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Download anyway'));
+        await _waitForIroh(
+          () =>
+              !bob.attachmentAwaitingAcceptance(id) &&
+              !bob.attachmentAcceptanceInProgress(id),
+        );
+      });
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(bob.identity!.connectivity.storageReserveEnabled, isTrue);
+      expect(find.text('Download anyway'), findsNothing);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: app.SettingsDialog(
+              controller: bob,
+              updateService: updates,
+              themeController: theme,
+              palette: app.ConestPalette(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.ensureVisible(find.text('Keep 10% of storage free'));
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Keep 10% of storage free'));
+        await _waitForIroh(
+          () => !bob.identity!.connectivity.storageReserveEnabled,
+        );
+      });
+      await tester.pump();
+      expect(bob.identity!.connectivity.storageReserveEnabled, isFalse);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.runAsync(() async {
+        await bob.cancelTransfer(id);
+      });
+    },
+  );
+
+  for (final disableGlobally in [false, true]) {
+    test(
+      'storage reserve can be bypassed with global setting=$disableGlobally',
+      () async {
+        final relay = _FakeRelayClient();
+        final vault = _MemoryVaultStore();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          vaultStore: vault,
+          storageCapacityProvider: (_) async => const StorageCapacity(
+            freeBytes: 512 * 1024,
+            totalBytes: 10 * 1024 * 1024,
+          ),
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        await bob.updateGlobalConnectivity(
+          bob.identity!.connectivity.copyWith(
+            autoDownloadPreset: AutoDownloadPreset.custom,
+          ),
+        );
+        final bytes = Uint8List.fromList(List<int>.filled(64 * 1024, 73));
+        await alice.sendAttachment(
+          contact: alice.contacts.single,
+          bytes: bytes,
+          fileName: 'reserve.bin',
+        );
+        await bob.pollNow();
+        final id = bob
+            .messagesFor(alice.identity!.deviceId)
+            .singleWhere((m) => m.attachment != null)
+            .attachment!
+            .id;
+        await bob.acceptIncomingAttachment(id);
+        expect(bob.attachmentAwaitingAcceptance(id), isTrue);
+        expect(bob.canDownloadIgnoringStorageReserve(id), isTrue);
+        expect(
+          bob.transferSnapshotFor(id)?.error,
+          contains('10% free-space reserve'),
+        );
+        await bob.pollNow();
+        await _waitForIroh(
+          () => vault._snapshot.transferSessions.any(
+            (s) => s.storageReserveBlocked,
+          ),
+        );
+        expect(
+          TransferSession.fromJson(
+            vault._snapshot.transferSessions.single.toJson(),
+          ).storageReserveBlocked,
+          isTrue,
+        );
+        if (disableGlobally) {
+          await bob.updateStorageReserveEnabled(false);
+          expect(
+            (await vault.load()).identity!.connectivity.storageReserveEnabled,
+            isFalse,
+          );
+        }
+        await bob.acceptIncomingAttachment(
+          id,
+          ignoreStorageReserve: !disableGlobally,
+        );
+        expect(bob.attachmentAwaitingAcceptance(id), isFalse);
+        expect(
+          bob.identity!.connectivity.storageReserveEnabled,
+          !disableGlobally,
+        );
+        for (var i = 0; i < 10 && !bob.attachmentAvailableLocally(id); i++) {
+          await alice.pollNow();
+          await bob.pollNow();
+        }
+        expect(bob.attachmentBytesFor(id), bytes);
+        await alice.sendAttachment(
+          contact: alice.contacts.single,
+          bytes: bytes,
+          fileName: 'second.bin',
+        );
+        await alice.pollNow();
+        await bob.pollNow();
+        final secondId = bob
+            .messagesFor(alice.identity!.deviceId)
+            .singleWhere((m) => m.attachment?.fileName == 'second.bin')
+            .attachment!
+            .id;
+        await bob.acceptIncomingAttachment(secondId);
+        expect(
+          bob.attachmentAwaitingAcceptance(secondId),
+          !disableGlobally,
+          reason:
+              'A one-time override must not disable the reserve for subsequent files',
+        );
+      },
+    );
+  }
+
+  test(
+    'Download anyway rechecks actual free space and refuses unknown capacity',
+    () async {
+      StorageCapacity? capacity = const StorageCapacity(
+        freeBytes: 512 * 1024,
+        totalBytes: 10 * 1024 * 1024,
+      );
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        storageCapacityProvider: (_) async => capacity,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      await bob.updateGlobalConnectivity(
+        bob.identity!.connectivity.copyWith(
+          autoDownloadPreset: AutoDownloadPreset.custom,
+        ),
+      );
+      await alice.sendAttachment(
+        contact: alice.contacts.single,
+        bytes: Uint8List(64 * 1024),
+        fileName: 'full.bin',
+      );
+      await bob.pollNow();
+      final id = bob
+          .messagesFor(alice.identity!.deviceId)
+          .singleWhere((m) => m.attachment != null)
+          .attachment!
+          .id;
+      await bob.acceptIncomingAttachment(id);
+      expect(bob.canDownloadIgnoringStorageReserve(id), isTrue);
+      capacity = const StorageCapacity(
+        freeBytes: 1024,
+        totalBytes: 10 * 1024 * 1024,
+      );
+      await bob.acceptIncomingAttachment(id, ignoreStorageReserve: true);
+      expect(bob.attachmentAwaitingAcceptance(id), isTrue);
+      expect(bob.canDownloadIgnoringStorageReserve(id), isFalse);
+      expect(
+        bob.transferSnapshotFor(id)?.error,
+        contains('Not enough free storage'),
+      );
+      await bob.updateStorageReserveEnabled(false);
+      await bob.acceptIncomingAttachment(id);
+      expect(bob.attachmentAwaitingAcceptance(id), isTrue);
+      capacity = null;
+      await bob.acceptIncomingAttachment(id, ignoreStorageReserve: true);
+      expect(bob.attachmentAwaitingAcceptance(id), isTrue);
+      expect(
+        bob.transferSnapshotFor(id)?.error,
+        contains('Could not check available storage'),
+      );
+    },
+  );
+
   test(
     'canceling an in-flight binary block prevents retries and fallback delivery',
     () async {
@@ -6246,7 +6518,7 @@ void main() {
     expect(bob.attachmentAwaitingAcceptance(attachmentId), isTrue);
     final snapshot = bob.transferSnapshotFor(attachmentId);
     expect(snapshot?.phase, TransferPhase.awaitingApproval);
-    expect(snapshot?.error, contains('Not enough storage'));
+    expect(snapshot?.error, contains('Could not check available storage'));
   });
 
   test(

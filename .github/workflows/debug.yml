@@ -12,7 +12,7 @@ env:
 
 jobs:
   verify:
-    name: Verify debug battle-test protocol
+    name: Verify debug transfers and storage controls
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +24,9 @@ jobs:
       - name: Verify channel identity and automatic transfer handshake
         run: |
           flutter test test/build_info_test.dart
+          flutter test test/storage_capacity_test.dart
+          flutter test test/messenger_controller_test.dart \
+            --name "storage reserve|Download anyway|manual Download storage|spool reserve"
           flutter test test/messenger_controller_test.dart \
             --plain-name "matching debug builds auto-accept, verify, report, and clean a real LAN test"
           flutter test test/messenger_controller_test.dart \
