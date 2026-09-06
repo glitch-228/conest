@@ -72,6 +72,38 @@ fn transport(handle: u64) -> Option<Arc<NativeTransport>> {
     TRANSPORTS.lock().ok()?.get(&handle).cloned()
 }
 
+/// Hashes a file with bounded memory. Called from a Dart worker isolate.
+/// The path must be a valid NUL-terminated UTF-8 string; free the returned
+/// JSON string with `conest_string_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_attachment_hash_file(path: *const c_char) -> *mut c_char {
+    let result = (|| -> anyhow::Result<serde_json::Value> {
+        use std::io::Read;
+        anyhow::ensure!(!path.is_null(), "Missing attachment path");
+        let path = unsafe { CStr::from_ptr(path) }.to_str()?;
+        let mut file = std::fs::File::open(path)?;
+        let mut hash = Sha256::new();
+        let mut buffer = vec![0u8; 1024 * 1024];
+        let mut size = 0u64;
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            hash.update(&buffer[..count]);
+            size += count as u64;
+        }
+        Ok(serde_json::json!({"sizeBytes": size, "sha256Base64": BASE64.encode(hash.finalize())}))
+    })();
+    match result {
+        Ok(value) => json_string(&value),
+        Err(error) => {
+            record_error(error);
+            std::ptr::null_mut()
+        }
+    }
+}
+
 /// Encrypts one already-bounded attachment block without JSON or base64.
 ///
 /// The caller owns every buffer. `ciphertext_out` must be exactly

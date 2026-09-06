@@ -233,6 +233,18 @@ class _FailingVaultStore extends _MemoryVaultStore {
   }
 }
 
+// Exercise the production TCP multiplexer without occupying the app's port.
+class _EphemeralLocalRelayNode extends LocalRelayNode {
+  @override
+  Future<void> start(int port) async {
+    if (isRunning) return;
+    final reservation = await ServerSocket.bind(InternetAddress.anyIPv4, 0);
+    final availablePort = reservation.port;
+    await reservation.close();
+    await super.start(availablePort);
+  }
+}
+
 class _FakeLocalRelayNode extends LocalRelayNode {
   int? _currentPort;
   bool _running = false;
@@ -1254,6 +1266,144 @@ void main() {
       expect(
         relay.storedEnvelopes.where((e) => e.kind != 'pairing_announcement'),
         isEmpty,
+      );
+    },
+  );
+
+  test(
+    'automatic online file test verifies direct Iroh with one peer off Wi-Fi while LAN remains enabled',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        lanDirectChannel: _InProcessLanDirectChannel(host: '192.168.1.20'),
+        transportRegistryFactory: network.registry,
+        debugBuildId: 'debug-direct-iroh',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        lanAddresses: const [],
+        transportRegistryFactory: network.registry,
+        debugBuildId: 'debug-direct-iroh',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await alice.updateGlobalConnectivity(
+        _irohOnlyConnectivity.copyWith(
+          irohRelayEnabled: false,
+          lanEnabled: true,
+        ),
+      );
+      await bob.updateGlobalConnectivity(
+        _irohOnlyConnectivity.copyWith(
+          irohRelayEnabled: false,
+          lanEnabled: true,
+        ),
+      );
+      await _pairControllers(alice, bob);
+      relay.storedEnvelopes.clear();
+      for (final sender in [alice, bob]) {
+        final result = await sender
+            .runDebugFileBattleTest(contact: sender.contacts.single, sizeMiB: 5)
+            .timeout(const Duration(seconds: 30));
+        expect(result.success, isTrue, reason: result.detail);
+        expect(result.bytesVerified, 5 * 1024 * 1024);
+      }
+      expect(
+        relay.storedEnvelopes.where((e) => e.kind != 'pairing_announcement'),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'verification progress renews the stall timer and cannot regress',
+    () async {
+      final timers = <Timer>[];
+      await runZoned(
+        () async {
+          final relay = _FakeRelayClient();
+          final alice = await _createController(
+            relayClient: relay,
+            displayName: 'Alice',
+          );
+          final bob = await _createController(
+            relayClient: relay,
+            displayName: 'Bob',
+          );
+          addTearDown(alice.dispose);
+          addTearDown(bob.dispose);
+          await _pairControllers(alice, bob);
+          await alice.sendAttachment(
+            contact: alice.contacts.single,
+            bytes: Uint8List(1024),
+            fileName: 'verify.bin',
+          );
+          final descriptor = alice
+              .messagesFor(bob.identity!.deviceId)
+              .singleWhere((m) => m.attachment != null)
+              .attachment!;
+          final crypto = CryptoService(identityProvider: () => bob.identity!);
+          var sequence = 0;
+          Future<void> progress(int received, int bytes) async {
+            final envelope = await crypto.encryptPayloadEnvelope(
+              kind: 'attachment_progress',
+              messageId: 'progress-${sequence++}',
+              conversationId: crypto.conversationIdFor(
+                alice.identity!.deviceId,
+              ),
+              senderAccountId: bob.identity!.accountId,
+              senderDeviceId: bob.identity!.deviceId,
+              recipientDeviceId: alice.identity!.deviceId,
+              contact: bob.contacts.single,
+              plaintext: jsonEncode({
+                'attachmentId': descriptor.id,
+                'received': received,
+                'receivedBytes': bytes,
+                'total': descriptor.effectiveChunkCount,
+                'totalBytes': descriptor.sizeBytes,
+                'verifying': true,
+              }),
+            );
+            await alice.processEnvelopesForTesting([envelope]);
+          }
+
+          expect(timers, isNotEmpty);
+          final initialTimer = timers.last;
+          await progress(descriptor.effectiveChunkCount, descriptor.sizeBytes);
+          expect(initialTimer.isActive, isFalse);
+          expect(timers.last.isActive, isTrue);
+          expect(
+            alice.transferSnapshotFor(descriptor.id)!.phase,
+            TransferPhase.verifying,
+          );
+          final verificationTimer = timers.last;
+          await progress(descriptor.effectiveChunkCount, descriptor.sizeBytes);
+          expect(
+            verificationTimer.isActive,
+            isFalse,
+            reason:
+                'verification heartbeats must renew the deadline even without new blocks',
+          );
+          final renewedTimer = timers.last;
+          await progress(0, 0);
+          expect(identical(timers.last, renewedTimer), isTrue);
+          expect(
+            alice.transferSnapshotFor(descriptor.id)!.phase,
+            TransferPhase.verifying,
+          );
+          expect(alice.outboundAttachmentProgress(descriptor.id), 1);
+        },
+        zoneSpecification: ZoneSpecification(
+          createTimer: (self, parent, zone, duration, callback) {
+            final timer = parent.createTimer(zone, duration, callback);
+            if (duration == const Duration(seconds: 60)) timers.add(timer);
+            return timer;
+          },
+        ),
       );
     },
   );
@@ -8307,6 +8457,7 @@ void main() {
           displayName: 'Alice',
           lanAddresses: <String>[host],
           lanDirectChannel: aliceChannel,
+          localRelayNode: _EphemeralLocalRelayNode(),
           attachmentRootProvider: () async => aliceRoot,
           debugBuildId: 'debug-test@same-commit',
         );
@@ -8315,6 +8466,7 @@ void main() {
           displayName: 'Bob',
           lanAddresses: <String>[host],
           lanDirectChannel: bobChannel,
+          localRelayNode: _EphemeralLocalRelayNode(),
           attachmentRootProvider: () async => bobRoot,
           debugBuildId: 'debug-test@same-commit',
         );
@@ -8595,6 +8747,7 @@ void main() {
           displayName: 'Alice',
           lanAddresses: <String>[host],
           lanDirectChannel: aliceChannel,
+          localRelayNode: _EphemeralLocalRelayNode(),
           attachmentRootProvider: () async => aliceRoot,
         );
         final bob = await _createController(
@@ -8602,6 +8755,7 @@ void main() {
           displayName: 'Bob',
           lanAddresses: <String>[host],
           lanDirectChannel: bobChannel,
+          localRelayNode: _EphemeralLocalRelayNode(),
           attachmentRootProvider: () async => bobRoot,
         );
         addTearDown(alice.dispose);

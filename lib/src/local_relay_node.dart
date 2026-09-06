@@ -55,6 +55,13 @@ class LocalRelayNode {
   StreamSubscription<RawSocketEvent>? _udpSubscription;
   int? _port;
 
+  // Direct HTTP traffic shares the existing LAN port. The destination is
+  // always our own bounded attachment server, never a caller-selected host.
+  int? attachmentHttpPort;
+  int? get attachmentIngressPort =>
+      attachmentHttpPort == null ? null : _server?.port;
+  final Set<Socket> _attachmentSockets = {};
+
   bool get isRunning => _server != null || _udpSocket != null;
   int? get port => _port;
 
@@ -85,6 +92,10 @@ class LocalRelayNode {
       await udpSubscription.cancel();
     }
     udpSocket?.close();
+    for (final socket in _attachmentSockets.toList()) {
+      socket.destroy();
+    }
+    _attachmentSockets.clear();
   }
 
   Future<void> _acceptLoop(ServerSocket server) async {
@@ -95,8 +106,26 @@ class LocalRelayNode {
 
   Future<void> _handleClient(Socket socket) async {
     var isHttp = false;
+    final input = StreamIterator<List<int>>(socket);
     try {
-      final wireRequest = await _readWireRequest(socket);
+      final prefix = BytesBuilder(copy: false);
+      while (prefix.length < 4) {
+        if (!await input.moveNext().timeout(const Duration(seconds: 4))) break;
+        prefix.add(input.current);
+      }
+      final initial = prefix.takeBytes();
+      final incoming = _remainingInput(initial, input);
+      final directPort = attachmentHttpPort;
+      if (directPort != null &&
+          initial.length >= 4 &&
+          initial[0] == 80 &&
+          initial[1] == 85 &&
+          initial[2] == 84 &&
+          initial[3] == 32) {
+        await _forwardAttachmentHttp(socket, incoming, directPort);
+        return;
+      }
+      final wireRequest = await _readWireRequest(incoming);
       isHttp = wireRequest.isHttp;
       final response = _handleRequest(
         wireRequest.request,
@@ -115,18 +144,63 @@ class LocalRelayNode {
         'messages': const [],
         'error': error.toString(),
       };
-      if (isHttp) {
-        _writeHttpResponse(socket, response, statusCode: 400);
-      } else {
-        socket.writeln(jsonEncode(response));
+      try {
+        if (isHttp) {
+          _writeHttpResponse(socket, response, statusCode: 400);
+        } else {
+          socket.writeln(jsonEncode(response));
+        }
+        await socket.flush();
+      } catch (_) {
+        // The peer may have disconnected before its error response.
       }
-      await socket.flush();
     } finally {
-      await socket.close();
+      await input.cancel();
+      socket.destroy();
     }
   }
 
-  Future<_RelayWireRequest> _readWireRequest(Socket socket) {
+  Stream<List<int>> _remainingInput(
+    List<int> first,
+    StreamIterator<List<int>> input,
+  ) async* {
+    if (first.isNotEmpty) yield first;
+    while (await input.moveNext()) {
+      yield input.current;
+    }
+  }
+
+  Future<void> _forwardAttachmentHttp(
+    Socket client,
+    Stream<List<int>> incoming,
+    int port,
+  ) async {
+    if (_attachmentSockets.length >= 64) return;
+    _attachmentSockets.add(client);
+    Socket? destination;
+    try {
+      destination = await Socket.connect(
+        InternetAddress.loopbackIPv4,
+        port,
+        timeout: const Duration(seconds: 2),
+      );
+      _attachmentSockets.add(destination);
+      final target = destination;
+      await Future.wait([
+        target.addStream(incoming).whenComplete(target.close),
+        client.addStream(target).whenComplete(client.close),
+      ], eagerError: true);
+    } catch (_) {
+      // A closed peer or bounded HTTP rejection simply ends this connection.
+    } finally {
+      destination?.destroy();
+      client.destroy();
+      _attachmentSockets.remove(destination);
+      _attachmentSockets.remove(client);
+    }
+  }
+
+  Future<_RelayWireRequest> _readWireRequest(Stream<List<int>> incoming) {
     final completer = Completer<_RelayWireRequest>();
     final buffer = BytesBuilder(copy: false);
     StreamSubscription<List<int>>? subscription;
@@ -170,7 +244,7 @@ class LocalRelayNode {
       const Duration(seconds: 4),
       () => completeWithError(TimeoutException('Relay request timed out.')),
     );
-    subscription = socket.listen(
+    subscription = incoming.listen(
       (chunk) {
         buffer.add(chunk);
         if (buffer.length > maxLineBytes) {

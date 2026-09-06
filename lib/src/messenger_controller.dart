@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart' as path_provider;
 import 'crypto_service.dart';
 import 'beam_protocol.dart';
 import 'attachment_safety.dart';
+import 'attachment_file_io.dart';
 import 'iroh_transport.dart';
 import 'lan_direct.dart';
 import 'local_relay_node.dart';
@@ -55,18 +56,6 @@ const bool experimentalAndroidBackgroundRuntimeAvailable = bool.fromEnvironment(
 Future<Directory> _defaultAttachmentRootProvider() async {
   final root = await path_provider.getApplicationSupportDirectory();
   return Directory(p.join(root.path, 'attachments'));
-}
-
-class _SingleDigestSink implements Sink<dart_crypto.Digest> {
-  dart_crypto.Digest? value;
-
-  @override
-  void add(dart_crypto.Digest data) {
-    value = data;
-  }
-
-  @override
-  void close() {}
 }
 
 const int _maxInviteRouteHints = 8;
@@ -555,8 +544,8 @@ class MessengerController extends ChangeNotifier {
   String? _debugFileTestStatus;
   final List<DebugFileTestResult> _debugFileTestResults =
       <DebugFileTestResult>[];
-  final Map<String, Completer<bool>> _debugFileProbeCompleters =
-      <String, Completer<bool>>{};
+  final Map<String, Completer<bool?>> _debugFileProbeCompleters =
+      <String, Completer<bool?>>{};
   final Map<String, Completer<DebugFileTestResult>> _debugFileResultCompleters =
       <String, Completer<DebugFileTestResult>>{};
   final Map<String, DebugAttachmentTestSpec> _outboundDebugAttachmentTests =
@@ -2180,6 +2169,9 @@ class MessengerController extends ChangeNotifier {
     buffer.writeln('platform=${kIsWeb ? 'web' : Platform.operatingSystem}');
     buffer.writeln('debugBuildId=${_debugBuildId ?? "(none)"}');
     buffer.writeln('lanDirectPort=$lanDirectPort');
+    buffer.writeln(
+      'lanAttachmentIngressPort=${_localRelayNode.attachmentIngressPort}',
+    );
     if (_lanDirectChannel case final HttpLanDirectChannel channel) {
       buffer.writeln('lanLastPutFailure=${channel.lastPutFailure ?? "(none)"}');
     }
@@ -4721,8 +4713,7 @@ class MessengerController extends ChangeNotifier {
     _debugFileTestStatus =
         'Checking that ${contact.alias} is on this exact debug build…';
     notifyListeners();
-    final irohOnly = !_effectiveTransports(contact).lan;
-    await _probeDebugFileTestPeer(contact, testId, buildId, irohOnly: irohOnly);
+    final irohOnly = await _probeDebugFileTestPeer(contact, testId, buildId);
     final startedAt = _now().toUtc();
     final spec = DebugAttachmentTestSpec(
       testId: testId,
@@ -4867,6 +4858,7 @@ class MessengerController extends ChangeNotifier {
             count == pattern.length ? pattern : pattern.sublist(0, count),
           );
           written += count;
+          if (written % (4 * 1024 * 1024) == 0) await sink.flush();
           if (written == sizeBytes || written % (32 * 1024 * 1024) == 0) {
             _debugFileTestStatus =
                 'Generating $sizeMiB MiB test file: '
@@ -4916,21 +4908,11 @@ class MessengerController extends ChangeNotifier {
           stat.size != source.sizeBytes) {
         throw AttachmentSpoolException('The diagnostic source file changed.');
       }
-      var hashed = 0;
-      final digestOutput = _SingleDigestSink();
-      final digestInput = dart_crypto.sha256.startChunkedConversion(
-        digestOutput,
-      );
-      await for (final chunk in original.openRead()) {
-        hashed += chunk.length;
-        digestInput.add(chunk);
-        onProgress?.call(hashed);
-      }
-      digestInput.close();
-      final digest = digestOutput.value;
-      if (hashed != stat.size || digest == null) {
+      final digest = await hashAttachmentFile(original.path);
+      if (digest.sizeBytes != stat.size) {
         throw AttachmentSpoolException('The diagnostic source file changed.');
       }
+      onProgress?.call(digest.sizeBytes);
       return _PreparedAttachmentSource(
         path: original.path,
         relativePath: p.relative(normalizedOriginal, from: normalizedRoot),
@@ -4939,7 +4921,7 @@ class MessengerController extends ChangeNotifier {
         // change after process restart permanently fail the transfer.
         sourceKind: TransferSourceKind.privateSpool,
         sizeBytes: stat.size,
-        fileHashBase64: base64Encode(digest.bytes),
+        fileHashBase64: digest.sha256Base64,
         sourceModifiedAt: stat.modified,
       );
     }
@@ -4949,47 +4931,20 @@ class MessengerController extends ChangeNotifier {
     if (canSpool) {
       final temporary = File('${target.path}.tmp');
       try {
-        var written = 0;
-        final digestOutput = _SingleDigestSink();
-        final digestInput = dart_crypto.sha256.startChunkedConversion(
-          digestOutput,
-        );
         await temporary.create(recursive: true);
         await restrictFileToOwner(temporary);
-        final sink = temporary.openWrite(mode: FileMode.writeOnly);
-        try {
-          await for (final chunk in source.openRead()) {
-            written += chunk.length;
-            if (written > source.sizeBytes) {
-              throw const FormatException(
-                'Attachment source grew while copying.',
-              );
-            }
-            sink.add(chunk);
-            digestInput.add(chunk);
-            onProgress?.call(written);
-          }
-          await sink.flush();
-        } finally {
-          await sink.close();
-          digestInput.close();
-        }
-        if (written != source.sizeBytes) {
-          throw const FormatException(
-            'Attachment source size changed while copying.',
-          );
-        }
+        final digest = await copyAndHashAttachment(
+          source,
+          temporary.path,
+          onProgress: onProgress,
+        );
         await temporary.rename(target.path);
-        final digest = digestOutput.value;
-        if (digest == null) {
-          throw const FormatException('Attachment hashing did not complete.');
-        }
         return _PreparedAttachmentSource(
           path: target.path,
           relativePath: relativePath,
           sourceKind: TransferSourceKind.privateSpool,
-          sizeBytes: written,
-          fileHashBase64: base64Encode(digest.bytes),
+          sizeBytes: digest.sizeBytes,
+          fileHashBase64: digest.sha256Base64,
           sourceModifiedAt: await target.lastModified(),
         );
       } catch (error) {
@@ -5015,13 +4970,16 @@ class MessengerController extends ChangeNotifier {
         stat.size != source.sizeBytes) {
       throw AttachmentSpoolException('The selected source file changed.');
     }
-    final digest = await dart_crypto.sha256.bind(original.openRead()).first;
+    final digest = await hashAttachmentFile(original.path);
+    if (digest.sizeBytes != stat.size) {
+      throw AttachmentSpoolException('The selected source file changed.');
+    }
     return _PreparedAttachmentSource(
       path: original.path,
       relativePath: '',
       sourceKind: TransferSourceKind.originalPath,
       sizeBytes: stat.size,
-      fileHashBase64: base64Encode(digest.bytes),
+      fileHashBase64: digest.sha256Base64,
       sourceModifiedAt: stat.modified,
     );
   }
@@ -5440,6 +5398,8 @@ class MessengerController extends ChangeNotifier {
     };
     final phase = pause != null && (pause.pausedByMe || pause.pausedByPeer)
         ? TransferPhase.paused
+        : inbound?.finalizing == true || outbound?.peerVerifying == true
+        ? TransferPhase.verifying
         : inbound?.awaitingAcceptance == true
         ? TransferPhase.awaitingApproval
         : switch (session?.state) {
@@ -10157,15 +10117,21 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     state.finalizing = true;
+    notifyListeners();
+    _maybeSendAttachmentProgress(state, sender, force: true);
+    final verificationHeartbeat = Timer.periodic(const Duration(seconds: 10), (
+      _,
+    ) {
+      _maybeSendAttachmentProgress(state, sender, force: true);
+    });
     try {
       state.retryTimer?.cancel();
       await state.checkpoint();
       await state.closeFile();
       final partial = File(state.partialPath!);
-      final wholeDigest = await dart_crypto.sha256
-          .bind(partial.openRead())
-          .first;
-      if (base64Encode(wholeDigest.bytes) != state.descriptor.fileHashBase64) {
+      final wholeDigest = await hashAttachmentFile(partial.path);
+      if (wholeDigest.sizeBytes != state.descriptor.sizeBytes ||
+          wholeDigest.sha256Base64 != state.descriptor.fileHashBase64) {
         if (state.debugTest != null) {
           try {
             await _sendDebugFileTestResult(
@@ -10267,6 +10233,8 @@ class MessengerController extends ChangeNotifier {
         DeliveryState.failed,
       );
       notifyListeners();
+    } finally {
+      verificationHeartbeat.cancel();
     }
   }
 
@@ -10665,6 +10633,7 @@ class MessengerController extends ChangeNotifier {
         total: state.descriptor.effectiveChunkCount,
         receivedBytes: receivedBytes,
         totalBytes: state.descriptor.sizeBytes,
+        verifying: state.finalizing,
       ),
     );
   }
@@ -10676,6 +10645,7 @@ class MessengerController extends ChangeNotifier {
     required int total,
     required int receivedBytes,
     required int totalBytes,
+    bool verifying = false,
   }) async {
     if (!hasIdentity) return;
     final me = _requireIdentity();
@@ -10694,6 +10664,7 @@ class MessengerController extends ChangeNotifier {
           'total': total,
           'receivedBytes': receivedBytes,
           'totalBytes': totalBytes,
+          'verifying': verifying,
         }),
       );
       await _deliverToContact(
@@ -10720,11 +10691,20 @@ class MessengerController extends ChangeNotifier {
     if (received < 0 || received > state.descriptor.effectiveChunkCount) {
       return;
     }
-    state.peerReceivedCount = received;
+    if (received < (state.peerReceivedCount ?? 0)) return;
     final exactBytes = (payload['receivedBytes'] as num?)?.toInt();
     if (exactBytes != null &&
         (exactBytes < 0 || exactBytes > state.descriptor.sizeBytes)) {
       return;
+    }
+    if (exactBytes != null && exactBytes < (state.peerReceivedBytes ?? 0)) {
+      return;
+    }
+    state.peerReceivedCount = received;
+    state.peerVerifying = received == state.descriptor.effectiveChunkCount;
+    if (_activeOutboundByContact[sender.deviceId] == attachmentId) {
+      _armOutboundStallTimer(sender);
+      _setTransferSessionState(attachmentId, TransferState.transferring);
     }
     state.recordPeerProgress(
       exactBytes ??
@@ -11596,22 +11576,19 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
-  Future<void> _probeDebugFileTestPeer(
+  Future<bool> _probeDebugFileTestPeer(
     ContactRecord contact,
     String testId,
-    String buildId, {
-    required bool irohOnly,
-  }) async {
+    String buildId,
+  ) async {
     await _refreshLocalLanDirectAddressCache();
     final localLanHint = _localLanDirectHintPayload();
-    if (!irohOnly && localLanHint['senderLanBinaryVersion'] != 1) {
-      throw StateError(
-        'This device could not advertise a binary LAN endpoint. '
-        'Check Wi-Fi/LAN access and restart Conest Debug.',
-      );
-    }
+    final irohOnly =
+        !_effectiveTransports(contact).lan ||
+        _localLanAddressesCache.isEmpty ||
+        localLanHint['senderLanBinaryVersion'] != 1;
     final me = _requireIdentity();
-    final completer = Completer<bool>();
+    final completer = Completer<bool?>();
     _debugFileProbeCompleters[testId] = completer;
     final probe = await _crypto.encryptPayloadEnvelope(
       kind: 'debug_file_test_probe',
@@ -11648,15 +11625,18 @@ class MessengerController extends ChangeNotifier {
       }
       final accepted = await completer.future.timeout(
         const Duration(seconds: 20),
-        onTimeout: () => false,
+        onTimeout: () => throw StateError(
+          'No file-test handshake reply from ${contact.alias}. Check the connection; the installed build has not been checked yet.',
+        ),
       );
-      if (!accepted) {
+      if (accepted == null) {
         throw StateError(
           '${contact.alias} did not confirm the same debug build and '
           'selected direct transport. '
           'Install the identical debug artifact on both peers.',
         );
       }
+      return accepted;
     } finally {
       _debugFileProbeCompleters.remove(testId);
     }
@@ -11676,7 +11656,7 @@ class MessengerController extends ChangeNotifier {
     }
     final testId = decoded['testId'] as String;
     final requestedBuild = decoded['buildId'] as String;
-    final irohOnly = decoded['irohOnly'] == true;
+    final requestedIroh = decoded['irohOnly'] == true;
     if (testId.isEmpty ||
         testId.length > 160 ||
         requestedBuild.isEmpty ||
@@ -11686,6 +11666,11 @@ class MessengerController extends ChangeNotifier {
     _cachePeerLanDirectFromPayload(contact.deviceId, decoded);
     await _refreshLocalLanDirectAddressCache();
     final localLanHint = _localLanDirectHintPayload();
+    final irohOnly =
+        requestedIroh ||
+        !_effectiveTransports(contact).lan ||
+        _localLanAddressesCache.isEmpty ||
+        localLanHint['senderLanBinaryVersion'] != 1;
     final localBuild = _debugBuildId;
     final accepted =
         localBuild != null &&
@@ -11761,10 +11746,12 @@ class MessengerController extends ChangeNotifier {
     if (completer == null || completer.isCompleted) return;
     completer.complete(
       decoded['accepted'] == true &&
-          decoded['buildId'] == _debugBuildId &&
-          (decoded['irohOnly'] == true
-              ? _canUseIrohForContact(contact)
-              : peerBinaryReady),
+              decoded['buildId'] == _debugBuildId &&
+              (decoded['irohOnly'] == true
+                  ? _canUseIrohForContact(contact)
+                  : peerBinaryReady)
+          ? decoded['irohOnly'] == true
+          : null,
     );
   }
 
@@ -14974,6 +14961,9 @@ class MessengerController extends ChangeNotifier {
     try {
       final port = await channel.start();
       if (port != null) {
+        if (channel is HttpLanDirectChannel) {
+          _localRelayNode.attachmentHttpPort = port;
+        }
         appendDebugLog('LAN-direct server listening on port $port');
       } else {
         appendDebugLog('LAN-direct server refused to bind — fast-path off.');
@@ -15035,7 +15025,8 @@ class MessengerController extends ChangeNotifier {
   /// Returns an empty map when the channel isn't running, the platform
   /// refused to bind, or no LAN addresses are known.
   Map<String, dynamic> _localLanDirectHintPayload() {
-    final port = _lanDirectChannel?.localPort;
+    final port =
+        _localRelayNode.attachmentIngressPort ?? _lanDirectChannel?.localPort;
     if (port == null) return const <String, dynamic>{};
     // Identity addresses are the last successfully discovered durable view;
     // the direct-channel cache is the current runtime view. Unioning them
@@ -17180,6 +17171,7 @@ class _OutboundAttachmentState {
   /// to render the SAME percentage on the sender side as the receiver
   /// shows — fixes the nightly.7 desync where each side computed its
   /// own value (LocalSend-style).
+  bool peerVerifying = false;
   int? peerReceivedCount;
   int? peerReceivedBytes;
   DateTime? peerProgressAt;
@@ -17188,20 +17180,23 @@ class _OutboundAttachmentState {
   double? bytesPerSecond;
 
   void recordPeerProgress(int bytes, DateTime at) {
+    peerReceivedBytes = bytes;
+    peerProgressAt = at;
+    _sampleRate(bytes, at);
+  }
+
+  void _sampleRate(int bytes, DateTime at) {
     final previousAt = _rateSampleAt;
-    if (previousAt != null && bytes >= _rateSampleBytes) {
+    if (previousAt != null) {
       final seconds = at.difference(previousAt).inMicroseconds / 1000000;
-      if (seconds > 0) {
-        final instant = (bytes - _rateSampleBytes) / seconds;
-        bytesPerSecond = bytesPerSecond == null
-            ? instant
-            : bytesPerSecond! * 0.7 + instant * 0.3;
-      }
+      if (seconds < 0.5) return;
+      final instant = max(0, bytes - _rateSampleBytes) / seconds;
+      bytesPerSecond = bytesPerSecond == null
+          ? instant
+          : bytesPerSecond! * 0.7 + instant * 0.3;
     }
     _rateSampleAt = at;
     _rateSampleBytes = bytes;
-    peerReceivedBytes = bytes;
-    peerProgressAt = at;
   }
 
   /// Number of automatic re-enqueues fired by the stall escape hatch
@@ -17358,14 +17353,13 @@ class _InboundAttachmentState {
     final now = DateTime.now().toUtc();
     final bytes = receivedBytes;
     final previousAt = _rateSampleAt;
-    if (previousAt != null && bytes >= _rateSampleBytes) {
+    if (previousAt != null) {
       final seconds = now.difference(previousAt).inMicroseconds / 1000000;
-      if (seconds > 0) {
-        final instant = (bytes - _rateSampleBytes) / seconds;
-        bytesPerSecond = bytesPerSecond == null
-            ? instant
-            : bytesPerSecond! * 0.7 + instant * 0.3;
-      }
+      if (seconds < 0.5) return;
+      final instant = max(0, bytes - _rateSampleBytes) / seconds;
+      bytesPerSecond = bytesPerSecond == null
+          ? instant
+          : bytesPerSecond! * 0.7 + instant * 0.3;
     }
     _rateSampleAt = now;
     _rateSampleBytes = bytes;

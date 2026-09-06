@@ -10541,7 +10541,7 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
                                 snapshot.id,
                             lines: [
                               '${snapshot.direction.name} · ${snapshot.phase.name} · ${(snapshot.progress * 100).toStringAsFixed(1)}%',
-                              '${snapshot.bytesTransferred} / ${snapshot.totalBytes} bytes · ${snapshot.routeLabel}',
+                              '${snapshot.bytesTransferred} / ${snapshot.totalBytes} bytes${snapshot.routeLabel == null ? '' : ' · ${snapshot.routeLabel}'}',
                               if (snapshot.error != null)
                                 'error: ${snapshot.error}',
                             ],

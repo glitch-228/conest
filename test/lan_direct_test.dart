@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:conest/src/lan_direct.dart';
+import 'package:conest/src/local_relay_node.dart';
 import 'package:conest/src/models.dart';
 
 RelayEnvelope _envelope(int index) => RelayEnvelope(
@@ -31,6 +32,60 @@ Future<int> _putRaw(int port, RelayEnvelope envelope, HttpClient client) async {
 }
 
 void main() {
+  test(
+    'direct binary files share the messaging port without relay storage',
+    () async {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+      );
+      final host = interfaces
+          .expand((entry) => entry.addresses)
+          .map((address) => address.address)
+          .firstWhere(isValidLanDirectHost);
+      final direct = HttpLanDirectChannel();
+      addTearDown(direct.stop);
+      final directPort = await direct.start();
+      final blocks = <LanAttachmentBlock>[];
+      direct.onAttachmentBlock = (block) async {
+        blocks.add(block);
+      };
+      final reserved = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final ingressPort = reserved.port;
+      await reserved.close();
+      final node = LocalRelayNode()..attachmentHttpPort = directPort;
+      var relayStores = 0;
+      node.onEnvelopeStored = (_, _) => relayStores++;
+      addTearDown(node.stop);
+      await node.start(ingressPort);
+      final client = HttpLanDirectChannel();
+      addTearDown(client.stop);
+      final bytes = Uint8List(4 * 1024 * 1024 + 16)..[42] = 79;
+      for (var index = 0; index < 3; index++) {
+        expect(
+          await client.putAttachmentBlock(
+            host: host,
+            port: ingressPort,
+            block: LanAttachmentBlock(
+              attachmentId: 'test',
+              index: index,
+              hash: Uint8List(32),
+              ciphertext: bytes,
+            ),
+          ),
+          isTrue,
+          reason: client.lastPutFailure,
+        );
+      }
+      for (var i = 0; i < 100 && blocks.length < 3; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(blocks, hasLength(3));
+      expect(blocks.last.ciphertext, bytes);
+      expect(relayStores, 0);
+      expect(node.attachmentIngressPort, ingressPort);
+    },
+  );
+
   test(
     'timed-out LAN uploads release pooled connections for the next block',
     () async {

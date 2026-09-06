@@ -1,4 +1,5 @@
 import 'dart:ffi';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -56,10 +57,13 @@ typedef _ErrorNative = Pointer<Utf8> Function();
 typedef _ErrorDart = Pointer<Utf8> Function();
 typedef _FreeNative = Void Function(Pointer<Utf8>);
 typedef _FreeDart = void Function(Pointer<Utf8>);
+typedef _HashFileNative = Pointer<Utf8> Function(Pointer<Utf8>);
+typedef _HashFileDart = Pointer<Utf8> Function(Pointer<Utf8>);
 
 class _NativeAttachmentCryptoBindings {
   _NativeAttachmentCryptoBindings(DynamicLibrary library)
-    : encrypt = library.lookupFunction<_EncryptNative, _EncryptDart>(
+    : hashFile = _lookupHashFile(library),
+      encrypt = library.lookupFunction<_EncryptNative, _EncryptDart>(
         'conest_attachment_encrypt_block',
       ),
       decrypt = library.lookupFunction<_DecryptNative, _DecryptDart>(
@@ -73,6 +77,17 @@ class _NativeAttachmentCryptoBindings {
       );
 
   final _EncryptDart encrypt;
+  final _HashFileDart? hashFile;
+  static _HashFileDart? _lookupHashFile(DynamicLibrary library) {
+    try {
+      return library.lookupFunction<_HashFileNative, _HashFileDart>(
+        'conest_attachment_hash_file',
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   final _DecryptDart decrypt;
   final _ErrorDart lastError;
   final _FreeDart freeString;
@@ -113,6 +128,27 @@ class NativeAttachmentCrypto {
   static const int _maximumBlockLength = 4 * 1024 * 1024;
 
   final _NativeAttachmentCryptoBindings _bindings;
+
+  ({int sizeBytes, String sha256Base64})? hashFile(String path) {
+    final hash = _bindings.hashFile;
+    if (hash == null) return null;
+    final input = path.toNativeUtf8();
+    try {
+      final output = hash(input);
+      if (output == nullptr) throw StateError(_bindings.takeLastError());
+      try {
+        final value = jsonDecode(output.toDartString()) as Map<String, dynamic>;
+        return (
+          sizeBytes: value['sizeBytes'] as int,
+          sha256Base64: value['sha256Base64'] as String,
+        );
+      } finally {
+        _bindings.freeString(output);
+      }
+    } finally {
+      malloc.free(input);
+    }
+  }
 
   static NativeAttachmentCrypto? tryCreate() {
     for (final candidate in _candidateLibraryPaths()) {
