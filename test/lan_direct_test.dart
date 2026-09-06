@@ -31,6 +31,53 @@ Future<int> _putRaw(int port, RelayEnvelope envelope, HttpClient client) async {
 }
 
 void main() {
+  test(
+    'timed-out LAN uploads release pooled connections for the next block',
+    () async {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+      );
+      final host = interfaces
+          .expand((entry) => entry.addresses)
+          .map((address) => address.address)
+          .firstWhere(isValidLanDirectHost);
+      final server = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      var hang = true;
+      server.listen((request) async {
+        try {
+          await request.drain<void>();
+          if (hang) return;
+          request.response.statusCode = HttpStatus.accepted;
+          await request.response.close();
+        } catch (_) {}
+      });
+      final channel = HttpLanDirectChannel();
+      addTearDown(channel.stop);
+      final failed = await Future.wait([
+        for (var i = 0; i < 20; i++)
+          channel.putEnvelope(
+            host: host,
+            port: server.port,
+            envelope: _envelope(i),
+            timeout: const Duration(milliseconds: 300),
+          ),
+      ]);
+      expect(failed, everyElement(isFalse));
+      hang = false;
+      expect(
+        await channel.putEnvelope(
+          host: host,
+          port: server.port,
+          envelope: _envelope(21),
+          timeout: const Duration(seconds: 2),
+        ),
+        isTrue,
+        reason: channel.lastPutFailure,
+      );
+    },
+  );
+
   test('LAN-direct accepts only private or link-local literal addresses', () {
     for (final host in const <String>[
       '10.0.0.1',

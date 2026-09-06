@@ -364,6 +364,64 @@ class HttpLanDirectChannel implements LanDirectChannel, BinaryLanDirectChannel {
     }
   }
 
+  String? lastPutFailure;
+
+  Future<bool> _put({
+    required String host,
+    required int port,
+    required String path,
+    required List<List<int>> segments,
+    required Duration timeout,
+  }) async {
+    if (!isValidLanDirectHost(host) || !isValidPeerEndpointPort(port)) {
+      return false;
+    }
+    final length = segments.fold<int>(0, (sum, bytes) => sum + bytes.length);
+    if (length > _maxRequestBytes) return false;
+    final client = _outboundClient ??= HttpClient()
+      ..connectionTimeout = const Duration(milliseconds: 1500)
+      ..idleTimeout = const Duration(seconds: 30)
+      ..maxConnectionsPerHost = 16;
+    HttpClientRequest? request;
+    var expired = false;
+    var finished = false;
+    try {
+      final accepted = await (() async {
+        final opened = await client.putUrl(
+          Uri(scheme: 'http', host: host, port: port, path: path),
+        );
+        request = opened;
+        // Future.timeout does not cancel putUrl while it waits for a pooled
+        // connection. Abort late arrivals as well as the current upload.
+        if (expired) {
+          opened.abort();
+          return false;
+        }
+        opened.headers.contentType = ContentType('application', 'octet-stream');
+        opened.contentLength = length;
+        for (final segment in segments) {
+          opened.add(segment);
+        }
+        final response = await opened.close();
+        await response.drain<void>();
+        finished = true;
+        final ok = response.statusCode >= 200 && response.statusCode < 300;
+        if (!ok) {
+          lastPutFailure = '$host:$port$path HTTP ${response.statusCode}';
+        }
+        return ok;
+      })().timeout(timeout);
+      if (accepted) lastPutFailure = null;
+      return accepted;
+    } catch (error) {
+      lastPutFailure = '$host:$port$path: $error';
+      return false;
+    } finally {
+      expired = true;
+      if (!finished) request?.abort();
+    }
+  }
+
   @override
   Future<bool> putEnvelope({
     required String host,
@@ -371,39 +429,17 @@ class HttpLanDirectChannel implements LanDirectChannel, BinaryLanDirectChannel {
     required RelayEnvelope envelope,
     Duration timeout = const Duration(seconds: 10),
   }) async {
-    if (!isValidLanDirectHost(host) || !isValidPeerEndpointPort(port)) {
-      return false;
+    final accepted = await _put(
+      host: host,
+      port: port,
+      path: '/v1/chunk',
+      segments: [utf8.encode(jsonEncode(envelope.toJson()))],
+      timeout: timeout,
+    );
+    if (accepted && envelope.kind == 'attachment_chunk') {
+      _successfulAttachmentChunkPutCount++;
     }
-    // Reuse HTTP/1.1 connections for the whole LAN session. Creating and
-    // force-closing a client for every block caused socket churn and
-    // ephemeral-port pressure on Android during sustained transfers.
-    final client = _outboundClient ??= HttpClient()
-      ..connectionTimeout = const Duration(milliseconds: 1500)
-      ..idleTimeout = const Duration(seconds: 30)
-      ..maxConnectionsPerHost = 16;
-    try {
-      final uri = Uri(
-        scheme: 'http',
-        host: host,
-        port: port,
-        path: '/v1/chunk',
-      );
-      final req = await client.putUrl(uri).timeout(timeout);
-      req.headers.contentType = ContentType('application', 'octet-stream');
-      final body = utf8.encode(jsonEncode(envelope.toJson()));
-      if (body.length > _maxRequestBytes) return false;
-      req.contentLength = body.length;
-      req.add(body);
-      final resp = await req.close().timeout(timeout);
-      await resp.drain<void>();
-      final accepted = resp.statusCode >= 200 && resp.statusCode < 300;
-      if (accepted && envelope.kind == 'attachment_chunk') {
-        _successfulAttachmentChunkPutCount++;
-      }
-      return accepted;
-    } catch (_) {
-      return false;
-    }
+    return accepted;
   }
 
   @override
@@ -413,36 +449,15 @@ class HttpLanDirectChannel implements LanDirectChannel, BinaryLanDirectChannel {
     required LanAttachmentBlock block,
     Duration timeout = const Duration(seconds: 10),
   }) async {
-    if (!isValidLanDirectHost(host) || !isValidPeerEndpointPort(port)) {
-      return false;
-    }
-    final header = _encodeAttachmentBlockHeader(block);
-    final bodyLength = header.length + block.ciphertext.length;
-    if (bodyLength > _maxRequestBytes) return false;
-    final client = _outboundClient ??= HttpClient()
-      ..connectionTimeout = const Duration(milliseconds: 1500)
-      ..idleTimeout = const Duration(seconds: 30)
-      ..maxConnectionsPerHost = 16;
-    try {
-      final request = await client
-          .putUrl(
-            Uri(scheme: 'http', host: host, port: port, path: '/v2/block'),
-          )
-          .timeout(timeout);
-      request.headers.contentType = ContentType('application', 'octet-stream');
-      request.contentLength = bodyLength;
-      // Keep the 4 MiB ciphertext as its own segment. Building one combined
-      // frame copied every encrypted block before the socket could send it.
-      request.add(header);
-      request.add(block.ciphertext);
-      final response = await request.close().timeout(timeout);
-      await response.drain<void>();
-      final accepted = response.statusCode >= 200 && response.statusCode < 300;
-      if (accepted) _successfulAttachmentChunkPutCount++;
-      return accepted;
-    } catch (_) {
-      return false;
-    }
+    final accepted = await _put(
+      host: host,
+      port: port,
+      path: '/v2/block',
+      segments: [_encodeAttachmentBlockHeader(block), block.ciphertext],
+      timeout: timeout,
+    );
+    if (accepted) _successfulAttachmentChunkPutCount++;
+    return accepted;
   }
 }
 
@@ -563,12 +578,14 @@ class LanDirectEndpoint {
     this.consecutiveFailures = 0,
     this.demotedUntil,
     this.binaryBlockVersion = 0,
+    this.alternateHosts = const [],
   });
 
   final String host;
   final int port;
-  final DateTime cachedAt;
+  DateTime cachedAt;
   int consecutiveFailures;
   DateTime? demotedUntil;
-  final int binaryBlockVersion;
+  int binaryBlockVersion;
+  List<String> alternateHosts;
 }

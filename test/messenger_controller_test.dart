@@ -1109,6 +1109,183 @@ const _irohOnlyConnectivity = GlobalConnectivityPreferences(
 );
 
 void main() {
+  test(
+    'discarded message duplicates never manufacture delivery receipts',
+    () async {
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      await bob.updateGlobalConnectivity(
+        bob.identity!.connectivity.copyWith(onlineEnabled: false),
+      );
+      await alice.sendMessage(
+        contact: alice.contacts.single,
+        body: 'blocked ingress',
+      );
+      final envelope = relay.storedEnvelopes.lastWhere(
+        (e) => e.kind == 'direct_message',
+      );
+      relay.storedEnvelopes.clear();
+      await bob.processEnvelopesForTesting([envelope]);
+      await bob.processEnvelopesForTesting([envelope]);
+      expect(bob.messagesFor(alice.identity!.deviceId), isEmpty);
+      expect(relay.storedEnvelopes.where((e) => e.kind == 'ack'), isEmpty);
+    },
+  );
+
+  test(
+    'Beam pairing receives Iroh heartbeat replies without legacy routes',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+      final beam = await bob.prepareInviteBeam();
+      final imported = await alice.inspectBeamPackage(beam.package);
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: imported.invite!.encodePayload(),
+        codephrase: '',
+      );
+      await _waitForIroh(() => bob.pendingContactRequests.isNotEmpty);
+      await bob.approvePendingContactRequest(
+        bob.pendingContactRequests.single.id,
+      );
+      network.envelopes.clear();
+      expect(await alice.runHeartbeatPassNow(), 1);
+      await _waitForIroh(
+        () =>
+            network.envelopes.where((e) => e.kind == 'route_update').length >=
+            2,
+      );
+      await _waitForIroh(
+        () =>
+            alice.reachabilityStateFor(bob.identity!.deviceId) ==
+            ContactReachabilityState.online,
+      );
+    },
+  );
+
+  test('rejected contact messages remain unconfirmed after retries', () async {
+    final relay = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(relayClient: relay, displayName: 'Bob');
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: (await bob.buildInvite()).encodePayload(),
+      codephrase: '',
+    );
+    await bob.pollNow();
+    await bob.rejectPendingContactRequest(bob.pendingContactRequests.single.id);
+    await alice.sendMessage(contact: alice.contacts.single, body: 'unaccepted');
+    expect(alice.statusMessage, isNot(contains('Delivered')));
+    for (var i = 0; i < 2; i++) {
+      await bob.pollNow();
+      await alice.pollNow();
+      await alice.retryUnacknowledgedMessagesNow();
+    }
+    expect(bob.messagesFor(alice.identity!.deviceId), isEmpty);
+    expect(
+      alice.messagesFor(bob.identity!.deviceId).single.state.awaitsRecipientAck,
+      isTrue,
+    );
+  });
+
+  test(
+    'automatic online file test verifies direct Iroh with LAN disabled',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        debugBuildId: 'debug-direct-iroh',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        debugBuildId: 'debug-direct-iroh',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await alice.updateGlobalConnectivity(
+        _irohOnlyConnectivity.copyWith(irohRelayEnabled: false),
+      );
+      await bob.updateGlobalConnectivity(
+        _irohOnlyConnectivity.copyWith(irohRelayEnabled: false),
+      );
+      await _pairControllers(alice, bob);
+      relay.storedEnvelopes.clear();
+      for (final sender in [alice, bob]) {
+        final result = await sender
+            .runDebugFileBattleTest(contact: sender.contacts.single, sizeMiB: 5)
+            .timeout(const Duration(seconds: 30));
+        expect(result.success, isTrue, reason: result.detail);
+        expect(result.bytesVerified, 5 * 1024 * 1024);
+      }
+      expect(
+        relay.storedEnvelopes.where((e) => e.kind != 'pairing_announcement'),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'repeated LAN hints preserve the endpoint and prefer the shared subnet',
+    () async {
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        lanAddresses: ['192.168.3.55'],
+      );
+      addTearDown(controller.dispose);
+      final hint = <String, dynamic>{
+        'senderLanDirectPort': 43210,
+        'senderLanAddresses': ['172.17.0.1', '192.168.3.11'],
+        'senderLanBinaryVersion': 1,
+      };
+      controller.cachePeerLanDirectHintForTesting('peer', hint);
+      final before = controller.peerLanDirectEndpointForTesting('peer')!;
+      expect(before.host, '192.168.3.11');
+      before.consecutiveFailures = 1;
+      controller.cachePeerLanDirectHintForTesting('peer', hint);
+      expect(
+        identical(before, controller.peerLanDirectEndpointForTesting('peer')),
+        isTrue,
+      );
+      expect(before.consecutiveFailures, 1);
+      expect(before.alternateHosts, ['172.17.0.1']);
+    },
+  );
+
   testWidgets(
     'storage reserve warning offers Download anyway and Settings exposes its switch',
     (tester) async {

@@ -10420,7 +10420,7 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
                     const SizedBox(height: 6),
                     Text(
                       debugFileTestsReady
-                          ? 'The selected peer must run the exact same debug build. It auto-accepts the encrypted test, verifies every block and the final SHA-256, reports timing, and removes test artifacts on both devices. No visual confirmation is required; payload blocks cannot use Iroh or Conest relays.'
+                          ? 'The selected peer must run the exact same debug build. It auto-accepts the encrypted test, verifies every block and the final SHA-256, reports timing, and removes test artifacts on both devices. No visual confirmation is required. Tests use LAN when enabled for the contact, otherwise direct Iroh. Payload blocks cannot use relays.'
                           : 'Automatic file tests are disabled because this local build has no exact artifact tag and commit. Use a Debug workflow artifact or build both peers with identical CONEST_BUILD_TAG and CONEST_BUILD_COMMIT values.',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: debugFileTestsReady

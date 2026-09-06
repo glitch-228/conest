@@ -24,9 +24,9 @@ jobs:
       - name: Verify channel identity and automatic transfer handshake
         run: |
           flutter test test/build_info_test.dart
-          flutter test test/storage_capacity_test.dart
+          flutter test test/storage_capacity_test.dart test/lan_direct_test.dart
           flutter test test/messenger_controller_test.dart \
-            --name "storage reserve|Download anyway|manual Download storage|spool reserve"
+            --name "storage reserve|Download anyway|manual Download storage|spool reserve|Beam pairing receives|rejected contact messages|discarded message duplicates|automatic online file|repeated LAN hints"
           flutter test test/messenger_controller_test.dart \
             --plain-name "matching debug builds auto-accept, verify, report, and clean a real LAN test"
           flutter test test/messenger_controller_test.dart \
