@@ -142,7 +142,7 @@ class FfiNativeIrohBridge implements NativeIrohBridge {
     );
     _handle = started.handle;
     try {
-      for (var index = 0; index < _sendWorkerCount; index++) {
+      for (var index = 0; index < _sendWorkerCount + 1; index++) {
         final worker = await _spawnIrohSendWorker(libraryPath, index);
         _sendWorkerIsolates.add(worker.isolate);
         _sendWorkerPorts.add(worker.port);
@@ -172,8 +172,7 @@ class FfiNativeIrohBridge implements NativeIrohBridge {
     if (_sendWorkerPorts.isEmpty) {
       throw StateError('Iroh send workers are not running.');
     }
-    final worker =
-        _sendWorkerPorts[_nextSendWorker++ % _sendWorkerPorts.length];
+    final worker = _sendWorkerPorts[_nextSendWorker++ % _sendWorkerCount];
     final addressHints = List<String>.of(directAddresses, growable: false);
     final reply = ReceivePort();
     try {
@@ -211,18 +210,30 @@ class FfiNativeIrohBridge implements NativeIrohBridge {
     if (handle == null || _polling) return;
     _polling = true;
     try {
-      for (var count = 0; count < 32; count++) {
-        final value = _tryNextNative(_libraryPath, handle);
-        if (value == null) break;
-        _inbound.add(
-          IrohBridgeInbound(
-            senderEndpointId: value['senderEndpointId'] as String,
-            bytes: Uint8List.fromList(
-              base64Decode(value['bytesBase64'] as String),
+      final reply = ReceivePort();
+      try {
+        // The final worker is reserved for inbound decoding so a slow dial
+        // cannot hold up incoming messages or block acknowledgements.
+        _sendWorkerPorts.last.send(<Object?>[reply.sendPort, handle]);
+        final result =
+            await reply.first.timeout(const Duration(seconds: 5))
+                as List<Object?>;
+        if (_handle != handle) return;
+        if (result[0] != true) throw StateError(result[1] as String);
+        for (final entry in result[1] as List) {
+          final value = entry as List;
+          _inbound.add(
+            IrohBridgeInbound(
+              senderEndpointId: value[0] as String,
+              bytes: (value[1] as TransferableTypedData)
+                  .materialize()
+                  .asUint8List(),
+              relayed: value[2] as bool,
             ),
-            relayed: value['relayed'] as bool? ?? false,
-          ),
-        );
+          );
+        }
+      } finally {
+        reply.close();
       }
     } catch (error, stackTrace) {
       _inbound.addError(error, stackTrace);
@@ -329,6 +340,13 @@ void _irohSendWorkerMain(List<Object?> startup) {
       return;
     }
     try {
+      if (message.length == 2) {
+        reply.send(<Object?>[
+          true,
+          _drainNativeInbound(bindings, message[1] as int),
+        ]);
+        return;
+      }
       final bytes = (message[4] as TransferableTypedData)
           .materialize()
           .asUint8List();
@@ -405,13 +423,6 @@ Map<String, dynamic> _sendNativeWithBindings(
   }
 }
 
-Map<String, dynamic>? _tryNextNative(String libraryPath, int handle) {
-  final bindings = _NativeIrohBindings(DynamicLibrary.open(libraryPath));
-  final pointer = bindings.next(handle);
-  if (pointer == nullptr) return null;
-  return _decodeObject(bindings.takeString(pointer));
-}
-
 void _closeNative(String libraryPath, int handle) {
   _NativeIrohBindings(DynamicLibrary.open(libraryPath)).close(handle);
 }
@@ -432,3 +443,26 @@ IrohBridgeStatus _statusFromJson(Map<String, dynamic> value) =>
       relayUrl: value['relay_url'] as String?,
       relayEnabled: value['relay_enabled'] as bool? ?? false,
     );
+
+// Bound each drain to eight envelopes or 8 MiB. All JSON/base64 and
+// transferable-buffer construction stays on the dedicated inbound worker.
+List<List<Object?>> _drainNativeInbound(
+  _NativeIrohBindings bindings,
+  int handle,
+) {
+  final batch = <List<Object?>>[];
+  var bytes = 0;
+  for (var count = 0; count < 8 && bytes < 8 * 1024 * 1024; count++) {
+    final pointer = bindings.next(handle);
+    if (pointer == nullptr) break;
+    final value = _decodeObject(bindings.takeString(pointer));
+    final payload = base64Decode(value['bytesBase64'] as String);
+    bytes += payload.length;
+    batch.add([
+      value['senderEndpointId'] as String,
+      TransferableTypedData.fromList([payload]),
+      value['relayed'] as bool? ?? false,
+    ]);
+  }
+  return batch;
+}

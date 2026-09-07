@@ -102,9 +102,10 @@ class HttpLanDirectChannel implements LanDirectChannel, BinaryLanDirectChannel {
   // The old 120 request / 64 MiB limits therefore throttled every real LAN
   // transfer after roughly 15 MiB and made it look as if the route had died.
   // Body and concurrency bounds remain the primary LAN DoS controls; these
-  // generous per-minute ceilings accommodate the supported 2 GiB payload.
+  // generous per-minute ceilings accommodate consecutive multi-gigabyte
+  // files. A 4 GiB/minute budget was an unintended ~68 MiB/s LAN ceiling.
   static const int _maxRequestsPerMinutePerIp = 20 * 1024;
-  static const int _maxBytesPerMinutePerIp = 4 * 1024 * 1024 * 1024;
+  static const int _maxBytesPerMinutePerIp = 64 * 1024 * 1024 * 1024;
   static const Duration _readTimeout = Duration(seconds: 15);
 
   HttpServer? _server;

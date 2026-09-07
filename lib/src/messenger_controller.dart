@@ -15,6 +15,7 @@ import 'crypto_service.dart';
 import 'beam_protocol.dart';
 import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
+import 'attachment_block_worker.dart';
 import 'iroh_transport.dart';
 import 'lan_direct.dart';
 import 'local_relay_node.dart';
@@ -85,15 +86,6 @@ List<int> _attachmentBlockNonce(AttachmentDescriptor descriptor, int index) {
   final nonce = Uint8List(24)..setRange(0, 16, prefix);
   ByteData.sublistView(nonce).setUint64(16, index, Endian.big);
   return nonce;
-}
-
-bool _attachmentBytesEqual(List<int> left, List<int> right) {
-  if (left.length != right.length) return false;
-  var difference = 0;
-  for (var index = 0; index < left.length; index++) {
-    difference |= left[index] ^ right[index];
-  }
-  return difference == 0;
 }
 
 String? _irohSocketAddressForRoute(PeerEndpoint route) {
@@ -303,6 +295,7 @@ class DebugAttachmentTestSpec {
     required this.sizeMiB,
     required this.startedAt,
     this.irohOnly = false,
+    this.allowIrohRelay = false,
   });
 
   final String testId;
@@ -310,10 +303,12 @@ class DebugAttachmentTestSpec {
   final int sizeMiB;
   final DateTime startedAt;
   final bool irohOnly;
+  final bool allowIrohRelay;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
     'protocolVersion': 1,
     'irohOnly': irohOnly,
+    'allowIrohRelay': allowIrohRelay,
     'testId': testId,
     'buildId': buildId,
     'sizeMiB': sizeMiB,
@@ -328,7 +323,8 @@ class DebugAttachmentTestSpec {
     final buildId = value['buildId'];
     final sizeMiB = value['sizeMiB'];
     final startedAt = DateTime.tryParse(value['startedAt'] as String? ?? '');
-    if ((value['irohOnly'] != null && value['irohOnly'] is! bool) ||
+    if ((value['allowIrohRelay'] != null && value['allowIrohRelay'] is! bool) ||
+        (value['irohOnly'] != null && value['irohOnly'] is! bool) ||
         testId is! String ||
         testId.isEmpty ||
         testId.length > 160 ||
@@ -346,6 +342,7 @@ class DebugAttachmentTestSpec {
       sizeMiB: sizeMiB,
       startedAt: startedAt.toUtc(),
       irohOnly: value['irohOnly'] == true,
+      allowIrohRelay: value['allowIrohRelay'] == true,
     );
   }
 }
@@ -432,6 +429,7 @@ class MessengerController extends ChangeNotifier {
   // ChangeNotifier's debug assertion ("used after being disposed");
   // checking this flag in the override turns those into safe no-ops.
   bool _disposed = false;
+  Timer? _transferProgressUiTimer;
   final LocalRelayNode _localRelayNode;
   final PlatformBridge _platformBridge;
   PlatformBridge get platformBridge => _platformBridge;
@@ -452,6 +450,7 @@ class MessengerController extends ChangeNotifier {
   /// sender PUTs chunks directly instead of round-tripping via the relay.
   final LanDirectChannel? _lanDirectChannel;
   final NativeAttachmentCrypto? _nativeAttachmentCrypto;
+  final _attachmentBlockWorker = AttachmentBlockWorker();
   final String? _debugBuildId;
   final Future<TransportRegistry?> Function(IdentityRecord identity)?
   _transportRegistryFactory;
@@ -544,8 +543,10 @@ class MessengerController extends ChangeNotifier {
   String? _debugFileTestStatus;
   final List<DebugFileTestResult> _debugFileTestResults =
       <DebugFileTestResult>[];
-  final Map<String, Completer<bool?>> _debugFileProbeCompleters =
-      <String, Completer<bool?>>{};
+  final Map<String, String> _debugFileProbeMessageIds = {};
+  final Map<String, Completer<({bool irohOnly, bool allowIrohRelay})?>>
+  _debugFileProbeCompleters =
+      <String, Completer<({bool irohOnly, bool allowIrohRelay})?>>{};
   final Map<String, Completer<DebugFileTestResult>> _debugFileResultCompleters =
       <String, Completer<DebugFileTestResult>>{};
   final Map<String, DebugAttachmentTestSpec> _outboundDebugAttachmentTests =
@@ -1285,7 +1286,9 @@ class MessengerController extends ChangeNotifier {
           );
         }
         if (state.debugTest case final spec?) {
-          if (!spec.irohOnly || inbound.path != TransportPathKind.direct) {
+          if (!spec.irohOnly ||
+              (!spec.allowIrohRelay &&
+                  inbound.path != TransportPathKind.direct)) {
             throw const FormatException(
               'Diagnostic block arrived on an unselected transport.',
             );
@@ -4400,12 +4403,17 @@ class MessengerController extends ChangeNotifier {
     return maxLanAttachmentSizeBytes;
   }
 
-  /// Picks the chunk size to use when slicing a new outbound attachment.
-  /// LAN-only contacts get the larger LAN chunk size since their chunk
-  /// envelopes never traverse the relay's 256 KB envelope cap.
+  /// Use large binary blocks for capable LAN/Iroh peers, including ordinary
+  /// manual sends. Legacy mailbox envelopes retain their smaller block cap.
   int _effectiveChunkSizeFor(ContactRecord contact) {
     final effective = _effectiveTransports(contact);
-    if (effective.lan && !effective.online) {
+    final endpoint = _peerLanDirect[contact.deviceId];
+    if ((effective.lan && !effective.online) ||
+        (effective.lan &&
+            endpoint != null &&
+            endpoint.binaryBlockVersion >= 1 &&
+            _lanDirectEndpointUsable(endpoint)) ||
+        _canUseIrohForContact(contact)) {
       return _lanAttachmentChunkSize;
     }
     return _attachmentChunkSize;
@@ -4713,7 +4721,8 @@ class MessengerController extends ChangeNotifier {
     _debugFileTestStatus =
         'Checking that ${contact.alias} is on this exact debug build…';
     notifyListeners();
-    final irohOnly = await _probeDebugFileTestPeer(contact, testId, buildId);
+    final selected = await _probeDebugFileTestPeer(contact, testId, buildId);
+    final irohOnly = selected.irohOnly;
     final startedAt = _now().toUtc();
     final spec = DebugAttachmentTestSpec(
       testId: testId,
@@ -4721,6 +4730,7 @@ class MessengerController extends ChangeNotifier {
       sizeMiB: sizeMiB,
       startedAt: startedAt,
       irohOnly: irohOnly,
+      allowIrohRelay: selected.allowIrohRelay,
     );
     final resultCompleter = Completer<DebugFileTestResult>();
     final target = await _generateDebugAttachmentSource(
@@ -5183,7 +5193,8 @@ class MessengerController extends ChangeNotifier {
         contact: contact,
         recipientDeviceId: contact.deviceId,
         envelope: envelope,
-        allowRelayedPaths: debugTest?.irohOnly != true,
+        allowRelayedPaths:
+            debugTest?.irohOnly != true || debugTest?.allowIrohRelay == true,
         allowLegacyRoutes: debugTest?.irohOnly != true,
         allowedUnifiedKinds: debugTest?.irohOnly == true
             ? {TransportKind.iroh}
@@ -5539,7 +5550,12 @@ class MessengerController extends ChangeNotifier {
 
   bool _largeIrohRelayAllowed(String attachmentId) {
     final session = _transferSessionById(attachmentId);
-    return session?.allowIrohRelay == true || _managedIrohRelayAllowsBulk();
+    final peer = session == null
+        ? null
+        : _contactByDeviceId(session.peerDeviceIds.firstOrNull ?? '');
+    return session?.allowIrohRelay == true ||
+        _managedIrohRelayAllowsBulk() ||
+        (peer != null && _irohRelayEnabledFor(peer));
   }
 
   /// Whether the transfer manager should offer an explicit, per-transfer
@@ -5551,8 +5567,7 @@ class MessengerController extends ChangeNotifier {
     if (outbound == null ||
         session == null ||
         !outbound.requiresLan ||
-        session.allowIrohRelay ||
-        _managedIrohRelayAllowsBulk()) {
+        _largeIrohRelayAllowed(attachmentId)) {
       return false;
     }
     final contact = _contactByDeviceId(outbound.peerDeviceId);
@@ -8493,6 +8508,14 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  void _notifyTransferProgress() {
+    if (_disposed || _transferProgressUiTimer != null) return;
+    _transferProgressUiTimer = Timer(const Duration(milliseconds: 100), () {
+      _transferProgressUiTimer = null;
+      notifyListeners();
+    });
+  }
+
   @override
   void notifyListeners() {
     if (_disposed) {
@@ -9079,6 +9102,7 @@ class MessengerController extends ChangeNotifier {
             debugTest.buildId != _debugBuildId ||
             !debugAuthorized ||
             debugAuthorization.irohOnly != debugTest.irohOnly ||
+            debugAuthorization.allowIrohRelay != debugTest.allowIrohRelay ||
             descriptor.mimeType != 'application/x-conest-transfer-test' ||
             descriptor.sizeBytes != debugTest.sizeMiB * 1024 * 1024)) {
       appendDebugLog(
@@ -9415,7 +9439,9 @@ class MessengerController extends ChangeNotifier {
         contact: peer,
         recipientDeviceId: peer.deviceId,
         envelope: envelope,
-        allowRelayedPaths: inbound.debugTest?.irohOnly != true,
+        allowRelayedPaths:
+            inbound.debugTest?.irohOnly != true ||
+            inbound.debugTest?.allowIrohRelay == true,
         allowLegacyRoutes: inbound.debugTest?.irohOnly != true,
         allowedUnifiedKinds: inbound.debugTest?.irohOnly == true
             ? {TransportKind.iroh}
@@ -9605,12 +9631,12 @@ class MessengerController extends ChangeNotifier {
           state.consecutiveChunkFailures = 0;
           state.lastDeliveryRoute = OutboundDeliveryRoute.lanDirect;
           _armOutboundStallTimer(requester);
-          notifyListeners();
+          _notifyTransferProgress();
         }
         return;
       }
       unawaited(_onLanDirectPutFailure(requester.deviceId));
-      if (state.descriptor.chunkSize > _attachmentChunkSize) {
+      if (state.lanOnly && state.descriptor.chunkSize > _attachmentChunkSize) {
         _setTransferSessionState(
           attachmentId,
           TransferState.reconnecting,
@@ -9624,7 +9650,9 @@ class MessengerController extends ChangeNotifier {
     }
     if (irohBinarySupported && !state.lanOnly) {
       final allowIrohRelay =
-          !irohOnly && (!state.requiresLan || allowLargeIrohRelay);
+          (_outboundDebugAttachmentTests[attachmentId]?.allowIrohRelay ==
+              true) ||
+          (!irohOnly && (!state.requiresLan || allowLargeIrohRelay));
       try {
         final receipt = await _deliverIrohAttachmentRange(
           contact: requester,
@@ -9652,7 +9680,7 @@ class MessengerController extends ChangeNotifier {
                 ? OutboundDeliveryRoute.irohRelay
                 : OutboundDeliveryRoute.irohDirect;
             _armOutboundStallTimer(requester);
-            notifyListeners();
+            _notifyTransferProgress();
           }
           return;
         }
@@ -9739,7 +9767,7 @@ class MessengerController extends ChangeNotifier {
           state.consecutiveChunkFailures = 0;
           state.lastDeliveryRoute = OutboundDeliveryRoute.lanDirect;
           _armOutboundStallTimer(requester);
-          notifyListeners();
+          _notifyTransferProgress();
         }
         return;
       }
@@ -9880,40 +9908,11 @@ class MessengerController extends ChangeNotifier {
     final aad = Uint8List.fromList(
       _attachmentChunkAssociatedData(descriptor, index, plaintext.length),
     );
-    final native = _nativeAttachmentCrypto;
-    if (native != null) {
-      try {
-        final encrypted = native.encrypt(
-          key: key,
-          nonce: nonce,
-          aad: aad,
-          plaintext: plaintext,
-        );
-        return (
-          ciphertext: encrypted.ciphertext,
-          hash: encrypted.plaintextSha256,
-        );
-      } catch (error) {
-        appendDebugLog(
-          'Native attachment encryption failed; using compatible Dart path: '
-          '$error',
-        );
-      }
-    }
-    final digest = await Sha256().hash(plaintext);
-    final chunkCipher = Xchacha20.poly1305Aead();
-    final encrypted = await chunkCipher.encrypt(
-      plaintext,
-      secretKey: SecretKey(key),
+    return _attachmentBlockWorker.encrypt(
+      key: key,
       nonce: nonce,
       aad: aad,
-    );
-    return (
-      ciphertext: Uint8List.fromList(<int>[
-        ...encrypted.cipherText,
-        ...encrypted.mac.bytes,
-      ]),
-      hash: Uint8List.fromList(digest.bytes),
+      plaintext: plaintext,
     );
   }
 
@@ -10020,34 +10019,13 @@ class MessengerController extends ChangeNotifier {
       final aad = Uint8List.fromList(
         _attachmentChunkAssociatedData(state.descriptor, index, expectedLength),
       );
-      final native = _nativeAttachmentCrypto;
-      if (native != null) {
-        bytes = native.decrypt(
-          key: key,
-          nonce: nonce,
-          aad: aad,
-          ciphertext: packedBytes,
-          expectedPlaintextSha256: expectedHash,
-        );
-      } else {
-        final cipher = Xchacha20.poly1305Aead();
-        final macStart = packedBytes.length - cipher.macAlgorithm.macLength;
-        bytes = Uint8List.fromList(
-          await cipher.decrypt(
-            SecretBox(
-              packedBytes.sublist(0, macStart),
-              nonce: nonce,
-              mac: Mac(packedBytes.sublist(macStart)),
-            ),
-            secretKey: SecretKey(key),
-            aad: aad,
-          ),
-        );
-        final digest = await Sha256().hash(bytes);
-        if (!_attachmentBytesEqual(digest.bytes, expectedHash)) {
-          throw const FormatException('Attachment block digest mismatch.');
-        }
-      }
+      bytes = await _attachmentBlockWorker.decrypt(
+        key: key,
+        nonce: nonce,
+        aad: aad,
+        ciphertext: packedBytes,
+        expectedHash: expectedHash,
+      );
     } catch (_) {
       state.requestedInFlight.remove(index);
       if (!identical(_inboundAttachments[attachmentId], state) ||
@@ -10270,6 +10248,23 @@ class MessengerController extends ChangeNotifier {
     String attachmentId,
     _InboundAttachmentState state,
   ) async {
+    final active = state.checkpointInFlight;
+    if (active != null) return active;
+    final operation = _performInboundCheckpoint(attachmentId, state);
+    state.checkpointInFlight = operation;
+    try {
+      await operation;
+    } finally {
+      if (identical(state.checkpointInFlight, operation)) {
+        state.checkpointInFlight = null;
+      }
+    }
+  }
+
+  Future<void> _performInboundCheckpoint(
+    String attachmentId,
+    _InboundAttachmentState state,
+  ) async {
     state.checkpointTimer?.cancel();
     state.checkpointTimer = null;
     // Capture the journal before flushing; later writes are not part of this
@@ -10319,7 +10314,7 @@ class MessengerController extends ChangeNotifier {
         state.partialPath == null) {
       return;
     }
-    final window = state.descriptor.sizeBytes > maxAttachmentSizeBytes
+    final window = state.descriptor.chunkSize > _attachmentChunkSize
         ? _largeDirectInboundChunkWindow
         : _inboundChunkWindow;
     final requests = <Future<void>>[];
@@ -10711,7 +10706,7 @@ class MessengerController extends ChangeNotifier {
           _verifiedBytesFor(state.descriptor, Iterable<int>.generate(received)),
       DateTime.now().toUtc(),
     );
-    notifyListeners();
+    _notifyTransferProgress();
   }
 
   Future<void> _handleAttachmentComplete(
@@ -11576,70 +11571,107 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
-  Future<bool> _probeDebugFileTestPeer(
+  bool _irohRelayEnabledFor(ContactRecord contact) =>
+      _snapshot.identity?.connectivity.irohRelayEnabled == true &&
+      contact.routing.irohRelayEnabled;
+
+  Future<({bool irohOnly, bool allowIrohRelay})> _probeDebugFileTestPeer(
     ContactRecord contact,
     String testId,
     String buildId,
   ) async {
     await _refreshLocalLanDirectAddressCache();
     final localLanHint = _localLanDirectHintPayload();
-    final irohOnly =
-        !_effectiveTransports(contact).lan ||
-        _localLanAddressesCache.isEmpty ||
-        localLanHint['senderLanBinaryVersion'] != 1;
+    final canTryLan =
+        _effectiveTransports(contact).lan &&
+        _localLanAddressesCache.isNotEmpty &&
+        localLanHint['senderLanBinaryVersion'] == 1;
     final me = _requireIdentity();
-    final completer = Completer<bool?>();
-    _debugFileProbeCompleters[testId] = completer;
-    final probe = await _crypto.encryptPayloadEnvelope(
-      kind: 'debug_file_test_probe',
-      messageId: _randomId('fileprobe'),
-      conversationId: _crypto.conversationIdFor(contact.deviceId),
-      senderAccountId: me.accountId,
-      senderDeviceId: me.deviceId,
-      recipientDeviceId: contact.deviceId,
-      contact: contact,
-      plaintext: jsonEncode(<String, dynamic>{
-        'protocolVersion': 1,
-        'testId': testId,
-        'buildId': buildId,
-        'irohOnly': irohOnly,
-        ...localLanHint,
-      }),
-    );
-    try {
-      try {
-        await _deliverToContact(
-          contact: contact,
-          recipientDeviceId: contact.deviceId,
-          envelope: probe,
-          allowRelayedPaths: !irohOnly,
-          allowLegacyRoutes: !irohOnly,
-          allowedUnifiedKinds: irohOnly ? {TransportKind.iroh} : null,
-        ).timeout(const Duration(seconds: 20));
-      } catch (error) {
-        throw StateError(
-          irohOnly
-              ? 'Could not establish direct Iroh with ${contact.alias}. No relay was used. Check that both peers are online and direct connections are permitted. Details: $error'
-              : 'Could not reach ${contact.alias} for the LAN test. Check the peer connection and try again. Details: $error',
-        );
-      }
-      final accepted = await completer.future.timeout(
-        const Duration(seconds: 20),
-        onTimeout: () => throw StateError(
-          'No file-test handshake reply from ${contact.alias}. Check the connection; the installed build has not been checked yet.',
-        ),
+    for (final irohOnly in [if (canTryLan) false, true]) {
+      final completer = Completer<({bool irohOnly, bool allowIrohRelay})?>();
+      _debugFileProbeCompleters[testId] = completer;
+      final probe = await _crypto.encryptPayloadEnvelope(
+        kind: 'debug_file_test_probe',
+        messageId: _randomId('fileprobe'),
+        conversationId: _crypto.conversationIdFor(contact.deviceId),
+        senderAccountId: me.accountId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: contact.deviceId,
+        contact: contact,
+        plaintext: jsonEncode({
+          'protocolVersion': 1,
+          'testId': testId,
+          'buildId': buildId,
+          'irohOnly': irohOnly,
+          'allowIrohRelay': _irohRelayEnabledFor(contact),
+          ...localLanHint,
+        }),
       );
-      if (accepted == null) {
-        throw StateError(
-          '${contact.alias} did not confirm the same debug build and '
-          'selected direct transport. '
-          'Install the identical debug artifact on both peers.',
+      _debugFileProbeMessageIds[testId] = probe.messageId;
+      var rejected = false;
+      try {
+        if (irohOnly) {
+          _debugFileTestStatus = 'Connecting to ${contact.alias} over Iroh…';
+          notifyListeners();
+          await _deliverToContact(
+            contact: contact,
+            recipientDeviceId: contact.deviceId,
+            envelope: probe,
+            allowRelayedPaths: _irohRelayEnabledFor(contact),
+            allowLegacyRoutes: false,
+            allowedUnifiedKinds: {TransportKind.iroh},
+          );
+        } else {
+          final endpoint = _peerLanDirect[contact.deviceId];
+          var sent = false;
+          if (endpoint != null && _lanDirectEndpointUsable(endpoint)) {
+            sent = await _lanDirectChannel!.putEnvelope(
+              host: endpoint.host,
+              port: endpoint.port,
+              envelope: probe,
+              timeout: const Duration(seconds: 2),
+            );
+          }
+          if (!sent) {
+            final routes = _candidateRoutesForContact(
+              contact,
+            ).where((r) => r.kind == PeerRouteKind.lan).take(2).toList();
+            await _deliverAcrossRoutes(
+              routes: routes,
+              recipientDeviceId: contact.deviceId,
+              envelope: probe,
+              lanTimeout: const Duration(milliseconds: 750),
+            );
+          }
+        }
+        final accepted = await completer.future.timeout(
+          Duration(seconds: irohOnly ? 20 : 2),
         );
+        if (accepted == null) {
+          rejected = true;
+          throw StateError(
+            '${contact.alias} did not confirm the same debug build and selected transport.',
+          );
+        }
+        return accepted;
+      } catch (error) {
+        if (rejected) rethrow;
+        if (irohOnly) {
+          throw StateError(
+            'Could not establish Iroh with ${contact.alias}. '
+            'No custom Conest relay is required. Check that both peers are online '
+            'and Iroh is enabled. Details: $error',
+          );
+        }
+        appendDebugLog(
+          'LAN file-test handshake unavailable; trying Iroh: $error',
+        );
+      } finally {
+        _debugFileProbeCompleters.remove(testId);
+        _debugFileProbeMessageIds.remove(testId);
       }
-      return accepted;
-    } finally {
-      _debugFileProbeCompleters.remove(testId);
     }
+    throw StateError('No file-test transport is available.');
   }
 
   Future<void> _handleDebugFileTestProbe(RelayEnvelope envelope) async {
@@ -11671,6 +11703,10 @@ class MessengerController extends ChangeNotifier {
         !_effectiveTransports(contact).lan ||
         _localLanAddressesCache.isEmpty ||
         localLanHint['senderLanBinaryVersion'] != 1;
+    final allowIrohRelay =
+        irohOnly &&
+        decoded['allowIrohRelay'] == true &&
+        _irohRelayEnabledFor(contact);
     final localBuild = _debugBuildId;
     final accepted =
         localBuild != null &&
@@ -11689,6 +11725,7 @@ class MessengerController extends ChangeNotifier {
       _authorizedInboundDebugFileTests[testId] = _AuthorizedDebugFileTest(
         peerDeviceId: contact.deviceId,
         irohOnly: irohOnly,
+        allowIrohRelay: allowIrohRelay,
         expiresAt: now.add(const Duration(minutes: 10)),
       );
     }
@@ -11708,15 +11745,29 @@ class MessengerController extends ChangeNotifier {
         'buildId': localBuild ?? '',
         'accepted': accepted,
         'irohOnly': irohOnly,
+        'allowIrohRelay': allowIrohRelay,
         'probeMessageId': envelope.messageId,
         ...localLanHint,
       }),
     );
+    if (!irohOnly) {
+      final endpoint = _peerLanDirect[contact.deviceId];
+      if (endpoint != null &&
+          _lanDirectChannel != null &&
+          await _lanDirectChannel.putEnvelope(
+            host: endpoint.host,
+            port: endpoint.port,
+            envelope: acknowledgement,
+            timeout: const Duration(seconds: 2),
+          )) {
+        return;
+      }
+    }
     await _deliverToContact(
       contact: contact,
       recipientDeviceId: contact.deviceId,
       envelope: acknowledgement,
-      allowRelayedPaths: !irohOnly,
+      allowRelayedPaths: !irohOnly || allowIrohRelay,
       allowLegacyRoutes: !irohOnly,
       allowedUnifiedKinds: irohOnly ? {TransportKind.iroh} : null,
     );
@@ -11742,6 +11793,10 @@ class MessengerController extends ChangeNotifier {
         peerEndpoint != null &&
         peerEndpoint.binaryBlockVersion >= 1 &&
         _lanDirectEndpointUsable(peerEndpoint);
+    if (_debugFileProbeMessageIds[decoded['testId']] !=
+        decoded['probeMessageId']) {
+      return;
+    }
     final completer = _debugFileProbeCompleters[decoded['testId'] as String];
     if (completer == null || completer.isCompleted) return;
     completer.complete(
@@ -11750,7 +11805,12 @@ class MessengerController extends ChangeNotifier {
               (decoded['irohOnly'] == true
                   ? _canUseIrohForContact(contact)
                   : peerBinaryReady)
-          ? decoded['irohOnly'] == true
+          ? (
+              irohOnly: decoded['irohOnly'] == true,
+              allowIrohRelay:
+                  decoded['allowIrohRelay'] == true &&
+                  _irohRelayEnabledFor(contact),
+            )
           : null,
     );
   }
@@ -11859,7 +11919,7 @@ class MessengerController extends ChangeNotifier {
       contact: contact,
       recipientDeviceId: contact.deviceId,
       envelope: result,
-      allowRelayedPaths: !spec.irohOnly,
+      allowRelayedPaths: !spec.irohOnly || spec.allowIrohRelay,
       allowLegacyRoutes: !spec.irohOnly,
       allowedUnifiedKinds: spec.irohOnly ? {TransportKind.iroh} : null,
     );
@@ -13627,7 +13687,14 @@ class MessengerController extends ChangeNotifier {
     // be exhausted before the durable Conest store-forward relay. This keeps
     // the latter an offline-delivery route instead of accidentally making it
     // the hot path when an old online preference is present after migration.
-    await tryLegacy(preferredLan);
+    // A stale private address must not delay an available Iroh connection.
+    await tryLegacy(
+      preferredLan.where(
+        (route) =>
+            !_canUseIrohForContact(contact) ||
+            _routeHealthTracker.healthFor(route)?.available == true,
+      ),
+    );
     await tryUnifiedTransports();
     await tryLegacy(preferredDirectInternet);
     await tryLegacy(preferredConestRelays);
@@ -15189,11 +15256,8 @@ class MessengerController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Records a PUT failure and demotes the peer to relay-only after the
-  /// second consecutive miss — but only if a fast TCP probe confirms the
-  /// peer's HTTP server is actually unreachable. nightly.11 demoted on a
-  /// single jitter blip and burned 30 s of relay-only delivery even when
-  /// LAN was fine; nightly.12 stays sticky on transient hiccups.
+  /// Absorb brief Wi-Fi failures, then let Iroh take over. A listening TCP
+  /// port alone cannot prove that the peer is accepting HTTP uploads.
   Future<void> _onLanDirectPutFailure(String peerDeviceId) async {
     final ep = _peerLanDirect[peerDeviceId];
     if (ep == null) return;
@@ -15209,13 +15273,13 @@ class MessengerController extends ChangeNotifier {
       port: ep.port,
     );
     if (!identical(_peerLanDirect[peerDeviceId], ep)) return;
-    if (reachable) {
+    if (reachable && ep.consecutiveFailures < 4) {
       appendDebugLog(
         'LAN-direct PUT failures to $peerDeviceId were transient '
         '(probe ${ep.host}:${ep.port} succeeded); staying on LAN-direct.',
       );
-      // Reset the streak so a later real outage still triggers demotion.
-      ep.consecutiveFailures = 0;
+      // A TCP accept does not prove that HTTP uploads are working. Only
+      // a successful authenticated PUT resets the failure streak.
       return;
     }
     for (final host in ep.alternateHosts) {
@@ -15241,7 +15305,7 @@ class MessengerController extends ChangeNotifier {
     ep.demotedUntil = DateTime.now().toUtc().add(_lanDirectCooldown);
     appendDebugLog(
       'LAN-direct demoted for $peerDeviceId after ${ep.consecutiveFailures} '
-      'failures + probe ${ep.host}:${ep.port} unreachable; cooldown '
+      'upload failures (TCP reachable=$reachable); cooldown '
       '${_lanDirectCooldown.inSeconds}s.',
     );
   }
@@ -16980,6 +17044,8 @@ class MessengerController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _attachmentBlockWorker.close();
+    _transferProgressUiTimer?.cancel();
     _stopLongPoll();
     _pollTimer?.cancel();
     _pendingSaveTimer?.cancel();
@@ -17010,11 +17076,13 @@ class _AuthorizedDebugFileTest {
     required this.peerDeviceId,
     required this.expiresAt,
     required this.irohOnly,
+    required this.allowIrohRelay,
   });
 
   final String peerDeviceId;
   final DateTime expiresAt;
   final bool irohOnly;
+  final bool allowIrohRelay;
 }
 
 class _PairingBeaconRoute {
@@ -17278,6 +17346,7 @@ class _InboundAttachmentState {
   bool finalizing = false;
   RandomAccessFile? _partialHandle;
   Future<void> _partialIo = Future<void>.value();
+  Future<void>? checkpointInFlight;
   int _bytesSinceCheckpoint = 0;
   DateTime _lastCheckpointAt = DateTime.now().toUtc();
   DateTime? _rateSampleAt;

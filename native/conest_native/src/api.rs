@@ -116,6 +116,10 @@ impl NativeTransport {
             builder = builder.relay_mode(RelayMode::Custom(relay_map));
         }
         let endpoint = builder.bind().await.context("bind Iroh endpoint")?;
+        Ok(Self::from_endpoint(endpoint, relay_enabled))
+    }
+
+    fn from_endpoint(endpoint: Endpoint, relay_enabled: bool) -> Self {
         let (inbox_tx, inbox_rx) = mpsc::channel(INBOX_CAPACITY);
         let connections = Arc::new(Mutex::new(HashMap::new()));
         tokio::spawn(run_accept_loop(
@@ -123,7 +127,7 @@ impl NativeTransport {
             inbox_tx.clone(),
             Arc::clone(&connections),
         ));
-        Ok(Self {
+        Self {
             endpoint,
             inbox: Arc::new(Mutex::new(inbox_rx)),
             inbox_tx,
@@ -132,7 +136,7 @@ impl NativeTransport {
             #[cfg(test)]
             connection_attempts: Arc::new(AtomicUsize::new(0)),
             relay_enabled,
-        })
+        }
     }
 
     #[frb]
@@ -490,6 +494,70 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.to_string().contains("parse custom Iroh relay"));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires live default Iroh relay and public discovery services"]
+    async fn default_relays_discover_and_exchange_without_ip_hints() {
+        use sha2::{Digest, Sha256};
+        let entropy = format!("{:?}-{}", std::time::SystemTime::now(), std::process::id());
+        let make_endpoint = |label: &str| {
+            let seed: [u8; 32] = Sha256::digest(format!("{entropy}-{label}")).into();
+            Endpoint::builder(presets::N0)
+                .secret_key(SecretKey::from_bytes(&seed))
+                .alpns(vec![CONEST_ALPN.to_vec()])
+                .clear_ip_transports()
+                .bind()
+        };
+        let (a, b) = tokio::join!(make_endpoint("a"), make_endpoint("b"));
+        let alice = NativeTransport::from_endpoint(a.unwrap(), true);
+        let bob = NativeTransport::from_endpoint(b.unwrap(), true);
+        tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::join!(alice.endpoint.online(), bob.endpoint.online());
+        })
+        .await
+        .expect("default relays did not become reachable");
+        assert!(alice.status().relay_url.is_some());
+        assert!(bob.status().relay_url.is_some());
+        let payload = vec![0x5a; 256 * 1024];
+        let mut last_error = None;
+        for _ in 0..3 {
+            match alice
+                .send_to(bob.endpoint.id().to_string(), payload.clone(), true)
+                .await
+            {
+                Ok(receipt) => {
+                    assert!(receipt.accepted);
+                    assert_eq!(receipt.path, NativePathKind::Relayed);
+                    last_error = None;
+                    break;
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }
+        }
+        assert!(
+            last_error.is_none(),
+            "default discovery/send failed: {last_error:?}"
+        );
+        let inbound = tokio::time::timeout(Duration::from_secs(5), bob.next_envelope())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(inbound.bytes, payload);
+        let reply = bob
+            .send_to(alice.endpoint.id().to_string(), b"reply".to_vec(), true)
+            .await
+            .unwrap();
+        assert_eq!(reply.path, NativePathKind::Relayed);
+        let inbound = tokio::time::timeout(Duration::from_secs(5), alice.next_envelope())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(inbound.bytes, b"reply");
+        tokio::join!(alice.close(), bob.close());
     }
 
     #[tokio::test]

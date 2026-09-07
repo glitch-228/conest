@@ -8575,7 +8575,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   ),
                             title: const Text('Online'),
                             subtitle: const Text(
-                              'Relay polling, internet/relay delivery, auto-imported contact relays.',
+                              'Iroh messaging and file transfers over the internet. Custom Conest relays are optional.',
                             ),
                           ),
                           SwitchListTile.adaptive(
@@ -8594,7 +8594,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   ),
                             title: const Text('Iroh relay fallback'),
                             subtitle: const Text(
-                              'Visible relay path used only while both peers are online.',
+                              'Use Iroh’s built-in relays for messages and files when direct connections cannot get through. Both peers must be online.',
                             ),
                           ),
                           ListTile(
@@ -8687,31 +8687,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 child: const Text('Save Iroh relays'),
                               ),
                             ],
-                          ),
-                          SwitchListTile.adaptive(
-                            value: identity
-                                .connectivity
-                                .irohCustomRelaysBulkCapable,
-                            contentPadding: EdgeInsets.zero,
-                            onChanged:
-                                _busy ||
-                                    !identity.connectivity.irohRelayEnabled ||
-                                    identity.connectivity.irohRelayUrls.isEmpty
-                                ? null
-                                : (value) => _run(
-                                    () => widget.controller
-                                        .updateGlobalConnectivity(
-                                          identity.connectivity.copyWith(
-                                            irohCustomRelaysBulkCapable: value,
-                                          ),
-                                        ),
-                                  ),
-                            title: const Text(
-                              'Custom relays allow bulk transfers',
-                            ),
-                            subtitle: const Text(
-                              'Trust these self-managed relays to carry files above 30 MiB automatically.',
-                            ),
                           ),
                           const SizedBox(height: 12),
                           Text(
@@ -10420,7 +10395,7 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
                     const SizedBox(height: 6),
                     Text(
                       debugFileTestsReady
-                          ? 'The selected peer must run the exact same debug build. It auto-accepts the encrypted test, verifies every block and the final SHA-256, reports timing, and removes test artifacts on both devices. No visual confirmation is required. Tests use LAN when enabled for the contact, otherwise direct Iroh. Payload blocks cannot use relays.'
+                          ? 'The selected peer must run the exact same debug build. It auto-accepts the encrypted test, verifies every block and the final SHA-256, reports timing, and removes test artifacts on both devices. No visual confirmation is required. Tests check LAN reachability first, then use Iroh. Iroh relay fallback follows your settings; online tests need no custom Conest relay.'
                           : 'Automatic file tests are disabled because this local build has no exact artifact tag and commit. Use a Debug workflow artifact or build both peers with identical CONEST_BUILD_TAG and CONEST_BUILD_COMMIT values.',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: debugFileTestsReady

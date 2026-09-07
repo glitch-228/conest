@@ -1408,6 +1408,111 @@ void main() {
     },
   );
 
+  for (final relayed in [false, true]) {
+    test(
+      'different-network Iroh messaging and file tests use ${relayed ? "default relay fallback" : "direct connections"} without Conest relays',
+      () async {
+        final network = _InProcessIrohNetwork(relayed: relayed);
+        final relay = _FakeRelayClient();
+        final aliceChannel = _InProcessLanDirectChannel(host: '192.168.10.2');
+        final bobChannel = _InProcessLanDirectChannel(host: '192.168.20.2');
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          lanAddresses: ['192.168.10.2'],
+          lanDirectChannel: aliceChannel,
+          transportRegistryFactory: network.registry,
+          debugBuildId: 'debug-iroh-fallback',
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          lanAddresses: ['192.168.20.2'],
+          lanDirectChannel: bobChannel,
+          transportRegistryFactory: network.registry,
+          debugBuildId: 'debug-iroh-fallback',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        for (final controller in [alice, bob]) {
+          await controller.updateGlobalConnectivity(
+            _irohOnlyConnectivity.copyWith(lanEnabled: true),
+          );
+        }
+        await _pairControllers(alice, bob);
+        aliceChannel.transientFailureCount = 10000;
+        bobChannel.transientFailureCount = 10000;
+        relay.shouldFailStore = (_, _, _, _, _) => true;
+        relay.storedEnvelopes.clear();
+        for (final sender in [alice, bob]) {
+          await sender.sendMessage(
+            contact: sender.contacts.single,
+            body: 'Across networks',
+          );
+          final result = await sender
+              .runDebugFileBattleTest(
+                contact: sender.contacts.single,
+                sizeMiB: 5,
+              )
+              .timeout(const Duration(seconds: 30));
+          expect(result.success, isTrue, reason: result.detail);
+        }
+        expect(
+          alice
+              .messagesFor(bob.identity!.deviceId)
+              .where((m) => !m.outbound && m.body == 'Across networks'),
+          hasLength(1),
+        );
+        expect(
+          bob
+              .messagesFor(alice.identity!.deviceId)
+              .where((m) => !m.outbound && m.body == 'Across networks'),
+          hasLength(1),
+        );
+        // Exercise the ordinary picker/send path, including a failed binary
+        // LAN upload falling through to Iroh and the >30 MiB relay policy.
+        final manualBytes = Uint8List(31 * 1024 * 1024)..[0] = 17;
+        final sourceRoot = await Directory.systemTemp.createTemp(
+          'conest-manual-iroh-',
+        );
+        addTearDown(() => sourceRoot.delete(recursive: true));
+        final sourceFile = File('${sourceRoot.path}/manual-large.bin');
+        await sourceFile.writeAsBytes(manualBytes);
+        await alice.sendAttachmentSource(
+          contact: alice.contacts.single,
+          source: StagedAttachment(
+            id: 'manual-source',
+            fileName: 'manual-large.bin',
+            mimeType: 'application/octet-stream',
+            sizeBytes: manualBytes.length,
+            filePath: sourceFile.path,
+          ),
+        );
+        ChatMessage? manual;
+        for (var step = 0; step < 2000; step++) {
+          manual = bob
+              .messagesFor(alice.identity!.deviceId)
+              .where((m) => m.attachment?.fileName == 'manual-large.bin')
+              .firstOrNull;
+          if (manual != null) {
+            if (bob.attachmentAwaitingAcceptance(manual.attachment!.id)) {
+              await bob.acceptIncomingAttachment(manual.attachment!.id);
+            }
+            if (bob.attachmentAvailableLocally(manual.attachment!.id)) break;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        expect(manual, isNotNull);
+        expect(manual!.attachment!.chunkSize, 4 * 1024 * 1024);
+        final cache = await bob.attachmentCachePathFor(manual.attachment!.id);
+        expect(cache, isNotNull);
+        expect(await File(cache!).length(), manualBytes.length);
+        expect((await File(cache).openRead(0, 1).first).single, 17);
+        expect(relay.storedEnvelopes, isEmpty);
+      },
+    );
+  }
+
   test(
     'repeated LAN hints preserve the endpoint and prefer the shared subnet',
     () async {
