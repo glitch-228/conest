@@ -15,6 +15,53 @@ void main() {
   );
 
   test(
+    'Iroh delivery can finish after four seconds and explicit timeouts still apply',
+    () async {
+      final adapter = _FakeAdapter(
+        kind: TransportKind.iroh,
+        route: _route(TransportKind.iroh, TransportPathKind.direct),
+        sendDelay: const Duration(milliseconds: 4100),
+      );
+      final registry = TransportRegistry([adapter]);
+      final result = await registry.deliverEnvelope(
+        peer: peer,
+        envelope: _envelope(),
+        policies: const {TransportKind.iroh: TransportPolicy.automatic},
+      );
+      expect(result.receipt.accepted, isTrue);
+      await expectLater(
+        registry.deliverEnvelope(
+          peer: peer,
+          envelope: _envelope(),
+          policies: const {TransportKind.iroh: TransportPolicy.automatic},
+          attemptTimeout: const Duration(milliseconds: 1),
+        ),
+        throwsStateError,
+      );
+    },
+  );
+
+  test('Iroh transfer limit defaults on and persists an explicit opt-out', () {
+    expect(
+      const GlobalConnectivityPreferences().irohTransferLimitEnabled,
+      isTrue,
+    );
+    expect(
+      GlobalConnectivityPreferences.fromJson({}).irohTransferLimitEnabled,
+      isTrue,
+    );
+    final disabled = const GlobalConnectivityPreferences().copyWith(
+      irohTransferLimitEnabled: false,
+    );
+    final loaded = GlobalConnectivityPreferences.fromJson(disabled.toJson());
+    expect(loaded.irohTransferLimitEnabled, isFalse);
+    expect(
+      loaded.copyWith(lanEnabled: false).irohTransferLimitEnabled,
+      isFalse,
+    );
+  });
+
+  test(
     'registry prefers configured routes and falls back sequentially',
     () async {
       final failed = _FakeAdapter(
@@ -257,12 +304,18 @@ RouteCandidate _route(TransportKind kind, TransportPathKind path) =>
     );
 
 class _FakeAdapter implements TransportAdapter {
-  _FakeAdapter({required this.kind, required this.route, this.fail = false});
+  _FakeAdapter({
+    required this.kind,
+    required this.route,
+    this.fail = false,
+    this.sendDelay = Duration.zero,
+  });
 
   @override
   final TransportKind kind;
   final RouteCandidate route;
   final bool fail;
+  final Duration sendDelay;
   int sendCount = 0;
 
   @override
@@ -297,6 +350,7 @@ class _FakeAdapter implements TransportAdapter {
     required TransportEnvelope envelope,
   }) async {
     sendCount++;
+    if (sendDelay > Duration.zero) await Future<void>.delayed(sendDelay);
     if (fail) throw StateError('unavailable');
     return DeliveryReceipt(
       state: DeliveryReceiptState.deliveredToPeer,

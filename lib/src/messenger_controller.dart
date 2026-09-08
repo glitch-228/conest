@@ -288,6 +288,19 @@ class DebugFileTestResult {
       : (bytesVerified / (1024 * 1024)) / (elapsed.inMilliseconds / 1000);
 }
 
+typedef _DebugFileRoute = ({
+  bool irohOnly,
+  bool allowIrohRelay,
+  int maxIrohBytes,
+});
+
+class IrohTransferLimitException implements Exception {
+  const IrohTransferLimitException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
 class DebugAttachmentTestSpec {
   const DebugAttachmentTestSpec({
     required this.testId,
@@ -544,9 +557,8 @@ class MessengerController extends ChangeNotifier {
   final List<DebugFileTestResult> _debugFileTestResults =
       <DebugFileTestResult>[];
   final Map<String, String> _debugFileProbeMessageIds = {};
-  final Map<String, Completer<({bool irohOnly, bool allowIrohRelay})?>>
-  _debugFileProbeCompleters =
-      <String, Completer<({bool irohOnly, bool allowIrohRelay})?>>{};
+  final Map<String, Completer<_DebugFileRoute?>> _debugFileProbeCompleters =
+      <String, Completer<_DebugFileRoute?>>{};
   final Map<String, Completer<DebugFileTestResult>> _debugFileResultCompleters =
       <String, Completer<DebugFileTestResult>>{};
   final Map<String, DebugAttachmentTestSpec> _outboundDebugAttachmentTests =
@@ -1284,6 +1296,10 @@ class MessengerController extends ChangeNotifier {
           throw const FormatException(
             'Iroh attachment range does not match an active manifest.',
           );
+        }
+        if (!_irohFileAllowed(state.descriptor.sizeBytes)) {
+          _waitForLanBecauseOfIrohLimit(range.attachmentId);
+          return;
         }
         if (state.debugTest case final spec?) {
           if (!spec.irohOnly ||
@@ -2171,6 +2187,7 @@ class MessengerController extends ChangeNotifier {
     buffer.writeln('buildMode=${kDebugMode ? 'debug' : 'release'}');
     buffer.writeln('platform=${kIsWeb ? 'web' : Platform.operatingSystem}');
     buffer.writeln('debugBuildId=${_debugBuildId ?? "(none)"}');
+    buffer.writeln('irohTransferLimitBytes=$maxIrohAttachmentBytes');
     buffer.writeln('lanDirectPort=$lanDirectPort');
     buffer.writeln(
       'lanAttachmentIngressPort=${_localRelayNode.attachmentIngressPort}',
@@ -3224,6 +3241,53 @@ class MessengerController extends ChangeNotifier {
         'Connectivity is fully off. The app will not send or receive.',
     };
     await _persist(label);
+  }
+
+  static const int recommendedIrohTransferLimitBytes = 100 * 1024 * 1024;
+  static const String _irohLimitMessage =
+      'This file exceeds the recommended 100 MiB Iroh limit. Use LAN or disable '
+      '“Limit Iroh files to 100 MiB” in Settings on both devices.';
+
+  int get maxIrohAttachmentBytes =>
+      (_snapshot.identity?.connectivity.irohTransferLimitEnabled ?? true)
+      ? recommendedIrohTransferLimitBytes
+      : maxLanAttachmentSizeBytes;
+
+  bool _irohFileAllowed(int sizeBytes) => sizeBytes <= maxIrohAttachmentBytes;
+
+  Future<void> updateIrohTransferLimitEnabled(bool enabled) async {
+    final me = _requireIdentity();
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(
+        connectivity: me.connectivity.copyWith(
+          irohTransferLimitEnabled: enabled,
+        ),
+      ),
+    );
+    await _saveSnapshotSilently();
+    if (!enabled) {
+      for (final state in _inboundAttachments.values.toList()) {
+        if (!state.accepted || state.finalizing) continue;
+        final peer = _contactByDeviceId(state.peerDeviceId);
+        if (peer == null) continue;
+        state.requestedInFlight.clear();
+        _scheduleAttachmentRetry(state.descriptor.id);
+        _startInboundRequestWindow(state, peer);
+      }
+      for (final state in _outboundAttachments.values.toList()) {
+        final peer = _contactByDeviceId(state.peerDeviceId);
+        if (peer != null) _pumpOutboundQueue(peer);
+      }
+    }
+  }
+
+  void _waitForLanBecauseOfIrohLimit(String attachmentId) {
+    _setTransferSessionState(
+      attachmentId,
+      TransferState.waitingForLan,
+      error: _irohLimitMessage,
+    );
+    _setTransientStatus(_irohLimitMessage);
   }
 
   double get _storageReserveFraction =>
@@ -4371,6 +4435,7 @@ class MessengerController extends ChangeNotifier {
     5,
     15,
     30,
+    100,
     125,
     1000,
     2000,
@@ -4397,6 +4462,7 @@ class MessengerController extends ChangeNotifier {
         (policies[TransportKind.iroh] == TransportPolicy.automatic ||
             policies[TransportKind.iroh] == TransportPolicy.preferred);
     if (!effective.lan && !irohAllowed) return maxAttachmentSizeBytes;
+    if (!effective.lan && irohAllowed) return maxIrohAttachmentBytes;
     // Selection is allowed while LAN is enabled even if the direct endpoint
     // is temporarily absent. Large sessions enter waitingForLan and never
     // leak file chunks through the online/relay fallback.
@@ -4494,6 +4560,11 @@ class MessengerController extends ChangeNotifier {
     if ((debugTest != null || debugUseSourceInPlace) &&
         (_debugBuildId == null || debugTest?.buildId != _debugBuildId)) {
       throw StateError('Automatic file tests require this exact debug build.');
+    }
+    if (!_effectiveTransports(contact).lan &&
+        _canUseIrohForContact(contact) &&
+        !_irohFileAllowed(source.sizeBytes)) {
+      throw const IrohTransferLimitException(_irohLimitMessage);
     }
     final perContactCap = effectiveMaxAttachmentSizeFor(contact);
     if (source.sizeBytes > perContactCap) {
@@ -4723,6 +4794,11 @@ class MessengerController extends ChangeNotifier {
     notifyListeners();
     final selected = await _probeDebugFileTestPeer(contact, testId, buildId);
     final irohOnly = selected.irohOnly;
+    if (irohOnly && sizeMiB * 1024 * 1024 > selected.maxIrohBytes) {
+      _debugFileTestStatus = _irohLimitMessage;
+      _setTransientStatus(_irohLimitMessage);
+      throw const IrohTransferLimitException(_irohLimitMessage);
+    }
     final startedAt = _now().toUtc();
     final spec = DebugAttachmentTestSpec(
       testId: testId,
@@ -4802,12 +4878,19 @@ class MessengerController extends ChangeNotifier {
   }) async {
     final results = <DebugFileTestResult>[];
     for (final sizeMiB in debugLanTestSizesMiB) {
-      final result = await runDebugFileBattleTest(
-        contact: contact,
-        sizeMiB: sizeMiB,
-      );
-      results.add(result);
-      if (!result.success) break;
+      try {
+        final result = await runDebugFileBattleTest(
+          contact: contact,
+          sizeMiB: sizeMiB,
+        );
+        results.add(result);
+        if (!result.success) break;
+      } on IrohTransferLimitException {
+        _debugFileTestStatus =
+            'Matrix finished within the recommended 100 MiB Iroh limit. Disable it in Settings on both devices to test larger files.';
+        notifyListeners();
+        break;
+      }
     }
     return List<DebugFileTestResult>.unmodifiable(results);
   }
@@ -5292,7 +5375,8 @@ class MessengerController extends ChangeNotifier {
     }
     // If the transfer is paused, keep waiting — pause is explicit, not a
     // stall. The timer rearms on resume so we don't lose the escape hatch.
-    if (state.paused) {
+    if (state.paused ||
+        _transferSessionById(activeId)?.lastError == _irohLimitMessage) {
       _armOutboundStallTimer(contact);
       return;
     }
@@ -9395,6 +9479,7 @@ class MessengerController extends ChangeNotifier {
         'attachmentId': attachmentId,
         'index': index,
         'senderIrohBinaryVersion': 1,
+        'maxIrohBytes': maxIrohAttachmentBytes,
         ...hint,
       }),
     );
@@ -9649,6 +9734,14 @@ class MessengerController extends ChangeNotifier {
       }
     }
     if (irohBinarySupported && !state.lanOnly) {
+      final peerLimit = payload['maxIrohBytes'];
+      if (!_irohFileAllowed(state.descriptor.sizeBytes) ||
+          (peerLimit is int &&
+              peerLimit >= 0 &&
+              state.descriptor.sizeBytes > peerLimit)) {
+        _waitForLanBecauseOfIrohLimit(attachmentId);
+        return;
+      }
       final allowIrohRelay =
           (_outboundDebugAttachmentTests[attachmentId]?.allowIrohRelay ==
               true) ||
@@ -11575,7 +11668,7 @@ class MessengerController extends ChangeNotifier {
       _snapshot.identity?.connectivity.irohRelayEnabled == true &&
       contact.routing.irohRelayEnabled;
 
-  Future<({bool irohOnly, bool allowIrohRelay})> _probeDebugFileTestPeer(
+  Future<_DebugFileRoute> _probeDebugFileTestPeer(
     ContactRecord contact,
     String testId,
     String buildId,
@@ -11588,7 +11681,7 @@ class MessengerController extends ChangeNotifier {
         localLanHint['senderLanBinaryVersion'] == 1;
     final me = _requireIdentity();
     for (final irohOnly in [if (canTryLan) false, true]) {
-      final completer = Completer<({bool irohOnly, bool allowIrohRelay})?>();
+      final completer = Completer<_DebugFileRoute?>();
       _debugFileProbeCompleters[testId] = completer;
       final probe = await _crypto.encryptPayloadEnvelope(
         kind: 'debug_file_test_probe',
@@ -11746,6 +11839,7 @@ class MessengerController extends ChangeNotifier {
         'accepted': accepted,
         'irohOnly': irohOnly,
         'allowIrohRelay': allowIrohRelay,
+        'maxIrohBytes': maxIrohAttachmentBytes,
         'probeMessageId': envelope.messageId,
         ...localLanHint,
       }),
@@ -11806,6 +11900,11 @@ class MessengerController extends ChangeNotifier {
                   ? _canUseIrohForContact(contact)
                   : peerBinaryReady)
           ? (
+              maxIrohBytes: min(
+                maxIrohAttachmentBytes,
+                (decoded['maxIrohBytes'] as num?)?.toInt() ??
+                    recommendedIrohTransferLimitBytes,
+              ),
               irohOnly: decoded['irohOnly'] == true,
               allowIrohRelay:
                   decoded['allowIrohRelay'] == true &&

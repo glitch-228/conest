@@ -1514,6 +1514,84 @@ void main() {
   }
 
   test(
+    'Iroh limit blocks oversized manual and debug sends before preparation and honors both peers',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final aliceVault = _MemoryVaultStore();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: aliceVault,
+        transportRegistryFactory: network.registry,
+        debugBuildId: 'debug-limit',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        debugBuildId: 'debug-limit',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await _pairControllers(alice, bob);
+      final contact = alice.contacts.single;
+      expect(alice.effectiveMaxAttachmentSizeFor(contact), 100 * 1024 * 1024);
+      await expectLater(
+        alice.sendAttachmentSource(
+          contact: contact,
+          source: StagedAttachment(
+            id: 'oversized',
+            fileName: 'oversized.bin',
+            mimeType: 'application/octet-stream',
+            sizeBytes: 100 * 1024 * 1024 + 1,
+            filePath: '/does-not-exist',
+          ),
+        ),
+        throwsA(isA<IrohTransferLimitException>()),
+      );
+      await expectLater(
+        alice.runDebugFileBattleTest(contact: contact, sizeMiB: 125),
+        throwsA(isA<IrohTransferLimitException>()),
+      );
+      await alice.updateIrohTransferLimitEnabled(false);
+      expect(
+        (await aliceVault.load())
+            .identity!
+            .connectivity
+            .irohTransferLimitEnabled,
+        isFalse,
+      );
+      expect(
+        alice.effectiveMaxAttachmentSizeFor(contact),
+        MessengerController.maxLanAttachmentSizeBytes,
+      );
+      await expectLater(
+        alice.runDebugFileBattleTest(contact: contact, sizeMiB: 125),
+        throwsA(isA<IrohTransferLimitException>()),
+        reason: 'receiver limit is still on',
+      );
+      expect(alice.messagesFor(contact.deviceId), isEmpty);
+      expect(bob.messagesFor(alice.identity!.deviceId), isEmpty);
+      final matrix = await alice.runDebugFileBattleTestMatrix(contact: contact);
+      expect(matrix.map((result) => result.sizeMiB), [5, 15, 30, 100]);
+      expect(matrix.every((result) => result.success), isTrue);
+      expect(alice.debugFileTestStatus, contains('100 MiB Iroh limit'));
+      await alice.updateIrohTransferLimitEnabled(true);
+      await alice.updateGlobalConnectivity(
+        alice.identity!.connectivity.copyWith(lanEnabled: true),
+      );
+      expect(
+        alice.effectiveMaxAttachmentSizeFor(contact),
+        MessengerController.maxLanAttachmentSizeBytes,
+      );
+    },
+    timeout: const Timeout(Duration(seconds: 90)),
+  );
+
+  test(
     'repeated LAN hints preserve the endpoint and prefer the shared subnet',
     () async {
       final controller = await _createController(
@@ -1642,6 +1720,20 @@ void main() {
       });
       await tester.pump();
       expect(bob.identity!.connectivity.storageReserveEnabled, isFalse);
+      expect(bob.identity!.connectivity.irohTransferLimitEnabled, isTrue);
+      await tester.ensureVisible(
+        find.text('Limit Iroh files to 100 MiB (recommended)'),
+      );
+      await tester.runAsync(() async {
+        await tester.tap(
+          find.text('Limit Iroh files to 100 MiB (recommended)'),
+        );
+        await _waitForIroh(
+          () => !bob.identity!.connectivity.irohTransferLimitEnabled,
+        );
+      });
+      await tester.pump();
+      expect(bob.identity!.connectivity.irohTransferLimitEnabled, isFalse);
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.runAsync(() async {
         await bob.cancelTransfer(id);
@@ -9377,8 +9469,12 @@ void main() {
         );
         addTearDown(alice.dispose);
         addTearDown(bob.dispose);
-        await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
-        await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+        await alice.updateGlobalConnectivity(
+          _irohOnlyConnectivity.copyWith(irohTransferLimitEnabled: false),
+        );
+        await bob.updateGlobalConnectivity(
+          _irohOnlyConnectivity.copyWith(irohTransferLimitEnabled: false),
+        );
         relayClient.storedEnvelopes.clear();
         final pairing = await alice.addContactFromInvite(
           alias: 'Bob',

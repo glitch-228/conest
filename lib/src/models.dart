@@ -666,6 +666,7 @@ class GlobalConnectivityPreferences {
     this.irohCustomRelaysBulkCapable = false,
     this.autoDownloadPreset = AutoDownloadPreset.medium,
     this.storageReserveEnabled = true,
+    this.irohTransferLimitEnabled = true,
     this.transportPolicies = const {
       TransportKind.lan: TransportPolicy.automatic,
       TransportKind.iroh: TransportPolicy.automatic,
@@ -690,6 +691,7 @@ class GlobalConnectivityPreferences {
   final bool irohCustomRelaysBulkCapable;
   final AutoDownloadPreset autoDownloadPreset;
   final bool storageReserveEnabled;
+  final bool irohTransferLimitEnabled;
   final Map<TransportKind, TransportPolicy> transportPolicies;
 
   bool get anyEnabled => lanEnabled || onlineEnabled;
@@ -716,6 +718,7 @@ class GlobalConnectivityPreferences {
     bool? irohCustomRelaysBulkCapable,
     AutoDownloadPreset? autoDownloadPreset,
     bool? storageReserveEnabled,
+    bool? irohTransferLimitEnabled,
     Map<TransportKind, TransportPolicy>? transportPolicies,
   }) {
     return GlobalConnectivityPreferences(
@@ -726,6 +729,8 @@ class GlobalConnectivityPreferences {
       irohCustomRelaysBulkCapable:
           irohCustomRelaysBulkCapable ?? this.irohCustomRelaysBulkCapable,
       autoDownloadPreset: autoDownloadPreset ?? this.autoDownloadPreset,
+      irohTransferLimitEnabled:
+          irohTransferLimitEnabled ?? this.irohTransferLimitEnabled,
       storageReserveEnabled:
           storageReserveEnabled ?? this.storageReserveEnabled,
       transportPolicies: transportPolicies ?? this.transportPolicies,
@@ -740,6 +745,7 @@ class GlobalConnectivityPreferences {
     'irohCustomRelaysBulkCapable': irohCustomRelaysBulkCapable,
     'autoDownloadPreset': autoDownloadPreset.name,
     'storageReserveEnabled': storageReserveEnabled,
+    'irohTransferLimitEnabled': irohTransferLimitEnabled,
     'transportPolicies': transportPoliciesToJson(transportPolicies),
   };
 
@@ -765,6 +771,8 @@ class GlobalConnectivityPreferences {
       lanEnabled: lanEnabled,
       onlineEnabled: onlineEnabled,
       storageReserveEnabled: json['storageReserveEnabled'] as bool? ?? true,
+      irohTransferLimitEnabled:
+          json['irohTransferLimitEnabled'] as bool? ?? true,
       irohRelayEnabled: json['irohRelayEnabled'] as bool? ?? true,
       irohRelayUrls: normalizeIrohRelayUrls(
         (json['irohRelayUrls'] as List<dynamic>? ?? const [])

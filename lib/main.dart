@@ -8597,6 +8597,23 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               'Use Iroh’s built-in relays for messages and files when direct connections cannot get through. Both peers must be online.',
                             ),
                           ),
+                          SwitchListTile.adaptive(
+                            value:
+                                identity.connectivity.irohTransferLimitEnabled,
+                            contentPadding: EdgeInsets.zero,
+                            onChanged: _busy
+                                ? null
+                                : (value) => _run(
+                                    () => widget.controller
+                                        .updateIrohTransferLimitEnabled(value),
+                                  ),
+                            title: const Text(
+                              'Limit Iroh files to 100 MiB (recommended)',
+                            ),
+                            subtitle: const Text(
+                              'Applies to direct online and Iroh relay transfers. Disable for larger files; they may take a long time. LAN transfers keep their larger limit.',
+                            ),
+                          ),
                           ListTile(
                             contentPadding: EdgeInsets.zero,
                             title: const Text('Automatic downloads'),
@@ -10453,6 +10470,14 @@ class _DebugMenuDialogState extends State<DebugMenuDialog> {
                               }
                             },
                     ),
+                    if (_selectedDebugSizeMiB > 100 &&
+                        identity.connectivity.irohTransferLimitEnabled ==
+                            true) ...[
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Iroh tests stop at the recommended 100 MiB limit. Disable the limit in Settings on both devices for larger online tests. LAN tests can use every size.',
+                      ),
+                    ],
                     if (_selectedDebugSizeMiB >= 1000) ...[
                       const SizedBox(height: 8),
                       Text(

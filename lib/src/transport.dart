@@ -231,7 +231,10 @@ class TransportRegistry {
     required TransportPeer peer,
     required TransportEnvelope envelope,
     required Map<TransportKind, TransportPolicy> policies,
-    Duration attemptTimeout = const Duration(seconds: 4),
+    // A fresh Iroh connection includes discovery/NAT traversal (the native
+    // dial alone permits ten seconds). Four seconds prematurely abandoned
+    // healthy cold connections and left their native sends still running.
+    Duration? attemptTimeout,
   }) async {
     final routes = await routesFor(peer, policies: policies);
     final attempts = <DeliveryAttempt>[];
@@ -244,7 +247,12 @@ class TransportRegistry {
       try {
         final receipt = await adapter
             .sendEnvelope(peer: peer, route: route, envelope: envelope)
-            .timeout(attemptTimeout);
+            .timeout(
+              attemptTimeout ??
+                  (route.transport == TransportKind.iroh
+                      ? const Duration(seconds: 30)
+                      : const Duration(seconds: 4)),
+            );
         attempts.add(
           DeliveryAttempt(
             route: route,
