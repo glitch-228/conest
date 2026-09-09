@@ -1,45 +1,48 @@
-## Iroh pairing and transfer reliability
+## Conest 0.3.9 nightly
 
-- Signed QR/pasted ci6 invites now deliver contact requests over Iroh before
-  the sender is a trusted contact. The signed invite must match the
-  authenticated endpoint, and the receiver must approve the request.
-- Approval returns an encrypted contact confirmation. Codephrase-only
-  discovery still requires LAN discovery or a shared Conest relay.
-- Fixes stalled replies and transfer acknowledgements on pooled Iroh
-  connections. Both dialed and accepted connections now receive streams.
-- Isolates connection attempts by peer, bounds stalled streams, and allows
-  direct delivery to recover after a previous relayed connection.
-- Checks attachment ownership before accepting pause, completion, or cancel
-  controls, and rejects attachment-ID collisions across conversations.
-- Makes cancellation persist across restart, cleans private transfer files,
-  advances the outbound queue, and stops late block retries and fallback.
-- Preserves paused state and durable range boundaries when checkpointing
-  incoming transfers.
+### Iroh connections and file transfers
 
-## Debug artifacts
+- Messaging and files can use Iroh discovery and relay fallback without a
+  custom Conest relay. LAN remains preferred when available.
+- Gives Iroh connection setup 30 seconds instead of the previous 4-second
+  transport timeout, allowing discovery and connection establishment time
+  to complete.
+- Adds a recommended 100 MiB Iroh file limit, enabled by default in Settings.
+  It applies to both direct and relayed Iroh transfers. Larger files can use
+  LAN, or both peers can disable the limit to allow larger Iroh transfers.
+- Large Iroh transfers can still be slow; the limit is a practical default,
+  not a throughput improvement.
+- Fixes Iroh contact presence and delivery receipts: transport acceptance
+  alone no longer marks a message as delivered to its recipient.
 
-- Adds a separate debug channel and manually triggered Android, Linux, and
-  Windows debug artifact workflow. Android debug installs use a separate app
-  identity and the label Conest Debug.
-- Matching debug builds can run automatic LAN file tests with build
-  compatibility checks, hash verification, timing/results, and cleanup.
-- Automatic file-test controls are limited to debug artifacts. Debug builds
-  do not use the release updater or publish to the nightly release feed.
+### LAN transfers and responsiveness
 
-## Validation
+- Uses the existing LAN messaging port for attachment ingress, avoiding
+  random file ports that may be blocked by a firewall.
+- Uses larger binary blocks for manual transfers, moves hashing and block
+  processing off the UI isolate, and reduces progress/checkpoint overhead.
+- Improves endpoint recovery, retry backoff, verification heartbeats, and
+  transfer timing to reduce stalls and misleading acknowledgement timeouts.
+- Raises the LAN byte budget that previously throttled sustained transfers.
 
-- Flutter suite: 279 tests passed, followed by focused cancellation, pairing,
-  transfer, and restart/resume regressions after the final fixes.
-- Rust workspace: 56 tests passed; Clippy and Dart/Flutter analysis passed.
-- A real 250 MiB native-Iroh controller transfer passed with contact pairing
-  forced through Iroh, final file verification, and no Conest relay payloads.
-- Direct and relayed Iroh controller simulations cover pairing, two-way
-  messages, files, and invalid identity rejection.
+### Storage and debug testing
 
-## Testing notes
+- Adds a setting to disable the default 10% free-space reserve, plus a
+  per-file Download Anyway option when the file fits but would use the reserve.
+- Matching debug builds support LAN and Iroh file matrices, negotiate the
+  selected transport and peer size limits, and stop before generating files
+  above the negotiated Iroh limit. Debug test controls remain debug-only.
 
-Update both peers to this nightly for the pairing and pooled-connection fixes.
-Attachment-v2 compatibility and the 30 MiB default Conest store-forward limit
-remain in effect. Public-relay/NAT and physical Android/Windows qualification
-were not performed for this change; repeat pause/resume, cancellation, restart,
-and network-change checks on your devices.
+### Validation
+
+- Flutter: 302 tests passed, with 4 opt-in tests skipped; analysis passed.
+- Separate native transfer checks passed for 1000/2000 MiB LAN transfers
+  with the Iroh limit enabled and 250 MiB Iroh with the limit disabled.
+- Rust workspace: 56 tests passed for the preceding transport changes.
+- A native public-Iroh discovery/relay test passed with direct IP transport
+  disabled. Android/Linux device testing also confirmed online transfers;
+  large-file performance and network transitions still need device testing.
+
+Update both peers to this nightly to use the matching transfer fixes and
+negotiate the Iroh file limit. The 30 MiB default Conest store-forward limit
+remains separate from the Iroh limit.
