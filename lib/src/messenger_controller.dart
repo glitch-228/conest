@@ -7,7 +7,6 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:crypto/crypto.dart' as dart_crypto;
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart' show AssetBundle, rootBundle;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart' as path_provider;
 
@@ -207,12 +206,6 @@ const Set<String> _v2PairwiseKinds = <String>{
   'debug_file_test_probe_ack',
   'debug_file_test_result',
 };
-
-/// Base URL the "Update default relays" button pulls from. Points at the
-/// project's `main`-branch raw assets so a freshly-pushed signed manifest
-/// reaches users without an app release.
-const String kDefaultRelaysGitHubRawBase =
-    'https://raw.githubusercontent.com/glitch-228/conest/main/assets';
 
 /// Outcome of a [`MessengerController.refreshDefaultRelays`] call.
 class DefaultRelaysRefreshResult {
@@ -1129,9 +1122,78 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  static bool _isRetiredRelay(PeerEndpoint route) =>
+      route.host == '185.182.65.29' && route.port == 7667;
+
+  bool _allowsAdvertisedRoute(PeerEndpoint route) =>
+      !_isRetiredRelay(route) ||
+      (_snapshot.identity?.configuredRelays.any(
+            (configured) =>
+                configured.host == route.host && configured.port == route.port,
+          ) ??
+          false);
+
+  /// Retire only provenance-tagged bundled routes. Explicit custom lists win.
+  /// Clearing their provenance makes this migration naturally idempotent.
+  Future<void> _retireBundledRelayRoutes() async {
+    final me = _snapshot.identity;
+    if (me == null) return;
+    final imported = _snapshot.customRelaySources
+        .expand((source) => source.routeKeys)
+        .toSet();
+    final removed = me.configuredRelays
+        .where(
+          (route) =>
+              _isRetiredRelay(route) &&
+              !imported.contains(route.routeKey) &&
+              (_snapshot.defaultRelayRouteKeys.contains(route.routeKey) ||
+                  _snapshot.defaultRelayHosts.contains(
+                    '${route.host}:${route.port}',
+                  )),
+        )
+        .toList();
+    final retiredKeys = _snapshot.defaultRelayRouteKeys
+        .where((key) => key.contains('185.182.65.29:7667'))
+        .toSet();
+    if (removed.isEmpty &&
+        retiredKeys.isEmpty &&
+        !_snapshot.defaultRelayHosts.contains('185.182.65.29:7667')) {
+      return;
+    }
+    final removedKeys = removed.map((route) => route.routeKey).toSet();
+    final healthKeys = removed.map(relayHealthEndpointKey).toSet();
+    if (!me.configuredRelays.any(
+      (route) =>
+          _isRetiredRelay(route) && !removedKeys.contains(route.routeKey),
+    )) {
+      healthKeys.addAll(
+        _snapshot.relayHealthScores.keys.where(
+          (key) => key.startsWith('185.182.65.29:7667:'),
+        ),
+      );
+    }
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(
+        configuredRelays: me.configuredRelays
+            .where((route) => !removedKeys.contains(route.routeKey))
+            .toList(),
+      ),
+      defaultRelayRouteKeys: _snapshot.defaultRelayRouteKeys.difference(
+        retiredKeys,
+      ),
+      defaultRelayHosts: _snapshot.defaultRelayHosts.difference({
+        '185.182.65.29:7667',
+      }),
+      relayHealthScores: Map.of(_snapshot.relayHealthScores)
+        ..removeWhere((key, _) => healthKeys.contains(key)),
+    );
+    await _saveSnapshotSilently(notify: false);
+  }
+
   Future<void> initialize() async {
     try {
       _snapshot = await _vaultStore.load();
+      await _retireBundledRelayRoutes();
       final transportIdentityMigrated = await _ensureTransportIdentity();
       final protocolQueueMigrated = _markLegacyQueuedControlsIncompatible();
       if (!experimentalAndroidBackgroundRuntimeAvailable &&
@@ -1252,6 +1314,9 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     try {
+      if (contact == null && await _handleGroupOnlyIrohInbound(inbound)) {
+        return;
+      }
       if (contact == null) {
         // A first contact request cannot have a local pin yet. Authenticate
         // its signed ci6 binding against QUIC's remote identity, and retain
@@ -1342,6 +1407,66 @@ class MessengerController extends ChangeNotifier {
     } catch (error) {
       appendDebugLog('Rejected malformed Iroh envelope: $error');
     }
+  }
+
+  /// Membership grants access only to this group's control/text envelopes.
+  /// A member not accepted as a contact cannot use this to send a private DM.
+  Future<bool> _handleGroupOnlyIrohInbound(
+    TransportInboundEnvelope inbound,
+  ) async {
+    if (inbound.bytes.length > _maxEncryptedEnvelopeCiphertextBytes * 2) {
+      return false;
+    }
+    final decoded = jsonDecode(utf8.decode(inbound.bytes));
+    if (decoded is! Map<String, dynamic>) return false;
+    final envelope = RelayEnvelope.fromJson(decoded);
+    if (!const {
+      'group_message',
+      'group_membership',
+      'group_membership_ack',
+      'group_leave',
+      'ack',
+    }.contains(envelope.kind)) {
+      return false;
+    }
+    final group = _groupById(envelope.conversationId);
+    final me = _snapshot.identity;
+    if (group == null || me == null) return false;
+    final membershipUpdate =
+        envelope.kind == 'group_membership' &&
+        (group.roleFor(envelope.senderDeviceId) == GroupMemberRole.owner ||
+            group.roleFor(envelope.senderDeviceId) == GroupMemberRole.admin);
+    final pendingMembershipAck =
+        envelope.kind == 'group_membership_ack' &&
+        _snapshot.pendingGroupMembershipDeliveries.any(
+          (entry) =>
+              entry.groupId == group.groupId &&
+              entry.targetDeviceId == envelope.senderDeviceId &&
+              entry.originalMessageId == envelope.acknowledgedMessageId,
+        );
+    if (!membershipUpdate &&
+        !pendingMembershipAck &&
+        (!group.hasActiveMember(me.deviceId) ||
+            !group.hasActiveMember(envelope.senderDeviceId))) {
+      return false;
+    }
+    final peer = _groupMemberContact(group, envelope.senderDeviceId);
+    if (peer == null ||
+        !peer.hasPinnedIrohIdentity ||
+        !peer.canSendOutbound ||
+        peer.accountId != envelope.senderAccountId ||
+        peer.irohEndpointId != inbound.senderTransportIdentity ||
+        envelope.recipientDeviceId != me.deviceId) {
+      return false;
+    }
+    await _processEnvelopes(
+      [envelope],
+      ingressKind: inbound.path == TransportPathKind.relayed
+          ? PeerRouteKind.relay
+          : PeerRouteKind.directInternet,
+    );
+    await _saveSnapshotSilently(debounce: true);
+    return true;
   }
 
   Future<bool> _ensureTransportIdentity() async {
@@ -1771,8 +1896,9 @@ class MessengerController extends ChangeNotifier {
   /// by route key. Failures (missing public key, tampered manifest) are
   /// silent — the path must never block startup.
   Future<void> _ingestSignedDefaultRelaysIfNeeded() async {
-    final loader =
-        _signedRelayDefaultsLoader ?? _loadSignedDefaultRelaysFromBundle;
+    // Only an explicitly injected list may be ingested; no bundled/network defaults.
+    final loader = _signedRelayDefaultsLoader;
+    if (loader == null) return;
     final SignedRelayDefaults? defaults;
     try {
       defaults = await loader();
@@ -1890,87 +2016,11 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  static Future<SignedRelayDefaults?> _loadSignedDefaultRelaysFromBundle({
-    AssetBundle? bundle,
-  }) async {
-    const publicKey = String.fromEnvironment(
-      'CONEST_DEFAULT_RELAYS_PUBLIC_KEY',
-    );
-    if (publicKey.isEmpty) {
-      return null;
-    }
-    final assets = bundle ?? rootBundle;
-    try {
-      final manifest = await assets.loadString('assets/default_relays.json');
-      final signature = await assets.loadString(
-        'assets/default_relays.ed25519.sig',
-      );
-      return loadSignedDefaultRelays(
-        manifestJson: manifest,
-        signatureBase64: signature,
-        publicKeyBase64: publicKey,
-      );
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Source of truth for the in-app "Update default relays" button. Pulls
-  /// the latest signed manifest from the project's GitHub `main` branch,
-  /// verifies it against the build-time public key, and ingests it if the
-  /// `version` is newer than the one already persisted. Returns a result
-  /// describing what happened so the UI can surface a snackbar.
-  Future<DefaultRelaysRefreshResult> refreshDefaultRelays() async {
-    const publicKey = String.fromEnvironment(
-      'CONEST_DEFAULT_RELAYS_PUBLIC_KEY',
-    );
-    if (publicKey.isEmpty) {
-      return const DefaultRelaysRefreshResult.error(
-        'This build was packaged without a default-relays signing key.',
-      );
-    }
-    final fetcher = _httpBytesFetcher;
-    Uint8List manifestBytes;
-    String signatureBase64;
-    try {
-      manifestBytes = await fetcher(
-        '$kDefaultRelaysGitHubRawBase/default_relays.json',
-      );
-      final sigBytes = await fetcher(
-        '$kDefaultRelaysGitHubRawBase/default_relays.ed25519.sig',
-      );
-      signatureBase64 = utf8.decode(sigBytes).trim();
-    } catch (error) {
-      return DefaultRelaysRefreshResult.error('Fetch failed: $error');
-    }
-    final defaults = await loadSignedDefaultRelaysFromBytes(
-      manifestBytes: manifestBytes,
-      signatureBase64: signatureBase64,
-      publicKeyBase64: publicKey,
-    );
-    if (defaults == null) {
-      return const DefaultRelaysRefreshResult.error(
-        'Signature did not verify against the build key.',
-      );
-    }
-    if (defaults.version <= _snapshot.defaultRelayDefaultsVersion) {
-      _snapshot = _snapshot.copyWith(
-        defaultRelaysLastFetchedAt: DateTime.now().toUtc(),
-      );
-      await _saveSnapshotSilently(notify: true);
-      return DefaultRelaysRefreshResult.upToDate(
-        version: _snapshot.defaultRelayDefaultsVersion,
-      );
-    }
-    final added = await _applyIngestedDefaults(
-      defaults,
-      recordFetchTimestamp: true,
-    );
-    return DefaultRelaysRefreshResult.updated(
-      version: defaults.version,
-      addedRoutes: added,
-    );
-  }
+  /// Kept for callers from older UI integrations; never fetch retired defaults.
+  Future<DefaultRelaysRefreshResult>
+  refreshDefaultRelays() async => const DefaultRelaysRefreshResult.error(
+    'Bundled Conest relays have been retired. Add a custom relay explicitly.',
+  );
 
   /// Imports a relay list from a user-supplied URL. When [publicKeyBase64]
   /// is non-null, the import follows the same signed-manifest verification
@@ -3376,6 +3426,12 @@ class MessengerController extends ChangeNotifier {
     final updated = dedupePeerEndpoints([...me.configuredRelays, ...relays]);
     _snapshot = _snapshot.copyWith(
       identity: me.copyWith(configuredRelays: updated),
+      defaultRelayRouteKeys: _snapshot.defaultRelayRouteKeys.difference(
+        relays.map((route) => route.routeKey).toSet(),
+      ),
+      defaultRelayHosts: _snapshot.defaultRelayHosts.difference(
+        relays.map((route) => '${route.host}:${route.port}').toSet(),
+      ),
     );
     await _announcePairingAvailabilityIfNeeded();
     _markRuntimeActivity();
@@ -7644,6 +7700,17 @@ class MessengerController extends ChangeNotifier {
     final acknowledgedVersion =
         (payload['membershipVersion'] as num?)?.toInt() ??
         group.membershipVersion;
+    final acknowledgedId = payload['acknowledgedMessageId'] as String?;
+    if (acknowledgedId != envelope.acknowledgedMessageId ||
+        !_snapshot.pendingGroupMembershipDeliveries.any(
+          (entry) =>
+              entry.groupId == groupId &&
+              entry.targetDeviceId == sender.deviceId &&
+              entry.originalMessageId == acknowledgedId &&
+              entry.membershipVersion == acknowledgedVersion,
+        )) {
+      return;
+    }
     _clearPendingMembershipDelivery(
       groupId: group.groupId,
       targetDeviceId: envelope.senderDeviceId,
@@ -8717,6 +8784,13 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
       if (_seenEnvelopeIdSet.contains(envelope.messageId)) {
+        if (envelope.kind == 'group_membership') {
+          // The previous acknowledgment may have been lost. The handler
+          // reauthenticates and acknowledges only the state actually held.
+          try {
+            await _handleGroupMembership(envelope);
+          } catch (_) {}
+        }
         await _replayAckForSeenEnvelope(envelope);
         continue;
       }
@@ -9056,7 +9130,10 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _handleAck(RelayEnvelope envelope) async {
-    final contact = _contactByDeviceId(envelope.senderDeviceId);
+    final group = _groupById(envelope.conversationId);
+    final contact = group == null
+        ? _contactByDeviceId(envelope.senderDeviceId)
+        : _groupMemberContact(group, envelope.senderDeviceId);
     if (contact == null || contact.accountId != envelope.senderAccountId) {
       return;
     }
@@ -9072,7 +9149,6 @@ class MessengerController extends ChangeNotifier {
         target != envelope.acknowledgedMessageId) {
       return;
     }
-    final group = _groupById(envelope.conversationId);
     if (group != null) {
       if (!group.hasActiveMember(contact.deviceId)) return;
       _updateGroupRecipientState(
@@ -11202,7 +11278,7 @@ class MessengerController extends ChangeNotifier {
         ? _contactByDeviceId(envelope.senderDeviceId)
         : _groupMemberContact(existingForEnvelope, envelope.senderDeviceId) ??
               _contactByDeviceId(envelope.senderDeviceId);
-    if (sender == null) {
+    if (sender == null || sender.accountId != envelope.senderAccountId) {
       return;
     }
     final decoded = await _crypto.decryptMessage(
@@ -11218,6 +11294,21 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final incoming = GroupRecord.fromJson(groupPayload);
+    for (final profile in incoming.memberProfiles) {
+      final signingKey = profile.signingPublicKeyBase64;
+      final endpoint = profile.irohEndpointId;
+      if (signingKey == null && endpoint == null) continue; // Legacy LAN peer.
+      try {
+        if (signingKey == null ||
+            endpoint == null ||
+            base64Decode(signingKey).length != 32 ||
+            _crypto.irohEndpointIdForSigningKey(signingKey) != endpoint) {
+          return;
+        }
+      } catch (_) {
+        return;
+      }
+    }
     if (incoming.groupId != envelope.conversationId) {
       return;
     }
@@ -11245,6 +11336,23 @@ class MessengerController extends ChangeNotifier {
         return;
       }
       if (incoming.membershipVersion <= existing.membershipVersion) {
+        if (incoming.membershipVersion == existing.membershipVersion &&
+            incoming.ownerDeviceId == existing.ownerDeviceId &&
+            incoming.title == existing.title &&
+            incoming.dissolvedAt == existing.dissolvedAt &&
+            _sameIdSet(incoming.adminDeviceIds, existing.adminDeviceIds) &&
+            _sameIdSet(
+              incoming.moderatorDeviceIds,
+              existing.moderatorDeviceIds,
+            ) &&
+            _sameIdSet(incoming.memberDeviceIds, existing.memberDeviceIds) &&
+            _sameIdSet(incoming.removedDeviceIds, existing.removedDeviceIds)) {
+          await _sendGroupMembershipAck(
+            envelope,
+            group: existing,
+            sender: sender,
+          );
+        }
         return;
       }
       if (!_isAuthorizedGroupMembershipUpdate(
@@ -11339,6 +11447,7 @@ class MessengerController extends ChangeNotifier {
   Future<void> _handleGroupMessage(RelayEnvelope envelope) async {
     final group = _groupById(envelope.conversationId);
     if (group == null ||
+        !group.hasActiveMember(_snapshot.identity!.deviceId) ||
         !group.hasActiveMember(envelope.senderDeviceId) ||
         group.removedDeviceIds.contains(envelope.senderDeviceId)) {
       return;
@@ -12427,7 +12536,13 @@ class MessengerController extends ChangeNotifier {
           continue;
         }
       }
-      final contact = _contactByDeviceId(entry.targetDeviceId);
+      final group = _groupById(entry.conversationId);
+      final contact = group == null
+          ? _contactByDeviceId(entry.targetDeviceId)
+          : group.hasActiveMember(me.deviceId) &&
+                group.hasActiveMember(entry.targetDeviceId)
+          ? _groupMemberContact(group, entry.targetDeviceId)
+          : null;
       if (contact == null || contact.isArchived) {
         // Successor exists or contact removed — drop the stale entry.
         _clearPendingAckDelivery(
@@ -14697,6 +14812,7 @@ class MessengerController extends ChangeNotifier {
   /// than 5 recorded attempts are treated as unknown (optimistic). Relays
   /// with recent successRate < 0.3 sink to the back of the relay tier.
   List<PeerEndpoint> _withRelayScoringTieBreak(List<PeerEndpoint> routes) {
+    routes = routes.where(_allowsAdvertisedRoute).toList();
     final nonRelay = <PeerEndpoint>[];
     final relay = <PeerEndpoint>[];
     for (final route in routes) {
@@ -14750,7 +14866,7 @@ class MessengerController extends ChangeNotifier {
         }
       }
     }
-    return dedupePeerEndpoints(routes);
+    return dedupePeerEndpoints(routes.where(_allowsAdvertisedRoute));
   }
 
   List<PeerEndpoint> _trustedContactRelayRoutes() {
@@ -14762,24 +14878,28 @@ class MessengerController extends ChangeNotifier {
         }
       }
     }
-    return dedupePeerEndpoints(routes);
+    return dedupePeerEndpoints(routes.where(_allowsAdvertisedRoute));
   }
 
   List<PeerEndpoint> _effectiveRelayRoutesForIdentity(IdentityRecord me) {
-    return dedupePeerEndpoints([
-      ...me.configuredRelays,
-      ..._contactRelayRoutes(),
-    ]);
+    return dedupePeerEndpoints(
+      [
+        ...me.configuredRelays,
+        ..._contactRelayRoutes(),
+      ].where(_allowsAdvertisedRoute),
+    );
   }
 
   List<PeerEndpoint> _diagnosticRelayRoutesForIdentity(IdentityRecord me) {
-    return dedupePeerEndpoints([
-      ...me.configuredRelays,
-      ..._trustedContactRelayRoutes(),
-      ..._routeHealthTracker.healthMap.values
-          .where((health) => health.route.kind == PeerRouteKind.relay)
-          .map((health) => health.route),
-    ]);
+    return dedupePeerEndpoints(
+      [
+        ...me.configuredRelays,
+        ..._trustedContactRelayRoutes(),
+        ..._routeHealthTracker.healthMap.values
+            .where((health) => health.route.kind == PeerRouteKind.relay)
+            .map((health) => health.route),
+      ].where(_allowsAdvertisedRoute),
+    );
   }
 
   List<PeerEndpoint> _lanPairingRoutesForIdentity(
@@ -16082,6 +16202,9 @@ class MessengerController extends ChangeNotifier {
       bio: identity.bio,
       relayCapable: identity.relayModeEnabled,
       publicKeyBase64: identity.publicKeyBase64,
+      signingPublicKeyBase64: identity.signingPublicKeyBase64,
+      irohEndpointId: identity.irohEndpointId,
+      capabilities: const [TransportKind.iroh],
       routeHints: _inviteRouteHintsForIdentity(identity),
     );
   }
@@ -16094,9 +16217,25 @@ class MessengerController extends ChangeNotifier {
       bio: contact.bio,
       relayCapable: contact.relayCapable,
       publicKeyBase64: contact.publicKeyBase64,
+      signingPublicKeyBase64: contact.signingPublicKeyBase64,
+      irohEndpointId: contact.irohEndpointId,
+      capabilities: contact.capabilities,
       routeHints: contact.routeHints,
     );
   }
+
+  /// Older clients omit transport fields; omission must not erase known pins.
+  GroupMemberProfile _retainMissingGroupTransportIdentity(
+    GroupMemberProfile profile,
+    GroupMemberProfile? prior,
+  ) => profile.copyWith(
+    signingPublicKeyBase64:
+        profile.signingPublicKeyBase64 ?? prior?.signingPublicKeyBase64,
+    irohEndpointId: profile.irohEndpointId ?? prior?.irohEndpointId,
+    capabilities: profile.capabilities.isEmpty
+        ? prior?.capabilities
+        : profile.capabilities,
+  );
 
   GroupRecord _refreshGroupMemberProfiles(
     GroupRecord group, {
@@ -16117,7 +16256,11 @@ class MessengerController extends ChangeNotifier {
     }
     for (final contact in [..._snapshot.contacts, ...contacts]) {
       if (knownIds.contains(contact.deviceId)) {
-        profilesByDeviceId[contact.deviceId] = _groupProfileForContact(contact);
+        profilesByDeviceId[contact.deviceId] =
+            _retainMissingGroupTransportIdentity(
+              _groupProfileForContact(contact),
+              profilesByDeviceId[contact.deviceId],
+            );
       }
     }
     final orderedIds = <String>[
@@ -16148,7 +16291,11 @@ class MessengerController extends ChangeNotifier {
       for (final profile
           in existing?.memberProfiles ?? const <GroupMemberProfile>[])
         profile.deviceId: profile,
-      for (final profile in incoming.memberProfiles) profile.deviceId: profile,
+      for (final profile in incoming.memberProfiles)
+        profile.deviceId: _retainMissingGroupTransportIdentity(
+          profile,
+          existing?.memberProfileFor(profile.deviceId),
+        ),
       for (final profile in trustedProfiles) profile.deviceId: profile,
     };
     final me = _snapshot.identity;
@@ -16160,7 +16307,11 @@ class MessengerController extends ChangeNotifier {
     for (final contact in _snapshot.contacts) {
       if (incoming.memberDeviceIds.contains(contact.deviceId) ||
           incoming.removedDeviceIds.contains(contact.deviceId)) {
-        profilesByDeviceId[contact.deviceId] = _groupProfileForContact(contact);
+        profilesByDeviceId[contact.deviceId] =
+            _retainMissingGroupTransportIdentity(
+              _groupProfileForContact(contact),
+              profilesByDeviceId[contact.deviceId],
+            );
       }
     }
     final orderedIds = <String>[
@@ -16187,13 +16338,23 @@ class MessengerController extends ChangeNotifier {
     GroupRecord incoming,
   ) {
     final incomingByDevice = <String, GroupMemberProfile>{
-      for (final profile in incoming.memberProfiles) profile.deviceId: profile,
+      for (final profile in incoming.memberProfiles)
+        profile.deviceId: _retainMissingGroupTransportIdentity(
+          profile,
+          existing.memberProfileFor(profile.deviceId),
+        ),
     };
     for (final prior in existing.memberProfiles) {
       final next = incomingByDevice[prior.deviceId];
       if (next == null) continue;
       if (next.accountId != prior.accountId ||
-          next.publicKeyBase64 != prior.publicKeyBase64) {
+          next.publicKeyBase64 != prior.publicKeyBase64 ||
+          (prior.signingPublicKeyBase64 != null &&
+              next.signingPublicKeyBase64 != null &&
+              next.signingPublicKeyBase64 != prior.signingPublicKeyBase64) ||
+          (prior.irohEndpointId != null &&
+              next.irohEndpointId != null &&
+              next.irohEndpointId != prior.irohEndpointId)) {
         return false;
       }
     }
@@ -16201,7 +16362,13 @@ class MessengerController extends ChangeNotifier {
       final next = incomingByDevice[contact.deviceId];
       if (next == null) continue;
       if (next.accountId != contact.accountId ||
-          next.publicKeyBase64 != contact.publicKeyBase64) {
+          next.publicKeyBase64 != contact.publicKeyBase64 ||
+          (contact.signingPublicKeyBase64 != null &&
+              next.signingPublicKeyBase64 != null &&
+              next.signingPublicKeyBase64 != contact.signingPublicKeyBase64) ||
+          (contact.irohEndpointId != null &&
+              next.irohEndpointId != null &&
+              next.irohEndpointId != contact.irohEndpointId)) {
         return false;
       }
     }
@@ -16218,6 +16385,9 @@ class MessengerController extends ChangeNotifier {
         profile.bio,
         profile.relayCapable.toString(),
         profile.publicKeyBase64,
+        profile.signingPublicKeyBase64 ?? '',
+        profile.irohEndpointId ?? '',
+        profile.capabilities.map((kind) => kind.name).join(','),
         routeKeys.join(','),
       ].join('|');
     }).toList()..sort();
@@ -16230,6 +16400,9 @@ class MessengerController extends ChangeNotifier {
         profile.bio,
         profile.relayCapable.toString(),
         profile.publicKeyBase64,
+        profile.signingPublicKeyBase64 ?? '',
+        profile.irohEndpointId ?? '',
+        profile.capabilities.map((kind) => kind.name).join(','),
         routeKeys.join(','),
       ].join('|');
     }).toList()..sort();
@@ -16330,6 +16503,9 @@ class MessengerController extends ChangeNotifier {
       bio: profile.bio,
       relayCapable: profile.relayCapable,
       publicKeyBase64: profile.publicKeyBase64,
+      signingPublicKeyBase64: profile.signingPublicKeyBase64,
+      irohEndpointId: profile.irohEndpointId,
+      capabilities: profile.capabilities,
       routeHints: profile.routeHints,
       safetyNumber: 'group-${_shortId(profile.publicKeyBase64)}',
       trustedAt: group.createdAt,

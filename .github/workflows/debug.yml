@@ -26,7 +26,7 @@ jobs:
           flutter test test/build_info_test.dart test/transport_test.dart
           flutter test test/storage_capacity_test.dart test/lan_direct_test.dart test/attachment_file_io_test.dart test/attachment_block_worker_test.dart
           flutter test test/messenger_controller_test.dart \
-            --name "storage reserve|Download anyway|manual Download storage|spool reserve|Beam pairing receives|rejected contact messages|discarded message duplicates|Iroh limit blocks|automatic online file|different-network|verification progress|repeated LAN hints"
+            --name "Iroh group-only|real socket group-only|legacy group updates|retired default|Iroh pairing|Iroh bootstrap|storage reserve|Download anyway|manual Download storage|spool reserve|Beam pairing receives|rejected contact messages|discarded message duplicates|Iroh limit blocks|automatic online file|different-network|verification progress|repeated LAN hints"
           flutter test test/messenger_controller_test.dart \
             --plain-name "matching debug builds auto-accept, verify, report, and clean a real LAN test"
           flutter test test/messenger_controller_test.dart \
@@ -100,6 +100,15 @@ jobs:
           mkdir -p dist-stage/conest-debug-linux-x64 dist
           cp -a build/linux/x64/debug/bundle/. dist-stage/conest-debug-linux-x64/
           (cd dist-stage && zip -r ../dist/conest-debug-linux-x64-${GITHUB_RUN_NUMBER}.zip conest-debug-linux-x64)
+      - name: Qualify native group transports
+        env:
+          CONEST_RUN_IROH_GROUP_CERT: "1"
+          CONEST_RELAY_TEST_BINARY: ${{ github.workspace }}/target/debug/conest_relay
+          LD_LIBRARY_PATH: ${{ github.workspace }}/build/linux/x64/debug/bundle/lib
+        run: |
+          cargo build -p conest_relay --locked
+          flutter test test/messenger_controller_test.dart \
+            --name "Iroh group-only|real socket group-only"
       - uses: actions/upload-artifact@v4
         with:
           name: conest-debug-linux-x64-${{ github.run_number }}

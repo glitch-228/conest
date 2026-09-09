@@ -1,7 +1,5 @@
 {
-  "version": 3,
-  "issuedAt": "2026-05-16T00:00:00Z",
-  "endpoints": [
-    { "kind": "relay", "host": "185.182.65.29", "port": 7667 }
-  ]
+  "version": 4,
+  "issuedAt": "2026-09-09T00:00:00Z",
+  "endpoints": []
 }

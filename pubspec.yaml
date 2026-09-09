@@ -43,9 +43,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/default_relays.json
-    - assets/default_relays.ed25519.sig
   # Signature redesign typography — bundled OFL fonts (offline/deterministic,
   # no runtime fetch). Space Grotesk = display/body, JetBrains Mono = the mono
   # labels/chips/receipts. See assets/fonts/OFL.txt for licenses.

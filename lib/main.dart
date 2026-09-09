@@ -9491,45 +9491,7 @@ class _DefaultRelaysControlsCard extends StatefulWidget {
 
 class _DefaultRelaysControlsCardState
     extends State<_DefaultRelaysControlsCard> {
-  bool _refreshing = false;
   bool _importing = false;
-
-  Future<void> _runRefresh() async {
-    setState(() => _refreshing = true);
-    try {
-      final result = await widget.controller.refreshDefaultRelays();
-      if (!mounted) return;
-      final messenger = ScaffoldMessenger.of(context);
-      switch (result.status) {
-        case DefaultRelaysRefreshStatus.upToDate:
-          messenger.showSnackBar(
-            const SnackBar(content: Text('Default relays are up to date.')),
-          );
-          break;
-        case DefaultRelaysRefreshStatus.updated:
-          messenger.showSnackBar(
-            SnackBar(
-              content: Text(
-                'Updated to version ${result.version}: ${result.addedRoutes.length} route(s).',
-              ),
-            ),
-          );
-          break;
-        case DefaultRelaysRefreshStatus.error:
-          messenger.showSnackBar(
-            SnackBar(
-              backgroundColor: Theme.of(context).colorScheme.errorContainer,
-              content: Text(
-                'Update failed: ${result.errorMessage ?? "unknown error"}',
-              ),
-            ),
-          );
-          break;
-      }
-    } finally {
-      if (mounted) setState(() => _refreshing = false);
-    }
-  }
 
   Future<void> _runImport() async {
     final result = await showDialog<_ImportRelaysDialogResult>(
@@ -9591,22 +9553,11 @@ class _DefaultRelaysControlsCardState
     }
   }
 
-  String _relativeFetchedAt(DateTime? value) {
-    if (value == null) return 'from bundle';
-    final delta = DateTime.now().toUtc().difference(value);
-    if (delta.inMinutes < 1) return 'just now';
-    if (delta.inHours < 1) return '${delta.inMinutes} min ago';
-    if (delta.inDays < 1) return '${delta.inHours} h ago';
-    return '${delta.inDays} d ago';
-  }
-
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: widget.controller,
       builder: (context, _) {
-        final version = widget.controller.defaultRelaysVersion;
-        final fetched = widget.controller.defaultRelaysLastFetchedAt;
         final sources = widget.controller.customRelaySources;
         return Container(
           margin: const EdgeInsets.only(bottom: 12),
@@ -9618,34 +9569,9 @@ class _DefaultRelaysControlsCardState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Default relays · v$version · ${_relativeFetchedAt(fetched)}',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  FilledButton.tonal(
-                    onPressed: _refreshing ? null : _runRefresh,
-                    child: _refreshing
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Text('Update'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Pulled from the project repository when you tap Update.',
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(color: widget.palette.inkSoft),
+              const Text(
+                'No bundled Conest relays. Online connections use Iroh; '
+                'you can also configure your own relay.',
               ),
               const Divider(height: 24),
               Row(

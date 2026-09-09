@@ -2083,6 +2083,333 @@ void main() {
     );
   }
 
+  for (final native in [false, true]) {
+    for (final relayed in native ? [false] : [false, true]) {
+      test(
+        'Iroh group-only members exchange messages and receipts relayed=$relayed native=$native',
+        () async {
+          final network = _InProcessIrohNetwork(relayed: relayed);
+          final relay = _FakeRelayClient();
+          final peers = <MessengerController>[];
+          for (final name in ['Alice', 'Bob', 'Carol']) {
+            final peer = await _createController(
+              relayClient: relay,
+              displayName: name,
+              internetRelayHost: null,
+              transportRegistryFactory: native
+                  ? _directNativeIrohRegistry
+                  : network.registry,
+            );
+            peers.add(peer);
+            addTearDown(peer.dispose);
+            await peer.updateGlobalConnectivity(_irohOnlyConnectivity);
+          }
+          final [alice, bob, carol] = peers;
+          for (final peer in [bob, carol]) {
+            await alice.addContactFromInvite(
+              alias: peer.identity!.displayName,
+              payload: (await peer.buildInvite()).encodePayload(),
+              codephrase: '',
+            );
+            await _waitForIroh(() => peer.pendingContactRequests.isNotEmpty);
+            await peer.approvePendingContactRequest(
+              peer.pendingContactRequests.single.id,
+            );
+          }
+          final group = await alice.createGroup(
+            title: 'Iroh only',
+            members: alice.contacts,
+          );
+          await _waitForIroh(
+            () => bob.groups.isNotEmpty && carol.groups.isNotEmpty,
+          );
+          expect(bob.contactByDeviceId(carol.identity!.deviceId), isNull);
+          expect(carol.contactByDeviceId(bob.identity!.deviceId), isNull);
+          final profile = GroupRecord.fromJson(
+            bob.groups.single.toJson(),
+          ).memberProfileFor(carol.identity!.deviceId)!;
+          expect(profile.irohEndpointId, carol.identity!.irohEndpointId);
+          expect(
+            profile.signingPublicKeyBase64,
+            carol.identity!.signingPublicKeyBase64,
+          );
+          expect(profile.capabilities, contains(TransportKind.iroh));
+          relay.storedEnvelopes.clear();
+          await bob.sendGroupMessage(
+            groupId: group.groupId,
+            body: 'group without contacts',
+          );
+          await _waitForIroh(
+            () => carol.messagesForGroup(group.groupId).length == 1,
+          );
+          await _waitForIroh(
+            () =>
+                bob
+                    .messagesForGroup(group.groupId)
+                    .single
+                    .recipientStates[carol.identity!.deviceId] ==
+                DeliveryState.delivered,
+          );
+          await carol.markGroupReadThroughMessage(
+            group.groupId,
+            carol.messagesForGroup(group.groupId).single,
+          );
+          await _waitForIroh(
+            () =>
+                bob
+                    .messagesForGroup(group.groupId)
+                    .single
+                    .recipientStates[carol.identity!.deviceId] ==
+                DeliveryState.read,
+          );
+          // A valid pairwise encrypted DM must not inherit the group's trust.
+          final crypto = CryptoService(identityProvider: () => bob.identity!);
+          final carolContact = alice.contacts.singleWhere(
+            (c) => c.deviceId == carol.identity!.deviceId,
+          );
+          final forbidden = await crypto.encryptPayloadEnvelope(
+            kind: 'direct_message',
+            messageId: 'forbidden-group-dm',
+            conversationId: crypto.conversationIdFor(carolContact.deviceId),
+            senderAccountId: bob.identity!.accountId,
+            senderDeviceId: bob.identity!.deviceId,
+            recipientDeviceId: carolContact.deviceId,
+            contact: carolContact,
+            plaintext: 'private intrusion',
+          );
+          if (!native) {
+            network.inject(
+              carol.identity!,
+              bob.identity!.irohEndpointId!,
+              forbidden,
+            );
+          }
+          await carol.sendGroupMessage(groupId: group.groupId, body: 'reply');
+          await _waitForIroh(
+            () => bob.messagesForGroup(group.groupId).length == 2,
+          );
+          expect(carol.messagesFor(bob.identity!.deviceId), isEmpty);
+          await alice.setGroupMemberRole(
+            groupId: group.groupId,
+            memberDeviceId: carol.identity!.deviceId,
+            role: GroupMemberRole.admin,
+          );
+          await _waitForIroh(
+            () =>
+                carol.groups.single.roleFor(carol.identity!.deviceId) ==
+                    GroupMemberRole.admin &&
+                bob.groups.single.roleFor(carol.identity!.deviceId) ==
+                    GroupMemberRole.admin,
+          );
+          await carol.removeGroupMember(
+            groupId: group.groupId,
+            memberDeviceId: bob.identity!.deviceId,
+          );
+          await _waitForIroh(
+            () => !bob.groups.single.hasActiveMember(bob.identity!.deviceId),
+          );
+          await _waitForIroh(
+            () => carol.pendingGroupMembershipDeliveries.isEmpty,
+          );
+          await carol.addGroupMembers(
+            groupId: group.groupId,
+            members: [
+              alice.contacts.singleWhere(
+                (c) => c.deviceId == bob.identity!.deviceId,
+              ),
+            ],
+          );
+          await _waitForIroh(
+            () => bob.groups.single.hasActiveMember(bob.identity!.deviceId),
+          );
+          await bob.sendGroupMessage(
+            groupId: group.groupId,
+            body: 'after rejoining',
+          );
+          await _waitForIroh(
+            () => carol.messagesForGroup(group.groupId).length == 3,
+          );
+
+          expect(
+            network.envelopes.where(
+              (e) => e.acknowledgedMessageId == forbidden.messageId,
+            ),
+            isEmpty,
+          );
+          expect(
+            relay.storedEnvelopes.where(
+              (e) => e.kind != 'pairing_announcement',
+            ),
+            isEmpty,
+          );
+        },
+        skip:
+            native && Platform.environment['CONEST_RUN_IROH_GROUP_CERT'] != '1',
+      );
+    }
+  }
+
+  for (final lan in [true, false]) {
+    test(
+      'real socket group-only messaging uses ${lan ? "LAN" : "custom relay"}',
+      () async {
+        Future<LocalRelayNode> startNode() async {
+          final reservation = await ServerSocket.bind(
+            InternetAddress.loopbackIPv4,
+            0,
+          );
+          final port = reservation.port;
+          await reservation.close();
+          final node = LocalRelayNode(maxRequestsPerMinute: 10000);
+          await node.start(port);
+          addTearDown(node.stop);
+          return node;
+        }
+
+        int? relayPort;
+        if (!lan) {
+          final reservation = await ServerSocket.bind(
+            InternetAddress.loopbackIPv4,
+            0,
+          );
+          relayPort = reservation.port;
+          await reservation.close();
+          final directory = await Directory.systemTemp.createTemp(
+            'conest_group_relay_',
+          );
+          final process = await Process.start(
+            Platform.environment['CONEST_RELAY_TEST_BINARY']!,
+            [
+              '127.0.0.1:$relayPort',
+              '--identity-seed-path',
+              '${directory.path}/identity.seed',
+              '--database-path',
+              '${directory.path}/relay.sqlite3',
+              '--max-requests-per-minute',
+              '10000',
+            ],
+          );
+          process.stdout.listen((_) {});
+          process.stderr.listen((_) {});
+          addTearDown(() async {
+            process.kill();
+            await process.exitCode;
+            await directory.delete(recursive: true);
+          });
+          var ready = false;
+          for (var attempt = 0; attempt < 50 && !ready; attempt++) {
+            try {
+              final socket = await Socket.connect(
+                '127.0.0.1',
+                relayPort,
+                timeout: const Duration(milliseconds: 100),
+              );
+              socket.destroy();
+              ready = true;
+            } catch (_) {
+              await Future<void>.delayed(const Duration(milliseconds: 20));
+            }
+          }
+          expect(ready, isTrue);
+        }
+        final traffic = <RelayEnvelope>[];
+        final peers = <MessengerController>[];
+        for (final name in ['Alice', 'Bob', 'Carol']) {
+          final node = lan ? await startNode() : _FakeLocalRelayNode();
+          final peer = await _createController(
+            relayClient: RelayClient(),
+            displayName: name,
+            createIdentity: false,
+            localRelayNode: node,
+            lanAddresses: lan ? ['127.0.0.1'] : [],
+            transportRegistryFactory: (_) async => null,
+          );
+          addTearDown(peer.dispose);
+          await peer.createIdentity(
+            displayName: name,
+            internetRelayHost: lan ? null : 'tcp://127.0.0.1',
+            internetRelayPort: relayPort ?? 7667,
+            localRelayPort: node.port ?? 7667,
+          );
+          await peer.updateGlobalConnectivity(
+            GlobalConnectivityPreferences(
+              lanEnabled: lan,
+              onlineEnabled: !lan,
+              transportPolicies: {
+                TransportKind.lan: lan
+                    ? TransportPolicy.automatic
+                    : TransportPolicy.disabled,
+                TransportKind.iroh: TransportPolicy.disabled,
+                TransportKind.conestRelay: lan
+                    ? TransportPolicy.disabled
+                    : TransportPolicy.automatic,
+              },
+            ),
+          );
+          if (lan) {
+            final onStored = node.onEnvelopeStored;
+            node.onEnvelopeStored = (id, envelope) {
+              traffic.add(envelope);
+              onStored?.call(id, envelope);
+            };
+          }
+          peers.add(peer);
+        }
+        final [alice, bob, carol] = peers;
+        await _pairControllers(alice, bob);
+        await _pairControllers(alice, carol);
+        final group = await alice.createGroup(
+          title: 'Socket group',
+          members: alice.contacts,
+        );
+        await bob.pollNow();
+        await carol.pollNow();
+        expect(bob.contactByDeviceId(carol.identity!.deviceId), isNull);
+        await bob.sendGroupMessage(
+          groupId: group.groupId,
+          body: 'real sockets',
+        );
+        await carol.pollNow();
+        await bob.pollNow();
+        await _waitForIroh(
+          () => carol.messagesForGroup(group.groupId).isNotEmpty,
+        );
+        await _waitForIroh(
+          () =>
+              bob
+                  .messagesForGroup(group.groupId)
+                  .single
+                  .recipientStates[carol.identity!.deviceId] ==
+              DeliveryState.delivered,
+        );
+        if (lan) {
+          expect(
+            traffic.where(
+              (e) =>
+                  e.kind == 'group_message' &&
+                  e.senderDeviceId == bob.identity!.deviceId,
+            ),
+            isNotEmpty,
+          );
+        } else {
+          expect(
+            peers.every((peer) => peer.pinnedRelayIdentityKeys.isNotEmpty),
+            isTrue,
+          );
+        }
+        await carol.sendGroupMessage(
+          groupId: group.groupId,
+          body: 'socket reply',
+        );
+        await bob.pollNow();
+        await _waitForIroh(
+          () => bob.messagesForGroup(group.groupId).length == 2,
+        );
+      },
+      skip: !lan && Platform.environment['CONEST_RELAY_TEST_BINARY'] == null,
+    );
+  }
+
   test(
     'Iroh bootstrap rejects spoofed endpoint bindings, signatures and unknown messages',
     () async {
@@ -6179,6 +6506,214 @@ void main() {
     expect(score.lastFailureAt, isNotNull);
   });
 
+  for (final mode in ['bundled', 'manual', 'imported']) {
+    test(
+      'retired default relay migration preserves $mode provenance correctly',
+      () async {
+        final vault = _MemoryVaultStore();
+        final initial = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+          vaultStore: vault,
+          internetRelayHost: null,
+        );
+        final initialSnapshot = await vault.load();
+        initial.dispose();
+        const retired = PeerEndpoint(
+          kind: PeerRouteKind.relay,
+          host: '185.182.65.29',
+          port: 7667,
+          protocol: PeerRouteProtocol.tcp,
+        );
+        const custom = PeerEndpoint(
+          kind: PeerRouteKind.relay,
+          host: 'custom.example',
+          port: 7667,
+          protocol: PeerRouteProtocol.tcp,
+        );
+        final key = relayHealthEndpointKey(retired);
+        await vault.save(
+          initialSnapshot.copyWith(
+            identity: initialSnapshot.identity!.copyWith(
+              configuredRelays: [retired, custom],
+            ),
+            defaultRelayRouteKeys: mode == 'manual' ? {} : {retired.routeKey},
+            defaultRelayHosts: mode == 'manual' ? {} : {'185.182.65.29:7667'},
+            relayHealthScores: {key: RelayHealthScore(endpointKey: key)},
+            customRelaySources: mode != 'imported'
+                ? []
+                : [
+                    CustomRelaySource(
+                      id: 'explicit-source',
+                      url: 'https://example.test/relays.json',
+                      publicKeyBase64: null,
+                      lastVersion: null,
+                      lastFetchedAt: DateTime.now().toUtc(),
+                      routeKeys: {retired.routeKey},
+                    ),
+                  ],
+          ),
+        );
+        for (var restart = 0; restart < 2; restart++) {
+          final peer = await _createController(
+            relayClient: _FakeRelayClient(),
+            displayName: 'Alice',
+            vaultStore: vault,
+            createIdentity: false,
+          );
+          final snapshot = await vault.load();
+          expect(
+            peer.identity!.configuredRelays.any((r) => r.host == retired.host),
+            mode != 'bundled',
+          );
+          expect(
+            peer.identity!.configuredRelays.any((r) => r.host == custom.host),
+            isTrue,
+          );
+          expect(
+            snapshot.relayHealthScores.containsKey(key),
+            mode != 'bundled',
+          );
+          expect(snapshot.defaultRelayHosts, isEmpty);
+          peer.dispose();
+        }
+      },
+    );
+  }
+
+  test(
+    'retired default advertisements are not used until explicitly configured',
+    () async {
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        internetRelayHost: null,
+      );
+      addTearDown(alice.dispose);
+      final invite = _bobInvite().copyWithSignature('');
+      // Legacy invite is sufficient to test routing, without manufacturing a ci6 signature.
+      final retiredInvite = ContactInvite(
+        version: 5,
+        accountId: invite.accountId,
+        deviceId: invite.deviceId,
+        displayName: invite.displayName,
+        bio: invite.bio,
+        pairingNonce: invite.pairingNonce,
+        pairingEpochMs: invite.pairingEpochMs,
+        relayCapable: false,
+        publicKeyBase64: invite.publicKeyBase64,
+        routeHints: const [
+          PeerEndpoint(
+            kind: PeerRouteKind.relay,
+            host: '185.182.65.29',
+            port: 7667,
+          ),
+        ],
+      );
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: retiredInvite.encodePayload(),
+        codephrase: '',
+      );
+      await alice.pollNow();
+      expect(
+        [
+          ...relay.storeAttempts,
+          ...relay.fetchAttempts,
+          ...relay.inspectHealthAttempts,
+        ].where((entry) => entry.contains('185.182.65.29')),
+        isEmpty,
+      );
+      await alice.addRelay(host: 'tcp://185.182.65.29', port: 7667);
+      await alice.pollNow();
+      expect(
+        relay.fetchAttempts.any((entry) => entry.contains('185.182.65.29')),
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'legacy group updates retain Iroh pins and explicit identity replacement is rejected',
+    () async {
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      final carol = await _createController(
+        relayClient: relay,
+        displayName: 'Carol',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      addTearDown(carol.dispose);
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      final group = await alice.createGroup(
+        title: 'Legacy membership',
+        members: alice.contacts,
+      );
+      await bob.pollNow();
+      final crypto = CryptoService(identityProvider: () => alice.identity!);
+      final bobContact = alice.contacts.singleWhere(
+        (peer) => peer.deviceId == bob.identity!.deviceId,
+      );
+      Future<void> deliver(Map<String, dynamic> payload, String id) async {
+        await bob.processEnvelopesForTesting([
+          await crypto.encryptPayloadEnvelope(
+            kind: 'group_membership',
+            messageId: id,
+            conversationId: group.groupId,
+            senderAccountId: alice.identity!.accountId,
+            senderDeviceId: alice.identity!.deviceId,
+            recipientDeviceId: bob.identity!.deviceId,
+            contact: bobContact,
+            plaintext: jsonEncode({'group': payload}),
+          ),
+        ]);
+      }
+
+      final legacy = group.toJson()
+        ..['membershipVersion'] = group.membershipVersion + 1;
+      for (final profile in legacy['memberProfiles'] as List) {
+        (profile as Map).remove('signingPublicKeyBase64');
+        profile.remove('irohEndpointId');
+        profile.remove('capabilities');
+      }
+      await deliver(legacy, 'legacy-profile-update');
+      expect(bob.groups.single.membershipVersion, group.membershipVersion + 1);
+      expect(
+        bob.groups.single
+            .memberProfileFor(carol.identity!.deviceId)!
+            .irohEndpointId,
+        carol.identity!.irohEndpointId,
+      );
+      final forged = bob.groups.single.toJson()
+        ..['membershipVersion'] = group.membershipVersion + 2;
+      for (final profile in forged['memberProfiles'] as List) {
+        if (profile['deviceId'] == carol.identity!.deviceId) {
+          profile['signingPublicKeyBase64'] =
+              alice.identity!.signingPublicKeyBase64;
+          profile['irohEndpointId'] = alice.identity!.irohEndpointId;
+        }
+      }
+      await deliver(forged, 'forged-profile-update');
+      expect(bob.groups.single.membershipVersion, group.membershipVersion + 1);
+      expect(
+        bob.groups.single
+            .memberProfileFor(carol.identity!.deviceId)!
+            .irohEndpointId,
+        carol.identity!.irohEndpointId,
+      );
+    },
+  );
+
   test('signed default relays ingest endpoints on first boot', () async {
     final relayClient = _FakeRelayClient();
     const spec = DefaultRelayEndpointSpec(
@@ -8869,8 +9404,7 @@ void main() {
       'automatic file test survives one transient binary LAN PUT failure',
       () async {
         final relayClient = _FakeRelayClient();
-        final aliceChannel = _InProcessLanDirectChannel(host: '192.168.57.10')
-          ..transientFailureCount = 1;
+        final aliceChannel = _InProcessLanDirectChannel(host: '192.168.57.10');
         final bobChannel = _InProcessLanDirectChannel(host: '192.168.57.11');
         final alice = await _createController(
           relayClient: relayClient,
@@ -8892,6 +9426,12 @@ void main() {
         addTearDown(bobChannel.stop);
         await _pairControllers(alice, bob);
 
+        var failedBinaryPut = false;
+        aliceChannel.blockPutOverride = () async {
+          aliceChannel.blockPutOverride = null;
+          failedBinaryPut = true;
+          return false;
+        };
         var finished = false;
         final resultFuture = alice
             .runDebugFileBattleTest(contact: alice.contacts.single, sizeMiB: 5)
@@ -8904,14 +9444,10 @@ void main() {
         final result = await resultFuture;
 
         expect(result.success, isTrue, reason: result.detail);
-        expect(
-          alice.recentDebugLog.any(
-            (entry) =>
-                entry.contains('LAN-binary immediate retry') &&
-                entry.contains('result=ok'),
-          ),
-          isTrue,
-        );
+        // Fail a binary block specifically; unrelated control PUTs cannot
+        // consume the fault. Exact-hash success proves recovery independently
+        // of when the sender appends its asynchronous diagnostic log.
+        expect(failedBinaryPut, isTrue);
       },
       timeout: const Timeout(Duration(seconds: 30)),
     );

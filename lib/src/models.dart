@@ -2095,6 +2095,9 @@ class GroupMemberProfile {
     required this.relayCapable,
     required this.publicKeyBase64,
     required List<PeerEndpoint> routeHints,
+    this.signingPublicKeyBase64,
+    this.irohEndpointId,
+    this.capabilities = const <TransportKind>[],
   }) : routeHints = prunePeerEndpointsByKind(routeHints);
 
   final String accountId;
@@ -2104,12 +2107,18 @@ class GroupMemberProfile {
   final bool relayCapable;
   final String publicKeyBase64;
   final List<PeerEndpoint> routeHints;
+  final String? signingPublicKeyBase64;
+  final String? irohEndpointId;
+  final List<TransportKind> capabilities;
 
   GroupMemberProfile copyWith({
     String? displayName,
     String? bio,
     bool? relayCapable,
     List<PeerEndpoint>? routeHints,
+    String? signingPublicKeyBase64,
+    String? irohEndpointId,
+    List<TransportKind>? capabilities,
   }) {
     return GroupMemberProfile(
       accountId: accountId,
@@ -2119,11 +2128,20 @@ class GroupMemberProfile {
       relayCapable: relayCapable ?? this.relayCapable,
       publicKeyBase64: publicKeyBase64,
       routeHints: routeHints ?? this.routeHints,
+      signingPublicKeyBase64:
+          signingPublicKeyBase64 ?? this.signingPublicKeyBase64,
+      irohEndpointId: irohEndpointId ?? this.irohEndpointId,
+      capabilities: capabilities ?? this.capabilities,
     );
   }
 
   Map<String, dynamic> toJson() {
     return {
+      'profileVersion': 2,
+      if (signingPublicKeyBase64 != null)
+        'signingPublicKeyBase64': signingPublicKeyBase64,
+      if (irohEndpointId != null) 'irohEndpointId': irohEndpointId,
+      'capabilities': capabilities.map((entry) => entry.name).toList(),
       'accountId': accountId,
       'deviceId': deviceId,
       'displayName': displayName,
@@ -2136,6 +2154,14 @@ class GroupMemberProfile {
 
   factory GroupMemberProfile.fromJson(Map<String, dynamic> json) {
     return GroupMemberProfile(
+      signingPublicKeyBase64: json['signingPublicKeyBase64'] as String?,
+      irohEndpointId: json['irohEndpointId'] as String?,
+      capabilities: (json['capabilities'] as List<dynamic>? ?? const [])
+          .whereType<String>()
+          .expand(
+            (name) => TransportKind.values.where((kind) => kind.name == name),
+          )
+          .toList(),
       accountId: json['accountId'] as String,
       deviceId: json['deviceId'] as String,
       displayName: json['displayName'] as String,

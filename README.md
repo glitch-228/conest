@@ -11,9 +11,11 @@ Conest is a phased secure messenger and transfer app. The repository contains:
 - Resumable, hash-verified attachment transfer with route-boundary migration.
 - Conest Beam optical transfer for public files, contact-encrypted files, and
   contact invites.
-- Invite-only trusted groups with pairwise encrypted text fanout.
+- Invite-only trusted groups with pairwise encrypted text fanout, including Iroh peers who are not individual contacts.
 - Rust workspace with the native transport/camera library, standalone relay,
   and desktop updater.
+
+The active implementation roadmap and qualification gates are in [PLAN.md](PLAN.md).
 
 ## What Is Implemented Now
 
@@ -26,6 +28,7 @@ Conest is a phased secure messenger and transfer app. The repository contains:
   contact is trusted. The invite must match the authenticated endpoint; the
   receiver approves the request before exchanging encrypted messages.
 - Route hints carry both route kind and protocol, currently `tcp`, `udp`, `http`, or `https`.
+- No bundled Conest relay servers. Previously bundled routes are retired on upgrade; explicitly configured relays and Iroh discovery/fallback remain available.
 - Rotating pairing code derived from the payload in 120-second windows.
 - Desktop-style relay behavior enabled by default through the app's local LAN node.
 - X25519-derived shared secret encryption per direct conversation.
