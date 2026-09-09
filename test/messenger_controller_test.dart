@@ -2066,6 +2066,9 @@ void main() {
             .id;
         await bob.acceptIncomingAttachment(attachmentId);
         await _waitForIroh(() => bob.attachmentAvailableLocally(attachmentId));
+        // Disk availability precedes the asynchronous in-memory cache load.
+        // Wait for that accessor before comparing bytes, as the UI does.
+        await _waitForIroh(() => bob.attachmentBytesFor(attachmentId) != null);
         expect(bob.attachmentBytesFor(attachmentId), bytes);
         await _waitForIroh(
           () =>
