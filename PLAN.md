@@ -96,13 +96,23 @@ Test forged authors, removed members, membership conflicts and mixed versions.
 - Added an encrypted append-only journal with a dedicated worker, flushed
   appends, rebuildable offset indexes, bounded pages/ranges, duplicate and
   author-fork detection, exclusive opens and torn-tail recovery.
-- 13 focused foundation tests passed: partition arrival order, duplicates,
+- Foundation commit: `4afc1c7`. Added signed membership records anchored to the
+  approved owner, historical author checks, current carrier/recipient checks,
+  immutable admission references, checkpoint-based since-admission policy,
+  admin/owner authorization and owner resolution of competing membership heads.
+  Membership changes during signature verification invalidate the decision.
+- 21 focused history/membership tests passed: partition arrival order, duplicates,
   restart, forgery, wrong key/group, corruption, immutable payloads, inventory
-  gaps, pagination and the 1 MiB page budget. These are storage/protocol tests,
+  gaps, pagination, the 1 MiB page budget, history policy changes, removal,
+  re-admission, owner handoff, admin restrictions and membership conflicts.
+  These are storage/protocol tests,
   not the four-device transport catch-up acceptance tests.
-- Not yet connected to the controller: membership proof validation, admission
-  boundaries, inventory exchange, migration and live conversation pagination
-  remain necessary before advertising synchronization support.
+- Not yet connected to the controller: durable membership import/rebuild,
+  inventory exchange, admission settings UI, event projection/authorization
+  (edits/deletions/reactions/receipts), migration and conversation pagination
+  remain necessary before advertising synchronization support. Persist local
+  removal independently of received proofs; recheck membership before sending
+  each history batch. Four-device isolated-LAN catch-up remains unqualified.
 
 ## M3 — group files
 

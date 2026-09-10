@@ -7,7 +7,15 @@ import 'package:cryptography/cryptography.dart';
 const groupEventMaxBytes = 128 * 1024;
 const groupEventMaxCounter = 9007199254740991;
 
-enum GroupEventKind { message, edit, deletion, reaction, attachment, receipt }
+enum GroupEventKind {
+  message,
+  edit,
+  deletion,
+  reaction,
+  attachment,
+  receipt,
+  membership,
+}
 
 /// An original author's proof, independent of the peer carrying the envelope.
 ///
