@@ -204,6 +204,59 @@ void main() {
     expect((await store.load()).seenEnvelopeIds, const <String>['primary']);
   });
 
+  test(
+    'group journals reopen with the vault and clear with its identity',
+    () async {
+      final root = await createTempRoot('conest_group_vault_');
+      final vault = File(p.join(root.path, 'identity.vault'));
+      final key = File(p.join(root.path, 'identity.key'));
+      final store = VaultStore(
+        vaultFileProvider: () async => vault,
+        keyProvider: FileVaultKeyProvider(fileProvider: () async => key),
+      );
+      addTearDown(store.closeGroupHistory);
+      final journal = await store.openGroupHistory('group');
+      expect(identical(journal, await store.openGroupHistory('group')), isTrue);
+      await journal.saveSyncProgress('peer', {
+        'phase': 'inventory',
+        'sequence': 42,
+      });
+      await store.closeGroupHistory();
+      final reopened = await store.openGroupHistory('group');
+      expect(await reopened.syncProgress('peer'), {
+        'phase': 'inventory',
+        'sequence': 42,
+      });
+      await store.clear();
+      expect(await Directory('${vault.path}.groups').exists(), isFalse);
+      expect(await key.exists(), isFalse);
+      await expectLater(reopened.readPage(), throwsStateError);
+    },
+  );
+
+  test(
+    'closing a pending journal open does not deadlock the next open',
+    () async {
+      final root = await createTempRoot('conest_group_vault_race_');
+      final store = VaultStore(
+        vaultFileProvider: () async => File(p.join(root.path, 'vault')),
+        keyProvider: FileVaultKeyProvider(
+          fileProvider: () async => File(p.join(root.path, 'key')),
+        ),
+      );
+      addTearDown(store.closeGroupHistory);
+      final opening = store.openGroupHistory('group');
+      final closing = store.closeGroupHistory();
+      final reopening = store.openGroupHistory('group');
+      await closing.timeout(const Duration(seconds: 5));
+      final old = await opening;
+      final next = await reopening.timeout(const Duration(seconds: 5));
+      expect(identical(old, next), isFalse);
+      await expectLater(old.readPage(), throwsStateError);
+      expect(await next.readPage(), isEmpty);
+    },
+  );
+
   group('nightly.11 AppInstanceLock stale-PID recovery', () {
     test('acquire steals a lock recorded by a long-dead PID', () async {
       final dir = await createTempRoot('conest_lock_test_');

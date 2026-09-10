@@ -302,6 +302,41 @@ void main() {
   });
 
   test(
+    'source message IDs are scoped by author and cannot rewrite signed messages',
+    () async {
+      final a1 = await event(
+        payload: {'messageId': 'shared-id', 'body': 'Alice'},
+      );
+      final b1 = await event(
+        author: 'bob',
+        payload: {'messageId': 'shared-id', 'body': 'Bob'},
+      );
+      final replacement = await event(
+        sequence: 2,
+        previous: a1,
+        payload: {'messageId': 'shared-id', 'body': 'Replacement'},
+      );
+      final journal = await open();
+      try {
+        await journal.append(a1);
+        await journal.append(b1);
+        await expectLater(journal.append(replacement), throwsStateError);
+        expect(
+          (await journal.sourceMessage('alice', 'shared-id'))!.eventId,
+          a1.eventId,
+        );
+        expect(
+          (await journal.sourceMessage('bob', 'shared-id'))!.eventId,
+          b1.eventId,
+        );
+        expect((await journal.authorHead('alice'))!.eventId, a1.eventId);
+      } finally {
+        await journal.close();
+      }
+    },
+  );
+
+  test(
     'same-author forks and contradictory predecessors are rejected',
     () async {
       final a1 = await event();

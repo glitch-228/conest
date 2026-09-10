@@ -202,6 +202,20 @@ class _InProcessLanDirectChannel
 }
 
 class _MemoryVaultStore extends VaultStore {
+  _MemoryVaultStore()
+    : this._(Directory.systemTemp.createTempSync('conest-controller-history-'));
+  _MemoryVaultStore._(Directory directory)
+    : super(
+        vaultFileProvider: () async => File('${directory.path}/vault'),
+        keyProvider: FileVaultKeyProvider(
+          fileProvider: () async => File('${directory.path}/key'),
+        ),
+      ) {
+    addTearDown(() async {
+      await closeGroupHistory();
+      if (await directory.exists()) await directory.delete(recursive: true);
+    });
+  }
   VaultSnapshot _snapshot = VaultSnapshot.empty();
   int saveCount = 0;
 
@@ -216,6 +230,7 @@ class _MemoryVaultStore extends VaultStore {
 
   @override
   Future<void> clear() async {
+    await super.clear();
     _snapshot = VaultSnapshot.empty();
   }
 }
@@ -2083,6 +2098,106 @@ void main() {
     );
   }
 
+  test(
+    'Iroh group history crosses partitions through a group-only carrier',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final peers = <MessengerController>[];
+      for (final name in ['Alice', 'Bob', 'Carol', 'Dave']) {
+        final peer = await _createController(
+          relayClient: relay,
+          displayName: name,
+          internetRelayHost: null,
+          transportRegistryFactory: network.registry,
+        );
+        peers.add(peer);
+        addTearDown(peer.dispose);
+        await peer.updateGlobalConnectivity(_irohOnlyConnectivity);
+      }
+      final [alice, bob, carol, dave] = peers;
+      for (final peer in [bob, carol, dave]) {
+        await alice.addContactFromInvite(
+          alias: peer.identity!.displayName,
+          payload: (await peer.buildInvite()).encodePayload(),
+          codephrase: '',
+        );
+        await _waitForIroh(() => peer.pendingContactRequests.isNotEmpty);
+        await peer.approvePendingContactRequest(
+          peer.pendingContactRequests.single.id,
+        );
+      }
+      final group = await alice.createGroup(
+        title: 'Carried history',
+        members: alice.contacts,
+      );
+      await _waitForIroh(
+        () =>
+            [bob, carol, dave].every((peer) => peer.groups.isNotEmpty) &&
+            alice.pendingGroupMembershipDeliveries.isEmpty,
+      );
+      final carolBridge = network.bridges.remove(
+        carol.identity!.irohEndpointId,
+      )!;
+      final daveBridge = network.bridges.remove(dave.identity!.irohEndpointId)!;
+      await alice.sendGroupMessage(
+        groupId: group.groupId,
+        body: 'Alice partition message',
+      );
+      await bob.sendGroupMessage(
+        groupId: group.groupId,
+        body: 'Bob partition message',
+      );
+      await bob.synchronizeGroupHistory(
+        groupId: group.groupId,
+        peerDeviceId: alice.identity!.deviceId,
+      );
+      network.bridges.remove(alice.identity!.irohEndpointId);
+      network.bridges[carol.identity!.irohEndpointId!] = carolBridge;
+      expect(
+        await carol.synchronizeGroupHistory(
+          groupId: group.groupId,
+          peerDeviceId: bob.identity!.deviceId,
+        ),
+        2,
+      );
+      network.bridges.remove(bob.identity!.irohEndpointId);
+      network.bridges[dave.identity!.irohEndpointId!] = daveBridge;
+      expect(
+        await dave.synchronizeGroupHistory(
+          groupId: group.groupId,
+          peerDeviceId: carol.identity!.deviceId,
+        ),
+        2,
+      );
+      expect(
+        dave
+            .messagesForGroup(group.groupId)
+            .map((message) => message.body)
+            .toSet(),
+        {'Alice partition message', 'Bob partition message'},
+      );
+      expect(dave.contactByDeviceId(carol.identity!.deviceId), isNull);
+      expect(
+        await dave.synchronizeGroupHistory(
+          groupId: group.groupId,
+          peerDeviceId: carol.identity!.deviceId,
+        ),
+        0,
+      );
+      expect(
+        network.envelopes.where((envelope) => envelope.kind == 'group_history'),
+        isNotEmpty,
+      );
+      expect(
+        relay.storedEnvelopes.where(
+          (envelope) => envelope.kind != 'pairing_announcement',
+        ),
+        isEmpty,
+      );
+    },
+  );
+
   for (final native in [false, true]) {
     for (final relayed in native ? [false] : [false, true]) {
       test(
@@ -2163,6 +2278,10 @@ void main() {
                 DeliveryState.read,
           );
           // A valid pairwise encrypted DM must not inherit the group's trust.
+          await carol.synchronizeGroupHistory(
+            groupId: group.groupId,
+            peerDeviceId: bob.identity!.deviceId,
+          );
           final crypto = CryptoService(identityProvider: () => bob.identity!);
           final carolContact = alice.contacts.singleWhere(
             (c) => c.deviceId == carol.identity!.deviceId,

@@ -4,12 +4,14 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:crypto/crypto.dart' as hashes;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'app_storage.dart';
 import 'models.dart';
+import 'group_history_journal.dart';
 
 List<int> _secureRandomBytes(int length) {
   final random = Random.secure();
@@ -305,6 +307,58 @@ class VaultStore {
   final VaultKeyProvider _keyProvider;
   static const _vaultFileName = 'conest.vault';
   Future<void> _saveTail = Future<void>.value();
+  final _groupJournals = <String, Future<GroupHistoryJournal>>{};
+  Future<void> _groupCloseTail = Future<void>.value();
+
+  /// History belongs to this vault, not to the evictable attachment cache.
+  Future<GroupHistoryJournal> openGroupHistory(String groupId) {
+    if (groupId.isEmpty || groupId.length > 128) {
+      return Future.error(ArgumentError('Invalid group identity.'));
+    }
+    return _groupJournals.putIfAbsent(groupId, () {
+      late final Future<GroupHistoryJournal> opened;
+      opened = () async {
+        await _groupCloseTail;
+        final vault = await _vaultFile();
+        final name = hashes.sha256.convert(utf8.encode(groupId)).toString();
+        return GroupHistoryJournal.open(
+          file: File('${vault.path}.groups/$name.journal'),
+          key: await _readOrCreateVaultKey(),
+          groupId: groupId,
+        );
+      }();
+      // Failed opens must be retryable without replacing other pending opens.
+      unawaited(
+        opened.then<void>(
+          (_) {},
+          onError: (Object _, StackTrace _) {
+            if (identical(_groupJournals[groupId], opened)) {
+              _groupJournals.remove(groupId);
+            }
+          },
+        ),
+      );
+      return opened;
+    });
+  }
+
+  Future<void> closeGroupHistory() {
+    final journals = _groupJournals.values.toList();
+    _groupJournals.clear();
+    final previousClose = _groupCloseTail;
+    return _groupCloseTail = () async {
+      await previousClose;
+      for (final journal in journals) {
+        GroupHistoryJournal opened;
+        try {
+          opened = await journal;
+        } catch (_) {
+          continue;
+        }
+        await opened.close();
+      }
+    }();
+  }
 
   Future<VaultSnapshot> load() async {
     final file = await _vaultFile();
@@ -402,7 +456,10 @@ class VaultStore {
 
   Future<void> clear() async {
     await _saveTail.catchError((_) {});
+    await closeGroupHistory();
     final file = await _vaultFile();
+    final history = Directory('${file.path}.groups');
+    if (await history.exists()) await history.delete(recursive: true);
     for (final candidate in <File>[
       file,
       File('${file.path}.tmp'),

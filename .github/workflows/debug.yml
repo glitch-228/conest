@@ -24,9 +24,10 @@ jobs:
       - name: Verify channel identity and automatic transfer handshake
         run: |
           flutter test test/build_info_test.dart test/transport_test.dart
+          flutter test test/group_history_test.dart test/group_history_sync_test.dart test/group_history_wire_test.dart test/group_membership_history_test.dart test/storage_test.dart
           flutter test test/storage_capacity_test.dart test/lan_direct_test.dart test/attachment_file_io_test.dart test/attachment_block_worker_test.dart
           flutter test test/messenger_controller_test.dart \
-            --name "Iroh group-only|real socket group-only|legacy group updates|retired default|Iroh pairing|Iroh bootstrap|storage reserve|Download anyway|manual Download storage|spool reserve|Beam pairing receives|rejected contact messages|discarded message duplicates|Iroh limit blocks|automatic online file|different-network|verification progress|repeated LAN hints"
+            --name "Iroh group history|Iroh group-only|real socket group-only|legacy group updates|retired default|Iroh pairing|Iroh bootstrap|storage reserve|Download anyway|manual Download storage|spool reserve|Beam pairing receives|rejected contact messages|discarded message duplicates|Iroh limit blocks|automatic online file|different-network|verification progress|repeated LAN hints"
           flutter test test/messenger_controller_test.dart \
             --plain-name "matching debug builds auto-accept, verify, report, and clean a real LAN test"
           flutter test test/messenger_controller_test.dart \
@@ -108,7 +109,7 @@ jobs:
         run: |
           cargo build -p conest_relay --locked
           flutter test test/messenger_controller_test.dart \
-            --name "Iroh group-only|real socket group-only"
+            --name "Iroh group history|Iroh group-only|real socket group-only"
       - uses: actions/upload-artifact@v4
         with:
           name: conest-debug-linux-x64-${{ github.run_number }}

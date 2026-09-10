@@ -149,6 +149,16 @@ class GroupHistoryJournal {
       (await _request('events', List<String>.of(ids)) as List)
           .cast<GroupHistoryEvent>();
 
+  Future<GroupHistoryEvent?> authorHead(String author) async =>
+      await _request('authorHead', [author]) as GroupHistoryEvent?;
+
+  Future<GroupHistoryEvent?> sourceMessage(
+    String author,
+    String messageId,
+  ) async =>
+      await _request('sourceMessage', [author, messageId])
+          as GroupHistoryEvent?;
+
   Future<Set<String>> retainedIds(List<String> ids) async =>
       (await _request('retained', List<String>.of(ids)) as List)
           .cast<String>()
@@ -258,6 +268,8 @@ class _JournalWorker {
   final _entries = <String, _JournalEntry>{};
   final _authors = <String, Map<int, _JournalEntry>>{};
   final _ordered = <_JournalEntry>[];
+  final _authorHeads = <String, _JournalEntry>{};
+  final _sourceMessages = <String, _JournalEntry>{};
   RandomAccessFile? _handle;
   int _end = 0;
   bool _poisoned = false;
@@ -404,6 +416,16 @@ class _JournalWorker {
   }
 
   void _checkChain(GroupHistoryEvent event) {
+    final source = event.kind == GroupEventKind.message
+        ? event.payload['messageId']
+        : null;
+    if (source is String) {
+      final existing =
+          _sourceMessages[jsonEncode([event.authorDeviceId, source])];
+      if (existing != null && existing.id != event.eventId) {
+        throw StateError('Conflicting group source message identity.');
+      }
+    }
     final author = _authors[event.authorDeviceId];
     if (author == null) return;
     final existing = author[event.sequence];
@@ -427,6 +449,15 @@ class _JournalWorker {
     final entry = _JournalEntry(event, offset, size);
     _entries[entry.id] = entry;
     (_authors[event.authorDeviceId] ??= {})[event.sequence] = entry;
+    if ((_authorHeads[event.authorDeviceId]?.sequence ?? 0) < event.sequence) {
+      _authorHeads[event.authorDeviceId] = entry;
+    }
+    final source = event.kind == GroupEventKind.message
+        ? event.payload['messageId']
+        : null;
+    if (source is String) {
+      _sourceMessages[jsonEncode([event.authorDeviceId, source])] = entry;
+    }
     var low = 0;
     var high = _ordered.length;
     while (low < high) {
@@ -507,6 +538,12 @@ class _JournalWorker {
     }
     final args = arguments as List;
     switch (operation) {
+      case 'authorHead':
+      case 'sourceMessage':
+        final entry = operation == 'authorHead'
+            ? _authorHeads[args[0]]
+            : _sourceMessages[jsonEncode(args)];
+        return entry == null ? null : (await _read([entry], 1)).single;
       case 'syncProgress':
         return (await _loadSyncProgress())[args[0]] ?? <String, Object?>{};
       case 'saveSyncProgress':

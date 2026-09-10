@@ -11,6 +11,8 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart' as path_provider;
 
 import 'crypto_service.dart';
+import 'group_history_coordinator.dart';
+import 'group_history_event.dart';
 import 'beam_protocol.dart';
 import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
@@ -180,6 +182,7 @@ const int _maxPendingContactRequests = 20;
 const Duration _pendingContactRequestTtl = Duration(days: 7);
 
 const Set<String> _v2PairwiseKinds = <String>{
+  'group_history',
   'direct_message',
   'ack',
   'contact_exchange',
@@ -1190,6 +1193,158 @@ class MessengerController extends ChangeNotifier {
     await _saveSnapshotSilently(notify: false);
   }
 
+  GroupHistoryCoordinator? _groupHistoryService;
+  final _groupHistoryTimers = <String, Timer>{};
+  final _groupHistoryLastSync = <String, DateTime>{};
+
+  void _scheduleGroupHistorySync(String groupId, String peer) {
+    final key = jsonEncode([groupId, peer]);
+    if (_disposed || _groupHistoryTimers.containsKey(key)) return;
+    final elapsed = _now().difference(
+      _groupHistoryLastSync[key] ?? DateTime.fromMillisecondsSinceEpoch(0),
+    );
+    final delay = elapsed < const Duration(seconds: 5)
+        ? const Duration(seconds: 5) - elapsed
+        : const Duration(seconds: 1);
+    _groupHistoryTimers[key] = Timer(delay, () async {
+      _groupHistoryTimers.remove(key);
+      final group = _groupById(groupId);
+      final me = _snapshot.identity;
+      if (_disposed ||
+          group == null ||
+          me == null ||
+          group.localRemovedAt != null ||
+          !group.hasActiveMember(me.deviceId) ||
+          !group.hasActiveMember(peer)) {
+        return;
+      }
+      _groupHistoryLastSync[key] = _now();
+      try {
+        await synchronizeGroupHistory(groupId: groupId, peerDeviceId: peer);
+      } catch (error) {
+        if (!_disposed) appendDebugLog('Group catch-up waiting: $error');
+      }
+    });
+  }
+
+  GroupHistoryCoordinator get _groupHistory =>
+      _groupHistoryService ??= GroupHistoryCoordinator(
+        vault: _vaultStore,
+        identity: _requireIdentity,
+        group: _requireGroup,
+        send: (groupId, peer, payload) async {
+          final group = _requireGroup(groupId);
+          final me = _requireIdentity();
+          final contact = _groupMemberContact(group, peer);
+          if (_disposed ||
+              group.localRemovedAt != null ||
+              !group.hasActiveMember(me.deviceId) ||
+              !group.hasActiveMember(peer) ||
+              contact == null) {
+            throw StateError('Group history peer is not authorized.');
+          }
+          final envelope = await _crypto.encryptPayloadEnvelope(
+            kind: 'group_history',
+            messageId: _randomId('ghist'),
+            conversationId: groupId,
+            senderAccountId: me.accountId,
+            senderDeviceId: me.deviceId,
+            recipientDeviceId: peer,
+            contact: contact,
+            plaintext: jsonEncode(payload),
+            createdAt: _now().toUtc(),
+          );
+          await _deliverToContact(
+            contact: contact,
+            recipientDeviceId: peer,
+            envelope: envelope,
+          );
+        },
+        onMessage: _projectGroupHistoryMessage,
+      );
+
+  void _projectGroupHistoryMessage(String groupId, GroupHistoryEvent event) {
+    final group = _groupById(groupId);
+    if (_disposed || group == null || group.localRemovedAt != null) return;
+    final payload = event.payload;
+    final id = payload['messageId'];
+    final body = payload['body'];
+    final created = payload['createdAt'];
+    if (id is! String ||
+        id.isEmpty ||
+        id.length > 160 ||
+        body is! String ||
+        created is! String) {
+      return;
+    }
+    final at = DateTime.tryParse(created);
+    if (at == null) return;
+    var projectedId = id;
+    for (final existing in _groupConversation(groupId).messages) {
+      if (existing.id != id) continue;
+      if (existing.senderDeviceId == event.authorDeviceId) return;
+      // Legacy message IDs are sender-controlled. Another author's choice of
+      // the same ID must not hide this authenticated event or replace its author.
+      projectedId = event.eventId;
+    }
+    if (_groupConversation(
+      groupId,
+    ).messages.any((message) => message.id == projectedId)) {
+      return;
+    }
+    String? optional(String field) =>
+        payload[field] is String ? payload[field] as String : null;
+    _upsertGroupMessage(
+      groupId,
+      ChatMessage(
+        id: projectedId,
+        conversationId: groupId,
+        senderDeviceId: event.authorDeviceId,
+        recipientDeviceId: groupId,
+        body: body,
+        outbound: event.authorDeviceId == _requireIdentity().deviceId,
+        state: event.authorDeviceId == _requireIdentity().deviceId
+            ? DeliveryState.pending
+            : DeliveryState.delivered,
+        createdAt: at,
+        senderDisplayName: optional('senderDisplayName'),
+        replyToMessageId: optional('replyToMessageId'),
+        replySnippet: optional('replySnippet'),
+        replySenderDeviceId: optional('replySenderDeviceId'),
+        replySenderDisplayName: optional('replySenderDisplayName'),
+      ),
+    );
+  }
+
+  Future<int> synchronizeGroupHistory({
+    required String groupId,
+    required String peerDeviceId,
+  }) async {
+    final count = await _groupHistory.synchronize(groupId, peerDeviceId);
+    await _saveSnapshotSilently();
+    return count;
+  }
+
+  Future<void> _handleGroupHistory(RelayEnvelope envelope) async {
+    final group = _groupById(envelope.conversationId);
+    final me = _snapshot.identity;
+    if (group == null ||
+        me == null ||
+        group.localRemovedAt != null ||
+        !group.hasActiveMember(me.deviceId) ||
+        !group.hasActiveMember(envelope.senderDeviceId)) {
+      return;
+    }
+    final sender = _groupMemberContact(group, envelope.senderDeviceId);
+    if (sender == null || sender.accountId != envelope.senderAccountId) return;
+    final decoded = jsonDecode(
+      await _crypto.decryptMessage(contact: sender, envelope: envelope),
+    );
+    if (decoded is Map<String, dynamic>) {
+      await _groupHistory.handle(group.groupId, sender.deviceId, decoded);
+    }
+  }
+
   Future<void> initialize() async {
     try {
       _snapshot = await _vaultStore.load();
@@ -1421,6 +1576,7 @@ class MessengerController extends ChangeNotifier {
     if (decoded is! Map<String, dynamic>) return false;
     final envelope = RelayEnvelope.fromJson(decoded);
     if (!const {
+      'group_history',
       'group_message',
       'group_membership',
       'group_membership_ack',
@@ -3735,6 +3891,13 @@ class MessengerController extends ChangeNotifier {
   /// of the display-name screen. Failures inside the hook are swallowed;
   /// the user can manually restart the app if needed.
   Future<void> resetIdentity({Future<void> Function()? onPostReset}) async {
+    for (final timer in _groupHistoryTimers.values) {
+      timer.cancel();
+    }
+    _groupHistoryTimers.clear();
+    _groupHistoryLastSync.clear();
+    await _groupHistoryService?.close();
+    _groupHistoryService = null;
     _stopLongPoll();
     _pollTimer?.cancel();
     _pollTimer = null;
@@ -6684,6 +6847,11 @@ class MessengerController extends ChangeNotifier {
     _upsertGroupMessage(profiledGroup.groupId, message);
     _markRuntimeActivity();
     await _persist('Sending group message to ${profiledGroup.title}.');
+    try {
+      await _groupHistory.recordOutgoing(profiledGroup, message);
+    } catch (error) {
+      appendDebugLog('Group history archive pending: $error');
+    }
     for (final contact in recipientContacts) {
       await _tryDeliverExistingGroupMessage(
         group: profiledGroup,
@@ -7437,10 +7605,19 @@ class MessengerController extends ChangeNotifier {
     if (!_sameGroupMemberProfiles(profiledGroup, group)) {
       _upsertGroup(profiledGroup);
     }
+    String? historyProof;
+    try {
+      historyProof = (await _groupHistory.prepareMembership(
+        profiledGroup,
+      ))?.encode();
+    } catch (error) {
+      appendDebugLog('Group membership history pending: $error');
+    }
     final payload = jsonEncode({
       'version': 1,
       'reason': reason,
       'group': profiledGroup.toJson(),
+      'historyProof': ?historyProof,
     });
     final now = _now();
     for (final deviceId in targetDeviceIds.toSet()) {
@@ -8878,6 +9055,12 @@ class MessengerController extends ChangeNotifier {
 
         if (envelope.kind == 'group_leave') {
           await _handleGroupLeave(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'group_history') {
+          await _handleGroupHistory(envelope);
           _markSeen(envelope.messageId);
           continue;
         }
@@ -11383,6 +11566,17 @@ class MessengerController extends ChangeNotifier {
     }
     _reachability.noteAnySignal(sender.deviceId, at: envelope.createdAt);
     await _persist('Updated group ${enriched.title}.');
+    if (payload['historyProof'] is String) {
+      try {
+        await _groupHistory.importMembership(
+          merged.groupId,
+          payload['historyProof'] as String,
+        );
+      } catch (error) {
+        appendDebugLog('Group history membership needs catch-up: $error');
+      }
+      _scheduleGroupHistorySync(merged.groupId, sender.deviceId);
+    }
     // Tell the sender we applied their version so they can drop the
     // pending-retry entry. Best-effort; the sender will retry on miss.
     await _sendGroupMembershipAck(envelope, group: merged, sender: sender);
@@ -11461,11 +11655,20 @@ class MessengerController extends ChangeNotifier {
       envelope: envelope,
     );
     final payload = _crypto.decodeGroupMessagePayload(decoded);
+    final historySupported =
+        (jsonDecode(decoded) as Map)['groupHistoryVersion'] == 1;
     if (payload.groupId != group.groupId ||
         payload.membershipVersion < group.membershipVersion) {
       return;
     }
     final existingConversation = _groupConversation(group.groupId);
+    if (existingConversation.messages.any(
+      (message) =>
+          message.id == envelope.messageId &&
+          message.senderDeviceId != envelope.senderDeviceId,
+    )) {
+      return;
+    }
     final alreadyKnown = existingConversation.messages.any(
       (message) => message.id == envelope.messageId,
     );
@@ -11496,6 +11699,9 @@ class MessengerController extends ChangeNotifier {
     }
     _reachability.noteAnySignal(sender.deviceId, at: envelope.createdAt);
     await _sendAck(contact: sender, envelope: envelope);
+    if (historySupported) {
+      _scheduleGroupHistorySync(group.groupId, sender.deviceId);
+    }
   }
 
   Future<ContactRecord?> _updateExistingContactFromInvite(
@@ -17319,6 +17525,11 @@ class MessengerController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    for (final timer in _groupHistoryTimers.values) {
+      timer.cancel();
+    }
+    _groupHistoryTimers.clear();
+    unawaited(_groupHistoryService?.close());
     _attachmentBlockWorker.close();
     _transferProgressUiTimer?.cancel();
     _stopLongPoll();

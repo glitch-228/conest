@@ -116,10 +116,24 @@ Test forged authors, removed members, membership conflicts and mixed versions.
   work budgets across restarts, partial responses and failed membership writes.
   The exchange interface is exercised in-process; this does not qualify native
   transport or physical isolated-LAN behavior.
-- Not yet connected to the controller: encrypted-envelope exchange adapter,
-  admission settings UI, event projection/authorization
+- Controller integration now archives newly sent group text, attaches signed
+  membership proofs to membership updates, and exposes encrypted group-scoped
+  catch-up with strict request/peer/group correlation. Compatible group traffic
+  schedules debounced catch-up. Vault close/reset also closes/removes journals.
+- Initial text projection keeps original authorship and handles sender-controlled
+  legacy message-ID collisions. Bounded pages and author-scoped source indexes
+  prevent repeated imports from replacing existing messages.
+- Full Flutter suite after controller integration: **344 passed, 6 optional
+  certifications skipped**. Additional focused checks cover the source-ID
+  regression and native Iroh catch-up. The four-controller simulated-Iroh test
+  proves C → D carriage with A/B disconnected and no C/D private contact.
+- Remaining M2 integration: reconnect/chat-open scheduling, admission settings UI,
+  complete event projection/authorization
   (edits/deletions/reactions/receipts), migration and conversation pagination
-  remain necessary before advertising synchronization support. Persist local
+  remain necessary before claiming the milestone complete. Finish journal-backed
+  conversation persistence/pagination (the current projection still enters the
+  vault snapshot), legacy outgoing-history migration, admission after owner
+  handoff, and off-UI validation/profile measurements. Persist local
   removal independently of received proofs; recheck membership before sending
   each history batch. Four-device isolated-LAN catch-up remains unqualified.
 

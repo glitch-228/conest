@@ -358,6 +358,7 @@ class CryptoService {
       'version': 1,
       'groupId': group.groupId,
       'groupTitle': group.title,
+      'groupHistoryVersion': 1,
       'membershipVersion': group.membershipVersion,
       'body': message.body,
       'senderDisplayName': message.senderDisplayName,

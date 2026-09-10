@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:conest/src/group_history_event.dart';
 import 'package:conest/src/group_history_journal.dart';
 import 'package:conest/src/group_history_sync.dart';
+import 'package:conest/src/group_history_wire.dart';
 import 'package:conest/src/group_membership_history.dart';
 import 'package:conest/src/models.dart';
 
@@ -263,6 +264,48 @@ void main() {
       expect(await replicas['b']!.pullFrom(peer, carrierDeviceId: 'a'), 5);
       expect(peer.requests, 5);
       expect(await messages('b'), await messages('a'));
+    },
+  );
+
+  test(
+    'catch-up exchanges serialized requests and responses between group-only carriers',
+    () async {
+      final wires = <String, GroupHistoryWire>{};
+      var requests = 0;
+      for (final device in ['a', 'b', 'c', 'd']) {
+        wires[device] = GroupHistoryWire(
+          groupId: 'group',
+          localExchange: () async => replicas[device]!,
+          send: (peer, message) async {
+            if (message['type'] == 'request') requests++;
+            await wires[peer]!.handle(
+              device,
+              Map<String, Object?>.from(jsonDecode(jsonEncode(message)) as Map),
+            );
+          },
+        );
+      }
+      addTearDown(() {
+        for (final wire in wires.values) {
+          wire.close();
+        }
+      });
+      await send('a');
+      await send('b');
+      await replicas['c']!.pullFrom(
+        wires['c']!.remote('a'),
+        carrierDeviceId: 'a',
+      );
+      await replicas['c']!.pullFrom(
+        wires['c']!.remote('b'),
+        carrierDeviceId: 'b',
+      );
+      await replicas['d']!.pullFrom(
+        wires['d']!.remote('c'),
+        carrierDeviceId: 'c',
+      );
+      expect((await messages('d')).length, 2);
+      expect(requests, greaterThan(0));
     },
   );
 
