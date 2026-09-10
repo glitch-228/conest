@@ -107,8 +107,17 @@ Test forged authors, removed members, membership conflicts and mixed versions.
   re-admission, owner handoff, admin restrictions and membership conflicts.
   These are storage/protocol tests,
   not the four-device transport catch-up acceptance tests.
-- Not yet connected to the controller: durable membership import/rebuild,
-  inventory exchange, admission settings UI, event projection/authorization
+- Added a durable replica/exchange engine: dependency-ordered membership replay,
+  validate-before-flush membership publication, bounded inventories and event
+  requests, encrypted resumable cursors, and retry of bounded partial responses.
+  Journal offsets and retained IDs prevent duplicate writes/downloads.
+- **27 history tests passed**, including four-replica A/B → C → D carriage,
+  independently active partitions, interrupted catch-up plus restart, one-page
+  work budgets across restarts, partial responses and failed membership writes.
+  The exchange interface is exercised in-process; this does not qualify native
+  transport or physical isolated-LAN behavior.
+- Not yet connected to the controller: encrypted-envelope exchange adapter,
+  admission settings UI, event projection/authorization
   (edits/deletions/reactions/receipts), migration and conversation pagination
   remain necessary before advertising synchronization support. Persist local
   removal independently of received proofs; recheck membership before sending

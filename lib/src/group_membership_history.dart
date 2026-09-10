@@ -174,6 +174,19 @@ class GroupMembershipHistory {
       _heads.length == 1 ? _records[_heads.single] : null;
   GroupMembershipRecord? record(String id) => _records[id];
 
+  /// A candidate index can be validated before its proof is flushed, then
+  /// published only after the journal append succeeds.
+  GroupMembershipHistory fork() {
+    final copy = GroupMembershipHistory(
+      groupId: groupId,
+      trustedOwner: trustedOwner,
+    );
+    copy._records.addAll(_records);
+    copy._heads.addAll(_heads);
+    copy._identities.addAll(_identities);
+    return copy;
+  }
+
   Future<GroupMembershipImport> import(GroupMembershipRecord record) {
     final result = _tail.then((_) => _import(record));
     _tail = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
@@ -209,6 +222,9 @@ class GroupMembershipHistory {
       actor = trustedOwner;
     } else {
       if (incoming.proof.membershipId != incoming.parents.first ||
+          parents.any(
+            (parent) => parent.proof.lamport >= incoming.proof.lamport,
+          ) ||
           parents.any((parent) => parent.group.isDissolved) ||
           group.membershipVersion !=
               parents

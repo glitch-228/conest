@@ -139,6 +139,36 @@ class GroupHistoryJournal {
   Future<List<String>> authors({String? after, int limit = 16}) async =>
       (await _request('authors', [after, limit]) as List).cast<String>();
 
+  Future<List<GroupHistoryEvent>> readMembershipPage({
+    String? afterEventId,
+    int limit = 32,
+  }) async => (await _request('memberships', [afterEventId, limit]) as List)
+      .cast<GroupHistoryEvent>();
+
+  Future<List<GroupHistoryEvent>> readEvents(List<String> ids) async =>
+      (await _request('events', List<String>.of(ids)) as List)
+          .cast<GroupHistoryEvent>();
+
+  Future<Set<String>> retainedIds(List<String> ids) async =>
+      (await _request('retained', List<String>.of(ids)) as List)
+          .cast<String>()
+          .toSet();
+
+  Future<Map<String, Object?>> syncProgress(String peerDeviceId) async =>
+      Map<String, Object?>.from(
+        await _request('syncProgress', [peerDeviceId]) as Map,
+      );
+
+  Future<void> saveSyncProgress(
+    String peerDeviceId,
+    Map<String, Object?> progress,
+  ) async {
+    await _request('saveSyncProgress', [
+      peerDeviceId,
+      Map<String, Object?>.of(progress),
+    ]);
+  }
+
   /// Inclusive, contiguous verified ranges. The next page starts after the
   /// previous page's final end; gaps remain visible even with reordered arrival.
   Future<List<({int start, int end})>> rangesForAuthor(
@@ -231,6 +261,73 @@ class _JournalWorker {
   RandomAccessFile? _handle;
   int _end = 0;
   bool _poisoned = false;
+  Map<String, Object?>? _syncProgress;
+
+  Future<Map<String, Object?>> _loadSyncProgress() async {
+    if (_syncProgress != null) return _syncProgress!;
+    final progressFile = File('${file.path}.sync');
+    try {
+      if (await progressFile.exists() && await progressFile.length() <= 65536) {
+        final bytes = await progressFile.readAsBytes();
+        final clear = await _cipher.decrypt(
+          SecretBox(
+            bytes.sublist(12, bytes.length - 16),
+            nonce: bytes.sublist(0, 12),
+            mac: Mac(bytes.sublist(bytes.length - 16)),
+          ),
+          secretKey: key,
+          aad: utf8.encode('conest.group-sync-progress.v1|$groupId'),
+        );
+        _syncProgress = Map<String, Object?>.from(
+          jsonDecode(utf8.decode(clear)) as Map,
+        );
+      }
+    } catch (_) {
+      // Progress is an optimization. Corruption can only cause another metadata
+      // scan; signed, durable events in the journal remain authoritative.
+    }
+    return _syncProgress ??= {};
+  }
+
+  Future<void> _saveSyncProgress(
+    String peer,
+    Map<String, Object?> progress,
+  ) async {
+    if (peer.isEmpty || peer.length > 128) {
+      throw ArgumentError('Invalid sync peer.');
+    }
+    final updated = Map<String, Object?>.of(await _loadSyncProgress());
+    if (progress.isEmpty) {
+      updated.remove(peer);
+    } else {
+      updated[peer] = progress;
+    }
+    final clear = utf8.encode(jsonEncode(updated));
+    if (clear.length > 65000) {
+      throw StateError('Too many pending group synchronization cursors.');
+    }
+    final box = await _cipher.encrypt(
+      clear,
+      secretKey: key,
+      aad: utf8.encode('conest.group-sync-progress.v1|$groupId'),
+    );
+    final destination = File('${file.path}.sync');
+    final temporary = File('${destination.path}.tmp');
+    await temporary.writeAsBytes([
+      ...box.nonce,
+      ...box.cipherText,
+      ...box.mac.bytes,
+    ], flush: true);
+    try {
+      await temporary.rename(destination.path);
+    } on FileSystemException {
+      // Windows may refuse replacement. Losing only this optional cursor on a
+      // crash between delete/rename safely restarts metadata enumeration.
+      if (await destination.exists()) await destination.delete();
+      await temporary.rename(destination.path);
+    }
+    _syncProgress = updated;
+  }
 
   Future<void> open() async {
     await file.parent.create(recursive: true);
@@ -410,6 +507,41 @@ class _JournalWorker {
     }
     final args = arguments as List;
     switch (operation) {
+      case 'syncProgress':
+        return (await _loadSyncProgress())[args[0]] ?? <String, Object?>{};
+      case 'saveSyncProgress':
+        await _saveSyncProgress(
+          args[0] as String,
+          (args[1] as Map).cast<String, Object?>(),
+        );
+        return null;
+      case 'retained':
+        _checkLimit(args.length, 128);
+        return args.cast<String>().where(_entries.containsKey).toList();
+      case 'events':
+        _checkLimit(args.length, 128);
+        return _read(
+          args
+              .cast<String>()
+              .toSet()
+              .map((id) => _entries[id])
+              .whereType<_JournalEntry>(),
+          128,
+        );
+      case 'memberships':
+        final afterId = args[0] as String?;
+        final after = _entries[afterId];
+        if (afterId != null && after == null) {
+          throw ArgumentError('Unknown membership page cursor.');
+        }
+        return _read(
+          _ordered.where(
+            (entry) =>
+                entry.kind == GroupEventKind.membership &&
+                (after == null || entry.compareTo(after) > 0),
+          ),
+          args[1] as int,
+        );
       case 'page':
         final beforeId = args[0] as String?;
         final before = _entries[beforeId];
@@ -492,13 +624,15 @@ class _JournalEntry implements Comparable<_JournalEntry> {
       author = event.authorDeviceId,
       sequence = event.sequence,
       previousId = event.previousEventId,
-      lamport = event.lamport;
+      lamport = event.lamport,
+      kind = event.kind;
 
   final String id;
   final String author;
   final int sequence;
   final String? previousId;
   final int lamport;
+  final GroupEventKind kind;
   final int offset;
   final int size;
 
