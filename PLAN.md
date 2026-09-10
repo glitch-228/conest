@@ -7,7 +7,7 @@ only until separately scheduled. Preserve colors and the existing 16-member cap.
 ## Status and delivery
 
 - [x] Record the approved roadmap.
-- [ ] M1: transport fixes and automated qualification complete; debug builds pending.
+- [ ] M1: implemented and debug artifacts built; physical network qualification remains.
 - [ ] M2: signed, durable, peer-carried group history.
 - [ ] M3: group attachments from multiple providers.
 - [ ] M4: Telegram interface and everyday chat features.
@@ -50,8 +50,13 @@ cover Iroh pairing/bootstrap and legacy groups, not group Iroh or history sync.
   membership updates retain transport pins and reject identity replacement.
   Analyzer reports no issues. Corrected the existing transient binary PUT test
   to inject exactly one block failure and verify recovery by the completed hash.
-- Debug workflow now gates Linux artifacts on native Iroh and signed custom
-  relay group tests. Matching Android/Linux/Windows artifact identifiers: pending.
+- Commit `40e532dc240c0bbd67fa896915012df47e0b1cba` passed regular CI and
+  [debug #6](https://github.com/glitch-228/conest/actions/runs/34395113241).
+  Linux artifacts additionally passed native Iroh and signed custom relay
+  group tests. Matching artifact names: `conest-debug-android-arm64-6`,
+  `conest-debug-linux-x64-6`, `conest-debug-windows-x64-6` (14-day retention).
+  Physical Android/Linux/Windows and native Iroh fallback qualification remain
+  outstanding; automated success is not a physical qualification claim.
 
 ## M2 — group synchronization
 
@@ -83,6 +88,21 @@ Acceptance: A/B talk on isolated LAN and C catches up; A/B/C talk on LAN1,
 C moves to D on LAN2 and carries history; independently active partitions
 converge despite duplicate/reordered deliveries, restarts and clock differences.
 Test forged authors, removed members, membership conflicts and mixed versions.
+
+### M2 progress (2026-09-10)
+
+- Added immutable, versioned Ed25519 events with canonical digests, author
+  sequence/predecessor references, Lamport ordering and membership references.
+- Added an encrypted append-only journal with a dedicated worker, flushed
+  appends, rebuildable offset indexes, bounded pages/ranges, duplicate and
+  author-fork detection, exclusive opens and torn-tail recovery.
+- 13 focused foundation tests passed: partition arrival order, duplicates,
+  restart, forgery, wrong key/group, corruption, immutable payloads, inventory
+  gaps, pagination and the 1 MiB page budget. These are storage/protocol tests,
+  not the four-device transport catch-up acceptance tests.
+- Not yet connected to the controller: membership proof validation, admission
+  boundaries, inventory exchange, migration and live conversation pagination
+  remain necessary before advertising synchronization support.
 
 ## M3 — group files
 
