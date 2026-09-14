@@ -1,48 +1,52 @@
-## Conest 0.3.9 nightly
+## Conest 0.3.10 nightly
 
-### Iroh connections and file transfers
+### Group chat history and membership
 
-- Messaging and files can use Iroh discovery and relay fallback without a
-  custom Conest relay. LAN remains preferred when available.
-- Gives Iroh connection setup 30 seconds instead of the previous 4-second
-  transport timeout, allowing discovery and connection establishment time
-  to complete.
-- Adds a recommended 100 MiB Iroh file limit, enabled by default in Settings.
-  It applies to both direct and relayed Iroh transfers. Larger files can use
-  LAN, or both peers can disable the limit to allow larger Iroh transfers.
-- Large Iroh transfers can still be slow; the limit is a practical default,
-  not a throughput improvement.
-- Fixes Iroh contact presence and delivery receipts: transport acceptance
-  alone no longer marks a message as delivered to its recipient.
+- Group events are now signed and covered by an encrypted, peer-carried
+  history journal, with authenticated group membership history and admission
+  boundaries.
+- Adds durable group catch-up with bounded, resumable exchanges: joining or
+  reconnecting members fetch authorized group history automatically on
+  startup reconnect and when a chat is opened, and catch-up resumes on fresh
+  connections.
+- Group owners can control history visibility for members, and admission
+  checkpoints are captured so later-joined members receive only the history
+  they are authorized to read.
+- Authorized older group history pages are now exposed in chat, so members
+  can scroll back into history fetched before they joined.
 
-### LAN transfers and responsiveness
+### Groups over Iroh and relay changes
 
-- Uses the existing LAN messaging port for attachment ingress, avoiding
-  random file ports that may be blocked by a firewall.
-- Uses larger binary blocks for manual transfers, moves hashing and block
-  processing off the UI isolate, and reduces progress/checkpoint overhead.
-- Improves endpoint recovery, retry backoff, verification heartbeats, and
-  transfer timing to reduce stalls and misleading acknowledgement timeouts.
-- Raises the LAN byte budget that previously throttled sustained transfers.
+- Group messaging now works over Iroh with peers who are not individual
+  contacts.
+- Bundled Conest relay servers are retired: previously bundled routes are
+  removed on upgrade. Explicitly configured relays and Iroh
+  discovery/fallback remain available.
 
-### Storage and debug testing
+### Everyday chat interface
 
-- Adds a setting to disable the default 10% free-space reserve, plus a
-  per-file Download Anyway option when the file fits but would use the reserve.
-- Matching debug builds support LAN and Iroh file matrices, negotiate the
-  selected transport and peer size limits, and stop before generating files
-  above the negotiated Iroh limit. Debug test controls remain debug-only.
+- Begins the Telegram-style interface: Courier layout is the default for new
+  installations; existing preference files migrate once, retaining brightness,
+  decoration intensity, and the older home-layout choice.
+- Replaces the decorative search with a working, editable and clearable
+  search across contact/group names and currently loaded message previews.
+  Full journal search and result highlighting remain outstanding.
+- Courier chat-list rows now show a compact reachability mark (colored dot
+  plus online/seen-recently/known/unknown label) for contact conversations,
+  matching the reachability chip in the chat header.
+- Direct, group, and LAN-lobby composers keep separate encrypted text
+  drafts. Drafts persist locally in the encrypted vault, are never sent as
+  network events, and are cleared when the message is sent.
 
 ### Validation
 
-- Flutter: 302 tests passed, with 4 opt-in tests skipped; analysis passed.
-- Separate native transfer checks passed for 1000/2000 MiB LAN transfers
-  with the Iroh limit enabled and 250 MiB Iroh with the limit disabled.
-- Rust workspace: 56 tests passed for the preceding transport changes.
-- A native public-Iroh discovery/relay test passed with direct IP transport
-  disabled. Android/Linux device testing also confirmed online transfers;
-  large-file performance and network transitions still need device testing.
+- CI green at this nightly's commit: Flutter 348 tests passed, 6 skipped;
+  analysis and formatting clean; Rust workspace 56 tests passed with clippy
+  and rustfmt gates.
+- Search widget/screenshot review, group history physical-network
+  qualification, and draft lifecycle flush qualification remain outstanding.
 
-Update both peers to this nightly to use the matching transfer fixes and
-negotiate the Iroh file limit. The 30 MiB default Conest store-forward limit
-remains separate from the Iroh limit.
+Update both peers to this nightly to use matching group history and
+admission behavior. With the bundled relays retired, devices that relied on
+the previously bundled Conest relay should add an explicit relay or keep
+Iroh discovery enabled.
