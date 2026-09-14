@@ -8406,6 +8406,39 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  ConversationRecord _draftConversation(ConversationKind kind, String id) {
+    return switch (kind) {
+      ConversationKind.direct => _conversationFor(id),
+      ConversationKind.group => _groupConversation(id),
+      ConversationKind.lanLobby => _lanLobbyConversation(),
+    };
+  }
+
+  String conversationDraft(ConversationKind kind, String id) =>
+      _draftConversation(kind, id).draft;
+
+  Future<void> setConversationDraft(
+    ConversationKind kind,
+    String id,
+    String text,
+  ) async {
+    if (identity == null) return;
+    final conversation = _draftConversation(kind, id);
+    if (conversation.draft == text) return;
+    final updated = conversation.copyWith(draft: text);
+    final conversations = List<ConversationRecord>.of(_snapshot.conversations);
+    final index = conversations.indexWhere(
+      (entry) => entry.kind == kind && entry.id == conversation.id,
+    );
+    if (index < 0) {
+      conversations.add(updated);
+    } else {
+      conversations[index] = updated;
+    }
+    _snapshot = _snapshot.copyWith(conversations: conversations);
+    await _saveSnapshotSilently(notify: false, debounce: true);
+  }
+
   List<ChatMessage> messagesFor(String peerDeviceId) {
     final conversation = _conversationFor(peerDeviceId);
     return conversation.messages
@@ -16381,7 +16414,8 @@ class MessengerController extends ChangeNotifier {
 
   ConversationRecord _conversationFor(String peerDeviceId) {
     for (final conversation in _snapshot.conversations) {
-      if (conversation.peerDeviceId == peerDeviceId) {
+      if (conversation.kind == ConversationKind.direct &&
+          conversation.peerDeviceId == peerDeviceId) {
         return conversation;
       }
     }

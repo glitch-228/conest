@@ -220,6 +220,13 @@ installations; retain Signature/Garrison choices and later user preferences.
   show a matching preview; navigation still opens the conversation normally.
   Full journal search, result highlighting/jump, and large-history performance
   qualification remain outstanding.
+- Direct, group and LAN-lobby composers now keep separate text drafts. Drafts
+  persist locally in the encrypted vault with debounced writes and are never
+  sent as network events. Sending clears the selected conversation's draft.
+  Tests cover rapid updates, destination isolation, controller restart, legacy
+  decoding and encrypted storage. Reply-target drafts, navigation widget tests,
+  send-failure restoration and lifecycle flush qualification remain outstanding.
+- Draft validation: 2 focused controller/storage regressions pass; analysis clean.
 - Automated: 10 theme tests pass, including legacy migration and post-migration
   preference persistence; Flutter analysis passes. Search widget/screenshot and
   physical-device qualification remain outstanding. No new debug release yet.

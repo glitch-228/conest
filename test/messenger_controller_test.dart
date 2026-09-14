@@ -1137,6 +1137,88 @@ const _irohOnlyConnectivity = GlobalConnectivityPreferences(
 
 void main() {
   test(
+    'conversation drafts isolate destinations and survive controller restart',
+    () async {
+      final vault = _MemoryVaultStore();
+      final relay = _FakeRelayClient();
+      final first = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: vault,
+      );
+      final writes = <Future<void>>[];
+      writes.add(
+        first.setConversationDraft(
+          ConversationKind.direct,
+          'same-id',
+          'unfinished private',
+        ),
+      );
+      writes.add(
+        first.setConversationDraft(
+          ConversationKind.group,
+          'same-id',
+          'unfinished group',
+        ),
+      );
+      writes.add(
+        first.setConversationDraft(
+          ConversationKind.lanLobby,
+          'lobby',
+          'unfinished lobby',
+        ),
+      );
+      writes.add(
+        first.setConversationDraft(
+          ConversationKind.direct,
+          'same-id',
+          'latest private',
+        ),
+      );
+      await Future.wait(writes);
+      first.dispose();
+      final restored = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: vault,
+        createIdentity: false,
+      );
+      addTearDown(restored.dispose);
+      expect(
+        restored.conversationDraft(ConversationKind.direct, 'same-id'),
+        'latest private',
+      );
+      expect(
+        restored.conversationDraft(ConversationKind.group, 'same-id'),
+        'unfinished group',
+      );
+      expect(
+        restored.conversationDraft(ConversationKind.lanLobby, 'lobby'),
+        'unfinished lobby',
+      );
+      await restored.setConversationDraft(
+        ConversationKind.direct,
+        'same-id',
+        '',
+      );
+      expect(
+        restored.conversationDraft(ConversationKind.direct, 'same-id'),
+        isEmpty,
+      );
+      expect(
+        restored.conversationDraft(ConversationKind.group, 'same-id'),
+        'unfinished group',
+      );
+      expect(
+        relay.storedEnvelopes.where(
+          (e) => e.kind == 'direct_message' || e.kind == 'group_message',
+        ),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
     'discarded message duplicates never manufacture delivery receipts',
     () async {
       final relay = _FakeRelayClient();

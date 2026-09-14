@@ -2447,6 +2447,7 @@ class ConversationRecord {
     required this.peerDeviceId,
     required this.messages,
     this.lastReadAt,
+    this.draft = '',
   });
 
   final String id;
@@ -2455,11 +2456,16 @@ class ConversationRecord {
   final List<ChatMessage> messages;
   final DateTime? lastReadAt;
 
+  /// Local-only composer text, encrypted with the vault and never advertised.
+  final String draft;
+
   ConversationRecord copyWith({
     List<ChatMessage>? messages,
+    String? draft,
     DateTime? lastReadAt,
   }) {
     return ConversationRecord(
+      draft: draft ?? this.draft,
       id: id,
       kind: kind,
       peerDeviceId: peerDeviceId,
@@ -2470,6 +2476,7 @@ class ConversationRecord {
 
   Map<String, dynamic> toJson() {
     return {
+      'draft': draft,
       'id': id,
       'kind': kind.name,
       'peerDeviceId': peerDeviceId,
@@ -2494,6 +2501,7 @@ class ConversationRecord {
                     ))
         : DateTime.tryParse(lastReadAtValue);
     return ConversationRecord(
+      draft: json['draft'] as String? ?? '',
       id: json['id'] as String,
       kind: ConversationKind.values.byName(json['kind'] as String),
       peerDeviceId: json['peerDeviceId'] as String,

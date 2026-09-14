@@ -1348,7 +1348,37 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _selectedContactId;
   String? _selectedGroupId;
   bool _lanLobbySelected = false;
-  final _composerController = TextEditingController();
+  final _composers = <(ConversationKind, String), TextEditingController>{};
+  final _emptyComposer = TextEditingController();
+
+  TextEditingController get _composerController {
+    final (ConversationKind, String) key;
+    if (_selectedContactId case final String id) {
+      key = (ConversationKind.direct, id);
+    } else if (_selectedGroupId case final String id) {
+      key = (ConversationKind.group, id);
+    } else if (_lanLobbySelected) {
+      key = (ConversationKind.lanLobby, 'lobby');
+    } else {
+      return _emptyComposer;
+    }
+    return _composers.putIfAbsent(key, () {
+      final composer = TextEditingController(
+        text: widget.controller.conversationDraft(key.$1, key.$2),
+      );
+      composer.addListener(() {
+        unawaited(
+          widget.controller
+              .setConversationDraft(key.$1, key.$2, composer.text)
+              .catchError((Object error) {
+                debugPrint('Could not save conversation draft: $error');
+              }),
+        );
+      });
+      return composer;
+    });
+  }
+
   ChatMessage? _replyTarget;
 
   @override
@@ -1358,7 +1388,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
-    _composerController.dispose();
+    for (final composer in _composers.values) {
+      composer.dispose();
+    }
+    _emptyComposer.dispose();
     super.dispose();
   }
 

@@ -91,6 +91,15 @@ void main() {
       );
       final snapshot = VaultSnapshot.empty().copyWith(
         seenEnvelopeIds: const ['seen-a'],
+        conversations: [
+          ConversationRecord(
+            id: 'draft-chat',
+            kind: ConversationKind.direct,
+            peerDeviceId: 'peer',
+            messages: [],
+            draft: 'private unfinished text',
+          ),
+        ],
       );
 
       await VaultStore(
@@ -109,6 +118,13 @@ void main() {
         ),
       ).load();
       expect(loaded.seenEnvelopeIds, const ['seen-a']);
+      expect(loaded.conversations.single.draft, 'private unfinished text');
+      expect(
+        utf8.decode(await vaultFile.readAsBytes(), allowMalformed: true),
+        isNot(contains('private unfinished text')),
+      );
+      final legacy = loaded.conversations.single.toJson()..remove('draft');
+      expect(ConversationRecord.fromJson(legacy).draft, isEmpty);
 
       expect(
         () => VaultStore(
