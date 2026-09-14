@@ -4562,12 +4562,14 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   void initState() {
     super.initState();
     _scrollController.addListener(_scheduleReadSweep);
+    controller.requestGroupHistoryCatchUp(group.groupId);
   }
 
   @override
   void didUpdateWidget(covariant _GroupChatPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.group.groupId != widget.group.groupId) {
+      controller.requestGroupHistoryCatchUp(group.groupId);
       _messageKeys.clear();
       _didInitialPosition = false;
       _initialPositionScheduled = false;

@@ -127,7 +127,11 @@ Test forged authors, removed members, membership conflicts and mixed versions.
   certifications skipped**. Additional focused checks cover the source-ID
   regression and native Iroh catch-up. The four-controller simulated-Iroh test
   proves C → D carriage with A/B disconnected and no C/D private contact.
-- Remaining M2 integration: reconnect/chat-open scheduling, admission settings UI,
+- Startup, network reconnection and group conversation opening now schedule
+  debounced catch-up against active signed group peers. The four-controller
+  partition regression passes using the network-change and conversation-open
+  hooks instead of manually invoking both catch-up exchanges (2026-09-14).
+- Remaining M2 integration: admission settings UI,
   complete event projection/authorization
   (edits/deletions/reactions/receipts), migration and conversation pagination
   remain necessary before claiming the milestone complete. Finish journal-backed

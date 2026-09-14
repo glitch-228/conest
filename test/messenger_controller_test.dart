@@ -2154,21 +2154,15 @@ void main() {
       );
       network.bridges.remove(alice.identity!.irohEndpointId);
       network.bridges[carol.identity!.irohEndpointId!] = carolBridge;
-      expect(
-        await carol.synchronizeGroupHistory(
-          groupId: group.groupId,
-          peerDeviceId: bob.identity!.deviceId,
-        ),
-        2,
+      carol.onConnectivityChanged(interfaceLabel: 'mobile');
+      await _waitForIroh(
+        () => carol.messagesForGroup(group.groupId).length == 2,
       );
       network.bridges.remove(bob.identity!.irohEndpointId);
       network.bridges[dave.identity!.irohEndpointId!] = daveBridge;
-      expect(
-        await dave.synchronizeGroupHistory(
-          groupId: group.groupId,
-          peerDeviceId: carol.identity!.deviceId,
-        ),
-        2,
+      dave.requestGroupHistoryCatchUp(group.groupId);
+      await _waitForIroh(
+        () => dave.messagesForGroup(group.groupId).length == 2,
       );
       expect(
         dave

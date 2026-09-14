@@ -1197,6 +1197,33 @@ class MessengerController extends ChangeNotifier {
   final _groupHistoryTimers = <String, Timer>{};
   final _groupHistoryLastSync = <String, DateTime>{};
 
+  /// Called on conversation open and after an interface change. Every active
+  /// signed group peer can carry history; the owner is not a required hop.
+  void requestGroupHistoryCatchUp(String groupId) {
+    final me = _snapshot.identity;
+    final group = _groupById(groupId);
+    if (_disposed ||
+        me == null ||
+        group == null ||
+        group.localRemovedAt != null ||
+        !group.hasActiveMember(me.deviceId)) {
+      return;
+    }
+    for (final peer in group.activeMemberDeviceIds) {
+      if (peer == me.deviceId ||
+          group.memberProfileFor(peer)?.signingPublicKeyBase64 == null) {
+        continue;
+      }
+      _scheduleGroupHistorySync(groupId, peer);
+    }
+  }
+
+  void _requestVisibleGroupCatchUp() {
+    for (final group in visibleGroups) {
+      requestGroupHistoryCatchUp(group.groupId);
+    }
+  }
+
   void _scheduleGroupHistorySync(String groupId, String peer) {
     final key = jsonEncode([groupId, peer]);
     if (_disposed || _groupHistoryTimers.containsKey(key)) return;
@@ -1398,6 +1425,7 @@ class MessengerController extends ChangeNotifier {
         unawaited(_pollLocalInboxOnly());
         unawaited(pollNow());
         unawaited(_startLongPollIfEnabled());
+        _requestVisibleGroupCatchUp();
       }
     } catch (error) {
       _statusMessage = 'Vault unlock failed: $error';
@@ -7151,6 +7179,9 @@ class MessengerController extends ChangeNotifier {
       'Connectivity changed ($label) — kicking active transfers + polling.',
     );
     _routeHealthTracker.clearBackoffWindows();
+    if (_networkCostClass != NetworkCostClass.offline) {
+      _requestVisibleGroupCatchUp();
+    }
     // An address learned on the old interface is no longer trusted as a LAN
     // destination. Both peers exchange fresh, authenticated endpoint hints.
     _peerLanDirect.clear();
