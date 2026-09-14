@@ -131,7 +131,13 @@ Test forged authors, removed members, membership conflicts and mixed versions.
   debounced catch-up against active signed group peers. The four-controller
   partition regression passes using the network-change and conversation-open
   hooks instead of manually invoking both catch-up exchanges (2026-09-14).
-- Remaining M2 integration: admission settings UI,
+- Group details now exposes the owner-only **History for new members** choice:
+  all retained history (default) or since admission. Policy updates are signed
+  membership records, preserve existing admission IDs, and new admissions capture
+  retained author sequence/event checkpoints rather than wall-clock time.
+  The controller regression verifies owner-only updates and subsequent partition
+  catch-up; comprehensive widget/admission qualification remains outstanding.
+- Remaining M2 integration:
   complete event projection/authorization
   (edits/deletions/reactions/receipts), migration and conversation pagination
   remain necessary before claiming the milestone complete. Finish journal-backed

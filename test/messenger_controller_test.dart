@@ -2131,6 +2131,24 @@ void main() {
         title: 'Carried history',
         members: alice.contacts,
       );
+      expect(
+        await alice.groupHistoryIncludesEarlierMessages(group.groupId),
+        isTrue,
+      );
+      await expectLater(
+        bob.setGroupHistoryIncludesEarlierMessages(group.groupId, false),
+        throwsStateError,
+      );
+      await alice.setGroupHistoryIncludesEarlierMessages(group.groupId, false);
+      expect(
+        await alice.groupHistoryIncludesEarlierMessages(group.groupId),
+        isFalse,
+      );
+      await alice.setGroupHistoryIncludesEarlierMessages(group.groupId, true);
+      expect(
+        await alice.groupHistoryIncludesEarlierMessages(group.groupId),
+        isTrue,
+      );
       await _waitForIroh(
         () =>
             [bob, carol, dave].every((peer) => peer.groups.isNotEmpty) &&

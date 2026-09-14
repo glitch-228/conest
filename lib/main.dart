@@ -3958,6 +3958,48 @@ class GroupDetailsDialog extends StatefulWidget {
 enum _DeleteGroupChoice { cancel, transfer, delete }
 
 class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
+  bool _savingHistoryVisibility = false;
+  Future<void> _editHistoryVisibility() async {
+    setState(() => _savingHistoryVisibility = true);
+    try {
+      final includeEarlier = await widget.controller
+          .groupHistoryIncludesEarlierMessages(group.groupId);
+      if (!mounted) return;
+      final selected = await showDialog<bool>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          title: const Text('History for new members'),
+          children: [
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+              child: Text(
+                'Applies to future admissions. History already received cannot be withdrawn.',
+              ),
+            ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text('${includeEarlier ? '✓ ' : ''}All retained history'),
+            ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text('${!includeEarlier ? '✓ ' : ''}Since admission'),
+            ),
+          ],
+        ),
+      );
+      if (selected != null && selected != includeEarlier) {
+        await widget.controller.setGroupHistoryIncludesEarlierMessages(
+          group.groupId,
+          selected,
+        );
+      }
+    } catch (error) {
+      widget.controller.setStatus(error.toString());
+    } finally {
+      if (mounted) setState(() => _savingHistoryVisibility = false);
+    }
+  }
+
   GroupRecord get group {
     for (final candidate in widget.controller.groups) {
       if (candidate.groupId == widget.group.groupId) {
@@ -4331,6 +4373,23 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
                 title: Text(widget.controller.groupMemberLabel(deviceId)),
                 subtitle: Text(group.roleFor(deviceId)?.label ?? 'Member'),
                 trailing: _memberTrailing(deviceId, group.roleFor(deviceId)),
+              ),
+            if (myId == group.ownerDeviceId && !group.isDissolved)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.history),
+                title: const Text('History for new members'),
+                subtitle: const Text(
+                  'Choose what future members can catch up on',
+                ),
+                onTap: _savingHistoryVisibility ? null : _editHistoryVisibility,
+                trailing: _savingHistoryVisibility
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.chevron_right),
               ),
             // Trust fanout sits below the member list so the role rows render
             // first (and aren't pushed out of a constrained dialog viewport).

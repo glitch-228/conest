@@ -126,47 +126,79 @@ class GroupHistoryCoordinator {
     );
   }
 
-  Future<GroupHistoryEvent?> prepareMembership(GroupRecord snapshot) => _write(
-    snapshot.groupId,
-    () async {
-      final replica = await _replica(snapshot.groupId);
-      final history = replica.membership;
-      final current = history.current;
-      final me = identity();
-      if (history.hasConflict) {
-        throw StateError('Group membership conflict needs owner resolution.');
+  Future<GroupHistoryVisibility> historyVisibility(String id) async =>
+      (await _replica(id)).membership.current?.historyVisibility ??
+      GroupHistoryVisibility.allRetained;
+
+  Future<GroupHistoryEvent?> prepareMembership(
+    GroupRecord snapshot, {
+    GroupHistoryVisibility? visibility,
+  }) => _write(snapshot.groupId, () async {
+    final replica = await _replica(snapshot.groupId);
+    final history = replica.membership;
+    final current = history.current;
+    final me = identity();
+    if (history.hasConflict) {
+      throw StateError('Group membership conflict needs owner resolution.');
+    }
+    if (visibility != null && snapshot.ownerDeviceId != me.deviceId) {
+      throw StateError('Only the group owner can change history visibility.');
+    }
+    if (current != null &&
+        current.group.membershipVersion == snapshot.membershipVersion) {
+      return current.proof;
+    }
+    if (current == null && snapshot.ownerDeviceId != me.deviceId) return null;
+    final parents = history.heads;
+    final checkpoints = <String, GroupHistoryCheckpoint>{};
+    // Capture retained event boundaries for new admissions, including authors
+    // no longer active. Wall clocks are not admission boundaries.
+    if (snapshot.activeMemberDeviceIds.any(
+      (device) => current?.admissions[device] == null,
+    )) {
+      String? afterAuthor;
+      while (true) {
+        final authors = await replica.journal.authors(after: afterAuthor);
+        if (authors.isEmpty) break;
+        for (final author in authors) {
+          final head = await replica.journal.authorHead(author);
+          if (head != null) {
+            checkpoints[author] = GroupHistoryCheckpoint(
+              sequence: head.sequence,
+              eventId: head.eventId,
+            );
+          }
+        }
+        afterAuthor = authors.last;
       }
-      if (current != null &&
-          current.group.membershipVersion == snapshot.membershipVersion) {
-        return current.proof;
-      }
-      if (current == null && snapshot.ownerDeviceId != me.deviceId) return null;
-      final parents = history.heads;
-      final proof = await _sign(
-        replica.journal,
-        groupId: snapshot.groupId,
-        membershipId: parents.isEmpty
-            ? GroupMembershipRecord.rootReference(
-                snapshot.groupId,
-                me.signingPublicKeyBase64!,
-              )
-            : parents.first,
-        kind: GroupEventKind.membership,
-        payload: GroupMembershipRecord.payload(
-          group: snapshot,
-          parents: parents,
-          historyVisibility:
-              current?.historyVisibility ?? GroupHistoryVisibility.allRetained,
-          admissions: {
-            for (final device in snapshot.activeMemberDeviceIds)
-              device: current?.admissions[device],
-          },
-        ),
-      );
-      await replica.importMembership(proof);
-      return proof;
-    },
-  );
+    }
+    final proof = await _sign(
+      replica.journal,
+      groupId: snapshot.groupId,
+      membershipId: parents.isEmpty
+          ? GroupMembershipRecord.rootReference(
+              snapshot.groupId,
+              me.signingPublicKeyBase64!,
+            )
+          : parents.first,
+      kind: GroupEventKind.membership,
+      payload: GroupMembershipRecord.payload(
+        group: snapshot,
+        parents: parents,
+        historyVisibility:
+            visibility ??
+            current?.historyVisibility ??
+            GroupHistoryVisibility.allRetained,
+        admissions: {
+          for (final device in snapshot.activeMemberDeviceIds)
+            device: current?.admissions[device],
+        },
+        checkpoints: checkpoints,
+      ),
+    );
+    await replica.importMembership(proof);
+    return proof;
+  });
 
   Future<void> importMembership(String id, String encoded) =>
       _write(id, () async {

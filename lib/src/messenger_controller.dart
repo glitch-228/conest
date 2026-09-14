@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart' as path_provider;
 import 'crypto_service.dart';
 import 'group_history_coordinator.dart';
 import 'group_history_event.dart';
+import 'group_membership_history.dart';
 import 'beam_protocol.dart';
 import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
@@ -1194,6 +1195,43 @@ class MessengerController extends ChangeNotifier {
   }
 
   GroupHistoryCoordinator? _groupHistoryService;
+  Future<bool> groupHistoryIncludesEarlierMessages(String groupId) async =>
+      await _groupHistory.historyVisibility(groupId) ==
+      GroupHistoryVisibility.allRetained;
+
+  Future<void> setGroupHistoryIncludesEarlierMessages(
+    String groupId,
+    bool includeEarlier,
+  ) async {
+    final previous = _requireGroup(groupId);
+    if (previous.ownerDeviceId != _requireIdentity().deviceId ||
+        previous.isDissolved) {
+      throw StateError(
+        'Only the active group owner can change history visibility.',
+      );
+    }
+    await _groupHistory.prepareMembership(previous);
+    final updated = previous.copyWith(
+      membershipVersion: previous.membershipVersion + 1,
+      updatedAt: _now(),
+    );
+    await _groupHistory.prepareMembership(
+      updated,
+      visibility: includeEarlier
+          ? GroupHistoryVisibility.allRetained
+          : GroupHistoryVisibility.sinceAdmission,
+    );
+    _upsertGroup(updated);
+    await _persist('Updated history visibility for future group members.');
+    await _sendGroupMembershipUpdate(
+      updated,
+      targetDeviceIds: updated.activeMemberDeviceIds
+          .where((device) => device != _requireIdentity().deviceId)
+          .toList(),
+      reason: 'history_visibility',
+    );
+  }
+
   final _groupHistoryTimers = <String, Timer>{};
   final _groupHistoryLastSync = <String, DateTime>{};
 
