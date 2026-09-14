@@ -2400,6 +2400,7 @@ class _CourierHomeState extends State<_CourierHome> {
             bool selected,
             bool isGroup,
             int memberCount,
+            ContactReachabilityState? reachability,
             VoidCallback onTap,
           })
         >[];
@@ -2422,6 +2423,7 @@ class _CourierHomeState extends State<_CourierHome> {
         selected: widget.selectedContactId == contact.deviceId,
         isGroup: false,
         memberCount: 0,
+        reachability: widget.controller.reachabilityStateFor(contact.deviceId),
         onTap: () => widget.onContactSelected(contact),
       ));
     }
@@ -2447,6 +2449,7 @@ class _CourierHomeState extends State<_CourierHome> {
         selected: widget.selectedGroupId == group.groupId,
         isGroup: true,
         memberCount: group.activeMemberDeviceIds.length,
+        reachability: null,
         onTap: () => widget.onGroupSelected(group),
       ));
     }
@@ -2549,6 +2552,7 @@ class _CourierHomeState extends State<_CourierHome> {
                   selected: entry.selected,
                   isGroup: entry.isGroup,
                   memberCount: entry.memberCount,
+                  reachability: entry.reachability,
                   onTap: entry.onTap,
                 ),
             ],
@@ -2590,6 +2594,7 @@ class _CourierRow extends StatelessWidget {
     this.at,
     this.isGroup = false,
     this.memberCount = 0,
+    this.reachability,
   });
 
   final ConestPalette palette;
@@ -2603,6 +2608,7 @@ class _CourierRow extends StatelessWidget {
   final DateTime? at;
   final bool isGroup;
   final int memberCount;
+  final ContactReachabilityState? reachability;
 
   @override
   Widget build(BuildContext context) {
@@ -2708,6 +2714,13 @@ class _CourierRow extends StatelessWidget {
                               ),
                         ),
                       ),
+                      if (reachability != null) ...[
+                        const SizedBox(width: 6),
+                        _CourierPresenceMark(
+                          state: reachability!,
+                          palette: palette,
+                        ),
+                      ],
                       if (unread > 0) ...[
                         const SizedBox(width: 6),
                         _UnreadBadge(
@@ -2723,6 +2736,45 @@ class _CourierRow extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Compact dot + label presence marker for [_CourierRow] chat list entries.
+class _CourierPresenceMark extends StatelessWidget {
+  const _CourierPresenceMark({required this.state, required this.palette});
+
+  final ContactReachabilityState state;
+  final ConestPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = switch (state) {
+      ContactReachabilityState.online => palette.success,
+      ContactReachabilityState.seenRecently => palette.warning,
+      ContactReachabilityState.known => palette.inkSoft,
+      ContactReachabilityState.unknown => palette.danger,
+    };
+    return Padding(
+      padding: const EdgeInsets.only(right: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            state.label,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: accent,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }
