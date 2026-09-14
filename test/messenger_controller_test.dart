@@ -2300,6 +2300,19 @@ void main() {
         carol.messagesForGroup(group.groupId).map((message) => message.body),
         ['after admission'],
       );
+      String? cursor;
+      var pages = 0;
+      do {
+        cursor = await carol.loadOlderGroupHistory(
+          group.groupId,
+          beforeEventId: cursor,
+        );
+        expect(++pages, lessThan(10));
+      } while (cursor != null);
+      expect(
+        carol.messagesForGroup(group.groupId).map((message) => message.body),
+        ['after admission'],
+      );
       await alice.setGroupHistoryIncludesEarlierMessages(group.groupId, true);
       await _waitForIroh(() => alice.pendingGroupMembershipDeliveries.isEmpty);
       await catchUp('admission catch-up');

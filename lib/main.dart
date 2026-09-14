@@ -4514,6 +4514,35 @@ class _GroupChatPanel extends StatefulWidget {
 }
 
 class _GroupChatPanelState extends State<_GroupChatPanel> {
+  String? _historyCursor;
+  bool _loadingHistory = false;
+  bool _historyExhausted = false;
+
+  Future<void> _loadOlderHistory() async {
+    if (_loadingHistory || _historyExhausted) return;
+    final requestedGroup = group.groupId;
+    setState(() => _loadingHistory = true);
+    try {
+      final next = await controller.loadOlderGroupHistory(
+        requestedGroup,
+        beforeEventId: _historyCursor,
+      );
+      if (!mounted || group.groupId != requestedGroup) return;
+      setState(() {
+        _historyCursor = next;
+        _historyExhausted = next == null;
+      });
+    } catch (error) {
+      if (mounted) {
+        controller.setStatus('Could not load older group history: $error');
+      }
+    } finally {
+      if (mounted && group.groupId == requestedGroup) {
+        setState(() => _loadingHistory = false);
+      }
+    }
+  }
+
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _messageListKey = GlobalKey();
   final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
@@ -4628,6 +4657,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   void didUpdateWidget(covariant _GroupChatPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.group.groupId != widget.group.groupId) {
+      _historyCursor = null;
+      _loadingHistory = false;
+      _historyExhausted = false;
       controller.requestGroupHistoryCatchUp(group.groupId);
       _messageKeys.clear();
       _didInitialPosition = false;
@@ -5062,8 +5094,23 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     reverse: true,
                     controller: _scrollController,
                     padding: const EdgeInsets.all(18),
-                    itemCount: messages.length,
+                    itemCount: messages.length + (_historyExhausted ? 0 : 1),
                     itemBuilder: (context, index) {
+                      if (index == messages.length) {
+                        return Center(
+                          child: TextButton.icon(
+                            onPressed: _loadingHistory
+                                ? null
+                                : _loadOlderHistory,
+                            icon: const Icon(Icons.history),
+                            label: Text(
+                              _loadingHistory
+                                  ? 'Loading history…'
+                                  : 'Load older messages',
+                            ),
+                          ),
+                        );
+                      }
                       final chronoIndex = messages.length - 1 - index;
                       final message = messages[chronoIndex];
                       if (_isAlbumContinuation(messages, chronoIndex)) {

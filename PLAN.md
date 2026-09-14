@@ -142,6 +142,10 @@ Test forged authors, removed members, membership conflicts and mixed versions.
   to all-retained history do not rewrite that member's original grant. This
   exposed and fixed stale in-flight catch-up reuse after an interface change;
   reconnection now cancels old requests and resumes with fresh correlation IDs.
+- Added a group-chat **Load older messages** control using stable signed-event
+  cursors. Each page rechecks history authorization; the controller admission
+  regression verifies pagination does not reveal pre-admission messages.
+  Large-history widget/scroll-position qualification remains outstanding.
 - Remaining M2 integration:
   complete event projection/authorization
   (edits/deletions/reactions/receipts), migration and conversation pagination

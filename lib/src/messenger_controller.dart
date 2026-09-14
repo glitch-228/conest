@@ -1390,6 +1390,20 @@ class MessengerController extends ChangeNotifier {
     return count;
   }
 
+  /// Returns a stable signed-event cursor; null means the retained journal has
+  /// no older page. Projection rechecks admission before showing every event.
+  Future<String?> loadOlderGroupHistory(
+    String groupId, {
+    String? beforeEventId,
+  }) async {
+    final cursor = await _groupHistory.projectPage(
+      groupId,
+      beforeEventId: beforeEventId,
+    );
+    if (!_disposed) notifyListeners();
+    return cursor;
+  }
+
   Future<void> _handleGroupHistory(RelayEnvelope envelope) async {
     final group = _groupById(envelope.conversationId);
     final me = _snapshot.identity;
