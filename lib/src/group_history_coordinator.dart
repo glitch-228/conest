@@ -293,10 +293,10 @@ class GroupHistoryCoordinator {
       unawaited(
         result.then<void>(
           (_) {
-            _pulls.remove(key);
+            if (identical(_pulls[key], result)) _pulls.remove(key);
           },
           onError: (Object _, StackTrace _) {
-            _pulls.remove(key);
+            if (identical(_pulls[key], result)) _pulls.remove(key);
           },
         ),
       );
@@ -327,5 +327,15 @@ class GroupHistoryCoordinator {
     }
     await Future.wait(_writes.values);
     await vault.closeGroupHistory();
+  }
+
+  void onConnectivityChanged() {
+    // Requests accepted by the old transport may never receive a response.
+    // Resume from durable cursors using fresh correlation IDs and connections.
+    for (final wire in _wires.values) {
+      wire.close();
+    }
+    _wires.clear();
+    _pulls.clear();
   }
 }

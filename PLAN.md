@@ -137,6 +137,11 @@ Test forged authors, removed members, membership conflicts and mixed versions.
   retained author sequence/event checkpoints rather than wall-clock time.
   The controller regression verifies owner-only updates and subsequent partition
   catch-up; comprehensive widget/admission qualification remains outstanding.
+- End-to-end admission regression now verifies older history stays unavailable,
+  post-admission messages resume after an offline interval, and later changes
+  to all-retained history do not rewrite that member's original grant. This
+  exposed and fixed stale in-flight catch-up reuse after an interface change;
+  reconnection now cancels old requests and resumes with fresh correlation IDs.
 - Remaining M2 integration:
   complete event projection/authorization
   (edits/deletions/reactions/receipts), migration and conversation pagination

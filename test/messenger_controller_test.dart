@@ -2210,6 +2210,106 @@ void main() {
     },
   );
 
+  test(
+    'Iroh group admission excludes earlier history and survives later policy changes',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final peers = <MessengerController>[];
+      for (final name in ['Alice', 'Bob', 'Carol']) {
+        final peer = await _createController(
+          relayClient: relay,
+          displayName: name,
+          internetRelayHost: null,
+          transportRegistryFactory: network.registry,
+        );
+        peers.add(peer);
+        addTearDown(peer.dispose);
+        await peer.updateGlobalConnectivity(_irohOnlyConnectivity);
+      }
+      final [alice, bob, carol] = peers;
+      Future<void> catchUp(String phase) async {
+        await carol
+            .synchronizeGroupHistory(
+              groupId: alice.groups.single.groupId,
+              peerDeviceId: alice.identity!.deviceId,
+            )
+            .timeout(
+              const Duration(seconds: 8),
+              onTimeout: () {
+                throw StateError(
+                  '$phase timed out. Alice: ${alice.recentDebugLog.join("\n")} Carol: ${carol.recentDebugLog.join("\n")}',
+                );
+              },
+            );
+      }
+
+      for (final peer in [bob, carol]) {
+        await alice.addContactFromInvite(
+          alias: peer.identity!.displayName,
+          payload: (await peer.buildInvite()).encodePayload(),
+          codephrase: '',
+        );
+        await _waitForIroh(() => peer.pendingContactRequests.isNotEmpty);
+        await peer.approvePendingContactRequest(
+          peer.pendingContactRequests.single.id,
+        );
+      }
+      final group = await alice.createGroup(
+        title: 'Admission policy',
+        members: [
+          alice.contacts.firstWhere(
+            (peer) => peer.deviceId == bob.identity!.deviceId,
+          ),
+        ],
+      );
+      await _waitForIroh(
+        () =>
+            bob.groups.isNotEmpty &&
+            alice.pendingGroupMembershipDeliveries.isEmpty,
+      );
+      await alice.sendGroupMessage(
+        groupId: group.groupId,
+        body: 'before admission',
+      );
+      await alice.setGroupHistoryIncludesEarlierMessages(group.groupId, false);
+      await alice.addGroupMembers(
+        groupId: group.groupId,
+        members: [
+          alice.contacts.firstWhere(
+            (peer) => peer.deviceId == carol.identity!.deviceId,
+          ),
+        ],
+      );
+      await _waitForIroh(
+        () =>
+            carol.groups.isNotEmpty &&
+            alice.pendingGroupMembershipDeliveries.isEmpty,
+      );
+      await catchUp('admission catch-up');
+      expect(carol.messagesForGroup(group.groupId), isEmpty);
+      final bridge = network.bridges.remove(carol.identity!.irohEndpointId)!;
+      await alice.sendGroupMessage(
+        groupId: group.groupId,
+        body: 'after admission',
+      );
+      network.bridges[carol.identity!.irohEndpointId!] = bridge;
+      carol.onConnectivityChanged(interfaceLabel: 'mobile');
+      await catchUp('admission catch-up');
+      expect(
+        carol.messagesForGroup(group.groupId).map((message) => message.body),
+        ['after admission'],
+      );
+      await alice.setGroupHistoryIncludesEarlierMessages(group.groupId, true);
+      await _waitForIroh(() => alice.pendingGroupMembershipDeliveries.isEmpty);
+      await catchUp('admission catch-up');
+      expect(
+        carol.messagesForGroup(group.groupId).map((message) => message.body),
+        ['after admission'],
+      );
+    },
+  );
+
   for (final native in [false, true]) {
     for (final relayed in native ? [false] : [false, true]) {
       test(

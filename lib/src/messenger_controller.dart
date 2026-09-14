@@ -7206,6 +7206,12 @@ class MessengerController extends ChangeNotifier {
   /// future doesn't hold the queue hostage waiting for the 60 s stall
   /// timer (the symptom the user reported when toggling VPN mid-transfer).
   void onConnectivityChanged({String? interfaceLabel}) {
+    _groupHistoryService?.onConnectivityChanged();
+    _groupHistoryLastSync.clear();
+    for (final timer in _groupHistoryTimers.values) {
+      timer.cancel();
+    }
+    _groupHistoryTimers.clear();
     final label = interfaceLabel ?? 'unknown';
     final normalizedLabel = label.toLowerCase();
     _networkCostClass = normalizedLabel.contains('none')
