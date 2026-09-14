@@ -130,14 +130,25 @@ class ThemePreferenceStore {
       }
       final decoded = jsonDecode(await file.readAsString());
       if (decoded is Map<String, Object?>) {
-        return ThemePreferences(
+        final prefs = ThemePreferences(
           mode: ConestThemeMode.fromStorage(decoded['themeMode'] as String?),
           decorationIntensity: _readIntensity(decoded['decorationIntensity']),
           homeLayout: ConestHomeLayout.fromStorage(
             decoded['homeLayout'] as String?,
           ),
-          shell: ConestShell.fromStorage(decoded['shell'] as String?),
+          shell: decoded['layoutMigrationVersion'] == 1
+              ? ConestShell.fromStorage(decoded['shell'] as String?)
+              : ConestShell.courier,
         );
+        if (decoded['layoutMigrationVersion'] != 1) {
+          try {
+            await save(prefs);
+          } catch (_) {
+            // Keep the loaded palette even when migration cannot be saved.
+            // The absent marker makes the migration retry next launch.
+          }
+        }
+        return prefs;
       }
     } catch (_) {
       // Theme preferences are non-critical; corrupt or unavailable files fall
@@ -159,6 +170,7 @@ class ThemePreferenceStore {
         'decorationIntensity': prefs.decorationIntensity,
         'homeLayout': prefs.homeLayout.name,
         'shell': prefs.shell.name,
+        'layoutMigrationVersion': 1,
       }),
     );
   }
@@ -182,14 +194,14 @@ class ThemePreferences {
     required this.mode,
     required this.decorationIntensity,
     this.homeLayout = ConestHomeLayout.signalCards,
-    this.shell = ConestShell.signature,
+    this.shell = ConestShell.courier,
   });
 
   const ThemePreferences.defaults()
     : mode = ConestThemeMode.system,
       decorationIntensity = defaultDecorationIntensity,
       homeLayout = ConestHomeLayout.signalCards,
-      shell = ConestShell.signature;
+      shell = ConestShell.courier;
 
   /// Subtle-by-default Signature ambience. 0 = clean, 1.5 = full atmosphere.
   static const double defaultDecorationIntensity = 1.0;

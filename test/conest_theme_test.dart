@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:conest/src/conest_theme.dart';
 import 'package:flutter/material.dart';
@@ -105,7 +106,7 @@ void main() {
     addTearDown(controller.dispose);
 
     await controller.initialize();
-    expect(controller.shell, ConestShell.signature);
+    expect(controller.shell, ConestShell.courier);
 
     await controller.setShell(ConestShell.courier);
     expect(controller.shell, ConestShell.courier);
@@ -119,6 +120,40 @@ void main() {
     expect(ConestShell.fromStorage('garrison'), ConestShell.garrison);
     expect(ConestShell.fromStorage('bogus'), ConestShell.signature);
   });
+
+  test(
+    'legacy layout migrates once without changing palette preferences',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'conest_layout_migration_',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}/theme.json');
+      await file.writeAsString(
+        jsonEncode({
+          'themeMode': 'black',
+          'decorationIntensity': 0.35,
+          'homeLayout': 'classic',
+          'shell': 'garrison',
+        }),
+      );
+      final store = ThemePreferenceStore(fileProvider: () async => file);
+      final migrated = await store.load();
+      expect(migrated.shell, ConestShell.courier);
+      expect(migrated.mode, ConestThemeMode.black);
+      expect(migrated.decorationIntensity, 0.35);
+      expect(migrated.homeLayout, ConestHomeLayout.classic);
+      expect(
+        jsonDecode(await file.readAsString())['layoutMigrationVersion'],
+        1,
+      );
+      expect((await store.load()).shell, ConestShell.courier);
+      for (final shell in [ConestShell.signature, ConestShell.garrison]) {
+        await store.save(migrated.copyWith(shell: shell));
+        expect((await store.load()).shell, shell);
+      }
+    },
+  );
 
   test('theme preference store persists selected mode', () async {
     final directory = await Directory.systemTemp.createTemp(

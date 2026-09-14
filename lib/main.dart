@@ -2303,7 +2303,7 @@ class _PasteMediaIntent extends Intent {
 /// groups and the LAN lobby merge into one list sorted by recent activity,
 /// each a clean tailed row (seal · name · preview · time · unread). Reuses
 /// the shared chat panels on tap.
-class _CourierHome extends StatelessWidget {
+class _CourierHome extends StatefulWidget {
   const _CourierHome({
     required this.controller,
     required this.palette,
@@ -2333,7 +2333,28 @@ class _CourierHome extends StatelessWidget {
   final Future<void> Function() onShowBeam;
 
   @override
+  State<_CourierHome> createState() => _CourierHomeState();
+}
+
+class _CourierHomeState extends State<_CourierHome> {
+  final _search = TextEditingController();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final query = _search.text.trim().toLowerCase();
+    ChatMessage? matchingMessage(List<ChatMessage> messages) {
+      for (final message in messages.reversed) {
+        if (message.bodyPreview.toLowerCase().contains(query)) return message;
+      }
+      return null;
+    }
+
     // Unified, recency-sorted conversation entries.
     final entries =
         <
@@ -2349,34 +2370,51 @@ class _CourierHome extends StatelessWidget {
             VoidCallback onTap,
           })
         >[];
-    for (final contact in controller.contacts) {
-      final last = controller.lastMessageFor(contact.deviceId);
+    for (final contact in widget.controller.contacts) {
+      final last = widget.controller.lastMessageFor(contact.deviceId);
+      final match = query.isEmpty
+          ? null
+          : matchingMessage(widget.controller.messagesFor(contact.deviceId));
+      if (query.isNotEmpty &&
+          !contact.alias.toLowerCase().contains(query) &&
+          match == null) {
+        continue;
+      }
       entries.add((
         seed: contact.deviceId,
         title: contact.alias,
-        preview: last?.bodyPreview ?? 'No messages yet',
+        preview: match?.bodyPreview ?? last?.bodyPreview ?? 'No messages yet',
         at: last?.createdAt,
-        unread: controller.unreadCountFor(contact.deviceId),
-        selected: selectedContactId == contact.deviceId,
+        unread: widget.controller.unreadCountFor(contact.deviceId),
+        selected: widget.selectedContactId == contact.deviceId,
         isGroup: false,
         memberCount: 0,
-        onTap: () => onContactSelected(contact),
+        onTap: () => widget.onContactSelected(contact),
       ));
     }
-    for (final group in controller.visibleGroups) {
-      final last = controller.lastGroupMessageFor(group.groupId);
+    for (final group in widget.controller.visibleGroups) {
+      final last = widget.controller.lastGroupMessageFor(group.groupId);
+      final match = query.isEmpty
+          ? null
+          : matchingMessage(widget.controller.messagesForGroup(group.groupId));
+      if (query.isNotEmpty &&
+          !group.title.toLowerCase().contains(query) &&
+          match == null) {
+        continue;
+      }
       entries.add((
         seed: group.groupId,
         title: group.title,
         preview:
+            match?.bodyPreview ??
             last?.bodyPreview ??
             '${group.activeMemberDeviceIds.length} member(s)',
         at: last?.createdAt,
-        unread: controller.unreadGroupCountFor(group.groupId),
-        selected: selectedGroupId == group.groupId,
+        unread: widget.controller.unreadGroupCountFor(group.groupId),
+        selected: widget.selectedGroupId == group.groupId,
         isGroup: true,
         memberCount: group.activeMemberDeviceIds.length,
-        onTap: () => onGroupSelected(group),
+        onTap: () => widget.onGroupSelected(group),
       ));
     }
     entries.sort((a, b) {
@@ -2403,17 +2441,17 @@ class _CourierHome extends StatelessWidget {
               const Spacer(),
               IconButton(
                 tooltip: 'Conest Beam',
-                onPressed: () => unawaited(onShowBeam()),
+                onPressed: () => unawaited(widget.onShowBeam()),
                 icon: const Icon(Icons.center_focus_strong),
               ),
               IconButton(
                 tooltip: 'My invite',
-                onPressed: () => unawaited(onShowInvite()),
+                onPressed: () => unawaited(widget.onShowInvite()),
                 icon: const Icon(Icons.qr_code_2),
               ),
               IconButton(
                 tooltip: 'Settings',
-                onPressed: () => unawaited(onShowSettings()),
+                onPressed: () => unawaited(widget.onShowSettings()),
                 icon: const Icon(Icons.settings_outlined),
               ),
             ],
@@ -2421,22 +2459,27 @@ class _CourierHome extends StatelessWidget {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: palette.panel2,
-              borderRadius: BorderRadius.circular(ConestPalette.radius),
-              border: Border.all(color: palette.border),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.search, size: 18, color: palette.inkSoft),
-                const SizedBox(width: 8),
-                Text(
-                  'Search contacts, codephrase, key…',
-                  style: TextStyle(fontSize: 13, color: palette.inkSoft),
-                ),
-              ],
+          child: TextField(
+            key: const ValueKey('courier-search'),
+            controller: _search,
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(
+              hintText: 'Search chats and messages',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: query.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'Clear search',
+                      icon: const Icon(Icons.close),
+                      onPressed: () => setState(_search.clear),
+                    ),
+              filled: true,
+              fillColor: widget.palette.panel2,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(24),
+                borderSide: BorderSide.none,
+              ),
+              isDense: true,
             ),
           ),
         ),
@@ -2444,23 +2487,27 @@ class _CourierHome extends StatelessWidget {
           child: ListView(
             padding: const EdgeInsets.only(bottom: 12),
             children: [
-              _CourierRow(
-                palette: palette,
-                icon: Icons.forum_outlined,
-                title: 'LAN lobby',
-                preview: 'Free-for-all local chat · untrusted',
-                unread: controller.unreadLanLobbyCount,
-                selected: lanLobbySelected,
-                onTap: onLanLobbySelected,
-              ),
-              if (entries.isEmpty)
+              if ('lan lobby'.contains(query))
+                _CourierRow(
+                  palette: widget.palette,
+                  icon: Icons.forum_outlined,
+                  title: 'LAN lobby',
+                  preview: 'Free-for-all local chat · untrusted',
+                  unread: widget.controller.unreadLanLobbyCount,
+                  selected: widget.lanLobbySelected,
+                  onTap: widget.onLanLobbySelected,
+                ),
+              if (entries.isEmpty &&
+                  (query.isEmpty || !'lan lobby'.contains(query)))
                 Padding(
                   padding: const EdgeInsets.all(16),
-                  child: _EmptyContactsState(palette: palette),
+                  child: query.isNotEmpty
+                      ? const Text('No chats found')
+                      : _EmptyContactsState(palette: widget.palette),
                 ),
               for (final entry in entries)
                 _CourierRow(
-                  palette: palette,
+                  palette: widget.palette,
                   seed: entry.seed,
                   title: entry.title,
                   preview: entry.preview,
@@ -2482,9 +2529,9 @@ class _CourierHome extends StatelessWidget {
               alignment: Alignment.centerRight,
               child: FloatingActionButton.extended(
                 heroTag: 'courier-add',
-                onPressed: onAddContact,
-                backgroundColor: palette.primary,
-                foregroundColor: palette.onPrimary,
+                onPressed: widget.onAddContact,
+                backgroundColor: widget.palette.primary,
+                foregroundColor: widget.palette.onPrimary,
                 icon: const Icon(Icons.person_add_alt_1),
                 label: const Text('Add'),
               ),

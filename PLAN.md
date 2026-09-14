@@ -1,16 +1,18 @@
 # Conest implementation roadmap
 
 Approved 2026-09-09. Reference baseline: README.md, NIGHTLY_RELEASE_NOTES.md,
-v0.3.9 nightly. Implement in order; web clients and voice calls are documentation
-only until separately scheduled. Preserve colors and the existing 16-member cap.
+v0.3.9 nightly. Priority updated 2026-09-14: M4 → M3 → remaining M2,
+with outstanding M1 qualification retained. Web clients and voice calls are
+documentation only until separately scheduled. Preserve colors and the existing 16-member cap.
 
 ## Status and delivery
 
 - [x] Record the approved roadmap.
 - [ ] M1: implemented and debug artifacts built; physical network qualification remains.
-- [ ] M2: signed, durable, peer-carried group history.
+- [ ] M2: basic authenticated catch-up working; remaining requirements deferred
+  until after M4 and M3, except blocking regressions.
 - [ ] M3: group attachments from multiple providers.
-- [ ] M4: Telegram interface and everyday chat features.
+- [ ] M4: Telegram interface and everyday chat features — active priority.
 
 Use separate reviewable commits and matching debug artifacts per milestone.
 Record automated checks separately from physical device qualification. Do not
@@ -207,6 +209,20 @@ installations; retain Signature/Garrison choices and later user preferences.
 - Preserve scroll during catch-up; summarize unread notifications; avoid whole
   screen rebuilds for transfer progress. Widget/screenshot coverage on mobile
   and desktop, keyboard/gesture/navigation/scaling/availability states.
+
+### M4 progress (2026-09-14)
+
+- Courier is the default for new installations. Existing preference files migrate
+  once, retaining brightness, decoration intensity and the older home-layout
+  choice. Subsequent Signature/Garrison selections survive reloads.
+- Replaced decorative Courier search with editable, clearable search across
+  contact/group names and currently loaded message previews. Matching conversations
+  show a matching preview; navigation still opens the conversation normally.
+  Full journal search, result highlighting/jump, and large-history performance
+  qualification remain outstanding.
+- Automated: 10 theme tests pass, including legacy migration and post-migration
+  preference persistence; Flutter analysis passes. Search widget/screenshot and
+  physical-device qualification remain outstanding. No new debug release yet.
 
 Performance gate: profile builds, identical manual/automatic workloads; manual
 LAN throughput target within 10% of automatic baseline, no reproducible
