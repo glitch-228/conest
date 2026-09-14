@@ -235,6 +235,22 @@ class _MemoryVaultStore extends VaultStore {
   }
 }
 
+class _DelayedVaultStore extends _MemoryVaultStore {
+  Completer<void>? releaseWrite;
+  Completer<void>? writeStarted;
+
+  @override
+  Future<void> save(VaultSnapshot snapshot) async {
+    final barrier = releaseWrite;
+    if (barrier != null) {
+      releaseWrite = null;
+      writeStarted?.complete();
+      await barrier.future;
+    }
+    await super.save(snapshot);
+  }
+}
+
 class _FailingVaultStore extends _MemoryVaultStore {
   bool failNextSave = false;
 
@@ -1136,6 +1152,72 @@ const _irohOnlyConnectivity = GlobalConnectivityPreferences(
 );
 
 void main() {
+  test(
+    'draft updates during a delayed vault write schedule a new snapshot',
+    () async {
+      final vault = _DelayedVaultStore();
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        vaultStore: vault,
+      );
+      addTearDown(controller.dispose);
+      final release = Completer<void>();
+      vault.releaseWrite = release;
+      vault.writeStarted = Completer<void>();
+      final first = controller.setConversationDraft(
+        ConversationKind.direct,
+        'peer',
+        'first',
+      );
+      await vault.writeStarted!.future.timeout(const Duration(seconds: 5));
+      final second = controller.setConversationDraft(
+        ConversationKind.direct,
+        'peer',
+        'later keystrokes',
+      );
+      release.complete();
+      await first;
+      await controller.flushPendingChanges();
+      await second;
+      expect(
+        (await vault.load()).conversations.single.draft,
+        'later keystrokes',
+      );
+    },
+  );
+
+  test(
+    'background and disposal flush drafts before the debounce expires',
+    () async {
+      final vault = _MemoryVaultStore();
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        vaultStore: vault,
+      );
+      final background = controller.setConversationDraft(
+        ConversationKind.direct,
+        'peer',
+        'background draft',
+      );
+      controller.setAppForegroundState(false);
+      await background.timeout(const Duration(seconds: 1));
+      expect(
+        (await vault.load()).conversations.single.draft,
+        'background draft',
+      );
+      final closing = controller.setConversationDraft(
+        ConversationKind.direct,
+        'peer',
+        'closing draft',
+      );
+      controller.dispose();
+      await closing.timeout(const Duration(seconds: 1));
+      expect((await vault.load()).conversations.single.draft, 'closing draft');
+    },
+  );
+
   test(
     'conversation drafts isolate destinations and survive controller restart',
     () async {
@@ -5745,6 +5827,65 @@ void main() {
       expect(aliceMessage.state, DeliveryState.delivered);
     },
   );
+
+  testWidgets('Courier navigation keeps private and lobby drafts separate', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    late MessengerController alice;
+    late MessengerController bob;
+    await tester.runAsync(() async {
+      final relay = _FakeRelayClient();
+      alice = await _createController(relayClient: relay, displayName: 'Alice');
+      bob = await _createController(relayClient: relay, displayName: 'Bob');
+      await _pairControllers(alice, bob);
+    });
+    final theme = app.ConestThemeController.memory();
+    final updates = _createUpdateService();
+    addTearDown(theme.dispose);
+    addTearDown(updates.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: app.HomeScreen(
+          controller: alice,
+          updateService: updates,
+          buildInfo: _createBuildInfo(),
+          themeController: theme,
+          palette: app.ConestPalette(),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Bob').first);
+    await tester.pump();
+    await tester.enterText(find.byType(TextField).last, 'private unfinished');
+    await tester.tap(find.text('LAN lobby').first);
+    await tester.pump();
+    expect(
+      tester.widget<TextField>(find.byType(TextField).last).controller!.text,
+      isEmpty,
+    );
+    await tester.enterText(find.byType(TextField).last, 'lobby unfinished');
+    await tester.tap(find.text('Bob').first);
+    await tester.pump();
+    expect(
+      tester.widget<TextField>(find.byType(TextField).last).controller!.text,
+      'private unfinished',
+    );
+    await tester.tap(find.text('LAN lobby').first);
+    await tester.pump();
+    expect(
+      tester.widget<TextField>(find.byType(TextField).last).controller!.text,
+      'lobby unfinished',
+    );
+    await tester.runAsync(alice.flushPendingChanges);
+    await tester.pumpWidget(const SizedBox.shrink());
+    alice.dispose();
+    bob.dispose();
+    await tester.pump(const Duration(milliseconds: 100));
+  });
 
   testWidgets(
     'double tap incoming message opens reply preview and can cancel',

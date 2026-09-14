@@ -540,6 +540,7 @@ class MessengerController extends ChangeNotifier {
   DateTime? _runtimeActiveUntil;
   DateTime? _nextScheduledPollAt;
   Timer? _pendingSaveTimer;
+  final _activeSnapshotWrites = <Future<void>>{};
   Completer<void>? _pendingSaveCompleter;
   int _vaultSaveCount = 0;
   DateTime? _lastVaultSaveAt;
@@ -866,6 +867,7 @@ class MessengerController extends ChangeNotifier {
       // (especially Android) tries to suspend the app.
       unawaited(_startLongPollIfEnabled());
     } else if (!value) {
+      savePendingChangesForLifecycle();
       _stopLongPoll();
     }
     _reschedulePolling();
@@ -17420,6 +17422,33 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  /// Flush debounced local changes before the OS can suspend the app.
+  /// Callers needing a durable boundary can await this future.
+  Future<void> flushPendingChanges() async {
+    if (_pendingSaveCompleter != null) {
+      await _saveSnapshotSilently(notify: false);
+    }
+    await Future.wait(_activeSnapshotWrites.toList());
+  }
+
+  void savePendingChangesForLifecycle() {
+    unawaited(
+      flushPendingChanges().catchError((Object error) {
+        appendDebugLog('Could not save pending local changes: $error');
+      }),
+    );
+  }
+
+  Future<void> _writeCurrentSnapshot() async {
+    final write = _vaultStore.save(_snapshot);
+    _activeSnapshotWrites.add(write);
+    try {
+      await write;
+    } finally {
+      _activeSnapshotWrites.remove(write);
+    }
+  }
+
   Future<void> _saveSnapshotSilently({
     bool notify = true,
     bool debounce = false,
@@ -17438,10 +17467,16 @@ class MessengerController extends ChangeNotifier {
       _pendingSaveCompleter = completer;
       _pendingSaveTimer?.cancel();
       _pendingSaveTimer = Timer(_saveDebounceWindow, () async {
+        // Detach this batch before awaiting I/O. Changes arriving during the
+        // write must schedule another batch rather than join an older snapshot.
+        if (identical(_pendingSaveCompleter, completer)) {
+          _pendingSaveCompleter = null;
+          _pendingSaveTimer = null;
+        }
         try {
           _prunePendingRouteUpdateProbes();
           _pruneRelayHealthScores();
-          await _vaultStore.save(_snapshot);
+          await _writeCurrentSnapshot();
           _vaultSaveCount++;
           _lastVaultSaveAt = _now();
           if (!completer.isCompleted) {
@@ -17452,10 +17487,6 @@ class MessengerController extends ChangeNotifier {
             completer.completeError(error, stackTrace);
           }
         } finally {
-          if (identical(_pendingSaveCompleter, completer)) {
-            _pendingSaveCompleter = null;
-          }
-          _pendingSaveTimer = null;
           if (notify) {
             notifyListeners();
           }
@@ -17471,7 +17502,7 @@ class MessengerController extends ChangeNotifier {
     _pendingSaveTimer = null;
     _pendingSaveCompleter = null;
     try {
-      await _vaultStore.save(_snapshot);
+      await _writeCurrentSnapshot();
       _vaultSaveCount++;
       _lastVaultSaveAt = _now();
       if (pendingCompleter != null && !pendingCompleter.isCompleted) {
@@ -17647,6 +17678,7 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    savePendingChangesForLifecycle();
     _disposed = true;
     for (final timer in _groupHistoryTimers.values) {
       timer.cancel();

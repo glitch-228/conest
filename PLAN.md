@@ -224,9 +224,21 @@ installations; retain Signature/Garrison choices and later user preferences.
   persist locally in the encrypted vault with debounced writes and are never
   sent as network events. Sending clears the selected conversation's draft.
   Tests cover rapid updates, destination isolation, controller restart, legacy
-  decoding and encrypted storage. Reply-target drafts, navigation widget tests,
-  send-failure restoration and lifecycle flush qualification remain outstanding.
-- Draft validation: 2 focused controller/storage regressions pass; analysis clean.
+  decoding and encrypted storage. A desktop Courier navigation widget test
+  verifies separate private/lobby composers and restoration on return. Mobile and
+  group navigation, reply-target drafts, send-failure restoration and physical
+  lifecycle qualification remain outstanding.
+- Draft lifecycle: inactive/background transitions and controller disposal flush
+  queued edits. A debounced write now detaches its batch before awaiting storage,
+  so later keystrokes queue another snapshot. Three focused controller regressions
+  pass, covering delayed writes, background/disposal, and restart isolation;
+  analysis is clean. Forced process termination can still interrupt an OS write.
+- Full-suite run: 349 passed, 6 optional skipped, 1 failed because Courier lacked
+  the contact-list online indicator after the default-layout migration. Remote
+  commit 9f1be80 supplies presence marks and supersedes the local label fix.
+  Focused rerun before integration: presence
+  and 3 draft regressions pass; separate draft navigation widget test passes.
+  Analysis is clean. The full suite has not been rerun after this UI-only fix.
 - Automated: 10 theme tests pass, including legacy migration and post-migration
   preference persistence; Flutter analysis passes. Search widget/screenshot and
   physical-device qualification remain outstanding. No new debug release yet.

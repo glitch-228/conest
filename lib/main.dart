@@ -827,6 +827,9 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive) {
+      widget.controller.savePendingChangesForLifecycle();
+    }
     final inForeground =
         state == AppLifecycleState.resumed ||
         state == AppLifecycleState.inactive;
