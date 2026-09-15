@@ -21,6 +21,7 @@ class GroupHistoryCoordinator {
     required this.group,
     required this.send,
     required this.onMessage,
+    required this.retainedMessages,
   });
 
   final VaultStore vault;
@@ -34,6 +35,10 @@ class GroupHistoryCoordinator {
   send;
   final void Function(String groupId, GroupMessageProjection projection)
   onMessage;
+  final Iterable<ChatMessage> Function(String groupId) retainedMessages;
+
+  bool? supportsMessageMutations(String groupId, String peer) =>
+      _wires[groupId]?.supportsMessageMutations(peer);
   final _replicas = <String, Future<GroupHistoryReplica>>{};
   final _writes = <String, Future<void>>{};
   final _wires = <String, GroupHistoryWire>{};
@@ -353,6 +358,34 @@ class GroupHistoryCoordinator {
         );
         // Bounded initial projection; older pages are exposed separately below.
         await projectPage(id);
+        // A mutation can precede the newest page in a large catch-up. Refresh
+        // messages already materialized in the vault without loading all older
+        // text history. Each lookup is handled by the journal worker's indexes.
+        for (final message in retainedMessages(id).toList()) {
+          if (_closed || group(id).localRemovedAt != null) break;
+          if (message.deleted) continue;
+          var original = await replica.journal.sourceMessage(
+            message.senderDeviceId,
+            message.id,
+          );
+          // A legacy ID collision is projected under the signed event digest.
+          if (original == null &&
+              RegExp(r'^[0-9a-f]{64}$').hasMatch(message.id)) {
+            final events = await replica.journal.readEvents([message.id]);
+            if (events.isNotEmpty &&
+                events.single.authorDeviceId == message.senderDeviceId) {
+              original = events.single;
+            }
+          }
+          if (original != null) {
+            await _projectOriginal(
+              id,
+              replica,
+              original,
+              requireMutation: true,
+            );
+          }
+        }
         return count;
       }();
       unawaited(
@@ -385,29 +418,40 @@ class GroupHistoryCoordinator {
         if (targets.isNotEmpty) original = targets.single;
       }
       if (original == null || !projected.add(original.eventId)) continue;
-      if (!await replica.membership.canReceive(
-        original,
-        recipientDeviceId: identity().deviceId,
-      )) {
-        continue;
-      }
-      final permitted = <GroupHistoryEvent>[];
-      for (final mutation in await replica.journal.messageMutations(original)) {
-        if (await replica.membership.canReceive(
-          mutation,
-          recipientDeviceId: identity().deviceId,
-        )) {
-          permitted.add(mutation);
-        }
-      }
-      // Recheck local removal after asynchronous journal/authorization reads.
-      if (_closed || group(id).localRemovedAt != null) return null;
-      final projection = GroupMessageProjection.reduce(original, permitted);
-      if (projection != null) {
-        onMessage(id, projection);
-      }
+      await _projectOriginal(id, replica, original);
     }
     return page.isEmpty ? null : page.last.eventId;
+  }
+
+  Future<void> _projectOriginal(
+    String id,
+    GroupHistoryReplica replica,
+    GroupHistoryEvent original, {
+    bool requireMutation = false,
+  }) async {
+    final mutations = await replica.journal.messageMutations(original);
+    if (requireMutation && mutations.isEmpty) return;
+    if (!await replica.membership.canReceive(
+      original,
+      recipientDeviceId: identity().deviceId,
+    )) {
+      return;
+    }
+    final permitted = <GroupHistoryEvent>[];
+    for (final mutation in mutations) {
+      if (await replica.membership.canReceive(
+        mutation,
+        recipientDeviceId: identity().deviceId,
+      )) {
+        permitted.add(mutation);
+      }
+    }
+    // Recheck local removal after asynchronous journal/authorization reads.
+    if (_closed || group(id).localRemovedAt != null) return;
+    final projection = GroupMessageProjection.reduce(original, permitted);
+    if (projection != null) {
+      onMessage(id, projection);
+    }
   }
 
   Future<void> close() async {

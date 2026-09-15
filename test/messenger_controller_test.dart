@@ -13,6 +13,7 @@ import 'package:conest/main.dart' as app;
 import 'package:conest/main.dart' show sniffImageMimeType;
 import 'package:conest/src/build_info.dart';
 import 'package:conest/src/crypto_service.dart';
+import 'package:conest/src/group_history_event.dart';
 import 'package:conest/src/iroh_ffi_bridge.dart';
 import 'package:conest/src/iroh_transport.dart';
 import 'package:conest/src/lan_direct.dart';
@@ -2268,12 +2269,14 @@ void main() {
       final network = _InProcessIrohNetwork();
       final relay = _FakeRelayClient();
       final peers = <MessengerController>[];
+      final aliceVault = _MemoryVaultStore();
       for (final name in ['Alice', 'Bob', 'Carol', 'Dave']) {
         final peer = await _createController(
           relayClient: relay,
           displayName: name,
           internetRelayHost: null,
           transportRegistryFactory: network.registry,
+          vaultStore: name == 'Alice' ? aliceVault : null,
         );
         peers.add(peer);
         addTearDown(peer.dispose);
@@ -2396,6 +2399,38 @@ void main() {
         messageId: original.id,
         delete: true,
       );
+      // More than a projection page arrives after the deletion. Catch-up must
+      // still update an older message already displayed by the receiving peer.
+      final journal = await aliceVault.openGroupHistory(group.groupId);
+      final identity = alice.identity!;
+      var head = (await journal.authorHead(identity.deviceId))!;
+      final signingKey = SimpleKeyPairData(
+        base64Decode(identity.signingPrivateKeyBase64!),
+        publicKey: SimplePublicKey(
+          base64Decode(identity.signingPublicKeyBase64!),
+          type: KeyPairType.ed25519,
+        ),
+        type: KeyPairType.ed25519,
+      );
+      for (var index = 0; index < 55; index++) {
+        head = await GroupHistoryEvent.sign(
+          groupId: group.groupId,
+          authorAccountId: identity.accountId,
+          authorDeviceId: identity.deviceId,
+          keyPair: signingKey,
+          sequence: head.sequence + 1,
+          previousEventId: head.eventId,
+          lamport: head.lamport + 1,
+          membershipId: head.membershipId,
+          kind: GroupEventKind.message,
+          payload: {
+            'messageId': 'later-$index',
+            'body': 'Later $index',
+            'createdAt': DateTime.utc(2026, 9, 15).toIso8601String(),
+          },
+        );
+        await journal.append(head);
+      }
       await carol.synchronizeGroupHistory(
         groupId: group.groupId,
         peerDeviceId: alice.identity!.deviceId,
@@ -2407,10 +2442,21 @@ void main() {
       );
       expect(
         dave.messagesForGroup(group.groupId).map((message) => message.body),
-        ['Bob partition message'],
+        contains('Bob partition message'),
+      );
+      expect(
+        dave
+            .messagesForGroup(group.groupId)
+            .any((message) => message.id == original.id),
+        isFalse,
       );
       await dave.loadOlderGroupHistory(group.groupId);
-      expect(dave.messagesForGroup(group.groupId).length, 1);
+      expect(
+        dave
+            .messagesForGroup(group.groupId)
+            .any((message) => message.id == original.id),
+        isFalse,
+      );
       expect(
         network.envelopes.where((envelope) => envelope.kind == 'group_history'),
         isNotEmpty,

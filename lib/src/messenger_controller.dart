@@ -1328,6 +1328,7 @@ class MessengerController extends ChangeNotifier {
           );
         },
         onMessage: _projectGroupHistoryMessage,
+        retainedMessages: (id) => _groupConversation(id).messages,
       );
 
   void _projectGroupHistoryMessage(
@@ -1350,6 +1351,12 @@ class MessengerController extends ChangeNotifier {
     for (final existing in _groupConversation(groupId).messages) {
       if (existing.id != id) continue;
       if (existing.senderDeviceId == event.authorDeviceId) {
+        if (existing.deleted ||
+            (existing.body == body &&
+                existing.editedAt == projection.editedAt &&
+                !projection.deleted)) {
+          return;
+        }
         _upsertGroupMessage(
           groupId,
           existing.copyWith(
@@ -1367,6 +1374,12 @@ class MessengerController extends ChangeNotifier {
     final retained = _groupMessageById(groupId, projectedId);
     if (retained != null) {
       if (retained.senderDeviceId == event.authorDeviceId) {
+        if (retained.deleted ||
+            (retained.body == body &&
+                retained.editedAt == projection.editedAt &&
+                !projection.deleted)) {
+          return;
+        }
         _upsertGroupMessage(
           groupId,
           retained.copyWith(
@@ -6986,6 +6999,29 @@ class MessengerController extends ChangeNotifier {
         message: message,
       );
     }
+  }
+
+  String? groupMessageChangeCompatibility(String groupId) {
+    final group = _requireGroup(groupId);
+    final unsupported = <String>[];
+    var unknown = false;
+    for (final peer in group.activeMemberDeviceIds) {
+      if (peer == _requireIdentity().deviceId) continue;
+      switch (_groupHistory.supportsMessageMutations(groupId, peer)) {
+        case false:
+          unsupported.add(group.memberProfileFor(peer)?.displayName ?? peer);
+        case null:
+          unknown = true;
+        case true:
+          break;
+      }
+    }
+    if (unsupported.isNotEmpty) {
+      return '${unsupported.join(', ')} must update Conest to see group edits and deletions.';
+    }
+    return unknown
+        ? 'Some members have not confirmed support yet. Older Conest versions need an update to show edits and deletions.'
+        : null;
   }
 
   Future<void> changeGroupMessage({

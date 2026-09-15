@@ -22,6 +22,10 @@ class GroupHistoryWire {
   final Duration timeout;
   final _random = Random.secure();
   final _pending = <String, _PendingHistoryRequest>{};
+  final _mutationSupport = <String, bool>{};
+
+  /// Null means no correlated response has been received on this connection.
+  bool? supportsMessageMutations(String peer) => _mutationSupport[peer];
   int _serving = 0;
   bool _closed = false;
 
@@ -91,6 +95,9 @@ class GroupHistoryWire {
         return false;
       }
       final payload = message['payload'];
+      _mutationSupport[authenticatedPeer] =
+          message['features'] is List &&
+          (message['features'] as List).contains('message-mutations-v1');
       if (message['error'] is String) {
         pending.result.completeError(
           StateError('Group history peer: ${message['error']}'),
@@ -111,6 +118,7 @@ class GroupHistoryWire {
       'type': 'response',
       'requestId': id,
       'operation': operation,
+      'features': ['message-mutations-v1'],
     };
     if (_serving >= 4) {
       response['error'] = 'busy';

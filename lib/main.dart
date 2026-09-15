@@ -5521,6 +5521,62 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   ConestPalette get palette => widget.palette;
   GroupRecord get group => widget.group;
 
+  Future<void> _changeGroupMessage(
+    ChatMessage message, {
+    required bool delete,
+  }) async {
+    final groupId = group.groupId;
+    final compatibility = controller.groupMessageChangeCompatibility(groupId);
+    String? body;
+    if (delete) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Delete message?'),
+          content: Text(
+            'This removes the message for group members when they synchronize.'
+            '${compatibility == null ? '' : '\n\n$compatibility'}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Delete'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    } else {
+      body = await showDialog<String>(
+        context: context,
+        builder: (context) => _EditMessageDialog(
+          initialBody: message.body,
+          explanation: compatibility,
+        ),
+      );
+      if (body == null || body.trim() == message.body) return;
+    }
+    if (!mounted) return;
+    try {
+      await controller.changeGroupMessage(
+        groupId: groupId,
+        messageId: message.id,
+        body: body,
+        delete: delete,
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+      }
+    }
+  }
+
   int _searchGeneration = 0;
 
   Future<void> _searchMessages() async {
@@ -5966,6 +6022,17 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       ),
                     ),
                   ],
+                  if (message.isEdited) ...[
+                    const SizedBox(width: 6),
+                    Text(
+                      'edited',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: outbound
+                            ? palette.outboundMeta
+                            : palette.inboundMeta,
+                      ),
+                    ),
+                  ],
                   if (outbound) ...[
                     const SizedBox(width: 8),
                     Tooltip(
@@ -5998,10 +6065,26 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         );
                       } else if (value == 'reply') {
                         widget.onReplyToMessage(message);
+                      } else if (value == 'edit' || value == 'delete') {
+                        await _changeGroupMessage(
+                          message,
+                          delete: value == 'delete',
+                        );
                       }
                     },
                     itemBuilder: (context) => [
                       const PopupMenuItem(value: 'reply', child: Text('Reply')),
+                      if (message.outbound &&
+                          !message.hasAttachment &&
+                          group.hasActiveMember(
+                            controller.identity?.deviceId ?? '',
+                          )) ...[
+                        const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                        const PopupMenuItem(
+                          value: 'delete',
+                          child: Text('Delete'),
+                        ),
+                      ],
                       const PopupMenuItem(
                         value: 'copy',
                         child: Text('Copy message'),
@@ -7555,9 +7638,10 @@ class _ChatPanelState extends State<_ChatPanel> {
 }
 
 class _EditMessageDialog extends StatefulWidget {
-  const _EditMessageDialog({required this.initialBody});
+  const _EditMessageDialog({required this.initialBody, this.explanation});
 
   final String initialBody;
+  final String? explanation;
 
   @override
   State<_EditMessageDialog> createState() => _EditMessageDialogState();
@@ -7582,13 +7666,22 @@ class _EditMessageDialogState extends State<_EditMessageDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Edit message'),
-      content: TextField(
-        controller: _controller,
-        minLines: 1,
-        maxLines: 6,
-        autofocus: true,
-        onChanged: (_) => setState(() {}),
-        decoration: const InputDecoration(labelText: 'Message'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (widget.explanation != null) ...[
+            Text(widget.explanation!),
+            const SizedBox(height: 12),
+          ],
+          TextField(
+            controller: _controller,
+            minLines: 1,
+            maxLines: 6,
+            autofocus: true,
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(labelText: 'Message'),
+          ),
+        ],
       ),
       actions: [
         TextButton(

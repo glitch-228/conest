@@ -24,6 +24,7 @@ void main() {
         'payload': {'entries': [], 'next': null},
       };
       expect(await wire.handle('carol', response), isFalse);
+      expect(wire.supportsMessageMutations('carol'), isNull);
       expect(
         await wire.handle('bob', {...response, 'groupId': 'other'}),
         isFalse,
@@ -33,8 +34,35 @@ void main() {
         isFalse,
       );
       expect(await wire.handle('bob', response), isTrue);
+      expect(wire.supportsMessageMutations('bob'), isFalse);
       expect((await pending).entries, isEmpty);
       expect(await wire.handle('bob', response), isFalse);
+    },
+  );
+
+  test(
+    'mutation support requires a correlated authenticated response',
+    () async {
+      final sent = Completer<Map<String, Object?>>();
+      final wire = GroupHistoryWire(
+        groupId: 'group',
+        send: (peer, message) async => sent.complete(message),
+        localExchange: () => throw UnimplementedError(),
+      );
+      addTearDown(wire.close);
+      final pending = wire.remote('bob').inventory('alice');
+      final response = {
+        ...await sent.future,
+        'type': 'response',
+        'features': ['message-mutations-v1'],
+        'payload': {'entries': [], 'next': null},
+      };
+      expect(wire.supportsMessageMutations('bob'), isNull);
+      expect(await wire.handle('carol', response), isFalse);
+      expect(wire.supportsMessageMutations('bob'), isNull);
+      expect(await wire.handle('bob', response), isTrue);
+      await pending;
+      expect(wire.supportsMessageMutations('bob'), isTrue);
     },
   );
 
