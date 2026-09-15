@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:cryptography/cryptography.dart';
 
 import 'group_history_event.dart';
+import 'group_file_manifest.dart';
 import 'group_history_journal.dart';
 import 'group_history_sync.dart';
 import 'group_history_wire.dart';
@@ -22,6 +23,7 @@ class GroupHistoryCoordinator {
     required this.send,
     required this.onMessage,
     required this.retainedMessages,
+    this.onAttachment,
   });
 
   final VaultStore vault;
@@ -36,6 +38,84 @@ class GroupHistoryCoordinator {
   final void Function(String groupId, GroupMessageProjection projection)
   onMessage;
   final Iterable<ChatMessage> Function(String groupId) retainedMessages;
+  final void Function(
+    String groupId,
+    GroupHistoryEvent event,
+    GroupFileManifest manifest,
+  )?
+  onAttachment;
+
+  /// Persist original authorship before advertising a file. The signed event ID
+  /// is the transfer identity; provider identities never replace its author.
+  Future<GroupHistoryEvent> publishFile(
+    GroupRecord snapshot,
+    GroupFileManifest manifest,
+  ) async {
+    await prepareMembership(snapshot);
+    return _write(snapshot.groupId, () async {
+      final current = group(snapshot.groupId);
+      if (current.localRemovedAt != null ||
+          !current.hasActiveMember(identity().deviceId)) {
+        throw StateError('You are no longer a member of this group.');
+      }
+      final replica = await _replica(snapshot.groupId);
+      final membership = replica.membership.current;
+      if (membership == null) {
+        throw StateError('Waiting for signed membership history.');
+      }
+      final event = await _sign(
+        replica.journal,
+        groupId: snapshot.groupId,
+        membershipId: membership.id,
+        kind: GroupEventKind.attachment,
+        payload: manifest.toPayload(),
+      );
+      await replica.importEvent(event, carrierDeviceId: identity().deviceId);
+      return event;
+    });
+  }
+
+  /// Resolve a transfer only through retained, authenticated history. This gate
+  /// applies to availability requests and every piece served, including partial
+  /// files. An approved private contact alone is insufficient authorization.
+  Future<GroupFileManifest?> fileForPeer(
+    String id,
+    String eventId,
+    String peer,
+  ) async {
+    final snapshot = group(id);
+    if (_closed ||
+        snapshot.localRemovedAt != null ||
+        !snapshot.hasActiveMember(identity().deviceId) ||
+        !snapshot.hasActiveMember(peer)) {
+      return null;
+    }
+    final replica = await _replica(id);
+    final events = await replica.journal.readEvents([eventId]);
+    if (events.isEmpty || events.single.kind != GroupEventKind.attachment) {
+      return null;
+    }
+    final event = events.single;
+    if (!await replica.membership.canForward(
+      event,
+      carrierDeviceId: identity().deviceId,
+      recipientDeviceId: peer,
+    )) {
+      return null;
+    }
+    final latest = group(id);
+    if (_closed ||
+        latest.localRemovedAt != null ||
+        !latest.hasActiveMember(peer) ||
+        !latest.hasActiveMember(identity().deviceId)) {
+      return null;
+    }
+    try {
+      return GroupFileManifest.fromEvent(event);
+    } on FormatException {
+      return null;
+    }
+  }
 
   bool? supportsMessageMutations(String groupId, String peer) =>
       _wires[groupId]?.supportsMessageMutations(peer);
@@ -408,6 +488,15 @@ class GroupHistoryCoordinator {
     final page = await replica.journal.readPage(beforeEventId: beforeEventId);
     final projected = <String>{};
     for (final event in page.reversed) {
+      if (event.kind == GroupEventKind.attachment) {
+        final manifest = await fileForPeer(
+          id,
+          event.eventId,
+          identity().deviceId,
+        );
+        if (manifest != null) onAttachment?.call(id, event, manifest);
+        continue;
+      }
       GroupHistoryEvent? original;
       if (event.kind == GroupEventKind.message) {
         original = event;

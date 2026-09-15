@@ -15,6 +15,16 @@ class GroupFileScheduler {
   bool get complete => _verified.length == manifest.pieceHashes.length;
   Set<int> get verifiedPieces => Set.unmodifiable(_verified);
 
+  bool stillAllowed(
+    GroupPieceRequest request,
+    bool Function(String peer, bool lan) allowed,
+  ) {
+    final provider = _providers[request.peer];
+    return _requests[request.piece] == request &&
+        provider != null &&
+        allowed(request.peer, provider.lan);
+  }
+
   void updateProvider(String peer, Iterable<int> pieces, {required bool lan}) {
     final available = pieces.toSet();
     for (final piece in available) {

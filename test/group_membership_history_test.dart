@@ -4,6 +4,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:conest/src/group_history_event.dart';
+import 'package:conest/src/group_file_manifest.dart';
 import 'package:conest/src/group_membership_history.dart';
 import 'package:conest/src/models.dart';
 
@@ -146,6 +147,72 @@ void main() {
     kind: GroupEventKind.message,
     payload: {'text': 'Hello from $author'},
     signingAs: signingAs,
+  );
+
+  test(
+    'file manifests retain authorship and stop serving removed recipients',
+    () async {
+      final index = history();
+      final root = await membership(members: ['alice', 'bob', 'carol']);
+      await index.import(root);
+      final file = await signed(
+        author: 'alice',
+        membershipId: root.id,
+        kind: GroupEventKind.attachment,
+        payload: GroupFileManifest(
+          fileName: 'photo.jpg',
+          mimeType: 'image/jpeg',
+          sizeBytes: 1,
+          fileHash: 'a' * 64,
+          pieceHashes: ['b' * 64],
+        ).toPayload(),
+      );
+      expect(
+        await index.canForward(
+          file,
+          carrierDeviceId: 'bob',
+          recipientDeviceId: 'carol',
+        ),
+        isTrue,
+      );
+      expect(
+        await index.canForward(
+          file,
+          carrierDeviceId: 'bob',
+          recipientDeviceId: 'eve',
+        ),
+        isFalse,
+      );
+      final removal = await membership(
+        parents: [root],
+        members: ['alice', 'bob'],
+      );
+      await index.import(removal);
+      expect(
+        await index.canForward(
+          file,
+          carrierDeviceId: 'bob',
+          recipientDeviceId: 'carol',
+        ),
+        isFalse,
+      );
+      expect(
+        await index.canForward(
+          file,
+          carrierDeviceId: 'carol',
+          recipientDeviceId: 'bob',
+        ),
+        isFalse,
+      );
+      expect(
+        await index.canForward(
+          file,
+          carrierDeviceId: 'alice',
+          recipientDeviceId: 'bob',
+        ),
+        isTrue,
+      );
+    },
   );
 
   test(

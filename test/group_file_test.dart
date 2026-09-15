@@ -6,8 +6,92 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:conest/src/group_file_manifest.dart';
 import 'package:conest/src/group_file_scheduler.dart';
 import 'package:conest/src/group_file_store.dart';
+import 'package:conest/src/group_file_download.dart';
 
 void main() {
+  test(
+    'download replaces corrupt provider and resumes durable pieces',
+    () async {
+      final root = await Directory.systemTemp.createTemp('group-download-');
+      try {
+        final bytes = Uint8List.fromList([1, 2, 3]);
+        final hash = sha256.convert(bytes).toString();
+        final description = GroupFileManifest(
+          fileName: 'data',
+          mimeType: 'application/octet-stream',
+          sizeBytes: 3,
+          fileHash: hash,
+          pieceHashes: [hash],
+        );
+        final requested = <String>[];
+        final download = GroupFileDownload(
+          store: GroupFileStore(root: root, manifest: description),
+          allowed: (_, _) => true,
+          authorize: (_) async => true,
+          fetch: (request) async {
+            requested.add(request.peer);
+            return request.peer == 'bad' ? Uint8List(3) : bytes;
+          },
+        );
+        download.scheduler.updateProvider('bad', [0], lan: true);
+        download.scheduler.updateProvider('good', [0], lan: false);
+        await download.resume();
+        expect(requested, ['bad', 'good']);
+        expect(download.state, GroupFileDownloadState.complete);
+        expect(download.verifiedBytes, 3);
+        final restarted = GroupFileDownload(
+          store: GroupFileStore(root: root, manifest: description),
+          allowed: (_, _) => true,
+          authorize: (_) async => true,
+          fetch: (_) async => throw StateError('Already cached'),
+        );
+        await restarted.resume();
+        expect(restarted.state, GroupFileDownloadState.complete);
+        expect(await restarted.completedFile!.readAsBytes(), bytes);
+      } finally {
+        await root.delete(recursive: true);
+      }
+    },
+  );
+
+  test(
+    'in-flight removal prevents storage and leaves a waiting download',
+    () async {
+      final root = await Directory.systemTemp.createTemp('group-revocation-');
+      try {
+        final bytes = Uint8List.fromList([1]);
+        final hash = sha256.convert(bytes).toString();
+        final store = GroupFileStore(
+          root: root,
+          manifest: GroupFileManifest(
+            fileName: 'data',
+            mimeType: 'application/octet-stream',
+            sizeBytes: 1,
+            fileHash: hash,
+            pieceHashes: [hash],
+          ),
+        );
+        var authorized = true;
+        final download = GroupFileDownload(
+          store: store,
+          allowed: (_, _) => true,
+          authorize: (_) async => authorized,
+          fetch: (_) async {
+            authorized = false;
+            return bytes;
+          },
+        );
+        download.scheduler.updateProvider('peer', [0], lan: true);
+        await download.resume();
+        expect(download.state, GroupFileDownloadState.waiting);
+        expect(download.verifiedBytes, 0);
+        expect(await store.recover(), isEmpty);
+      } finally {
+        await root.delete(recursive: true);
+      }
+    },
+  );
+
   test(
     'partial cache recovers verified bytes, rejects corruption and assembles',
     () async {
