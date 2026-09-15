@@ -2334,7 +2334,9 @@ void main() {
         groupId: group.groupId,
         peerDeviceId: alice.identity!.deviceId,
       );
-      network.bridges.remove(alice.identity!.irohEndpointId);
+      final aliceBridge = network.bridges.remove(
+        alice.identity!.irohEndpointId,
+      )!;
       network.bridges[carol.identity!.irohEndpointId!] = carolBridge;
       carol.onConnectivityChanged(interfaceLabel: 'mobile');
       await _waitForIroh(
@@ -2361,6 +2363,54 @@ void main() {
         ),
         0,
       );
+      final original = alice
+          .messagesForGroup(group.groupId)
+          .firstWhere((message) => message.body == 'Alice partition message');
+      await expectLater(
+        dave.changeGroupMessage(
+          groupId: group.groupId,
+          messageId: original.id,
+          body: 'Forged edit',
+        ),
+        throwsStateError,
+      );
+      await alice.changeGroupMessage(
+        groupId: group.groupId,
+        messageId: original.id,
+        body: 'Alice edited offline',
+      );
+      network.bridges[alice.identity!.irohEndpointId!] = aliceBridge;
+      await carol.synchronizeGroupHistory(
+        groupId: group.groupId,
+        peerDeviceId: alice.identity!.deviceId,
+      );
+      expect(
+        carol
+            .messagesForGroup(group.groupId)
+            .firstWhere((message) => message.id == original.id)
+            .body,
+        'Alice edited offline',
+      );
+      await alice.changeGroupMessage(
+        groupId: group.groupId,
+        messageId: original.id,
+        delete: true,
+      );
+      await carol.synchronizeGroupHistory(
+        groupId: group.groupId,
+        peerDeviceId: alice.identity!.deviceId,
+      );
+      network.bridges.remove(alice.identity!.irohEndpointId);
+      await dave.synchronizeGroupHistory(
+        groupId: group.groupId,
+        peerDeviceId: carol.identity!.deviceId,
+      );
+      expect(
+        dave.messagesForGroup(group.groupId).map((message) => message.body),
+        ['Bob partition message'],
+      );
+      await dave.loadOlderGroupHistory(group.groupId);
+      expect(dave.messagesForGroup(group.groupId).length, 1);
       expect(
         network.envelopes.where((envelope) => envelope.kind == 'group_history'),
         isNotEmpty,

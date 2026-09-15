@@ -1920,6 +1920,7 @@ class ChatMessage {
     this.senderDisplayName,
     this.untrusted = false,
     this.editedAt,
+    this.deleted = false,
     this.replyToMessageId,
     this.replySnippet,
     this.replySenderDeviceId,
@@ -1945,6 +1946,9 @@ class ChatMessage {
   final String? senderDisplayName;
   final bool untrusted;
   final DateTime? editedAt;
+
+  /// Durable tombstone. Keep the ID so legacy replay cannot resurrect it.
+  final bool deleted;
   final String? replyToMessageId;
   final String? replySnippet;
   final String? replySenderDeviceId;
@@ -1978,6 +1982,7 @@ class ChatMessage {
     String? body,
     DeliveryState? state,
     DateTime? editedAt,
+    bool? deleted,
     String? replyToMessageId,
     String? replySnippet,
     String? replySenderDeviceId,
@@ -2002,6 +2007,7 @@ class ChatMessage {
       senderDisplayName: senderDisplayName,
       untrusted: untrusted,
       editedAt: editedAt ?? this.editedAt,
+      deleted: deleted ?? this.deleted,
       replyToMessageId: replyToMessageId ?? this.replyToMessageId,
       replySnippet: replySnippet ?? this.replySnippet,
       replySenderDeviceId: replySenderDeviceId ?? this.replySenderDeviceId,
@@ -2029,6 +2035,7 @@ class ChatMessage {
       'senderDisplayName': senderDisplayName,
       'untrusted': untrusted,
       'editedAt': editedAt?.toIso8601String(),
+      if (deleted) 'deleted': true,
       'replyToMessageId': replyToMessageId,
       'replySnippet': replySnippet,
       'replySenderDeviceId': replySenderDeviceId,
@@ -2058,6 +2065,7 @@ class ChatMessage {
       createdAt: DateTime.parse(json['createdAt'] as String),
       senderDisplayName: json['senderDisplayName'] as String?,
       untrusted: json['untrusted'] as bool? ?? false,
+      deleted: json['deleted'] as bool? ?? false,
       editedAt: json['editedAt'] == null
           ? null
           : DateTime.parse(json['editedAt'] as String),

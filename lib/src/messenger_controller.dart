@@ -12,7 +12,7 @@ import 'package:path_provider/path_provider.dart' as path_provider;
 
 import 'crypto_service.dart';
 import 'group_history_coordinator.dart';
-import 'group_history_event.dart';
+import 'group_message_projection.dart';
 import 'group_membership_history.dart';
 import 'beam_protocol.dart';
 import 'attachment_safety.dart';
@@ -1330,18 +1330,18 @@ class MessengerController extends ChangeNotifier {
         onMessage: _projectGroupHistoryMessage,
       );
 
-  void _projectGroupHistoryMessage(String groupId, GroupHistoryEvent event) {
+  void _projectGroupHistoryMessage(
+    String groupId,
+    GroupMessageProjection projection,
+  ) {
+    final event = projection.original;
     final group = _groupById(groupId);
     if (_disposed || group == null || group.localRemovedAt != null) return;
     final payload = event.payload;
     final id = payload['messageId'];
-    final body = payload['body'];
+    final body = projection.body;
     final created = payload['createdAt'];
-    if (id is! String ||
-        id.isEmpty ||
-        id.length > 160 ||
-        body is! String ||
-        created is! String) {
+    if (id is! String || id.isEmpty || id.length > 160 || created is! String) {
       return;
     }
     final at = DateTime.tryParse(created);
@@ -1349,14 +1349,33 @@ class MessengerController extends ChangeNotifier {
     var projectedId = id;
     for (final existing in _groupConversation(groupId).messages) {
       if (existing.id != id) continue;
-      if (existing.senderDeviceId == event.authorDeviceId) return;
+      if (existing.senderDeviceId == event.authorDeviceId) {
+        _upsertGroupMessage(
+          groupId,
+          existing.copyWith(
+            body: existing.deleted ? '' : body,
+            editedAt: projection.editedAt,
+            deleted: existing.deleted || projection.deleted,
+          ),
+        );
+        return;
+      }
       // Legacy message IDs are sender-controlled. Another author's choice of
       // the same ID must not hide this authenticated event or replace its author.
       projectedId = event.eventId;
     }
-    if (_groupConversation(
-      groupId,
-    ).messages.any((message) => message.id == projectedId)) {
+    final retained = _groupMessageById(groupId, projectedId);
+    if (retained != null) {
+      if (retained.senderDeviceId == event.authorDeviceId) {
+        _upsertGroupMessage(
+          groupId,
+          retained.copyWith(
+            body: retained.deleted ? '' : body,
+            editedAt: projection.editedAt,
+            deleted: retained.deleted || projection.deleted,
+          ),
+        );
+      }
       return;
     }
     String? optional(String field) =>
@@ -1369,6 +1388,8 @@ class MessengerController extends ChangeNotifier {
         senderDeviceId: event.authorDeviceId,
         recipientDeviceId: groupId,
         body: body,
+        editedAt: projection.editedAt,
+        deleted: projection.deleted,
         outbound: event.authorDeviceId == _requireIdentity().deviceId,
         state: event.authorDeviceId == _requireIdentity().deviceId
             ? DeliveryState.pending
@@ -1402,7 +1423,7 @@ class MessengerController extends ChangeNotifier {
       groupId,
       beforeEventId: beforeEventId,
     );
-    if (!_disposed) notifyListeners();
+    if (!_disposed) await _saveSnapshotSilently();
     return cursor;
   }
 
@@ -1422,6 +1443,12 @@ class MessengerController extends ChangeNotifier {
       await _crypto.decryptMessage(contact: sender, envelope: envelope),
     );
     if (decoded is Map<String, dynamic>) {
+      if (decoded['version'] == 1 &&
+          decoded['groupId'] == group.groupId &&
+          decoded['type'] == 'changed') {
+        _scheduleGroupHistorySync(group.groupId, sender.deviceId);
+        return;
+      }
       await _groupHistory.handle(group.groupId, sender.deviceId, decoded);
     }
   }
@@ -6961,6 +6988,36 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  Future<void> changeGroupMessage({
+    required String groupId,
+    required String messageId,
+    String? body,
+    bool delete = false,
+  }) async {
+    final group = _requireGroup(groupId);
+    final message = _groupMessageById(groupId, messageId);
+    if (message == null) throw ArgumentError('Message not found.');
+    await _groupHistory.mutateMessage(
+      group,
+      message,
+      body: body,
+      delete: delete,
+    );
+    await _saveSnapshotSilently();
+    // The event is durable before hints are sent. Offline peers catch up from
+    // this device or another group carrier after reconnecting.
+    for (final peer in group.activeMemberDeviceIds) {
+      if (peer == _requireIdentity().deviceId) continue;
+      unawaited(
+        _groupHistory.announceChange(groupId, peer).catchError((Object error) {
+          if (!_disposed) {
+            appendDebugLog('Group change announcement waiting: $error');
+          }
+        }),
+      );
+    }
+  }
+
   Future<void> cancelPendingMessage({
     required ContactRecord contact,
     required String messageId,
@@ -8544,6 +8601,7 @@ class MessengerController extends ChangeNotifier {
   /// duplicate-offer or torn-state race, and they showed up as
   /// "10:42 •••" stubs in the chat. Reject them at the public API.
   static bool _isRenderableMessage(ChatMessage m) {
+    if (m.deleted) return false;
     if (m.body.trim().isNotEmpty) return true;
     if (m.attachment != null) return true;
     if (m.replyToMessageId != null && m.replyToMessageId!.isNotEmpty) {
@@ -14008,7 +14066,9 @@ class MessengerController extends ChangeNotifier {
     required ContactRecord contact,
     required ChatMessage message,
   }) async {
-    if (_locallyDeletedMessageIds.contains(message.id) ||
+    if (message.deleted ||
+        _groupMessageById(group.groupId, message.id)?.deleted == true ||
+        _locallyDeletedMessageIds.contains(message.id) ||
         _groupMessageById(group.groupId, message.id) == null ||
         !group.hasActiveMember(contact.deviceId)) {
       return true;

@@ -8,6 +8,7 @@ import 'group_history_journal.dart';
 import 'group_history_sync.dart';
 import 'group_history_wire.dart';
 import 'group_membership_history.dart';
+import 'group_message_projection.dart';
 import 'models.dart';
 import 'storage.dart';
 
@@ -31,7 +32,8 @@ class GroupHistoryCoordinator {
     Map<String, Object?> payload,
   )
   send;
-  final void Function(String groupId, GroupHistoryEvent event) onMessage;
+  final void Function(String groupId, GroupMessageProjection projection)
+  onMessage;
   final _replicas = <String, Future<GroupHistoryReplica>>{};
   final _writes = <String, Future<void>>{};
   final _wires = <String, GroupHistoryWire>{};
@@ -259,6 +261,69 @@ class GroupHistoryCoordinator {
     ),
   );
 
+  Future<void> mutateMessage(
+    GroupRecord snapshot,
+    ChatMessage message, {
+    String? body,
+    required bool delete,
+  }) async {
+    if (snapshot.localRemovedAt != null ||
+        !snapshot.hasActiveMember(identity().deviceId) ||
+        message.conversationId != snapshot.groupId ||
+        message.senderDeviceId != identity().deviceId ||
+        !message.outbound ||
+        message.hasAttachment ||
+        message.deleted) {
+      throw StateError(
+        'Only your own active group text messages can be changed.',
+      );
+    }
+    if (!delete && (body == null || body.trim().isEmpty)) {
+      throw ArgumentError('The edited message cannot be empty.');
+    }
+    // Only the original author may sign retained pre-upgrade outgoing text.
+    await recordOutgoing(snapshot, message);
+    await _write(snapshot.groupId, () async {
+      final current = group(snapshot.groupId);
+      if (current.localRemovedAt != null ||
+          !current.hasActiveMember(identity().deviceId)) {
+        throw StateError('You are no longer a member of this group.');
+      }
+      final replica = await _replica(snapshot.groupId);
+      final original = await replica.journal.sourceMessage(
+        message.senderDeviceId,
+        message.id,
+      );
+      final membership = replica.membership.current;
+      if (original == null || membership == null) {
+        throw StateError('Waiting for signed group history.');
+      }
+      final projected = GroupMessageProjection.reduce(
+        original,
+        await replica.journal.messageMutations(original),
+      );
+      if (projected == null || projected.deleted) {
+        throw StateError('This message has already been deleted.');
+      }
+      final mutation = await _sign(
+        replica.journal,
+        groupId: snapshot.groupId,
+        membershipId: membership.id,
+        kind: delete ? GroupEventKind.deletion : GroupEventKind.edit,
+        payload: {
+          'targetEventId': original.eventId,
+          'changedAt': DateTime.now().toUtc().toIso8601String(),
+          if (!delete) 'body': body!.trim(),
+        },
+      );
+      await replica.importEvent(mutation, carrierDeviceId: identity().deviceId);
+    });
+    await projectPage(snapshot.groupId);
+  }
+
+  Future<void> announceChange(String id, String peer) =>
+      send(id, peer, {'version': 1, 'groupId': id, 'type': 'changed'});
+
   Future<bool> handle(String id, String peer, Map<String, Object?> payload) {
     final snapshot = group(id);
     if (_closed ||
@@ -308,13 +373,38 @@ class GroupHistoryCoordinator {
     if (_closed || group(id).localRemovedAt != null) return null;
     final replica = await _replica(id);
     final page = await replica.journal.readPage(beforeEventId: beforeEventId);
+    final projected = <String>{};
     for (final event in page.reversed) {
-      if (event.kind == GroupEventKind.message &&
-          await replica.membership.canReceive(
-            event,
-            recipientDeviceId: identity().deviceId,
-          )) {
-        onMessage(id, event);
+      GroupHistoryEvent? original;
+      if (event.kind == GroupEventKind.message) {
+        original = event;
+      } else if (GroupMessageProjection.isMutation(event)) {
+        final targets = await replica.journal.readEvents([
+          event.payload['targetEventId'] as String,
+        ]);
+        if (targets.isNotEmpty) original = targets.single;
+      }
+      if (original == null || !projected.add(original.eventId)) continue;
+      if (!await replica.membership.canReceive(
+        original,
+        recipientDeviceId: identity().deviceId,
+      )) {
+        continue;
+      }
+      final permitted = <GroupHistoryEvent>[];
+      for (final mutation in await replica.journal.messageMutations(original)) {
+        if (await replica.membership.canReceive(
+          mutation,
+          recipientDeviceId: identity().deviceId,
+        )) {
+          permitted.add(mutation);
+        }
+      }
+      // Recheck local removal after asynchronous journal/authorization reads.
+      if (_closed || group(id).localRemovedAt != null) return null;
+      final projection = GroupMessageProjection.reduce(original, permitted);
+      if (projection != null) {
+        onMessage(id, projection);
       }
     }
     return page.isEmpty ? null : page.last.eventId;

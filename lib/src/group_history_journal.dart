@@ -8,6 +8,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:path/path.dart' as paths;
 
 import 'group_history_event.dart';
+import 'group_message_projection.dart';
 
 /// One encrypted append-only journal per group, outside the attachment cache.
 /// The caller owns the vault key and must authorize membership before appending
@@ -152,6 +153,20 @@ class GroupHistoryJournal {
   Future<GroupHistoryEvent?> authorHead(String author) async =>
       await _request('authorHead', [author]) as GroupHistoryEvent?;
 
+  /// At most one edit and one terminal deletion for this exact signed author.
+  /// Callers must still check membership/history visibility before projection.
+  Future<List<GroupHistoryEvent>> messageMutations(
+    GroupHistoryEvent original,
+  ) async =>
+      (await _request('messageMutations', [
+                original.eventId,
+                original.authorAccountId,
+                original.authorDeviceId,
+                original.signingPublicKeyBase64,
+              ])
+              as List)
+          .cast<GroupHistoryEvent>();
+
   Future<GroupHistoryEvent?> sourceMessage(
     String author,
     String messageId,
@@ -270,6 +285,7 @@ class _JournalWorker {
   final _ordered = <_JournalEntry>[];
   final _authorHeads = <String, _JournalEntry>{};
   final _sourceMessages = <String, _JournalEntry>{};
+  final _messageMutations = <String, _JournalEntry>{};
   RandomAccessFile? _handle;
   int _end = 0;
   bool _poisoned = false;
@@ -458,6 +474,19 @@ class _JournalWorker {
     if (source is String) {
       _sourceMessages[jsonEncode([event.authorDeviceId, source])] = entry;
     }
+    if (GroupMessageProjection.isMutation(event)) {
+      final key = jsonEncode([
+        event.payload['targetEventId'],
+        event.authorAccountId,
+        event.authorDeviceId,
+        event.signingPublicKeyBase64,
+        event.kind.name,
+      ]);
+      final previous = _messageMutations[key];
+      if (previous == null || previous.compareTo(entry) < 0) {
+        _messageMutations[key] = entry;
+      }
+    }
     var low = 0;
     var high = _ordered.length;
     while (low < high) {
@@ -538,6 +567,11 @@ class _JournalWorker {
     }
     final args = arguments as List;
     switch (operation) {
+      case 'messageMutations':
+        return _read([
+          for (final kind in [GroupEventKind.edit, GroupEventKind.deletion])
+            ?_messageMutations[jsonEncode([...args, kind.name])],
+        ], 2);
       case 'authorHead':
       case 'sourceMessage':
         final entry = operation == 'authorHead'
