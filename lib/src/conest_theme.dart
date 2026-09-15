@@ -121,8 +121,10 @@ class ThemePreferenceStore {
   }
 
   final Future<File> Function() _fileProvider;
+  Future<void> _saveQueue = Future<void>.value();
 
   Future<ThemePreferences> load() async {
+    await _saveQueue;
     try {
       final file = await _fileProvider();
       if (!await file.exists()) {
@@ -132,6 +134,7 @@ class ThemePreferenceStore {
       if (decoded is Map<String, Object?>) {
         final prefs = ThemePreferences(
           mode: ConestThemeMode.fromStorage(decoded['themeMode'] as String?),
+          sidebarWidth: _readSidebarWidth(decoded['sidebarWidth']),
           decorationIntensity: _readIntensity(decoded['decorationIntensity']),
           homeLayout: ConestHomeLayout.fromStorage(
             decoded['homeLayout'] as String?,
@@ -161,7 +164,14 @@ class ThemePreferenceStore {
   /// the mode.
   Future<ConestThemeMode> loadThemeMode() async => (await load()).mode;
 
-  Future<void> save(ThemePreferences prefs) async {
+  Future<void> save(ThemePreferences prefs) {
+    final saved = _saveQueue.then((_) => _savePreferences(prefs));
+    // An individual failure reaches its caller but does not poison later saves.
+    _saveQueue = saved.catchError((Object _) {});
+    return saved;
+  }
+
+  Future<void> _savePreferences(ThemePreferences prefs) async {
     final file = await _fileProvider();
     await file.parent.create(recursive: true);
     await file.writeAsString(
@@ -171,6 +181,7 @@ class ThemePreferenceStore {
         'homeLayout': prefs.homeLayout.name,
         'shell': prefs.shell.name,
         'layoutMigrationVersion': 1,
+        'sidebarWidth': prefs.sidebarWidth,
       }),
     );
   }
@@ -178,6 +189,11 @@ class ThemePreferenceStore {
   Future<void> saveThemeMode(ConestThemeMode mode) async {
     final current = await load();
     await save(current.copyWith(mode: mode));
+  }
+
+  static double _readSidebarWidth(Object? raw) {
+    if (raw is num && raw.isFinite) return raw.toDouble().clamp(300.0, 560.0);
+    return ThemePreferences.defaultSidebarWidth;
   }
 
   static double _readIntensity(Object? raw) {
@@ -195,13 +211,15 @@ class ThemePreferences {
     required this.decorationIntensity,
     this.homeLayout = ConestHomeLayout.signalCards,
     this.shell = ConestShell.courier,
+    this.sidebarWidth = defaultSidebarWidth,
   });
 
   const ThemePreferences.defaults()
     : mode = ConestThemeMode.system,
       decorationIntensity = defaultDecorationIntensity,
       homeLayout = ConestHomeLayout.signalCards,
-      shell = ConestShell.courier;
+      shell = ConestShell.courier,
+      sidebarWidth = defaultSidebarWidth;
 
   /// Subtle-by-default Signature ambience. 0 = clean, 1.5 = full atmosphere.
   static const double defaultDecorationIntensity = 1.0;
@@ -209,6 +227,8 @@ class ThemePreferences {
   final ConestThemeMode mode;
   final double decorationIntensity;
   final ConestHomeLayout homeLayout;
+  static const double defaultSidebarWidth = 380;
+  final double sidebarWidth;
   final ConestShell shell;
 
   ThemePreferences copyWith({
@@ -216,12 +236,14 @@ class ThemePreferences {
     double? decorationIntensity,
     ConestHomeLayout? homeLayout,
     ConestShell? shell,
+    double? sidebarWidth,
   }) {
     return ThemePreferences(
       mode: mode ?? this.mode,
       decorationIntensity: decorationIntensity ?? this.decorationIntensity,
       homeLayout: homeLayout ?? this.homeLayout,
       shell: shell ?? this.shell,
+      sidebarWidth: sidebarWidth ?? this.sidebarWidth,
     );
   }
 }
@@ -250,6 +272,7 @@ class ConestThemeController extends ChangeNotifier {
   double get decorationIntensity => _prefs.decorationIntensity;
   ConestHomeLayout get homeLayout => _prefs.homeLayout;
   ConestShell get shell => _prefs.shell;
+  double get sidebarWidth => _prefs.sidebarWidth;
   bool get initialized => _initialized;
 
   Future<void> initialize() async {
@@ -285,6 +308,15 @@ class ConestThemeController extends ChangeNotifier {
       return;
     }
     _prefs = _prefs.copyWith(homeLayout: layout);
+    notifyListeners();
+    await _store.save(_prefs);
+  }
+
+  Future<void> setSidebarWidth(double width) async {
+    if (!width.isFinite) return;
+    final bounded = width.clamp(300.0, 560.0);
+    if (bounded == _prefs.sidebarWidth) return;
+    _prefs = _prefs.copyWith(sidebarWidth: bounded);
     notifyListeners();
     await _store.save(_prefs);
   }
@@ -676,7 +708,8 @@ class ConestPalette {
     required this.shadow,
   });
 
-  ThemeData themeData() {
+  ThemeData themeData({bool courier = false}) {
+    final interfaceFont = courier ? 'Roboto' : displayFont;
     final scheme =
         ColorScheme.fromSeed(
           seedColor: primary,
@@ -705,14 +738,27 @@ class ConestPalette {
     final baseTextTheme = ThemeData(brightness: brightness).textTheme.apply(
       bodyColor: textPrimary,
       displayColor: textPrimary,
-      fontFamily: displayFont,
+      fontFamily: interfaceFont,
     );
     return ThemeData(
       brightness: brightness,
       scaffoldBackgroundColor: appBackground,
       colorScheme: scheme,
-      fontFamily: displayFont,
+      fontFamily: interfaceFont,
       useMaterial3: true,
+      appBarTheme: AppBarTheme(
+        backgroundColor: panel,
+        foregroundColor: textPrimary,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: false,
+        titleTextStyle: TextStyle(
+          fontFamily: interfaceFont,
+          color: textPrimary,
+          fontSize: 20,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
       dividerTheme: DividerThemeData(color: border, thickness: 1),
       cardTheme: CardThemeData(
         elevation: 0,
@@ -729,9 +775,9 @@ class ConestPalette {
         ),
         titleTextStyle: TextStyle(
           color: textPrimary,
-          fontSize: 22,
+          fontSize: courier ? 20 : 22,
           fontWeight: FontWeight.w700,
-          fontFamily: displayFont,
+          fontFamily: interfaceFont,
         ),
       ),
       textTheme: baseTextTheme,

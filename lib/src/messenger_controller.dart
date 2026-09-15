@@ -4615,6 +4615,24 @@ class MessengerController extends ChangeNotifier {
   List<PendingContactRequest> get pendingContactRequests =>
       List.unmodifiable(_snapshot.pendingContactRequests);
 
+  Future<String> pendingContactSafetyNumber(String requestId) async {
+    final request = _snapshot.pendingContactRequests
+        .where((entry) => entry.id == requestId)
+        .firstOrNull;
+    if (request == null) {
+      throw StateError('Contact request is no longer available.');
+    }
+    final invite = ContactInvite.decodePayload(request.invitePayload);
+    if (invite.deviceId != request.senderDeviceId ||
+        invite.accountId != request.senderAccountId) {
+      throw const FormatException('Contact request identity mismatch.');
+    }
+    return _crypto.deriveSafetyNumber([
+      base64Decode(_requireIdentity().publicKeyBase64),
+      base64Decode(invite.publicKeyBase64),
+    ]);
+  }
+
   Future<ContactAdditionResult> approvePendingContactRequest(
     String requestId, {
     String? alias,
@@ -8416,6 +8434,52 @@ class MessengerController extends ChangeNotifier {
     };
   }
 
+  ({bool pinned, bool archived, bool muted, String draft})
+  conversationPreferences(ConversationKind kind, String id) {
+    final conversation = _draftConversation(kind, id);
+    return (
+      pinned: conversation.pinned,
+      archived: conversation.archived,
+      muted: conversation.muted,
+      draft: conversation.draft,
+    );
+  }
+
+  Future<void> updateConversationPreferences(
+    ConversationKind kind,
+    String id, {
+    bool? pinned,
+    bool? archived,
+    bool? muted,
+  }) async {
+    if (identity == null) return;
+    final current = _draftConversation(kind, id);
+    final updated = current.copyWith(
+      pinned: pinned,
+      archived: archived,
+      muted: muted,
+    );
+    final conversations = List<ConversationRecord>.of(_snapshot.conversations);
+    final index = conversations.indexWhere(
+      (entry) => entry.kind == kind && entry.id == current.id,
+    );
+    if (index < 0) {
+      conversations.add(updated);
+    } else {
+      conversations[index] = updated;
+    }
+    _snapshot = _snapshot.copyWith(conversations: conversations);
+    await _saveSnapshotSilently();
+    if (muted == true) {
+      await _platformBridge.dismissMessageNotification(
+        conversationId: current.id,
+      );
+    }
+  }
+
+  /// Notifies only conversation-list listeners when local draft text changes.
+  final ValueNotifier<int> localConversationRevision = ValueNotifier<int>(0);
+
   String conversationDraft(ConversationKind kind, String id) =>
       _draftConversation(kind, id).draft;
 
@@ -8424,7 +8488,7 @@ class MessengerController extends ChangeNotifier {
     String id,
     String text,
   ) async {
-    if (identity == null) return;
+    if (_disposed || identity == null) return;
     final conversation = _draftConversation(kind, id);
     if (conversation.draft == text) return;
     final updated = conversation.copyWith(draft: text);
@@ -8438,6 +8502,7 @@ class MessengerController extends ChangeNotifier {
       conversations[index] = updated;
     }
     _snapshot = _snapshot.copyWith(conversations: conversations);
+    localConversationRevision.value++;
     await _saveSnapshotSilently(notify: false, debounce: true);
   }
 
@@ -11972,7 +12037,9 @@ class MessengerController extends ChangeNotifier {
     required String body,
   }) {
     final me = identity;
-    if (me == null || !me.notificationsEnabled) {
+    if (me == null ||
+        !me.notificationsEnabled ||
+        _conversationFor(contact.deviceId).muted) {
       return;
     }
     final recent = _recentInboundLinesForContact(contact, defaultBody: body);
@@ -11994,7 +12061,9 @@ class MessengerController extends ChangeNotifier {
     required String body,
   }) {
     final me = identity;
-    if (me == null || !me.notificationsEnabled) {
+    if (me == null ||
+        !me.notificationsEnabled ||
+        _groupConversation(group.groupId).muted) {
       return;
     }
     final recent = _recentInboundLinesForGroup(group);
@@ -17708,6 +17777,7 @@ class MessengerController extends ChangeNotifier {
     }
     _authorizedInboundDebugFileTests.clear();
     _outboundDebugAttachmentTests.clear();
+    localConversationRevision.dispose();
     super.dispose();
   }
 }

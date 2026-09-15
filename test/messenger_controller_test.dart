@@ -5930,6 +5930,19 @@ void main() {
       await tester.pump();
 
       await tester.ensureVisible(find.text('Bob').first);
+      final divider = find.byKey(
+        const ValueKey('conversation-sidebar-divider'),
+      );
+      expect(tester.getTopLeft(divider).dx, 380);
+      await tester.drag(divider, const Offset(1000, 0));
+      await tester.pump();
+      expect(tester.getTopLeft(divider).dx, 560);
+      await tester.drag(divider, const Offset(-1000, 0));
+      await tester.pump();
+      expect(tester.getTopLeft(divider).dx, 300);
+      await tester.sendKeyEvent(LogicalKeyboardKey.home);
+      await tester.pump();
+      expect(tester.getTopLeft(divider).dx, 380);
       await tester.tap(find.text('Bob').first);
       await tester.pump();
       await tester.ensureVisible(find.text('incoming text').last);

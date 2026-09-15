@@ -22,9 +22,13 @@ import 'package:video_player_media_kit/video_player_media_kit.dart';
 import 'package:path/path.dart' as p;
 
 import 'src/app_storage.dart';
+import 'src/adaptive_chat_dialog.dart';
 import 'src/attachment_safety.dart';
 import 'src/build_info.dart';
+import 'src/chat_message_search.dart';
+import 'src/chat_day_separator.dart';
 import 'src/conest_theme.dart';
+import 'src/conversation_sidebar_divider.dart';
 import 'src/desktop_beam_scanner.dart';
 import 'src/lan_direct.dart';
 import 'src/iroh_ffi_bridge.dart';
@@ -36,6 +40,7 @@ import 'src/platform_bridge.dart';
 import 'src/qr_scan_screen.dart';
 import 'src/relay_client.dart';
 import 'src/storage.dart';
+import 'src/swipe_to_reply.dart';
 import 'src/transport.dart';
 import 'src/ui/seal_avatar.dart';
 import 'src/ui/signature_decoration.dart';
@@ -248,7 +253,9 @@ class ConestAlreadyRunningApp extends StatelessWidget {
             return MaterialApp(
               debugShowCheckedModeBanner: false,
               title: 'Conest',
-              theme: palette.themeData(),
+              theme: palette.themeData(
+                courier: themeController.shell == ConestShell.courier,
+              ),
               home: Scaffold(
                 body: DecoratedBox(
                   decoration: BoxDecoration(gradient: palette.appGradient),
@@ -398,7 +405,9 @@ class _ConestBootstrapAppState extends State<ConestBootstrapApp> {
             return MaterialApp(
               debugShowCheckedModeBanner: false,
               title: 'Conest',
-              theme: palette.themeData(),
+              theme: palette.themeData(
+                courier: widget.themeController.shell == ConestShell.courier,
+              ),
               home: body,
             );
           },
@@ -900,7 +909,9 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
               debugShowCheckedModeBanner: false,
               title: 'Conest',
               navigatorKey: _navigatorKey,
-              theme: palette.themeData(),
+              theme: palette.themeData(
+                courier: widget.themeController.shell == ConestShell.courier,
+              ),
               home: widget.controller.isReady
                   ? widget.controller.hasIdentity
                         ? HomeScreen(
@@ -1351,6 +1362,8 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _selectedContactId;
   String? _selectedGroupId;
   bool _lanLobbySelected = false;
+  double _sidebarWidth = 380;
+  final _courierKey = GlobalKey<_CourierHomeState>();
   final _composers = <(ConversationKind, String), TextEditingController>{};
   final _emptyComposer = TextEditingController();
 
@@ -1387,6 +1400,17 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _sidebarWidth = widget.themeController.sidebarWidth;
+  }
+
+  void _saveSidebarWidth() {
+    unawaited(
+      widget.themeController.setSidebarWidth(_sidebarWidth).catchError((
+        Object error,
+      ) {
+        widget.controller.setStatus('Could not save sidebar width: $error');
+      }),
+    );
   }
 
   @override
@@ -1509,6 +1533,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await showDialog<void>(
       context: context,
       builder: (context) => AddContactDialog(
+        fullscreenOnMobile: widget.themeController.shell == ConestShell.courier,
         controller: widget.controller,
         palette: widget.palette,
       ),
@@ -1519,6 +1544,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final created = await showDialog<GroupRecord>(
       context: context,
       builder: (context) => CreateGroupDialog(
+        fullscreenOnMobile: widget.themeController.shell == ConestShell.courier,
         controller: widget.controller,
         palette: widget.palette,
       ),
@@ -1538,6 +1564,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await showDialog<void>(
       context: context,
       builder: (context) => GroupDetailsDialog(
+        fullscreenOnMobile: widget.themeController.shell == ConestShell.courier,
         controller: widget.controller,
         palette: widget.palette,
         group: group,
@@ -1561,6 +1588,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await showDialog<void>(
       context: context,
       builder: (context) => SettingsDialog(
+        fullscreenOnMobile: widget.themeController.shell == ConestShell.courier,
         controller: widget.controller,
         updateService: widget.updateService,
         themeController: widget.themeController,
@@ -1615,6 +1643,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await showDialog<void>(
       context: context,
       builder: (context) => ContactProfileDialog(
+        fullscreenOnMobile: widget.themeController.shell == ConestShell.courier,
         controller: widget.controller,
         palette: widget.palette,
         contact: contact,
@@ -2086,240 +2115,327 @@ class _HomeScreenState extends State<HomeScreen> {
     final selectedGroup = _selectedGroup;
     final lanLobbySelected =
         _lanLobbySelected && selectedContact == null && selectedGroup == null;
-    return Scaffold(
-      floatingActionButton: FloatingActionButton.small(
-        heroTag: 'global-transfers',
-        tooltip: 'Transfers',
-        onPressed: _showTransfers,
-        child: Badge(
-          isLabelVisible: widget.controller.transferSnapshots.any(
-            (entry) =>
-                entry.phase.isActive || entry.phase == TransferPhase.paused,
-          ),
-          label: Text(
-            '${widget.controller.transferSnapshots.where((entry) => entry.phase.isActive || entry.phase == TransferPhase.paused).length}',
-          ),
-          child: const Icon(Icons.downloading_outlined),
-        ),
-      ),
-      body: DecoratedBox(
-        decoration: BoxDecoration(gradient: palette.appGradient),
-        child: Stack(
-          children: [
-            // Signature ambient overlay — sits behind all panels, hugs the
-            // screen corners with reticles + readout. Intensity is the
-            // user-controlled Decoration setting.
-            Positioned.fill(
-              child: SignatureDecoration(
-                palette: palette,
-                intensity: widget.themeController.decorationIntensity,
-              ),
-            ),
-            PopScope(
-              canPop:
-                  selectedContact == null &&
-                  selectedGroup == null &&
-                  !lanLobbySelected,
-              onPopInvokedWithResult: (didPop, result) {
-                if (!didPop &&
-                    (_selectedContactId != null ||
-                        _selectedGroupId != null ||
-                        _lanLobbySelected)) {
-                  setState(() {
-                    _selectedContactId = null;
-                    _selectedGroupId = null;
-                    _lanLobbySelected = false;
-                    _replyTarget = null;
-                  });
-                }
-              },
-              child: SafeArea(
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final isWide = constraints.maxWidth > 920;
-                    if (!isWide && selectedContact != null) {
-                      return _ChatPanel(
-                        key: ValueKey('chat-${selectedContact.deviceId}'),
-                        controller: widget.controller,
-                        palette: palette,
-                        contact: selectedContact,
-                        composerController: _composerController,
-                        replyTarget: _replyTarget,
-                        onBack: () => setState(() {
-                          _selectedContactId = null;
-                          _replyTarget = null;
-                        }),
-                        onCancelReply: () =>
-                            setState(() => _replyTarget = null),
-                        onReplyToMessage: (message) =>
-                            setState(() => _replyTarget = message),
-                        onShowProfile: () =>
-                            _showContactProfile(selectedContact),
-                        onSend: _sendCurrentMessage,
-                        onAttach: _openMediaPicker,
-                        onDropFiles: _handleDroppedFiles,
-                        onSmartPaste: () => unawaited(_handleSmartPaste()),
-                      );
-                    }
-                    if (!isWide && selectedGroup != null) {
-                      return _GroupChatPanel(
-                        key: ValueKey('group-${selectedGroup.groupId}'),
-                        controller: widget.controller,
-                        palette: palette,
-                        group: selectedGroup,
-                        composerController: _composerController,
-                        replyTarget: _replyTarget,
-                        onBack: () => setState(() {
-                          _selectedGroupId = null;
-                          _replyTarget = null;
-                        }),
-                        onCancelReply: () =>
-                            setState(() => _replyTarget = null),
-                        onReplyToMessage: (message) =>
-                            setState(() => _replyTarget = message),
-                        onShowDetails: () => _showGroupDetails(selectedGroup),
-                        onSend: _sendCurrentGroupMessage,
-                        onDropFiles: _handleDroppedFilesForGroup,
-                        onSmartPaste: () => unawaited(_handleSmartPaste()),
-                      );
-                    }
-                    if (!isWide && lanLobbySelected) {
-                      return _LanLobbyPanel(
-                        controller: widget.controller,
-                        palette: palette,
-                        composerController: _composerController,
-                        onBack: () => setState(() => _lanLobbySelected = false),
-                        onSend: _sendLanLobbyMessage,
-                      );
-                    }
-                    return Row(
-                      children: [
-                        SizedBox(
-                          width: isWide ? 380 : constraints.maxWidth,
-                          // Shell selector — Garrison (Discord rail) and
-                          // Courier (Telegram list) are alternate home
-                          // presentations; all reuse the chat panels below.
-                          child: switch (widget.themeController.shell) {
-                            ConestShell.courier => _CourierHome(
-                              controller: widget.controller,
-                              palette: palette,
-                              selectedContactId: _selectedContactId,
-                              selectedGroupId: _selectedGroupId,
-                              lanLobbySelected: lanLobbySelected,
-                              onContactSelected: _selectHomeContact,
-                              onGroupSelected: _selectHomeGroup,
-                              onLanLobbySelected: _selectHomeLanLobby,
-                              onAddContact: _showAddContact,
-                              onShowSettings: _showSettings,
-                              onShowInvite: _showInvite,
-                              onShowBeam: _showBeam,
-                            ),
-                            ConestShell.garrison => _GarrisonHome(
-                              controller: widget.controller,
-                              palette: palette,
-                              selectedContactId: _selectedContactId,
-                              selectedGroupId: _selectedGroupId,
-                              lanLobbySelected: lanLobbySelected,
-                              onContactSelected: _selectHomeContact,
-                              onGroupSelected: _selectHomeGroup,
-                              onGroupDetails: _showGroupDetails,
-                              onLanLobbySelected: _selectHomeLanLobby,
-                              onAddContact: _showAddContact,
-                              onCreateGroup: _showCreateGroup,
-                              onShowSettings: _showSettings,
-                              onShowInvite: _showInvite,
-                              onShowBeam: _showBeam,
-                            ),
-                            ConestShell.signature => _Sidebar(
-                              controller: widget.controller,
-                              palette: palette,
-                              homeLayout: widget.themeController.homeLayout,
-                              selectedContactId: _selectedContactId,
-                              selectedGroupId: _selectedGroupId,
-                              lanLobbySelected: lanLobbySelected,
-                              onAddContact: _showAddContact,
-                              onCreateGroup: _showCreateGroup,
-                              onLanLobbySelected: _selectHomeLanLobby,
-                              onGroupSelected: _selectHomeGroup,
-                              onGroupDetails: _showGroupDetails,
-                              onContactSelected: _selectHomeContact,
-                              onContactProfile: _showContactProfile,
-                              // Automatic file battle tests can mutate large
-                              // amounts of app-owned storage, so expose them
-                              // only in the isolated debug channel.
-                              onShowDebug:
-                                  widget.buildInfo.channel ==
-                                      UpdateChannel.debug
-                                  ? _showDebugMenu
-                                  : null,
-                              onPoll: widget.controller.pollNow,
-                              onShowSettings: _showSettings,
-                              onShowInvite: _showInvite,
-                              onShowBeam: _showBeam,
-                            ),
-                          },
-                        ),
-                        if (isWide)
-                          Expanded(
-                            child: lanLobbySelected
-                                ? _LanLobbyPanel(
-                                    controller: widget.controller,
-                                    palette: palette,
-                                    composerController: _composerController,
-                                    onSend: _sendLanLobbyMessage,
-                                  )
-                                : selectedGroup != null
-                                ? _GroupChatPanel(
-                                    key: ValueKey(
-                                      'group-${selectedGroup.groupId}',
-                                    ),
-                                    controller: widget.controller,
-                                    palette: palette,
-                                    group: selectedGroup,
-                                    composerController: _composerController,
-                                    replyTarget: _replyTarget,
-                                    onCancelReply: () =>
-                                        setState(() => _replyTarget = null),
-                                    onReplyToMessage: (message) =>
-                                        setState(() => _replyTarget = message),
-                                    onShowDetails: () =>
-                                        _showGroupDetails(selectedGroup),
-                                    onSend: _sendCurrentGroupMessage,
-                                    onDropFiles: _handleDroppedFilesForGroup,
-                                    onSmartPaste: () =>
-                                        unawaited(_handleSmartPaste()),
-                                  )
-                                : selectedContact == null
-                                ? _EmptyChatState(palette: palette)
-                                : _ChatPanel(
-                                    key: ValueKey(
-                                      'chat-${selectedContact.deviceId}',
-                                    ),
-                                    controller: widget.controller,
-                                    palette: palette,
-                                    contact: selectedContact,
-                                    composerController: _composerController,
-                                    replyTarget: _replyTarget,
-                                    onCancelReply: () =>
-                                        setState(() => _replyTarget = null),
-                                    onReplyToMessage: (message) =>
-                                        setState(() => _replyTarget = message),
-                                    onShowProfile: () =>
-                                        _showContactProfile(selectedContact),
-                                    onSend: _sendCurrentMessage,
-                                    onAttach: _openMediaPicker,
-                                    onDropFiles: _handleDroppedFiles,
-                                    onSmartPaste: () =>
-                                        unawaited(_handleSmartPaste()),
-                                  ),
-                          ),
-                      ],
-                    );
-                  },
+    return CallbackShortcuts(
+      bindings: widget.themeController.shell != ConestShell.courier
+          ? const {}
+          : {
+              const SingleActivator(
+                LogicalKeyboardKey.arrowDown,
+                alt: true,
+              ): () =>
+                  _courierKey.currentState?.navigateChat(1),
+              const SingleActivator(
+                LogicalKeyboardKey.arrowUp,
+                alt: true,
+              ): () =>
+                  _courierKey.currentState?.navigateChat(-1),
+              const SingleActivator(
+                LogicalKeyboardKey.keyK,
+                control: true,
+              ): () =>
+                  _courierKey.currentState?._searchFocus.requestFocus(),
+              const SingleActivator(LogicalKeyboardKey.keyK, meta: true): () =>
+                  _courierKey.currentState?._searchFocus.requestFocus(),
+              const SingleActivator(
+                LogicalKeyboardKey.keyN,
+                control: true,
+              ): () =>
+                  _courierKey.currentState?._newChat(),
+              const SingleActivator(LogicalKeyboardKey.keyN, meta: true): () =>
+                  _courierKey.currentState?._newChat(),
+            },
+      child: Scaffold(
+        floatingActionButton:
+            widget.themeController.shell == ConestShell.courier
+            ? null
+            : FloatingActionButton.small(
+                heroTag: 'global-transfers',
+                tooltip: 'Transfers',
+                onPressed: _showTransfers,
+                child: Badge(
+                  isLabelVisible: widget.controller.transferSnapshots.any(
+                    (entry) =>
+                        entry.phase.isActive ||
+                        entry.phase == TransferPhase.paused,
+                  ),
+                  label: Text(
+                    '${widget.controller.transferSnapshots.where((entry) => entry.phase.isActive || entry.phase == TransferPhase.paused).length}',
+                  ),
+                  child: const Icon(Icons.downloading_outlined),
                 ),
               ),
-            ),
-          ],
+        body: DecoratedBox(
+          decoration: BoxDecoration(gradient: palette.appGradient),
+          child: Stack(
+            children: [
+              // Signature ambient overlay — sits behind all panels, hugs the
+              // screen corners with reticles + readout. Intensity is the
+              // user-controlled Decoration setting.
+              Positioned.fill(
+                child: SignatureDecoration(
+                  palette: palette,
+                  intensity: widget.themeController.decorationIntensity,
+                ),
+              ),
+              PopScope(
+                canPop:
+                    selectedContact == null &&
+                    selectedGroup == null &&
+                    !lanLobbySelected,
+                onPopInvokedWithResult: (didPop, result) {
+                  if (!didPop &&
+                      (_selectedContactId != null ||
+                          _selectedGroupId != null ||
+                          _lanLobbySelected)) {
+                    setState(() {
+                      _selectedContactId = null;
+                      _selectedGroupId = null;
+                      _lanLobbySelected = false;
+                      _replyTarget = null;
+                    });
+                  }
+                },
+                child: SafeArea(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final isWide = constraints.maxWidth > 920;
+                      final resizableSidebar =
+                          isWide &&
+                          widget.themeController.shell == ConestShell.courier;
+                      final sidebarMaximum = math.min(
+                        560.0,
+                        constraints.maxWidth - 488,
+                      );
+                      final sidebarWidth = _sidebarWidth
+                          .clamp(300.0, math.max(300.0, sidebarMaximum))
+                          .toDouble();
+                      if (!isWide && selectedContact != null) {
+                        return _ChatPanel(
+                          telegramLayout:
+                              widget.themeController.shell ==
+                              ConestShell.courier,
+                          key: ValueKey('chat-${selectedContact.deviceId}'),
+                          controller: widget.controller,
+                          palette: palette,
+                          contact: selectedContact,
+                          composerController: _composerController,
+                          replyTarget: _replyTarget,
+                          onBack: () => setState(() {
+                            _selectedContactId = null;
+                            _replyTarget = null;
+                          }),
+                          onCancelReply: () =>
+                              setState(() => _replyTarget = null),
+                          onReplyToMessage: (message) =>
+                              setState(() => _replyTarget = message),
+                          onShowProfile: () =>
+                              _showContactProfile(selectedContact),
+                          onSend: _sendCurrentMessage,
+                          onAttach: _openMediaPicker,
+                          onDropFiles: _handleDroppedFiles,
+                          onSmartPaste: () => unawaited(_handleSmartPaste()),
+                        );
+                      }
+                      if (!isWide && selectedGroup != null) {
+                        return _GroupChatPanel(
+                          telegramLayout:
+                              widget.themeController.shell ==
+                              ConestShell.courier,
+                          key: ValueKey('group-${selectedGroup.groupId}'),
+                          controller: widget.controller,
+                          palette: palette,
+                          group: selectedGroup,
+                          composerController: _composerController,
+                          replyTarget: _replyTarget,
+                          onBack: () => setState(() {
+                            _selectedGroupId = null;
+                            _replyTarget = null;
+                          }),
+                          onCancelReply: () =>
+                              setState(() => _replyTarget = null),
+                          onReplyToMessage: (message) =>
+                              setState(() => _replyTarget = message),
+                          onShowDetails: () => _showGroupDetails(selectedGroup),
+                          onSend: _sendCurrentGroupMessage,
+                          onDropFiles: _handleDroppedFilesForGroup,
+                          onSmartPaste: () => unawaited(_handleSmartPaste()),
+                        );
+                      }
+                      if (!isWide && lanLobbySelected) {
+                        return _LanLobbyPanel(
+                          controller: widget.controller,
+                          palette: palette,
+                          composerController: _composerController,
+                          onBack: () =>
+                              setState(() => _lanLobbySelected = false),
+                          onSend: _sendLanLobbyMessage,
+                        );
+                      }
+                      return Row(
+                        children: [
+                          SizedBox(
+                            width: isWide
+                                ? (resizableSidebar ? sidebarWidth : 380.0)
+                                : constraints.maxWidth,
+                            // Shell selector — Garrison (Discord rail) and
+                            // Courier (Telegram list) are alternate home
+                            // presentations; all reuse the chat panels below.
+                            child: switch (widget.themeController.shell) {
+                              ConestShell.courier => _CourierHome(
+                                key: _courierKey,
+                                controller: widget.controller,
+                                palette: palette,
+                                selectedContactId: _selectedContactId,
+                                selectedGroupId: _selectedGroupId,
+                                lanLobbySelected: lanLobbySelected,
+                                onContactSelected: _selectHomeContact,
+                                onGroupSelected: _selectHomeGroup,
+                                onLanLobbySelected: _selectHomeLanLobby,
+                                onAddContact: _showAddContact,
+                                onCreateGroup: _showCreateGroup,
+                                onShowTransfers: _showTransfers,
+                                onShowDebug:
+                                    widget.buildInfo.channel ==
+                                        UpdateChannel.debug
+                                    ? _showDebugMenu
+                                    : null,
+                                onShowSettings: _showSettings,
+                                onShowInvite: _showInvite,
+                                onShowBeam: _showBeam,
+                              ),
+                              ConestShell.garrison => _GarrisonHome(
+                                controller: widget.controller,
+                                palette: palette,
+                                selectedContactId: _selectedContactId,
+                                selectedGroupId: _selectedGroupId,
+                                lanLobbySelected: lanLobbySelected,
+                                onContactSelected: _selectHomeContact,
+                                onGroupSelected: _selectHomeGroup,
+                                onGroupDetails: _showGroupDetails,
+                                onLanLobbySelected: _selectHomeLanLobby,
+                                onAddContact: _showAddContact,
+                                onCreateGroup: _showCreateGroup,
+                                onShowSettings: _showSettings,
+                                onShowInvite: _showInvite,
+                                onShowBeam: _showBeam,
+                              ),
+                              ConestShell.signature => _Sidebar(
+                                controller: widget.controller,
+                                palette: palette,
+                                homeLayout: widget.themeController.homeLayout,
+                                selectedContactId: _selectedContactId,
+                                selectedGroupId: _selectedGroupId,
+                                lanLobbySelected: lanLobbySelected,
+                                onAddContact: _showAddContact,
+                                onCreateGroup: _showCreateGroup,
+                                onLanLobbySelected: _selectHomeLanLobby,
+                                onGroupSelected: _selectHomeGroup,
+                                onGroupDetails: _showGroupDetails,
+                                onContactSelected: _selectHomeContact,
+                                onContactProfile: _showContactProfile,
+                                // Automatic file battle tests can mutate large
+                                // amounts of app-owned storage, so expose them
+                                // only in the isolated debug channel.
+                                onShowDebug:
+                                    widget.buildInfo.channel ==
+                                        UpdateChannel.debug
+                                    ? _showDebugMenu
+                                    : null,
+                                onPoll: widget.controller.pollNow,
+                                onShowSettings: _showSettings,
+                                onShowInvite: _showInvite,
+                                onShowBeam: _showBeam,
+                              ),
+                            },
+                          ),
+                          if (resizableSidebar)
+                            ConversationSidebarDivider(
+                              key: const ValueKey(
+                                'conversation-sidebar-divider',
+                              ),
+                              color: palette.border,
+                              onResize: (delta) => setState(() {
+                                _sidebarWidth = (sidebarWidth + delta).clamp(
+                                  300.0,
+                                  sidebarMaximum,
+                                );
+                              }),
+                              onResizeEnd: _saveSidebarWidth,
+                              onReset: () {
+                                setState(() => _sidebarWidth = 380);
+                                _saveSidebarWidth();
+                              },
+                            ),
+                          if (isWide)
+                            Expanded(
+                              child: lanLobbySelected
+                                  ? _LanLobbyPanel(
+                                      controller: widget.controller,
+                                      palette: palette,
+                                      composerController: _composerController,
+                                      onSend: _sendLanLobbyMessage,
+                                    )
+                                  : selectedGroup != null
+                                  ? _GroupChatPanel(
+                                      telegramLayout:
+                                          widget.themeController.shell ==
+                                          ConestShell.courier,
+                                      key: ValueKey(
+                                        'group-${selectedGroup.groupId}',
+                                      ),
+                                      controller: widget.controller,
+                                      palette: palette,
+                                      group: selectedGroup,
+                                      composerController: _composerController,
+                                      replyTarget: _replyTarget,
+                                      onCancelReply: () =>
+                                          setState(() => _replyTarget = null),
+                                      onReplyToMessage: (message) => setState(
+                                        () => _replyTarget = message,
+                                      ),
+                                      onShowDetails: () =>
+                                          _showGroupDetails(selectedGroup),
+                                      onSend: _sendCurrentGroupMessage,
+                                      onDropFiles: _handleDroppedFilesForGroup,
+                                      onSmartPaste: () =>
+                                          unawaited(_handleSmartPaste()),
+                                    )
+                                  : selectedContact == null
+                                  ? _EmptyChatState(palette: palette)
+                                  : _ChatPanel(
+                                      telegramLayout:
+                                          widget.themeController.shell ==
+                                          ConestShell.courier,
+                                      key: ValueKey(
+                                        'chat-${selectedContact.deviceId}',
+                                      ),
+                                      controller: widget.controller,
+                                      palette: palette,
+                                      contact: selectedContact,
+                                      composerController: _composerController,
+                                      replyTarget: _replyTarget,
+                                      onCancelReply: () =>
+                                          setState(() => _replyTarget = null),
+                                      onReplyToMessage: (message) => setState(
+                                        () => _replyTarget = message,
+                                      ),
+                                      onShowProfile: () =>
+                                          _showContactProfile(selectedContact),
+                                      onSend: _sendCurrentMessage,
+                                      onAttach: _openMediaPicker,
+                                      onDropFiles: _handleDroppedFiles,
+                                      onSmartPaste: () =>
+                                          unawaited(_handleSmartPaste()),
+                                    ),
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2341,6 +2457,7 @@ class _PasteMediaIntent extends Intent {
 /// the shared chat panels on tap.
 class _CourierHome extends StatefulWidget {
   const _CourierHome({
+    super.key,
     required this.controller,
     required this.palette,
     required this.selectedContactId,
@@ -2350,6 +2467,9 @@ class _CourierHome extends StatefulWidget {
     required this.onGroupSelected,
     required this.onLanLobbySelected,
     required this.onAddContact,
+    required this.onCreateGroup,
+    required this.onShowTransfers,
+    this.onShowDebug,
     required this.onShowSettings,
     required this.onShowInvite,
     required this.onShowBeam,
@@ -2364,6 +2484,9 @@ class _CourierHome extends StatefulWidget {
   final ValueChanged<GroupRecord> onGroupSelected;
   final VoidCallback onLanLobbySelected;
   final VoidCallback onAddContact;
+  final VoidCallback onCreateGroup;
+  final VoidCallback onShowTransfers;
+  final VoidCallback? onShowDebug;
   final Future<void> Function() onShowSettings;
   final Future<void> Function() onShowInvite;
   final Future<void> Function() onShowBeam;
@@ -2373,10 +2496,249 @@ class _CourierHome extends StatefulWidget {
 }
 
 class _CourierHomeState extends State<_CourierHome> {
+  bool _showArchived = false;
+  List<({String id, bool selected, VoidCallback open})> _navigation = const [];
+
+  void navigateChat(int direction) {
+    if (_navigation.isEmpty) return;
+    final current = _navigation.indexWhere((entry) => entry.selected);
+    final next = current < 0
+        ? (direction > 0 ? 0 : _navigation.length - 1)
+        : (current + direction).clamp(0, _navigation.length - 1);
+    _navigation[next].open();
+  }
+
+  void _refreshLocalConversations() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.localConversationRevision.addListener(
+      _refreshLocalConversations,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _CourierHome oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.localConversationRevision.removeListener(
+        _refreshLocalConversations,
+      );
+      widget.controller.localConversationRevision.addListener(
+        _refreshLocalConversations,
+      );
+    }
+  }
+
   final _search = TextEditingController();
+  final _searchFocus = FocusNode();
+  final _scaffold = GlobalKey<ScaffoldState>();
+
+  Future<void> _showRequests() => Navigator.of(context).push<void>(
+    MaterialPageRoute(
+      builder: (_) => _ContactRequestsScreen(
+        controller: widget.controller,
+        palette: widget.palette,
+      ),
+    ),
+  );
+
+  Future<void> _newChat() async {
+    final action = await Navigator.of(context).push<Object>(
+      MaterialPageRoute(
+        builder: (_) => _CourierNewChatScreen(
+          controller: widget.controller,
+          palette: widget.palette,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    switch (action) {
+      case ContactRecord contact:
+        widget.onContactSelected(contact);
+      case 'group':
+        widget.onCreateGroup();
+      case 'contact':
+        widget.onAddContact();
+      case 'beam':
+        unawaited(widget.onShowBeam());
+    }
+  }
+
+  Future<void> _chatActions(
+    ConversationKind kind,
+    String id, {
+    Offset? at,
+  }) async {
+    final prefs = widget.controller.conversationPreferences(kind, id);
+    final actions = <(String, IconData, String)>[
+      ('pin', Icons.push_pin_outlined, prefs.pinned ? 'Unpin' : 'Pin'),
+      (
+        'mute',
+        Icons.notifications_off_outlined,
+        prefs.muted ? 'Unmute' : 'Mute',
+      ),
+      (
+        'archive',
+        Icons.archive_outlined,
+        prefs.archived ? 'Unarchive' : 'Archive',
+      ),
+    ];
+    final String? selected;
+    if (at != null) {
+      selected = await showMenu<String>(
+        context: context,
+        position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
+        items: [
+          for (final action in actions)
+            PopupMenuItem(
+              value: action.$1,
+              child: Row(
+                children: [
+                  Icon(action.$2),
+                  const SizedBox(width: 12),
+                  Text(action.$3),
+                ],
+              ),
+            ),
+        ],
+      );
+    } else {
+      selected = await showModalBottomSheet<String>(
+        context: context,
+        showDragHandle: true,
+        builder: (context) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final action in actions)
+                ListTile(
+                  leading: Icon(action.$2),
+                  title: Text(action.$3),
+                  onTap: () => Navigator.pop(context, action.$1),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (selected == null || !mounted) return;
+    try {
+      await widget.controller.updateConversationPreferences(
+        kind,
+        id,
+        pinned: selected == 'pin' ? !prefs.pinned : null,
+        muted: selected == 'mute' ? !prefs.muted : null,
+        archived: selected == 'archive' ? !prefs.archived : null,
+      );
+      if (mounted) setState(() {});
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not save chat settings: $error')),
+        );
+      }
+    }
+  }
+
+  Widget _drawer() {
+    final me = widget.controller.identity;
+    Widget action(IconData icon, String title, VoidCallback callback) =>
+        ListTile(
+          leading: Icon(icon),
+          title: Text(title),
+          onTap: () {
+            _scaffold.currentState?.closeDrawer();
+            callback();
+          },
+        );
+    return Drawer(
+      backgroundColor: widget.palette.panel,
+      child: SafeArea(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SealAvatar(
+                    seed: me?.deviceId ?? 'me',
+                    label: me?.displayName ?? 'Conest',
+                    palette: widget.palette,
+                    size: 64,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    me?.displayName ?? 'Conest',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  if (me?.bio.isNotEmpty == true)
+                    Text(me!.bio, maxLines: 2, overflow: TextOverflow.ellipsis),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            action(Icons.group_add_outlined, 'New group', widget.onCreateGroup),
+            action(
+              Icons.contacts_outlined,
+              'Contacts',
+              () => unawaited(_newChat()),
+            ),
+            action(
+              Icons.forum_outlined,
+              'LAN lobby',
+              widget.onLanLobbySelected,
+            ),
+            action(
+              Icons.archive_outlined,
+              'Archived chats',
+              () => setState(() => _showArchived = true),
+            ),
+            action(
+              Icons.person_add_alt_1_outlined,
+              'Contact requests (${widget.controller.pendingContactRequests.length})',
+              () => unawaited(_showRequests()),
+            ),
+            action(Icons.swap_vert, 'Transfers', widget.onShowTransfers),
+            const Divider(),
+            action(
+              Icons.qr_code_2,
+              'My invite',
+              () => unawaited(widget.onShowInvite()),
+            ),
+            action(
+              Icons.center_focus_strong,
+              'Conest Beam',
+              () => unawaited(widget.onShowBeam()),
+            ),
+            action(
+              Icons.settings_outlined,
+              'Settings',
+              () => unawaited(widget.onShowSettings()),
+            ),
+            if (widget.onShowDebug != null)
+              action(
+                Icons.bug_report_outlined,
+                'Debug tools',
+                widget.onShowDebug!,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   void dispose() {
+    widget.controller.localConversationRevision.removeListener(
+      _refreshLocalConversations,
+    );
+    _searchFocus.dispose();
     _search.dispose();
     super.dispose();
   }
@@ -2402,6 +2764,10 @@ class _CourierHomeState extends State<_CourierHome> {
             int unread,
             bool selected,
             bool isGroup,
+            bool pinned,
+            bool archived,
+            bool muted,
+            String draft,
             int memberCount,
             ContactReachabilityState? reachability,
             VoidCallback onTap,
@@ -2409,6 +2775,10 @@ class _CourierHomeState extends State<_CourierHome> {
         >[];
     for (final contact in widget.controller.contacts) {
       final last = widget.controller.lastMessageFor(contact.deviceId);
+      final prefs = widget.controller.conversationPreferences(
+        ConversationKind.direct,
+        contact.deviceId,
+      );
       final match = query.isEmpty
           ? null
           : matchingMessage(widget.controller.messagesFor(contact.deviceId));
@@ -2419,6 +2789,10 @@ class _CourierHomeState extends State<_CourierHome> {
       }
       entries.add((
         seed: contact.deviceId,
+        pinned: prefs.pinned,
+        archived: prefs.archived,
+        muted: prefs.muted,
+        draft: prefs.draft,
         title: contact.alias,
         preview: match?.bodyPreview ?? last?.bodyPreview ?? 'No messages yet',
         at: last?.createdAt,
@@ -2432,6 +2806,10 @@ class _CourierHomeState extends State<_CourierHome> {
     }
     for (final group in widget.controller.visibleGroups) {
       final last = widget.controller.lastGroupMessageFor(group.groupId);
+      final prefs = widget.controller.conversationPreferences(
+        ConversationKind.group,
+        group.groupId,
+      );
       final match = query.isEmpty
           ? null
           : matchingMessage(widget.controller.messagesForGroup(group.groupId));
@@ -2442,6 +2820,10 @@ class _CourierHomeState extends State<_CourierHome> {
       }
       entries.add((
         seed: group.groupId,
+        pinned: prefs.pinned,
+        archived: prefs.archived,
+        muted: prefs.muted,
+        draft: prefs.draft,
         title: group.title,
         preview:
             match?.bodyPreview ??
@@ -2456,7 +2838,12 @@ class _CourierHomeState extends State<_CourierHome> {
         onTap: () => widget.onGroupSelected(group),
       ));
     }
+    final archivedCount = entries.where((entry) => entry.archived).length;
+    entries.removeWhere(
+      (entry) => query.isEmpty && entry.archived != _showArchived,
+    );
     entries.sort((a, b) {
+      if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
       final at = a.at;
       final bt = b.at;
       if (at == null && bt == null) return a.title.compareTo(b.title);
@@ -2465,120 +2852,303 @@ class _CourierHomeState extends State<_CourierHome> {
       return bt.compareTo(at);
     });
 
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 12, 8),
-          child: Row(
-            children: [
-              Text(
-                'Conest',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const Spacer(),
-              IconButton(
-                tooltip: 'Conest Beam',
-                onPressed: () => unawaited(widget.onShowBeam()),
-                icon: const Icon(Icons.center_focus_strong),
-              ),
-              IconButton(
-                tooltip: 'My invite',
-                onPressed: () => unawaited(widget.onShowInvite()),
-                icon: const Icon(Icons.qr_code_2),
-              ),
-              IconButton(
-                tooltip: 'Settings',
-                onPressed: () => unawaited(widget.onShowSettings()),
-                icon: const Icon(Icons.settings_outlined),
-              ),
-            ],
-          ),
+    _navigation = [
+      if (!_showArchived && 'lan lobby'.contains(query))
+        (
+          id: 'lobby',
+          selected: widget.lanLobbySelected,
+          open: widget.onLanLobbySelected,
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: TextField(
-            key: const ValueKey('courier-search'),
-            controller: _search,
-            onChanged: (_) => setState(() {}),
-            decoration: InputDecoration(
-              hintText: 'Search chats and messages',
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: query.isEmpty
-                  ? null
-                  : IconButton(
-                      tooltip: 'Clear search',
-                      icon: const Icon(Icons.close),
-                      onPressed: () => setState(_search.clear),
+      for (final entry in entries)
+        (id: entry.seed, selected: entry.selected, open: entry.onTap),
+    ];
+
+    return Scaffold(
+      key: _scaffold,
+      backgroundColor: widget.palette.panel,
+      drawer: _drawer(),
+      floatingActionButton: FloatingActionButton(
+        heroTag: 'courier-new-chat',
+        tooltip: 'New message',
+        onPressed: _newChat,
+        backgroundColor: widget.palette.primary,
+        foregroundColor: widget.palette.onPrimary,
+        child: const Icon(Icons.edit_outlined),
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 8),
+            child: Row(
+              children: [
+                IconButton(
+                  tooltip: _showArchived ? 'Back to chats' : 'Navigation menu',
+                  onPressed: () {
+                    if (_showArchived) {
+                      setState(() => _showArchived = false);
+                    } else {
+                      _scaffold.currentState?.openDrawer();
+                    }
+                  },
+                  icon: Icon(_showArchived ? Icons.arrow_back : Icons.menu),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  _showArchived ? 'Archived chats' : 'Conest',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                const Spacer(),
+                IconButton(
+                  tooltip: 'Search',
+                  onPressed: _searchFocus.requestFocus,
+                  icon: const Icon(Icons.search),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: TextField(
+              key: const ValueKey('courier-search'),
+              controller: _search,
+              focusNode: _searchFocus,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                hintText: 'Search chats and messages',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: query.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: 'Clear search',
+                        icon: const Icon(Icons.close),
+                        onPressed: () => setState(_search.clear),
+                      ),
+                filled: true,
+                fillColor: widget.palette.panel2,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide.none,
+                ),
+                isDense: true,
+              ),
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.only(bottom: 88),
+              children: [
+                if (!_showArchived &&
+                    query.isEmpty &&
+                    widget.controller.pendingContactRequests.isNotEmpty)
+                  ListTile(
+                    leading: Icon(
+                      Icons.person_add_alt_1_outlined,
+                      color: widget.palette.primary,
                     ),
-              filled: true,
-              fillColor: widget.palette.panel2,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(24),
-                borderSide: BorderSide.none,
-              ),
-              isDense: true,
+                    title: const Text('Contact requests'),
+                    subtitle: const Text('Review people who want to connect'),
+                    trailing: Badge(
+                      label: Text(
+                        '${widget.controller.pendingContactRequests.length}',
+                      ),
+                    ),
+                    onTap: _showRequests,
+                  ),
+                if (!_showArchived && query.isEmpty && archivedCount > 0)
+                  ListTile(
+                    leading: const Icon(Icons.archive_outlined),
+                    title: const Text('Archived chats'),
+                    trailing: Text('$archivedCount'),
+                    onTap: () => setState(() => _showArchived = true),
+                  ),
+                if (!_showArchived && 'lan lobby'.contains(query))
+                  _CourierRow(
+                    palette: widget.palette,
+                    icon: Icons.forum_outlined,
+                    title: 'LAN lobby',
+                    preview: 'Free-for-all local chat · untrusted',
+                    unread: widget.controller.unreadLanLobbyCount,
+                    selected: widget.lanLobbySelected,
+                    onTap: widget.onLanLobbySelected,
+                  ),
+                if (entries.isEmpty &&
+                    (query.isEmpty || !'lan lobby'.contains(query)))
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: query.isNotEmpty
+                        ? const Text('No chats found')
+                        : _showArchived
+                        ? const Text('No archived chats')
+                        : _EmptyContactsState(palette: widget.palette),
+                  ),
+                for (final entry in entries)
+                  _CourierRow(
+                    palette: widget.palette,
+                    seed: entry.seed,
+                    title: entry.title,
+                    preview: query.isEmpty && entry.draft.isNotEmpty
+                        ? 'Draft: ${entry.draft}'
+                        : entry.preview,
+                    pinned: entry.pinned,
+                    muted: entry.muted,
+                    onLongPress: () => unawaited(
+                      _chatActions(
+                        entry.isGroup
+                            ? ConversationKind.group
+                            : ConversationKind.direct,
+                        entry.seed,
+                      ),
+                    ),
+                    onSecondaryTapDown: (event) => unawaited(
+                      _chatActions(
+                        entry.isGroup
+                            ? ConversationKind.group
+                            : ConversationKind.direct,
+                        entry.seed,
+                        at: event.globalPosition,
+                      ),
+                    ),
+                    at: entry.at,
+                    unread: entry.unread,
+                    selected: entry.selected,
+                    isGroup: entry.isGroup,
+                    memberCount: entry.memberCount,
+                    reachability: entry.reachability,
+                    onTap: entry.onTap,
+                  ),
+              ],
             ),
           ),
-        ),
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.only(bottom: 12),
-            children: [
-              if ('lan lobby'.contains(query))
-                _CourierRow(
-                  palette: widget.palette,
-                  icon: Icons.forum_outlined,
-                  title: 'LAN lobby',
-                  preview: 'Free-for-all local chat · untrusted',
-                  unread: widget.controller.unreadLanLobbyCount,
-                  selected: widget.lanLobbySelected,
-                  onTap: widget.onLanLobbySelected,
-                ),
-              if (entries.isEmpty &&
-                  (query.isEmpty || !'lan lobby'.contains(query)))
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: query.isNotEmpty
-                      ? const Text('No chats found')
-                      : _EmptyContactsState(palette: widget.palette),
-                ),
-              for (final entry in entries)
-                _CourierRow(
-                  palette: widget.palette,
-                  seed: entry.seed,
-                  title: entry.title,
-                  preview: entry.preview,
-                  at: entry.at,
-                  unread: entry.unread,
-                  selected: entry.selected,
-                  isGroup: entry.isGroup,
-                  memberCount: entry.memberCount,
-                  reachability: entry.reachability,
-                  onTap: entry.onTap,
-                ),
-            ],
-          ),
-        ),
-        SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: FloatingActionButton.extended(
-                heroTag: 'courier-add',
-                onPressed: widget.onAddContact,
-                backgroundColor: widget.palette.primary,
-                foregroundColor: widget.palette.onPrimary,
-                icon: const Icon(Icons.person_add_alt_1),
-                label: const Text('Add'),
+        ],
+      ),
+    );
+  }
+}
+
+/// Contact picker shared by the drawer and the floating compose action.
+class _CourierNewChatScreen extends StatefulWidget {
+  const _CourierNewChatScreen({
+    required this.controller,
+    required this.palette,
+  });
+  final MessengerController controller;
+  final ConestPalette palette;
+
+  @override
+  State<_CourierNewChatScreen> createState() => _CourierNewChatScreenState();
+}
+
+class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
+  final _search = TextEditingController();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: widget.palette.panel,
+      appBar: AppBar(
+        title: const Text('New message'),
+        backgroundColor: widget.palette.panel,
+      ),
+      body: ListenableBuilder(
+        listenable: widget.controller,
+        builder: (context, _) {
+          final query = _search.text.trim().toLowerCase();
+          final contacts =
+              widget.controller.contacts
+                  .where(
+                    (contact) => contact.alias.toLowerCase().contains(query),
+                  )
+                  .toList()
+                ..sort(
+                  (a, b) =>
+                      a.alias.toLowerCase().compareTo(b.alias.toLowerCase()),
+                );
+          return Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 640),
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: TextField(
+                      controller: _search,
+                      onChanged: (_) => setState(() {}),
+                      decoration: InputDecoration(
+                        hintText: 'Search contacts',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: query.isEmpty
+                            ? null
+                            : IconButton(
+                                tooltip: 'Clear search',
+                                icon: const Icon(Icons.close),
+                                onPressed: () => setState(_search.clear),
+                              ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView(
+                      children: [
+                        if (query.isEmpty) ...[
+                          ListTile(
+                            leading: const Icon(Icons.group_add_outlined),
+                            title: const Text('New group'),
+                            onTap: () => Navigator.pop(context, 'group'),
+                          ),
+                          ListTile(
+                            leading: const Icon(Icons.person_add_alt_1),
+                            title: const Text('Add contact'),
+                            onTap: () => Navigator.pop(context, 'contact'),
+                          ),
+                          ListTile(
+                            leading: const Icon(Icons.center_focus_strong),
+                            title: const Text('Add with Conest Beam'),
+                            onTap: () => Navigator.pop(context, 'beam'),
+                          ),
+                          const Divider(),
+                        ],
+                        if (contacts.isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Text(
+                              query.isEmpty
+                                  ? 'Add a contact to start a conversation'
+                                  : 'No contacts found',
+                            ),
+                          ),
+                        for (final contact in contacts)
+                          ListTile(
+                            leading: SealAvatar(
+                              seed: contact.deviceId,
+                              label: contact.alias,
+                              palette: widget.palette,
+                              size: 48,
+                            ),
+                            title: Text(contact.alias),
+                            subtitle: Text(
+                              widget.controller
+                                  .reachabilityStateFor(contact.deviceId)
+                                  .label,
+                            ),
+                            onTap: () => Navigator.pop(context, contact),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
-        ),
-      ],
+          );
+        },
+      ),
     );
   }
 }
@@ -2598,8 +3168,16 @@ class _CourierRow extends StatelessWidget {
     this.isGroup = false,
     this.memberCount = 0,
     this.reachability,
+    this.pinned = false,
+    this.muted = false,
+    this.onLongPress,
+    this.onSecondaryTapDown,
   });
 
+  final bool pinned;
+  final bool muted;
+  final VoidCallback? onLongPress;
+  final GestureTapDownCallback? onSecondaryTapDown;
   final ConestPalette palette;
   final String title;
   final String preview;
@@ -2617,6 +3195,8 @@ class _CourierRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
+      onLongPress: onLongPress,
+      onSecondaryTapDown: onSecondaryTapDown,
       child: Container(
         color: selected ? palette.selection : Colors.transparent,
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -2689,6 +3269,24 @@ class _CourierRow extends StatelessWidget {
                               ?.copyWith(fontWeight: FontWeight.w700),
                         ),
                       ),
+                      if (muted)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: Icon(
+                            Icons.notifications_off,
+                            size: 14,
+                            color: palette.inkSoft,
+                          ),
+                        ),
+                      if (pinned)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: Icon(
+                            Icons.push_pin,
+                            size: 14,
+                            color: palette.inkSoft,
+                          ),
+                        ),
                       if (at != null)
                         Text(
                           formatTimestamp(at!),
@@ -3919,10 +4517,12 @@ class _Sidebar extends StatelessWidget {
 class CreateGroupDialog extends StatefulWidget {
   const CreateGroupDialog({
     super.key,
+    this.fullscreenOnMobile = false,
     required this.controller,
     required this.palette,
   });
 
+  final bool fullscreenOnMobile;
   final MessengerController controller;
   final ConestPalette palette;
 
@@ -3982,7 +4582,8 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
         _titleController.text.trim().isNotEmpty &&
         _selectedDeviceIds.isNotEmpty &&
         !_creating;
-    return AlertDialog(
+    return AdaptiveChatDialog(
+      fullscreenOnMobile: widget.fullscreenOnMobile,
       title: const Text('Create group'),
       content: SizedBox(
         width: 420,
@@ -4077,11 +4678,13 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
 class GroupDetailsDialog extends StatefulWidget {
   const GroupDetailsDialog({
     super.key,
+    this.fullscreenOnMobile = false,
     required this.controller,
     required this.palette,
     required this.group,
   });
 
+  final bool fullscreenOnMobile;
   final MessengerController controller;
   final ConestPalette palette;
   final GroupRecord group;
@@ -4487,7 +5090,8 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
             ),
           ),
     ];
-    return AlertDialog(
+    return AdaptiveChatDialog(
+      fullscreenOnMobile: widget.fullscreenOnMobile,
       title: Text(group.title),
       content: SizedBox(
         width: 460,
@@ -4614,9 +5218,226 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
   }
 }
 
+Future<void> _forwardTextMessage(
+  BuildContext context,
+  MessengerController controller,
+  ConestPalette palette,
+  ChatMessage message,
+) async {
+  if (message.hasAttachment || message.body.trim().isEmpty) return;
+  final search = TextEditingController();
+  Object? destination;
+  try {
+    destination = await showDialog<Object>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final query = search.text.trim().toLowerCase();
+          final contacts = controller.contacts.where(
+            (contact) =>
+                contact.canSendOutbound &&
+                contact.alias.toLowerCase().contains(query),
+          );
+          final groups = controller.visibleGroups.where(
+            (group) =>
+                group.hasActiveMember(controller.identity?.deviceId ?? '') &&
+                group.title.toLowerCase().contains(query),
+          );
+          return AlertDialog(
+            title: const Text('Forward message'),
+            content: SizedBox(
+              width: 420,
+              height: 400,
+              child: Column(
+                children: [
+                  Text(
+                    message.body,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: search,
+                    autofocus: true,
+                    onChanged: (_) => setDialogState(() {}),
+                    decoration: const InputDecoration(
+                      hintText: 'Search chats',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView(
+                      children: [
+                        if (contacts.isEmpty && groups.isEmpty)
+                          const ListTile(title: Text('No available chats')),
+                        for (final contact in contacts)
+                          ListTile(
+                            leading: SealAvatar(
+                              seed: contact.deviceId,
+                              label: contact.alias,
+                              palette: palette,
+                              size: 36,
+                            ),
+                            title: Text(contact.alias),
+                            onTap: () => Navigator.pop(context, contact),
+                          ),
+                        for (final group in groups)
+                          ListTile(
+                            leading: const Icon(Icons.group_outlined),
+                            title: Text(group.title),
+                            onTap: () => Navigator.pop(context, group),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  } finally {
+    search.dispose();
+  }
+  if (destination == null) return;
+  try {
+    switch (destination) {
+      case ContactRecord contact:
+        await controller.sendMessage(contact: contact, body: message.body);
+      case GroupRecord group:
+        await controller.sendGroupMessage(
+          groupId: group.groupId,
+          body: message.body,
+        );
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Forwarded message queued')));
+    }
+  } catch (error) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not forward: $error')));
+    }
+  }
+}
+
+class _TelegramChatHeader extends StatelessWidget {
+  const _TelegramChatHeader({
+    required this.palette,
+    required this.title,
+    required this.subtitle,
+    required this.seed,
+    required this.onDetails,
+    required this.onSearch,
+    this.onBack,
+    this.onConnectionDetails,
+  });
+  final ConestPalette palette;
+  final String title;
+  final String subtitle;
+  final String seed;
+  final VoidCallback onDetails;
+  final VoidCallback onSearch;
+  final VoidCallback? onBack;
+  final VoidCallback? onConnectionDetails;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: palette.panel,
+    child: SizedBox(
+      height: 64,
+      child: Row(
+        children: [
+          if (onBack != null)
+            IconButton(
+              tooltip: 'Back',
+              onPressed: onBack,
+              icon: const Icon(Icons.arrow_back),
+            ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: InkWell(
+              onTap: onDetails,
+              child: Row(
+                children: [
+                  ClipOval(
+                    child: SealAvatar(
+                      seed: seed,
+                      label: title,
+                      palette: palette,
+                      size: 42,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                        Text(
+                          subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: palette.inkSoft),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Search messages',
+            onPressed: onSearch,
+            icon: const Icon(Icons.search),
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'Chat options',
+            icon: const Icon(Icons.more_vert),
+            onSelected: (action) =>
+                action == 'details' ? onDetails() : onConnectionDetails?.call(),
+            itemBuilder: (_) => [
+              const PopupMenuItem(
+                value: 'details',
+                child: Text('Chat details'),
+              ),
+              if (onConnectionDetails != null)
+                const PopupMenuItem(
+                  value: 'connection',
+                  child: Text('Connection details'),
+                ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class _GroupChatPanel extends StatefulWidget {
   const _GroupChatPanel({
     super.key,
+    this.telegramLayout = false,
     required this.controller,
     required this.palette,
     required this.group,
@@ -4631,6 +5452,7 @@ class _GroupChatPanel extends StatefulWidget {
     this.onSmartPaste,
   });
 
+  final bool telegramLayout;
   final MessengerController controller;
   final ConestPalette palette;
   final GroupRecord group;
@@ -4698,6 +5520,55 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   MessengerController get controller => widget.controller;
   ConestPalette get palette => widget.palette;
   GroupRecord get group => widget.group;
+
+  int _searchGeneration = 0;
+
+  Future<void> _searchMessages() async {
+    final generation = ++_searchGeneration;
+    final conversationId = group.groupId;
+    final selected = await showModalBottomSheet<ChatMessage>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => ChatMessageSearch(
+        messages: () => controller.messagesForGroup(group.groupId),
+        changes: controller,
+        loadOlder: _historyExhausted ? null : _loadOlderHistory,
+      ),
+    );
+    if (selected == null || !mounted || group.groupId != conversationId) return;
+    final messages = controller.messagesForGroup(group.groupId);
+    // Album continuations are represented by their first bubble in the list.
+    var target = selected.id;
+    final index = messages.indexWhere((message) => message.id == target);
+    if (index >= 0 && _isAlbumContinuation(messages, index)) {
+      var anchor = index;
+      while (anchor > 0 && _isAlbumContinuation(messages, anchor)) {
+        anchor--;
+      }
+      target = messages[anchor].id;
+    }
+    final found = await revealChatMessage(
+      scroll: _scrollController,
+      keys: _messageKeys,
+      messages: messages,
+      messageId: target,
+      isCurrent: () =>
+          mounted &&
+          _searchGeneration == generation &&
+          group.groupId == conversationId,
+    );
+    if (!mounted || _searchGeneration != generation) return;
+    if (found) {
+      _flashMessage(target);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not locate this message in the current chat'),
+        ),
+      );
+    }
+  }
 
   void _flashMessage(String messageId) {
     _flashTimer?.cancel();
@@ -4987,8 +5858,10 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
           duration: _replyFlashDuration,
           curve: Curves.easeOut,
           constraints: const BoxConstraints(maxWidth: 560),
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.all(14),
+          margin: EdgeInsets.only(bottom: widget.telegramLayout ? 6 : 12),
+          padding: widget.telegramLayout
+              ? const EdgeInsets.fromLTRB(12, 8, 8, 4)
+              : const EdgeInsets.all(14),
           decoration: BoxDecoration(
             color: (outbound && !selected && !flashing)
                 ? null
@@ -5072,7 +5945,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    formatTimestamp(message.createdAt),
+                    widget.telegramLayout
+                        ? chatMessageTime(context, message.createdAt)
+                        : formatTimestamp(message.createdAt),
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
                       fontFamily: ConestPalette.monoFont,
                       color: outbound
@@ -5114,13 +5989,29 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     onSelected: (value) async {
                       if (value == 'copy') {
                         await _copyMessage(message);
+                      } else if (value == 'forward') {
+                        await _forwardTextMessage(
+                          context,
+                          controller,
+                          palette,
+                          message,
+                        );
                       } else if (value == 'reply') {
                         widget.onReplyToMessage(message);
                       }
                     },
-                    itemBuilder: (context) => const [
-                      PopupMenuItem(value: 'reply', child: Text('Reply')),
-                      PopupMenuItem(value: 'copy', child: Text('Copy message')),
+                    itemBuilder: (context) => [
+                      const PopupMenuItem(value: 'reply', child: Text('Reply')),
+                      const PopupMenuItem(
+                        value: 'copy',
+                        child: Text('Copy message'),
+                      ),
+                      if (!message.hasAttachment &&
+                          message.body.trim().isNotEmpty)
+                        const PopupMenuItem(
+                          value: 'forward',
+                          child: Text('Forward'),
+                        ),
                     ],
                   ),
                 ],
@@ -5146,59 +6037,75 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
         ? widget.replyTarget
         : null;
     final body = Padding(
-      padding: const EdgeInsets.all(18),
+      padding: widget.telegramLayout
+          ? EdgeInsets.zero
+          : const EdgeInsets.all(18),
       child: Card(
+        margin: widget.telegramLayout ? EdgeInsets.zero : null,
         elevation: 0,
         color: palette.paperStrong,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(28),
-          side: BorderSide(color: palette.stroke),
+          borderRadius: BorderRadius.circular(widget.telegramLayout ? 0 : 28),
+          side: widget.telegramLayout
+              ? BorderSide.none
+              : BorderSide(color: palette.stroke),
         ),
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
-              child: Row(
-                children: [
-                  if (widget.onBack != null)
+            if (widget.telegramLayout)
+              _TelegramChatHeader(
+                onSearch: _searchMessages,
+                palette: palette,
+                title: group.title,
+                subtitle: '${group.activeMemberDeviceIds.length} members',
+                seed: group.groupId,
+                onBack: widget.onBack,
+                onDetails: widget.onShowDetails,
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
+                child: Row(
+                  children: [
+                    if (widget.onBack != null)
+                      IconButton(
+                        onPressed: widget.onBack,
+                        icon: const Icon(Icons.arrow_back),
+                      ),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            group.title,
+                            style: Theme.of(context).textTheme.headlineSmall
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${group.activeMemberDeviceIds.length} member(s) • owner ${controller.groupMemberLabel(group.ownerDeviceId)}',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: palette.inkSoft),
+                          ),
+                        ],
+                      ),
+                    ),
+                    _StatusChip(
+                      label: 'pairwise',
+                      palette: palette,
+                      icon: Icons.lock_outline,
+                    ),
+                    const SizedBox(width: 8),
                     IconButton(
-                      onPressed: widget.onBack,
-                      icon: const Icon(Icons.arrow_back),
+                      onPressed: widget.onShowDetails,
+                      icon: const Icon(Icons.groups_2_outlined),
+                      tooltip: 'Group details',
                     ),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          group.title,
-                          style: Theme.of(context).textTheme.headlineSmall
-                              ?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${group.activeMemberDeviceIds.length} member(s) • owner ${controller.groupMemberLabel(group.ownerDeviceId)}',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: palette.inkSoft),
-                        ),
-                      ],
-                    ),
-                  ),
-                  _StatusChip(
-                    label: 'pairwise',
-                    palette: palette,
-                    icon: Icons.lock_outline,
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    onPressed: widget.onShowDetails,
-                    icon: const Icon(Icons.groups_2_outlined),
-                    tooltip: 'Group details',
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
             const Divider(height: 1),
             if (_selectionMode)
               _MessageSelectionBar(
@@ -5251,12 +6158,41 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       if (_isAlbumContinuation(messages, chronoIndex)) {
                         return const SizedBox.shrink();
                       }
-                      final bubble = _isAlbumAnchor(messages, chronoIndex)
+                      final messageBubble =
+                          _isAlbumAnchor(messages, chronoIndex)
                           ? _buildAlbumBubble(
                               context,
                               _collectAlbumFrom(messages, chronoIndex),
                             )
                           : _buildMessageBubble(context, message);
+                      final replyBubble = widget.telegramLayout
+                          ? SwipeToReply(
+                              key: ValueKey('reply-swipe-${message.id}'),
+                              enabled: !_selectionMode,
+                              color: palette.primary,
+                              onReply: () => widget.onReplyToMessage(message),
+                              child: messageBubble,
+                            )
+                          : messageBubble;
+                      final startsDay =
+                          chronoIndex == 0 ||
+                          !sameChatDay(
+                            messages[chronoIndex - 1].createdAt,
+                            message.createdAt,
+                          );
+                      final bubble = widget.telegramLayout && startsDay
+                          ? Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                ChatDaySeparator(
+                                  timestamp: message.createdAt,
+                                  background: palette.panel2,
+                                  foreground: palette.inkSoft,
+                                ),
+                                replyBubble,
+                              ],
+                            )
+                          : replyBubble;
                       final showDivider =
                           anchor != null && message.id == anchor;
                       if (!showDivider) {
@@ -5374,8 +6310,17 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
         ),
       ),
     );
+    Widget searchable(Widget child) => CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+            _searchMessages,
+        const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
+            _searchMessages,
+      },
+      child: child,
+    );
     if (!_isDesktopPlatform) {
-      return body;
+      return searchable(body);
     }
     return DropTarget(
       onDragEntered: (_) => setState(() => _droppingFiles = true),
@@ -5387,7 +6332,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       child: Stack(
         fit: StackFit.passthrough,
         children: [
-          body,
+          searchable(body),
           if (_droppingFiles)
             Positioned.fill(
               child: IgnorePointer(
@@ -5418,6 +6363,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
 class _ChatPanel extends StatefulWidget {
   const _ChatPanel({
     super.key,
+    this.telegramLayout = false,
     required this.controller,
     required this.palette,
     required this.contact,
@@ -5433,6 +6379,7 @@ class _ChatPanel extends StatefulWidget {
     this.onSmartPaste,
   });
 
+  final bool telegramLayout;
   final MessengerController controller;
   final ConestPalette palette;
   final ContactRecord contact;
@@ -5521,6 +6468,56 @@ class _ChatPanelState extends State<_ChatPanel> {
         available: relayUp,
       ),
     ];
+  }
+
+  int _searchGeneration = 0;
+
+  Future<void> _searchMessages() async {
+    final generation = ++_searchGeneration;
+    final conversationId = contact.deviceId;
+    final selected = await showModalBottomSheet<ChatMessage>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => ChatMessageSearch(
+        messages: () => controller.messagesFor(contact.deviceId),
+        changes: controller,
+      ),
+    );
+    if (selected == null || !mounted || contact.deviceId != conversationId) {
+      return;
+    }
+    final messages = controller.messagesFor(contact.deviceId);
+    // Album continuations are represented by their first bubble in the list.
+    var target = selected.id;
+    final index = messages.indexWhere((message) => message.id == target);
+    if (index >= 0 && _isAlbumContinuation(messages, index)) {
+      var anchor = index;
+      while (anchor > 0 && _isAlbumContinuation(messages, anchor)) {
+        anchor--;
+      }
+      target = messages[anchor].id;
+    }
+    final found = await revealChatMessage(
+      scroll: _scrollController,
+      keys: _messageKeys,
+      messages: messages,
+      messageId: target,
+      isCurrent: () =>
+          mounted &&
+          _searchGeneration == generation &&
+          contact.deviceId == conversationId,
+    );
+    if (!mounted || _searchGeneration != generation) return;
+    if (found) {
+      _flashMessage(target);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not locate this message in the current chat'),
+        ),
+      );
+    }
   }
 
   void _flashMessage(String messageId) {
@@ -5888,8 +6885,10 @@ class _ChatPanelState extends State<_ChatPanel> {
           duration: _replyFlashDuration,
           curve: Curves.easeOut,
           constraints: const BoxConstraints(maxWidth: 520),
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.all(14),
+          margin: EdgeInsets.only(bottom: widget.telegramLayout ? 6 : 12),
+          padding: widget.telegramLayout
+              ? const EdgeInsets.fromLTRB(12, 8, 8, 4)
+              : const EdgeInsets.all(14),
           decoration: BoxDecoration(
             color: useSelfGradient
                 ? null
@@ -5964,7 +6963,9 @@ class _ChatPanelState extends State<_ChatPanel> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    formatTimestamp(message.createdAt),
+                    widget.telegramLayout
+                        ? chatMessageTime(context, message.createdAt)
+                        : formatTimestamp(message.createdAt),
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
                       fontFamily: ConestPalette.monoFont,
                       color: outbound
@@ -5994,7 +6995,9 @@ class _ChatPanelState extends State<_ChatPanel> {
                       ),
                     ),
                   ],
-                  if (outbound && message.transportKind != null) ...[
+                  if (!widget.telegramLayout &&
+                      outbound &&
+                      message.transportKind != null) ...[
                     const SizedBox(width: 8),
                     _MessageRouteChip(message: message),
                   ],
@@ -6022,6 +7025,41 @@ class _ChatPanelState extends State<_ChatPanel> {
                       try {
                         if (value == 'copy') {
                           await _copyMessage(message);
+                        } else if (value == 'details') {
+                          await showDialog<void>(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('Message details'),
+                              content: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(formatTimestamp(message.createdAt)),
+                                  const SizedBox(height: 8),
+                                  Text(message.state.label),
+                                  if (message.transportKind != null) ...[
+                                    const SizedBox(height: 12),
+                                    _MessageRouteChip(message: message),
+                                  ],
+                                ],
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  child: const Text('Close'),
+                                ),
+                              ],
+                            ),
+                          );
+                        } else if (value == 'forward') {
+                          await _forwardTextMessage(
+                            context,
+                            controller,
+                            palette,
+                            message,
+                          );
+                        } else if (value == 'reply') {
+                          widget.onReplyToMessage(message);
                         } else if (value == 'edit') {
                           await _editMessage(context, message);
                         } else if (value == 'cancel') {
@@ -6037,6 +7075,17 @@ class _ChatPanelState extends State<_ChatPanel> {
                       }
                     },
                     itemBuilder: (context) => [
+                      const PopupMenuItem(
+                        value: 'details',
+                        child: Text('Message details'),
+                      ),
+                      const PopupMenuItem(value: 'reply', child: Text('Reply')),
+                      if (!message.hasAttachment &&
+                          message.body.trim().isNotEmpty)
+                        const PopupMenuItem(
+                          value: 'forward',
+                          child: Text('Forward'),
+                        ),
                       const PopupMenuItem(
                         value: 'copy',
                         child: Text('Copy message'),
@@ -6087,101 +7136,101 @@ class _ChatPanelState extends State<_ChatPanel> {
         ? widget.replyTarget
         : null;
     final body = Padding(
-      padding: const EdgeInsets.all(18),
+      padding: widget.telegramLayout
+          ? EdgeInsets.zero
+          : const EdgeInsets.all(18),
       child: Card(
+        margin: widget.telegramLayout ? EdgeInsets.zero : null,
         elevation: 0,
         color: palette.paperStrong,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(28),
-          side: BorderSide(color: palette.stroke),
+          borderRadius: BorderRadius.circular(widget.telegramLayout ? 0 : 28),
+          side: widget.telegramLayout
+              ? BorderSide.none
+              : BorderSide(color: palette.stroke),
         ),
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final compactHeader = constraints.maxWidth < 560;
-                  final title = Row(
-                    children: [
-                      SealAvatar(
-                        seed: contact.deviceId,
-                        palette: palette,
-                        size: 38,
-                        animate: true,
-                        label: contact.alias,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              contact.alias,
-                              style: Theme.of(context).textTheme.headlineSmall
-                                  ?.copyWith(fontWeight: FontWeight.w700),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              '${contact.routeSummary} • safety ${contact.shortSafetyNumber}',
-                              maxLines: compactHeader ? 3 : 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(
-                                    fontFamily: ConestPalette.monoFont,
-                                    color: palette.inkSoft,
-                                  ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  );
-                  final controls = <Widget>[
-                    _ReachabilityChip(
-                      state: reachabilityState,
-                      palette: palette,
-                    ),
-                    _ConnectivityChip(
-                      contact: contact,
-                      controller: controller,
-                      palette: palette,
-                    ),
-                    IconButton(
-                      onPressed: () => setState(
-                        () => _routeInspectorOpen = !_routeInspectorOpen,
-                      ),
-                      icon: const Icon(Icons.route_outlined),
-                      tooltip: 'Route inspector',
-                      isSelected: _routeInspectorOpen,
-                      color: _routeInspectorOpen ? palette.primary : null,
-                    ),
-                    IconButton(
-                      onPressed: widget.onShowProfile,
-                      icon: const Icon(Icons.badge_outlined),
-                      tooltip: 'Contact profile',
-                    ),
-                  ];
-                  if (!compactHeader) {
-                    return Row(
+            if (widget.telegramLayout)
+              _TelegramChatHeader(
+                onSearch: _searchMessages,
+                palette: palette,
+                title: contact.alias,
+                subtitle: reachabilityState.label,
+                seed: contact.deviceId,
+                onBack: widget.onBack,
+                onDetails: widget.onShowProfile,
+                onConnectionDetails: () =>
+                    setState(() => _routeInspectorOpen = !_routeInspectorOpen),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final compactHeader = constraints.maxWidth < 560;
+                    final title = Row(
                       children: [
-                        if (widget.onBack != null)
-                          IconButton(
-                            onPressed: widget.onBack,
-                            icon: const Icon(Icons.arrow_back),
-                          ),
-                        Expanded(child: title),
-                        const SizedBox(width: 12),
-                        ...controls.expand(
-                          (control) => [control, const SizedBox(width: 8)],
+                        SealAvatar(
+                          seed: contact.deviceId,
+                          palette: palette,
+                          size: 38,
+                          animate: true,
+                          label: contact.alias,
                         ),
-                      ]..removeLast(),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                contact.alias,
+                                style: Theme.of(context).textTheme.headlineSmall
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '${contact.routeSummary} • safety ${contact.shortSafetyNumber}',
+                                maxLines: compactHeader ? 3 : 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
+                                      fontFamily: ConestPalette.monoFont,
+                                      color: palette.inkSoft,
+                                    ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     );
-                  }
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                    final controls = <Widget>[
+                      _ReachabilityChip(
+                        state: reachabilityState,
+                        palette: palette,
+                      ),
+                      _ConnectivityChip(
+                        contact: contact,
+                        controller: controller,
+                        palette: palette,
+                      ),
+                      IconButton(
+                        onPressed: () => setState(
+                          () => _routeInspectorOpen = !_routeInspectorOpen,
+                        ),
+                        icon: const Icon(Icons.route_outlined),
+                        tooltip: 'Route inspector',
+                        isSelected: _routeInspectorOpen,
+                        color: _routeInspectorOpen ? palette.primary : null,
+                      ),
+                      IconButton(
+                        onPressed: widget.onShowProfile,
+                        icon: const Icon(Icons.badge_outlined),
+                        tooltip: 'Contact profile',
+                      ),
+                    ];
+                    if (!compactHeader) {
+                      return Row(
                         children: [
                           if (widget.onBack != null)
                             IconButton(
@@ -6189,20 +7238,38 @@ class _ChatPanelState extends State<_ChatPanel> {
                               icon: const Icon(Icons.arrow_back),
                             ),
                           Expanded(child: title),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: controls,
-                      ),
-                    ],
-                  );
-                },
+                          const SizedBox(width: 12),
+                          ...controls.expand(
+                            (control) => [control, const SizedBox(width: 8)],
+                          ),
+                        ]..removeLast(),
+                      );
+                    }
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            if (widget.onBack != null)
+                              IconButton(
+                                onPressed: widget.onBack,
+                                icon: const Icon(Icons.arrow_back),
+                              ),
+                            Expanded(child: title),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: controls,
+                        ),
+                      ],
+                    );
+                  },
+                ),
               ),
-            ),
             const Divider(height: 1),
             if (_routeInspectorOpen)
               Padding(
@@ -6257,12 +7324,41 @@ class _ChatPanelState extends State<_ChatPanel> {
                       if (_isAlbumContinuation(messages, chronoIndex)) {
                         return const SizedBox.shrink();
                       }
-                      final bubble = _isAlbumAnchor(messages, chronoIndex)
+                      final messageBubble =
+                          _isAlbumAnchor(messages, chronoIndex)
                           ? _buildAlbumBubble(
                               context,
                               _collectAlbumFrom(messages, chronoIndex),
                             )
                           : _buildMessageBubble(context, message);
+                      final replyBubble = widget.telegramLayout
+                          ? SwipeToReply(
+                              key: ValueKey('reply-swipe-${message.id}'),
+                              enabled: !_selectionMode,
+                              color: palette.primary,
+                              onReply: () => widget.onReplyToMessage(message),
+                              child: messageBubble,
+                            )
+                          : messageBubble;
+                      final startsDay =
+                          chronoIndex == 0 ||
+                          !sameChatDay(
+                            messages[chronoIndex - 1].createdAt,
+                            message.createdAt,
+                          );
+                      final bubble = widget.telegramLayout && startsDay
+                          ? Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                ChatDaySeparator(
+                                  timestamp: message.createdAt,
+                                  background: palette.panel2,
+                                  foreground: palette.inkSoft,
+                                ),
+                                replyBubble,
+                              ],
+                            )
+                          : replyBubble;
                       final showDivider =
                           anchor != null && message.id == anchor;
                       if (!showDivider) {
@@ -6347,7 +7443,9 @@ class _ChatPanelState extends State<_ChatPanel> {
                                 hintText: !contact.canSendOutbound
                                     ? 'Verify the contact\'s identity to send.'
                                     : activeReplyTarget == null
-                                    ? 'Write an encrypted message'
+                                    ? (widget.telegramLayout
+                                          ? 'Message'
+                                          : 'Write an encrypted message')
                                     : 'Write a reply'
                                           ' or add a caption',
                               ),
@@ -6377,13 +7475,22 @@ class _ChatPanelState extends State<_ChatPanel> {
                         ),
                       ),
                       const SizedBox(width: 12),
-                      FilledButton.icon(
-                        onPressed: contact.canSendOutbound
-                            ? widget.onSend
-                            : null,
-                        icon: const Icon(Icons.north_east),
-                        label: const Text('Send'),
-                      ),
+                      if (widget.telegramLayout)
+                        IconButton.filled(
+                          tooltip: 'Send',
+                          onPressed: contact.canSendOutbound
+                              ? widget.onSend
+                              : null,
+                          icon: const Icon(Icons.send_rounded),
+                        )
+                      else
+                        FilledButton.icon(
+                          onPressed: contact.canSendOutbound
+                              ? widget.onSend
+                              : null,
+                          icon: const Icon(Icons.north_east),
+                          label: const Text('Send'),
+                        ),
                     ],
                   ),
                 ],
@@ -6393,8 +7500,17 @@ class _ChatPanelState extends State<_ChatPanel> {
         ),
       ),
     );
+    Widget searchable(Widget child) => CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+            _searchMessages,
+        const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
+            _searchMessages,
+      },
+      child: child,
+    );
     if (!_isDesktopPlatform) {
-      return body;
+      return searchable(body);
     }
     return DropTarget(
       onDragEntered: (_) => setState(() => _droppingFiles = true),
@@ -6406,7 +7522,7 @@ class _ChatPanelState extends State<_ChatPanel> {
       child: Stack(
         fit: StackFit.passthrough,
         children: [
-          body,
+          searchable(body),
           if (_droppingFiles)
             Positioned.fill(
               child: IgnorePointer(
@@ -6701,11 +7817,13 @@ class _LanLobbyPanel extends StatelessWidget {
 class ContactProfileDialog extends StatefulWidget {
   const ContactProfileDialog({
     super.key,
+    this.fullscreenOnMobile = false,
     required this.controller,
     required this.palette,
     required this.contact,
   });
 
+  final bool fullscreenOnMobile;
   final MessengerController controller;
   final ConestPalette palette;
   final ContactRecord contact;
@@ -6888,7 +8006,8 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
       currentContact.deviceId,
     );
     final checkTwoWayConfirmed = _twoWayConfirmedForLastCheck();
-    return AlertDialog(
+    return AdaptiveChatDialog(
+      fullscreenOnMobile: widget.fullscreenOnMobile,
       scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
       title: const Text('Contact profile'),
@@ -7029,10 +8148,12 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
 class AddContactDialog extends StatefulWidget {
   const AddContactDialog({
     super.key,
+    this.fullscreenOnMobile = false,
     required this.controller,
     required this.palette,
   });
 
+  final bool fullscreenOnMobile;
   final MessengerController controller;
   final ConestPalette palette;
 
@@ -7152,7 +8273,8 @@ class _AddContactDialogState extends State<AddContactDialog> {
   @override
   Widget build(BuildContext context) {
     final preview = _previewInvite;
-    return AlertDialog(
+    return AdaptiveChatDialog(
+      fullscreenOnMobile: widget.fullscreenOnMobile,
       scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
       title: const Text('Add contact'),
@@ -8477,6 +9599,7 @@ class FullscreenQrScreen extends StatelessWidget {
 class SettingsDialog extends StatefulWidget {
   const SettingsDialog({
     super.key,
+    this.fullscreenOnMobile = false,
     required this.controller,
     required this.updateService,
     required this.themeController,
@@ -8484,6 +9607,7 @@ class SettingsDialog extends StatefulWidget {
     this.onResetIdentity,
   });
 
+  final bool fullscreenOnMobile;
   final MessengerController controller;
   final UpdateService updateService;
   final ConestThemeController themeController;
@@ -8495,6 +9619,8 @@ class SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
+  String _settingsCategory = 'Personal / Preferences';
+
   late final TextEditingController _displayNameController;
   late final TextEditingController _bioController;
   final TextEditingController _relayHostController = TextEditingController();
@@ -8612,7 +9738,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
     final report = widget.controller.relayCapabilityReport;
     final configuredRelays = widget.controller.configuredRelays;
     final contactRelays = widget.controller.discoveredContactRelayRoutes;
-    return AlertDialog(
+    final categorized =
+        widget.fullscreenOnMobile && MediaQuery.sizeOf(context).width < 700;
+    return AdaptiveChatDialog(
+      fullscreenOnMobile: widget.fullscreenOnMobile,
       scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
       title: const Text('Settings'),
@@ -8625,687 +9754,749 @@ class _SettingsDialogState extends State<SettingsDialog> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _SettingsSection(
-                      title: 'Personal / Preferences',
-                      palette: widget.palette,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _ThemeModeSelector(
-                            controller: widget.themeController,
-                            palette: widget.palette,
-                          ),
-                          const SizedBox(height: 16),
-                          Wrap(
-                            spacing: 12,
-                            runSpacing: 12,
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            children: [
-                              SizedBox(
-                                width: 280,
-                                child: TextField(
-                                  controller: _displayNameController,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Display name',
+                    if (categorized) ...[
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            for (final category in const [
+                              'Personal / Preferences',
+                              'Storage',
+                              'Connectivity',
+                              'Network / Relay',
+                              'Updates',
+                              'Danger',
+                            ])
+                              Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: ChoiceChip(
+                                  label: Text(switch (category) {
+                                    'Personal / Preferences' => 'Personal',
+                                    'Network / Relay' => 'Relays',
+                                    'Danger' => 'Account',
+                                    _ => category,
+                                  }),
+                                  selected: _settingsCategory == category,
+                                  onSelected: (_) => setState(
+                                    () => _settingsCategory = category,
                                   ),
                                 ),
                               ),
-                              FilledButton(
-                                onPressed: _busy
-                                    ? null
-                                    : () => _run(
-                                        () =>
-                                            widget.controller.updateDisplayName(
-                                              _displayNameController.text,
-                                            ),
-                                      ),
-                                child: const Text('Save Name'),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Wrap(
-                            spacing: 12,
-                            runSpacing: 12,
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            children: [
-                              SizedBox(
-                                width: 420,
-                                child: TextField(
-                                  controller: _bioController,
-                                  minLines: 1,
-                                  maxLines: 4,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Description / bio',
-                                  ),
-                                ),
-                              ),
-                              FilledButton(
-                                onPressed: _busy
-                                    ? null
-                                    : () => _run(
-                                        () => widget.controller.updateBio(
-                                          _bioController.text,
-                                        ),
-                                      ),
-                                child: const Text('Save Bio'),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          SwitchListTile.adaptive(
-                            value: identity.notificationsEnabled,
-                            contentPadding: EdgeInsets.zero,
-                            onChanged: _busy
-                                ? null
-                                : (value) => _run(
-                                    () => widget.controller
-                                        .updateNotificationsEnabled(value),
-                                  ),
-                            title: const Text('Message notifications'),
-                            subtitle: const Text(
-                              'Show a system notification when a direct message arrives.',
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                    if (!categorized ||
+                        _settingsCategory == 'Personal / Preferences')
+                      _SettingsSection(
+                        title: 'Personal / Preferences',
+                        palette: widget.palette,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _ThemeModeSelector(
+                              controller: widget.themeController,
+                              palette: widget.palette,
                             ),
-                          ),
-                          if (!kIsWeb && Platform.isAndroid)
+                            const SizedBox(height: 16),
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 12,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                SizedBox(
+                                  width: 280,
+                                  child: TextField(
+                                    controller: _displayNameController,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Display name',
+                                    ),
+                                  ),
+                                ),
+                                FilledButton(
+                                  onPressed: _busy
+                                      ? null
+                                      : () => _run(
+                                          () => widget.controller
+                                              .updateDisplayName(
+                                                _displayNameController.text,
+                                              ),
+                                        ),
+                                  child: const Text('Save Name'),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 12,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                SizedBox(
+                                  width: 420,
+                                  child: TextField(
+                                    controller: _bioController,
+                                    minLines: 1,
+                                    maxLines: 4,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Description / bio',
+                                    ),
+                                  ),
+                                ),
+                                FilledButton(
+                                  onPressed: _busy
+                                      ? null
+                                      : () => _run(
+                                          () => widget.controller.updateBio(
+                                            _bioController.text,
+                                          ),
+                                        ),
+                                  child: const Text('Save Bio'),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
                             SwitchListTile.adaptive(
-                              value:
-                                  experimentalAndroidBackgroundRuntimeAvailable &&
-                                  identity.androidBackgroundRuntimeEnabled,
+                              value: identity.notificationsEnabled,
                               contentPadding: EdgeInsets.zero,
-                              onChanged:
-                                  _busy ||
-                                      !experimentalAndroidBackgroundRuntimeAvailable
+                              onChanged: _busy
                                   ? null
                                   : (value) => _run(
                                       () => widget.controller
-                                          .updateAndroidBackgroundRuntimeEnabled(
+                                          .updateNotificationsEnabled(value),
+                                    ),
+                              title: const Text('Message notifications'),
+                              subtitle: const Text(
+                                'Show a system notification when a direct message arrives.',
+                              ),
+                            ),
+                            if (!kIsWeb && Platform.isAndroid)
+                              SwitchListTile.adaptive(
+                                value:
+                                    experimentalAndroidBackgroundRuntimeAvailable &&
+                                    identity.androidBackgroundRuntimeEnabled,
+                                contentPadding: EdgeInsets.zero,
+                                onChanged:
+                                    _busy ||
+                                        !experimentalAndroidBackgroundRuntimeAvailable
+                                    ? null
+                                    : (value) => _run(
+                                        () => widget.controller
+                                            .updateAndroidBackgroundRuntimeEnabled(
+                                              value,
+                                            ),
+                                      ),
+                                title: const Text(
+                                  'Experimental Android background receive',
+                                ),
+                                subtitle: const Text(
+                                  'Disabled in release builds: the foreground service does not yet host a headless Flutter receiver.',
+                                ),
+                              ),
+                            if (kDebugMode)
+                              SwitchListTile.adaptive(
+                                value: identity.suppressReadReceipts,
+                                contentPadding: EdgeInsets.zero,
+                                onChanged: _busy
+                                    ? null
+                                    : (value) => _run(
+                                        () => widget.controller
+                                            .updateSuppressReadReceipts(value),
+                                      ),
+                                title: const Text(
+                                  "Don't send read confirmations",
+                                ),
+                                subtitle: const Text(
+                                  'Debug-only. Delivery acknowledgements still send; incoming read confirmations are still processed.',
+                                ),
+                              ),
+                            const SizedBox(height: 12),
+                            SelectableText(
+                              'account ${identity.accountId}\ndevice ${identity.deviceId}\nsafety ${identity.safetyNumber}',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: widget.palette.inkSoft,
+                                    height: 1.5,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const SizedBox(height: 16),
+                    if (!categorized || _settingsCategory == 'Storage')
+                      _SettingsSection(
+                        title: 'Storage',
+                        palette: widget.palette,
+                        child: SwitchListTile.adaptive(
+                          value: identity.connectivity.storageReserveEnabled,
+                          contentPadding: EdgeInsets.zero,
+                          onChanged: _busy
+                              ? null
+                              : (value) => _run(
+                                  () => widget.controller
+                                      .updateStorageReserveEnabled(value),
+                                ),
+                          title: const Text('Keep 10% of storage free'),
+                          subtitle: const Text(
+                            'Reserve free space for other apps. When off, transfers can use this space but must still fit on disk.',
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: 16),
+                    if (!categorized || _settingsCategory == 'Connectivity')
+                      _SettingsSection(
+                        title: 'Connectivity',
+                        palette: widget.palette,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SwitchListTile.adaptive(
+                              value: identity.connectivity.lanEnabled,
+                              contentPadding: EdgeInsets.zero,
+                              onChanged: _busy
+                                  ? null
+                                  : (value) => _run(
+                                      () => widget.controller
+                                          .updateGlobalConnectivity(
+                                            identity.connectivity.copyWith(
+                                              lanEnabled: value,
+                                            ),
+                                          ),
+                                    ),
+                              title: const Text('LAN'),
+                              subtitle: const Text(
+                                'Same-network listener, pairing beacons, LAN delivery.',
+                              ),
+                            ),
+                            SwitchListTile.adaptive(
+                              value: identity.connectivity.onlineEnabled,
+                              contentPadding: EdgeInsets.zero,
+                              onChanged: _busy
+                                  ? null
+                                  : (value) => _run(
+                                      () => widget.controller
+                                          .updateGlobalConnectivity(
+                                            identity.connectivity.copyWith(
+                                              onlineEnabled: value,
+                                            ),
+                                          ),
+                                    ),
+                              title: const Text('Online'),
+                              subtitle: const Text(
+                                'Iroh messaging and file transfers over the internet. Custom Conest relays are optional.',
+                              ),
+                            ),
+                            SwitchListTile.adaptive(
+                              value: identity.connectivity.irohRelayEnabled,
+                              contentPadding: EdgeInsets.zero,
+                              onChanged:
+                                  _busy || !identity.connectivity.onlineEnabled
+                                  ? null
+                                  : (value) => _run(
+                                      () => widget.controller
+                                          .updateGlobalConnectivity(
+                                            identity.connectivity.copyWith(
+                                              irohRelayEnabled: value,
+                                            ),
+                                          ),
+                                    ),
+                              title: const Text('Iroh relay fallback'),
+                              subtitle: const Text(
+                                'Use Iroh’s built-in relays for messages and files when direct connections cannot get through. Both peers must be online.',
+                              ),
+                            ),
+                            SwitchListTile.adaptive(
+                              value: identity
+                                  .connectivity
+                                  .irohTransferLimitEnabled,
+                              contentPadding: EdgeInsets.zero,
+                              onChanged: _busy
+                                  ? null
+                                  : (value) => _run(
+                                      () => widget.controller
+                                          .updateIrohTransferLimitEnabled(
                                             value,
                                           ),
                                     ),
                               title: const Text(
-                                'Experimental Android background receive',
+                                'Limit Iroh files to 100 MiB (recommended)',
                               ),
                               subtitle: const Text(
-                                'Disabled in release builds: the foreground service does not yet host a headless Flutter receiver.',
+                                'Applies to direct online and Iroh relay transfers. Disable for larger files; they may take a long time. LAN transfers keep their larger limit.',
                               ),
                             ),
-                          if (kDebugMode)
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('Automatic downloads'),
+                              subtitle: const Text(
+                                'Verified contacts only. Limits adapt to Wi-Fi/Ethernet, cellular, and roaming.',
+                              ),
+                              trailing: DropdownButton<AutoDownloadPreset>(
+                                value:
+                                    identity.connectivity.autoDownloadPreset ==
+                                        AutoDownloadPreset.custom
+                                    ? AutoDownloadPreset.medium
+                                    : identity.connectivity.autoDownloadPreset,
+                                onChanged: _busy
+                                    ? null
+                                    : (value) {
+                                        if (value == null) return;
+                                        unawaited(
+                                          _run(
+                                            () => widget.controller
+                                                .updateGlobalConnectivity(
+                                                  identity.connectivity
+                                                      .copyWith(
+                                                        autoDownloadPreset:
+                                                            value,
+                                                      ),
+                                                ),
+                                          ),
+                                        );
+                                      },
+                                items: const [
+                                  DropdownMenuItem(
+                                    value: AutoDownloadPreset.low,
+                                    child: Text('Low'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: AutoDownloadPreset.medium,
+                                    child: Text('Medium'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: AutoDownloadPreset.high,
+                                    child: Text('High'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 8,
+                              crossAxisAlignment: WrapCrossAlignment.end,
+                              children: [
+                                SizedBox(
+                                  width: 440,
+                                  child: TextField(
+                                    controller: _irohRelayUrlsController,
+                                    enabled:
+                                        !_busy &&
+                                        identity.connectivity.irohRelayEnabled,
+                                    minLines: 1,
+                                    maxLines: 4,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Custom Iroh relay URLs',
+                                      helperText:
+                                          'One HTTPS URL per line; blank uses the standard N0 relay set.',
+                                    ),
+                                  ),
+                                ),
+                                FilledButton.tonal(
+                                  onPressed:
+                                      _busy ||
+                                          !identity
+                                              .connectivity
+                                              .irohRelayEnabled
+                                      ? null
+                                      : () => _run(() async {
+                                          final current =
+                                              widget.controller.identity!;
+                                          final values =
+                                              _irohRelayUrlsController.text
+                                                  .split(RegExp(r'[\s,]+'))
+                                                  .where(
+                                                    (value) => value.isNotEmpty,
+                                                  );
+                                          await widget.controller
+                                              .updateGlobalConnectivity(
+                                                current.connectivity.copyWith(
+                                                  irohRelayUrls: values
+                                                      .toList(),
+                                                  irohCustomRelaysBulkCapable:
+                                                      values.isEmpty
+                                                      ? false
+                                                      : null,
+                                                ),
+                                              );
+                                        }),
+                                  child: const Text('Save Iroh relays'),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              'Transport policy',
+                              style: Theme.of(context).textTheme.titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 6),
+                            for (final kind in const [
+                              TransportKind.lan,
+                              TransportKind.iroh,
+                              TransportKind.conestRelay,
+                              TransportKind.optical,
+                              TransportKind.deltaChat,
+                              TransportKind.reticulum,
+                              TransportKind.localSend,
+                            ])
+                              _TransportPolicySelector(
+                                kind: kind,
+                                value: identity.connectivity.policyFor(kind),
+                                enabled: !_busy,
+                                onChanged: (value) =>
+                                    _setGlobalTransportPolicy(kind, value),
+                              ),
+                            const SizedBox(height: 8),
+                            Text(
+                              identity.connectivity.anyEnabled
+                                  ? 'Per-contact routing is intersected with these flags. Turning off either restricts traffic; turning off both makes the app idle.'
+                                  : 'Connectivity is fully off — the app will not send or receive.',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: identity.connectivity.anyEnabled
+                                        ? widget.palette.inkSoft
+                                        : widget.palette.danger,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const SizedBox(height: 16),
+                    if (!categorized || _settingsCategory == 'Network / Relay')
+                      _SettingsSection(
+                        title: 'Network / Relay',
+                        palette: widget.palette,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (report != null)
+                              _InsetPanel(
+                                palette: widget.palette,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      report.summary,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodyLarge
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    for (final note in report.notes)
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: 6,
+                                        ),
+                                        child: Text(
+                                          note,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall
+                                              ?.copyWith(
+                                                color: widget.palette.inkSoft,
+                                              ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              onPressed: _busy
+                                  ? null
+                                  : () => _run(
+                                      widget.controller.checkRelayAvailability,
+                                    ),
+                              icon: const Icon(Icons.network_check),
+                              label: const Text('Check Availability'),
+                            ),
+                            const SizedBox(height: 12),
                             SwitchListTile.adaptive(
-                              value: identity.suppressReadReceipts,
+                              value: identity.relayModeEnabled,
                               contentPadding: EdgeInsets.zero,
                               onChanged: _busy
                                   ? null
                                   : (value) => _run(
                                       () => widget.controller
-                                          .updateSuppressReadReceipts(value),
+                                          .updateRelayModeEnabled(value),
                                     ),
-                              title: const Text(
-                                "Don't send read confirmations",
-                              ),
+                              title: const Text('Run this device as a relay'),
                               subtitle: const Text(
-                                'Debug-only. Delivery acknowledgements still send; incoming read confirmations are still processed.',
+                                'Allow trusted contacts to use this device as a relay.',
                               ),
                             ),
-                          const SizedBox(height: 12),
-                          SelectableText(
-                            'account ${identity.accountId}\ndevice ${identity.deviceId}\nsafety ${identity.safetyNumber}',
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  color: widget.palette.inkSoft,
-                                  height: 1.5,
-                                ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    _SettingsSection(
-                      title: 'Storage',
-                      palette: widget.palette,
-                      child: SwitchListTile.adaptive(
-                        value: identity.connectivity.storageReserveEnabled,
-                        contentPadding: EdgeInsets.zero,
-                        onChanged: _busy
-                            ? null
-                            : (value) => _run(
-                                () => widget.controller
-                                    .updateStorageReserveEnabled(value),
-                              ),
-                        title: const Text('Keep 10% of storage free'),
-                        subtitle: const Text(
-                          'Reserve free space for other apps. When off, transfers can use this space but must still fit on disk.',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    _SettingsSection(
-                      title: 'Connectivity',
-                      palette: widget.palette,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          SwitchListTile.adaptive(
-                            value: identity.connectivity.lanEnabled,
-                            contentPadding: EdgeInsets.zero,
-                            onChanged: _busy
-                                ? null
-                                : (value) => _run(
-                                    () => widget.controller
-                                        .updateGlobalConnectivity(
-                                          identity.connectivity.copyWith(
-                                            lanEnabled: value,
-                                          ),
-                                        ),
-                                  ),
-                            title: const Text('LAN'),
-                            subtitle: const Text(
-                              'Same-network listener, pairing beacons, LAN delivery.',
-                            ),
-                          ),
-                          SwitchListTile.adaptive(
-                            value: identity.connectivity.onlineEnabled,
-                            contentPadding: EdgeInsets.zero,
-                            onChanged: _busy
-                                ? null
-                                : (value) => _run(
-                                    () => widget.controller
-                                        .updateGlobalConnectivity(
-                                          identity.connectivity.copyWith(
-                                            onlineEnabled: value,
-                                          ),
-                                        ),
-                                  ),
-                            title: const Text('Online'),
-                            subtitle: const Text(
-                              'Iroh messaging and file transfers over the internet. Custom Conest relays are optional.',
-                            ),
-                          ),
-                          SwitchListTile.adaptive(
-                            value: identity.connectivity.irohRelayEnabled,
-                            contentPadding: EdgeInsets.zero,
-                            onChanged:
-                                _busy || !identity.connectivity.onlineEnabled
-                                ? null
-                                : (value) => _run(
-                                    () => widget.controller
-                                        .updateGlobalConnectivity(
-                                          identity.connectivity.copyWith(
-                                            irohRelayEnabled: value,
-                                          ),
-                                        ),
-                                  ),
-                            title: const Text('Iroh relay fallback'),
-                            subtitle: const Text(
-                              'Use Iroh’s built-in relays for messages and files when direct connections cannot get through. Both peers must be online.',
-                            ),
-                          ),
-                          SwitchListTile.adaptive(
-                            value:
-                                identity.connectivity.irohTransferLimitEnabled,
-                            contentPadding: EdgeInsets.zero,
-                            onChanged: _busy
-                                ? null
-                                : (value) => _run(
-                                    () => widget.controller
-                                        .updateIrohTransferLimitEnabled(value),
-                                  ),
-                            title: const Text(
-                              'Limit Iroh files to 100 MiB (recommended)',
-                            ),
-                            subtitle: const Text(
-                              'Applies to direct online and Iroh relay transfers. Disable for larger files; they may take a long time. LAN transfers keep their larger limit.',
-                            ),
-                          ),
-                          ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: const Text('Automatic downloads'),
-                            subtitle: const Text(
-                              'Verified contacts only. Limits adapt to Wi-Fi/Ethernet, cellular, and roaming.',
-                            ),
-                            trailing: DropdownButton<AutoDownloadPreset>(
-                              value:
-                                  identity.connectivity.autoDownloadPreset ==
-                                      AutoDownloadPreset.custom
-                                  ? AutoDownloadPreset.medium
-                                  : identity.connectivity.autoDownloadPreset,
+                            SwitchListTile.adaptive(
+                              value: identity.autoUseContactRelays,
+                              contentPadding: EdgeInsets.zero,
                               onChanged: _busy
                                   ? null
-                                  : (value) {
-                                      if (value == null) return;
-                                      unawaited(
-                                        _run(
-                                          () => widget.controller
-                                              .updateGlobalConnectivity(
-                                                identity.connectivity.copyWith(
-                                                  autoDownloadPreset: value,
-                                                ),
-                                              ),
-                                        ),
-                                      );
-                                    },
-                              items: const [
-                                DropdownMenuItem(
-                                  value: AutoDownloadPreset.low,
-                                  child: Text('Low'),
-                                ),
-                                DropdownMenuItem(
-                                  value: AutoDownloadPreset.medium,
-                                  child: Text('Medium'),
-                                ),
-                                DropdownMenuItem(
-                                  value: AutoDownloadPreset.high,
-                                  child: Text('High'),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Wrap(
-                            spacing: 12,
-                            runSpacing: 8,
-                            crossAxisAlignment: WrapCrossAlignment.end,
-                            children: [
-                              SizedBox(
-                                width: 440,
-                                child: TextField(
-                                  controller: _irohRelayUrlsController,
-                                  enabled:
-                                      !_busy &&
-                                      identity.connectivity.irohRelayEnabled,
-                                  minLines: 1,
-                                  maxLines: 4,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Custom Iroh relay URLs',
-                                    helperText:
-                                        'One HTTPS URL per line; blank uses the standard N0 relay set.',
-                                  ),
-                                ),
-                              ),
-                              FilledButton.tonal(
-                                onPressed:
-                                    _busy ||
-                                        !identity.connectivity.irohRelayEnabled
-                                    ? null
-                                    : () => _run(() async {
-                                        final current =
-                                            widget.controller.identity!;
-                                        final values = _irohRelayUrlsController
-                                            .text
-                                            .split(RegExp(r'[\s,]+'))
-                                            .where((value) => value.isNotEmpty);
-                                        await widget.controller
-                                            .updateGlobalConnectivity(
-                                              current.connectivity.copyWith(
-                                                irohRelayUrls: values.toList(),
-                                                irohCustomRelaysBulkCapable:
-                                                    values.isEmpty
-                                                    ? false
-                                                    : null,
-                                              ),
-                                            );
-                                      }),
-                                child: const Text('Save Iroh relays'),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            'Transport policy',
-                            style: Theme.of(context).textTheme.titleSmall
-                                ?.copyWith(fontWeight: FontWeight.w700),
-                          ),
-                          const SizedBox(height: 6),
-                          for (final kind in const [
-                            TransportKind.lan,
-                            TransportKind.iroh,
-                            TransportKind.conestRelay,
-                            TransportKind.optical,
-                            TransportKind.deltaChat,
-                            TransportKind.reticulum,
-                            TransportKind.localSend,
-                          ])
-                            _TransportPolicySelector(
-                              kind: kind,
-                              value: identity.connectivity.policyFor(kind),
-                              enabled: !_busy,
-                              onChanged: (value) =>
-                                  _setGlobalTransportPolicy(kind, value),
-                            ),
-                          const SizedBox(height: 8),
-                          Text(
-                            identity.connectivity.anyEnabled
-                                ? 'Per-contact routing is intersected with these flags. Turning off either restricts traffic; turning off both makes the app idle.'
-                                : 'Connectivity is fully off — the app will not send or receive.',
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  color: identity.connectivity.anyEnabled
-                                      ? widget.palette.inkSoft
-                                      : widget.palette.danger,
-                                ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    _SettingsSection(
-                      title: 'Network / Relay',
-                      palette: widget.palette,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (report != null)
-                            _InsetPanel(
-                              palette: widget.palette,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    report.summary,
-                                    style: Theme.of(context).textTheme.bodyLarge
-                                        ?.copyWith(fontWeight: FontWeight.w700),
-                                  ),
-                                  const SizedBox(height: 10),
-                                  for (final note in report.notes)
-                                    Padding(
-                                      padding: const EdgeInsets.only(bottom: 6),
-                                      child: Text(
-                                        note,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall
-                                            ?.copyWith(
-                                              color: widget.palette.inkSoft,
-                                            ),
-                                      ),
+                                  : (value) => _run(
+                                      () => widget.controller
+                                          .updateAutoUseContactRelays(value),
                                     ),
-                                ],
+                              title: const Text('Auto-use contacts as relays'),
+                              subtitle: Text(
+                                '${contactRelays.length} candidate route(s) are available right now.',
                               ),
                             ),
-                          const SizedBox(height: 12),
-                          OutlinedButton.icon(
-                            onPressed: _busy
-                                ? null
-                                : () => _run(
-                                    widget.controller.checkRelayAvailability,
-                                  ),
-                            icon: const Icon(Icons.network_check),
-                            label: const Text('Check Availability'),
-                          ),
-                          const SizedBox(height: 12),
-                          SwitchListTile.adaptive(
-                            value: identity.relayModeEnabled,
-                            contentPadding: EdgeInsets.zero,
-                            onChanged: _busy
-                                ? null
-                                : (value) => _run(
-                                    () => widget.controller
-                                        .updateRelayModeEnabled(value),
-                                  ),
-                            title: const Text('Run this device as a relay'),
-                            subtitle: const Text(
-                              'Allow trusted contacts to use this device as a relay.',
-                            ),
-                          ),
-                          SwitchListTile.adaptive(
-                            value: identity.autoUseContactRelays,
-                            contentPadding: EdgeInsets.zero,
-                            onChanged: _busy
-                                ? null
-                                : (value) => _run(
-                                    () => widget.controller
-                                        .updateAutoUseContactRelays(value),
-                                  ),
-                            title: const Text('Auto-use contacts as relays'),
-                            subtitle: Text(
-                              '${contactRelays.length} candidate route(s) are available right now.',
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 12,
-                            runSpacing: 12,
-                            children: [
-                              SizedBox(
-                                width: 220,
-                                child: TextField(
-                                  controller: _localRelayPortController,
-                                  keyboardType: TextInputType.number,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Local relay port',
-                                  ),
-                                ),
-                              ),
-                              FilledButton(
-                                onPressed: _busy
-                                    ? null
-                                    : () => _run(() async {
-                                        final port = int.tryParse(
-                                          _localRelayPortController.text.trim(),
-                                        );
-                                        if (port == null) {
-                                          throw ArgumentError(
-                                            'Enter a valid local relay port.',
-                                          );
-                                        }
-                                        await widget.controller
-                                            .updateLocalRelayPort(port);
-                                      }),
-                                child: const Text('Save Port'),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 16),
-                          _RelayIdentityMismatchBanner(
-                            controller: widget.controller,
-                            palette: widget.palette,
-                          ),
-                          _DefaultRelaysControlsCard(
-                            controller: widget.controller,
-                            palette: widget.palette,
-                          ),
-                          const SizedBox(height: 12),
-                          _RelayHealthDashboard(
-                            controller: widget.controller,
-                            palette: widget.palette,
-                          ),
-                          Text(
-                            'Configured relays',
-                            style: Theme.of(context).textTheme.titleMedium
-                                ?.copyWith(fontWeight: FontWeight.w800),
-                          ),
-                          const SizedBox(height: 8),
-                          if (configuredRelays.isEmpty)
-                            Text(
-                              'No relays added yet.',
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(color: widget.palette.inkSoft),
-                            )
-                          else
+                            const SizedBox(height: 8),
                             Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
+                              spacing: 12,
+                              runSpacing: 12,
                               children: [
-                                for (final relay in configuredRelays)
-                                  InputChip(
-                                    label: Text(
-                                      widget.controller.relayDisplayLabel(
-                                        relay,
-                                      ),
+                                SizedBox(
+                                  width: 220,
+                                  child: TextField(
+                                    controller: _localRelayPortController,
+                                    keyboardType: TextInputType.number,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Local relay port',
                                     ),
-                                    onDeleted: _busy
-                                        ? null
-                                        : () => _run(
-                                            () => widget.controller.removeRelay(
-                                              relay,
-                                            ),
-                                          ),
                                   ),
+                                ),
+                                FilledButton(
+                                  onPressed: _busy
+                                      ? null
+                                      : () => _run(() async {
+                                          final port = int.tryParse(
+                                            _localRelayPortController.text
+                                                .trim(),
+                                          );
+                                          if (port == null) {
+                                            throw ArgumentError(
+                                              'Enter a valid local relay port.',
+                                            );
+                                          }
+                                          await widget.controller
+                                              .updateLocalRelayPort(port);
+                                        }),
+                                  child: const Text('Save Port'),
+                                ),
                               ],
                             ),
-                          const SizedBox(height: 12),
-                          Wrap(
-                            spacing: 12,
-                            runSpacing: 12,
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            children: [
-                              SizedBox(
-                                width: 220,
-                                child: TextField(
-                                  controller: _relayHostController,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Relay host / URL',
-                                    hintText: 'udp://host:port forces UDP',
-                                  ),
-                                ),
-                              ),
-                              SizedBox(
-                                width: 140,
-                                child: TextField(
-                                  controller: _relayPortController,
-                                  keyboardType: TextInputType.number,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Relay port',
-                                  ),
-                                ),
-                              ),
-                              FilledButton(
-                                onPressed: _busy
-                                    ? null
-                                    : () => _run(() async {
-                                        final port = int.tryParse(
-                                          _relayPortController.text.trim(),
-                                        );
-                                        if (port == null) {
-                                          throw ArgumentError(
-                                            'Enter a valid relay port.',
-                                          );
-                                        }
-                                        await widget.controller.addRelay(
-                                          host: _relayHostController.text
-                                              .trim(),
-                                          port: port,
-                                        );
-                                        _relayHostController.clear();
-                                        _relayPortController.text =
-                                            '$defaultRelayPort';
-                                      }),
-                                child: const Text('Detect & Add Relay'),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    _SettingsSection(
-                      title: 'Updates',
-                      palette: widget.palette,
-                      child: ListenableBuilder(
-                        listenable: widget.updateService,
-                        builder: (context, _) {
-                          final updateService = widget.updateService;
-                          final buildInfo = updateService.buildInfo;
-                          final available = updateService.availableUpdate;
-                          final actionLabel =
-                              updateService.targetPlatform ==
-                                  UpdateTargetPlatform.android
-                              ? 'Download & Install'
-                              : 'Download & Restart';
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
+                            const SizedBox(height: 16),
+                            _RelayIdentityMismatchBanner(
+                              controller: widget.controller,
+                              palette: widget.palette,
+                            ),
+                            _DefaultRelaysControlsCard(
+                              controller: widget.controller,
+                              palette: widget.palette,
+                            ),
+                            const SizedBox(height: 12),
+                            _RelayHealthDashboard(
+                              controller: widget.controller,
+                              palette: widget.palette,
+                            ),
+                            Text(
+                              'Configured relays',
+                              style: Theme.of(context).textTheme.titleMedium
+                                  ?.copyWith(fontWeight: FontWeight.w800),
+                            ),
+                            const SizedBox(height: 8),
+                            if (configuredRelays.isEmpty)
                               Text(
-                                'Current build: ${buildInfo.displayVersion} • ${buildInfo.channelLabel}',
-                                style: Theme.of(context).textTheme.bodyLarge
-                                    ?.copyWith(fontWeight: FontWeight.w700),
-                              ),
-                              if (buildInfo.commit != null &&
-                                  buildInfo.commit!.isNotEmpty) ...[
-                                const SizedBox(height: 6),
-                                Text(
-                                  'commit ${buildInfo.commit}',
-                                  style: Theme.of(context).textTheme.bodySmall
-                                      ?.copyWith(color: widget.palette.inkSoft),
-                                ),
-                              ],
-                              if (available != null) ...[
-                                const SizedBox(height: 10),
-                                Text('Available: ${available.release.tagName}'),
-                              ],
-                              if (updateService.isDownloading) ...[
-                                const SizedBox(height: 12),
-                                LinearProgressIndicator(
-                                  value: updateService.downloadProgress,
-                                ),
-                              ],
-                              if (updateService.statusMessage != null) ...[
-                                const SizedBox(height: 10),
-                                Text(
-                                  updateService.statusMessage!,
-                                  style: Theme.of(context).textTheme.bodySmall
-                                      ?.copyWith(color: widget.palette.inkSoft),
-                                ),
-                              ],
-                              if (updateService.lastError != null) ...[
-                                const SizedBox(height: 10),
-                                Text(
-                                  updateService.lastError!,
-                                  style: Theme.of(context).textTheme.bodySmall
-                                      ?.copyWith(
-                                        color: Theme.of(
-                                          context,
-                                        ).colorScheme.error,
-                                      ),
-                                ),
-                              ],
-                              const SizedBox(height: 12),
+                                'No relays added yet.',
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(color: widget.palette.inkSoft),
+                              )
+                            else
                               Wrap(
-                                spacing: 12,
-                                runSpacing: 12,
+                                spacing: 8,
+                                runSpacing: 8,
                                 children: [
-                                  OutlinedButton.icon(
-                                    onPressed:
-                                        _busy ||
-                                            updateService.isChecking ||
-                                            updateService.isDownloading
-                                        ? null
-                                        : () => updateService.checkForUpdate(
-                                            userInitiated: true,
-                                          ),
-                                    icon: const Icon(Icons.system_update_alt),
-                                    label: Text(
-                                      updateService.isChecking
-                                          ? 'Checking...'
-                                          : 'Check for Updates',
-                                    ),
-                                  ),
-                                  if (available != null)
-                                    FilledButton.icon(
-                                      onPressed:
-                                          _busy || updateService.isDownloading
+                                  for (final relay in configuredRelays)
+                                    InputChip(
+                                      label: Text(
+                                        widget.controller.relayDisplayLabel(
+                                          relay,
+                                        ),
+                                      ),
+                                      onDeleted: _busy
                                           ? null
-                                          : updateService
-                                                .downloadAndApplyAvailableUpdate,
-                                      icon: const Icon(Icons.download),
-                                      label: Text(actionLabel),
+                                          : () => _run(
+                                              () => widget.controller
+                                                  .removeRelay(relay),
+                                            ),
                                     ),
                                 ],
                               ),
-                            ],
-                          );
-                        },
+                            const SizedBox(height: 12),
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 12,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                SizedBox(
+                                  width: 220,
+                                  child: TextField(
+                                    controller: _relayHostController,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Relay host / URL',
+                                      hintText: 'udp://host:port forces UDP',
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 140,
+                                  child: TextField(
+                                    controller: _relayPortController,
+                                    keyboardType: TextInputType.number,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Relay port',
+                                    ),
+                                  ),
+                                ),
+                                FilledButton(
+                                  onPressed: _busy
+                                      ? null
+                                      : () => _run(() async {
+                                          final port = int.tryParse(
+                                            _relayPortController.text.trim(),
+                                          );
+                                          if (port == null) {
+                                            throw ArgumentError(
+                                              'Enter a valid relay port.',
+                                            );
+                                          }
+                                          await widget.controller.addRelay(
+                                            host: _relayHostController.text
+                                                .trim(),
+                                            port: port,
+                                          );
+                                          _relayHostController.clear();
+                                          _relayPortController.text =
+                                              '$defaultRelayPort';
+                                        }),
+                                  child: const Text('Detect & Add Relay'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
                     const SizedBox(height: 16),
-                    _SettingsSection(
-                      title: 'Danger',
-                      palette: widget.palette,
-                      child: OutlinedButton.icon(
-                        onPressed: _busy ? null : _confirmReset,
-                        icon: const Icon(Icons.restart_alt),
-                        label: const Text('Reset App Identity'),
+                    if (!categorized || _settingsCategory == 'Updates')
+                      _SettingsSection(
+                        title: 'Updates',
+                        palette: widget.palette,
+                        child: ListenableBuilder(
+                          listenable: widget.updateService,
+                          builder: (context, _) {
+                            final updateService = widget.updateService;
+                            final buildInfo = updateService.buildInfo;
+                            final available = updateService.availableUpdate;
+                            final actionLabel =
+                                updateService.targetPlatform ==
+                                    UpdateTargetPlatform.android
+                                ? 'Download & Install'
+                                : 'Download & Restart';
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Current build: ${buildInfo.displayVersion} • ${buildInfo.channelLabel}',
+                                  style: Theme.of(context).textTheme.bodyLarge
+                                      ?.copyWith(fontWeight: FontWeight.w700),
+                                ),
+                                if (buildInfo.commit != null &&
+                                    buildInfo.commit!.isNotEmpty) ...[
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'commit ${buildInfo.commit}',
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(
+                                          color: widget.palette.inkSoft,
+                                        ),
+                                  ),
+                                ],
+                                if (available != null) ...[
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    'Available: ${available.release.tagName}',
+                                  ),
+                                ],
+                                if (updateService.isDownloading) ...[
+                                  const SizedBox(height: 12),
+                                  LinearProgressIndicator(
+                                    value: updateService.downloadProgress,
+                                  ),
+                                ],
+                                if (updateService.statusMessage != null) ...[
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    updateService.statusMessage!,
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(
+                                          color: widget.palette.inkSoft,
+                                        ),
+                                  ),
+                                ],
+                                if (updateService.lastError != null) ...[
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    updateService.lastError!,
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(
+                                          color: Theme.of(
+                                            context,
+                                          ).colorScheme.error,
+                                        ),
+                                  ),
+                                ],
+                                const SizedBox(height: 12),
+                                Wrap(
+                                  spacing: 12,
+                                  runSpacing: 12,
+                                  children: [
+                                    OutlinedButton.icon(
+                                      onPressed:
+                                          _busy ||
+                                              updateService.isChecking ||
+                                              updateService.isDownloading
+                                          ? null
+                                          : () => updateService.checkForUpdate(
+                                              userInitiated: true,
+                                            ),
+                                      icon: const Icon(Icons.system_update_alt),
+                                      label: Text(
+                                        updateService.isChecking
+                                            ? 'Checking...'
+                                            : 'Check for Updates',
+                                      ),
+                                    ),
+                                    if (available != null)
+                                      FilledButton.icon(
+                                        onPressed:
+                                            _busy || updateService.isDownloading
+                                            ? null
+                                            : updateService
+                                                  .downloadAndApplyAvailableUpdate,
+                                        icon: const Icon(Icons.download),
+                                        label: Text(actionLabel),
+                                      ),
+                                  ],
+                                ),
+                              ],
+                            );
+                          },
+                        ),
                       ),
-                    ),
+                    const SizedBox(height: 16),
+                    if (!categorized || _settingsCategory == 'Danger')
+                      _SettingsSection(
+                        title: 'Danger',
+                        palette: widget.palette,
+                        child: OutlinedButton.icon(
+                          onPressed: _busy ? null : _confirmReset,
+                          icon: const Icon(Icons.restart_alt),
+                          label: const Text('Reset App Identity'),
+                        ),
+                      ),
                     if (_error != null) ...[
                       const SizedBox(height: 12),
                       Text(
@@ -9469,6 +10660,47 @@ class _RelayIdentityMismatchBanner extends StatelessWidget {
   }
 }
 
+class _ContactRequestsScreen extends StatelessWidget {
+  const _ContactRequestsScreen({
+    required this.controller,
+    required this.palette,
+  });
+  final MessengerController controller;
+  final ConestPalette palette;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: palette.panel,
+    appBar: AppBar(title: const Text('Contact requests')),
+    body: SafeArea(
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+          child: ListenableBuilder(
+            listenable: controller,
+            builder: (context, _) {
+              final requests = controller.pendingContactRequests;
+              if (requests.isEmpty) {
+                return const Center(child: Text('No pending contact requests'));
+              }
+              return ListView.separated(
+                padding: const EdgeInsets.all(16),
+                itemCount: requests.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 12),
+                itemBuilder: (_, index) => _PendingContactRequestCard(
+                  controller: controller,
+                  palette: palette,
+                  request: requests[index],
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 class _PendingContactRequestCard extends StatelessWidget {
   const _PendingContactRequestCard({
     required this.controller,
@@ -9488,14 +10720,35 @@ class _PendingContactRequestCard extends StatelessWidget {
   Future<void> _approve(BuildContext context) async {
     final invite = _invite;
     if (invite == null) return;
+    String safetyNumber;
+    try {
+      safetyNumber = await controller.pendingContactSafetyNumber(request.id);
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not review request: $error')),
+        );
+      }
+      return;
+    }
+    if (!context.mounted) return;
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: Text('Add ${invite.displayName}?'),
-        content: const Text(
-          'This request is not authenticated by an existing contact. Verify '
-          'the person and compare the safety number through another channel '
-          'before accepting.',
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Verify the person and compare this safety number through another channel before accepting.',
+            ),
+            const SizedBox(height: 16),
+            SelectableText(
+              safetyNumber,
+              style: const TextStyle(fontFamily: ConestPalette.monoFont),
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -9521,7 +10774,16 @@ class _PendingContactRequestCard extends StatelessWidget {
   }
 
   Future<void> _reject(BuildContext context) async {
-    await controller.rejectPendingContactRequest(request.id);
+    try {
+      await controller.rejectPendingContactRequest(request.id);
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not reject request: $error')),
+        );
+      }
+      return;
+    }
     if (!context.mounted) return;
     ScaffoldMessenger.of(
       context,

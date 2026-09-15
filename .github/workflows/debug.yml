@@ -2,6 +2,11 @@ name: Debug artifacts
 
 on:
   workflow_dispatch:
+    inputs:
+      quick_build:
+        description: "Build interim tester artifacts without qualification tests"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -12,6 +17,7 @@ env:
 
 jobs:
   verify:
+    if: ${{ !inputs.quick_build }}
     name: Verify debug transfers and storage controls
     runs-on: ubuntu-latest
     steps:
@@ -36,6 +42,7 @@ jobs:
   android:
     name: Android debug battle-test APK
     needs: verify
+    if: ${{ always() && !cancelled() && (needs.verify.result == 'success' || (inputs.quick_build && needs.verify.result == 'skipped')) }}
     runs-on: ubuntu-latest
     env:
       CON_ANDROID_TARGETS: arm64-v8a
@@ -76,6 +83,7 @@ jobs:
   linux:
     name: Linux debug battle-test bundle
     needs: verify
+    if: ${{ always() && !cancelled() && (needs.verify.result == 'success' || (inputs.quick_build && needs.verify.result == 'skipped')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -102,6 +110,7 @@ jobs:
           cp -a build/linux/x64/debug/bundle/. dist-stage/conest-debug-linux-x64/
           (cd dist-stage && zip -r ../dist/conest-debug-linux-x64-${GITHUB_RUN_NUMBER}.zip conest-debug-linux-x64)
       - name: Qualify native group transports
+        if: ${{ !inputs.quick_build }}
         env:
           CONEST_RUN_IROH_GROUP_CERT: "1"
           CONEST_RELAY_TEST_BINARY: ${{ github.workspace }}/target/debug/conest_relay
@@ -120,6 +129,7 @@ jobs:
   windows:
     name: Windows debug battle-test bundle
     needs: verify
+    if: ${{ always() && !cancelled() && (needs.verify.result == 'success' || (inputs.quick_build && needs.verify.result == 'skipped')) }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

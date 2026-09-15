@@ -2448,6 +2448,9 @@ class ConversationRecord {
     required this.messages,
     this.lastReadAt,
     this.draft = '',
+    this.pinned = false,
+    this.archived = false,
+    this.muted = false,
   });
 
   final String id;
@@ -2458,14 +2461,23 @@ class ConversationRecord {
 
   /// Local-only composer text, encrypted with the vault and never advertised.
   final String draft;
+  final bool pinned;
+  final bool archived;
+  final bool muted;
 
   ConversationRecord copyWith({
     List<ChatMessage>? messages,
     String? draft,
+    bool? pinned,
+    bool? archived,
+    bool? muted,
     DateTime? lastReadAt,
   }) {
     return ConversationRecord(
       draft: draft ?? this.draft,
+      pinned: pinned ?? this.pinned,
+      archived: archived ?? this.archived,
+      muted: muted ?? this.muted,
       id: id,
       kind: kind,
       peerDeviceId: peerDeviceId,
@@ -2477,6 +2489,9 @@ class ConversationRecord {
   Map<String, dynamic> toJson() {
     return {
       'draft': draft,
+      'pinned': pinned,
+      'archived': archived,
+      'muted': muted,
       'id': id,
       'kind': kind.name,
       'peerDeviceId': peerDeviceId,
@@ -2502,6 +2517,9 @@ class ConversationRecord {
         : DateTime.tryParse(lastReadAtValue);
     return ConversationRecord(
       draft: json['draft'] as String? ?? '',
+      pinned: json['pinned'] == true,
+      archived: json['archived'] == true,
+      muted: json['muted'] == true,
       id: json['id'] as String,
       kind: ConversationKind.values.byName(json['kind'] as String),
       peerDeviceId: json['peerDeviceId'] as String,
