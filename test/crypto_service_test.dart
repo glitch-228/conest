@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -49,6 +50,53 @@ ContactRecord _contactFor(IdentityRecord peer, {String? overridePublicKey}) {
 }
 
 void main() {
+  test(
+    'group binary binds file and peers and detects modified ciphertext',
+    () async {
+      final alice = await _createIdentity(displayName: 'alice');
+      final bob = await _createIdentity(displayName: 'bob');
+      final sender = CryptoService(identityProvider: () => alice);
+      final receiver = CryptoService(identityProvider: () => bob);
+      final bytes = Uint8List.fromList([0, 1, 255, 4]);
+      final encrypted = await sender.encryptGroupFile(
+        peer: _contactFor(bob),
+        groupId: 'group',
+        eventId: 'a' * 64,
+        requestId: 'b' * 32,
+        bytes: bytes,
+      );
+      Future<Uint8List> decrypt(Uint8List frame, {String group = 'group'}) =>
+          receiver.decryptGroupFile(
+            peer: _contactFor(alice),
+            groupId: group,
+            eventId: 'a' * 64,
+            requestId: 'b' * 32,
+            bytes: frame,
+          );
+      expect(await decrypt(encrypted), bytes);
+      await expectLater(
+        decrypt(encrypted, group: 'other'),
+        throwsFormatException,
+      );
+      final damaged = Uint8List.fromList(encrypted)
+        ..[encrypted.length - 1] ^= 1;
+      await expectLater(
+        decrypt(damaged),
+        throwsA(isA<SecretBoxAuthenticationError>()),
+      );
+      await expectLater(
+        sender.decryptGroupFile(
+          peer: _contactFor(bob),
+          groupId: 'group',
+          eventId: 'a' * 64,
+          requestId: 'b' * 32,
+          bytes: encrypted,
+        ),
+        throwsFormatException,
+      );
+    },
+  );
+
   test('encrypt-then-decrypt round-trips a direct message body', () async {
     final alice = await _createIdentity(displayName: 'alice');
     final bob = await _createIdentity(displayName: 'bob');

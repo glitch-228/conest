@@ -14,6 +14,8 @@ import 'crypto_service.dart';
 import 'group_history_coordinator.dart';
 import 'group_history_event.dart';
 import 'group_file_manifest.dart';
+import 'group_file_crypto.dart';
+import 'group_file_service.dart';
 import 'group_message_projection.dart';
 import 'group_membership_history.dart';
 import 'beam_protocol.dart';
@@ -1334,6 +1336,161 @@ class MessengerController extends ChangeNotifier {
         retainedMessages: (id) => _groupConversation(id).messages,
       );
 
+  Future<GroupFileService>? _groupFileService;
+  final _groupFileSessions = <String, GroupFileSession>{};
+  final _groupFileSends = <String, Future<void>>{};
+
+  Future<GroupFileService>
+  _ensureGroupFileService() => _groupFileService ??= () async {
+    final root = await _attachmentRoot();
+    return GroupFileService(
+      root: Directory(p.join(root.path, 'groups')),
+      authorizeEvent: (event) async =>
+          !_disposed &&
+          await _groupHistory.fileForPeer(
+                event.groupId,
+                event.eventId,
+                _requireIdentity().deviceId,
+              ) !=
+              null,
+      authorizePeer: (event, peer) async =>
+          !_disposed &&
+          await _groupHistory.fileForPeer(event.groupId, event.eventId, peer) !=
+              null,
+      // Downloads remain disabled until an explicit storage reservation and
+      // receive-policy check is attached. Serving retained pieces is independent.
+      receiveAllowed: (event, peer, lan) => false,
+      loadPreferences: (event) async =>
+          groupFilePreference(event.groupId, event.eventId),
+      savePreferences: (event, preference) => setGroupFilePreference(
+        event.groupId,
+        event.eventId,
+        accepted: preference.accepted,
+        paused: preference.paused,
+        sharing: preference.sharing,
+        reserveOverride: preference.reserveOverride,
+      ),
+      sendEncrypted: _sendGroupFileFrame,
+      cancelAndDrain: (event, peer, request) async {
+        final pending =
+            _groupFileSends[jsonEncode([event.eventId, peer, request])];
+        if (pending != null) {
+          try {
+            await pending;
+          } catch (_) {
+            /* Request reports its own failure. */
+          }
+        }
+      },
+      onChanged: (_) {
+        if (!_disposed) notifyListeners();
+      },
+    );
+  }();
+
+  Future<GroupFileSession> _registerGroupFile(GroupHistoryEvent event) async {
+    final session = await (await _ensureGroupFileService()).register(event);
+    _groupFileSessions[event.eventId] = session;
+    return session;
+  }
+
+  Future<void> _sendGroupFileFrame(
+    GroupHistoryEvent event,
+    String peerId,
+    String request,
+    Uint8List frame,
+  ) {
+    final key = jsonEncode([event.eventId, peerId, request]);
+    final task = () async {
+      if (await _groupHistory.fileForPeer(
+            event.groupId,
+            event.eventId,
+            peerId,
+          ) ==
+          null) {
+        throw StateError('Group file peer is not authorized.');
+      }
+      final contact = _groupMemberContact(_requireGroup(event.groupId), peerId);
+      final adapter = _transportRegistry?.adapterFor(TransportKind.iroh);
+      if (contact == null ||
+          adapter == null ||
+          !_canUseIrohForContact(contact) ||
+          !_irohFileAllowed(GroupFileManifest.fromEvent(event).sizeBytes)) {
+        throw StateError(
+          'Group file Iroh route is unavailable or exceeds its limit.',
+        );
+      }
+      final bytes = await _crypto.encryptGroupFile(
+        peer: contact,
+        groupId: event.groupId,
+        eventId: event.eventId,
+        requestId: request,
+        bytes: frame,
+      );
+      final peer = _transportPeerForContact(contact, allowRelay: true);
+      for (final route in await adapter.discoverRoutes(peer)) {
+        if (!route.permitsPayload(bytes.length)) continue;
+        if (await _groupHistory.fileForPeer(
+              event.groupId,
+              event.eventId,
+              peerId,
+            ) ==
+            null) {
+          throw StateError('Group file authorization changed.');
+        }
+        final receipt = await adapter.sendEnvelope(
+          peer: peer,
+          route: route,
+          envelope: TransportEnvelope(
+            id: request,
+            recipientDeviceId: peerId,
+            bytes: bytes,
+            createdAt: _now().toUtc(),
+          ),
+        );
+        if (receipt.accepted) return;
+      }
+      throw StateError('No Iroh group file route accepted the frame.');
+    }();
+    _groupFileSends[key] = task;
+    return task.whenComplete(() {
+      if (identical(_groupFileSends[key], task)) _groupFileSends.remove(key);
+    });
+  }
+
+  Future<void> _handleGroupFileIroh(TransportInboundEnvelope inbound) async {
+    final header = peekGroupFileBinary(inbound.bytes);
+    if (header.recipient != _requireIdentity().deviceId) return;
+    final group = _groupById(header.groupId);
+    if (group == null) return;
+    final peer = _groupMemberContact(group, header.sender);
+    if (peer == null ||
+        !peer.hasPinnedIrohIdentity ||
+        peer.irohEndpointId != inbound.senderTransportIdentity ||
+        !_canUseIrohForContact(peer)) {
+      return;
+    }
+    final event = await _groupHistory.fileEventForPeer(
+      header.groupId,
+      header.eventId,
+      header.sender,
+    );
+    if (event == null ||
+        !_irohFileAllowed(GroupFileManifest.fromEvent(event).sizeBytes)) {
+      return;
+    }
+    final clear = await _crypto.decryptGroupFile(
+      peer: peer,
+      groupId: header.groupId,
+      eventId: header.eventId,
+      requestId: header.requestId,
+      bytes: inbound.bytes,
+    );
+    await (await _registerGroupFile(
+      event,
+    )).transport.receive(header.sender, clear);
+  }
+
   void _projectGroupFile(
     String groupId,
     GroupHistoryEvent event,
@@ -1598,6 +1755,10 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _stopTransportRegistry() async {
+    final files = _groupFileService;
+    _groupFileService = null;
+    if (files != null) await (await files).close();
+    _groupFileSessions.clear();
     for (final subscription in _transportInboundSubscriptions) {
       await subscription.cancel();
     }
@@ -1627,6 +1788,10 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     try {
+      if (isGroupFileBinary(inbound.bytes)) {
+        await _handleGroupFileIroh(inbound);
+        return;
+      }
       if (contact == null && await _handleGroupOnlyIrohInbound(inbound)) {
         return;
       }

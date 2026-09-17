@@ -7,6 +7,7 @@ import 'package:cryptography/cryptography.dart';
 
 import 'beam_protocol.dart';
 import 'models.dart';
+import 'group_file_crypto.dart';
 
 /// Owns pairwise key derivation and envelope encrypt/decrypt for the
 /// messenger controller. Lifted out of [MessengerController] so the
@@ -20,6 +21,42 @@ class CryptoService {
     : _identityProvider = identityProvider;
 
   final IdentityRecord Function() _identityProvider;
+
+  Future<Uint8List> encryptGroupFile({
+    required ContactRecord peer,
+    required String groupId,
+    required String eventId,
+    required String requestId,
+    required Uint8List bytes,
+  }) async => encryptGroupFileBinary(
+    pairwiseKey: await (await sessionKeyFor(peer)).extractBytes(),
+    header: GroupFileBinaryHeader(
+      groupId: groupId,
+      eventId: eventId,
+      requestId: requestId,
+      sender: _identityProvider().deviceId,
+      recipient: peer.deviceId,
+    ),
+    cleartext: bytes,
+  );
+
+  Future<Uint8List> decryptGroupFile({
+    required ContactRecord peer,
+    required String groupId,
+    required String eventId,
+    required String requestId,
+    required Uint8List bytes,
+  }) async => decryptGroupFileBinary(
+    pairwiseKey: await (await sessionKeyFor(peer)).extractBytes(),
+    expected: GroupFileBinaryHeader(
+      groupId: groupId,
+      eventId: eventId,
+      requestId: requestId,
+      sender: peer.deviceId,
+      recipient: _identityProvider().deviceId,
+    ),
+    frame: bytes,
+  );
 
   Future<({String publicKeyBase64, String privateKeyBase64})>
   createSigningIdentity() async {

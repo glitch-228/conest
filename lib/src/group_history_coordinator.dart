@@ -117,6 +117,16 @@ class GroupHistoryCoordinator {
     }
   }
 
+  Future<GroupHistoryEvent?> fileEventForPeer(
+    String id,
+    String eventId,
+    String peer,
+  ) async {
+    if (await fileForPeer(id, eventId, peer) == null) return null;
+    final events = await (await _replica(id)).journal.readEvents([eventId]);
+    return events.isEmpty ? null : events.single;
+  }
+
   bool? supportsMessageMutations(String groupId, String peer) =>
       _wires[groupId]?.supportsMessageMutations(peer);
   final _replicas = <String, Future<GroupHistoryReplica>>{};
