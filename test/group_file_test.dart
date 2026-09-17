@@ -11,6 +11,36 @@ import 'package:conest/src/group_file_provider.dart';
 import 'package:conest/src/models.dart';
 
 void main() {
+  test(
+    'group file metadata survives vault message copies without becoming direct attachment',
+    () {
+      final manifest = GroupFileManifest(
+        fileName: 'group.bin',
+        mimeType: 'application/octet-stream',
+        sizeBytes: 1,
+        fileHash: 'a' * 64,
+        pieceHashes: ['b' * 64],
+      );
+      final message = ChatMessage(
+        id: 'c' * 64,
+        conversationId: 'group',
+        senderDeviceId: 'author',
+        recipientDeviceId: 'group',
+        body: '',
+        outbound: false,
+        state: DeliveryState.delivered,
+        createdAt: DateTime.utc(2026),
+        groupFile: manifest,
+      );
+      final restored = ChatMessage.fromJson(
+        message.copyWith(state: DeliveryState.read).toJson(),
+      );
+      expect(restored.groupFile!.toPayload(), manifest.toPayload());
+      expect(restored.attachment, isNull);
+      expect(restored.senderDeviceId, 'author');
+    },
+  );
+
   test('vault retains receive intent without changing legacy defaults', () {
     final legacy = VaultSnapshot.fromJson(
       VaultSnapshot.empty().toJson()..remove('groupFilePreferences'),

@@ -23,6 +23,8 @@ import 'package:path/path.dart' as p;
 
 import 'src/app_storage.dart';
 import 'src/adaptive_chat_dialog.dart';
+import 'src/group_file_tile.dart';
+import 'src/group_file_download.dart';
 import 'src/attachment_safety.dart';
 import 'src/build_info.dart';
 import 'src/chat_message_search.dart';
@@ -5973,6 +5975,19 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       ),
                       const SizedBox(height: 10),
                     ],
+                    if (message.groupFile case final file?)
+                      GroupFileTile(
+                        filename: file.fileName,
+                        size: file.sizeBytes,
+                        verifiedBytes: 0,
+                        state: GroupFileDownloadState.waiting,
+                        sharing: controller
+                            .groupFilePreference(group.groupId, message.id)
+                            .sharing,
+                        accepted: controller
+                            .groupFilePreference(group.groupId, message.id)
+                            .accepted,
+                      ),
                     if (message.hasAttachment) ...[
                       _AttachmentRow(
                         descriptor: message.attachment!,
@@ -5983,7 +5998,8 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       ),
                       if (message.body.isNotEmpty) const SizedBox(height: 8),
                     ],
-                    if (message.body.isNotEmpty || !message.hasAttachment)
+                    if (message.body.isNotEmpty ||
+                        (!message.hasAttachment && message.groupFile == null))
                       Text(
                         message.body,
                         style: Theme.of(context).textTheme.bodyLarge?.copyWith(
@@ -6075,6 +6091,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     itemBuilder: (context) => [
                       const PopupMenuItem(value: 'reply', child: Text('Reply')),
                       if (message.outbound &&
+                          message.groupFile == null &&
                           !message.hasAttachment &&
                           group.hasActiveMember(
                             controller.identity?.deviceId ?? '',
@@ -6090,6 +6107,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         child: Text('Copy message'),
                       ),
                       if (!message.hasAttachment &&
+                          message.groupFile == null &&
                           message.body.trim().isNotEmpty)
                         const PopupMenuItem(
                           value: 'forward',

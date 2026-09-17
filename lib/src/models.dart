@@ -4,6 +4,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 
 import 'transport_models.dart';
+import 'group_file_manifest.dart';
 
 export 'transport_models.dart';
 
@@ -1926,6 +1927,7 @@ class ChatMessage {
     this.replySenderDeviceId,
     this.replySenderDisplayName,
     this.attachment,
+    this.groupFile,
     this.albumId,
     this.transportKind,
     this.transportPath,
@@ -1957,6 +1959,9 @@ class ChatMessage {
   /// Non-null on v0.3.2+ messages that carry a file or image attachment.
   /// `body` may still hold a short caption alongside the attachment.
   final AttachmentDescriptor? attachment;
+
+  /// Signed group event ID is [id]; bytes may come from any authorized provider.
+  final GroupFileManifest? groupFile;
 
   /// Telegram-style media-group id. Consecutive same-sender messages that
   /// share an `albumId` render as a single album bubble in the UI; null
@@ -2014,6 +2019,7 @@ class ChatMessage {
       replySenderDisplayName:
           replySenderDisplayName ?? this.replySenderDisplayName,
       attachment: clearAttachment ? null : (attachment ?? this.attachment),
+      groupFile: groupFile,
       albumId: albumId ?? this.albumId,
       transportKind: transportKind ?? this.transportKind,
       transportPath: transportPath ?? this.transportPath,
@@ -2041,6 +2047,7 @@ class ChatMessage {
       'replySenderDeviceId': replySenderDeviceId,
       'replySenderDisplayName': replySenderDisplayName,
       if (attachment != null) 'attachment': attachment!.toJson(),
+      if (groupFile != null) 'groupFile': groupFile!.toPayload(),
       if (albumId != null) 'albumId': albumId,
       if (transportKind != null) 'transportKind': transportKind!.name,
       if (transportPath != null) 'transportPath': transportPath!.name,
@@ -2079,6 +2086,11 @@ class ChatMessage {
             )
           : null,
       albumId: json['albumId'] as String?,
+      groupFile: json['groupFile'] is Map<String, dynamic>
+          ? GroupFileManifest.fromPayload(
+              json['groupFile'] as Map<String, dynamic>,
+            )
+          : null,
       transportKind: TransportKind.values
           .where((entry) => entry.name == json['transportKind'])
           .firstOrNull,

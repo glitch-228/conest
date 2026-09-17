@@ -314,7 +314,8 @@ class GroupHistoryCoordinator {
       }
       if (!message.outbound ||
           message.senderDeviceId != identity().deviceId ||
-          message.attachment != null) {
+          message.attachment != null ||
+          message.groupFile != null) {
         return;
       }
       final event = await _sign(
@@ -358,6 +359,7 @@ class GroupHistoryCoordinator {
         message.senderDeviceId != identity().deviceId ||
         !message.outbound ||
         message.hasAttachment ||
+        message.groupFile != null ||
         message.deleted) {
       throw StateError(
         'Only your own active group text messages can be changed.',

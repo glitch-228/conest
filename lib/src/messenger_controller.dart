@@ -12,6 +12,8 @@ import 'package:path_provider/path_provider.dart' as path_provider;
 
 import 'crypto_service.dart';
 import 'group_history_coordinator.dart';
+import 'group_history_event.dart';
+import 'group_file_manifest.dart';
 import 'group_message_projection.dart';
 import 'group_membership_history.dart';
 import 'beam_protocol.dart';
@@ -1328,8 +1330,42 @@ class MessengerController extends ChangeNotifier {
           );
         },
         onMessage: _projectGroupHistoryMessage,
+        onAttachment: _projectGroupFile,
         retainedMessages: (id) => _groupConversation(id).messages,
       );
+
+  void _projectGroupFile(
+    String groupId,
+    GroupHistoryEvent event,
+    GroupFileManifest manifest,
+  ) {
+    final group = _groupById(groupId);
+    if (_disposed ||
+        group == null ||
+        group.localRemovedAt != null ||
+        _groupMessageById(groupId, event.eventId) != null) {
+      return;
+    }
+    _upsertGroupMessage(
+      groupId,
+      ChatMessage(
+        id: event.eventId,
+        conversationId: groupId,
+        senderDeviceId: event.authorDeviceId,
+        recipientDeviceId: groupId,
+        body: '',
+        groupFile: manifest,
+        outbound: event.authorDeviceId == _requireIdentity().deviceId,
+        state: event.authorDeviceId == _requireIdentity().deviceId
+            ? DeliveryState.pending
+            : DeliveryState.delivered,
+        createdAt: _now().toUtc(),
+        senderDisplayName: group
+            .memberProfileFor(event.authorDeviceId)
+            ?.displayName,
+      ),
+    );
+  }
 
   void _projectGroupHistoryMessage(
     String groupId,
@@ -8680,6 +8716,7 @@ class MessengerController extends ChangeNotifier {
   /// "10:42 •••" stubs in the chat. Reject them at the public API.
   static bool _isRenderableMessage(ChatMessage m) {
     if (m.deleted) return false;
+    if (m.groupFile != null) return true;
     if (m.body.trim().isNotEmpty) return true;
     if (m.attachment != null) return true;
     if (m.replyToMessageId != null && m.replyToMessageId!.isNotEmpty) {
