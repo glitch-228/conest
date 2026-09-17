@@ -7024,6 +7024,48 @@ class MessengerController extends ChangeNotifier {
         : null;
   }
 
+  GroupFilePreference groupFilePreference(String groupId, String eventId) {
+    for (final entry in _snapshot.groupFilePreferences) {
+      if (entry.groupId == groupId && entry.eventId == eventId) return entry;
+    }
+    return GroupFilePreference(groupId: groupId, eventId: eventId);
+  }
+
+  Future<void> setGroupFilePreference(
+    String groupId,
+    String eventId, {
+    bool? accepted,
+    bool? sharing,
+    bool? paused,
+    bool? reserveOverride,
+  }) async {
+    // Require a locally retained signed manifest and current admission. A
+    // filename or arbitrary event ID must not create receive authorization.
+    final manifest = await _groupHistory.fileForPeer(
+      groupId,
+      eventId,
+      _requireIdentity().deviceId,
+    );
+    if (manifest == null) {
+      throw StateError('This group file is not available to you.');
+    }
+    final previous = groupFilePreference(groupId, eventId);
+    final updated = previous.copyWith(
+      accepted: accepted,
+      sharing: sharing,
+      paused: paused,
+      reserveOverride: reserveOverride,
+    );
+    _snapshot = _snapshot.copyWith(
+      groupFilePreferences: [
+        for (final entry in _snapshot.groupFilePreferences)
+          if (entry.groupId != groupId || entry.eventId != eventId) entry,
+        updated,
+      ],
+    );
+    await _saveSnapshotSilently();
+  }
+
   Future<void> changeGroupMessage({
     required String groupId,
     required String messageId,

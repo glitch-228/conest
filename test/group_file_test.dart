@@ -7,8 +7,113 @@ import 'package:conest/src/group_file_manifest.dart';
 import 'package:conest/src/group_file_scheduler.dart';
 import 'package:conest/src/group_file_store.dart';
 import 'package:conest/src/group_file_download.dart';
+import 'package:conest/src/group_file_provider.dart';
+import 'package:conest/src/models.dart';
 
 void main() {
+  test('vault retains receive intent without changing legacy defaults', () {
+    final legacy = VaultSnapshot.fromJson(
+      VaultSnapshot.empty().toJson()..remove('groupFilePreferences'),
+    );
+    expect(legacy.groupFilePreferences, isEmpty);
+    final preference = GroupFilePreference(
+      groupId: 'group',
+      eventId: 'a' * 64,
+      accepted: true,
+      sharing: false,
+      paused: true,
+      reserveOverride: true,
+    );
+    final snapshot = legacy.copyWith(groupFilePreferences: [preference]);
+    final restored = VaultSnapshot.fromJson(
+      snapshot.copyWith(contacts: []).toJson(),
+    );
+    expect(restored.groupFilePreferences.single.toJson(), preference.toJson());
+    final changed = restored.groupFilePreferences.single.copyWith(
+      paused: false,
+    );
+    expect(changed.accepted, isTrue);
+    expect(changed.sharing, isFalse);
+    expect(changed.reserveOverride, isTrue);
+  });
+
+  test(
+    'partial providers combine verified pieces and stop sharing revokes reads',
+    () async {
+      final root = await Directory.systemTemp.createTemp('group-providers-');
+      try {
+        final first = Uint8List(GroupFileManifest.pieceSize)..[0] = 7;
+        final last = Uint8List.fromList([9]);
+        final source = await File(
+          '${root.path}/source',
+        ).writeAsBytes([...first, ...last]);
+        final description = await hashGroupFile(
+          path: source.path,
+          fileName: 'data.bin',
+          mimeType: 'application/octet-stream',
+        );
+        GroupFileStore store(String name) => GroupFileStore(
+          root: Directory('${root.path}/$name'),
+          manifest: description,
+        );
+        final a = store('a');
+        final b = store('b');
+        await a.writePiece(0, first);
+        await b.writePiece(1, last);
+        final persisted = <bool>[];
+        final providers = {
+          'a': GroupFileProvider(
+            store: a,
+            authorize: (peer) async => peer == 'recipient',
+            persistSharing: (value) async => persisted.add(value),
+            sharing: true,
+          ),
+          'b': GroupFileProvider(
+            store: b,
+            authorize: (peer) async => peer == 'recipient',
+            persistSharing: (_) async {},
+            sharing: true,
+          ),
+        };
+        expect(await providers['a']!.availability('outsider'), isEmpty);
+        expect(await providers['a']!.readPiece('outsider', 0), isNull);
+        final requested = <String>{};
+        final download = GroupFileDownload(
+          store: store('recipient'),
+          allowed: (_, _) => true,
+          authorize: (_) async => true,
+          fetch: (request) async {
+            requested.add(request.peer);
+            final bytes = await providers[request.peer]!.readPiece(
+              'recipient',
+              request.piece,
+            );
+            if (bytes == null) throw StateError('Provider unavailable');
+            return bytes;
+          },
+        );
+        for (final entry in providers.entries) {
+          download.scheduler.updateProvider(
+            entry.key,
+            await entry.value.availability('recipient'),
+            lan: true,
+          );
+        }
+        await download.resume();
+        expect(download.state, GroupFileDownloadState.complete);
+        expect(requested, {'a', 'b'});
+        expect(download.verifiedBytes, first.length + 1);
+        await providers['a']!.setSharing(false);
+        expect(persisted, [false]);
+        expect(await providers['a']!.availability('recipient'), isEmpty);
+        expect(await providers['a']!.readPiece('recipient', 0), isNull);
+        expect(await a.recover(), {0});
+      } finally {
+        await root.delete(recursive: true);
+      }
+    },
+  );
+
   test(
     'download replaces corrupt provider and resumes durable pieces',
     () async {

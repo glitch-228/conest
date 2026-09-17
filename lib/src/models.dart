@@ -3435,6 +3435,68 @@ class CustomRelaySource {
       );
 }
 
+/// Local receive intent for one signed group attachment event. Transport and
+/// storage limits are checked independently; acceptance never bypasses them.
+class GroupFilePreference {
+  const GroupFilePreference({
+    required this.groupId,
+    required this.eventId,
+    this.accepted = false,
+    this.sharing = true,
+    this.paused = false,
+    this.reserveOverride = false,
+  });
+  final String groupId;
+  final String eventId;
+  final bool accepted;
+  final bool sharing;
+  final bool paused;
+  final bool reserveOverride;
+
+  GroupFilePreference copyWith({
+    bool? accepted,
+    bool? sharing,
+    bool? paused,
+    bool? reserveOverride,
+  }) => GroupFilePreference(
+    groupId: groupId,
+    eventId: eventId,
+    accepted: accepted ?? this.accepted,
+    sharing: sharing ?? this.sharing,
+    paused: paused ?? this.paused,
+    reserveOverride: reserveOverride ?? this.reserveOverride,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'groupId': groupId,
+    'eventId': eventId,
+    'accepted': accepted,
+    'sharing': sharing,
+    'paused': paused,
+    'reserveOverride': reserveOverride,
+  };
+
+  factory GroupFilePreference.fromJson(Map<String, dynamic> json) {
+    final group = json['groupId'];
+    final event = json['eventId'];
+    if (group is! String ||
+        group.isEmpty ||
+        group.length > 128 ||
+        event is! String ||
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(event)) {
+      throw const FormatException('Invalid group file preference identity.');
+    }
+    return GroupFilePreference(
+      groupId: group,
+      eventId: event,
+      accepted: json['accepted'] == true,
+      sharing: json['sharing'] != false,
+      paused: json['paused'] == true,
+      reserveOverride: json['reserveOverride'] == true,
+    );
+  }
+}
+
 class VaultSnapshot {
   VaultSnapshot({
     required this.identity,
@@ -3457,6 +3519,7 @@ class VaultSnapshot {
     this.pendingContactRequests = const <PendingContactRequest>[],
     this.transferSessions = const <TransferSession>[],
     this.attachmentCacheReferences = const <AttachmentCacheReference>[],
+    this.groupFilePreferences = const <GroupFilePreference>[],
   });
 
   final IdentityRecord? identity;
@@ -3529,6 +3592,7 @@ class VaultSnapshot {
   final List<PendingContactRequest> pendingContactRequests;
   final List<TransferSession> transferSessions;
   final List<AttachmentCacheReference> attachmentCacheReferences;
+  final List<GroupFilePreference> groupFilePreferences;
 
   factory VaultSnapshot.empty() {
     return VaultSnapshot(
@@ -3576,6 +3640,7 @@ class VaultSnapshot {
     List<PendingContactRequest>? pendingContactRequests,
     List<TransferSession>? transferSessions,
     List<AttachmentCacheReference>? attachmentCacheReferences,
+    List<GroupFilePreference>? groupFilePreferences,
     bool clearIdentity = false,
   }) {
     return VaultSnapshot(
@@ -3608,6 +3673,7 @@ class VaultSnapshot {
       transferSessions: transferSessions ?? this.transferSessions,
       attachmentCacheReferences:
           attachmentCacheReferences ?? this.attachmentCacheReferences,
+      groupFilePreferences: groupFilePreferences ?? this.groupFilePreferences,
     );
   }
 
@@ -3654,6 +3720,9 @@ class VaultSnapshot {
           .map((entry) => entry.toJson())
           .toList(),
       'pinnedRelayIdentityKeys': pinnedRelayIdentityKeys,
+      'groupFilePreferences': groupFilePreferences
+          .map((entry) => entry.toJson())
+          .toList(),
     };
   }
 
@@ -3670,6 +3739,11 @@ class VaultSnapshot {
       identity: json['identity'] == null
           ? null
           : IdentityRecord.fromJson(json['identity'] as Map<String, dynamic>),
+      groupFilePreferences:
+          (json['groupFilePreferences'] as List<dynamic>? ?? const [])
+              .cast<Map<String, dynamic>>()
+              .map(GroupFilePreference.fromJson)
+              .toList(),
       contacts: (json['contacts'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>()
           .map(ContactRecord.fromJson)
