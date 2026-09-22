@@ -12604,8 +12604,14 @@ class MessengerController extends ChangeNotifier {
     final payload = _crypto.decodeGroupMessagePayload(decoded);
     final historySupported =
         (jsonDecode(decoded) as Map)['groupHistoryVersion'] == 1;
+    // A message may have been encrypted just before a membership update and
+    // arrive after that update.  The signed history path validates the
+    // message against the membership record referenced by the event, so the
+    // live envelope must not reject every older membership epoch.  A peer
+    // advertising a future version is still inconsistent and is held for
+    // history catch-up instead of being projected immediately.
     if (payload.groupId != group.groupId ||
-        payload.membershipVersion < group.membershipVersion) {
+        payload.membershipVersion > group.membershipVersion) {
       return;
     }
     final existingConversation = _groupConversation(group.groupId);
