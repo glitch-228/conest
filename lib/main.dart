@@ -5388,6 +5388,137 @@ Future<void> _forwardTextMessage(
   }
 }
 
+Future<void> _forwardAttachment(
+  BuildContext context,
+  MessengerController controller,
+  ConestPalette palette,
+  AttachmentDescriptor descriptor,
+) async {
+  final path = await controller.attachmentCachePathFor(descriptor.id);
+  if (!context.mounted) return;
+  if (path == null) {
+    controller.setStatus('This attachment is not available locally yet.');
+    return;
+  }
+  final search = TextEditingController();
+  Object? destination;
+  try {
+    destination = await showDialog<Object>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final query = search.text.trim().toLowerCase();
+          final contacts = controller.contacts.where(
+            (contact) =>
+                contact.canSendOutbound &&
+                contact.alias.toLowerCase().contains(query),
+          );
+          final groups = controller.visibleGroups.where(
+            (group) =>
+                group.hasActiveMember(controller.identity?.deviceId ?? '') &&
+                group.title.toLowerCase().contains(query),
+          );
+          return AlertDialog(
+            title: const Text('Forward attachment'),
+            content: SizedBox(
+              width: 420,
+              height: 400,
+              child: Column(
+                children: [
+                  Text(
+                    descriptor.fileName,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: search,
+                    autofocus: true,
+                    onChanged: (_) => setDialogState(() {}),
+                    decoration: const InputDecoration(
+                      hintText: 'Search chats',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView(
+                      children: [
+                        if (contacts.isEmpty && groups.isEmpty)
+                          const ListTile(title: Text('No available chats')),
+                        for (final contact in contacts)
+                          ListTile(
+                            leading: SealAvatar(
+                              seed: contact.deviceId,
+                              label: contact.alias,
+                              palette: palette,
+                              size: 36,
+                            ),
+                            title: Text(contact.alias),
+                            onTap: () => Navigator.pop(context, contact),
+                          ),
+                        for (final group in groups)
+                          ListTile(
+                            leading: const Icon(Icons.group_outlined),
+                            title: Text(group.title),
+                            onTap: () => Navigator.pop(context, group),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  } finally {
+    search.dispose();
+  }
+  if (destination == null) return;
+  try {
+    switch (destination) {
+      case ContactRecord contact:
+        await controller.sendAttachmentSource(
+          contact: contact,
+          source: StagedAttachment(
+            id: 'forward-${DateTime.now().microsecondsSinceEpoch}',
+            fileName: descriptor.fileName,
+            mimeType: descriptor.mimeType,
+            sizeBytes: descriptor.sizeBytes,
+            filePath: path,
+            presentation: descriptor.presentation,
+          ),
+        );
+      case GroupRecord group:
+        await controller.publishGroupFile(
+          groupId: group.groupId,
+          path: path,
+          fileName: descriptor.fileName,
+          mimeType: descriptor.mimeType,
+        );
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Forwarded attachment queued')),
+      );
+    }
+  } catch (error) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not forward attachment: $error')),
+      );
+    }
+  }
+}
+
 class _TelegramChatHeader extends StatelessWidget {
   const _TelegramChatHeader({
     required this.palette,
@@ -6146,6 +6277,12 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         palette: palette,
                         controller: controller,
                         messageState: message.state,
+                        onForward: () => _forwardAttachment(
+                          context,
+                          controller,
+                          palette,
+                          message.attachment!,
+                        ),
                       ),
                       if (message.body.isNotEmpty) const SizedBox(height: 8),
                     ],
@@ -7236,6 +7373,12 @@ class _ChatPanelState extends State<_ChatPanel> {
                         controller: controller,
                         messageState: message.state,
                         conversationPeerDeviceId: contact.deviceId,
+                        onForward: () => _forwardAttachment(
+                          context,
+                          controller,
+                          palette,
+                          message.attachment!,
+                        ),
                       ),
                       if (message.body.isNotEmpty) const SizedBox(height: 8),
                     ],
@@ -14360,6 +14503,7 @@ class _AttachmentRow extends StatelessWidget {
     required this.controller,
     required this.messageState,
     this.conversationPeerDeviceId,
+    this.onForward,
   });
 
   final AttachmentDescriptor descriptor;
@@ -14372,6 +14516,7 @@ class _AttachmentRow extends StatelessWidget {
   /// other image in the same conversation for swipe navigation. Null
   /// for group bubbles (group-wide swipe is a future enhancement).
   final String? conversationPeerDeviceId;
+  final Future<void> Function()? onForward;
 
   String _formatBytes(int size) {
     if (size < 1024) return '$size B';
@@ -14752,6 +14897,8 @@ class _AttachmentRow extends StatelessWidget {
             value: 'copy_path',
             child: Text('Copy cache path'),
           ),
+        if (hasLocalFile && onForward != null)
+          const PopupMenuItem(value: 'forward', child: Text('Forward')),
         if (hasLocalFile)
           PopupMenuItem(
             value: 'keep_offline',
@@ -14785,6 +14932,9 @@ class _AttachmentRow extends StatelessWidget {
         break;
       case 'copy_path':
         await _copyCachePath();
+        break;
+      case 'forward':
+        await onForward?.call();
         break;
       case 'keep_offline':
         await controller.setAttachmentKeepOffline(descriptor.id, !keptOffline);
