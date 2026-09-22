@@ -5421,6 +5421,12 @@ class MessengerController extends ChangeNotifier {
   /// resume, corruption recovery, and bounded-memory random access.
   static const int _lanAttachmentChunkSize = 4 * 1024 * 1024;
 
+  /// A failed binary PUT must release quickly so the receiver can re-request
+  /// the same verified block and the route-health logic can try an alternate
+  /// host. A healthy 4 MiB LAN block completes well below this bound even on
+  /// a slower mobile hotspot; the block remains resumable after a timeout.
+  static const Duration _binaryLanBlockTimeout = Duration(seconds: 10);
+
   /// When the only route to a contact is LAN, the size cap lifts to this
   /// value — LAN bandwidth + chunk size aren't constrained by the relay's
   /// envelope cap, and the user explicitly opted into LAN-only mode.
@@ -11165,7 +11171,7 @@ class MessengerController extends ChangeNotifier {
           hash: digestBytes,
           ciphertext: packedChunk,
         ),
-        timeout: const Duration(seconds: 30),
+        timeout: _binaryLanBlockTimeout,
       );
       if (!stillActive()) return;
       if (!ok) {
@@ -11184,7 +11190,7 @@ class MessengerController extends ChangeNotifier {
             hash: digestBytes,
             ciphertext: packedChunk,
           ),
-          timeout: const Duration(seconds: 30),
+          timeout: _binaryLanBlockTimeout,
         );
         if (!stillActive()) return;
         appendDebugLog(
