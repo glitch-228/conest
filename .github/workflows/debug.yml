@@ -40,6 +40,31 @@ jobs:
           echo "::error title=Milestone checkpoint required::Quick debug artifacts are reserved for quarter, half, or complete PLAN milestones."
           echo "Set milestone_checkpoint and milestone_id (for example M4-Q1) before dispatching quick_build."
           exit 1
+      - name: Validate the milestone identifier
+        if: ${{ inputs.quick_build }}
+        env:
+          CHECKPOINT: ${{ inputs.milestone_checkpoint }}
+          MILESTONE_ID: ${{ inputs.milestone_id }}
+        run: |
+          case "$CHECKPOINT" in
+            quarter)
+              pattern='^M[0-9]+-Q[1-4]$'
+              ;;
+            half)
+              pattern='^M[0-9]+-HALF$'
+              ;;
+            complete)
+              pattern='^M[0-9]+-COMPLETE$'
+              ;;
+            *)
+              echo "::error title=Invalid milestone checkpoint::Quick builds accept quarter, half, or complete checkpoints only."
+              exit 1
+              ;;
+          esac
+          if [[ ! "$MILESTONE_ID" =~ $pattern ]]; then
+            echo "::error title=Invalid milestone identifier::Use M<number>-Q1..Q4 for quarter, M<number>-HALF for half, or M<number>-COMPLETE for a finished milestone."
+            exit 1
+          fi
       - name: Record the requested cadence
         run: |
           if [ "${{ inputs.quick_build }}" = "true" ]; then
