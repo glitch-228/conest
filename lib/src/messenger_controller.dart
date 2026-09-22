@@ -5709,7 +5709,13 @@ class MessengerController extends ChangeNotifier {
         debugTest: spec,
         debugUseSourceInPlace: true,
       );
-      final timeoutMinutes = max(5, (sizeMiB / 60).ceil() + 2);
+      // A route handoff can consume one or more bounded reconnect windows
+      // while already-verified blocks remain durable. Keep the diagnostic
+      // deadline proportional to file size so a slow but progressing 100 MiB
+      // Iroh run is not reported as failed merely because recovery took a few
+      // minutes; the transfer's own stall/retry state still surfaces real
+      // failures promptly.
+      final timeoutMinutes = max(5, (sizeMiB / 30).ceil() + 3);
       final result = await resultCompleter.future.timeout(
         Duration(minutes: timeoutMinutes),
         onTimeout: () => DebugFileTestResult(
