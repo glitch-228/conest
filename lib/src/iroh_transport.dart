@@ -274,12 +274,32 @@ class IrohTransportAdapter implements TransportAdapter {
     if (!peer.identityPinned || endpoint == null || endpoint.isEmpty) {
       throw StateError('Iroh transport identity is not pinned.');
     }
-    final result = await _bridge.sendEnvelope(
-      remoteEndpointId: endpoint,
-      bytes: envelope.bytes,
-      allowRelay: peer.allowRelay,
-      directAddresses: peer.directAddresses,
-    );
+    IrohBridgeReceipt result;
+    try {
+      result = await _bridge.sendEnvelope(
+        remoteEndpointId: endpoint,
+        bytes: envelope.bytes,
+        allowRelay: peer.allowRelay,
+        directAddresses: peer.directAddresses,
+      );
+    } catch (error) {
+      // A network handoff can leave the signed direct socket hints stale while
+      // the endpoint identity and Iroh discovery remain valid. Retry once
+      // without hints so built-in discovery/relay fallback can select the
+      // current path. Envelope IDs and attachment offsets are idempotent, so
+      // a late first attempt cannot duplicate user-visible data.
+      if (peer.directAddresses.isEmpty) rethrow;
+      try {
+        result = await _bridge.sendEnvelope(
+          remoteEndpointId: endpoint,
+          bytes: envelope.bytes,
+          allowRelay: peer.allowRelay,
+          directAddresses: const <String>[],
+        );
+      } catch (_) {
+        Error.throwWithStackTrace(error, StackTrace.current);
+      }
+    }
     if (result.endpointId != endpoint) {
       throw StateError('Iroh peer identity changed during delivery.');
     }

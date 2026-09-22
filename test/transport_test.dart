@@ -247,6 +247,38 @@ void main() {
   );
 
   test(
+    'Iroh retries endpoint discovery after stale direct hint failure',
+    () async {
+      final bridge = _FakeIrohBridge(endpointId: 'endpoint-peer')
+        ..failWhenDirectAddressesProvided = true;
+      final adapter = IrohTransportAdapter(
+        bridge: bridge,
+        secretKeySeed: Uint8List(32),
+        relayEnabled: true,
+        expectedEndpointId: 'endpoint-peer',
+      );
+      await adapter.start();
+      addTearDown(adapter.stop);
+      final hintedPeer = const TransportPeer(
+        deviceId: 'peer',
+        transportIdentity: 'endpoint-peer',
+        identityPinned: true,
+        directAddresses: ['10.0.0.8:40000'],
+      );
+
+      final receipt = await adapter.sendEnvelope(
+        peer: hintedPeer,
+        route: _route(TransportKind.iroh, TransportPathKind.direct),
+        envelope: _envelope(),
+      );
+
+      expect(receipt.accepted, isTrue);
+      expect(bridge.sendCalls, 2);
+      expect(bridge.lastDirectAddresses, isEmpty);
+    },
+  );
+
+  test(
     'Iroh retries a direct path after a previous relayed delivery',
     () async {
       final bridge = _FakeIrohBridge(endpointId: 'peer', relayed: true);
@@ -376,6 +408,8 @@ class _FakeIrohBridge implements NativeIrohBridge {
   bool? lastAllowRelay;
   List<String> lastDirectAddresses = const <String>[];
   Uint8List? lastBytes;
+  bool failWhenDirectAddressesProvided = false;
+  int sendCalls = 0;
 
   @override
   Stream<IrohBridgeInbound> get inbound => const Stream.empty();
@@ -398,9 +432,13 @@ class _FakeIrohBridge implements NativeIrohBridge {
     required bool allowRelay,
     List<String> directAddresses = const <String>[],
   }) async {
+    sendCalls++;
     lastAllowRelay = allowRelay;
     lastDirectAddresses = List<String>.from(directAddresses);
     lastBytes = Uint8List.fromList(bytes);
+    if (failWhenDirectAddressesProvided && directAddresses.isNotEmpty) {
+      throw TimeoutException('stale direct hint');
+    }
     return IrohBridgeReceipt(
       endpointId: remoteEndpointId,
       relayed: relayed,
