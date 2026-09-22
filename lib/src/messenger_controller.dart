@@ -1413,12 +1413,35 @@ class MessengerController extends ChangeNotifier {
       final hasLan =
           contact != null &&
           _effectiveTransports(contact).lan &&
-          _peerLanDirect.containsKey(peer);
+          _groupLanDirectEndpoint(contact) != null;
       if (hasLan) await session.discoverProvider(peer, lan: true);
       await session.discoverProvider(peer, lan: false);
     } catch (error) {
       appendDebugLog('Group file provider waiting: $error');
     }
+  }
+
+  /// Group-only peers may not have exchanged a 1:1 attachment hint yet. Their
+  /// signed membership profile still carries the LAN route advertised during
+  /// pairing; the local relay forwards HTTP `/v2/block` traffic to the binary
+  /// attachment listener on that port.
+  LanDirectEndpoint? _groupLanDirectEndpoint(ContactRecord contact) {
+    final cached = _peerLanDirect[contact.deviceId];
+    if (cached != null && _lanDirectEndpointUsable(cached)) return cached;
+    for (final route in contact.lanRouteHints) {
+      if (route.protocol == PeerRouteProtocol.udp ||
+          !isValidLanDirectHost(route.host) ||
+          !isValidPeerEndpointPort(route.port)) {
+        continue;
+      }
+      return LanDirectEndpoint(
+        host: route.host,
+        port: route.port,
+        cachedAt: DateTime.now().toUtc(),
+        binaryBlockVersion: 1,
+      );
+    }
+    return null;
   }
 
   Future<GroupFileService> _ensureGroupFileService() =>
@@ -1524,9 +1547,9 @@ class MessengerController extends ChangeNotifier {
       final lanChannel = _lanDirectChannel;
       final BinaryLanDirectChannel? binaryLanChannel =
           lanChannel is BinaryLanDirectChannel
-              ? lanChannel as BinaryLanDirectChannel
-              : null;
-      final lanEndpoint = _peerLanDirect[peerId];
+          ? lanChannel as BinaryLanDirectChannel
+          : null;
+      final lanEndpoint = _groupLanDirectEndpoint(contact);
       if (binaryLanChannel != null &&
           lanEndpoint != null &&
           _effectiveTransports(contact).lan &&
