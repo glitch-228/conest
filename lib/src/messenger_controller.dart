@@ -3227,7 +3227,7 @@ class MessengerController extends ChangeNotifier {
       buffer.writeln('lastDebugRunPeerReports=${report.peerReports.length}');
       for (final peer in report.peerReports) {
         buffer.writeln(
-          'peer alias=${peer.alias} device=${peer.deviceId} reachability=${peer.reachability.name} availablePaths=${peer.availablePathCount}/${peer.totalPathCount} lanPathAvailable=${peer.lanPathAvailable} directInternetPathAvailable=${peer.directInternetPathAvailable} relayPathAvailable=${peer.relayPathAvailable} expectedBestDeliveryState=${peer.expectedBestDeliveryState} heartbeatAttempted=${peer.heartbeatAttempted} heartbeatReplyReceived=${peer.heartbeatReplyReceived} bestPath=${peer.bestPathSummary} probeAccepted=${peer.probeAccepted} probeAcknowledged=${peer.probeAcknowledged} twoWayAccepted=${peer.twoWayAccepted} twoWayReplyReceived=${peer.twoWayReplyReceived} relayProbeAccepted=${peer.relayProbeAccepted} lastTwoWaySuccessAt=${peer.lastTwoWaySuccessAt?.toIso8601String() ?? ''} lastHeartbeatReplyAt=${peer.lastHeartbeatReplyAt?.toIso8601String() ?? ''} lastAvailablePathAt=${peer.lastAvailablePathAt?.toIso8601String() ?? ''} routes=${peer.routeSummary}',
+          'peer alias=${peer.alias} device=${peer.deviceId} reachability=${peer.reachability.name} availablePaths=${peer.availablePathCount}/${peer.totalPathCount} lanPathAvailable=${peer.lanPathAvailable} directInternetPathAvailable=${peer.directInternetPathAvailable} irohPathAvailable=${peer.irohPathAvailable} relayPathAvailable=${peer.relayPathAvailable} expectedBestDeliveryState=${peer.expectedBestDeliveryState} heartbeatAttempted=${peer.heartbeatAttempted} heartbeatReplyReceived=${peer.heartbeatReplyReceived} bestPath=${peer.bestPathSummary} probeAccepted=${peer.probeAccepted} probeAcknowledged=${peer.probeAcknowledged} twoWayAccepted=${peer.twoWayAccepted} twoWayReplyReceived=${peer.twoWayReplyReceived} relayProbeAccepted=${peer.relayProbeAccepted} lastTwoWaySuccessAt=${peer.lastTwoWaySuccessAt?.toIso8601String() ?? ''} lastHeartbeatReplyAt=${peer.lastHeartbeatReplyAt?.toIso8601String() ?? ''} lastAvailablePathAt=${peer.lastAvailablePathAt?.toIso8601String() ?? ''} routes=${peer.routeSummary}',
         );
       }
       for (final note in report.notes) {
@@ -3835,11 +3835,9 @@ class MessengerController extends ChangeNotifier {
             lanPathAvailable: availableChecks.any(
               (check) => check.route.kind == PeerRouteKind.lan,
             ),
-            directInternetPathAvailable:
-                irohAvailable ||
-                availableChecks.any(
-                  (check) => check.route.kind == PeerRouteKind.directInternet,
-                ),
+            directInternetPathAvailable: availableChecks.any(
+              (check) => check.route.kind == PeerRouteKind.directInternet,
+            ),
             irohPathAvailable: irohAvailable,
             bestPathSummary: bestAvailableCheck != null
                 ? bestAvailableCheck.summary
@@ -3942,7 +3940,7 @@ class MessengerController extends ChangeNotifier {
             : DebugCheckStatus.warn,
         peerReports.isEmpty
             ? 'No delivery path data was collected.'
-            : 'LAN ${peerCountWhere((peer) => peer.lanPathAvailable)}/${peerReports.length} • direct internet ${peerCountWhere((peer) => peer.directInternetPathAvailable)}/${peerReports.length} • relay ${peerCountWhere((peer) => peer.relayPathAvailable)}/${peerReports.length} • relay fallback verified ${peerCountWhere((peer) => !peer.relayPathAvailable || peer.relayProbeAccepted)}/${peerReports.length}',
+            : 'LAN ${peerCountWhere((peer) => peer.lanPathAvailable)}/${peerReports.length} • direct internet ${peerCountWhere((peer) => peer.directInternetPathAvailable)}/${peerReports.length} • Iroh ${peerCountWhere((peer) => peer.irohPathAvailable)}/${peerReports.length} • relay ${peerCountWhere((peer) => peer.relayPathAvailable)}/${peerReports.length} • relay fallback verified ${peerCountWhere((peer) => !peer.relayPathAvailable || peer.relayProbeAccepted)}/${peerReports.length}',
       );
 
       if (contacts.length >= 2) {
