@@ -1672,6 +1672,7 @@ class MessengerController extends ChangeNotifier {
         );
       }
       final peer = _transportPeerForContact(contact, allowRelay: true);
+      Object? lastError;
       for (final route in await adapter.discoverRoutes(peer)) {
         if (!route.permitsPayload(bytes.length)) continue;
         if (await _groupHistory.fileForPeer(
@@ -1685,19 +1686,37 @@ class MessengerController extends ChangeNotifier {
         // Group pieces are up to 4 MiB.  Use the binary attachment-range
         // framing so they are not rejected by the ordinary message envelope
         // limit, while retaining the same authenticated encrypted payload.
-        final receipt = await adapter.sendAttachmentRange(
-          peer: peer,
-          route: route,
-          range: AttachmentRange(
-            attachmentId: 'group-file:${event.eventId}:$request',
-            offset: 0,
-            bytes: bytes,
-            sha256Base64: base64Encode(dart_crypto.sha256.convert(bytes).bytes),
-          ),
-        );
-        if (receipt.accepted) return;
+        try {
+          final receipt = await adapter
+              .sendAttachmentRange(
+                peer: peer,
+                route: route,
+                range: AttachmentRange(
+                  attachmentId: 'group-file:${event.eventId}:$request',
+                  offset: 0,
+                  bytes: bytes,
+                  sha256Base64: base64Encode(
+                    dart_crypto.sha256.convert(bytes).bytes,
+                  ),
+                ),
+              )
+              .timeout(const Duration(seconds: 25));
+          if (receipt.accepted) return;
+          lastError = StateError(
+            'Iroh route ${route.label} rejected the group file frame.',
+          );
+        } catch (error) {
+          lastError = error;
+          appendDebugLog(
+            'Group file frame ${event.eventId}/$request via '
+            '${route.label} failed: $error',
+          );
+        }
       }
-      throw StateError('No Iroh group file route accepted the frame.');
+      throw StateError(
+        'No Iroh group file route accepted the frame'
+        '${lastError == null ? '.' : ': $lastError'}',
+      );
     }();
     _groupFileSends[key] = task;
     return task.whenComplete(() {
