@@ -1345,6 +1345,9 @@ class MessengerController extends ChangeNotifier {
   GroupFileSession? groupFileSession(String eventId) =>
       _groupFileSessions[eventId];
 
+  String? groupFilePathFor(String eventId) =>
+      _groupFileSessions[eventId]?.download.completedFile?.path;
+
   Future<void> downloadGroupFile(
     String groupId,
     String eventId, {

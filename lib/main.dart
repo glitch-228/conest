@@ -5892,6 +5892,52 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     controller.setStatus('Copied message text.');
   }
 
+  Future<void> _openGroupFile(ChatMessage message) async {
+    final manifest = message.groupFile;
+    final path = controller.groupFilePathFor(message.id);
+    if (manifest == null || path == null) {
+      controller.setStatus('The group file is not available locally.');
+      return;
+    }
+    if (!kIsWeb && Platform.isAndroid) {
+      final kind = manifest.mimeType.startsWith('image/')
+          ? 'image'
+          : manifest.mimeType.startsWith('video/')
+          ? 'video'
+          : 'other';
+      try {
+        final saved = await controller.platformBridge.saveMediaFileToGallery(
+          sourcePath: path,
+          fileName: sanitizeAttachmentFileName(manifest.fileName),
+          mimeType: manifest.mimeType,
+          kind: kind,
+        );
+        if (saved != null) {
+          controller.setStatus('Saved ${manifest.fileName}.');
+          return;
+        }
+      } catch (error) {
+        controller.setStatus('Could not save ${manifest.fileName}: $error');
+        return;
+      }
+      controller.setStatus('The Android file saver is unavailable.');
+      return;
+    }
+    try {
+      if (Platform.isLinux) {
+        await Process.start('xdg-open', [path]);
+      } else if (Platform.isMacOS) {
+        await Process.start('open', [path]);
+      } else if (Platform.isWindows) {
+        await Process.start('cmd', ['/c', 'start', '', path]);
+      } else {
+        controller.setStatus('Opening files is unavailable on this platform.');
+      }
+    } catch (error) {
+      controller.setStatus('Could not open ${manifest.fileName}: $error');
+    }
+  }
+
   String _messageSenderLabel(ChatMessage message) {
     if (message.outbound) {
       return 'You';
@@ -6045,6 +6091,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                                 ?.download
                                 .state ??
                             GroupFileDownloadState.waiting,
+                        onOpen: () => unawaited(_openGroupFile(message)),
                         error: controller
                             .groupFileSession(message.id)
                             ?.download
@@ -6550,7 +6597,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                   ),
                   alignment: Alignment.center,
                   child: Text(
-                    'Group file send arrives in v0.3.3+',
+                    'Drop to share this file with the group',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       color: palette.primary,
                       fontWeight: FontWeight.w700,
