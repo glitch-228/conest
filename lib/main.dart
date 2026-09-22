@@ -1869,7 +1869,8 @@ class _HomeScreenState extends State<HomeScreen> {
   /// consume the event; returns false for plain-text-only clipboard.
   Future<bool> _pasteFromClipboard() async {
     final contact = _selectedContact;
-    if (contact == null) return false;
+    final group = _selectedGroup;
+    if (contact == null && group == null) return false;
     final clipboard = SystemClipboard.instance;
     if (clipboard == null) return false;
     final DataReader reader;
@@ -1907,12 +1908,23 @@ class _HomeScreenState extends State<HomeScreen> {
         if (bytes == null || bytes.isEmpty) continue;
         final mime = sniffImageMimeType(bytes) ?? 'image/png';
         final ext = mime == 'image/jpeg' ? 'jpg' : mime.split('/').last;
-        await _sendAttachmentBytes(
-          contact: contact,
-          bytes: bytes,
-          fileName: 'pasted-${DateTime.now().millisecondsSinceEpoch}.$ext',
-          mimeType: mime,
-        );
+        final fileName =
+            'pasted-${DateTime.now().millisecondsSinceEpoch}.$ext';
+        if (contact != null) {
+          await _sendAttachmentBytes(
+            contact: contact,
+            bytes: bytes,
+            fileName: fileName,
+            mimeType: mime,
+          );
+        } else {
+          await _publishGroupClipboardBytes(
+            group!,
+            bytes: bytes,
+            fileName: fileName,
+            mimeType: mime,
+          );
+        }
         return true;
       }
     }
@@ -1929,20 +1941,29 @@ class _HomeScreenState extends State<HomeScreen> {
           final name = file.uri.pathSegments.isNotEmpty
               ? file.uri.pathSegments.last
               : 'pasted';
-          await _stageMultipleAttachments(
-            contact: contact,
-            items: [
-              (
-                bytes: null,
-                filePath: file.path,
-                sizeBytes: await file.length(),
-                fileName: name,
-                mimeType: _guessMimeType(name),
-                caption: '',
-                poster: null,
-              ),
-            ],
-          );
+          if (contact != null) {
+            await _stageMultipleAttachments(
+              contact: contact,
+              items: [
+                (
+                  bytes: null,
+                  filePath: file.path,
+                  sizeBytes: await file.length(),
+                  fileName: name,
+                  mimeType: _guessMimeType(name),
+                  caption: '',
+                  poster: null,
+                ),
+              ],
+            );
+          } else {
+            await widget.controller.publishGroupFile(
+              groupId: group!.groupId,
+              path: file.path,
+              fileName: name,
+              mimeType: _guessMimeType(name),
+            );
+          }
           return true;
         } catch (error) {
           widget.controller.appendDebugLog('Paste file read failed: $error');
@@ -1950,6 +1971,29 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
     return false;
+  }
+
+  Future<void> _publishGroupClipboardBytes(
+    GroupRecord group, {
+    required Uint8List bytes,
+    required String fileName,
+    required String mimeType,
+  }) async {
+    final temp = await Directory.systemTemp.createTemp('conest-group-paste-');
+    final path = p.join(temp.path, fileName);
+    try {
+      await File(path).writeAsBytes(bytes, flush: true);
+      await widget.controller.publishGroupFile(
+        groupId: group.groupId,
+        path: path,
+        fileName: fileName,
+        mimeType: mimeType,
+      );
+    } finally {
+      try {
+        await temp.delete(recursive: true);
+      } catch (_) {}
+    }
   }
 
   void _handleDroppedFilesForGroup(List<XFile> files) {
