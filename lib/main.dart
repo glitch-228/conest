@@ -2352,6 +2352,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           onShowDetails: () => _showGroupDetails(selectedGroup),
                           onSend: _sendCurrentGroupMessage,
                           onDropFiles: _handleDroppedFilesForGroup,
+                          onAttach: _openMediaPicker,
                           onSmartPaste: () => unawaited(_handleSmartPaste()),
                         );
                       }
@@ -2491,6 +2492,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           _showGroupDetails(selectedGroup),
                                       onSend: _sendCurrentGroupMessage,
                                       onDropFiles: _handleDroppedFilesForGroup,
+                                      onAttach: _openMediaPicker,
                                       onSmartPaste: () =>
                                           unawaited(_handleSmartPaste()),
                                     )
@@ -5673,6 +5675,7 @@ class _GroupChatPanel extends StatefulWidget {
     required this.onSend,
     required this.onShowDetails,
     required this.onDropFiles,
+    this.onAttach,
     this.onBack,
     this.onSmartPaste,
   });
@@ -5688,6 +5691,7 @@ class _GroupChatPanel extends StatefulWidget {
   final VoidCallback onSend;
   final VoidCallback onShowDetails;
   final ValueChanged<List<XFile>> onDropFiles;
+  final VoidCallback? onAttach;
   final VoidCallback? onBack;
   final VoidCallback? onSmartPaste;
 
@@ -6723,6 +6727,14 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                   ],
                   Row(
                     children: [
+                      if (widget.onAttach != null) ...[
+                        IconButton(
+                          onPressed: canSend ? widget.onAttach : null,
+                          icon: const Icon(Icons.attach_file_outlined),
+                          tooltip: 'Share a file with this group',
+                        ),
+                        const SizedBox(width: 4),
+                      ],
                       Expanded(
                         child: Shortcuts(
                           shortcuts: <ShortcutActivator, Intent>{
