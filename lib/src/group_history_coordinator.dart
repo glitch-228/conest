@@ -348,6 +348,31 @@ class GroupHistoryCoordinator {
     });
   }
 
+  /// Give pre-journal outgoing text an authenticated event without inventing
+  /// proofs for messages authored by another device. Re-running this is safe:
+  /// [recordOutgoing] skips source messages already retained in the journal.
+  Future<int> migrateLegacyOutgoing(
+    GroupRecord snapshot,
+    Iterable<ChatMessage> messages,
+  ) async {
+    var migrated = 0;
+    for (final message in messages) {
+      if (!message.outbound ||
+          message.senderDeviceId != identity().deviceId ||
+          message.body.trim().isEmpty ||
+          message.attachment != null ||
+          message.groupFile != null) {
+        continue;
+      }
+      final before = await (await _replica(
+        snapshot.groupId,
+      )).journal.sourceMessage(message.senderDeviceId, message.id);
+      await recordOutgoing(snapshot, message);
+      if (before == null) migrated++;
+    }
+    return migrated;
+  }
+
   GroupHistoryWire _wire(String id) => _wires.putIfAbsent(
     id,
     () => GroupHistoryWire(

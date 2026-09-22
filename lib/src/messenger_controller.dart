@@ -1242,6 +1242,7 @@ class MessengerController extends ChangeNotifier {
 
   final _groupHistoryTimers = <String, Timer>{};
   final _groupHistoryLastSync = <String, DateTime>{};
+  final _groupLegacyMigrations = <String, Future<void>>{};
 
   /// Called on conversation open and after an interface change. Every active
   /// signed group peer can carry history; the owner is not a required hop.
@@ -1255,6 +1256,7 @@ class MessengerController extends ChangeNotifier {
         !group.hasActiveMember(me.deviceId)) {
       return;
     }
+    _migrateLegacyGroupHistory(group);
     for (final peer in group.activeMemberDeviceIds) {
       if (peer == me.deviceId ||
           group.memberProfileFor(peer)?.signingPublicKeyBase64 == null) {
@@ -1262,6 +1264,44 @@ class MessengerController extends ChangeNotifier {
       }
       _scheduleGroupHistorySync(groupId, peer);
     }
+  }
+
+  void _migrateLegacyGroupHistory(GroupRecord group) {
+    if (_groupLegacyMigrations.containsKey(group.groupId)) return;
+    final migration = _groupHistory
+        .migrateLegacyOutgoing(
+          group,
+          _groupConversation(group.groupId).messages,
+        )
+        .then<void>(
+          (migrated) async {
+            if (migrated > 0) {
+              await _saveSnapshotSilently(notify: false);
+              for (final peer in group.activeMemberDeviceIds) {
+                if (peer != _requireIdentity().deviceId) {
+                  unawaited(
+                    _groupHistory.announceChange(group.groupId, peer).catchError(
+                      (Object error) {
+                        if (!_disposed) {
+                          appendDebugLog(
+                            'Legacy group history announcement waiting: $error',
+                          );
+                        }
+                      },
+                    ),
+                  );
+                }
+              }
+            }
+          },
+          onError: (Object error, StackTrace stack) {
+            if (!_disposed) {
+              appendDebugLog('Legacy group history migration waiting: $error');
+            }
+          },
+        )
+        .whenComplete(() => _groupLegacyMigrations.remove(group.groupId));
+    _groupLegacyMigrations[group.groupId] = migration;
   }
 
   void _requestVisibleGroupCatchUp() {
