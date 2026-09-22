@@ -1497,6 +1497,20 @@ class MessengerController extends ChangeNotifier {
   GroupFileSession? groupFileSession(String eventId) =>
       _groupFileSessions[eventId];
 
+  /// A projected manifest can briefly exist before its durable session opens.
+  /// Keep that window distinguishable from "no provider is available" so the
+  /// chat tile does not claim a file is waiting while authorization/storage
+  /// checks are still running.
+  GroupFileDownloadState groupFileDownloadState(String eventId) =>
+      _groupFileSessions[eventId]?.download.state ??
+      GroupFileDownloadState.checking;
+
+  int groupFileVerifiedBytes(String eventId) =>
+      _groupFileSessions[eventId]?.download.verifiedBytes ?? 0;
+
+  Object? groupFileError(String eventId) =>
+      _groupFileSessions[eventId]?.download.lastError;
+
   String? groupFilePathFor(String eventId) =>
       _groupFileSessions[eventId]?.download.completedFile?.path;
 

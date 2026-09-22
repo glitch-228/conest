@@ -25,7 +25,6 @@ import 'package:path/path.dart' as p;
 import 'src/app_storage.dart';
 import 'src/adaptive_chat_dialog.dart';
 import 'src/group_file_tile.dart';
-import 'src/group_file_download.dart';
 import 'src/attachment_safety.dart';
 import 'src/build_info.dart';
 import 'src/chat_message_search.dart';
@@ -1956,8 +1955,7 @@ class _HomeScreenState extends State<HomeScreen> {
         if (bytes == null || bytes.isEmpty) continue;
         final mime = sniffImageMimeType(bytes) ?? 'image/png';
         final ext = mime == 'image/jpeg' ? 'jpg' : mime.split('/').last;
-        final fileName =
-            'pasted-${DateTime.now().millisecondsSinceEpoch}.$ext';
+        final fileName = 'pasted-${DateTime.now().millisecondsSinceEpoch}.$ext';
         if (contact != null) {
           await _sendAttachmentBytes(
             contact: contact,
@@ -2629,11 +2627,10 @@ class _HomeScreenState extends State<HomeScreen> {
                               contact: selectedContact,
                               onClose: () =>
                                   setState(() => _detailsPaneOpen = false),
-                              onOpenFullProfile: () =>
-                                  _showContactProfile(
-                                    selectedContact,
-                                    forceDialog: true,
-                                  ),
+                              onOpenFullProfile: () => _showContactProfile(
+                                selectedContact,
+                                forceDialog: true,
+                              ),
                             ),
                           if (showDetailsPane && selectedGroup != null)
                             _GroupDetailsPane(
@@ -2642,11 +2639,10 @@ class _HomeScreenState extends State<HomeScreen> {
                               group: selectedGroup,
                               onClose: () =>
                                   setState(() => _detailsPaneOpen = false),
-                              onOpenFullDetails: () =>
-                                  _showGroupDetails(
-                                    selectedGroup,
-                                    forceDialog: true,
-                                  ),
+                              onOpenFullDetails: () => _showGroupDetails(
+                                selectedGroup,
+                                forceDialog: true,
+                              ),
                             ),
                         ],
                       );
@@ -2730,9 +2726,9 @@ class _ContactDetailsPane extends StatelessWidget {
                 Text(
                   contact.bio,
                   textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: palette.inkSoft,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: palette.inkSoft),
                 ),
               ],
               const SizedBox(height: 18),
@@ -2837,9 +2833,9 @@ class _GroupDetailsPane extends StatelessWidget {
               Text(
                 '${members.length} active member${members.length == 1 ? '' : 's'}',
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: palette.inkSoft,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
               ),
               const SizedBox(height: 18),
               for (final member in members)
@@ -6071,9 +6067,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   bool _loadingHistory = false;
   bool _historyExhausted = false;
 
-  ({String id, double top})? _captureScrollAnchor(
-    List<ChatMessage> messages,
-  ) {
+  ({String id, double top})? _captureScrollAnchor(List<ChatMessage> messages) {
     final viewportContext = _messageListKey.currentContext;
     final viewportBox = viewportContext?.findRenderObject() as RenderBox?;
     if (viewportBox == null || !viewportBox.attached) return null;
@@ -6081,8 +6075,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     final viewportBottom = viewportTop + viewportBox.size.height;
     ({String id, double top})? anchor;
     for (final message in messages) {
-      final box = _messageKeyFor(message.id).currentContext?.findRenderObject()
-          as RenderBox?;
+      final box =
+          _messageKeyFor(message.id).currentContext?.findRenderObject()
+              as RenderBox?;
       if (box == null || !box.attached) continue;
       final top = box.localToGlobal(Offset.zero).dy;
       final bottom = top + box.size.height;
@@ -6098,8 +6093,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     if (anchor == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scrollController.hasClients) return;
-      final box = _messageKeyFor(anchor.id).currentContext?.findRenderObject()
-          as RenderBox?;
+      final box =
+          _messageKeyFor(anchor.id).currentContext?.findRenderObject()
+              as RenderBox?;
       if (box == null || !box.attached) return;
       final currentTop = box.localToGlobal(Offset.zero).dy;
       final delta = currentTop - anchor.top;
@@ -6721,87 +6717,77 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           controller.transferProgressListenable,
                         ]),
                         builder: (context, _) => GroupFileTile(
-                        filename: file.fileName,
-                        size: file.sizeBytes,
-                        verifiedBytes:
+                          filename: file.fileName,
+                          size: file.sizeBytes,
+                          verifiedBytes: controller.groupFileVerifiedBytes(
+                            message.id,
+                          ),
+                          state: controller.groupFileDownloadState(message.id),
+                          onOpen: () => unawaited(_openGroupFile(message)),
+                          error: controller
+                              .groupFileError(message.id)
+                              ?.toString(),
+                          onDownload: () => unawaited(
+                            controller
+                                .downloadGroupFile(group.groupId, message.id)
+                                .catchError(
+                                  (Object error) =>
+                                      controller.setStatus('$error'),
+                                ),
+                          ),
+                          onDownloadAnyway: () => unawaited(
+                            controller
+                                .downloadGroupFile(
+                                  group.groupId,
+                                  message.id,
+                                  ignoreReserve: true,
+                                )
+                                .catchError(
+                                  (Object error) =>
+                                      controller.setStatus('$error'),
+                                ),
+                          ),
+                          onPause: () => unawaited(
                             controller
                                 .groupFileSession(message.id)
-                                ?.download
-                                .verifiedBytes ??
-                            0,
-                        state:
+                                ?.setPaused(true)
+                                .catchError(
+                                  (Object error) =>
+                                      controller.setStatus('$error'),
+                                ),
+                          ),
+                          onResume: () => unawaited(
                             controller
                                 .groupFileSession(message.id)
-                                ?.download
-                                .state ??
-                            GroupFileDownloadState.waiting,
-                        onOpen: () => unawaited(_openGroupFile(message)),
-                        error: controller
-                            .groupFileSession(message.id)
-                            ?.download
-                            .lastError
-                            ?.toString(),
-                        onDownload: () => unawaited(
-                          controller
-                              .downloadGroupFile(group.groupId, message.id)
-                              .catchError(
-                                (Object error) =>
-                                    controller.setStatus('$error'),
-                              ),
-                        ),
-                        onDownloadAnyway: () => unawaited(
-                          controller
-                              .downloadGroupFile(
-                                group.groupId,
-                                message.id,
-                                ignoreReserve: true,
-                              )
-                              .catchError(
-                                (Object error) =>
-                                    controller.setStatus('$error'),
-                              ),
-                        ),
-                        onPause: () => unawaited(
-                          controller
-                              .groupFileSession(message.id)
-                              ?.setPaused(true)
-                              .catchError(
-                                (Object error) =>
-                                    controller.setStatus('$error'),
-                              ),
-                        ),
-                        onResume: () => unawaited(
-                          controller
-                              .groupFileSession(message.id)
-                              ?.setPaused(false)
-                              .catchError(
-                                (Object error) =>
-                                    controller.setStatus('$error'),
-                              ),
-                        ),
-                        onStopSharing: () => unawaited(
-                          controller
-                              .groupFileSession(message.id)
-                              ?.setSharing(false)
-                              .catchError(
-                                (Object error) =>
-                                    controller.setStatus('$error'),
-                              ),
-                        ),
-                        onEvict: () => unawaited(
-                          controller
-                              .evictGroupFile(group.groupId, message.id)
-                              .catchError(
-                                (Object error) =>
-                                    controller.setStatus('$error'),
-                              ),
-                        ),
-                        sharing: controller
-                            .groupFilePreference(group.groupId, message.id)
-                            .sharing,
-                        accepted: controller
-                            .groupFilePreference(group.groupId, message.id)
-                            .accepted,
+                                ?.setPaused(false)
+                                .catchError(
+                                  (Object error) =>
+                                      controller.setStatus('$error'),
+                                ),
+                          ),
+                          onStopSharing: () => unawaited(
+                            controller
+                                .groupFileSession(message.id)
+                                ?.setSharing(false)
+                                .catchError(
+                                  (Object error) =>
+                                      controller.setStatus('$error'),
+                                ),
+                          ),
+                          onEvict: () => unawaited(
+                            controller
+                                .evictGroupFile(group.groupId, message.id)
+                                .catchError(
+                                  (Object error) =>
+                                      controller.setStatus('$error'),
+                                ),
+                          ),
+                          sharing: controller
+                              .groupFilePreference(group.groupId, message.id)
+                              .sharing,
+                          accepted: controller
+                              .groupFilePreference(group.groupId, message.id)
+                              .accepted,
                         ),
                       ),
                     if (message.hasAttachment) ...[
@@ -7805,8 +7791,7 @@ class _ChatPanelState extends State<_ChatPanel> {
       selected: allSelected,
       onForwardAttachment: (descriptor) =>
           _forwardAttachment(context, controller, palette, descriptor),
-      onDeleteAttachment: (message) =>
-          _deleteMessage(context, message),
+      onDeleteAttachment: (message) => _deleteMessage(context, message),
       onToggleSelection: (album) {
         setState(() {
           final alreadyAll = album.every(
@@ -7924,10 +7909,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                           palette,
                           message.attachment!,
                         ),
-                        onDelete: () => _deleteMessage(
-                          context,
-                          message,
-                        ),
+                        onDelete: () => _deleteMessage(context, message),
                       ),
                       if (message.body.isNotEmpty) const SizedBox(height: 8),
                     ],
