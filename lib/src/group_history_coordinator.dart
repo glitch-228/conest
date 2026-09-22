@@ -418,6 +418,62 @@ class GroupHistoryCoordinator {
     await projectPage(snapshot.groupId);
   }
 
+  Future<void> toggleReaction(
+    GroupRecord snapshot,
+    ChatMessage message, {
+    required String emoji,
+  }) async {
+    final trimmed = emoji.trim();
+    if (trimmed.isEmpty || trimmed.length > 32) {
+      throw ArgumentError('Invalid reaction.');
+    }
+    if (snapshot.localRemovedAt != null ||
+        !snapshot.hasActiveMember(identity().deviceId) ||
+        message.conversationId != snapshot.groupId ||
+        message.groupFile != null ||
+        message.attachment != null) {
+      throw StateError('This group message cannot receive reactions.');
+    }
+    await recordOutgoing(snapshot, message);
+    await _write(snapshot.groupId, () async {
+      final current = group(snapshot.groupId);
+      if (current.localRemovedAt != null ||
+          !current.hasActiveMember(identity().deviceId)) {
+        throw StateError('You are no longer a member of this group.');
+      }
+      final replica = await _replica(snapshot.groupId);
+      final original = await replica.journal.sourceMessage(
+        message.senderDeviceId,
+        message.id,
+      );
+      final membership = replica.membership.current;
+      if (original == null || membership == null) {
+        throw StateError('Waiting for signed group history.');
+      }
+      final projection = GroupMessageProjection.reduce(
+        original,
+        await replica.journal.messageMutations(original),
+      );
+      final active =
+          projection?.reactions[trimmed]?.contains(identity().deviceId) ??
+          false;
+      final reaction = await _sign(
+        replica.journal,
+        groupId: snapshot.groupId,
+        membershipId: membership.id,
+        kind: GroupEventKind.reaction,
+        payload: {
+          'targetEventId': original.eventId,
+          'changedAt': DateTime.now().toUtc().toIso8601String(),
+          'emoji': trimmed,
+          'active': !active,
+        },
+      );
+      await replica.importEvent(reaction, carrierDeviceId: identity().deviceId);
+    });
+    await projectPage(snapshot.groupId);
+  }
+
   Future<void> announceChange(String id, String peer) =>
       send(id, peer, {'version': 1, 'groupId': id, 'type': 'changed'});
 

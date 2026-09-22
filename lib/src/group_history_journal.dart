@@ -153,8 +153,9 @@ class GroupHistoryJournal {
   Future<GroupHistoryEvent?> authorHead(String author) async =>
       await _request('authorHead', [author]) as GroupHistoryEvent?;
 
-  /// At most one edit and one terminal deletion for this exact signed author.
-  /// Callers must still check membership/history visibility before projection.
+  /// Returns the latest indexed edit/deletion and each actor/emoji reaction
+  /// for this exact signed author. Callers still check membership/history
+  /// visibility before projection.
   Future<List<GroupHistoryEvent>> messageMutations(
     GroupHistoryEvent original,
   ) async =>
@@ -481,6 +482,7 @@ class _JournalWorker {
         event.authorDeviceId,
         event.signingPublicKeyBase64,
         event.kind.name,
+        if (event.kind == GroupEventKind.reaction) event.payload['emoji'],
       ]);
       final previous = _messageMutations[key];
       if (previous == null || previous.compareTo(entry) < 0) {
@@ -568,10 +570,22 @@ class _JournalWorker {
     final args = arguments as List;
     switch (operation) {
       case 'messageMutations':
-        return _read([
-          for (final kind in [GroupEventKind.edit, GroupEventKind.deletion])
-            ?_messageMutations[jsonEncode([...args, kind.name])],
-        ], 2);
+        final target = args[0] as String;
+        final authorAccount = args[1] as String;
+        final authorDevice = args[2] as String;
+        final signingKey = args[3] as String;
+        final entries =
+            _messageMutations.values
+                .where(
+                  (entry) =>
+                      entry.event.payload['targetEventId'] == target &&
+                      entry.event.authorAccountId == authorAccount &&
+                      entry.event.authorDeviceId == authorDevice &&
+                      entry.event.signingPublicKeyBase64 == signingKey,
+                )
+                .toList()
+              ..sort();
+        return _read(entries, 128);
       case 'authorHead':
       case 'sourceMessage':
         final entry = operation == 'authorHead'
@@ -691,7 +705,8 @@ class _JournalWorker {
 
 class _JournalEntry implements Comparable<_JournalEntry> {
   _JournalEntry(GroupHistoryEvent event, this.offset, this.size)
-    : id = event.eventId,
+    : event = event,
+      id = event.eventId,
       author = event.authorDeviceId,
       sequence = event.sequence,
       previousId = event.previousEventId,
@@ -699,6 +714,7 @@ class _JournalEntry implements Comparable<_JournalEntry> {
       kind = event.kind;
 
   final String id;
+  final GroupHistoryEvent event;
   final String author;
   final int sequence;
   final String? previousId;

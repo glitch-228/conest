@@ -6160,6 +6160,31 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           height: 1.35,
                         ),
                       ),
+                    if (message.reactions.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 4,
+                        runSpacing: 4,
+                        children: [
+                          for (final entry in message.reactions.entries)
+                            ActionChip(
+                              label: Text('${entry.key} ${entry.value.length}'),
+                              onPressed: () => unawaited(
+                                controller
+                                    .toggleGroupReaction(
+                                      groupId: group.groupId,
+                                      messageId: message.id,
+                                      emoji: entry.key,
+                                    )
+                                    .catchError(
+                                      (Object error) =>
+                                          controller.setStatus('$error'),
+                                    ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -6232,6 +6257,16 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         );
                       } else if (value == 'reply') {
                         widget.onReplyToMessage(message);
+                      } else if (value == 'react') {
+                        await controller
+                            .toggleGroupReaction(
+                              groupId: group.groupId,
+                              messageId: message.id,
+                              emoji: '👍',
+                            )
+                            .catchError(
+                              (Object error) => controller.setStatus('$error'),
+                            );
                       } else if (value == 'edit' || value == 'delete') {
                         await _changeGroupMessage(
                           message,
@@ -6241,6 +6276,13 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     },
                     itemBuilder: (context) => [
                       const PopupMenuItem(value: 'reply', child: Text('Reply')),
+                      if (!message.hasAttachment &&
+                          message.groupFile == null &&
+                          message.body.trim().isNotEmpty)
+                        const PopupMenuItem(
+                          value: 'react',
+                          child: Text('React 👍'),
+                        ),
                       if (message.outbound &&
                           message.groupFile == null &&
                           !message.hasAttachment &&
@@ -7207,6 +7249,31 @@ class _ChatPanelState extends State<_ChatPanel> {
                           height: 1.35,
                         ),
                       ),
+                    if (message.reactions.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 4,
+                        runSpacing: 4,
+                        children: [
+                          for (final entry in message.reactions.entries)
+                            ActionChip(
+                              label: Text('${entry.key} ${entry.value.length}'),
+                              onPressed: () => unawaited(
+                                controller
+                                    .toggleMessageReaction(
+                                      contact: contact,
+                                      messageId: message.id,
+                                      emoji: entry.key,
+                                    )
+                                    .catchError(
+                                      (Object error) =>
+                                          controller.setStatus('$error'),
+                                    ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -7312,6 +7379,17 @@ class _ChatPanelState extends State<_ChatPanel> {
                           );
                         } else if (value == 'reply') {
                           widget.onReplyToMessage(message);
+                        } else if (value == 'react') {
+                          await controller
+                              .toggleMessageReaction(
+                                contact: contact,
+                                messageId: message.id,
+                                emoji: '👍',
+                              )
+                              .catchError(
+                                (Object error) =>
+                                    controller.setStatus('$error'),
+                              );
                         } else if (value == 'edit') {
                           await _editMessage(context, message);
                         } else if (value == 'cancel') {
@@ -7332,6 +7410,11 @@ class _ChatPanelState extends State<_ChatPanel> {
                         child: Text('Message details'),
                       ),
                       const PopupMenuItem(value: 'reply', child: Text('Reply')),
+                      if (message.state != DeliveryState.canceled)
+                        const PopupMenuItem(
+                          value: 'react',
+                          child: Text('React 👍'),
+                        ),
                       if (!message.hasAttachment &&
                           message.body.trim().isNotEmpty)
                         const PopupMenuItem(

@@ -206,6 +206,7 @@ const Set<String> _v2PairwiseKinds = <String>{
   'attachment_progress',
   'message_edit',
   'message_delete',
+  'message_reaction',
   'debug_probe',
   'debug_probe_ack',
   'debug_two_way_message',
@@ -1722,7 +1723,11 @@ class MessengerController extends ChangeNotifier {
         if (existing.deleted ||
             (existing.body == body &&
                 existing.editedAt == projection.editedAt &&
-                !projection.deleted)) {
+                !projection.deleted &&
+                _sameGroupReactions(
+                  existing.reactions,
+                  projection.reactions,
+                ))) {
           return;
         }
         _upsertGroupMessage(
@@ -1731,6 +1736,7 @@ class MessengerController extends ChangeNotifier {
             body: existing.deleted ? '' : body,
             editedAt: projection.editedAt,
             deleted: existing.deleted || projection.deleted,
+            reactions: projection.reactions,
           ),
         );
         return;
@@ -1745,7 +1751,11 @@ class MessengerController extends ChangeNotifier {
         if (retained.deleted ||
             (retained.body == body &&
                 retained.editedAt == projection.editedAt &&
-                !projection.deleted)) {
+                !projection.deleted &&
+                _sameGroupReactions(
+                  retained.reactions,
+                  projection.reactions,
+                ))) {
           return;
         }
         _upsertGroupMessage(
@@ -1754,6 +1764,7 @@ class MessengerController extends ChangeNotifier {
             body: retained.deleted ? '' : body,
             editedAt: projection.editedAt,
             deleted: retained.deleted || projection.deleted,
+            reactions: projection.reactions,
           ),
         );
       }
@@ -1771,6 +1782,7 @@ class MessengerController extends ChangeNotifier {
         body: body,
         editedAt: projection.editedAt,
         deleted: projection.deleted,
+        reactions: projection.reactions,
         outbound: event.authorDeviceId == _requireIdentity().deviceId,
         state: event.authorDeviceId == _requireIdentity().deviceId
             ? DeliveryState.pending
@@ -1783,6 +1795,22 @@ class MessengerController extends ChangeNotifier {
         replySenderDisplayName: optional('replySenderDisplayName'),
       ),
     );
+  }
+
+  bool _sameGroupReactions(
+    Map<String, Set<String>> left,
+    Map<String, Set<String>> right,
+  ) {
+    if (left.length != right.length) return false;
+    for (final entry in left.entries) {
+      final other = right[entry.key];
+      if (other == null ||
+          other.length != entry.value.length ||
+          !other.containsAll(entry.value)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<int> synchronizeGroupHistory({
@@ -7512,6 +7540,28 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  Future<void> toggleGroupReaction({
+    required String groupId,
+    required String messageId,
+    required String emoji,
+  }) async {
+    final group = _requireGroup(groupId);
+    final message = _groupMessageById(groupId, messageId);
+    if (message == null) throw ArgumentError('Message not found.');
+    await _groupHistory.toggleReaction(group, message, emoji: emoji);
+    await _saveSnapshotSilently();
+    for (final peer in group.activeMemberDeviceIds) {
+      if (peer == _requireIdentity().deviceId) continue;
+      unawaited(
+        _groupHistory.announceChange(groupId, peer).catchError((Object error) {
+          if (!_disposed) {
+            appendDebugLog('Group reaction announcement waiting: $error');
+          }
+        }),
+      );
+    }
+  }
+
   Future<void> cancelPendingMessage({
     required ContactRecord contact,
     required String messageId,
@@ -8075,6 +8125,70 @@ class MessengerController extends ChangeNotifier {
       kind: PendingAckKind.messageEdit,
     );
     await _persist('Message edit queued to ${contact.alias}.');
+  }
+
+  /// Toggles a reaction authored by this device on a direct message.
+  ///
+  /// Reactions travel as encrypted control envelopes so they use the same
+  /// route selection, persistence, and retry behavior as edits and deletes.
+  Future<void> toggleMessageReaction({
+    required ContactRecord contact,
+    required String messageId,
+    required String emoji,
+  }) async {
+    final trimmed = emoji.trim();
+    if (trimmed.isEmpty || trimmed.length > 32) {
+      throw ArgumentError('Reaction must be between 1 and 32 characters.');
+    }
+    final message = _messageById(contact.deviceId, messageId);
+    if (message == null || message.state == DeliveryState.canceled) {
+      throw ArgumentError('Message not found or no longer available.');
+    }
+    final me = _requireIdentity();
+    final currentlyActive =
+        message.reactions[trimmed]?.contains(me.deviceId) ?? false;
+    final updated = <String, Set<String>>{
+      for (final entry in message.reactions.entries)
+        entry.key: Set<String>.from(entry.value),
+    };
+    final users = updated.putIfAbsent(trimmed, () => <String>{});
+    if (currentlyActive) {
+      users.remove(me.deviceId);
+    } else {
+      users.add(me.deviceId);
+    }
+    updated.removeWhere((_, members) => members.isEmpty);
+    _updateMessageReactions(contact.deviceId, messageId, updated);
+    await _persist('Reaction updated locally.');
+
+    // A pending message may still be waiting for its first delivery. The
+    // reaction is retained locally and will be sent after the message is
+    // accepted by the normal composer flow.
+    if (message.state == DeliveryState.pending) {
+      return;
+    }
+    final payload = jsonEncode({
+      'targetMessageId': messageId,
+      'emoji': trimmed,
+      'active': !currentlyActive,
+      'changedAt': DateTime.now().toUtc().toIso8601String(),
+    });
+    final envelope = await _crypto.encryptPayloadEnvelope(
+      kind: 'message_reaction',
+      messageId: _randomId('reaction'),
+      conversationId: _crypto.conversationIdFor(contact.deviceId),
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: contact.deviceId,
+      contact: contact,
+      plaintext: payload,
+    );
+    await _enqueueAndDeliverEnvelope(
+      contact: contact,
+      envelope: envelope,
+      kind: PendingAckKind.messageReaction,
+    );
+    await _persist('Reaction queued to ${contact.alias}.');
   }
 
   Future<bool> _sendMessageDeletion({
@@ -9852,6 +9966,12 @@ class MessengerController extends ChangeNotifier {
           continue;
         }
 
+        if (envelope.kind == 'message_reaction') {
+          await _handleMessageReaction(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
         // Nightly builds are release-mode binaries, so kDebugMode cannot
         // gate the authenticated peer diagnostics exposed by their Debug
         // menu. These envelopes still pass the normal known-contact,
@@ -9973,6 +10093,8 @@ class MessengerController extends ChangeNotifier {
       case 'message_edit':
         return 3;
       case 'message_delete':
+        return 3;
+      case 'message_reaction':
         return 3;
       case 'ack':
         return 1;
@@ -12592,6 +12714,52 @@ class MessengerController extends ChangeNotifier {
     }
     _deleteMessage(contact.deviceId, targetMessageId);
     await _persist('Deleted message removed by ${contact.alias}.');
+  }
+
+  Future<void> _handleMessageReaction(RelayEnvelope envelope) async {
+    final contact = _contactByDeviceId(envelope.senderDeviceId);
+    if (contact == null) {
+      return;
+    }
+    final decoded = await _crypto.decryptMessage(
+      contact: contact,
+      envelope: envelope,
+    );
+    final payload = jsonDecode(decoded);
+    if (payload is! Map<String, dynamic>) {
+      return;
+    }
+    final targetMessageId = payload['targetMessageId'] as String?;
+    final emoji = (payload['emoji'] as String?)?.trim();
+    final active = payload['active'];
+    if (targetMessageId == null ||
+        targetMessageId.isEmpty ||
+        emoji == null ||
+        emoji.isEmpty ||
+        emoji.length > 32 ||
+        active is! bool) {
+      return;
+    }
+    final existing = _messageById(contact.deviceId, targetMessageId);
+    if (existing == null) {
+      // The control may arrive before the message on a different route. The
+      // sender will retry the message itself, so do not create a phantom
+      // message or claim that the reaction was applied.
+      return;
+    }
+    final reactions = <String, Set<String>>{
+      for (final entry in existing.reactions.entries)
+        entry.key: Set<String>.from(entry.value),
+    };
+    final users = reactions.putIfAbsent(emoji, () => <String>{});
+    if (active) {
+      users.add(envelope.senderDeviceId);
+    } else {
+      users.remove(envelope.senderDeviceId);
+    }
+    reactions.removeWhere((_, members) => members.isEmpty);
+    _updateMessageReactions(contact.deviceId, targetMessageId, reactions);
+    await _persist('Applied a reaction from ${contact.alias}.');
   }
 
   void _showInboundMessageNotification({
@@ -17956,6 +18124,35 @@ class MessengerController extends ChangeNotifier {
         .map(
           (message) => message.id == messageId
               ? message.copyWith(body: body, editedAt: editedAt)
+              : message,
+        )
+        .toList();
+    conversations[conversationIndex] = conversations[conversationIndex]
+        .copyWith(messages: updatedMessages);
+    _snapshot = _snapshot.copyWith(conversations: conversations);
+  }
+
+  void _updateMessageReactions(
+    String peerDeviceId,
+    String messageId,
+    Map<String, Set<String>> reactions,
+  ) {
+    if (messageId.isEmpty) {
+      return;
+    }
+    final conversations = List<ConversationRecord>.from(
+      _snapshot.conversations,
+    );
+    final conversationIndex = conversations.indexWhere(
+      (conversation) => conversation.peerDeviceId == peerDeviceId,
+    );
+    if (conversationIndex == -1) {
+      return;
+    }
+    final updatedMessages = conversations[conversationIndex].messages
+        .map(
+          (message) => message.id == messageId
+              ? message.copyWith(reactions: reactions)
               : message,
         )
         .toList();

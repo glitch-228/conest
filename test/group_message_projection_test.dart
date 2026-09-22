@@ -137,6 +137,85 @@ void main() {
     );
   });
 
+  test(
+    'reactions are signed per actor, deterministic, and persist in messages',
+    () async {
+      final bobOn = await GroupHistoryEvent.sign(
+        groupId: 'group',
+        authorAccountId: 'account-bob',
+        authorDeviceId: 'bob',
+        keyPair: bob,
+        sequence: 1,
+        previousEventId: null,
+        lamport: 2,
+        membershipId: membership,
+        kind: GroupEventKind.reaction,
+        payload: {
+          'targetEventId': original.eventId,
+          'changedAt': '2026-09-15T12:00:00.000Z',
+          'emoji': '👍',
+          'active': true,
+        },
+      );
+      final bobOff = await GroupHistoryEvent.sign(
+        groupId: 'group',
+        authorAccountId: 'account-bob',
+        authorDeviceId: 'bob',
+        keyPair: bob,
+        sequence: 2,
+        previousEventId: bobOn.eventId,
+        lamport: 3,
+        membershipId: membership,
+        kind: GroupEventKind.reaction,
+        payload: {
+          'targetEventId': original.eventId,
+          'changedAt': '2026-09-15T12:01:00.000Z',
+          'emoji': '👍',
+          'active': false,
+        },
+      );
+      final aliceOn = await GroupHistoryEvent.sign(
+        groupId: 'group',
+        authorAccountId: 'account-alice',
+        authorDeviceId: 'alice',
+        keyPair: alice,
+        sequence: 2,
+        previousEventId: original.eventId,
+        lamport: 4,
+        membershipId: membership,
+        kind: GroupEventKind.reaction,
+        payload: {
+          'targetEventId': original.eventId,
+          'changedAt': '2026-09-15T12:02:00.000Z',
+          'emoji': '👍',
+          'active': true,
+        },
+      );
+      final projection = GroupMessageProjection.reduce(original, [
+        aliceOn,
+        bobOff,
+        bobOn,
+      ])!;
+      expect(projection.reactions, {
+        '👍': {'alice'},
+      });
+      final message = ChatMessage(
+        id: 'message',
+        conversationId: 'group',
+        senderDeviceId: 'alice',
+        recipientDeviceId: 'group',
+        body: 'hello',
+        outbound: true,
+        state: DeliveryState.delivered,
+        createdAt: DateTime.utc(2026),
+        reactions: projection.reactions,
+      );
+      expect(ChatMessage.fromJson(message.toJson()).reactions, {
+        '👍': {'alice'},
+      });
+    },
+  );
+
   test('mutation index survives restart and arrival before original', () async {
     final root = await Directory.systemTemp.createTemp('conest-mutations-');
     final file = File('${root.path}/history');

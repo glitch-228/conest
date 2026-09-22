@@ -5227,6 +5227,47 @@ void main() {
     expect(received.isEdited, isTrue);
   });
 
+  test('direct reactions update both copies and can be toggled off', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+
+    await _pairControllers(alice, bob);
+    final bobContactForAlice = bob.contacts.single;
+    final aliceContactForBob = alice.contacts.single;
+    await alice.sendMessage(contact: aliceContactForBob, body: 'react here');
+    await bob.pollNow();
+    final received = bob.messagesFor(bobContactForAlice.deviceId).single;
+
+    await bob.toggleMessageReaction(
+      contact: bobContactForAlice,
+      messageId: received.id,
+      emoji: '👍',
+    );
+    await alice.pollNow();
+    final reacted = alice.messagesFor(aliceContactForBob.deviceId).single;
+    expect(reacted.reactions['👍'], contains(bob.identity!.deviceId));
+
+    await bob.toggleMessageReaction(
+      contact: bobContactForAlice,
+      messageId: received.id,
+      emoji: '👍',
+    );
+    await alice.pollNow();
+    expect(
+      alice.messagesFor(aliceContactForBob.deviceId).single.reactions,
+      isEmpty,
+    );
+  });
+
   test('message delete removes local and remote sent copies', () async {
     final relayClient = _FakeRelayClient();
     final alice = await _createController(

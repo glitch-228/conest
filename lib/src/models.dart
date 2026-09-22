@@ -1933,9 +1933,15 @@ class ChatMessage {
     this.transportPath,
     this.transportDetail,
     Map<String, DeliveryState>? recipientStates,
+    Map<String, Set<String>>? reactions,
   }) : recipientStates = Map.unmodifiable(
          recipientStates ?? const <String, DeliveryState>{},
-       );
+       ),
+       reactions = Map.unmodifiable({
+         for (final entry
+             in (reactions ?? const <String, Set<String>>{}).entries)
+           entry.key: Set<String>.unmodifiable(entry.value),
+       });
 
   final String id;
   final String conversationId;
@@ -1972,6 +1978,7 @@ class ChatMessage {
   final String? transportDetail;
 
   final Map<String, DeliveryState> recipientStates;
+  final Map<String, Set<String>> reactions;
 
   String get bodyPreview => body.replaceAll('\n', ' ');
   bool get isEdited => editedAt != null;
@@ -1999,6 +2006,7 @@ class ChatMessage {
     TransportPathKind? transportPath,
     String? transportDetail,
     Map<String, DeliveryState>? recipientStates,
+    Map<String, Set<String>>? reactions,
   }) {
     return ChatMessage(
       id: id,
@@ -2025,6 +2033,7 @@ class ChatMessage {
       transportPath: transportPath ?? this.transportPath,
       transportDetail: transportDetail ?? this.transportDetail,
       recipientStates: recipientStates ?? this.recipientStates,
+      reactions: reactions ?? this.reactions,
     );
   }
 
@@ -2055,12 +2064,18 @@ class ChatMessage {
       'recipientStates': recipientStates.map(
         (deviceId, state) => MapEntry(deviceId, state.name),
       ),
+      if (reactions.isNotEmpty)
+        'reactions': {
+          for (final entry in reactions.entries)
+            entry.key: entry.value.toList(growable: false),
+        },
     };
   }
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
     final rawRecipientStates =
         json['recipientStates'] as Map<String, dynamic>? ?? const {};
+    final rawReactions = json['reactions'] as Map<String, dynamic>? ?? const {};
     return ChatMessage(
       id: json['id'] as String,
       conversationId: json['conversationId'] as String,
@@ -2102,6 +2117,10 @@ class ChatMessage {
         (deviceId, value) =>
             MapEntry(deviceId, DeliveryState.values.byName(value as String)),
       ),
+      reactions: {
+        for (final entry in rawReactions.entries)
+          entry.key: (entry.value as List).cast<String>().toSet(),
+      },
     );
   }
 }
@@ -3202,6 +3221,7 @@ enum PendingAckKind {
   // re-push without re-encrypting.
   messageDelete,
   messageEdit,
+  messageReaction,
   attachmentCancel,
   debugProbe,
   debugProbeAck,
