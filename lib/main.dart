@@ -6236,6 +6236,18 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                                     controller.setStatus('$error'),
                               ),
                         ),
+                        onDownloadAnyway: () => unawaited(
+                          controller
+                              .downloadGroupFile(
+                                group.groupId,
+                                message.id,
+                                ignoreReserve: true,
+                              )
+                              .catchError(
+                                (Object error) =>
+                                    controller.setStatus('$error'),
+                              ),
+                        ),
                         onPause: () => unawaited(
                           controller
                               .groupFileSession(message.id)

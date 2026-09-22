@@ -13,6 +13,7 @@ class GroupFileTile extends StatelessWidget {
     required this.sharing,
     this.accepted = false,
     this.onDownload,
+    this.onDownloadAnyway,
     this.onPause,
     this.onResume,
     this.onStopSharing,
@@ -27,6 +28,7 @@ class GroupFileTile extends StatelessWidget {
   final bool sharing;
   final bool accepted;
   final VoidCallback? onDownload;
+  final VoidCallback? onDownloadAnyway;
   final VoidCallback? onPause;
   final VoidCallback? onResume;
   final VoidCallback? onStopSharing;
@@ -86,6 +88,13 @@ class GroupFileTile extends StatelessWidget {
               TextButton(onPressed: onResume, child: const Text('Retry'))
             else
               TextButton(onPressed: onPause, child: const Text('Pause')),
+            if (state == GroupFileDownloadState.failed &&
+                error?.contains('free-space reserve') == true &&
+                onDownloadAnyway != null)
+              TextButton(
+                onPressed: onDownloadAnyway,
+                child: const Text('Download anyway'),
+              ),
             if (sharing)
               TextButton(
                 onPressed: onStopSharing,

@@ -40,6 +40,14 @@ class GroupFileDownload {
 
   int get verifiedBytes => scheduler.verifiedBytes;
 
+  /// Surface a storage/policy failure without discarding verified partial
+  /// pieces. The caller can change policy and resume the same session.
+  void fail(Object error) {
+    lastError = error;
+    state = GroupFileDownloadState.failed;
+    onChanged?.call();
+  }
+
   void pause() {
     _paused = true;
     state = GroupFileDownloadState.paused;

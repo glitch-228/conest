@@ -1416,7 +1416,12 @@ class MessengerController extends ChangeNotifier {
         (_) {},
         onError: (Object _, StackTrace _) {},
       );
-      await reserve;
+      try {
+        await reserve;
+      } catch (error) {
+        session.download.fail(error);
+        rethrow;
+      }
       if (!session.preferences.accepted) await session.setAccepted(true);
       await Future.wait([
         for (final peer in group.activeMemberDeviceIds)
