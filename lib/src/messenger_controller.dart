@@ -1365,7 +1365,17 @@ class MessengerController extends ChangeNotifier {
     final preference = session.preferences;
     if (preference.paused) return;
     final manifest = session.manifest;
-    if (!preference.accepted && !manifest.automaticallyDownload(lan: false)) {
+    final group = _requireGroup(session.event.groupId);
+    final localDevice = _requireIdentity().deviceId;
+    final lanEligible = group.activeMemberDeviceIds.any((peer) {
+      if (peer == localDevice) return false;
+      final contact = _groupMemberContact(group, peer);
+      return contact != null &&
+          _effectiveTransports(contact).lan &&
+          _groupLanDirectEndpoint(contact) != null;
+    });
+    if (!preference.accepted &&
+        !manifest.automaticallyDownload(lan: lanEligible)) {
       return;
     }
     final reserve = _groupStorageQueue.then((_) async {
@@ -1395,7 +1405,6 @@ class MessengerController extends ChangeNotifier {
     );
     await reserve;
     if (!session.preferences.accepted) await session.setAccepted(true);
-    final group = _requireGroup(session.event.groupId);
     await Future.wait([
       for (final peer in group.activeMemberDeviceIds)
         if (peer != _requireIdentity().deviceId)
