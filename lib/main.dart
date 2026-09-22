@@ -1676,24 +1676,44 @@ class _HomeScreenState extends State<HomeScreen> {
     // staged, fall through to the text-only send path.
     final staged = widget.controller.stagedAttachmentsFor(contact.deviceId);
     if (staged.isNotEmpty) {
+      try {
+        await widget.controller.sendStagedBundle(
+          contact: contact,
+          caption: body,
+          confirmOriginalSourceFallback: _confirmOriginalSourceFallback,
+        );
+      } catch (error) {
+        widget.controller.setStatus('Could not send attachment: $error');
+        return;
+      }
+      if (!mounted ||
+          _composerController.text.trim() != body ||
+          _replyTarget != null) {
+        return;
+      }
       _composerController.clear();
       setState(() => _replyTarget = null);
-      await widget.controller.sendStagedBundle(
-        contact: contact,
-        caption: body,
-        confirmOriginalSourceFallback: _confirmOriginalSourceFallback,
-      );
       return;
     }
     if (body.isEmpty) return;
     final replyTarget = _replyTarget;
+    try {
+      await widget.controller.sendMessage(
+        contact: contact,
+        body: body,
+        replyTo: replyTarget,
+      );
+    } catch (error) {
+      widget.controller.setStatus('Could not send message: $error');
+      return;
+    }
+    if (!mounted ||
+        _composerController.text.trim() != body ||
+        _replyTarget != replyTarget) {
+      return;
+    }
     _composerController.clear();
     setState(() => _replyTarget = null);
-    await widget.controller.sendMessage(
-      contact: contact,
-      body: body,
-      replyTo: replyTarget,
-    );
   }
 
   Future<bool> _confirmOriginalSourceFallback(
@@ -1733,13 +1753,23 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     final replyTarget = _replyTarget;
+    try {
+      await widget.controller.sendGroupMessage(
+        groupId: group.groupId,
+        body: body,
+        replyTo: replyTarget,
+      );
+    } catch (error) {
+      widget.controller.setStatus('Could not send group message: $error');
+      return;
+    }
+    if (!mounted ||
+        _composerController.text.trim() != body ||
+        _replyTarget != replyTarget) {
+      return;
+    }
     _composerController.clear();
     setState(() => _replyTarget = null);
-    await widget.controller.sendGroupMessage(
-      groupId: group.groupId,
-      body: body,
-      replyTo: replyTarget,
-    );
   }
 
   Future<void> _sendLanLobbyMessage() async {
@@ -1747,8 +1777,16 @@ class _HomeScreenState extends State<HomeScreen> {
     if (body.isEmpty) {
       return;
     }
+    try {
+      await widget.controller.sendLanLobbyMessage(body);
+    } catch (error) {
+      widget.controller.setStatus('Could not send LAN lobby message: $error');
+      return;
+    }
+    if (!mounted || _composerController.text.trim() != body) {
+      return;
+    }
     _composerController.clear();
-    await widget.controller.sendLanLobbyMessage(body);
   }
 
   Future<void> _handleDroppedFiles(List<XFile> files) async {
