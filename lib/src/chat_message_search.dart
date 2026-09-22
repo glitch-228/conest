@@ -53,7 +53,10 @@ class _ChatMessageSearchState extends State<ChatMessageSearch> {
       return;
     }
     final generation = ++_searchGeneration;
-    setState(() => _searching = true);
+    setState(() {
+      _searching = true;
+      _remoteMatches = const <ChatMessage>[];
+    });
     _searchDebounce = Timer(const Duration(milliseconds: 180), () {
       unawaited(() async {
         try {
