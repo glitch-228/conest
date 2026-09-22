@@ -3648,6 +3648,7 @@ class MessengerController extends ChangeNotifier {
       );
       var contactsWithPath = 0;
       final contactChecks = <String, List<PeerRouteHealth>>{};
+      final contactIrohRoutes = <String, List<RouteCandidate>>{};
       for (final contact in contacts) {
         final checks = await checkContactRoutes(
           contact,
@@ -3656,16 +3657,25 @@ class MessengerController extends ChangeNotifier {
           fast: true,
         );
         contactChecks[contact.deviceId] = checks;
+        final irohRoutes = await _discoverIrohRoutesForContact(contact);
+        contactIrohRoutes[contact.deviceId] = irohRoutes;
         final available = checks.where((check) => check.available).toList();
-        if (available.isNotEmpty) {
+        if (available.isNotEmpty || irohRoutes.isNotEmpty) {
           contactsWithPath++;
         }
+        final pathSummary = <String>[
+          if (checks.isNotEmpty) _summarizeRouteChecks(checks),
+          if (irohRoutes.isNotEmpty)
+            'Iroh ${irohRoutes.map((route) => route.label).join(', ')}',
+        ];
         add(
           'Paths to ${contact.alias}',
-          available.isEmpty ? DebugCheckStatus.warn : DebugCheckStatus.pass,
-          checks.isEmpty
+          available.isEmpty && irohRoutes.isEmpty
+              ? DebugCheckStatus.warn
+              : DebugCheckStatus.pass,
+          pathSummary.isEmpty
               ? 'No advertised paths.'
-              : _summarizeRouteChecks(checks),
+              : pathSummary.join(' • '),
         );
       }
       add(
@@ -3798,12 +3808,16 @@ class MessengerController extends ChangeNotifier {
       for (final contact in contacts) {
         final checks =
             contactChecks[contact.deviceId] ?? const <PeerRouteHealth>[];
+        final irohRoutes =
+            contactIrohRoutes[contact.deviceId] ?? const <RouteCandidate>[];
         final availableChecks = checks
             .where((check) => check.available)
             .toList();
+        final irohAvailable = irohRoutes.isNotEmpty;
         final bestAvailableCheck = availableChecks.isNotEmpty
             ? availableChecks.first
             : null;
+        final bestIrohRoute = irohRoutes.firstOrNull;
         final reachability = _reachability.recordByDeviceId(contact.deviceId);
         final heartbeatAttemptAt = reachability?.lastHeartbeatAttemptAt;
         final heartbeatReplyAt = reachability?.lastHeartbeatReplyAt;
@@ -3815,23 +3829,33 @@ class MessengerController extends ChangeNotifier {
             alias: contact.alias,
             deviceId: contact.deviceId,
             reachability: _reachability.stateFor(contact.deviceId),
-            availablePathCount: availableChecks.length,
-            totalPathCount: checks.length,
+            availablePathCount:
+                availableChecks.length + (irohAvailable ? 1 : 0),
+            totalPathCount: checks.length + (irohRoutes.isNotEmpty ? 1 : 0),
             lanPathAvailable: availableChecks.any(
               (check) => check.route.kind == PeerRouteKind.lan,
             ),
-            directInternetPathAvailable: availableChecks.any(
-              (check) => check.route.kind == PeerRouteKind.directInternet,
-            ),
-            bestPathSummary: bestAvailableCheck == null
+            directInternetPathAvailable:
+                irohAvailable ||
+                availableChecks.any(
+                  (check) => check.route.kind == PeerRouteKind.directInternet,
+                ),
+            irohPathAvailable: irohAvailable,
+            bestPathSummary: bestAvailableCheck != null
+                ? bestAvailableCheck.summary
+                : bestIrohRoute == null
                 ? 'No advertised paths.'
-                : bestAvailableCheck.summary,
-            expectedBestDeliveryState: bestAvailableCheck == null
+                : 'Iroh ${bestIrohRoute.label}',
+            expectedBestDeliveryState: bestAvailableCheck != null
+                ? _expectedDeliveryStateLabelForRoute(bestAvailableCheck.route)
+                : bestIrohRoute == null
                 ? DeliveryState.pending.name
-                : _expectedDeliveryStateLabelForRoute(bestAvailableCheck.route),
-            routeSummary: checks.isEmpty
-                ? 'No advertised paths.'
-                : _summarizeRouteChecks(checks),
+                : DeliveryState.delivered.name,
+            routeSummary: <String>[
+              if (checks.isNotEmpty) _summarizeRouteChecks(checks),
+              if (irohAvailable)
+                'Iroh ${irohRoutes.map((route) => route.label).join(', ')}',
+            ].join(' • '),
             heartbeatAttempted:
                 heartbeatAttemptAt != null &&
                 !heartbeatAttemptAt.isBefore(startedAt) &&
@@ -3855,10 +3879,15 @@ class MessengerController extends ChangeNotifier {
                 twoWayMessageId != null &&
                 _debugTwoWayReplies.contains(twoWayMessageId),
             relayProbeAccepted: relayProbeMessageId != null,
-            relayPathAvailable: checks.any(
-              (check) =>
-                  check.available && check.route.kind == PeerRouteKind.relay,
-            ),
+            relayPathAvailable:
+                checks.any(
+                  (check) =>
+                      check.available &&
+                      check.route.kind == PeerRouteKind.relay,
+                ) ||
+                irohRoutes.any(
+                  (route) => route.path == TransportPathKind.relayed,
+                ),
             lastTwoWaySuccessAt: reachability?.lastTwoWaySuccessAt,
             lastHeartbeatReplyAt: reachability?.lastHeartbeatReplyAt,
             lastAvailablePathAt: reachability?.lastAvailablePathAt,

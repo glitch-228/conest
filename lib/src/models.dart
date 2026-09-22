@@ -3923,6 +3923,7 @@ class DebugPeerReport {
     required this.totalPathCount,
     required this.lanPathAvailable,
     required this.directInternetPathAvailable,
+    this.irohPathAvailable = false,
     required this.bestPathSummary,
     required this.expectedBestDeliveryState,
     required this.routeSummary,
@@ -3946,6 +3947,7 @@ class DebugPeerReport {
   final int totalPathCount;
   final bool lanPathAvailable;
   final bool directInternetPathAvailable;
+  final bool irohPathAvailable;
   final String bestPathSummary;
   final String expectedBestDeliveryState;
   final String routeSummary;
