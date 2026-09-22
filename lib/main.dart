@@ -6059,9 +6059,54 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   bool _loadingHistory = false;
   bool _historyExhausted = false;
 
+  ({String id, double top})? _captureScrollAnchor(
+    List<ChatMessage> messages,
+  ) {
+    final viewportContext = _messageListKey.currentContext;
+    final viewportBox = viewportContext?.findRenderObject() as RenderBox?;
+    if (viewportBox == null || !viewportBox.attached) return null;
+    final viewportTop = viewportBox.localToGlobal(Offset.zero).dy;
+    final viewportBottom = viewportTop + viewportBox.size.height;
+    ({String id, double top})? anchor;
+    for (final message in messages) {
+      final box = _messageKeyFor(message.id).currentContext?.findRenderObject()
+          as RenderBox?;
+      if (box == null || !box.attached) continue;
+      final top = box.localToGlobal(Offset.zero).dy;
+      final bottom = top + box.size.height;
+      if (bottom <= viewportTop || top >= viewportBottom) continue;
+      if (anchor == null || top < anchor.top) {
+        anchor = (id: message.id, top: top);
+      }
+    }
+    return anchor;
+  }
+
+  void _restoreScrollAnchor(({String id, double top})? anchor) {
+    if (anchor == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      final box = _messageKeyFor(anchor.id).currentContext?.findRenderObject()
+          as RenderBox?;
+      if (box == null || !box.attached) return;
+      final currentTop = box.localToGlobal(Offset.zero).dy;
+      final delta = currentTop - anchor.top;
+      if (delta.abs() < 0.5) return;
+      final position = _scrollController.position;
+      final target = (position.pixels + delta).clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
+      );
+      _scrollController.jumpTo(target.toDouble());
+    });
+  }
+
   Future<void> _loadOlderHistory() async {
     if (_loadingHistory || _historyExhausted) return;
     final requestedGroup = group.groupId;
+    final anchor = _captureScrollAnchor(
+      controller.messagesForGroup(requestedGroup),
+    );
     setState(() => _loadingHistory = true);
     try {
       final next = await controller.loadOlderGroupHistory(
@@ -6073,6 +6118,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
         _historyCursor = next;
         _historyExhausted = next == null;
       });
+      _restoreScrollAnchor(anchor);
     } catch (error) {
       if (mounted) {
         controller.setStatus('Could not load older group history: $error');
