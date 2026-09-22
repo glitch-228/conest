@@ -15,6 +15,7 @@ import 'group_history_coordinator.dart';
 import 'group_history_event.dart';
 import 'group_file_manifest.dart';
 import 'group_file_crypto.dart';
+import 'group_file_download.dart';
 import 'group_file_service.dart';
 import 'group_message_projection.dart';
 import 'group_membership_history.dart';
@@ -1339,6 +1340,8 @@ class MessengerController extends ChangeNotifier {
 
   Future<GroupFileService>? _groupFileService;
   final _groupFileSessions = <String, GroupFileSession>{};
+  final _groupFileDiscoveryTimers = <String, Timer>{};
+  final _groupFileDiscoveryInFlight = <String>{};
   final _groupFileSends = <String, Future<void>>{};
   final _groupFileReservations = <String, int>{};
   Future<void> _groupStorageQueue = Future.value();
@@ -1366,54 +1369,79 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _startGroupFileDownload(GroupFileSession session) async {
-    final preference = session.preferences;
-    if (preference.paused) return;
-    final manifest = session.manifest;
-    final group = _requireGroup(session.event.groupId);
-    final localDevice = _requireIdentity().deviceId;
-    final lanEligible = group.activeMemberDeviceIds.any((peer) {
-      if (peer == localDevice) return false;
-      final contact = _groupMemberContact(group, peer);
-      return contact != null &&
-          _effectiveTransports(contact).lan &&
-          _groupLanDirectEndpoint(contact) != null;
-    });
-    if (!preference.accepted &&
-        !manifest.automaticallyDownload(lan: lanEligible)) {
-      return;
-    }
-    final reserve = _groupStorageQueue.then((_) async {
-      final root = await _attachmentRoot();
-      final capacity = await _storageCapacityProvider(root.path);
-      // Piece cache and assembled copy coexist until cache eviction.
-      final needed = manifest.sizeBytes * 2;
-      final others = _groupFileReservations.entries
-          .where((e) => e.key != session.event.eventId)
-          .fold<int>(0, (sum, e) => sum + e.value);
-      if (capacity == null ||
-          !capacity.canAllocate(
-            needed + others,
-            reserveFraction: preference.reserveOverride
-                ? 0
-                : _storageReserveFraction,
-          )) {
-        throw StateError(
-          'Not enough storage is available for this group file and the free-space reserve.',
-        );
+    if (!_groupFileDiscoveryInFlight.add(session.event.eventId)) return;
+    try {
+      final preference = session.preferences;
+      if (preference.paused ||
+          session.download.state == GroupFileDownloadState.complete) {
+        _groupFileDiscoveryTimers.remove(session.event.eventId)?.cancel();
+        return;
       }
-      _groupFileReservations[session.event.eventId] = needed;
-    });
-    _groupStorageQueue = reserve.then<void>(
-      (_) {},
-      onError: (Object _, StackTrace _) {},
-    );
-    await reserve;
-    if (!session.preferences.accepted) await session.setAccepted(true);
-    await Future.wait([
-      for (final peer in group.activeMemberDeviceIds)
-        if (peer != _requireIdentity().deviceId)
-          _discoverGroupProvider(session, group, peer),
-    ]);
+      final manifest = session.manifest;
+      final group = _requireGroup(session.event.groupId);
+      final localDevice = _requireIdentity().deviceId;
+      final lanEligible = group.activeMemberDeviceIds.any((peer) {
+        if (peer == localDevice) return false;
+        final contact = _groupMemberContact(group, peer);
+        return contact != null &&
+            _effectiveTransports(contact).lan &&
+            _groupLanDirectEndpoint(contact) != null;
+      });
+      if (!preference.accepted &&
+          !manifest.automaticallyDownload(lan: lanEligible)) {
+        return;
+      }
+      final reserve = _groupStorageQueue.then((_) async {
+        final root = await _attachmentRoot();
+        final capacity = await _storageCapacityProvider(root.path);
+        // Piece cache and assembled copy coexist until cache eviction.
+        final needed = manifest.sizeBytes * 2;
+        final others = _groupFileReservations.entries
+            .where((e) => e.key != session.event.eventId)
+            .fold<int>(0, (sum, e) => sum + e.value);
+        if (capacity == null ||
+            !capacity.canAllocate(
+              needed + others,
+              reserveFraction: preference.reserveOverride
+                  ? 0
+                  : _storageReserveFraction,
+            )) {
+          throw StateError(
+            'Not enough storage is available for this group file and the free-space reserve.',
+          );
+        }
+        _groupFileReservations[session.event.eventId] = needed;
+      });
+      _groupStorageQueue = reserve.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {},
+      );
+      await reserve;
+      if (!session.preferences.accepted) await session.setAccepted(true);
+      await Future.wait([
+        for (final peer in group.activeMemberDeviceIds)
+          if (peer != _requireIdentity().deviceId)
+            _discoverGroupProvider(session, group, peer),
+      ]);
+      if (session.download.state == GroupFileDownloadState.waiting &&
+          !session.preferences.paused) {
+        _groupFileDiscoveryTimers[session.event.eventId] ??= Timer.periodic(
+          const Duration(seconds: 15),
+          (_) {
+            if (_disposed ||
+                !_groupFileSessions.containsKey(session.event.eventId)) {
+              _groupFileDiscoveryTimers.remove(session.event.eventId)?.cancel();
+              return;
+            }
+            unawaited(_startGroupFileDownload(session));
+          },
+        );
+      } else {
+        _groupFileDiscoveryTimers.remove(session.event.eventId)?.cancel();
+      }
+    } finally {
+      _groupFileDiscoveryInFlight.remove(session.event.eventId);
+    }
   }
 
   Future<void> _discoverGroupProvider(
@@ -1958,6 +1986,11 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _stopTransportRegistry() async {
+    for (final timer in _groupFileDiscoveryTimers.values) {
+      timer.cancel();
+    }
+    _groupFileDiscoveryTimers.clear();
+    _groupFileDiscoveryInFlight.clear();
     final files = _groupFileService;
     _groupFileService = null;
     if (files != null) await (await files).close();
@@ -8141,8 +8174,10 @@ class MessengerController extends ChangeNotifier {
       throw ArgumentError('Reaction must be between 1 and 32 characters.');
     }
     final message = _messageById(contact.deviceId, messageId);
-    if (message == null || message.state == DeliveryState.canceled) {
-      throw ArgumentError('Message not found or no longer available.');
+    if (message == null ||
+        message.state == DeliveryState.canceled ||
+        message.state == DeliveryState.pending) {
+      throw ArgumentError('Message is pending or no longer available.');
     }
     final me = _requireIdentity();
     final currentlyActive =
@@ -8161,12 +8196,6 @@ class MessengerController extends ChangeNotifier {
     _updateMessageReactions(contact.deviceId, messageId, updated);
     await _persist('Reaction updated locally.');
 
-    // A pending message may still be waiting for its first delivery. The
-    // reaction is retained locally and will be sent after the message is
-    // accepted by the normal composer flow.
-    if (message.state == DeliveryState.pending) {
-      return;
-    }
     final payload = jsonEncode({
       'targetMessageId': messageId,
       'emoji': trimmed,
