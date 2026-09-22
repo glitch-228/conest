@@ -1928,6 +1928,10 @@ class ChatMessage {
     this.replySenderDisplayName,
     this.attachment,
     this.groupFile,
+    this.groupHistoryLamport,
+    this.groupHistoryAuthorDeviceId,
+    this.groupHistorySequence,
+    this.groupHistoryEventId,
     this.albumId,
     this.transportKind,
     this.transportPath,
@@ -1969,6 +1973,14 @@ class ChatMessage {
   /// Signed group event ID is [id]; bytes may come from any authorized provider.
   final GroupFileManifest? groupFile;
 
+  /// Stable journal ordering metadata for projected group history. The
+  /// displayed [createdAt] remains the author's timestamp, while these fields
+  /// keep delayed and partitioned events in deterministic order.
+  final int? groupHistoryLamport;
+  final String? groupHistoryAuthorDeviceId;
+  final int? groupHistorySequence;
+  final String? groupHistoryEventId;
+
   /// Telegram-style media-group id. Consecutive same-sender messages that
   /// share an `albumId` render as a single album bubble in the UI; null
   /// for standalone messages (text-only OR singleton captioned image).
@@ -2001,6 +2013,10 @@ class ChatMessage {
     String? replySenderDisplayName,
     AttachmentDescriptor? attachment,
     bool clearAttachment = false,
+    int? groupHistoryLamport,
+    String? groupHistoryAuthorDeviceId,
+    int? groupHistorySequence,
+    String? groupHistoryEventId,
     String? albumId,
     TransportKind? transportKind,
     TransportPathKind? transportPath,
@@ -2028,6 +2044,11 @@ class ChatMessage {
           replySenderDisplayName ?? this.replySenderDisplayName,
       attachment: clearAttachment ? null : (attachment ?? this.attachment),
       groupFile: groupFile,
+      groupHistoryLamport: groupHistoryLamport ?? this.groupHistoryLamport,
+      groupHistoryAuthorDeviceId:
+          groupHistoryAuthorDeviceId ?? this.groupHistoryAuthorDeviceId,
+      groupHistorySequence: groupHistorySequence ?? this.groupHistorySequence,
+      groupHistoryEventId: groupHistoryEventId ?? this.groupHistoryEventId,
       albumId: albumId ?? this.albumId,
       transportKind: transportKind ?? this.transportKind,
       transportPath: transportPath ?? this.transportPath,
@@ -2057,6 +2078,14 @@ class ChatMessage {
       'replySenderDisplayName': replySenderDisplayName,
       if (attachment != null) 'attachment': attachment!.toJson(),
       if (groupFile != null) 'groupFile': groupFile!.toPayload(),
+      if (groupHistoryLamport != null)
+        'groupHistoryLamport': groupHistoryLamport,
+      if (groupHistoryAuthorDeviceId != null)
+        'groupHistoryAuthorDeviceId': groupHistoryAuthorDeviceId,
+      if (groupHistorySequence != null)
+        'groupHistorySequence': groupHistorySequence,
+      if (groupHistoryEventId != null)
+        'groupHistoryEventId': groupHistoryEventId,
       if (albumId != null) 'albumId': albumId,
       if (transportKind != null) 'transportKind': transportKind!.name,
       if (transportPath != null) 'transportPath': transportPath!.name,
@@ -2106,6 +2135,10 @@ class ChatMessage {
               json['groupFile'] as Map<String, dynamic>,
             )
           : null,
+      groupHistoryLamport: json['groupHistoryLamport'] as int?,
+      groupHistoryAuthorDeviceId: json['groupHistoryAuthorDeviceId'] as String?,
+      groupHistorySequence: json['groupHistorySequence'] as int?,
+      groupHistoryEventId: json['groupHistoryEventId'] as String?,
       transportKind: TransportKind.values
           .where((entry) => entry.name == json['transportKind'])
           .firstOrNull,

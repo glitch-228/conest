@@ -1882,7 +1882,26 @@ class MessengerController extends ChangeNotifier {
         }),
       );
     }
-    if (_groupMessageById(groupId, event.eventId) != null) return;
+    final existing = _groupMessageById(groupId, event.eventId);
+    if (existing != null) {
+      final hasStableOrder =
+          existing.groupHistoryEventId == event.eventId &&
+          existing.groupHistoryLamport == event.lamport &&
+          existing.groupHistoryAuthorDeviceId == event.authorDeviceId &&
+          existing.groupHistorySequence == event.sequence;
+      if (!hasStableOrder) {
+        _upsertGroupMessage(
+          groupId,
+          existing.copyWith(
+            groupHistoryLamport: event.lamport,
+            groupHistoryAuthorDeviceId: event.authorDeviceId,
+            groupHistorySequence: event.sequence,
+            groupHistoryEventId: event.eventId,
+          ),
+        );
+      }
+      return;
+    }
     _upsertGroupMessage(
       groupId,
       ChatMessage(
@@ -1897,6 +1916,10 @@ class MessengerController extends ChangeNotifier {
             ? DeliveryState.pending
             : DeliveryState.delivered,
         createdAt: _now().toUtc(),
+        groupHistoryLamport: event.lamport,
+        groupHistoryAuthorDeviceId: event.authorDeviceId,
+        groupHistorySequence: event.sequence,
+        groupHistoryEventId: event.eventId,
         senderDisplayName: group
             .memberProfileFor(event.authorDeviceId)
             ?.displayName,
@@ -1924,14 +1947,20 @@ class MessengerController extends ChangeNotifier {
     for (final existing in _groupConversation(groupId).messages) {
       if (existing.id != id) continue;
       if (existing.senderDeviceId == event.authorDeviceId) {
-        if (existing.deleted ||
-            (existing.body == body &&
-                existing.editedAt == projection.editedAt &&
-                !projection.deleted &&
-                _sameGroupReactions(
-                  existing.reactions,
-                  projection.reactions,
-                ))) {
+        final hasStableOrder =
+            existing.groupHistoryEventId == event.eventId &&
+            existing.groupHistoryLamport == event.lamport &&
+            existing.groupHistoryAuthorDeviceId == event.authorDeviceId &&
+            existing.groupHistorySequence == event.sequence;
+        if (hasStableOrder &&
+            (existing.deleted ||
+                (existing.body == body &&
+                    existing.editedAt == projection.editedAt &&
+                    !projection.deleted &&
+                    _sameGroupReactions(
+                      existing.reactions,
+                      projection.reactions,
+                    )))) {
           return;
         }
         _upsertGroupMessage(
@@ -1941,6 +1970,10 @@ class MessengerController extends ChangeNotifier {
             editedAt: projection.editedAt,
             deleted: existing.deleted || projection.deleted,
             reactions: projection.reactions,
+            groupHistoryLamport: event.lamport,
+            groupHistoryAuthorDeviceId: event.authorDeviceId,
+            groupHistorySequence: event.sequence,
+            groupHistoryEventId: event.eventId,
           ),
         );
         return;
@@ -1952,14 +1985,20 @@ class MessengerController extends ChangeNotifier {
     final retained = _groupMessageById(groupId, projectedId);
     if (retained != null) {
       if (retained.senderDeviceId == event.authorDeviceId) {
-        if (retained.deleted ||
-            (retained.body == body &&
-                retained.editedAt == projection.editedAt &&
-                !projection.deleted &&
-                _sameGroupReactions(
-                  retained.reactions,
-                  projection.reactions,
-                ))) {
+        final hasStableOrder =
+            retained.groupHistoryEventId == event.eventId &&
+            retained.groupHistoryLamport == event.lamport &&
+            retained.groupHistoryAuthorDeviceId == event.authorDeviceId &&
+            retained.groupHistorySequence == event.sequence;
+        if (hasStableOrder &&
+            (retained.deleted ||
+                (retained.body == body &&
+                    retained.editedAt == projection.editedAt &&
+                    !projection.deleted &&
+                    _sameGroupReactions(
+                      retained.reactions,
+                      projection.reactions,
+                    )))) {
           return;
         }
         _upsertGroupMessage(
@@ -1969,6 +2008,10 @@ class MessengerController extends ChangeNotifier {
             editedAt: projection.editedAt,
             deleted: retained.deleted || projection.deleted,
             reactions: projection.reactions,
+            groupHistoryLamport: event.lamport,
+            groupHistoryAuthorDeviceId: event.authorDeviceId,
+            groupHistorySequence: event.sequence,
+            groupHistoryEventId: event.eventId,
           ),
         );
       }
@@ -1992,6 +2035,10 @@ class MessengerController extends ChangeNotifier {
             ? DeliveryState.pending
             : DeliveryState.delivered,
         createdAt: at,
+        groupHistoryLamport: event.lamport,
+        groupHistoryAuthorDeviceId: event.authorDeviceId,
+        groupHistorySequence: event.sequence,
+        groupHistoryEventId: event.eventId,
         senderDisplayName: optional('senderDisplayName'),
         replyToMessageId: optional('replyToMessageId'),
         replySnippet: optional('replySnippet'),
@@ -9537,7 +9584,46 @@ class MessengerController extends ChangeNotifier {
     return conversation.messages
         .where(_isRenderableMessage)
         .toList(growable: false)
-      ..sort((left, right) => left.createdAt.compareTo(right.createdAt));
+      ..sort(_compareGroupTimelineMessages);
+  }
+
+  /// Group history carries a stable Lamport/author/sequence order. Prefer it
+  /// over wall-clock timestamps so delayed, duplicated, or partitioned events
+  /// converge to the same timeline on every device. Legacy local messages
+  /// retain the timestamp/id fallback until they are migrated.
+  static int _compareGroupTimelineMessages(
+    ChatMessage left,
+    ChatMessage right,
+  ) {
+    final leftHasOrder =
+        left.groupHistoryLamport != null &&
+        left.groupHistoryAuthorDeviceId != null &&
+        left.groupHistorySequence != null &&
+        left.groupHistoryEventId != null;
+    final rightHasOrder =
+        right.groupHistoryLamport != null &&
+        right.groupHistoryAuthorDeviceId != null &&
+        right.groupHistorySequence != null &&
+        right.groupHistoryEventId != null;
+    if (leftHasOrder && rightHasOrder) {
+      var result = left.groupHistoryLamport!.compareTo(
+        right.groupHistoryLamport!,
+      );
+      if (result != 0) return result;
+      result = left.groupHistoryAuthorDeviceId!.compareTo(
+        right.groupHistoryAuthorDeviceId!,
+      );
+      if (result != 0) return result;
+      result = left.groupHistorySequence!.compareTo(
+        right.groupHistorySequence!,
+      );
+      if (result != 0) return result;
+      result = left.groupHistoryEventId!.compareTo(right.groupHistoryEventId!);
+      if (result != 0) return result;
+    }
+    var result = left.createdAt.compareTo(right.createdAt);
+    if (result != 0) return result;
+    return left.id.compareTo(right.id);
   }
 
   /// Searches retained group history off the UI isolate, projects authorized
