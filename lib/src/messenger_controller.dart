@@ -10719,7 +10719,7 @@ class MessengerController extends ChangeNotifier {
     return (path: file.path, error: null, reserveBlocked: false);
   }
 
-  Future<void> _sendAttachmentChunkRequest(
+  Future<bool> _sendAttachmentChunkRequest(
     ContactRecord peer,
     String attachmentId,
     int index,
@@ -10727,7 +10727,7 @@ class MessengerController extends ChangeNotifier {
     final me = _requireIdentity();
     final inbound = _inboundAttachments[attachmentId];
     if (inbound == null || !inbound.accepted || inbound.partialPath == null) {
-      return;
+      return false;
     }
     final requiresLan = inbound.descriptor.sizeBytes > maxAttachmentSizeBytes;
     // nightly.9: piggy-back our LAN-direct endpoint hint so the sender
@@ -10782,7 +10782,7 @@ class MessengerController extends ChangeNotifier {
         if (requiresLan) {
           _setTransferSessionState(attachmentId, TransferState.transferring);
         }
-        return;
+        return true;
       }
       unawaited(_onLanDirectPutFailure(peer.deviceId));
     }
@@ -10807,7 +10807,9 @@ class MessengerController extends ChangeNotifier {
         'attachmentId=$attachmentId: $error',
       );
       inbound.requestedInFlight.remove(index);
+      return false;
     }
+    return true;
   }
 
   Future<void> _handleAttachmentChunkRequest(
@@ -11688,7 +11690,27 @@ class MessengerController extends ChangeNotifier {
       );
       requests.add(() async {
         try {
-          await _sendAttachmentChunkRequest(sender, state.descriptor.id, next);
+          final sent = await _sendAttachmentChunkRequest(
+            sender,
+            state.descriptor.id,
+            next,
+          );
+          if (!sent) {
+            state.requestedInFlight.remove(next);
+            unawaited(
+              Future<void>.delayed(const Duration(seconds: 5), () {
+                if (identical(
+                      _inboundAttachments[state.descriptor.id],
+                      state,
+                    ) &&
+                    !state.paused &&
+                    state.accepted &&
+                    state.partialPath != null) {
+                  _startInboundRequestWindow(state, sender);
+                }
+              }),
+            );
+          }
         } catch (error, stackTrace) {
           state.requestedInFlight.remove(next);
           appendDebugLog(
