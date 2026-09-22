@@ -1665,18 +1665,36 @@ class MessengerController extends ChangeNotifier {
           lanEndpoint != null &&
           _effectiveTransports(contact).lan &&
           _lanDirectEndpointUsable(lanEndpoint)) {
-        final accepted = await binaryLanChannel.putAttachmentBlock(
-          host: lanEndpoint.host,
-          port: lanEndpoint.port,
-          block: LanAttachmentBlock(
-            attachmentId: 'group-file:${event.eventId}:$request',
-            index: 0,
-            hash: Uint8List.fromList(dart_crypto.sha256.convert(bytes).bytes),
-            ciphertext: bytes,
-          ),
-          timeout: const Duration(seconds: 30),
-        );
-        if (accepted) return;
+        try {
+          final accepted = await binaryLanChannel.putAttachmentBlock(
+            host: lanEndpoint.host,
+            port: lanEndpoint.port,
+            block: LanAttachmentBlock(
+              attachmentId: 'group-file:${event.eventId}:$request',
+              index: 0,
+              hash: Uint8List.fromList(dart_crypto.sha256.convert(bytes).bytes),
+              ciphertext: bytes,
+            ),
+            timeout: const Duration(seconds: 30),
+          );
+          if (accepted) {
+            _onLanDirectPutSuccess(peerId);
+            return;
+          }
+          appendDebugLog(
+            'Group file LAN block rejected for ${contact.alias}; '
+            'trying Iroh fallback.',
+          );
+        } catch (error) {
+          appendDebugLog(
+            'Group file LAN block to ${contact.alias} failed: $error; '
+            'trying Iroh fallback.',
+          );
+        }
+        // A failed LAN PUT must not strand the request. Probe and demote the
+        // endpoint in the background, while the current immutable block
+        // immediately continues through Iroh direct/relay discovery.
+        unawaited(_onLanDirectPutFailure(peerId));
       }
 
       final adapter = _transportRegistry?.adapterFor(TransportKind.iroh);
