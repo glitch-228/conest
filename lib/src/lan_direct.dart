@@ -291,12 +291,15 @@ class HttpLanDirectChannel implements LanDirectChannel, BinaryLanDirectChannel {
         _activeEnvelopeHandlers < _maxConcurrentEnvelopeHandlers &&
         (_pendingEnvelopes.isNotEmpty || _pendingBlocks.isNotEmpty)) {
       final Future<void> Function() work;
-      if (_pendingBlocks.isNotEmpty) {
-        final queued = _pendingBlocks.removeFirst();
-        work = () => queued.handler(queued.block);
-      } else {
+      // Keep control and messaging envelopes ahead of bulk blocks. A full
+      // block window must not delay attachment requests, receipts, retries,
+      // or cancellation long enough to look like a stalled transfer.
+      if (_pendingEnvelopes.isNotEmpty) {
         final queued = _pendingEnvelopes.removeFirst();
         work = () => queued.handler(queued.envelope);
+      } else {
+        final queued = _pendingBlocks.removeFirst();
+        work = () => queued.handler(queued.block);
       }
       _activeEnvelopeHandlers++;
       unawaited(
