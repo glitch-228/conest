@@ -383,7 +383,11 @@ class HttpLanDirectChannel implements LanDirectChannel, BinaryLanDirectChannel {
     final length = segments.fold<int>(0, (sum, bytes) => sum + bytes.length);
     if (length > _maxRequestBytes) return false;
     final client = _outboundClient ??= HttpClient()
-      ..connectionTimeout = const Duration(milliseconds: 1500)
+      // A Wi-Fi handoff can take longer than the old 1.5 s setup window even
+      // while the peer's LAN listener remains healthy. Let the per-request
+      // timeout handle a genuinely stalled upload instead of demoting a
+      // briefly slow connection before the retry logic can run.
+      ..connectionTimeout = const Duration(seconds: 5)
       ..idleTimeout = const Duration(seconds: 30)
       ..maxConnectionsPerHost = 16;
     HttpClientRequest? request;
