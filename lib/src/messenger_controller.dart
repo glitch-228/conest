@@ -11399,7 +11399,10 @@ class MessengerController extends ChangeNotifier {
           state.lastRouteFallbackAt = DateTime.now().toUtc();
         }
         _armOutboundStallTimer(requester);
-        notifyListeners();
+        // Chunk acknowledgements are high-frequency data-plane updates. Keep
+        // them on the transfer-only notifier so the conversation shell does
+        // not rebuild once per block on the legacy envelope path.
+        _notifyTransferProgress();
       }
     } catch (error) {
       if (!stillActive()) return;
@@ -11412,7 +11415,7 @@ class MessengerController extends ChangeNotifier {
       // does not look frozen while the receiver retries.
       if (state.consecutiveChunkFailures >= 2) {
         state.lastRouteFallbackAt = DateTime.now().toUtc();
-        notifyListeners();
+        _notifyTransferProgress();
       }
       if (state.requiresLan && !allowLargeIrohRelay) {
         _setTransferSessionState(
