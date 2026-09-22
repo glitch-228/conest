@@ -7792,7 +7792,10 @@ class MessengerController extends ChangeNotifier {
     _markRuntimeActivity();
     await _persist('Sending group message to ${profiledGroup.title}.');
     try {
-      await _groupHistory.recordOutgoing(profiledGroup, message);
+      final event = await _groupHistory.recordOutgoing(profiledGroup, message);
+      if (event != null) {
+        _attachGroupHistoryOrder(profiledGroup.groupId, message.id, event);
+      }
     } catch (error) {
       appendDebugLog('Group history archive pending: $error');
     }
@@ -7803,6 +7806,26 @@ class MessengerController extends ChangeNotifier {
         message: message,
       );
     }
+  }
+
+  void _attachGroupHistoryOrder(
+    String groupId,
+    String messageId,
+    GroupHistoryEvent event,
+  ) {
+    final message = _groupMessageById(groupId, messageId);
+    if (message == null || message.groupHistoryEventId == event.eventId) {
+      return;
+    }
+    _upsertGroupMessage(
+      groupId,
+      message.copyWith(
+        groupHistoryLamport: event.lamport,
+        groupHistoryAuthorDeviceId: event.authorDeviceId,
+        groupHistorySequence: event.sequence,
+        groupHistoryEventId: event.eventId,
+      ),
+    );
   }
 
   String? groupMessageChangeCompatibility(String groupId) {

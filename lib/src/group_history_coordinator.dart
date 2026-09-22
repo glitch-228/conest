@@ -307,26 +307,29 @@ class GroupHistoryCoordinator {
         }
       });
 
-  Future<void> recordOutgoing(GroupRecord snapshot, ChatMessage message) async {
+  Future<GroupHistoryEvent?> recordOutgoing(
+    GroupRecord snapshot,
+    ChatMessage message,
+  ) async {
     await prepareMembership(snapshot);
-    await _write(snapshot.groupId, () async {
+    return _write(snapshot.groupId, () async {
       final replica = await _replica(snapshot.groupId);
       final membership = replica.membership.current;
       if (membership == null) {
         throw StateError('Waiting for the owner’s signed membership history.');
       }
-      if (await replica.journal.sourceMessage(
-            message.senderDeviceId,
-            message.id,
-          ) !=
-          null) {
-        return;
+      final existing = await replica.journal.sourceMessage(
+        message.senderDeviceId,
+        message.id,
+      );
+      if (existing != null) {
+        return existing;
       }
       if (!message.outbound ||
           message.senderDeviceId != identity().deviceId ||
           message.attachment != null ||
           message.groupFile != null) {
-        return;
+        return null;
       }
       final event = await _sign(
         replica.journal,
@@ -345,6 +348,7 @@ class GroupHistoryCoordinator {
         },
       );
       await replica.importEvent(event, carrierDeviceId: identity().deviceId);
+      return event;
     });
   }
 
