@@ -14254,7 +14254,10 @@ class _TransfersScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: controller,
+      listenable: Listenable.merge([
+        controller,
+        controller.transferProgressListenable,
+      ]),
       builder: (context, _) {
         final snapshots = controller.transferSnapshots;
         final active = snapshots
@@ -15143,7 +15146,15 @@ class _AttachmentRow extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: Listenable.merge([
+      controller,
+      controller.transferProgressListenable,
+    ]),
+    builder: (context, _) => _build(context),
+  );
+
+  Widget _build(BuildContext context) {
     // Defensive guard: a malformed descriptor used to surface as a blank
     // attachment bubble. Reject early so the user sees an explicit error
     // rather than an empty card.

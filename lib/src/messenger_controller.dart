@@ -446,6 +446,7 @@ class MessengerController extends ChangeNotifier {
   // checking this flag in the override turns those into safe no-ops.
   bool _disposed = false;
   Timer? _transferProgressUiTimer;
+  final ChangeNotifier _transferProgressNotifier = ChangeNotifier();
   final LocalRelayNode _localRelayNode;
   final PlatformBridge _platformBridge;
   PlatformBridge get platformBridge => _platformBridge;
@@ -9846,9 +9847,20 @@ class MessengerController extends ChangeNotifier {
     if (_disposed || _transferProgressUiTimer != null) return;
     _transferProgressUiTimer = Timer(const Duration(milliseconds: 100), () {
       _transferProgressUiTimer = null;
-      notifyListeners();
+      if (_disposed) return;
+      // Transfer byte counters change much more often than conversation or
+      // settings state. Keep those 100 ms updates local to attachment and
+      // transfer widgets so the root MaterialApp does not rebuild for every
+      // LAN/Iroh block acknowledgement.
+      _transferProgressNotifier.notifyListeners();
+      _scheduleTransferForegroundSync();
     });
   }
+
+  /// Emits throttled byte/progress updates without invalidating the whole
+  /// application shell. Structural transfer changes still use the regular
+  /// controller notifier.
+  Listenable get transferProgressListenable => _transferProgressNotifier;
 
   @override
   void notifyListeners() {
@@ -18727,6 +18739,7 @@ class MessengerController extends ChangeNotifier {
     unawaited(_groupHistoryService?.close());
     _attachmentBlockWorker.close();
     _transferProgressUiTimer?.cancel();
+    _transferProgressNotifier.dispose();
     _stopLongPoll();
     _pollTimer?.cancel();
     _pendingSaveTimer?.cancel();
