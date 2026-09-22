@@ -7802,6 +7802,15 @@ class MessengerController extends ChangeNotifier {
     // An address learned on the old interface is no longer trusted as a LAN
     // destination. Both peers exchange fresh, authenticated endpoint hints.
     _peerLanDirect.clear();
+    for (final session in _groupFileSessions.values.toList(growable: false)) {
+      unawaited(
+        _startGroupFileDownload(session).catchError((Object error) {
+          if (!_disposed) {
+            appendDebugLog('Group file route change waiting: $error');
+          }
+        }),
+      );
+    }
     for (final state in _outboundAttachments.values.where(
       (entry) => entry.requiresLan,
     )) {
