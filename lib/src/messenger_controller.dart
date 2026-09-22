@@ -1400,10 +1400,26 @@ class MessengerController extends ChangeNotifier {
     await Future.wait([
       for (final peer in group.activeMemberDeviceIds)
         if (peer != _requireIdentity().deviceId)
-          session.discoverProvider(peer, lan: false).catchError((Object error) {
-            appendDebugLog('Group file provider waiting: $error');
-          }),
+          _discoverGroupProvider(session, group, peer),
     ]);
+  }
+
+  Future<void> _discoverGroupProvider(
+    GroupFileSession session,
+    GroupRecord group,
+    String peer,
+  ) async {
+    try {
+      final contact = _groupMemberContact(group, peer);
+      final hasLan =
+          contact != null &&
+          _effectiveTransports(contact).lan &&
+          _peerLanDirect.containsKey(peer);
+      if (hasLan) await session.discoverProvider(peer, lan: true);
+      await session.discoverProvider(peer, lan: false);
+    } catch (error) {
+      appendDebugLog('Group file provider waiting: $error');
+    }
   }
 
   Future<GroupFileService> _ensureGroupFileService() =>
@@ -1432,10 +1448,16 @@ class MessengerController extends ChangeNotifier {
             final contact = group == null
                 ? null
                 : _groupMemberContact(group, peer);
-            return _groupFileReservations.containsKey(event.eventId) &&
-                contact != null &&
-                _canUseIrohForContact(contact) &&
-                _irohFileAllowed(GroupFileManifest.fromEvent(event).sizeBytes);
+            if (!_groupFileReservations.containsKey(event.eventId) ||
+                contact == null) {
+              return false;
+            }
+            final manifest = GroupFileManifest.fromEvent(event);
+            if (lan) {
+              return _effectiveTransports(contact).lan;
+            }
+            return _canUseIrohForContact(contact) &&
+                _irohFileAllowed(manifest.sizeBytes);
           },
           loadPreferences: (event) async =>
               groupFilePreference(event.groupId, event.eventId),
@@ -1488,14 +1510,9 @@ class MessengerController extends ChangeNotifier {
         throw StateError('Group file peer is not authorized.');
       }
       final contact = _groupMemberContact(_requireGroup(event.groupId), peerId);
-      final adapter = _transportRegistry?.adapterFor(TransportKind.iroh);
-      if (contact == null ||
-          adapter == null ||
-          !_canUseIrohForContact(contact) ||
-          !_irohFileAllowed(GroupFileManifest.fromEvent(event).sizeBytes)) {
-        throw StateError(
-          'Group file Iroh route is unavailable or exceeds its limit.',
-        );
+      final manifest = GroupFileManifest.fromEvent(event);
+      if (contact == null) {
+        throw StateError('Group file peer is unavailable.');
       }
       final bytes = await _crypto.encryptGroupFile(
         peer: contact,
@@ -1504,6 +1521,39 @@ class MessengerController extends ChangeNotifier {
         requestId: request,
         bytes: frame,
       );
+
+      final lanChannel = _lanDirectChannel;
+      final BinaryLanDirectChannel? binaryLanChannel =
+          lanChannel is BinaryLanDirectChannel
+              ? lanChannel as BinaryLanDirectChannel
+              : null;
+      final lanEndpoint = _peerLanDirect[peerId];
+      if (binaryLanChannel != null &&
+          lanEndpoint != null &&
+          _effectiveTransports(contact).lan &&
+          _lanDirectEndpointUsable(lanEndpoint)) {
+        final accepted = await binaryLanChannel.putAttachmentBlock(
+          host: lanEndpoint.host,
+          port: lanEndpoint.port,
+          block: LanAttachmentBlock(
+            attachmentId: 'group-file:${event.eventId}:$request',
+            index: 0,
+            hash: Uint8List.fromList(dart_crypto.sha256.convert(bytes).bytes),
+            ciphertext: bytes,
+          ),
+          timeout: const Duration(seconds: 30),
+        );
+        if (accepted) return;
+      }
+
+      final adapter = _transportRegistry?.adapterFor(TransportKind.iroh);
+      if (adapter == null ||
+          !_canUseIrohForContact(contact) ||
+          !_irohFileAllowed(manifest.sizeBytes)) {
+        throw StateError(
+          'Group file LAN and Iroh routes are unavailable or exceed their limits.',
+        );
+      }
       final peer = _transportPeerForContact(contact, allowRelay: true);
       for (final route in await adapter.discoverRoutes(peer)) {
         if (!route.permitsPayload(bytes.length)) continue;
@@ -16155,6 +16205,15 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> _handleLanDirectAttachmentBlock(LanAttachmentBlock block) async {
     if (_disposed || block.hash.length != 32) return;
+    if (block.attachmentId.startsWith('group-file:')) {
+      final actual = dart_crypto.sha256.convert(block.ciphertext).bytes;
+      if (actual.length != block.hash.length ||
+          actual.indexed.any((entry) => entry.$2 != block.hash[entry.$1])) {
+        return;
+      }
+      await _handleGroupFileLan(block.ciphertext);
+      return;
+    }
     final state = _inboundAttachments[block.attachmentId];
     if (state == null) return;
     final sender = _contactByDeviceId(state.peerDeviceId);
@@ -16170,6 +16229,31 @@ class MessengerController extends ChangeNotifier {
       packedBytes: block.ciphertext,
       expectedHash: block.hash,
     );
+  }
+
+  Future<void> _handleGroupFileLan(Uint8List bytes) async {
+    final header = peekGroupFileBinary(bytes);
+    if (header.recipient != _requireIdentity().deviceId) return;
+    final group = _groupById(header.groupId);
+    if (group == null) return;
+    final peer = _groupMemberContact(group, header.sender);
+    if (peer == null) return;
+    final event = await _groupHistory.fileEventForPeer(
+      header.groupId,
+      header.eventId,
+      header.sender,
+    );
+    if (event == null) return;
+    final clear = await _crypto.decryptGroupFile(
+      peer: peer,
+      groupId: header.groupId,
+      eventId: header.eventId,
+      requestId: header.requestId,
+      bytes: bytes,
+    );
+    await (await _registerGroupFile(
+      event,
+    )).transport.receive(header.sender, clear);
   }
 
   /// Public getter so the host (main.dart) and tests can read the bound
