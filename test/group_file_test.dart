@@ -298,6 +298,13 @@ void main() {
         );
         final store = GroupFileStore(root: root, manifest: description);
         await store.writePiece(0, bytes);
+        final provider = GroupFileProvider(
+          store: store,
+          authorize: (_) async => true,
+          persistSharing: (_) async {},
+          sharing: true,
+        );
+        expect(await provider.availability('peer'), {0});
         final download = GroupFileDownload(
           store: store,
           allowed: (_, _) => true,
@@ -314,6 +321,7 @@ void main() {
         expect(download.verifiedBytes, 0);
         expect(download.completedFile, isNull);
         expect(await store.recover(), isEmpty);
+        expect(await provider.availability('peer'), isEmpty);
         expect(description.fileName, 'keep-message.bin');
       } finally {
         await root.delete(recursive: true);
