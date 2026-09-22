@@ -7168,13 +7168,21 @@ class MessengerController extends ChangeNotifier {
         )) {
           if (manifestEntity is! Directory) continue;
           var size = 0;
+          var hasCompleteFile = false;
           await for (final child in manifestEntity.list(
             recursive: true,
             followLinks: false,
           )) {
-            if (child is File) size += (await child.stat()).size;
+            if (child is! File) continue;
+            size += (await child.stat()).size;
+            if (p.basename(child.path) == 'complete') {
+              hasCompleteFile = true;
+            }
           }
-          if (size == 0) continue;
+          // A directory without a completed whole-file artifact is a
+          // resumable partial download or provider cache. Keep it through
+          // startup eviction even before its runtime session is restored.
+          if (size == 0 || !hasCompleteFile) continue;
           final session = _groupFileSessions[eventId];
           final state = session?.download.state;
           final verified = session?.download.verifiedBytes ?? 0;
