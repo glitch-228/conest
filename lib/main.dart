@@ -6249,7 +6249,12 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       const SizedBox(height: 10),
                     ],
                     if (message.groupFile case final file?)
-                      GroupFileTile(
+                      ListenableBuilder(
+                        listenable: Listenable.merge([
+                          controller,
+                          controller.transferProgressListenable,
+                        ]),
+                        builder: (context, _) => GroupFileTile(
                         filename: file.fileName,
                         size: file.sizeBytes,
                         verifiedBytes:
@@ -6323,6 +6328,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         accepted: controller
                             .groupFilePreference(group.groupId, message.id)
                             .accepted,
+                        ),
                       ),
                     if (message.hasAttachment) ...[
                       _AttachmentRow(

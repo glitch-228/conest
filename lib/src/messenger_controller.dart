@@ -1381,6 +1381,7 @@ class MessengerController extends ChangeNotifier {
 
   Future<GroupFileService>? _groupFileService;
   final _groupFileSessions = <String, GroupFileSession>{};
+  final _groupFileLastStates = <String, GroupFileDownloadState>{};
   final _groupFileDiscoveryTimers = <String, Timer>{};
   final _groupFileDiscoveryInFlight = <String>{};
   final _groupFileSends = <String, Future<void>>{};
@@ -1597,10 +1598,24 @@ class MessengerController extends ChangeNotifier {
             // retained file; keeping this extra reservation would reject
             // unrelated later downloads indefinitely.
             final session = _groupFileSessions[eventId];
+            final state = session?.download.state;
             if (session?.download.state == GroupFileDownloadState.complete) {
               _groupFileReservations.remove(eventId);
             }
-            if (!_disposed) notifyListeners();
+            if (_disposed) return;
+            if (state == null) {
+              notifyListeners();
+              return;
+            }
+            final previous = _groupFileLastStates[eventId];
+            _groupFileLastStates[eventId] = state;
+            if (previous != state) {
+              // State transitions affect actions and labels; emit one normal
+              // structural update. Piece-level progress uses the throttled
+              // notifier so bulk group downloads do not rebuild the shell.
+              notifyListeners();
+            }
+            _notifyTransferProgress();
           },
         );
       }();
@@ -2069,6 +2084,7 @@ class MessengerController extends ChangeNotifier {
     _groupFileService = null;
     if (files != null) await (await files).close();
     _groupFileSessions.clear();
+    _groupFileLastStates.clear();
     _groupFileReservations.clear();
     for (final subscription in _transportInboundSubscriptions) {
       await subscription.cancel();
