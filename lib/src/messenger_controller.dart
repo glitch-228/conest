@@ -3318,6 +3318,22 @@ class MessengerController extends ChangeNotifier {
     buffer.writeln('debugProbeAcks=${_debugProbeAcknowledgements.length}');
     buffer.writeln('debugTwoWayReplies=${_debugTwoWayReplies.length}');
     buffer.writeln('frameTiming=$frameTimingSummary');
+    final activeTransfers = transferSnapshots
+        .where(
+          (entry) =>
+              entry.phase.isActive || entry.phase == TransferPhase.paused,
+        )
+        .take(12)
+        .toList(growable: false);
+    buffer.writeln('activeTransfers=${activeTransfers.length}');
+    for (final transfer in activeTransfers) {
+      buffer.writeln(
+        'transfer id=${transfer.id} direction=${transfer.direction.name} '
+        'phase=${transfer.phase.name} bytes=${transfer.bytesTransferred}/'
+        '${transfer.totalBytes} speedBps=${transfer.bytesPerSecond?.round() ?? 0} '
+        'route=${transfer.routeLabel ?? ''}',
+      );
+    }
     if (report != null) {
       buffer.writeln(
         'lastDebugRunStarted=${report.startedAt.toIso8601String()}',
