@@ -6101,6 +6101,8 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       outbound: members.first.outbound,
       selectionMode: _selectionMode,
       selected: allSelected,
+      onForwardAttachment: (descriptor) =>
+          _forwardAttachment(context, controller, palette, descriptor),
       onToggleSelection: (album) {
         setState(() {
           final alreadyAll = album.every(
@@ -7274,6 +7276,8 @@ class _ChatPanelState extends State<_ChatPanel> {
       outbound: members.first.outbound,
       selectionMode: _selectionMode,
       selected: allSelected,
+      onForwardAttachment: (descriptor) =>
+          _forwardAttachment(context, controller, palette, descriptor),
       onToggleSelection: (album) {
         setState(() {
           final alreadyAll = album.every(
@@ -13899,6 +13903,7 @@ class _AlbumBubble extends StatelessWidget {
     this.selectionMode = false,
     this.selected = false,
     this.onToggleSelection,
+    this.onForwardAttachment,
   });
 
   final List<ChatMessage> members;
@@ -13910,6 +13915,8 @@ class _AlbumBubble extends StatelessWidget {
   // nightly.10: when non-null, long-press + tap-in-selection-mode invoke
   // this to select the album as a unit (all members toggle together).
   final void Function(List<ChatMessage> members)? onToggleSelection;
+  final Future<void> Function(AttachmentDescriptor descriptor)?
+  onForwardAttachment;
 
   @override
   Widget build(BuildContext context) {
@@ -13971,6 +13978,9 @@ class _AlbumBubble extends StatelessWidget {
                             controller: controller,
                             palette: palette,
                             messageState: m.state,
+                            onForward: onForwardAttachment == null
+                                ? null
+                                : () => onForwardAttachment!(m.attachment!),
                           ),
                     ],
                   ),
