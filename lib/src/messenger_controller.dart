@@ -586,6 +586,13 @@ class MessengerController extends ChangeNotifier {
   final Map<String, _AuthorizedDebugFileTest> _authorizedInboundDebugFileTests =
       <String, _AuthorizedDebugFileTest>{};
   final Set<String> _locallyDeletedMessageIds = <String>{};
+  // A control envelope can arrive through Iroh while the corresponding
+  // message is still queued on a different route. Keep the authenticated
+  // reaction until the message is present instead of dropping it. The
+  // envelope remains outside the seen ledger so a restart can fetch it
+  // again if the message has not been persisted yet.
+  final Map<String, List<_DeferredDirectReaction>> _deferredDirectReactions =
+      <String, List<_DeferredDirectReaction>>{};
   final Map<String, DateTime> _outboundAttemptedAt = <String, DateTime>{};
   final Map<String, _PendingRouteUpdateProbe> _pendingRouteUpdateProbes =
       <String, _PendingRouteUpdateProbe>{};
@@ -1601,7 +1608,12 @@ class MessengerController extends ChangeNotifier {
         session.download.fail(error);
         rethrow;
       }
-      if (!session.preferences.accepted) await session.setAccepted(true);
+      // Keep automatic downloads unaccepted. This distinction matters when
+      // a large file starts on LAN and the route changes while pieces are in
+      // flight: the receive policy must be re-evaluated before falling back
+      // to Iroh, where files at/above 15 MiB require an explicit acceptance.
+      // The session's LAN/online automatic policy still permits the current
+      // route without turning that permission into a permanent opt-in.
       await Future.wait([
         for (final peer in group.activeMemberDeviceIds)
           if (peer != _requireIdentity().deviceId)
@@ -1840,6 +1852,13 @@ class MessengerController extends ChangeNotifier {
       }
 
       final adapter = _transportRegistry?.adapterFor(TransportKind.iroh);
+      final preference = groupFilePreference(event.groupId, event.eventId);
+      if (!preference.accepted &&
+          manifest.sizeBytes >= GroupFileManifest.onlineAutoDownloadLimit) {
+        throw StateError(
+          'This group file requires an explicit download acceptance when it leaves LAN.',
+        );
+      }
       if (adapter == null ||
           !_canUseIrohForContact(contact) ||
           !_irohFileAllowed(manifest.sizeBytes)) {
@@ -8684,14 +8703,22 @@ class MessengerController extends ChangeNotifier {
       users.add(me.deviceId);
     }
     updated.removeWhere((_, members) => members.isEmpty);
-    _updateMessageReactions(contact.deviceId, messageId, updated);
+    final changedAt = _now().toUtc();
+    final reactionClocks = Map<String, DateTime>.from(message.reactionClocks)
+      ..[_reactionClockKey(me.deviceId, trimmed)] = changedAt;
+    _updateMessageReactions(
+      contact.deviceId,
+      messageId,
+      updated,
+      reactionClocks: reactionClocks,
+    );
     await _persist('Reaction updated locally.');
 
     final payload = jsonEncode({
       'targetMessageId': messageId,
       'emoji': trimmed,
       'active': !currentlyActive,
-      'changedAt': DateTime.now().toUtc().toIso8601String(),
+      'changedAt': changedAt.toIso8601String(),
     });
     final envelope = await _crypto.encryptPayloadEnvelope(
       kind: 'message_reaction',
@@ -10570,8 +10597,11 @@ class MessengerController extends ChangeNotifier {
         }
 
         if (envelope.kind == 'message_reaction') {
-          await _handleMessageReaction(envelope);
-          _markSeen(envelope.messageId);
+          final applied = await _handleMessageReaction(envelope);
+          // Keep an out-of-order reaction eligible for replay until its
+          // target message is present. Once applied, the normal seen ledger
+          // gives it the same exactly-once behavior as other controls.
+          if (applied) _markSeen(envelope.messageId);
           continue;
         }
 
@@ -10659,6 +10689,7 @@ class MessengerController extends ChangeNotifier {
             replySenderDisplayName: decodedMessage.replySenderDisplayName,
           );
           _upsertMessage(contact.deviceId, inbound);
+          await _applyDeferredDirectReactions(contact.deviceId, inbound.id);
           _showInboundMessageNotification(
             contact: contact,
             body: decodedMessage.body,
@@ -13363,10 +13394,10 @@ class MessengerController extends ChangeNotifier {
     await _persist('Deleted message removed by ${contact.alias}.');
   }
 
-  Future<void> _handleMessageReaction(RelayEnvelope envelope) async {
+  Future<bool> _handleMessageReaction(RelayEnvelope envelope) async {
     final contact = _contactByDeviceId(envelope.senderDeviceId);
     if (contact == null) {
-      return;
+      return true;
     }
     final decoded = await _crypto.decryptMessage(
       contact: contact,
@@ -13374,39 +13405,115 @@ class MessengerController extends ChangeNotifier {
     );
     final payload = jsonDecode(decoded);
     if (payload is! Map<String, dynamic>) {
-      return;
+      return true;
     }
     final targetMessageId = payload['targetMessageId'] as String?;
     final emoji = (payload['emoji'] as String?)?.trim();
     final active = payload['active'];
+    final changedAt = DateTime.tryParse(
+      payload['changedAt'] as String? ?? '',
+    )?.toUtc();
     if (targetMessageId == null ||
         targetMessageId.isEmpty ||
         emoji == null ||
         emoji.isEmpty ||
         emoji.length > 32 ||
         active is! bool) {
-      return;
+      return true;
     }
     final existing = _messageById(contact.deviceId, targetMessageId);
     if (existing == null) {
-      // The control may arrive before the message on a different route. The
-      // sender will retry the message itself, so do not create a phantom
-      // message or claim that the reaction was applied.
-      return;
+      if (_locallyDeletedMessageIds.contains(targetMessageId)) return true;
+      final pending = _DeferredDirectReaction(
+        envelopeId: envelope.messageId,
+        targetMessageId: targetMessageId,
+        emoji: emoji,
+        active: active,
+        changedAt: changedAt ?? envelope.createdAt.toUtc(),
+      );
+      final key = _deferredDirectReactionKey(contact.deviceId, targetMessageId);
+      final entries = _deferredDirectReactions.putIfAbsent(
+        key,
+        () => <_DeferredDirectReaction>[],
+      );
+      if (!entries.any((entry) => entry.envelopeId == envelope.messageId)) {
+        entries.add(pending);
+      }
+      // Do not mark this envelope seen yet. The relay/poll path can replay it
+      // after a restart, and the entry remains bounded by the target message.
+      return false;
     }
+    _applyReaction(
+      peerDeviceId: contact.deviceId,
+      targetMessageId: targetMessageId,
+      emoji: emoji,
+      active: active,
+      senderDeviceId: envelope.senderDeviceId,
+      changedAt: changedAt ?? envelope.createdAt.toUtc(),
+    );
+    await _persist('Applied a reaction from ${contact.alias}.');
+    return true;
+  }
+
+  void _applyReaction({
+    required String peerDeviceId,
+    required String targetMessageId,
+    required String emoji,
+    required bool active,
+    required String senderDeviceId,
+    required DateTime changedAt,
+  }) {
+    final existing = _messageById(peerDeviceId, targetMessageId);
+    if (existing == null) return;
+    final clockKey = _reactionClockKey(senderDeviceId, emoji);
+    final previous = existing.reactionClocks[clockKey];
+    if (previous != null && !changedAt.isAfter(previous)) return;
     final reactions = <String, Set<String>>{
       for (final entry in existing.reactions.entries)
         entry.key: Set<String>.from(entry.value),
     };
     final users = reactions.putIfAbsent(emoji, () => <String>{});
     if (active) {
-      users.add(envelope.senderDeviceId);
+      users.add(senderDeviceId);
     } else {
-      users.remove(envelope.senderDeviceId);
+      users.remove(senderDeviceId);
     }
     reactions.removeWhere((_, members) => members.isEmpty);
-    _updateMessageReactions(contact.deviceId, targetMessageId, reactions);
-    await _persist('Applied a reaction from ${contact.alias}.');
+    final clocks = Map<String, DateTime>.from(existing.reactionClocks)
+      ..[clockKey] = changedAt;
+    _updateMessageReactions(
+      peerDeviceId,
+      targetMessageId,
+      reactions,
+      reactionClocks: clocks,
+    );
+  }
+
+  String _reactionClockKey(String actorDeviceId, String emoji) =>
+      '$actorDeviceId\u0000$emoji';
+
+  String _deferredDirectReactionKey(String peerDeviceId, String messageId) =>
+      '$peerDeviceId\u0000$messageId';
+
+  Future<void> _applyDeferredDirectReactions(
+    String peerDeviceId,
+    String messageId,
+  ) async {
+    final key = _deferredDirectReactionKey(peerDeviceId, messageId);
+    final pending = _deferredDirectReactions.remove(key);
+    if (pending == null || pending.isEmpty) return;
+    for (final reaction in pending) {
+      _applyReaction(
+        peerDeviceId: peerDeviceId,
+        targetMessageId: messageId,
+        emoji: reaction.emoji,
+        active: reaction.active,
+        senderDeviceId: peerDeviceId,
+        changedAt: reaction.changedAt,
+      );
+      _markSeen(reaction.envelopeId);
+    }
+    await _persist('Applied deferred direct reactions.');
   }
 
   void _showInboundMessageNotification({
@@ -18859,8 +18966,9 @@ class MessengerController extends ChangeNotifier {
   void _updateMessageReactions(
     String peerDeviceId,
     String messageId,
-    Map<String, Set<String>> reactions,
-  ) {
+    Map<String, Set<String>> reactions, {
+    Map<String, DateTime>? reactionClocks,
+  }) {
     if (messageId.isEmpty) {
       return;
     }
@@ -18876,7 +18984,10 @@ class MessengerController extends ChangeNotifier {
     final updatedMessages = conversations[conversationIndex].messages
         .map(
           (message) => message.id == messageId
-              ? message.copyWith(reactions: reactions)
+              ? message.copyWith(
+                  reactions: reactions,
+                  reactionClocks: reactionClocks,
+                )
               : message,
         )
         .toList();
@@ -19966,4 +20077,20 @@ class _ScoringRelayClient implements RelayClient {
       ),
     );
   }
+}
+
+class _DeferredDirectReaction {
+  const _DeferredDirectReaction({
+    required this.envelopeId,
+    required this.targetMessageId,
+    required this.emoji,
+    required this.active,
+    required this.changedAt,
+  });
+
+  final String envelopeId;
+  final String targetMessageId;
+  final String emoji;
+  final bool active;
+  final DateTime changedAt;
 }

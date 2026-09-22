@@ -1938,6 +1938,7 @@ class ChatMessage {
     this.transportDetail,
     Map<String, DeliveryState>? recipientStates,
     Map<String, Set<String>>? reactions,
+    Map<String, DateTime>? reactionClocks,
   }) : recipientStates = Map.unmodifiable(
          recipientStates ?? const <String, DeliveryState>{},
        ),
@@ -1945,7 +1946,10 @@ class ChatMessage {
          for (final entry
              in (reactions ?? const <String, Set<String>>{}).entries)
            entry.key: Set<String>.unmodifiable(entry.value),
-       });
+       }),
+       reactionClocks = Map.unmodifiable(
+         reactionClocks ?? const <String, DateTime>{},
+       );
 
   final String id;
   final String conversationId;
@@ -1992,6 +1996,11 @@ class ChatMessage {
   final Map<String, DeliveryState> recipientStates;
   final Map<String, Set<String>> reactions;
 
+  /// Last authenticated change per reaction author/emoji. This lets a
+  /// delayed toggle lose deterministically to a newer toggle and survives
+  /// restart without relying on wall-clock arrival order.
+  final Map<String, DateTime> reactionClocks;
+
   String get bodyPreview => body.replaceAll('\n', ' ');
   bool get isEdited => editedAt != null;
   bool get hasRecipientStates => recipientStates.isNotEmpty;
@@ -2023,6 +2032,7 @@ class ChatMessage {
     String? transportDetail,
     Map<String, DeliveryState>? recipientStates,
     Map<String, Set<String>>? reactions,
+    Map<String, DateTime>? reactionClocks,
   }) {
     return ChatMessage(
       id: id,
@@ -2055,6 +2065,7 @@ class ChatMessage {
       transportDetail: transportDetail ?? this.transportDetail,
       recipientStates: recipientStates ?? this.recipientStates,
       reactions: reactions ?? this.reactions,
+      reactionClocks: reactionClocks ?? this.reactionClocks,
     );
   }
 
@@ -2098,6 +2109,11 @@ class ChatMessage {
           for (final entry in reactions.entries)
             entry.key: entry.value.toList(growable: false),
         },
+      if (reactionClocks.isNotEmpty)
+        'reactionClocks': {
+          for (final entry in reactionClocks.entries)
+            entry.key: entry.value.toIso8601String(),
+        },
     };
   }
 
@@ -2105,6 +2121,15 @@ class ChatMessage {
     final rawRecipientStates =
         json['recipientStates'] as Map<String, dynamic>? ?? const {};
     final rawReactions = json['reactions'] as Map<String, dynamic>? ?? const {};
+    final rawReactionClocks =
+        json['reactionClocks'] as Map<String, dynamic>? ?? const {};
+    final reactionClocks = <String, DateTime>{};
+    for (final entry in rawReactionClocks.entries) {
+      final parsed = entry.value is String
+          ? DateTime.tryParse(entry.value as String)?.toUtc()
+          : null;
+      if (parsed != null) reactionClocks[entry.key] = parsed;
+    }
     return ChatMessage(
       id: json['id'] as String,
       conversationId: json['conversationId'] as String,
@@ -2154,6 +2179,7 @@ class ChatMessage {
         for (final entry in rawReactions.entries)
           entry.key: (entry.value as List).cast<String>().toSet(),
       },
+      reactionClocks: reactionClocks,
     );
   }
 }
