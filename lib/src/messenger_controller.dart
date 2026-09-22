@@ -1339,54 +1339,131 @@ class MessengerController extends ChangeNotifier {
   Future<GroupFileService>? _groupFileService;
   final _groupFileSessions = <String, GroupFileSession>{};
   final _groupFileSends = <String, Future<void>>{};
+  final _groupFileReservations = <String, int>{};
+  Future<void> _groupStorageQueue = Future.value();
 
-  Future<GroupFileService>
-  _ensureGroupFileService() => _groupFileService ??= () async {
-    final root = await _attachmentRoot();
-    return GroupFileService(
-      root: Directory(p.join(root.path, 'groups')),
-      authorizeEvent: (event) async =>
-          !_disposed &&
-          await _groupHistory.fileForPeer(
-                event.groupId,
-                event.eventId,
-                _requireIdentity().deviceId,
-              ) !=
-              null,
-      authorizePeer: (event, peer) async =>
-          !_disposed &&
-          await _groupHistory.fileForPeer(event.groupId, event.eventId, peer) !=
-              null,
-      // Downloads remain disabled until an explicit storage reservation and
-      // receive-policy check is attached. Serving retained pieces is independent.
-      receiveAllowed: (event, peer, lan) => false,
-      loadPreferences: (event) async =>
-          groupFilePreference(event.groupId, event.eventId),
-      savePreferences: (event, preference) => setGroupFilePreference(
-        event.groupId,
-        event.eventId,
-        accepted: preference.accepted,
-        paused: preference.paused,
-        sharing: preference.sharing,
-        reserveOverride: preference.reserveOverride,
-      ),
-      sendEncrypted: _sendGroupFileFrame,
-      cancelAndDrain: (event, peer, request) async {
-        final pending =
-            _groupFileSends[jsonEncode([event.eventId, peer, request])];
-        if (pending != null) {
-          try {
-            await pending;
-          } catch (_) {
-            /* Request reports its own failure. */
-          }
-        }
-      },
-      onChanged: (_) {
-        if (!_disposed) notifyListeners();
-      },
+  GroupFileSession? groupFileSession(String eventId) =>
+      _groupFileSessions[eventId];
+
+  Future<void> downloadGroupFile(
+    String groupId,
+    String eventId, {
+    bool ignoreReserve = false,
+  }) async {
+    final event = await _groupHistory.fileEventForPeer(
+      groupId,
+      eventId,
+      _requireIdentity().deviceId,
     );
-  }();
+    if (event == null) throw StateError('Group file is not authorized.');
+    final session = await _registerGroupFile(event);
+    await session.setAccepted(true, reserveOverride: ignoreReserve);
+    await _startGroupFileDownload(session);
+  }
+
+  Future<void> _startGroupFileDownload(GroupFileSession session) async {
+    final preference = session.preferences;
+    if (preference.paused) return;
+    final manifest = session.manifest;
+    if (!preference.accepted && !manifest.automaticallyDownload(lan: false)) {
+      return;
+    }
+    if (!_irohFileAllowed(manifest.sizeBytes)) return;
+    final reserve = _groupStorageQueue.then((_) async {
+      final root = await _attachmentRoot();
+      final capacity = await _storageCapacityProvider(root.path);
+      // Piece cache and assembled copy coexist until cache eviction.
+      final needed = manifest.sizeBytes * 2;
+      final others = _groupFileReservations.entries
+          .where((e) => e.key != session.event.eventId)
+          .fold<int>(0, (sum, e) => sum + e.value);
+      if (capacity == null ||
+          !capacity.canAllocate(
+            needed + others,
+            reserveFraction: preference.reserveOverride
+                ? 0
+                : _storageReserveFraction,
+          )) {
+        throw StateError(
+          'Not enough storage is available for this group file and the free-space reserve.',
+        );
+      }
+      _groupFileReservations[session.event.eventId] = needed;
+    });
+    _groupStorageQueue = reserve.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    await reserve;
+    if (!session.preferences.accepted) await session.setAccepted(true);
+    final group = _requireGroup(session.event.groupId);
+    await Future.wait([
+      for (final peer in group.activeMemberDeviceIds)
+        if (peer != _requireIdentity().deviceId)
+          session.discoverProvider(peer, lan: false).catchError((Object error) {
+            appendDebugLog('Group file provider waiting: $error');
+          }),
+    ]);
+  }
+
+  Future<GroupFileService> _ensureGroupFileService() =>
+      _groupFileService ??= () async {
+        final root = await _attachmentRoot();
+        return GroupFileService(
+          root: Directory(p.join(root.path, 'groups')),
+          authorizeEvent: (event) async =>
+              !_disposed &&
+              await _groupHistory.fileForPeer(
+                    event.groupId,
+                    event.eventId,
+                    _requireIdentity().deviceId,
+                  ) !=
+                  null,
+          authorizePeer: (event, peer) async =>
+              !_disposed &&
+              await _groupHistory.fileForPeer(
+                    event.groupId,
+                    event.eventId,
+                    peer,
+                  ) !=
+                  null,
+          receiveAllowed: (event, peer, lan) {
+            final group = _groupById(event.groupId);
+            final contact = group == null
+                ? null
+                : _groupMemberContact(group, peer);
+            return _groupFileReservations.containsKey(event.eventId) &&
+                contact != null &&
+                _canUseIrohForContact(contact) &&
+                _irohFileAllowed(GroupFileManifest.fromEvent(event).sizeBytes);
+          },
+          loadPreferences: (event) async =>
+              groupFilePreference(event.groupId, event.eventId),
+          savePreferences: (event, preference) => setGroupFilePreference(
+            event.groupId,
+            event.eventId,
+            accepted: preference.accepted,
+            paused: preference.paused,
+            sharing: preference.sharing,
+            reserveOverride: preference.reserveOverride,
+          ),
+          sendEncrypted: _sendGroupFileFrame,
+          cancelAndDrain: (event, peer, request) async {
+            final pending =
+                _groupFileSends[jsonEncode([event.eventId, peer, request])];
+            if (pending != null) {
+              try {
+                await pending;
+              } catch (_) {
+                /* Request reports its own failure. */
+              }
+            }
+          },
+          onChanged: (_) {
+            if (!_disposed) notifyListeners();
+          },
+        );
+      }();
 
   Future<GroupFileSession> _registerGroupFile(GroupHistoryEvent event) async {
     final session = await (await _ensureGroupFileService()).register(event);
@@ -1497,12 +1574,19 @@ class MessengerController extends ChangeNotifier {
     GroupFileManifest manifest,
   ) {
     final group = _groupById(groupId);
-    if (_disposed ||
-        group == null ||
-        group.localRemovedAt != null ||
-        _groupMessageById(groupId, event.eventId) != null) {
+    if (_disposed || group == null || group.localRemovedAt != null) {
       return;
     }
+    if (!_groupFileSessions.containsKey(event.eventId)) {
+      unawaited(
+        _registerGroupFile(event).then(_startGroupFileDownload).catchError((
+          Object error,
+        ) {
+          appendDebugLog('Group file download waiting: $error');
+        }),
+      );
+    }
+    if (_groupMessageById(groupId, event.eventId) != null) return;
     _upsertGroupMessage(
       groupId,
       ChatMessage(
@@ -1759,6 +1843,7 @@ class MessengerController extends ChangeNotifier {
     _groupFileService = null;
     if (files != null) await (await files).close();
     _groupFileSessions.clear();
+    _groupFileReservations.clear();
     for (final subscription in _transportInboundSubscriptions) {
       await subscription.cancel();
     }

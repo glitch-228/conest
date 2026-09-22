@@ -5,6 +5,108 @@ v0.3.9 nightly. Priority updated 2026-09-14: M4 → M3 → remaining M2,
 with outstanding M1 qualification retained. Web clients and voice calls are
 documentation only until separately scheduled. Preserve colors and the existing 16-member cap.
 
+## Current implementation cadence (2026-09-15)
+
+### Resource priority update (2026-09-17)
+
+Minimize token/limit use while pursuing the full goal. Implement release-critical
+end-to-end features in larger batches; use bounded sub-agents with separate file
+ownership and concise handoffs. Run only crucial checks for authorization, data
+integrity, restart recovery, and touched integration paths. Avoid repeated broad
+exploration, full suites, cosmetic tests, and repeated status-only turns. Delegate
+small tasks or defer them with UI polish until after the core release. Record
+unverified behavior honestly; do not shrink the full goal or claim release readiness
+from isolated unit tests. Immediate priority: native group-file LAN/Iroh bridge,
+sender seeding and receive controls, then release-candidate device testing.
+
+Current handoff: service/transport agents stopped with workspace-credit errors.
+Partial implementations remain uncommitted in `group_file_service.dart`,
+`group_file_transport.dart` and their tests. The UI tile and signed message
+metadata projection are also uncommitted. Integration analysis found no compiler
+errors, but four transport style findings remain. Review availability cancellation
+window accounting before native wiring. Do not treat these partial agent results
+as a finished or qualified release.
+
+Reviewed integration update: service, transport and minimal tile are now combined
+with signed attachment metadata projection and vault message persistence. Fixed
+availability cancellation window accounting; fourteen focused tests pass (service,
+transport, file core). Still callback-level transport, not native qualification.
+
+Next bounded release tasks (keep ownership separate):
+1. Native bridge: encrypt/decrypt group-file binary frames using authenticated
+   group-member identities; route through LAN binary ingress and Iroh binary
+   sends. Bind group/event/request before routing to the session. Preserve 2 MiB
+   ordinary-envelope limit; group frames may carry a 4 MiB piece. Join underlying
+   sends on cancellation, since Iroh adapter cancellation currently does not.
+2. Controller service wiring: instantiate one service per identity, connect
+   signed history authorization and vault preferences, implement storage-space
+   reservation plus route/Iroh limits, seed outgoing staged copies, refresh peer
+   availability on reconnection, and close sessions before identity reset.
+3. User flow: connect group picker/drop/paste to publishing, bind tile progress
+   and Download/Pause/Resume/Stop sharing/Open actions to live sessions. Current
+   metadata tile alone does not implement those actions.
+4. Release gate: focused direct-transfer regression and real Android/Linux LAN
+   and Iroh group transfer; publish matching debug candidate without waiting for
+   asynchronous build results. Record tester evidence before release/nightly.
+
+Native bridge progress: `CryptoService` now encrypts/decrypts bounded group binary
+frames with a separately derived key and authenticated group/event/request/sender/
+recipient header. Crypto runs off the UI isolate and retains the ordinary message
+limit. Seven crypto tests pass, including tampering, identity mismatch, and direct
+envelope regressions. This supplies encryption for the bridge; LAN/Iroh ingress,
+native sends, cancellation joining, and controller session wiring remain pending.
+
+Iroh bridge wiring added: controller recognizes group binary magic before ordinary
+envelope parsing, pins ingress to the signed member's Iroh identity, resolves the
+retained authorized manifest, decrypts, and dispatches to its session. Service
+send callbacks encrypt and use the existing Iroh adapter; cancellation joins the
+tracked send future (does not claim native abort). Transport shutdown closes the
+group service. Downloads intentionally remain disabled pending capacity reservation
+and receive policy wiring. LAN binary ingress, publishing/user actions, discovery,
+and real group-file transfer qualification remain outstanding.
+
+Release-first priority update: stabilize direct messaging/files on LAN/Iroh,
+qualify group messaging, then deliver core multi-peer group files and a release
+candidate. Pause additional Telegram layout work and cosmetic polish. Remaining
+M4/M2 requirements stay in this roadmap for after the usable release; the full
+goal is not complete until they are implemented and qualified.
+
+Per user direction: implement core features in larger batches. Run only crucial
+correctness checks during implementation; leave broader device/UI testing to the
+user/testers and final polishing to the final phase. Interim debug artifacts may
+use the explicit `quick_build` workflow option, which builds all platforms without
+qualification tests. Such artifacts are unqualified development snapshots, not
+nightly-release evidence. Do not wait for their results unless the user asks.
+
+Interim snapshot dispatched on 2026-09-15: `df5304c`, branch
+`debug/m4-midimplementation-20260915`, Android/Linux/Windows with `quick_build`.
+Run: https://github.com/glitch-228/conest/actions/runs/35017669082
+Workflow results have not been checked, per user direction.
+
+Subsequent core work (not in that artifact): author-scoped group edit/deletion
+reducer and rebuildable journal mutation indexes. Deletion dominates subsequent
+edits; malformed records and other authors cannot shadow a valid mutation.
+Focused journal/projection tests: 18 passed initially; the projection suite now
+has 5 passing tests including persisted tombstones. Coordinator projection and
+controller mutation creation are connected: mutations are signed, persisted before
+peer hints, and checked against the original author and membership history. Hidden
+tombstones survive vault saves and prevent replay/retry resurrection. History page
+projection now persists its result. The two simulated Iroh catch-up/admission
+tests pass, with the carrier scenario extended to reject another member's edit,
+carry an offline edit, and propagate deletion with the original author offline.
+This does not establish physical network qualification.
+
+Group text edit/delete controls are now wired, including the edited marker and
+compatibility notices for older/unconfirmed peers. Support is learned only from
+correlated authenticated history responses; reconnect clears that knowledge.
+Catch-up refreshes retained messages through journal indexes so mutations outside
+the initial page still apply, while older unseen text stays paginated. Unchanged
+projections avoid rewriting conversation lists. Automated: 9 focused wire and
+projection tests plus 2 catch-up/admission tests pass; the carrier test now buries
+a deletion under 55 later events. UI/device qualification, reaction events, and
+remaining M4 features are still outstanding. These changes are not in the earlier
+dispatched debug artifact.
+
 ## Status and delivery
 
 - [x] Record the approved roadmap.
@@ -160,6 +262,61 @@ Test forged authors, removed members, membership conflicts and mixed versions.
 
 ## M3 — group files
 
+Core work started: versioned attachment-event manifest with whole-file and 4 MiB
+piece hashes, off-UI single-pass file hashing (one piece of working memory), and
+a bounded scheduler selecting scarce pieces, preferring LAN and spreading load.
+Reservations cap at four pieces and three peers; stalled/withdrawn providers
+release reservations and late replies cannot inflate unique durable progress.
+Added app-owned partial-piece storage with verification before flush/rename,
+verification on recovery and before serving, and whole-file verification before
+publishing an assembled file. Worker entry points run outside the UI isolate;
+queued writes are capped at four pieces. Five focused core tests pass and analysis
+is clean, including damaged cache recovery and inconsistent whole-file manifests.
+These modules are not yet connected to group publishing, binary transport,
+or chat download controls. Receive policy, authorization, storage reservation,
+sharing preferences and single-owner store lifecycle must be integrated by the
+group transfer service. Existing direct-file
+transfer behavior is unchanged by this foundation.
+
+History integration added: coordinator can publish author-signed attachment
+events, project retained manifests through an attachment callback, and authorize
+a provider/recipient pair against signed membership and admission history before
+resolving a file. Controller/transport/UI wiring remains outstanding. Fourteen
+focused membership and file-core tests pass, including file-manifest forwarding
+and removal denial; this does not yet test an actual group file transfer.
+
+Download-session integration: scheduler and durable store now run as one bounded
+pump with shared concurrent wakeups, verified progress, corruption/provider
+fallback, pause, restart recovery, and final assembly. Authorization and current
+route policy are checked before fetching and again before writing received bytes.
+Seven file-core tests pass, including corrupt-provider replacement, cached restart
+without network reads, and removal during fetch; analysis is clean. Transport
+callbacks must release timed-out requests before returning. Native LAN/Iroh
+callbacks, durable acceptance/sharing preferences, storage reservations and chat
+controls are still required before this becomes user-facing group file transfer.
+
+Provider integration: verified partial-file availability and piece reads now
+recheck authorization around disk work; reads are bounded and concurrent
+availability scans are shared. Stop sharing disables immediately and invalidates
+in-flight reads without deleting cached bytes. Persistence is injected and still
+needs the application vault connection. Eight file-core tests pass, including a
+download assembled from two separate partial providers and denied reads after
+Stop sharing. This is an in-process storage/session test, not LAN/Iroh proof.
+
+Vault integration now retains per-group/event acceptance, pause, sharing, and
+storage-reserve override with legacy-safe defaults. The controller requires a
+retained signed manifest and current history permission before updating these
+preferences. Nine focused file/provider/preference tests pass. Running providers
+and downloads still need to be wired to these preferences by the group transfer
+service; no claim of an operational group file UI or native transport yet.
+
+Binary request correlation added: per-file requests bind authenticated peer,
+event, piece index and exact length, with at most four pending requests. Timeout
+completion waits for the transport cancellation callback; late/duplicate replies
+are ignored. Eleven focused core/provider/preference/wire tests pass. This layer
+still requires native LAN/Iroh send/receive and cancellation callbacks; it does
+not establish native transport support by itself.
+
 Inspiration: https://git.private.coffee/PrivateCoffee/transfer.coffee uses
 WebTorrent with tracker/STUN/TURN support. Reuse the piece-sharing concept,
 not a public tracker: discovery and access stay within authenticated groups.
@@ -212,6 +369,84 @@ installations; retain Signature/Garrison choices and later user preferences.
 
 ### M4 progress (2026-09-14)
 
+- Restored pending-contact-request visibility in Courier through a chat-list
+  request row/count and drawer inbox. The inbox updates after approval/rejection.
+  Review now displays the same pairwise safety number used by approved contacts,
+  without granting trust during preview; rejection errors are surfaced. The
+  existing controller approval and identity checks remain authoritative.
+  Analyzer qualification only; inbox interaction and Iroh approval/rejection
+  integration tests remain in the rollout gates.
+
+- Courier direct/group timelines now display calendar-day separators, localized
+  compact message times and tighter bubble spacing. Courier app themes use Roboto
+  text and compact, flat app bars while preserving palette values; bootstrap and
+  onboarding receive the same theme. Legacy layouts keep their display font.
+  Calendar/time, album boundaries, scaling and visual-reference checks remain
+  outstanding for the integrated UI validation pass.
+
+- Added Courier desktop chat navigation with Alt+Up/Down in the visible filtered
+  order, Ctrl/Cmd+K for chat search and Ctrl/Cmd+N for the contact picker. Local
+  draft changes notify the sidebar separately so previews update while typing
+  without broadcasting a full controller rebuild. Removed the overlapping global
+  Transfers floating button in Courier; transfers remain in the drawer.
+  Analysis passes. Shortcut, draft-rebuild and navigation qualification remains
+  part of the integrated M4 test pass.
+
+- Added adaptive full-screen Courier pages on narrow displays for settings,
+  contact profiles, adding contacts, group creation and group details, retaining
+  desktop and legacy-layout dialogs. Mobile settings exposes Personal, Storage,
+  Connectivity, Relays, Updates and Account categories backed by existing form
+  state/actions. Keyboard, scrolling, scaling and screenshots await the integrated
+  M4 validation pass; this is not a claim of complete visual parity.
+
+- Added direct/group in-chat search for loaded text and filenames, reachable
+  from the chat header and Ctrl/Cmd+F. Search results navigate to the matching
+  message or album anchor and flash it. Group search can request older authorized
+  pages. Navigation yields frames while seeking lazily built rows; large-history,
+  highly variable row heights and concurrent catch-up still need qualification.
+  Full journal search indexing and query highlighting remain outstanding.
+
+- Added directional swipe-to-reply for Courier direct/group message lists and
+  album rows, with threshold, cancellation, haptic feedback and return animation.
+  Selection disables the gesture. Added searchable text forwarding to contacts
+  and groups through existing send APIs (new author/message identity), plus a
+  direct-message Reply menu action and Message details for route metadata.
+  Attachment forwarding and comprehensive gesture/forwarding tests remain pending.
+
+- Added encrypted local pin/archive/mute flags with legacy defaults. Courier
+  sorts pinned chats first, exposes archive navigation, retains archived chats in
+  search, and offers pin/unpin, mute/unmute and archive/unarchive through mobile
+  long-press sheets and desktop right-click menus. Draft previews and pin/mute
+  indicators are shown in rows. Muting suppresses direct/group message alerts
+  and dismisses the existing conversation notification. Notification, persistence
+  and menu integration tests remain for the integrated M4 validation batch.
+
+- UI work now proceeds in larger integrated batches, per user preference:
+  analyzer checks during implementation, comprehensive UI/regression tests after
+  screen structure and interactions are integrated.
+- Added Courier navigation drawer (identity, contacts, groups, LAN lobby,
+  transfers, invites, Beam, settings and debug tools), floating new-message
+  action and searchable contact-picker screen. Group creation is accessible
+  from both drawer and new-message screen.
+- Courier direct/group chats now use edge-to-edge panes, compact tappable
+  avatar/title/status headers, and chat-details menus. Direct connection details
+  move behind the chat menu; the direct composer uses an icon send action.
+  Legacy layouts retain their prior chat frame/header. These changes have only
+  analyzer qualification so far; interaction/screenshots remain pending.
+- Consulted official Android and Desktop landing pages on 2026-09-14. Specific
+  reference build versions and visual comparison are still to be recorded before
+  claiming Telegram visual parity.
+
+- Desktop Courier now has a draggable sidebar divider, arrow-key resizing,
+  assistive-technology increase/decrease actions and reset via Home/double-click.
+  Width is bounded to 300–560 logical pixels, keeping at least 480 for chat.
+  Two LTR/RTL divider widget tests pass; the desktop navigation test verifies
+  both bounds and reset. Physical desktop qualification and persistence regression
+  tests remain outstanding; analysis is clean. Width now persists in
+  appearance preferences when an adjustment ends, including reset. Legacy files
+  default to 380; stored widths clamp to 300–560. Appearance writes are serialized
+  so rapid width/theme changes preserve their order.
+
 - Courier is the default for new installations. Existing preference files migrate
   once, retaining brightness, decoration intensity and the older home-layout
   choice. Subsequent Signature/Garrison selections survive reloads.
@@ -236,8 +471,7 @@ installations; retain Signature/Garrison choices and later user preferences.
 - Full-suite run: 349 passed, 6 optional skipped, 1 failed because Courier lacked
   the contact-list online indicator after the default-layout migration. Remote
   commit 9f1be80 supplies presence marks and supersedes the local label fix.
-  Focused rerun before integration: presence
-  and 3 draft regressions pass; separate draft navigation widget test passes.
+  After integration, all 5 focused presence/draft/navigation regressions pass.
   Analysis is clean. The full suite has not been rerun after this UI-only fix.
 - Automated: 10 theme tests pass, including legacy migration and post-migration
   preference persistence; Flutter analysis passes. Search widget/screenshot and

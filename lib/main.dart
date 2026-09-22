@@ -5979,8 +5979,58 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       GroupFileTile(
                         filename: file.fileName,
                         size: file.sizeBytes,
-                        verifiedBytes: 0,
-                        state: GroupFileDownloadState.waiting,
+                        verifiedBytes:
+                            controller
+                                .groupFileSession(message.id)
+                                ?.download
+                                .verifiedBytes ??
+                            0,
+                        state:
+                            controller
+                                .groupFileSession(message.id)
+                                ?.download
+                                .state ??
+                            GroupFileDownloadState.waiting,
+                        error: controller
+                            .groupFileSession(message.id)
+                            ?.download
+                            .lastError
+                            ?.toString(),
+                        onDownload: () => unawaited(
+                          controller
+                              .downloadGroupFile(group.groupId, message.id)
+                              .catchError(
+                                (Object error) =>
+                                    controller.setStatus('$error'),
+                              ),
+                        ),
+                        onPause: () => unawaited(
+                          controller
+                              .groupFileSession(message.id)
+                              ?.setPaused(true)
+                              .catchError(
+                                (Object error) =>
+                                    controller.setStatus('$error'),
+                              ),
+                        ),
+                        onResume: () => unawaited(
+                          controller
+                              .groupFileSession(message.id)
+                              ?.setPaused(false)
+                              .catchError(
+                                (Object error) =>
+                                    controller.setStatus('$error'),
+                              ),
+                        ),
+                        onStopSharing: () => unawaited(
+                          controller
+                              .groupFileSession(message.id)
+                              ?.setSharing(false)
+                              .catchError(
+                                (Object error) =>
+                                    controller.setStatus('$error'),
+                              ),
+                        ),
                         sharing: controller
                             .groupFilePreference(group.groupId, message.id)
                             .sharing,
