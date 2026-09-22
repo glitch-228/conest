@@ -648,6 +648,16 @@ class GroupHistoryCoordinator {
     return page.isEmpty ? null : page.last.eventId;
   }
 
+  /// Rebuilds the newest visible conversation page from the encrypted journal.
+  /// The vault snapshot is only a projection cache: a crash between a durable
+  /// journal append and the snapshot write must not hide a signed message on
+  /// the next launch. Older pages remain explicitly paginated through
+  /// [projectPage], so startup work stays bounded.
+  Future<void> restoreCurrentProjection(String id) async {
+    if (_closed || group(id).localRemovedAt != null) return;
+    await projectPage(id);
+  }
+
   Future<void> _projectOriginal(
     String id,
     GroupHistoryReplica replica,

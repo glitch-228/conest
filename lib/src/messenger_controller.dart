@@ -1295,6 +1295,7 @@ class MessengerController extends ChangeNotifier {
   final _groupHistoryTimers = <String, Timer>{};
   final _groupHistoryLastSync = <String, DateTime>{};
   final _groupLegacyMigrations = <String, Future<void>>{};
+  final _groupProjectionRestores = <String, Future<void>>{};
 
   /// Called on conversation open and after an interface change. Every active
   /// signed group peer can carry history; the owner is not a required hop.
@@ -1309,6 +1310,7 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     _migrateLegacyGroupHistory(group);
+    _restoreJournalBackedGroupProjection(group);
     _restoreRetainedGroupFileSessions(group);
     for (final peer in group.activeMemberDeviceIds) {
       if (peer == me.deviceId ||
@@ -1317,6 +1319,22 @@ class MessengerController extends ChangeNotifier {
       }
       _scheduleGroupHistorySync(groupId, peer);
     }
+  }
+
+  void _restoreJournalBackedGroupProjection(GroupRecord group) {
+    if (_groupProjectionRestores.containsKey(group.groupId)) return;
+    final restore = _groupHistory
+        .restoreCurrentProjection(group.groupId)
+        .then<void>((_) async {
+          if (!_disposed) await _saveSnapshotSilently(notify: true);
+        })
+        .catchError((Object error) {
+          if (!_disposed) {
+            appendDebugLog('Journal projection waiting: $error');
+          }
+        })
+        .whenComplete(() => _groupProjectionRestores.remove(group.groupId));
+    _groupProjectionRestores[group.groupId] = restore;
   }
 
   void _migrateLegacyGroupHistory(GroupRecord group) {
@@ -4801,6 +4819,7 @@ class MessengerController extends ChangeNotifier {
     }
     _groupHistoryTimers.clear();
     _groupHistoryLastSync.clear();
+    _groupProjectionRestores.clear();
     await _groupHistoryService?.close();
     _groupHistoryService = null;
     _stopLongPoll();
