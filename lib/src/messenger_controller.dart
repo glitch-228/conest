@@ -3327,7 +3327,9 @@ class MessengerController extends ChangeNotifier {
         ? await _rankRouteHealthForDebug(candidateRoutes)
         : await _rankRouteHealthForDelivery(candidateRoutes);
     final availableChecks = checks.where((check) => check.available).toList();
-    if (availableChecks.isNotEmpty) {
+    final irohRoutes = await _discoverIrohRoutesForContact(current);
+    final irohAvailable = irohRoutes.isNotEmpty;
+    if (availableChecks.isNotEmpty || irohAvailable) {
       _reachability.noteAvailablePath(current.deviceId);
       await _rememberLanRoutesForContact(
         deviceId: current.deviceId,
@@ -3336,20 +3338,35 @@ class MessengerController extends ChangeNotifier {
             .where((route) => route.kind == PeerRouteKind.lan),
       );
     }
-    final routeUpdateSent = exchangeRouteUpdate && availableChecks.isNotEmpty
-        ? await _sendRouteUpdate(
-            current,
-            requestReply: true,
-            reason: 'check_paths',
-            routes: [availableChecks.first.route],
-          )
+    final routeUpdateSent = exchangeRouteUpdate
+        ? availableChecks.isNotEmpty
+              ? await _sendRouteUpdate(
+                  current,
+                  requestReply: true,
+                  reason: 'check_paths',
+                  routes: [availableChecks.first.route],
+                )
+              : irohAvailable
+              ? await _sendRouteUpdate(
+                  current,
+                  requestReply: true,
+                  reason: 'check_paths',
+                )
+              : false
         : false;
     if (persist) {
-      final available = availableChecks.length;
+      final available = availableChecks.length + (irohAvailable ? 1 : 0);
+      final availableDescription = [
+        if (availableChecks.isNotEmpty) _summarizeRouteChecks(availableChecks),
+        if (irohAvailable)
+          'Iroh ${irohRoutes.map((route) => route.label).join(', ')}',
+      ].join(' • ');
       _setTransientStatus(
         checks.isEmpty
-            ? 'No paths are advertised for ${current.alias}.'
-            : 'Checked ${checks.length} path(s) for ${current.alias}; $available available. Reachability is ${_reachability.stateFor(current.deviceId).label}. ${routeUpdateSent ? 'Route info exchange requested.' : 'Route info exchange could not be sent yet.'}',
+            ? irohAvailable
+                  ? 'Checked Iroh path(s) for ${current.alias}; reachability is ${_reachability.stateFor(current.deviceId).label}. ${routeUpdateSent ? 'Route info exchange requested.' : 'Route info exchange could not be sent yet.'}'
+                  : 'No paths are advertised for ${current.alias}.'
+            : 'Checked ${checks.length + (irohAvailable ? 1 : 0)} path(s) for ${current.alias}; $available available${availableDescription.isEmpty ? '' : ' ($availableDescription)'}. Reachability is ${_reachability.stateFor(current.deviceId).label}. ${routeUpdateSent ? 'Route info exchange requested.' : 'Route info exchange could not be sent yet.'}',
       );
       await _saveSnapshotSilently(debounce: true);
     } else {
@@ -15885,6 +15902,34 @@ class MessengerController extends ChangeNotifier {
     final policy = _effectiveTransportPolicies(contact)[TransportKind.iroh];
     return policy == TransportPolicy.automatic ||
         policy == TransportPolicy.preferred;
+  }
+
+  /// Legacy route health cannot represent Iroh's endpoint identity. Keep the
+  /// profile/status path aware of authenticated Iroh discovery so an Iroh-only
+  /// contact does not appear unreachable while ordinary messages are already
+  /// flowing. Discovery is only a candidate signal; the route-update reply is
+  /// still required before reachability becomes online.
+  Future<List<RouteCandidate>> _discoverIrohRoutesForContact(
+    ContactRecord contact,
+  ) async {
+    if (!_canUseIrohForContact(contact)) {
+      return const <RouteCandidate>[];
+    }
+    final adapter = _transportRegistry!.adapterFor(TransportKind.iroh);
+    if (adapter == null) return const <RouteCandidate>[];
+    try {
+      return await adapter.discoverRoutes(
+        _transportPeerForContact(
+          contact,
+          allowRelay: _irohRelayEnabledFor(contact),
+        ),
+      );
+    } catch (error) {
+      appendDebugLog(
+        'Iroh route discovery for ${contact.alias} failed: $error',
+      );
+      return const <RouteCandidate>[];
+    }
   }
 
   bool _routeAllowedByTransports(
