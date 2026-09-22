@@ -15479,13 +15479,23 @@ class MessengerController extends ChangeNotifier {
     }
     final peer = _transportPeerForContact(contact, allowRelay: allowRelay);
     final routes = await adapter.discoverRoutes(peer);
+    Object? lastError;
     for (final route in routes) {
       if (!peer.allowRelay && route.path == TransportPathKind.relayed) continue;
-      final receipt = await adapter
-          .sendAttachmentRange(peer: peer, route: route, range: range)
-          .timeout(const Duration(seconds: 75));
-      if (receipt.accepted) return receipt;
+      try {
+        final receipt = await adapter
+            .sendAttachmentRange(peer: peer, route: route, range: range)
+            .timeout(const Duration(seconds: 25));
+        if (receipt.accepted) return receipt;
+      } catch (error) {
+        lastError = error;
+        appendDebugLog(
+          'Iroh attachment route ${route.path.name} failed for '
+          '${range.attachmentId} at ${range.offset}: $error; trying next.',
+        );
+      }
     }
+    if (lastError != null) throw lastError;
     return null;
   }
 
