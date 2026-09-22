@@ -13,6 +13,7 @@ import 'package:conest/main.dart' as app;
 import 'package:conest/main.dart' show sniffImageMimeType;
 import 'package:conest/src/build_info.dart';
 import 'package:conest/src/crypto_service.dart';
+import 'package:conest/src/group_file_download.dart';
 import 'package:conest/src/group_history_event.dart';
 import 'package:conest/src/iroh_ffi_bridge.dart';
 import 'package:conest/src/iroh_transport.dart';
@@ -2753,6 +2754,103 @@ void main() {
       );
     }
   }
+
+  test(
+    'retained group file sessions restore providers after a vault restart',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final bobVault = _MemoryVaultStore();
+      final aliceRoot = await Directory.systemTemp.createTemp(
+        'conest_group_file_restart_alice-',
+      );
+      final bobRoot = await Directory.systemTemp.createTemp(
+        'conest_group_file_restart_bob-',
+      );
+      addTearDown(() async {
+        if (await aliceRoot.exists()) await aliceRoot.delete(recursive: true);
+        if (await bobRoot.exists()) await bobRoot.delete(recursive: true);
+      });
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        internetRelayHost: null,
+        transportRegistryFactory: network.registry,
+        attachmentRootProvider: () async => aliceRoot,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        internetRelayHost: null,
+        vaultStore: bobVault,
+        transportRegistryFactory: network.registry,
+        attachmentRootProvider: () async => bobRoot,
+      );
+      addTearDown(alice.dispose);
+      var bobDisposed = false;
+      addTearDown(() {
+        if (!bobDisposed) bob.dispose();
+      });
+      await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Restartable files',
+        members: [alice.contacts.single],
+      );
+      await _waitForIroh(() => bob.groups.isNotEmpty);
+
+      final source = await File(
+        '${aliceRoot.path}/source.bin',
+      ).writeAsBytes([1, 3, 3, 7, 9]);
+      await alice.publishGroupFile(
+        groupId: group.groupId,
+        path: source.path,
+        fileName: 'restartable.bin',
+        mimeType: 'application/octet-stream',
+      );
+      final eventId = alice
+          .messagesForGroup(group.groupId)
+          .singleWhere((message) => message.groupFile != null)
+          .id;
+      await _waitForIroh(
+        () => bob
+            .messagesForGroup(group.groupId)
+            .any((message) => message.id == eventId),
+      );
+      await _waitForIroh(
+        () =>
+            bob.groupFileSession(eventId)?.download.state ==
+            GroupFileDownloadState.complete,
+      );
+
+      bob.dispose();
+      bobDisposed = true;
+      final resumed = await _createController(
+        relayClient: relay,
+        displayName: 'unused',
+        createIdentity: false,
+        vaultStore: bobVault,
+        internetRelayHost: null,
+        transportRegistryFactory: network.registry,
+        attachmentRootProvider: () async => bobRoot,
+      );
+      addTearDown(resumed.dispose);
+      await _waitForIroh(
+        () =>
+            resumed.groupFileSession(eventId)?.download.state ==
+            GroupFileDownloadState.complete,
+      );
+      expect(await File(resumed.groupFilePathFor(eventId)!).readAsBytes(), [
+        1,
+        3,
+        3,
+        7,
+        9,
+      ]);
+    },
+    timeout: const Timeout(Duration(seconds: 45)),
+  );
 
   for (final lan in [true, false]) {
     test(
