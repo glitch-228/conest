@@ -297,6 +297,21 @@ typedef _DebugFileRoute = ({
   int maxIrohBytes,
 });
 
+/// Result of the authenticated debug-file capability probe. A null route is
+/// meaningful: the peer may have answered and rejected the requested build or
+/// transport, which must not be confused with a timeout/no-response.
+class _DebugFileProbeResult {
+  const _DebugFileProbeResult({
+    required this.route,
+    required this.peerAccepted,
+    required this.peerBuildId,
+  });
+
+  final _DebugFileRoute? route;
+  final bool peerAccepted;
+  final String peerBuildId;
+}
+
 class IrohTransferLimitException implements Exception {
   const IrohTransferLimitException(this.message);
   final String message;
@@ -562,8 +577,8 @@ class MessengerController extends ChangeNotifier {
   final List<DebugFileTestResult> _debugFileTestResults =
       <DebugFileTestResult>[];
   final Map<String, String> _debugFileProbeMessageIds = {};
-  final Map<String, Completer<_DebugFileRoute?>> _debugFileProbeCompleters =
-      <String, Completer<_DebugFileRoute?>>{};
+  final Map<String, Completer<_DebugFileProbeResult>>
+  _debugFileProbeCompleters = <String, Completer<_DebugFileProbeResult>>{};
   final Map<String, Completer<DebugFileTestResult>> _debugFileResultCompleters =
       <String, Completer<DebugFileTestResult>>{};
   final Map<String, DebugAttachmentTestSpec> _outboundDebugAttachmentTests =
@@ -13278,7 +13293,7 @@ class MessengerController extends ChangeNotifier {
         localLanHint['senderLanBinaryVersion'] == 1;
     final me = _requireIdentity();
     for (final irohOnly in [if (canTryLan) false, true]) {
-      final completer = Completer<_DebugFileRoute?>();
+      final completer = Completer<_DebugFileProbeResult>();
       _debugFileProbeCompleters[testId] = completer;
       final probe = await _crypto.encryptPayloadEnvelope(
         kind: 'debug_file_test_probe',
@@ -13334,10 +13349,21 @@ class MessengerController extends ChangeNotifier {
             );
           }
         }
-        final accepted = await completer.future.timeout(
+        final probeResult = await completer.future.timeout(
           Duration(seconds: irohOnly ? 20 : 2),
         );
+        final accepted = probeResult.route;
         if (accepted == null) {
+          // A peer that answered with a different build must be reported as a
+          // build mismatch immediately. Falling through to Iroh here used to
+          // turn a deterministic rejection into a misleading connectivity
+          // error when Iroh was disabled or unavailable.
+          if (!probeResult.peerAccepted && probeResult.peerBuildId != buildId) {
+            rejected = true;
+            throw StateError(
+              '${contact.alias} did not confirm the same debug build and selected transport.',
+            );
+          }
           if (!irohOnly) {
             appendDebugLog(
               'LAN file-test peer rejected the current LAN path; '
@@ -13497,24 +13523,32 @@ class MessengerController extends ChangeNotifier {
     }
     final completer = _debugFileProbeCompleters[decoded['testId'] as String];
     if (completer == null || completer.isCompleted) return;
+    final peerAccepted = decoded['accepted'] == true;
+    final sameBuild = decoded['buildId'] == _debugBuildId;
+    final route =
+        peerAccepted &&
+            sameBuild &&
+            (decoded['irohOnly'] == true
+                ? _canUseIrohForContact(contact)
+                : peerBinaryReady)
+        ? (
+            maxIrohBytes: min(
+              maxIrohAttachmentBytes,
+              (decoded['maxIrohBytes'] as num?)?.toInt() ??
+                  recommendedIrohTransferLimitBytes,
+            ),
+            irohOnly: decoded['irohOnly'] == true,
+            allowIrohRelay:
+                decoded['allowIrohRelay'] == true &&
+                _irohRelayEnabledFor(contact),
+          )
+        : null;
     completer.complete(
-      decoded['accepted'] == true &&
-              decoded['buildId'] == _debugBuildId &&
-              (decoded['irohOnly'] == true
-                  ? _canUseIrohForContact(contact)
-                  : peerBinaryReady)
-          ? (
-              maxIrohBytes: min(
-                maxIrohAttachmentBytes,
-                (decoded['maxIrohBytes'] as num?)?.toInt() ??
-                    recommendedIrohTransferLimitBytes,
-              ),
-              irohOnly: decoded['irohOnly'] == true,
-              allowIrohRelay:
-                  decoded['allowIrohRelay'] == true &&
-                  _irohRelayEnabledFor(contact),
-            )
-          : null,
+      _DebugFileProbeResult(
+        route: route,
+        peerAccepted: peerAccepted,
+        peerBuildId: decoded['buildId'] as String,
+      ),
     );
   }
 
