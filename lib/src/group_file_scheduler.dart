@@ -8,7 +8,10 @@ class GroupFileScheduler {
   final _providers = <String, _Provider>{};
   final _requests = <int, GroupPieceRequest>{};
   final _verified = <int>{};
+  final _blockedRequests = <String, DateTime>{};
   int _generation = 0;
+
+  static const Duration _failedPieceCooldown = Duration(seconds: 30);
 
   int get verifiedBytes =>
       _verified.fold(0, (sum, piece) => sum + manifest.lengthOf(piece));
@@ -31,6 +34,9 @@ class GroupFileScheduler {
       manifest.lengthOf(piece);
     }
     _providers[peer] = _Provider(available, lan);
+    // A fresh authenticated availability response means the peer is back;
+    // do not keep a transient piece failure quarantined across rediscovery.
+    _blockedRequests.removeWhere((key, _) => key.startsWith('$peer|'));
     _requests.removeWhere(
       (piece, request) => request.peer == peer && !available.contains(piece),
     );
@@ -39,6 +45,7 @@ class GroupFileScheduler {
   void removeProvider(String peer) {
     _providers.remove(peer);
     _requests.removeWhere((_, request) => request.peer == peer);
+    _blockedRequests.removeWhere((key, _) => key.startsWith('$peer|'));
   }
 
   /// Reserve at most four pieces / 16 MiB, using at most three providers.
@@ -48,11 +55,13 @@ class GroupFileScheduler {
     required bool Function(String peer, bool lan) allowed,
     Duration timeout = const Duration(seconds: 15),
   }) {
+    _blockedRequests.removeWhere((_, until) => !now.isBefore(until));
     final stalled = _requests.values
         .where((r) => !now.isBefore(r.deadline))
         .toList();
     for (final request in stalled) {
-      removeProvider(request.peer);
+      _requests.remove(request.piece);
+      _block(request.peer, request.piece, now);
     }
     _requests.removeWhere(
       (_, r) => !allowed(r.peer, _providers[r.peer]?.lan ?? false),
@@ -67,6 +76,7 @@ class GroupFileScheduler {
             .where(
               (peer) =>
                   _providers[peer]!.pieces.contains(piece) &&
+                  !_isBlocked(peer, piece, now) &&
                   allowed(peer, _providers[peer]!.lan) &&
                   (active.length < 3 || active.contains(peer)),
             )
@@ -110,11 +120,14 @@ class GroupFileScheduler {
   bool markDurable(GroupPieceRequest request) {
     if (_requests[request.piece] != request) return false;
     _requests.remove(request.piece);
+    _blockedRequests.remove(_key(request.peer, request.piece));
     return _verified.add(request.piece);
   }
 
   void failed(GroupPieceRequest request) {
-    if (_requests[request.piece] == request) removeProvider(request.peer);
+    if (_requests[request.piece] != request) return;
+    _requests.remove(request.piece);
+    _block(request.peer, request.piece, DateTime.now().toUtc());
   }
 
   /// Recovery must verify retained bytes against the manifest before calling.
@@ -124,7 +137,22 @@ class GroupFileScheduler {
       manifest.lengthOf(piece);
     }
     _verified.addAll(checked);
-    _requests.removeWhere((piece, _) => checked.contains(piece));
+    _requests.removeWhere((piece, request) {
+      if (!checked.contains(piece)) return false;
+      _blockedRequests.remove(_key(request.peer, piece));
+      return true;
+    });
+  }
+
+  String _key(String peer, int piece) => '$peer|$piece';
+
+  bool _isBlocked(String peer, int piece, DateTime now) {
+    final until = _blockedRequests[_key(peer, piece)];
+    return until != null && now.isBefore(until);
+  }
+
+  void _block(String peer, int piece, DateTime now) {
+    _blockedRequests[_key(peer, piece)] = now.add(_failedPieceCooldown);
   }
 }
 
