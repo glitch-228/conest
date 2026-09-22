@@ -13142,6 +13142,13 @@ class MessengerController extends ChangeNotifier {
           Duration(seconds: irohOnly ? 20 : 2),
         );
         if (accepted == null) {
+          if (!irohOnly) {
+            appendDebugLog(
+              'LAN file-test peer rejected the current LAN path; '
+              'trying Iroh.',
+            );
+            continue;
+          }
           rejected = true;
           throw StateError(
             '${contact.alias} did not confirm the same debug build and selected transport.',
