@@ -65,6 +65,30 @@ class GroupFileDownload {
     return result.whenComplete(() => _running = null);
   }
 
+  /// Stop current requests and remove this device's verified cache. The
+  /// conversation metadata is deliberately preserved by the caller.
+  Future<void> evict() async {
+    _paused = true;
+    state = GroupFileDownloadState.paused;
+    onChanged?.call();
+    final running = _running;
+    if (running != null) {
+      try {
+        await running;
+      } catch (_) {
+        // The session is being reset; a request failure is not destructive.
+      }
+    }
+    await store.evict();
+    scheduler.reset();
+    completedFile = null;
+    lastError = null;
+    _recovered = true;
+    _paused = false;
+    state = GroupFileDownloadState.waiting;
+    onChanged?.call();
+  }
+
   Future<void> _pump() async {
     try {
       if (!_recovered) {

@@ -282,6 +282,45 @@ void main() {
     },
   );
 
+  test(
+    'group cache eviction removes pieces but keeps the manifest session',
+    () async {
+      final root = await Directory.systemTemp.createTemp('group-evict-');
+      try {
+        final bytes = Uint8List.fromList([8, 6, 7, 5, 3, 0, 9]);
+        final hash = sha256.convert(bytes).toString();
+        final description = GroupFileManifest(
+          fileName: 'keep-message.bin',
+          mimeType: 'application/octet-stream',
+          sizeBytes: bytes.length,
+          fileHash: hash,
+          pieceHashes: [hash],
+        );
+        final store = GroupFileStore(root: root, manifest: description);
+        await store.writePiece(0, bytes);
+        final download = GroupFileDownload(
+          store: store,
+          allowed: (_, _) => true,
+          authorize: (_) async => true,
+          fetch: (_) async => bytes,
+        );
+        await download.resume();
+        expect(download.state, GroupFileDownloadState.complete);
+        expect(await store.recover(), {0});
+
+        await download.evict();
+
+        expect(download.state, GroupFileDownloadState.waiting);
+        expect(download.verifiedBytes, 0);
+        expect(download.completedFile, isNull);
+        expect(await store.recover(), isEmpty);
+        expect(description.fileName, 'keep-message.bin');
+      } finally {
+        await root.delete(recursive: true);
+      }
+    },
+  );
+
   GroupFileManifest manifest(int size) => GroupFileManifest(
     fileName: 'file.bin',
     mimeType: 'application/octet-stream',

@@ -222,6 +222,12 @@ class GroupFileSession {
     _changed();
   }
 
+  /// Remove local pieces without removing the signed group attachment event.
+  Future<void> evict() async {
+    await download.evict();
+    _changed();
+  }
+
   /// Supply authenticated discovery advertisements only. Authorization is
   /// rechecked here and again before each fetch and durable write.
   Future<void> updateProvider(

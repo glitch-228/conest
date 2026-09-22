@@ -64,6 +64,15 @@ class GroupFileStore {
   /// whole-file hash check. Inconsistent signed manifests never produce a file.
   Future<File> assemble() =>
       _serialize(() async => File(await _assemble(directory.path, manifest)));
+
+  /// Remove all locally cached pieces and the assembled copy while retaining
+  /// the signed manifest held by the conversation. Availability therefore
+  /// becomes empty until this device downloads the file again.
+  Future<void> evict() => _serialize(() async {
+    if (await directory.exists()) {
+      await directory.delete(recursive: true);
+    }
+  });
 }
 
 Future<Set<int>> _recover(String path, GroupFileManifest description) =>

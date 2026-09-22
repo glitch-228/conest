@@ -18,6 +18,16 @@ class GroupFileScheduler {
   bool get complete => _verified.length == manifest.pieceHashes.length;
   Set<int> get verifiedPieces => Set.unmodifiable(_verified);
 
+  /// Drop runtime availability after a deliberate local cache eviction. The
+  /// signed manifest remains owned by the session and can be downloaded again.
+  void reset() {
+    _providers.clear();
+    _requests.clear();
+    _verified.clear();
+    _blockedRequests.clear();
+    _generation++;
+  }
+
   bool stillAllowed(
     GroupPieceRequest request,
     bool Function(String peer, bool lan) allowed,

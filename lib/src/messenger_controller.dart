@@ -1410,6 +1410,23 @@ class MessengerController extends ChangeNotifier {
     await _startGroupFileDownload(session);
   }
 
+  /// Remove only this device's group-file cache. The signed message and
+  /// manifest remain searchable and can be accepted again later.
+  Future<void> evictGroupFile(String groupId, String eventId) async {
+    final event = await _groupHistory.fileEventForPeer(
+      groupId,
+      eventId,
+      _requireIdentity().deviceId,
+    );
+    if (event == null) throw StateError('Group file is not authorized.');
+    final session = await _registerGroupFile(event);
+    await session.evict();
+    await session.setAccepted(false);
+    _groupFileReservations.remove(eventId);
+    await _saveSnapshotSilently();
+    notifyListeners();
+  }
+
   Future<void> _startGroupFileDownload(GroupFileSession session) async {
     if (!_groupFileDiscoveryInFlight.add(session.event.eventId)) return;
     try {

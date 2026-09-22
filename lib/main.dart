@@ -6730,6 +6730,14 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                                     controller.setStatus('$error'),
                               ),
                         ),
+                        onEvict: () => unawaited(
+                          controller
+                              .evictGroupFile(group.groupId, message.id)
+                              .catchError(
+                                (Object error) =>
+                                    controller.setStatus('$error'),
+                              ),
+                        ),
                         sharing: controller
                             .groupFilePreference(group.groupId, message.id)
                             .sharing,

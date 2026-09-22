@@ -17,6 +17,7 @@ class GroupFileTile extends StatelessWidget {
     this.onPause,
     this.onResume,
     this.onStopSharing,
+    this.onEvict,
     this.onOpen,
     this.error,
   });
@@ -32,6 +33,7 @@ class GroupFileTile extends StatelessWidget {
   final VoidCallback? onPause;
   final VoidCallback? onResume;
   final VoidCallback? onStopSharing;
+  final VoidCallback? onEvict;
   final VoidCallback? onOpen;
   final String? error;
 
@@ -99,6 +101,11 @@ class GroupFileTile extends StatelessWidget {
               TextButton(
                 onPressed: onStopSharing,
                 child: const Text('Stop sharing'),
+              ),
+            if (onEvict != null && (verified > 0 || complete))
+              TextButton(
+                onPressed: onEvict,
+                child: const Text('Remove local copy'),
               ),
           ],
         ),
