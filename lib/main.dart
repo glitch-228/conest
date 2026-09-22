@@ -1918,9 +1918,32 @@ class _HomeScreenState extends State<HomeScreen> {
     if (files.isEmpty) {
       return;
     }
-    widget.controller.setStatus(
-      'Group file send arrives in v0.3.3+. Use a 1:1 chat for now.',
-    );
+    final group = _selectedGroup;
+    if (group == null) {
+      widget.controller.setStatus('Select a group before dropping files.');
+      return;
+    }
+    unawaited(() async {
+      for (final file in files) {
+        final path = file.path;
+        if (path.isEmpty) {
+          widget.controller.setStatus(
+            '${file.name}: local file path unavailable.',
+          );
+          continue;
+        }
+        try {
+          await widget.controller.publishGroupFile(
+            groupId: group.groupId,
+            path: path,
+            fileName: file.name,
+            mimeType: _guessMimeType(file.name),
+          );
+        } catch (error) {
+          widget.controller.setStatus('Could not share ${file.name}: $error');
+        }
+      }
+    }());
   }
 
   Future<void> _openMediaPicker() async {

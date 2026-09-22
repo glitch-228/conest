@@ -1515,14 +1515,17 @@ class MessengerController extends ChangeNotifier {
             null) {
           throw StateError('Group file authorization changed.');
         }
-        final receipt = await adapter.sendEnvelope(
+        // Group pieces are up to 4 MiB.  Use the binary attachment-range
+        // framing so they are not rejected by the ordinary message envelope
+        // limit, while retaining the same authenticated encrypted payload.
+        final receipt = await adapter.sendAttachmentRange(
           peer: peer,
           route: route,
-          envelope: TransportEnvelope(
-            id: request,
-            recipientDeviceId: peerId,
+          range: AttachmentRange(
+            attachmentId: 'group-file:${event.eventId}:$request',
+            offset: 0,
             bytes: bytes,
-            createdAt: _now().toUtc(),
+            sha256Base64: base64Encode(dart_crypto.sha256.convert(bytes).bytes),
           ),
         );
         if (receipt.accepted) return;
@@ -1535,8 +1538,12 @@ class MessengerController extends ChangeNotifier {
     });
   }
 
-  Future<void> _handleGroupFileIroh(TransportInboundEnvelope inbound) async {
-    final header = peekGroupFileBinary(inbound.bytes);
+  Future<void> _handleGroupFileIroh(
+    TransportInboundEnvelope inbound, {
+    Uint8List? payload,
+  }) async {
+    final bytes = payload ?? inbound.bytes;
+    final header = peekGroupFileBinary(bytes);
     if (header.recipient != _requireIdentity().deviceId) return;
     final group = _groupById(header.groupId);
     if (group == null) return;
@@ -1561,7 +1568,7 @@ class MessengerController extends ChangeNotifier {
       groupId: header.groupId,
       eventId: header.eventId,
       requestId: header.requestId,
-      bytes: inbound.bytes,
+      bytes: bytes,
     );
     await (await _registerGroupFile(
       event,
@@ -1873,6 +1880,11 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     try {
+      final range = decodeIrohAttachmentRangeFrame(inbound.bytes);
+      if (range != null && range.attachmentId.startsWith('group-file:')) {
+        await _handleGroupFileIroh(inbound, payload: range.bytes);
+        return;
+      }
       if (isGroupFileBinary(inbound.bytes)) {
         await _handleGroupFileIroh(inbound);
         return;
@@ -1917,7 +1929,6 @@ class MessengerController extends ChangeNotifier {
         appendDebugLog('Rejected Iroh envelope from an untrusted contact.');
         return;
       }
-      final range = decodeIrohAttachmentRangeFrame(inbound.bytes);
       if (range != null) {
         final state = _inboundAttachments[range.attachmentId];
         if (state == null || range.offset % state.descriptor.chunkSize != 0) {
@@ -7315,6 +7326,41 @@ class MessengerController extends ChangeNotifier {
       if (entry.groupId == groupId && entry.eventId == eventId) return entry;
     }
     return GroupFilePreference(groupId: groupId, eventId: eventId);
+  }
+
+  /// Publish a group attachment from an app-owned staged path, then seed the
+  /// local verified cache so other members can fetch pieces from this device.
+  /// The signed history event is durable before any peer announcement.
+  Future<void> publishGroupFile({
+    required String groupId,
+    required String path,
+    required String fileName,
+    required String mimeType,
+  }) async {
+    final group = _requireGroup(groupId);
+    final manifest = await hashGroupFile(
+      path: path,
+      fileName: fileName,
+      mimeType: mimeType,
+    );
+    final event = await _groupHistory.publishFile(group, manifest);
+    _projectGroupFile(groupId, event, manifest);
+    final session = await _registerGroupFile(event);
+    await session.seedExisting(path);
+    await session.setAccepted(true);
+    await session.setSharing(true);
+    await _saveSnapshotSilently();
+    for (final peer in group.activeMemberDeviceIds) {
+      if (peer == _requireIdentity().deviceId) continue;
+      unawaited(
+        _groupHistory.announceChange(groupId, peer).catchError((Object error) {
+          if (!_disposed) {
+            appendDebugLog('Group file announcement waiting: $error');
+          }
+        }),
+      );
+    }
+    setStatus('Shared $fileName with the group.');
   }
 
   Future<void> setGroupFilePreference(
