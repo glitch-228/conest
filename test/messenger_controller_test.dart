@@ -7510,6 +7510,35 @@ void main() {
     expect(loaded.pinnedRelayIdentityKeys['relay-beta'], isNotNull);
   });
 
+  test('signed defaults do not restore the retired bundled relay', () async {
+    final relayClient = _FakeRelayClient();
+    final defaults = SignedRelayDefaults(
+      version: 12,
+      issuedAt: DateTime.utc(2026, 5, 12),
+      endpoints: const [
+        DefaultRelayEndpointSpec(
+          kind: PeerRouteKind.relay,
+          host: '185.182.65.29',
+          port: 7667,
+          protocol: PeerRouteProtocol.tcp,
+        ),
+      ],
+    );
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+      signedRelayDefaultsLoader: () async => defaults,
+    );
+    addTearDown(alice.dispose);
+
+    expect(
+      alice.identity!.configuredRelays.any(
+        (route) => route.host == '185.182.65.29' && route.port == 7667,
+      ),
+      isFalse,
+    );
+  });
+
   test(
     'RelayIdentityMismatchException carries a descriptive message',
     () async {

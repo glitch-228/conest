@@ -2908,7 +2908,11 @@ class MessengerController extends ChangeNotifier {
       // yet so the next initialize() retries once pairing is complete.
       return const <PeerEndpoint>[];
     }
-    final derived = _expandDefaultRelaySpecs(defaults.endpoints);
+    // A newer signed manifest must not resurrect an endpoint retired by the
+    // migration above. Explicitly configured/imported routes remain allowed.
+    final derived = _expandDefaultRelaySpecs(
+      defaults.endpoints,
+    ).where(_allowsAdvertisedRoute).toList(growable: false);
     if (me != null && derived.isNotEmpty) {
       final updated = dedupePeerEndpoints([...me.configuredRelays, ...derived]);
       final newDefaultKeys = <String>{
@@ -2917,7 +2921,7 @@ class MessengerController extends ChangeNotifier {
       };
       final newDefaultHosts = <String>{
         ..._snapshot.defaultRelayHosts,
-        ...defaults.endpoints.map((spec) => '${spec.host}:${spec.port}'),
+        ...derived.map((route) => '${route.host}:${route.port}'),
       };
       _snapshot = _snapshot.copyWith(
         identity: me.copyWith(configuredRelays: updated),
