@@ -5539,7 +5539,11 @@ class MessengerController extends ChangeNotifier {
         preferOriginalSource: debugUseSourceInPlace,
         onProgress: (bytes) {
           _preparationProgressBytes[attachmentId] = bytes;
-          notifyListeners();
+          // Hash/copy progress can arrive for every worker read. Keep the
+          // 100 ms progress cadence local to transfer widgets; rebuilding the
+          // whole conversation shell while staging a large file causes the
+          // visible freezes reported during preparation.
+          _notifyTransferProgress();
         },
       );
     } catch (_) {
