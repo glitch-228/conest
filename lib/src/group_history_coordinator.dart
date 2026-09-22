@@ -377,8 +377,17 @@ class GroupHistoryCoordinator {
         if (manifest != null) onAttachment?.call(id, event, manifest);
         continue;
       }
-      if (event.kind != GroupEventKind.message) continue;
-      await _projectOriginal(id, replica, event);
+      GroupHistoryEvent? original;
+      if (event.kind == GroupEventKind.message) {
+        original = event;
+      } else if (GroupMessageProjection.isMutation(event)) {
+        final target = event.payload['targetEventId'] as String;
+        final targets = await replica.journal.readEvents([target]);
+        if (targets.isNotEmpty) original = targets.single;
+      }
+      if (original != null) {
+        await _projectOriginal(id, replica, original);
+      }
     }
   }
 
