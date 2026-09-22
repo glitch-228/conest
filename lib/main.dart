@@ -7805,6 +7805,8 @@ class _ChatPanelState extends State<_ChatPanel> {
       selected: allSelected,
       onForwardAttachment: (descriptor) =>
           _forwardAttachment(context, controller, palette, descriptor),
+      onDeleteAttachment: (message) =>
+          _deleteMessage(context, message),
       onToggleSelection: (album) {
         setState(() {
           final alreadyAll = album.every(
@@ -7921,6 +7923,10 @@ class _ChatPanelState extends State<_ChatPanel> {
                           controller,
                           palette,
                           message.attachment!,
+                        ),
+                        onDelete: () => _deleteMessage(
+                          context,
+                          message,
                         ),
                       ),
                       if (message.body.isNotEmpty) const SizedBox(height: 8),
@@ -14431,6 +14437,7 @@ class _AlbumBubble extends StatelessWidget {
     this.selected = false,
     this.onToggleSelection,
     this.onForwardAttachment,
+    this.onDeleteAttachment,
   });
 
   final List<ChatMessage> members;
@@ -14444,6 +14451,7 @@ class _AlbumBubble extends StatelessWidget {
   final void Function(List<ChatMessage> members)? onToggleSelection;
   final Future<void> Function(AttachmentDescriptor descriptor)?
   onForwardAttachment;
+  final Future<void> Function(ChatMessage message)? onDeleteAttachment;
 
   @override
   Widget build(BuildContext context) {
@@ -14508,6 +14516,9 @@ class _AlbumBubble extends StatelessWidget {
                             onForward: onForwardAttachment == null
                                 ? null
                                 : () => onForwardAttachment!(m.attachment!),
+                            onDelete: onDeleteAttachment == null
+                                ? null
+                                : () => onDeleteAttachment!(m),
                           ),
                     ],
                   ),
@@ -15048,6 +15059,7 @@ class _AttachmentRow extends StatelessWidget {
     required this.messageState,
     this.conversationPeerDeviceId,
     this.onForward,
+    this.onDelete,
   });
 
   final AttachmentDescriptor descriptor;
@@ -15061,6 +15073,7 @@ class _AttachmentRow extends StatelessWidget {
   /// for group bubbles (group-wide swipe is a future enhancement).
   final String? conversationPeerDeviceId;
   final Future<void> Function()? onForward;
+  final Future<void> Function()? onDelete;
 
   String _formatBytes(int size) {
     if (size < 1024) return '$size B';
@@ -15495,12 +15508,14 @@ class _AttachmentRow extends StatelessWidget {
         }
         break;
       case 'cancel':
+        await controller.cancelAttachmentById(descriptor.id);
+        break;
       case 'delete':
-        // For now both route to the cancel-by-id path which sends an
-        // attachment_cancel envelope + clears local state. Full delete
-        // (including remote tombstone) requires the parent ChatMessage
-        // context — deferred until the bubble passes it down.
-        controller.cancelAttachmentById(descriptor.id);
+        if (onDelete != null) {
+          await onDelete!();
+        } else {
+          await controller.cancelAttachmentById(descriptor.id);
+        }
         break;
       case 'retry':
         controller.retryAttachment(descriptor.id);
