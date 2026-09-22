@@ -52,7 +52,12 @@ class GroupFileStore {
   /// since their last availability announcement.
   Future<Uint8List?> readPiece(int index) {
     manifest.lengthOf(index);
-    return _serialize(() => _read(directory.path, manifest, index));
+    // Reads use independent file handles inside their worker isolates. Wait
+    // for writes already queued, then allow verified pieces to be served in
+    // parallel; routing every read through [_serialize] serialized the
+    // provider's four-piece window and throttled group transfers.
+    final pendingWrites = _tail;
+    return pendingWrites.then((_) => _read(directory.path, manifest, index));
   }
 
   /// Assemble only into an app-owned path, and publish only after a separate
