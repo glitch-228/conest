@@ -15346,7 +15346,7 @@ class MessengerController extends ChangeNotifier {
       if (!peer.allowRelay && route.path == TransportPathKind.relayed) continue;
       final receipt = await adapter
           .sendAttachmentRange(peer: peer, route: route, range: range)
-          .timeout(const Duration(seconds: 60));
+          .timeout(const Duration(seconds: 75));
       if (receipt.accepted) return receipt;
     }
     return null;

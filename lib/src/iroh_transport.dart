@@ -8,6 +8,10 @@ import 'transport_models.dart';
 const List<int> _irohAttachmentRangeMagic = <int>[0x43, 0x49, 0x32, 0x00];
 const int _irohAttachmentRangeHeaderBytes = 4 + 1 + 2 + 8 + 4 + 32;
 const int _maxIrohAttachmentRangeBytes = 5 * 1024 * 1024;
+// Signed direct hints can become unusable immediately after a network
+// handoff. Do not let one such hint consume the whole route deadline before
+// endpoint discovery gets a chance to select a current direct or relay path.
+const Duration _irohDirectHintAttemptTimeout = Duration(seconds: 12);
 
 class IrohAttachmentRangeFrame {
   const IrohAttachmentRangeFrame({
@@ -276,12 +280,15 @@ class IrohTransportAdapter implements TransportAdapter {
     }
     IrohBridgeReceipt result;
     try {
-      result = await _bridge.sendEnvelope(
+      final hintedAttempt = _bridge.sendEnvelope(
         remoteEndpointId: endpoint,
         bytes: envelope.bytes,
         allowRelay: peer.allowRelay,
         directAddresses: peer.directAddresses,
       );
+      result = await (peer.directAddresses.isEmpty
+          ? hintedAttempt
+          : hintedAttempt.timeout(_irohDirectHintAttemptTimeout));
     } catch (error) {
       // A network handoff can leave the signed direct socket hints stale while
       // the endpoint identity and Iroh discovery remain valid. Retry once

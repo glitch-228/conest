@@ -232,8 +232,9 @@ class TransportRegistry {
     required TransportEnvelope envelope,
     required Map<TransportKind, TransportPolicy> policies,
     // A fresh Iroh connection includes discovery/NAT traversal (the native
-    // dial alone permits ten seconds). Four seconds prematurely abandoned
-    // healthy cold connections and left their native sends still running.
+    // dial alone permits ten seconds). The adapter may first discard a stale
+    // direct hint and retry endpoint-only, so thirty seconds can cut off the
+    // recovery path while the native send is still healthy.
     Duration? attemptTimeout,
   }) async {
     final routes = await routesFor(peer, policies: policies);
@@ -250,7 +251,7 @@ class TransportRegistry {
             .timeout(
               attemptTimeout ??
                   (route.transport == TransportKind.iroh
-                      ? const Duration(seconds: 30)
+                      ? const Duration(seconds: 60)
                       : const Duration(seconds: 4)),
             );
         attempts.add(
