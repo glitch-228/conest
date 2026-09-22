@@ -2391,6 +2391,12 @@ class MessengerController extends ChangeNotifier {
       );
       if (processed > 0) {
         _reachability.noteAvailablePath(contact.deviceId);
+        // An authenticated Iroh envelope is already a verified two-way
+        // exchange: the peer reached this endpoint and the encrypted payload
+        // passed the pinned identity/key checks. Waiting for a separate
+        // heartbeat reply made Beam-added contacts remain "discovering" even
+        // while messages and receipts were flowing.
+        _reachability.noteTwoWaySuccess(contact.deviceId);
         await _saveSnapshotSilently(debounce: true);
       }
     } catch (error) {
