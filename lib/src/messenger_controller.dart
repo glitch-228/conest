@@ -1830,31 +1830,36 @@ class MessengerController extends ChangeNotifier {
         // Group pieces are up to 4 MiB.  Use the binary attachment-range
         // framing so they are not rejected by the ordinary message envelope
         // limit, while retaining the same authenticated encrypted payload.
-        try {
-          final receipt = await adapter
-              .sendAttachmentRange(
-                peer: peer,
-                route: route,
-                range: AttachmentRange(
-                  attachmentId: 'group-file:${event.eventId}:$request',
-                  offset: 0,
-                  bytes: bytes,
-                  sha256Base64: base64Encode(
-                    dart_crypto.sha256.convert(bytes).bytes,
+        for (var attempt = 0; attempt < 2; attempt++) {
+          try {
+            final receipt = await adapter
+                .sendAttachmentRange(
+                  peer: peer,
+                  route: route,
+                  range: AttachmentRange(
+                    attachmentId: 'group-file:${event.eventId}:$request',
+                    offset: 0,
+                    bytes: bytes,
+                    sha256Base64: base64Encode(
+                      dart_crypto.sha256.convert(bytes).bytes,
+                    ),
                   ),
-                ),
-              )
-              .timeout(const Duration(seconds: 25));
-          if (receipt.accepted) return;
-          lastError = StateError(
-            'Iroh route ${route.label} rejected the group file frame.',
-          );
-        } catch (error) {
-          lastError = error;
-          appendDebugLog(
-            'Group file frame ${event.eventId}/$request via '
-            '${route.label} failed: $error',
-          );
+                )
+                .timeout(const Duration(seconds: 45));
+            if (receipt.accepted) return;
+            lastError = StateError(
+              'Iroh route ${route.label} rejected the group file frame.',
+            );
+          } catch (error) {
+            lastError = error;
+            appendDebugLog(
+              'Group file frame ${event.eventId}/$request via '
+              '${route.label} failed (attempt ${attempt + 1}/2): $error',
+            );
+          }
+          if (attempt == 0) {
+            await Future<void>.delayed(const Duration(milliseconds: 250));
+          }
         }
       }
       throw StateError(
@@ -11644,12 +11649,17 @@ class MessengerController extends ChangeNotifier {
     int index,
   ) async {
     final file = File(state.sourcePath);
-    final stat = await file.stat();
-    if (stat.type != FileSystemEntityType.file ||
-        stat.size != state.descriptor.sizeBytes) {
-      throw const FormatException('Attachment source is missing or changed.');
-    }
+    // Private spools are app-owned immutable copies. Avoid a filesystem
+    // metadata round-trip for every 4 MiB block; on mobile that repeated stat
+    // call was visible as transfer stalls. RandomAccessFile still fails fast
+    // if the spool disappears, and the exact read length remains checked
+    // below. User-selected originals retain the per-block mutation check.
     if (state.sourceKind == TransferSourceKind.originalPath) {
+      final stat = await file.stat();
+      if (stat.type != FileSystemEntityType.file ||
+          stat.size != state.descriptor.sizeBytes) {
+        throw const FormatException('Attachment source is missing or changed.');
+      }
       final session = _transferSessionById(state.descriptor.id);
       final expectedModified = session?.sourceModifiedAt;
       if (expectedModified != null && stat.modified != expectedModified) {
@@ -15873,17 +15883,30 @@ class MessengerController extends ChangeNotifier {
     Object? lastError;
     for (final route in routes) {
       if (!peer.allowRelay && route.path == TransportPathKind.relayed) continue;
-      try {
-        final receipt = await adapter
-            .sendAttachmentRange(peer: peer, route: route, range: range)
-            .timeout(const Duration(seconds: 25));
-        if (receipt.accepted) return receipt;
-      } catch (error) {
-        lastError = error;
-        appendDebugLog(
-          'Iroh attachment route ${route.path.name} failed for '
-          '${range.attachmentId} at ${range.offset}: $error; trying next.',
-        );
+      // A single lost QUIC stream should not force the whole attachment back
+      // through the 60-second stall timer. Range frames are immutable and
+      // keyed by attachment/offset, so one bounded retry is idempotent while
+      // the endpoint re-discovers a path after a Wi-Fi or NAT handoff.
+      for (var attempt = 0; attempt < 2; attempt++) {
+        try {
+          final receipt = await adapter
+              .sendAttachmentRange(peer: peer, route: route, range: range)
+              .timeout(const Duration(seconds: 45));
+          if (receipt.accepted) return receipt;
+          lastError = StateError(
+            'Iroh route ${route.label} rejected attachment range.',
+          );
+        } catch (error) {
+          lastError = error;
+          appendDebugLog(
+            'Iroh attachment route ${route.path.name} failed for '
+            '${range.attachmentId} at ${range.offset} '
+            '(attempt ${attempt + 1}/2): $error',
+          );
+        }
+        if (attempt == 0) {
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+        }
       }
     }
     if (lastError != null) throw lastError;
