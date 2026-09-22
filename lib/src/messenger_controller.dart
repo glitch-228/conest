@@ -5984,6 +5984,7 @@ class MessengerController extends ChangeNotifier {
     TransferState state, {
     String? error,
     bool storageReserveBlocked = false,
+    bool notify = true,
   }) {
     final session = _transferSessionById(attachmentId);
     if (session == null) return;
@@ -6005,7 +6006,7 @@ class MessengerController extends ChangeNotifier {
                 : 'The local transfer failed.'),
       );
     }
-    unawaited(_saveSnapshotSilently(notify: true, debounce: true));
+    unawaited(_saveSnapshotSilently(notify: notify, debounce: true));
   }
 
   void _completeDebugFileTestFromLocalFailure(
@@ -12099,7 +12100,15 @@ class MessengerController extends ChangeNotifier {
     state.peerVerifying = received == state.descriptor.effectiveChunkCount;
     if (_activeOutboundByContact[sender.deviceId] == attachmentId) {
       _armOutboundStallTimer(sender);
-      _setTransferSessionState(attachmentId, TransferState.transferring);
+      // Byte acknowledgements are rendered through the throttled transfer
+      // notifier below. Avoid invalidating the whole app shell for every
+      // verified block while still persisting the state in the debounced
+      // vault checkpoint.
+      _setTransferSessionState(
+        attachmentId,
+        TransferState.transferring,
+        notify: false,
+      );
     }
     state.recordPeerProgress(
       exactBytes ??
