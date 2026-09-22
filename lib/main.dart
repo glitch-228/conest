@@ -2376,9 +2376,15 @@ class _HomeScreenState extends State<HomeScreen> {
                       final resizableSidebar =
                           isWide &&
                           widget.themeController.shell == ConestShell.courier;
+                      final showDetailsPane =
+                          isWide &&
+                          widget.themeController.shell == ConestShell.courier &&
+                          _detailsPaneOpen &&
+                          constraints.maxWidth >= 1120;
+                      final detailsPaneWidth = showDetailsPane ? 320.0 : 0.0;
                       final sidebarMaximum = math.min(
                         560.0,
-                        constraints.maxWidth - 488,
+                        constraints.maxWidth - 488 - detailsPaneWidth,
                       );
                       final sidebarWidth = _sidebarWidth
                           .clamp(300.0, math.max(300.0, sidebarMaximum))
@@ -2604,11 +2610,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           unawaited(_handleSmartPaste()),
                                     ),
                             ),
-                          if (isWide &&
-                              widget.themeController.shell ==
-                                  ConestShell.courier &&
-                              _detailsPaneOpen &&
-                              selectedContact != null)
+                          if (showDetailsPane && selectedContact != null)
                             _ContactDetailsPane(
                               controller: widget.controller,
                               palette: palette,
@@ -2621,11 +2623,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     forceDialog: true,
                                   ),
                             ),
-                          if (isWide &&
-                              widget.themeController.shell ==
-                                  ConestShell.courier &&
-                              _detailsPaneOpen &&
-                              selectedGroup != null)
+                          if (showDetailsPane && selectedGroup != null)
                             _GroupDetailsPane(
                               controller: widget.controller,
                               palette: palette,
