@@ -1949,6 +1949,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _openMediaPicker() async {
     final contact = _selectedContact;
     if (contact == null) {
+      if (_selectedGroup != null) await _pickAndShareGroupFiles();
       return;
     }
     final result = await showMediaPickerSheet(
@@ -1976,6 +1977,36 @@ class _HomeScreenState extends State<HomeScreen> {
       fileName: result.fileName!,
       mimeType: result.mimeType ?? 'application/octet-stream',
     );
+  }
+
+  Future<void> _pickAndShareGroupFiles() async {
+    final group = _selectedGroup;
+    if (group == null) return;
+    final result = await FilePicker.pickFiles(
+      type: FileType.any,
+      allowMultiple: true,
+      withData: false,
+    );
+    if (!mounted || result == null) return;
+    for (final file in result.files) {
+      final path = file.path;
+      if (path == null || path.isEmpty) {
+        widget.controller.setStatus(
+          '${file.name}: local file path unavailable.',
+        );
+        continue;
+      }
+      try {
+        await widget.controller.publishGroupFile(
+          groupId: group.groupId,
+          path: path,
+          fileName: file.name,
+          mimeType: _guessMimeType(file.name),
+        );
+      } catch (error) {
+        widget.controller.setStatus('Could not share ${file.name}: $error');
+      }
+    }
   }
 
   Future<void> _pickAndSendAttachment() async {
