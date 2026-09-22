@@ -173,8 +173,8 @@ class GroupHistoryJournal {
   Future<GroupHistoryEvent?> authorHead(String author) async =>
       await _request('authorHead', [author]) as GroupHistoryEvent?;
 
-  /// Returns the latest indexed edit/deletion and each actor/emoji reaction
-  /// for this exact signed author. Callers still check membership/history
+  /// Returns the original author's latest edit/deletion and every actor's
+  /// latest reaction per emoji. Callers still check membership/history
   /// visibility before projection.
   Future<List<GroupHistoryEvent>> messageMutations(
     GroupHistoryEvent original,
@@ -623,9 +623,11 @@ class _JournalWorker {
                 .where(
                   (entry) =>
                       entry.event.payload['targetEventId'] == target &&
-                      entry.event.authorAccountId == authorAccount &&
-                      entry.event.authorDeviceId == authorDevice &&
-                      entry.event.signingPublicKeyBase64 == signingKey,
+                      (entry.kind == GroupEventKind.reaction ||
+                          (entry.event.authorAccountId == authorAccount &&
+                              entry.event.authorDeviceId == authorDevice &&
+                              entry.event.signingPublicKeyBase64 ==
+                                  signingKey)),
                 )
                 .toList()
               ..sort();

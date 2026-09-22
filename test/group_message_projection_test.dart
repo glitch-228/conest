@@ -253,4 +253,61 @@ void main() {
       await root.delete(recursive: true);
     }
   });
+
+  test('journal retains other members reactions across restart', () async {
+    final root = await Directory.systemTemp.createTemp('conest-reactions-');
+    Future<GroupHistoryJournal> open() => GroupHistoryJournal.open(
+      file: File('${root.path}/history'),
+      key: List.filled(32, 3),
+      groupId: 'group',
+    );
+    Future<GroupHistoryEvent> react(bool active, GroupHistoryEvent? previous) =>
+        GroupHistoryEvent.sign(
+          groupId: 'group',
+          authorAccountId: 'account-bob',
+          authorDeviceId: 'bob',
+          keyPair: bob,
+          sequence: (previous?.sequence ?? 0) + 1,
+          previousEventId: previous?.eventId,
+          lamport: (previous?.lamport ?? original.lamport) + 1,
+          membershipId: membership,
+          kind: GroupEventKind.reaction,
+          payload: {
+            'targetEventId': original.eventId,
+            'changedAt': '2026-09-22T12:00:00.000Z',
+            'emoji': '👍',
+            'active': active,
+          },
+        );
+    var journal = await open();
+    try {
+      final on = await react(true, null);
+      await journal.append(on);
+      await journal.append(original);
+      await journal.close();
+      journal = await open();
+      expect(
+        GroupMessageProjection.reduce(
+          original,
+          await journal.messageMutations(original),
+        )!.reactions,
+        {
+          '👍': {'bob'},
+        },
+      );
+      await journal.append(await react(false, on));
+      await journal.close();
+      journal = await open();
+      expect(
+        GroupMessageProjection.reduce(
+          original,
+          await journal.messageMutations(original),
+        )!.reactions,
+        isEmpty,
+      );
+    } finally {
+      await journal.close();
+      await root.delete(recursive: true);
+    }
+  });
 }
