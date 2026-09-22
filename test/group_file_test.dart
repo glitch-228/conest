@@ -31,6 +31,10 @@ void main() {
         state: DeliveryState.delivered,
         createdAt: DateTime.utc(2026),
         groupFile: manifest,
+        groupHistoryLamport: 7,
+        groupHistoryAuthorDeviceId: 'author',
+        groupHistorySequence: 3,
+        groupHistoryEventId: 'd' * 64,
       );
       final restored = ChatMessage.fromJson(
         message.copyWith(state: DeliveryState.read).toJson(),
@@ -38,6 +42,9 @@ void main() {
       expect(restored.groupFile!.toPayload(), manifest.toPayload());
       expect(restored.attachment, isNull);
       expect(restored.senderDeviceId, 'author');
+      expect(restored.groupHistoryLamport, 7);
+      expect(restored.groupHistorySequence, 3);
+      expect(restored.groupHistoryEventId, 'd' * 64);
     },
   );
 
