@@ -1364,6 +1364,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _selectedContactId;
   String? _selectedGroupId;
   bool _lanLobbySelected = false;
+  bool _detailsPaneOpen = false;
   double _sidebarWidth = 380;
   final _courierKey = GlobalKey<_CourierHomeState>();
   final _composers = <(ConversationKind, String), TextEditingController>{};
@@ -1471,6 +1472,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _lanLobbySelected = false;
       _selectedGroupId = null;
       _selectedContactId = contact.deviceId;
+      _detailsPaneOpen = false;
       if (!_replyTargetMatchesContact(contact)) {
         _replyTarget = null;
       }
@@ -1482,6 +1484,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _lanLobbySelected = false;
       _selectedContactId = null;
       _selectedGroupId = group.groupId;
+      _detailsPaneOpen = false;
       if (!_replyTargetMatchesGroup(group)) {
         _replyTarget = null;
       }
@@ -1493,6 +1496,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _selectedContactId = null;
       _selectedGroupId = null;
       _lanLobbySelected = true;
+      _detailsPaneOpen = false;
       _replyTarget = null;
     });
     unawaited(widget.controller.markLanLobbyRead());
@@ -1562,7 +1566,23 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  Future<void> _showGroupDetails(GroupRecord group) async {
+  Future<void> _showGroupDetails(
+    GroupRecord group, {
+    bool forceDialog = false,
+  }) async {
+    final desktopCourier =
+        !forceDialog &&
+        widget.themeController.shell == ConestShell.courier &&
+        MediaQuery.sizeOf(context).width > 920;
+    if (desktopCourier) {
+      setState(() {
+        _selectedGroupId = group.groupId;
+        _selectedContactId = null;
+        _lanLobbySelected = false;
+        _detailsPaneOpen = !_detailsPaneOpen;
+      });
+      return;
+    }
     await showDialog<void>(
       context: context,
       builder: (context) => GroupDetailsDialog(
@@ -1641,7 +1661,23 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _showContactProfile(ContactRecord contact) async {
+  Future<void> _showContactProfile(
+    ContactRecord contact, {
+    bool forceDialog = false,
+  }) async {
+    final desktopCourier =
+        !forceDialog &&
+        widget.themeController.shell == ConestShell.courier &&
+        MediaQuery.sizeOf(context).width > 920;
+    if (desktopCourier) {
+      setState(() {
+        _selectedContactId = contact.deviceId;
+        _selectedGroupId = null;
+        _lanLobbySelected = false;
+        _detailsPaneOpen = !_detailsPaneOpen;
+      });
+      return;
+    }
     await showDialog<void>(
       context: context,
       builder: (context) => ContactProfileDialog(
@@ -2568,6 +2604,40 @@ class _HomeScreenState extends State<HomeScreen> {
                                           unawaited(_handleSmartPaste()),
                                     ),
                             ),
+                          if (isWide &&
+                              widget.themeController.shell ==
+                                  ConestShell.courier &&
+                              _detailsPaneOpen &&
+                              selectedContact != null)
+                            _ContactDetailsPane(
+                              controller: widget.controller,
+                              palette: palette,
+                              contact: selectedContact,
+                              onClose: () =>
+                                  setState(() => _detailsPaneOpen = false),
+                              onOpenFullProfile: () =>
+                                  _showContactProfile(
+                                    selectedContact,
+                                    forceDialog: true,
+                                  ),
+                            ),
+                          if (isWide &&
+                              widget.themeController.shell ==
+                                  ConestShell.courier &&
+                              _detailsPaneOpen &&
+                              selectedGroup != null)
+                            _GroupDetailsPane(
+                              controller: widget.controller,
+                              palette: palette,
+                              group: selectedGroup,
+                              onClose: () =>
+                                  setState(() => _detailsPaneOpen = false),
+                              onOpenFullDetails: () =>
+                                  _showGroupDetails(
+                                    selectedGroup,
+                                    forceDialog: true,
+                                  ),
+                            ),
                         ],
                       );
                     },
@@ -2580,6 +2650,249 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+}
+
+class _ContactDetailsPane extends StatelessWidget {
+  const _ContactDetailsPane({
+    required this.controller,
+    required this.palette,
+    required this.contact,
+    required this.onClose,
+    required this.onOpenFullProfile,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+  final ContactRecord contact;
+  final VoidCallback onClose;
+  final VoidCallback onOpenFullProfile;
+
+  @override
+  Widget build(BuildContext context) {
+    final reachability = controller.reachabilityStateFor(contact.deviceId);
+    return SizedBox(
+      width: 320,
+      child: Material(
+        color: palette.panel,
+        elevation: 1,
+        child: SafeArea(
+          left: false,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Contact details',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: onClose,
+                    tooltip: 'Close details',
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Center(
+                child: SealAvatar(
+                  seed: contact.deviceId,
+                  label: contact.alias,
+                  palette: palette,
+                  size: 88,
+                  animate: true,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                contact.alias,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              if (contact.bio.trim().isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  contact.bio,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: palette.inkSoft,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 18),
+              _ReachabilityChip(
+                state: reachability,
+                palette: palette,
+                expand: true,
+              ),
+              const SizedBox(height: 12),
+              _DetailsValue(label: 'Route', value: contact.routeSummary),
+              _DetailsValue(
+                label: 'Safety number',
+                value: contact.shortSafetyNumber,
+              ),
+              _DetailsValue(
+                label: 'Iroh endpoint',
+                value: contact.irohEndpointId ?? 'Not pinned',
+              ),
+              _DetailsValue(
+                label: 'Device',
+                value: contact.deviceId,
+                monospace: true,
+              ),
+              const SizedBox(height: 16),
+              FilledButton.tonalIcon(
+                onPressed: onOpenFullProfile,
+                icon: const Icon(Icons.open_in_new),
+                label: const Text('Open full profile'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _GroupDetailsPane extends StatelessWidget {
+  const _GroupDetailsPane({
+    required this.controller,
+    required this.palette,
+    required this.group,
+    required this.onClose,
+    required this.onOpenFullDetails,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+  final GroupRecord group;
+  final VoidCallback onClose;
+  final VoidCallback onOpenFullDetails;
+
+  @override
+  Widget build(BuildContext context) {
+    final members = group.activeMemberDeviceIds;
+    return SizedBox(
+      width: 320,
+      child: Material(
+        color: palette.panel,
+        elevation: 1,
+        child: SafeArea(
+          left: false,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Group details',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: onClose,
+                    tooltip: 'Close details',
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Center(
+                child: SealAvatar(
+                  seed: group.groupId,
+                  label: group.title,
+                  palette: palette,
+                  size: 88,
+                  animate: true,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                group.title,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '${members.length} active member${members.length == 1 ? '' : 's'}',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: palette.inkSoft,
+                ),
+              ),
+              const SizedBox(height: 18),
+              for (final member in members)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  leading: SealAvatar(
+                    seed: member,
+                    label: controller.groupMemberLabel(member),
+                    palette: palette,
+                    size: 34,
+                  ),
+                  title: Text(
+                    controller.groupMemberLabel(member),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(
+                    member == group.ownerDeviceId ? 'Owner' : 'Member',
+                  ),
+                ),
+              const SizedBox(height: 12),
+              FilledButton.tonalIcon(
+                onPressed: onOpenFullDetails,
+                icon: const Icon(Icons.settings_outlined),
+                label: const Text('Open group settings'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DetailsValue extends StatelessWidget {
+  const _DetailsValue({
+    required this.label,
+    required this.value,
+    this.monospace = false,
+  });
+
+  final String label;
+  final String value;
+  final bool monospace;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: Theme.of(context).textTheme.labelMedium),
+        const SizedBox(height: 2),
+        SelectableText(
+          value,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            fontFamily: monospace ? ConestPalette.monoFont : null,
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 /// Intent dispatched by the composer's `Ctrl+V` / `Cmd+V` Shortcuts
