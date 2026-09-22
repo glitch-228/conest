@@ -9279,6 +9279,39 @@ class MessengerController extends ChangeNotifier {
       ..sort((left, right) => left.createdAt.compareTo(right.createdAt));
   }
 
+  /// Searches retained group history off the UI isolate, projects authorized
+  /// journal hits, and returns the matching visible bubbles. Direct-message
+  /// search remains local because it is stored in the pairwise conversation
+  /// snapshot rather than the group journal.
+  Future<List<ChatMessage>> searchGroupMessages(
+    String groupId,
+    String query, {
+    int limit = 64,
+  }) async {
+    await _groupHistory.searchAndProject(groupId, query, limit: limit);
+    final normalized = query.trim().toLowerCase();
+    if (normalized.isEmpty) return const <ChatMessage>[];
+    final terms = normalized
+        .split(RegExp(r'\s+'))
+        .where((term) => term.isNotEmpty)
+        .toList(growable: false);
+    return messagesForGroup(groupId)
+        .where((message) {
+          final values = <String>[
+            message.body,
+            if (message.groupFile case final file?) file.fileName,
+          ];
+          return values.any((value) {
+            final lower = value.toLowerCase();
+            return terms.every(lower.contains);
+          });
+        })
+        .toList(growable: false)
+        .reversed
+        .take(limit)
+        .toList(growable: false);
+  }
+
   /// Every renderable inbound + outbound message in the 1:1 conversation
   /// with [peerDeviceId] that carries an `image/*` attachment whose bytes
   /// are already in memory (`attachmentBytesFor` returns non-null). Sorted

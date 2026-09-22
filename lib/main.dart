@@ -5777,6 +5777,8 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
         messages: () => controller.messagesForGroup(group.groupId),
         changes: controller,
         loadOlder: _historyExhausted ? null : _loadOlderHistory,
+        searchRemote: (query) =>
+            controller.searchGroupMessages(group.groupId, query),
       ),
     );
     if (selected == null || !mounted || group.groupId != conversationId) return;

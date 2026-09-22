@@ -484,4 +484,30 @@ void main() {
       }
     },
   );
+
+  test(
+    'journal search survives worker restart and matches indexed terms',
+    () async {
+      var journal = await open();
+      final first = await event(payload: {'text': 'Lantern over the river'});
+      final second = await event(
+        sequence: 2,
+        previous: first,
+        payload: {'text': 'A quiet mountain path'},
+      );
+      await journal.append(first);
+      await journal.append(second);
+      expect((await journal.search('river')).single.eventId, first.eventId);
+      expect((await journal.search('mount')).single.eventId, second.eventId);
+      await journal.close();
+
+      journal = await open();
+      try {
+        expect((await journal.search('lantern')).single.eventId, first.eventId);
+        expect(await journal.search('missing'), isEmpty);
+      } finally {
+        await journal.close();
+      }
+    },
+  );
 }

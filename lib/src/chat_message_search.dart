@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'models.dart';
 
@@ -8,10 +10,12 @@ class ChatMessageSearch extends StatefulWidget {
     required this.messages,
     required this.changes,
     this.loadOlder,
+    this.searchRemote,
   });
   final List<ChatMessage> Function() messages;
   final Listenable changes;
   final Future<void> Function()? loadOlder;
+  final Future<List<ChatMessage>> Function(String query)? searchRemote;
 
   @override
   State<ChatMessageSearch> createState() => _ChatMessageSearchState();
@@ -20,12 +24,88 @@ class ChatMessageSearch extends StatefulWidget {
 class _ChatMessageSearchState extends State<ChatMessageSearch> {
   final _query = TextEditingController();
   bool _loading = false;
+  bool _searching = false;
   String? _error;
+  List<ChatMessage> _remoteMatches = const <ChatMessage>[];
+  int _searchGeneration = 0;
+  Timer? _searchDebounce;
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _query.dispose();
     super.dispose();
+  }
+
+  void _onQueryChanged(String value) {
+    setState(() {});
+    final query = value.trim();
+    final search = widget.searchRemote;
+    _searchDebounce?.cancel();
+    if (search == null || query.length < 2) {
+      _searchGeneration++;
+      if (_remoteMatches.isNotEmpty || _searching) {
+        setState(() {
+          _remoteMatches = const <ChatMessage>[];
+          _searching = false;
+        });
+      }
+      return;
+    }
+    final generation = ++_searchGeneration;
+    setState(() => _searching = true);
+    _searchDebounce = Timer(const Duration(milliseconds: 180), () {
+      unawaited(() async {
+        try {
+          final matches = await search(query);
+          if (!mounted || generation != _searchGeneration) return;
+          setState(() {
+            _remoteMatches = matches;
+            _searching = false;
+          });
+        } catch (_) {
+          if (!mounted || generation != _searchGeneration) return;
+          setState(() {
+            _remoteMatches = const <ChatMessage>[];
+            _searching = false;
+          });
+        }
+      }());
+    });
+  }
+
+  Widget _highlight(String value, String query, TextStyle? style) {
+    if (query.isEmpty) {
+      return Text(
+        value,
+        maxLines: 3,
+        overflow: TextOverflow.ellipsis,
+        style: style,
+      );
+    }
+    final lower = value.toLowerCase();
+    final spans = <TextSpan>[];
+    var start = 0;
+    while (start < value.length) {
+      final hit = lower.indexOf(query, start);
+      if (hit < 0) {
+        spans.add(TextSpan(text: value.substring(start)));
+        break;
+      }
+      if (hit > start) spans.add(TextSpan(text: value.substring(start, hit)));
+      spans.add(
+        TextSpan(
+          text: value.substring(hit, hit + query.length),
+          style: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+      );
+      start = hit + query.length;
+    }
+    return Text.rich(
+      TextSpan(style: style, children: spans),
+      maxLines: 3,
+      overflow: TextOverflow.ellipsis,
+    );
   }
 
   @override
@@ -44,7 +124,7 @@ class _ChatMessageSearchState extends State<ChatMessageSearch> {
                     child: TextField(
                       controller: _query,
                       autofocus: true,
-                      onChanged: (_) => setState(() {}),
+                      onChanged: _onQueryChanged,
                       decoration: const InputDecoration(
                         hintText: 'Search messages',
                         prefixIcon: Icon(Icons.search),
@@ -64,20 +144,32 @@ class _ChatMessageSearchState extends State<ChatMessageSearch> {
                 listenable: widget.changes,
                 builder: (context, _) {
                   final query = _query.text.trim().toLowerCase();
-                  final matches = query.isEmpty
-                      ? <ChatMessage>[]
-                      : widget
-                            .messages()
-                            .reversed
-                            .where(
-                              (message) =>
-                                  message.body.toLowerCase().contains(query) ||
-                                  (message.attachment?.fileName
-                                          .toLowerCase()
-                                          .contains(query) ??
-                                      false),
-                            )
-                            .toList();
+                  final combined = <String, ChatMessage>{};
+                  if (query.isNotEmpty) {
+                    final terms = query
+                        .split(RegExp(r'\s+'))
+                        .where((term) => term.isNotEmpty)
+                        .toList(growable: false);
+                    for (final message in widget.messages()) {
+                      final text = message.body.isEmpty
+                          ? message.groupFile?.fileName ??
+                                message.attachment?.fileName ??
+                                ''
+                          : message.body;
+                      final lower = text.toLowerCase();
+                      if (terms.every(lower.contains)) {
+                        combined[message.id] = message;
+                      }
+                    }
+                    for (final message in _remoteMatches) {
+                      combined[message.id] = message;
+                    }
+                  }
+                  final matches = combined.values.toList()
+                    ..sort(
+                      (left, right) =>
+                          right.createdAt.compareTo(left.createdAt),
+                    );
                   return Column(
                     children: [
                       Padding(
@@ -85,6 +177,8 @@ class _ChatMessageSearchState extends State<ChatMessageSearch> {
                         child: Text(
                           query.isEmpty
                               ? 'Search text or filenames on this device'
+                              : _searching
+                              ? 'Searching retained history…'
                               : '${matches.length} matching messages',
                         ),
                       ),
@@ -95,16 +189,19 @@ class _ChatMessageSearchState extends State<ChatMessageSearch> {
                             final message = matches[index];
                             return ListTile(
                               leading: Icon(
-                                message.hasAttachment
+                                message.hasAttachment ||
+                                        message.groupFile != null
                                     ? Icons.attach_file
                                     : Icons.chat_bubble_outline,
                               ),
-                              title: Text(
+                              title: _highlight(
                                 message.body.isEmpty
-                                    ? message.attachment?.fileName ?? ''
+                                    ? message.groupFile?.fileName ??
+                                          message.attachment?.fileName ??
+                                          ''
                                     : message.body,
-                                maxLines: 3,
-                                overflow: TextOverflow.ellipsis,
+                                query,
+                                Theme.of(context).textTheme.bodyLarge,
                               ),
                               subtitle: Text(
                                 message.createdAt.toLocal().toString(),

@@ -348,6 +348,36 @@ class GroupHistoryCoordinator {
     });
   }
 
+  /// Searches the worker-owned journal and projects only events the current
+  /// member is still allowed to receive. Mutation hits resolve to their
+  /// original message, so edited text remains searchable without exposing an
+  /// unauthorized historical record.
+  Future<void> searchAndProject(
+    String id,
+    String query, {
+    int limit = 64,
+  }) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return;
+    final snapshot = group(id);
+    if (_closed || snapshot.localRemovedAt != null) return;
+    final replica = await _replica(id);
+    final events = await replica.journal.search(trimmed, limit: limit);
+    for (final event in events) {
+      if (event.kind == GroupEventKind.attachment) {
+        final manifest = await fileForPeer(
+          id,
+          event.eventId,
+          identity().deviceId,
+        );
+        if (manifest != null) onAttachment?.call(id, event, manifest);
+        continue;
+      }
+      if (event.kind != GroupEventKind.message) continue;
+      await _projectOriginal(id, replica, event);
+    }
+  }
+
   /// Give pre-journal outgoing text an authenticated event without inventing
   /// proofs for messages authored by another device. Re-running this is safe:
   /// [recordOutgoing] skips source messages already retained in the journal.

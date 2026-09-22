@@ -10,6 +10,17 @@ import 'package:path/path.dart' as paths;
 import 'group_history_event.dart';
 import 'group_message_projection.dart';
 
+List<String> _searchTerms(String value) {
+  final terms = RegExp(r'[\p{L}\p{N}]+', unicode: true)
+      .allMatches(value.toLowerCase())
+      .map((match) => match.group(0)!)
+      .where((term) => term.isNotEmpty)
+      .toSet()
+      .toList();
+  terms.sort();
+  return terms;
+}
+
 /// One encrypted append-only journal per group, outside the attachment cache.
 /// The caller owns the vault key and must authorize membership before appending
 /// or serving an event. This layer checks signatures and author-chain conflicts;
@@ -150,6 +161,15 @@ class GroupHistoryJournal {
       (await _request('events', List<String>.of(ids)) as List)
           .cast<GroupHistoryEvent>();
 
+  /// Searches the worker-owned text index and returns bounded, newest-first
+  /// signed events. The caller still applies membership visibility before
+  /// showing a result; the journal never exposes cleartext outside the worker.
+  Future<List<GroupHistoryEvent>> search(
+    String query, {
+    int limit = 50,
+  }) async => (await _request('search', [query, limit]) as List)
+      .cast<GroupHistoryEvent>();
+
   Future<GroupHistoryEvent?> authorHead(String author) async =>
       await _request('authorHead', [author]) as GroupHistoryEvent?;
 
@@ -287,6 +307,7 @@ class _JournalWorker {
   final _authorHeads = <String, _JournalEntry>{};
   final _sourceMessages = <String, _JournalEntry>{};
   final _messageMutations = <String, _JournalEntry>{};
+  final _searchIndex = <String, Set<String>>{};
   RandomAccessFile? _handle;
   int _end = 0;
   bool _poisoned = false;
@@ -489,6 +510,7 @@ class _JournalWorker {
         _messageMutations[key] = entry;
       }
     }
+    _indexSearchTerms(event);
     var low = 0;
     var high = _ordered.length;
     while (low < high) {
@@ -500,6 +522,28 @@ class _JournalWorker {
       }
     }
     _ordered.insert(low, entry);
+  }
+
+  void _indexSearchTerms(GroupHistoryEvent event) {
+    final target = switch (event.kind) {
+      GroupEventKind.message || GroupEventKind.attachment => event.eventId,
+      GroupEventKind.edit => event.payload['targetEventId'] as String?,
+      _ => null,
+    };
+    if (target == null) return;
+    final values = <String>[
+      for (final key in const [
+        'body',
+        'text',
+        'fileName',
+        'mimeType',
+        'senderDisplayName',
+      ])
+        if (event.payload[key] is String) event.payload[key] as String,
+    ];
+    for (final term in _searchTerms(values.join(' '))) {
+      (_searchIndex[term] ??= <String>{}).add(target);
+    }
   }
 
   Future<bool> _append(String encoded) async {
@@ -613,6 +657,30 @@ class _JournalWorker {
               .whereType<_JournalEntry>(),
           128,
         );
+      case 'search':
+        final query = args[0] as String;
+        final limit = args[1] as int;
+        _checkLimit(limit, 128);
+        final terms = _searchTerms(query);
+        if (terms.isEmpty) return const <GroupHistoryEvent>[];
+        Set<String>? matches;
+        for (final term in terms) {
+          final termMatches = <String>{};
+          for (final entry in _searchIndex.entries) {
+            if (entry.key.contains(term)) termMatches.addAll(entry.value);
+          }
+          matches = matches == null
+              ? termMatches
+              : matches.intersection(termMatches);
+          if (matches.isEmpty) break;
+        }
+        final entries =
+            (matches ?? const <String>{})
+                .map((id) => _entries[id])
+                .whereType<_JournalEntry>()
+                .toList()
+              ..sort((a, b) => b.compareTo(a));
+        return _read(entries, limit);
       case 'memberships':
         final afterId = args[0] as String?;
         final after = _entries[afterId];
