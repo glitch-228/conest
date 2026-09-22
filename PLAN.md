@@ -89,6 +89,12 @@ delivery and LAN-first provider discovery. Debug artifact dispatched from
 The artifact is an unqualified development build until physical tester results
 are recorded.
 
+Follow-up `504a96a` permits large group files on LAN without applying the Iroh
+size cap, and `8d459ef` falls back to signed membership LAN hints for group-only
+peers that have not exchanged a 1:1 attachment hint. The updated carrier
+regression now expects authenticated group-only catch-up and still asserts no
+duplicate projected messages.
+
 Subsequent core work (not in that artifact): author-scoped group edit/deletion
 reducer and rebuildable journal mutation indexes. Deletion dominates subsequent
 edits; malformed records and other authors cannot shadow a valid mutation.

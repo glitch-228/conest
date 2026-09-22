@@ -2364,8 +2364,9 @@ void main() {
           groupId: group.groupId,
           peerDeviceId: carol.identity!.deviceId,
         ),
-        0,
+        2,
       );
+      expect(dave.messagesForGroup(group.groupId), hasLength(2));
       final original = alice
           .messagesForGroup(group.groupId)
           .firstWhere((message) => message.body == 'Alice partition message');
