@@ -1744,7 +1744,7 @@ class MessengerController extends ChangeNotifier {
               hash: Uint8List.fromList(dart_crypto.sha256.convert(bytes).bytes),
               ciphertext: bytes,
             ),
-            timeout: const Duration(seconds: 30),
+            timeout: _binaryLanBlockTimeout,
           );
           if (accepted) {
             _onLanDirectPutSuccess(peerId);
