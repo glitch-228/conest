@@ -1589,7 +1589,16 @@ class MessengerController extends ChangeNotifier {
               }
             }
           },
-          onChanged: (_) {
+          onChanged: (eventId) {
+            // The reservation covers the temporary piece cache and assembled
+            // copy while a download is active. Once the verified file is
+            // complete, the filesystem's actual usage accounts for the
+            // retained file; keeping this extra reservation would reject
+            // unrelated later downloads indefinitely.
+            final session = _groupFileSessions[eventId];
+            if (session?.download.state == GroupFileDownloadState.complete) {
+              _groupFileReservations.remove(eventId);
+            }
             if (!_disposed) notifyListeners();
           },
         );
