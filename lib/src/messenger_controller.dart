@@ -7054,7 +7054,8 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> _evictManagedCacheIfNeeded(Directory root) async {
     final cache = Directory(p.join(root.path, 'cache'));
-    if (!await cache.exists()) return;
+    final groupsCache = Directory(p.join(root.path, 'groups'));
+    if (!await cache.exists() && !await groupsCache.exists()) return;
     final now = _now().toUtc();
     final recordsByHash = <String, List<AttachmentCacheReference>>{};
     for (final record in _snapshot.attachmentCacheReferences) {
@@ -7066,43 +7067,100 @@ class MessengerController extends ChangeNotifier {
           .add(record);
     }
     final candidates =
-        <({File file, int size, DateTime lastAccess, Set<String> ids})>[];
+        <
+          ({
+            File? file,
+            Directory? groupDirectory,
+            String? groupEventId,
+            int size,
+            DateTime lastAccess,
+            Set<String> ids,
+          })
+        >[];
     var total = 0;
-    await for (final entity in cache.list(followLinks: false)) {
-      if (entity is! File) continue;
-      final stat = await entity.stat();
-      total += stat.size;
-      final matching = <AttachmentCacheReference>[];
-      for (final entry in recordsByHash.entries) {
-        if (attachmentStorageKey('sha256:${entry.key}') ==
-            p.basename(entity.path)) {
-          matching.addAll(entry.value);
-          break;
+    if (await cache.exists()) {
+      await for (final entity in cache.list(followLinks: false)) {
+        if (entity is! File) continue;
+        final stat = await entity.stat();
+        total += stat.size;
+        final matching = <AttachmentCacheReference>[];
+        for (final entry in recordsByHash.entries) {
+          if (attachmentStorageKey('sha256:${entry.key}') ==
+              p.basename(entity.path)) {
+            matching.addAll(entry.value);
+            break;
+          }
+        }
+        final ids = matching.map((entry) => entry.attachmentId).toSet();
+        final protected = matching.any(
+          (entry) => entry.keepOffline || entry.explicitlySaved,
+        );
+        final active = _snapshot.transferSessions.any(
+          (entry) =>
+              ids.contains(entry.id) &&
+              entry.state != TransferState.completed &&
+              entry.state != TransferState.canceled &&
+              entry.state != TransferState.failed,
+        );
+        if (protected || active) continue;
+        final lastAccess = matching.isEmpty
+            ? stat.modified.toUtc()
+            : matching
+                  .map((entry) => entry.lastAccessedAt)
+                  .reduce((left, right) => left.isAfter(right) ? left : right);
+        candidates.add((
+          file: entity,
+          groupDirectory: null,
+          groupEventId: null,
+          size: stat.size,
+          lastAccess: lastAccess,
+          ids: ids,
+        ));
+      }
+    }
+
+    // Group stores are rooted at groups/<event-id>/<manifest-hash>. Keep
+    // each manifest directory together so an eviction cannot leave a partial
+    // provider cache advertising stale pieces.
+    if (await groupsCache.exists()) {
+      await for (final eventEntity in groupsCache.list(followLinks: false)) {
+        if (eventEntity is! Directory) continue;
+        final eventId = p.basename(eventEntity.path);
+        await for (final manifestEntity in eventEntity.list(
+          followLinks: false,
+        )) {
+          if (manifestEntity is! Directory) continue;
+          var size = 0;
+          await for (final child in manifestEntity.list(
+            recursive: true,
+            followLinks: false,
+          )) {
+            if (child is File) size += (await child.stat()).size;
+          }
+          if (size == 0) continue;
+          final session = _groupFileSessions[eventId];
+          final state = session?.download.state;
+          final verified = session?.download.verifiedBytes ?? 0;
+          final active =
+              session != null &&
+              (state == GroupFileDownloadState.checking ||
+                  state == GroupFileDownloadState.downloading ||
+                  (verified > 0 &&
+                      state != GroupFileDownloadState.complete &&
+                      state != GroupFileDownloadState.failed));
+          if (active) continue;
+          final modified = (await manifestEntity.stat()).modified.toUtc();
+          total += size;
+          candidates.add((
+            file: null,
+            groupDirectory: manifestEntity,
+            groupEventId: eventId,
+            size: size,
+            lastAccess: modified,
+            ids: const <String>{},
+          ));
         }
       }
-      final ids = matching.map((entry) => entry.attachmentId).toSet();
-      final protected = matching.any(
-        (entry) => entry.keepOffline || entry.explicitlySaved,
-      );
-      final active = _snapshot.transferSessions.any(
-        (entry) =>
-            ids.contains(entry.id) &&
-            entry.state != TransferState.completed &&
-            entry.state != TransferState.canceled &&
-            entry.state != TransferState.failed,
-      );
-      if (protected || active) continue;
-      final lastAccess = matching.isEmpty
-          ? stat.modified.toUtc()
-          : matching
-                .map((entry) => entry.lastAccessedAt)
-                .reduce((left, right) => left.isAfter(right) ? left : right);
-      candidates.add((
-        file: entity,
-        size: stat.size,
-        lastAccess: lastAccess,
-        ids: ids,
-      ));
     }
     candidates.sort(
       (left, right) => left.lastAccess.compareTo(right.lastAccess),
@@ -7119,7 +7177,18 @@ class MessengerController extends ChangeNotifier {
       final belowReserve = projectedFree < reserve;
       if (!expired && !overLimit && !belowReserve) continue;
       try {
-        if (await candidate.file.exists()) await candidate.file.delete();
+        if (candidate.groupDirectory case final groupDirectory?) {
+          final eventId = candidate.groupEventId;
+          final session = eventId == null ? null : _groupFileSessions[eventId];
+          if (session != null) {
+            await session.evict();
+            if (eventId != null) _groupFileReservations.remove(eventId);
+          } else if (await groupDirectory.exists()) {
+            await groupDirectory.delete(recursive: true);
+          }
+        } else if (candidate.file case final file?) {
+          if (await file.exists()) await file.delete();
+        }
         total -= candidate.size;
         projectedFree += candidate.size;
         for (final id in candidate.ids) {
@@ -7127,9 +7196,9 @@ class MessengerController extends ChangeNotifier {
           _assembledAttachments.remove(id);
         }
       } catch (error) {
-        appendDebugLog(
-          'Cache eviction failed for ${candidate.file.path}: $error',
-        );
+        final location =
+            candidate.file?.path ?? candidate.groupDirectory?.path ?? root.path;
+        appendDebugLog('Cache eviction failed for $location: $error');
       }
     }
   }
