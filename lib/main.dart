@@ -5938,6 +5938,55 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     });
   }
 
+  bool _canDeleteSelected(List<ChatMessage> all) {
+    final selected = _selectedMessagesInOrder(all);
+    return selected.isNotEmpty &&
+        selected.every(
+          (message) =>
+              message.outbound &&
+              !message.hasAttachment &&
+              message.groupFile == null,
+        );
+  }
+
+  Future<void> _deleteSelected(List<ChatMessage> all) async {
+    final selected = _selectedMessagesInOrder(all);
+    if (selected.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete selected messages?'),
+        content: Text(
+          'Delete ${selected.length} message${selected.length == 1 ? '' : 's'} '
+          'for the group?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    for (final message in selected) {
+      try {
+        await controller.changeGroupMessage(
+          groupId: group.groupId,
+          messageId: message.id,
+          delete: true,
+        );
+      } catch (error) {
+        controller.setStatus('Delete failed for one message: $error');
+      }
+    }
+    _clearMessageSelection();
+  }
+
   Future<void> _copySelectedMessagesText(List<ChatMessage> all) async {
     final selected = _selectedMessagesInOrder(all);
     if (selected.isEmpty) return;
@@ -6655,10 +6704,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                 onSave: _canSaveSelected(messages)
                     ? () => _bulkSaveSelected(messages)
                     : null,
-                // Group-message deletion is not wired in the controller yet;
-                // hide the affordance rather than render a dead button.
-                onDelete: null,
-                showDelete: false,
+                onDelete: _canDeleteSelected(messages)
+                    ? () => _deleteSelected(messages)
+                    : null,
               ),
             Expanded(
               child: Builder(
@@ -14211,7 +14259,6 @@ class _MessageSelectionBar extends StatelessWidget {
     required this.onCopy,
     required this.onSave,
     required this.onDelete,
-    this.showDelete = true,
   });
 
   final ConestPalette palette;
@@ -14220,12 +14267,6 @@ class _MessageSelectionBar extends StatelessWidget {
   final VoidCallback onCopy;
   final VoidCallback? onSave;
   final VoidCallback? onDelete;
-
-  /// `onDelete: null` means "temporarily unavailable for this selection"
-  /// (button renders disabled). When the surface can never delete — group
-  /// chats until controller support lands — hide the affordance entirely
-  /// instead of showing a permanently dead button.
-  final bool showDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -14258,15 +14299,14 @@ class _MessageSelectionBar extends StatelessWidget {
             icon: const Icon(Icons.download_outlined),
             tooltip: 'Save attachments',
           ),
-          if (showDelete)
-            IconButton(
-              onPressed: onDelete,
-              icon: const Icon(Icons.delete_outline),
-              tooltip: 'Delete',
-              color: onDelete != null
-                  ? Theme.of(context).colorScheme.error
-                  : null,
-            ),
+          IconButton(
+            onPressed: onDelete,
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Delete',
+            color: onDelete != null
+                ? Theme.of(context).colorScheme.error
+                : null,
+          ),
         ],
       ),
     );
