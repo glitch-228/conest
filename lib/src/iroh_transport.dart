@@ -290,12 +290,12 @@ class IrohTransportAdapter implements TransportAdapter {
           ? hintedAttempt
           : hintedAttempt.timeout(_irohDirectHintAttemptTimeout));
     } catch (error) {
-      // A network handoff can leave the signed direct socket hints stale while
-      // the endpoint identity and Iroh discovery remain valid. Retry once
+      // A network handoff can leave signed direct hints stale, and endpoint
+      // discovery itself can briefly race a relay/NAT update. Retry once
       // without hints so built-in discovery/relay fallback can select the
-      // current path. Envelope IDs and attachment offsets are idempotent, so
-      // a late first attempt cannot duplicate user-visible data.
-      if (peer.directAddresses.isEmpty) rethrow;
+      // current path even when the first attempt had no hints. Envelope IDs
+      // and attachment offsets are idempotent, so a late first attempt cannot
+      // duplicate user-visible data.
       try {
         result = await _bridge.sendEnvelope(
           remoteEndpointId: endpoint,

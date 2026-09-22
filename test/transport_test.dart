@@ -279,6 +279,32 @@ void main() {
   );
 
   test(
+    'Iroh retries endpoint-only discovery after a transient first failure',
+    () async {
+      final bridge = _FakeIrohBridge(endpointId: 'endpoint-peer')
+        ..failFirstSend = true;
+      final adapter = IrohTransportAdapter(
+        bridge: bridge,
+        secretKeySeed: Uint8List(32),
+        relayEnabled: true,
+        expectedEndpointId: 'endpoint-peer',
+      );
+      await adapter.start();
+      addTearDown(adapter.stop);
+
+      final receipt = await adapter.sendEnvelope(
+        peer: peer,
+        route: _route(TransportKind.iroh, TransportPathKind.direct),
+        envelope: _envelope(),
+      );
+
+      expect(receipt.accepted, isTrue);
+      expect(bridge.sendCalls, 2);
+      expect(bridge.lastDirectAddresses, isEmpty);
+    },
+  );
+
+  test(
     'Iroh retries a direct path after a previous relayed delivery',
     () async {
       final bridge = _FakeIrohBridge(endpointId: 'peer', relayed: true);
@@ -409,6 +435,7 @@ class _FakeIrohBridge implements NativeIrohBridge {
   List<String> lastDirectAddresses = const <String>[];
   Uint8List? lastBytes;
   bool failWhenDirectAddressesProvided = false;
+  bool failFirstSend = false;
   int sendCalls = 0;
 
   @override
@@ -436,6 +463,9 @@ class _FakeIrohBridge implements NativeIrohBridge {
     lastAllowRelay = allowRelay;
     lastDirectAddresses = List<String>.from(directAddresses);
     lastBytes = Uint8List.fromList(bytes);
+    if (failFirstSend && sendCalls == 1) {
+      throw TimeoutException('transient endpoint discovery failure');
+    }
     if (failWhenDirectAddressesProvided && directAddresses.isNotEmpty) {
       throw TimeoutException('stale direct hint');
     }
