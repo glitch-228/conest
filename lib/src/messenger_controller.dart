@@ -1575,7 +1575,12 @@ class MessengerController extends ChangeNotifier {
           if (peer != _requireIdentity().deviceId)
             _discoverGroupProvider(session, group, peer),
       ]);
-      if (session.download.state == GroupFileDownloadState.waiting &&
+      // A provider timeout can leave the bounded pump in `failed` after all
+      // in-flight requests have been released. Keep accepted sessions probing
+      // so a provider that returns can resume verified partial progress. A
+      // storage-reserve failure returns above before this timer is installed.
+      if ((session.download.state == GroupFileDownloadState.waiting ||
+              session.download.state == GroupFileDownloadState.failed) &&
           !session.preferences.paused) {
         _groupFileDiscoveryTimers[session.event.eventId] ??= Timer.periodic(
           const Duration(seconds: 15),
