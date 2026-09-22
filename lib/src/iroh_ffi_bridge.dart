@@ -102,6 +102,11 @@ class FfiNativeIrohBridge implements NativeIrohBridge {
   // to cover latency without keeping eight Dart isolate heaps alive on mobile.
   static const int _sendWorkerCount = 4;
 
+  // A native send that exceeds this bound can otherwise pin one worker until
+  // the platform socket timeout. The caller retries the immutable envelope or
+  // attachment range, so replacing the worker is safe and bounded.
+  static const Duration _sendWorkerTimeout = Duration(seconds: 20);
+
   final String _libraryPath;
   final StreamController<IrohBridgeInbound> _inbound =
       StreamController<IrohBridgeInbound>.broadcast();
@@ -172,7 +177,8 @@ class FfiNativeIrohBridge implements NativeIrohBridge {
     if (_sendWorkerPorts.isEmpty) {
       throw StateError('Iroh send workers are not running.');
     }
-    final worker = _sendWorkerPorts[_nextSendWorker++ % _sendWorkerCount];
+    final workerIndex = _nextSendWorker++ % _sendWorkerCount;
+    final worker = _sendWorkerPorts[workerIndex];
     final addressHints = List<String>.of(directAddresses, growable: false);
     final reply = ReceivePort();
     try {
@@ -184,7 +190,7 @@ class FfiNativeIrohBridge implements NativeIrohBridge {
         TransferableTypedData.fromList(<Uint8List>[bytes]),
         allowRelay,
       ]);
-      final response = await reply.first;
+      final response = await reply.first.timeout(_sendWorkerTimeout);
       if (response is! List<Object?> || response.isEmpty) {
         throw const FormatException('Iroh send worker returned bad data.');
       }
@@ -200,8 +206,37 @@ class FfiNativeIrohBridge implements NativeIrohBridge {
         relayed: value['path'] == 'Relayed',
         accepted: value['accepted'] as bool? ?? false,
       );
+    } on TimeoutException {
+      await _replaceTimedOutSendWorker(workerIndex, worker);
+      throw TimeoutException(
+        'Iroh native send worker timed out.',
+        _sendWorkerTimeout,
+      );
     } finally {
       reply.close();
+    }
+  }
+
+  Future<void> _replaceTimedOutSendWorker(
+    int workerIndex,
+    SendPort timedOutPort,
+  ) async {
+    if (workerIndex < 0 || workerIndex >= _sendWorkerPorts.length) return;
+    if (!identical(_sendWorkerPorts[workerIndex], timedOutPort)) return;
+    final oldIsolate = _sendWorkerIsolates[workerIndex];
+    oldIsolate.kill(priority: Isolate.immediate);
+    try {
+      final replacement = await _spawnIrohSendWorker(_libraryPath, workerIndex);
+      if (_handle == null ||
+          !identical(_sendWorkerPorts[workerIndex], timedOutPort)) {
+        replacement.isolate.kill(priority: Isolate.immediate);
+        return;
+      }
+      _sendWorkerIsolates[workerIndex] = replacement.isolate;
+      _sendWorkerPorts[workerIndex] = replacement.port;
+    } catch (_) {
+      // Keep the dead slot visible. The next send fails quickly and the
+      // bridge lifecycle remains authoritative if replacement is unavailable.
     }
   }
 
