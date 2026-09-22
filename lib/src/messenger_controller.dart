@@ -1368,7 +1368,6 @@ class MessengerController extends ChangeNotifier {
     if (!preference.accepted && !manifest.automaticallyDownload(lan: false)) {
       return;
     }
-    if (!_irohFileAllowed(manifest.sizeBytes)) return;
     final reserve = _groupStorageQueue.then((_) async {
       final root = await _attachmentRoot();
       final capacity = await _storageCapacityProvider(root.path);
