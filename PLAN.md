@@ -95,6 +95,11 @@ peers that have not exchanged a 1:1 attachment hint. The updated carrier
 regression now expects authenticated group-only catch-up and still asserts no
 duplicate projected messages.
 
+`2fc31ff` re-probes group providers after connectivity changes, `6b14cb2`
+allows eligible LAN files to auto-download without the online 15 MiB limit, and
+`5b7ed64` adds the mobile file-picker path for group publishing. Latest debug
+artifact: https://github.com/glitch-228/conest/actions/runs/35715726251.
+
 Subsequent core work (not in that artifact): author-scoped group edit/deletion
 reducer and rebuildable journal mutation indexes. Deletion dominates subsequent
 edits; malformed records and other authors cannot shadow a valid mutation.
