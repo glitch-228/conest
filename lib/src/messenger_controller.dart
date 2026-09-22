@@ -1258,6 +1258,7 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     _migrateLegacyGroupHistory(group);
+    _restoreRetainedGroupFileSessions(group);
     for (final peer in group.activeMemberDeviceIds) {
       if (peer == me.deviceId ||
           group.memberProfileFor(peer)?.signingPublicKeyBase64 == null) {
@@ -1303,6 +1304,42 @@ class MessengerController extends ChangeNotifier {
         )
         .whenComplete(() => _groupLegacyMigrations.remove(group.groupId));
     _groupLegacyMigrations[group.groupId] = migration;
+  }
+
+  /// Recreate durable group-file sessions after a vault restart. The message
+  /// and signed event remain retained even when the runtime service was closed;
+  /// only an authorized event may restore a provider or resume an accepted
+  /// download.
+  void _restoreRetainedGroupFileSessions(GroupRecord group) {
+    final me = _snapshot.identity;
+    if (me == null || group.localRemovedAt != null) return;
+    for (final message in _groupConversation(group.groupId).messages) {
+      if (message.groupFile == null ||
+          _groupFileSessions.containsKey(message.id)) {
+        continue;
+      }
+      unawaited(_restoreRetainedGroupFileSession(group, message.id));
+    }
+  }
+
+  Future<void> _restoreRetainedGroupFileSession(
+    GroupRecord group,
+    String eventId,
+  ) async {
+    try {
+      final event = await _groupHistory.fileEventForPeer(
+        group.groupId,
+        eventId,
+        _requireIdentity().deviceId,
+      );
+      if (event == null || _disposed) return;
+      final session = await _registerGroupFile(event);
+      await _startGroupFileDownload(session);
+    } catch (error) {
+      if (!_disposed) {
+        appendDebugLog('Retained group file session waiting: $error');
+      }
+    }
   }
 
   void _requestVisibleGroupCatchUp() {
