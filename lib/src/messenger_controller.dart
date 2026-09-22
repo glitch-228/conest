@@ -775,6 +775,42 @@ class MessengerController extends ChangeNotifier {
     0,
     (count, conversation) => count + conversation.messages.length,
   );
+
+  int _frameTimingSamples = 0;
+  int _slowFrameTimingSamples = 0;
+  int _maxFrameTotalMicros = 0;
+  int _maxFrameBuildMicros = 0;
+  int _maxFrameRasterMicros = 0;
+
+  /// Records sampled Flutter frame timings for debug qualification. These
+  /// counters stay in memory and are intentionally excluded from the vault so
+  /// profiling cannot add write pressure during a transfer.
+  void recordFrameTiming({
+    required int buildMicros,
+    required int rasterMicros,
+  }) {
+    if (_disposed || buildMicros < 0 || rasterMicros < 0) return;
+    _frameTimingSamples++;
+    final totalMicros = buildMicros + rasterMicros;
+    if (totalMicros > 100000) {
+      _slowFrameTimingSamples++;
+    }
+    if (totalMicros > _maxFrameTotalMicros) {
+      _maxFrameTotalMicros = totalMicros;
+    }
+    if (buildMicros > _maxFrameBuildMicros) {
+      _maxFrameBuildMicros = buildMicros;
+    }
+    if (rasterMicros > _maxFrameRasterMicros) {
+      _maxFrameRasterMicros = rasterMicros;
+    }
+  }
+
+  String get frameTimingSummary =>
+      'samples=$_frameTimingSamples slowOver100ms=$_slowFrameTimingSamples '
+      'maxTotalMs=${(_maxFrameTotalMicros / 1000).toStringAsFixed(1)} '
+      'maxBuildMs=${(_maxFrameBuildMicros / 1000).toStringAsFixed(1)} '
+      'maxRasterMs=${(_maxFrameRasterMicros / 1000).toStringAsFixed(1)}';
   int get pendingOutboundCount => _snapshot.conversations.fold<int>(
     0,
     (count, conversation) =>
@@ -3261,6 +3297,7 @@ class MessengerController extends ChangeNotifier {
     buffer.writeln('seenEnvelopes=$seenEnvelopeCount');
     buffer.writeln('debugProbeAcks=${_debugProbeAcknowledgements.length}');
     buffer.writeln('debugTwoWayReplies=${_debugTwoWayReplies.length}');
+    buffer.writeln('frameTiming=$frameTimingSummary');
     if (report != null) {
       buffer.writeln(
         'lastDebugRunStarted=${report.startedAt.toIso8601String()}',

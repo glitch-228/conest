@@ -12,6 +12,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:dynamic_color/dynamic_color.dart';
@@ -826,6 +827,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addTimingsCallback(_recordFrameTimings);
     widget.controller.setAppForegroundState(true);
     widget.updateService.addListener(_handleUpdateServiceChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -849,6 +851,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeTimingsCallback(_recordFrameTimings);
     WidgetsBinding.instance.removeObserver(this);
     widget.updateService.removeListener(_handleUpdateServiceChanged);
     widget.updateService.dispose();
@@ -856,6 +859,15 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     widget.themeController.dispose();
     unawaited(widget.instanceLock.release());
     super.dispose();
+  }
+
+  void _recordFrameTimings(List<FrameTiming> timings) {
+    for (final timing in timings) {
+      widget.controller.recordFrameTiming(
+        buildMicros: timing.buildDuration.inMicroseconds,
+        rasterMicros: timing.rasterDuration.inMicroseconds,
+      );
+    }
   }
 
   void _handleUpdateServiceChanged() {
