@@ -19,13 +19,10 @@ unverified behavior honestly; do not shrink the full goal or claim release readi
 from isolated unit tests. Immediate priority: native group-file LAN/Iroh bridge,
 sender seeding and receive controls, then release-candidate device testing.
 
-Current handoff: service/transport agents stopped with workspace-credit errors.
-Partial implementations remain uncommitted in `group_file_service.dart`,
-`group_file_transport.dart` and their tests. The UI tile and signed message
-metadata projection are also uncommitted. Integration analysis found no compiler
-errors, but four transport style findings remain. Review availability cancellation
-window accounting before native wiring. Do not treat these partial agent results
-as a finished or qualified release.
+Current handoff: service/transport agents stopped with workspace-credit errors;
+their bounded service, wire, store, scheduler, and tile work is now integrated
+and committed. Physical network qualification is still open; do not treat the
+focused tests as native interoperability evidence.
 
 Reviewed integration update: service, transport and minimal tile are now combined
 with signed attachment metadata projection and vault message persistence. Fixed
@@ -49,21 +46,23 @@ Next bounded release tasks (keep ownership separate):
    and Iroh group transfer; publish matching debug candidate without waiting for
    asynchronous build results. Record tester evidence before release/nightly.
 
-Native bridge progress: `CryptoService` now encrypts/decrypts bounded group binary
+Native bridge progress: `CryptoService` encrypts/decrypts bounded group binary
 frames with a separately derived key and authenticated group/event/request/sender/
-recipient header. Crypto runs off the UI isolate and retains the ordinary message
-limit. Seven crypto tests pass, including tampering, identity mismatch, and direct
-envelope regressions. This supplies encryption for the bridge; LAN/Iroh ingress,
-native sends, cancellation joining, and controller session wiring remain pending.
+recipient header. The controller now sends 4 MiB pieces through Iroh's binary
+attachment-range framing and the existing LAN `/v2/block` channel, verifies LAN
+ciphertext digests, and authorizes/decrypts frames before session delivery. Group
+drop publishing hashes and signs a manifest, seeds the verified cache, and
+announces durable history. Cancellation still joins tracked sends; the underlying
+Iroh adapter has no native abort. Focused integrity/recovery checks pass; physical
+LAN/Iroh qualification and multi-provider qualification remain open.
 
-Iroh bridge wiring added: controller recognizes group binary magic before ordinary
-envelope parsing, pins ingress to the signed member's Iroh identity, resolves the
-retained authorized manifest, decrypts, and dispatches to its session. Service
-send callbacks encrypt and use the existing Iroh adapter; cancellation joins the
-tracked send future (does not claim native abort). Transport shutdown closes the
-group service. Downloads intentionally remain disabled pending capacity reservation
-and receive policy wiring. LAN binary ingress, publishing/user actions, discovery,
-and real group-file transfer qualification remain outstanding.
+Iroh bridge wiring recognizes group binary magic before ordinary envelope parsing,
+pins ingress to the signed member's Iroh identity, resolves the retained
+authorized manifest, decrypts, and dispatches to its session. LAN discovery is
+attempted before online discovery when a peer advertises a binary endpoint. Group
+downloads retain the storage reserve, 15 MiB automatic online threshold, and
+Iroh size policy. Multi-provider/device qualification and any remaining route
+fallback defects are still outstanding.
 
 Release-first priority update: stabilize direct messaging/files on LAN/Iroh,
 qualify group messaging, then deliver core multi-peer group files and a release
@@ -82,6 +81,13 @@ Interim snapshot dispatched on 2026-09-15: `df5304c`, branch
 `debug/m4-midimplementation-20260915`, Android/Linux/Windows with `quick_build`.
 Run: https://github.com/glitch-228/conest/actions/runs/35017669082
 Workflow results have not been checked, per user direction.
+
+Core group-file batches after that snapshot: `65fb3ba` adds authored group
+publishing and Iroh binary-range delivery; `82ccea9` adds LAN binary-block
+delivery and LAN-first provider discovery. Debug artifact dispatched from
+`82ccea9`: https://github.com/glitch-228/conest/actions/runs/35714230152.
+The artifact is an unqualified development build until physical tester results
+are recorded.
 
 Subsequent core work (not in that artifact): author-scoped group edit/deletion
 reducer and rebuildable journal mutation indexes. Deletion dominates subsequent
@@ -113,7 +119,8 @@ dispatched debug artifact.
 - [ ] M1: implemented and debug artifacts built; physical network qualification remains.
 - [ ] M2: basic authenticated catch-up working; remaining requirements deferred
   until after M4 and M3, except blocking regressions.
-- [ ] M3: group attachments from multiple providers.
+- [ ] M3: group attachments from multiple providers (core signed/verified LAN and
+  Iroh path implemented; provider switching and physical qualification remain).
 - [ ] M4: Telegram interface and everyday chat features — active priority.
 
 Use separate reviewable commits and matching debug artifacts per milestone.
