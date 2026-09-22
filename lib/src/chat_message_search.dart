@@ -87,10 +87,34 @@ class _ChatMessageSearchState extends State<ChatMessageSearch> {
       );
     }
     final lower = value.toLowerCase();
+    final terms = query
+        .toLowerCase()
+        .split(RegExp(r'\s+'))
+        .where((term) => term.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (terms.isEmpty) {
+      return Text(
+        value,
+        maxLines: 3,
+        overflow: TextOverflow.ellipsis,
+        style: style,
+      );
+    }
     final spans = <TextSpan>[];
     var start = 0;
     while (start < value.length) {
-      final hit = lower.indexOf(query, start);
+      var hit = -1;
+      var hitLength = 0;
+      for (final term in terms) {
+        final candidate = lower.indexOf(term, start);
+        if (candidate < 0 || (hit >= 0 && candidate > hit)) continue;
+        // Prefer the longer term when two query terms begin at the same
+        // character, so an overlapping term is highlighted as one span.
+        if (candidate == hit && term.length <= hitLength) continue;
+        hit = candidate;
+        hitLength = term.length;
+      }
       if (hit < 0) {
         spans.add(TextSpan(text: value.substring(start)));
         break;
@@ -98,11 +122,11 @@ class _ChatMessageSearchState extends State<ChatMessageSearch> {
       if (hit > start) spans.add(TextSpan(text: value.substring(start, hit)));
       spans.add(
         TextSpan(
-          text: value.substring(hit, hit + query.length),
+          text: value.substring(hit, hit + hitLength),
           style: const TextStyle(fontWeight: FontWeight.w800),
         ),
       );
-      start = hit + query.length;
+      start = hit + hitLength;
     }
     return Text.rich(
       TextSpan(style: style, children: spans),
