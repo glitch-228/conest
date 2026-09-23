@@ -1,6 +1,5 @@
 package dev.conest.conest
 
-import android.app.Activity
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
@@ -12,12 +11,15 @@ import android.media.MediaRecorder
 import android.media.AudioTrack.MODE_STREAM
 import android.media.AudioManager.STREAM_VOICE_CALL
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.content.Context
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Android device I/O. PCM is handed to Rust Opus workers through JNI; neither
  * audio callbacks nor codec/jitter work run on Flutter's UI isolate. */
 internal class VoiceCallAudioEngine(
-    private val activity: Activity,
+    private val context: Context,
     private val handle: Long,
     private val pushCapture: (Long, ShortArray, Int) -> Boolean,
     private val readPlayback: (Long, ShortArray, Int) -> Int,
@@ -31,8 +33,9 @@ internal class VoiceCallAudioEngine(
 
     private val running = AtomicBoolean(false)
     private val focusHeld = AtomicBoolean(false)
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val audioManager =
-        activity.getSystemService(Activity.AUDIO_SERVICE) as AudioManager
+        context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var priorAudioMode: Int? = null
     private var priorSpeakerphoneOn: Boolean? = null
     private var priorCommunicationDevice: AudioDeviceInfo? = null
@@ -263,7 +266,7 @@ internal class VoiceCallAudioEngine(
             markFailed(handle)
             try { recorder?.stop() } catch (_: IllegalStateException) {}
             try { track?.stop() } catch (_: IllegalStateException) {}
-            activity.runOnUiThread { onFailure(reason) }
+            mainHandler.post { onFailure(reason) }
         }
     }
 

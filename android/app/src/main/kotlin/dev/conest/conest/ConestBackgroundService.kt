@@ -22,18 +22,24 @@ class ConestBackgroundService : Service() {
     private var callTitle = ""
     private var callState = "idle"
     private var callIncoming = false
+    private var voiceCallAudio: VoiceCallAudioEngine? = null
+    private var voiceAudioLibraryLoaded = false
+    private var voiceCallAudioStarting = false
 
     override fun onCreate() {
         super.onCreate()
+        currentInstance = this
         ensureChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        var callAudioHandle: Long? = null
         when (intent?.action) {
             ACTION_END_CALL -> {
                 callTitle = ""
                 callState = "idle"
                 callIncoming = false
+                stopVoiceCallAudio()
             }
             ACTION_UPDATE_PREFERENCES -> {
                 backgroundEnabled = intent.getBooleanExtra(EXTRA_ENABLED, false)
@@ -45,6 +51,30 @@ class ConestBackgroundService : Service() {
                 callTitle = intent.getStringExtra(EXTRA_CALL_TITLE) ?: ""
                 callState = intent.getStringExtra(EXTRA_CALL_STATE) ?: "idle"
                 callIncoming = intent.getBooleanExtra(EXTRA_CALL_INCOMING, false)
+                if (callState == "idle" || callState == "ended") {
+                    stopVoiceCallAudio()
+                }
+            }
+            ACTION_START_CALL_AUDIO -> {
+                val handle = intent.getLongExtra(EXTRA_CALL_AUDIO_HANDLE, 0L)
+                if (handle != 0L) {
+                    if (callState == "idle" || callState == "ended") {
+                        callState = "connecting"
+                    }
+                    voiceCallAudioStarting = true
+                    callAudioHandle = handle
+                }
+            }
+            ACTION_STOP_CALL_AUDIO -> stopVoiceCallAudio()
+            ACTION_SET_CALL_SPEAKERPHONE -> {
+                val enabled = intent.getBooleanExtra(EXTRA_CALL_SPEAKERPHONE, false)
+                try {
+                    voiceCallAudio?.setSpeakerphoneEnabled(enabled)
+                } catch (error: Throwable) {
+                    MainActivity.reportVoiceCallAudioFailure(
+                        error.message ?: "Could not change the voice output."
+                    )
+                }
             }
             ACTION_UPDATE_TRANSFER -> {
                 transferActive = true
@@ -62,7 +92,7 @@ class ConestBackgroundService : Service() {
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             var types = 0
-            if (transferActive || backgroundEnabled || callsEnabled) {
+            if (transferActive || backgroundEnabled || callsEnabled || hasCall()) {
                 types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
             }
             if (callUsesMicrophone()) {
@@ -72,10 +102,64 @@ class ConestBackgroundService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, buildNotification())
         }
+        callAudioHandle?.let(::startVoiceCallAudio)
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        stopVoiceCallAudio()
+        if (currentInstance === this) currentInstance = null
+        super.onDestroy()
+    }
+
+    private fun startVoiceCallAudio(handle: Long) {
+        stopVoiceCallAudio()
+        try {
+            if (!voiceAudioLibraryLoaded) {
+                System.loadLibrary("conest_native")
+                voiceAudioLibraryLoaded = true
+            }
+            val engine = VoiceCallAudioEngine(
+                context = this,
+                handle = handle,
+                pushCapture = ::nativeVoiceAudioPushCapture,
+                readPlayback = ::nativeVoiceAudioReadPlayback,
+                markFailed = ::nativeVoiceAudioMarkFailed,
+                onFailure = MainActivity::reportVoiceCallAudioFailure,
+            )
+            engine.start()
+            voiceCallAudio = engine
+        } catch (error: Throwable) {
+            stopVoiceCallAudio()
+            MainActivity.reportVoiceCallAudioFailure(
+                error.message ?: "Could not start Android voice audio."
+            )
+        } finally {
+            voiceCallAudioStarting = false
+        }
+    }
+
+    private fun stopVoiceCallAudio() {
+        voiceCallAudioStarting = false
+        voiceCallAudio?.stop()
+        voiceCallAudio = null
+    }
+
+    private external fun nativeVoiceAudioPushCapture(
+        handle: Long,
+        samples: ShortArray,
+        count: Int,
+    ): Boolean
+
+    private external fun nativeVoiceAudioReadPlayback(
+        handle: Long,
+        output: ShortArray,
+        count: Int,
+    ): Int
+
+    private external fun nativeVoiceAudioMarkFailed(handle: Long)
 
     private fun buildNotification(): Notification {
         val launchIntent = Intent(this, MainActivity::class.java)
@@ -188,13 +272,17 @@ class ConestBackgroundService : Service() {
     private fun hasCall(): Boolean = callState != "idle" && callState != "ended"
 
     private fun callUsesMicrophone(): Boolean =
-        callState == "connecting" || callState == "connected" || callState == "reconnecting"
+        voiceCallAudioStarting || voiceCallAudio != null
 
     companion object {
         private const val NOTIFICATION_ID = 6018
         const val ACTION_UPDATE_STATE = "dev.conest.action.UPDATE_STATE"
         const val ACTION_UPDATE_PREFERENCES = "dev.conest.action.UPDATE_PREFERENCES"
         const val ACTION_END_CALL = "dev.conest.action.END_CALL"
+        const val ACTION_START_CALL_AUDIO = "dev.conest.action.START_CALL_AUDIO"
+        const val ACTION_STOP_CALL_AUDIO = "dev.conest.action.STOP_CALL_AUDIO"
+        const val ACTION_SET_CALL_SPEAKERPHONE =
+            "dev.conest.action.SET_CALL_SPEAKERPHONE"
         const val ACTION_UPDATE_TRANSFER = "dev.conest.action.UPDATE_TRANSFER"
         const val ACTION_STOP_TRANSFER = "dev.conest.action.STOP_TRANSFER"
         const val EXTRA_ENABLED = "enabled"
@@ -202,6 +290,8 @@ class ConestBackgroundService : Service() {
         const val EXTRA_CALL_TITLE = "callTitle"
         const val EXTRA_CALL_STATE = "callState"
         const val EXTRA_CALL_INCOMING = "callIncoming"
+        const val EXTRA_CALL_AUDIO_HANDLE = "callAudioHandle"
+        const val EXTRA_CALL_SPEAKERPHONE = "callSpeakerphone"
         const val EXTRA_TITLE = "title"
         const val EXTRA_TRANSFERRED = "transferred"
         const val EXTRA_TOTAL = "total"
@@ -211,5 +301,27 @@ class ConestBackgroundService : Service() {
         const val CONTROL_RESUME_ALL = "resume_all"
         const val CONTROL_CANCEL_ALL = "cancel_all"
         private const val CALL_CHANNEL_ID = "conest_calls"
+
+        @Volatile
+        private var currentInstance: ConestBackgroundService? = null
+
+        fun shouldKeepFlutterRuntime(): Boolean {
+            val service = currentInstance ?: return false
+            return service.backgroundEnabled ||
+                service.callsEnabled ||
+                service.hasCall() ||
+                service.transferActive
+        }
+
+        fun setVoiceCallSpeakerphoneEnabled(enabled: Boolean): Boolean {
+            val service = currentInstance ?: return false
+            val engine = service.voiceCallAudio ?: return false
+            engine.setSpeakerphoneEnabled(enabled)
+            return true
+        }
+
+        fun stopVoiceCallMedia() {
+            currentInstance?.stopVoiceCallAudio()
+        }
     }
 }

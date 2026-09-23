@@ -417,7 +417,7 @@ pub extern "C" fn conest_voice_message_recording_cancel(_handle: u64) {}
 
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_conest_conest_MainActivity_nativeVoiceAudioPushCapture(
+pub extern "system" fn Java_dev_conest_conest_ConestBackgroundService_nativeVoiceAudioPushCapture(
     mut unowned_env: EnvUnowned<'_>,
     _this: JObject<'_>,
     handle: jlong,
@@ -446,7 +446,7 @@ pub extern "system" fn Java_dev_conest_conest_MainActivity_nativeVoiceAudioPushC
 
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_conest_conest_MainActivity_nativeVoiceAudioReadPlayback(
+pub extern "system" fn Java_dev_conest_conest_ConestBackgroundService_nativeVoiceAudioReadPlayback(
     mut unowned_env: EnvUnowned<'_>,
     _this: JObject<'_>,
     handle: jlong,
@@ -475,7 +475,7 @@ pub extern "system" fn Java_dev_conest_conest_MainActivity_nativeVoiceAudioReadP
 
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_conest_conest_MainActivity_nativeVoiceAudioMarkFailed(
+pub extern "system" fn Java_dev_conest_conest_ConestBackgroundService_nativeVoiceAudioMarkFailed(
     _unowned_env: EnvUnowned<'_>,
     _this: JObject<'_>,
     handle: jlong,

@@ -20,6 +20,7 @@ import android.widget.Toast
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
@@ -27,12 +28,16 @@ import java.io.File
 class MainActivity : FlutterActivity() {
     private var systemChannel: MethodChannel? = null
     private var voiceCallPermissionResult: MethodChannel.Result? = null
-    private var voiceCallAudio: VoiceCallAudioEngine? = null
-    private var voiceAudioLibraryLoaded = false
-    private var voiceCallForegroundState = "idle"
+
+    override fun provideFlutterEngine(context: Context): FlutterEngine? =
+        FlutterEngineCache.getInstance().get(ENGINE_CACHE_ID)
+
+    override fun shouldDestroyEngineWithHost(): Boolean =
+        !ConestBackgroundService.shouldKeepFlutterRuntime()
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        FlutterEngineCache.getInstance().put(ENGINE_CACHE_ID, flutterEngine)
         val channel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             CHANNEL
@@ -50,8 +55,6 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
                 "updateVoiceCallForeground" -> {
-                    voiceCallForegroundState =
-                        call.argument<String>("callState") ?: "idle"
                     updateBackgroundServiceState(
                         call.argument<Boolean>("runtimeEnabled") == true,
                         call.argument<Boolean>("callsEnabled") == true,
@@ -85,12 +88,10 @@ class MainActivity : FlutterActivity() {
                 "setVoiceCallSpeakerphoneEnabled" -> {
                     val enabled = call.argument<Boolean>("enabled") == true
                     try {
-                        val engine = voiceCallAudio
-                        if (engine == null) {
-                            result.error("audio_not_open", "Voice audio is not active.", null)
-                        } else {
-                            engine.setSpeakerphoneEnabled(enabled)
+                        if (ConestBackgroundService.setVoiceCallSpeakerphoneEnabled(enabled)) {
                             result.success(enabled)
+                        } else {
+                            result.error("audio_not_open", "Voice audio is not active.", null)
                         }
                     } catch (error: Throwable) {
                         result.error(
@@ -101,8 +102,7 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "closeVoiceCallMedia" -> {
-                    voiceCallAudio?.stop()
-                    voiceCallAudio = null
+                    ConestBackgroundService.stopVoiceCallMedia()
                     result.success(null)
                 }
                 "updateTransferForeground" -> {
@@ -366,39 +366,20 @@ class MainActivity : FlutterActivity() {
         call: MethodCall,
         result: MethodChannel.Result
     ) {
-        if (voiceCallAudio != null) {
-            result.error("audio_busy", "Voice audio is already active.", null)
-            return
-        }
         val handle = (call.argument<Number>("handle"))?.toLong()
         if (handle == null || handle == 0L) {
             result.error("missing_audio_handle", "Native voice audio handle is missing.", null)
             return
         }
         try {
-            if (!voiceAudioLibraryLoaded) {
-                System.loadLibrary("conest_native")
-                voiceAudioLibraryLoaded = true
-            }
-            val engine = VoiceCallAudioEngine(
-                activity = this,
-                handle = handle,
-                pushCapture = ::nativeVoiceAudioPushCapture,
-                readPlayback = ::nativeVoiceAudioReadPlayback,
-                markFailed = ::nativeVoiceAudioMarkFailed,
-                onFailure = { reason ->
-                    systemChannel?.invokeMethod(
-                        "voiceCallAudioFailure",
-                        mapOf("reason" to reason)
-                    )
-                },
+            startConestForegroundService(
+                Intent(this, ConestBackgroundService::class.java).apply {
+                    action = ConestBackgroundService.ACTION_START_CALL_AUDIO
+                    putExtra(ConestBackgroundService.EXTRA_CALL_AUDIO_HANDLE, handle)
+                }
             )
-            engine.start()
-            voiceCallAudio = engine
             result.success(true)
         } catch (error: Throwable) {
-            voiceCallAudio?.stop()
-            voiceCallAudio = null
             result.error(
                 "audio_start_failed",
                 error.message ?: "Could not start Android voice audio.",
@@ -407,32 +388,12 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private external fun nativeVoiceAudioPushCapture(
-        handle: Long,
-        samples: ShortArray,
-        count: Int
-    ): Boolean
-
-    private external fun nativeVoiceAudioReadPlayback(
-        handle: Long,
-        output: ShortArray,
-        count: Int
-    ): Int
-
-    private external fun nativeVoiceAudioMarkFailed(handle: Long)
-
     override fun onDestroy() {
-        voiceCallAudio?.stop()
-        voiceCallAudio = null
-        if (voiceCallForegroundState != "idle" &&
-            voiceCallForegroundState != "ended") {
-            startService(
-                Intent(this, ConestBackgroundService::class.java).apply {
-                    action = ConestBackgroundService.ACTION_END_CALL
-                }
-            )
+        val keepRuntime = ConestBackgroundService.shouldKeepFlutterRuntime()
+        if (!keepRuntime) {
+            FlutterEngineCache.getInstance().remove(ENGINE_CACHE_ID)
+            if (activeSystemChannel === systemChannel) activeSystemChannel = null
         }
-        if (activeSystemChannel === systemChannel) activeSystemChannel = null
         super.onDestroy()
     }
 
@@ -817,6 +778,20 @@ class MainActivity : FlutterActivity() {
     companion object {
         @Volatile
         private var activeSystemChannel: MethodChannel? = null
+
+        private const val ENGINE_CACHE_ID = "conest_main_engine"
+
+        @JvmStatic
+        fun reportVoiceCallAudioFailure(reason: String) {
+            try {
+                activeSystemChannel?.invokeMethod(
+                    "voiceCallAudioFailure",
+                    mapOf("reason" to reason),
+                )
+            } catch (_: RuntimeException) {
+                // The Flutter engine may already be shutting down.
+            }
+        }
 
         fun requestScheduledMessagePump() {
             try {
