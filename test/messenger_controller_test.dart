@@ -2393,6 +2393,65 @@ void main() {
       );
       expect(afterLateVote.counts(), <int>[0, 1]);
 
+      await alice.createGroupPoll(
+        groupId: group.groupId,
+        question: 'Empty close checkpoint',
+        options: const <String>['Yes', 'No'],
+      );
+      await _waitForIroh(
+        () => bob
+            .messagesForGroup(group.groupId)
+            .any(
+              (message) => message.poll?.question == 'Empty close checkpoint',
+            ),
+        reason: 'second poll delivery',
+      );
+      final emptyCheckpointPoll = bob
+          .messagesForGroup(group.groupId)
+          .singleWhere(
+            (message) => message.poll?.question == 'Empty close checkpoint',
+          )
+          .poll!;
+      await alice.closeGroupPoll(
+        groupId: group.groupId,
+        pollId: emptyCheckpointPoll.id,
+      );
+      await _waitForIroh(
+        () =>
+            bob
+                .groupPollProjection(group.groupId, emptyCheckpointPoll.id)
+                ?.definition
+                .isClosed ==
+            true,
+        reason: 'empty close checkpoint delivery',
+      );
+      await bob.sendGroupMessage(
+        groupId: group.groupId,
+        body: 'late vote after empty checkpoint',
+        pollVote: PollVote(
+          pollId: emptyCheckpointPoll.id,
+          voterDeviceId: bob.identity!.deviceId,
+          optionIndexes: const <String>['0'],
+          changedAt: DateTime.now().toUtc(),
+        ),
+      );
+      await _waitForIroh(
+        () =>
+            alice
+                .groupPollProjection(group.groupId, emptyCheckpointPoll.id)
+                ?.unconfirmedVotes[bob.identity!.deviceId]
+                ?.optionIndexes
+                .join(',') ==
+            '0',
+        reason: 'vote outside empty checkpoint stays unconfirmed',
+      );
+      expect(
+        alice
+            .groupPollProjection(group.groupId, emptyCheckpointPoll.id)!
+            .counts(),
+        <int>[0, 0],
+      );
+
       final source = await File(
         p.join(aliceAttachmentRoot.path, 'scheduled-caption.txt'),
       ).writeAsBytes(<int>[1, 2, 3]);
