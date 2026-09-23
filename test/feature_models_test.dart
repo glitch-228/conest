@@ -129,10 +129,22 @@ void main() {
           createdAt: now,
         ),
       ],
+      voiceCallSummaries: [
+        VoiceCallSummary(
+          callId: 'call-1',
+          peerDeviceId: 'peer',
+          outgoing: false,
+          startedAt: now,
+          endedAt: now.add(const Duration(minutes: 2)),
+          outcome: 'completed',
+        ),
+      ],
     );
     final restored = VaultSnapshot.fromJson(snapshot.toJson());
     expect(restored.chatFolders.single.name, 'Pinned work');
     expect(restored.scheduledMessages.single.body, 'hello');
+    expect(restored.voiceCallSummaries.single.callId, 'call-1');
+    expect(restored.voiceCallSummaries.single.outcome, 'completed');
   });
 
   test(
@@ -262,6 +274,45 @@ void main() {
       expect(service.active?.state, VoiceCallState.ended);
       expect(signals.map((signal) => signal.action), ['invite', 'cancel']);
       await service.dispose();
+    },
+  );
+
+  test(
+    'terminal call summary persists replay protection across restart',
+    () async {
+      final signals = <VoiceCallSignal>[];
+      final summaries = <VoiceCallSummary>[];
+      final now = DateTime.utc(2026, 1, 1);
+      final service = VoiceCallService(
+        localDeviceId: 'me',
+        transport: _TestCallTransport(signals),
+        media: const _WorkingMedia(),
+        now: () => now,
+        onTerminal: (summary) async {
+          summaries.add(summary);
+        },
+      );
+      final invite = VoiceCallSignal(
+        callId: 'peer:persisted-call',
+        action: 'invite',
+        senderDeviceId: 'peer',
+        recipientDeviceId: 'me',
+        issuedAt: now,
+      );
+      expect(await service.receiveInvite(invite), isTrue);
+      await service.end(reason: 'Rejected by user.');
+      expect(summaries.single.outcome, 'rejected');
+      await service.dispose();
+
+      final restarted = VoiceCallService(
+        localDeviceId: 'me',
+        transport: _TestCallTransport(<VoiceCallSignal>[]),
+        media: const _WorkingMedia(),
+        now: () => now,
+        terminalCallIds: summaries.map((summary) => summary.callId),
+      );
+      expect(await restarted.receiveInvite(invite), isFalse);
+      await restarted.dispose();
     },
   );
 

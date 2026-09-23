@@ -3684,6 +3684,73 @@ class GroupFilePreference {
   }
 }
 
+/// Completed local call metadata used for the call log and replay protection.
+/// Audio and resumable live-call state are intentionally never persisted.
+class VoiceCallSummary {
+  const VoiceCallSummary({
+    required this.callId,
+    required this.peerDeviceId,
+    required this.outgoing,
+    required this.startedAt,
+    required this.endedAt,
+    required this.outcome,
+    this.reason,
+  });
+
+  final String callId;
+  final String peerDeviceId;
+  final bool outgoing;
+  final DateTime startedAt;
+  final DateTime endedAt;
+  final String outcome;
+  final String? reason;
+
+  Map<String, dynamic> toJson() => {
+    'version': 1,
+    'callId': callId,
+    'peerDeviceId': peerDeviceId,
+    'outgoing': outgoing,
+    'startedAt': startedAt.toUtc().toIso8601String(),
+    'endedAt': endedAt.toUtc().toIso8601String(),
+    'outcome': outcome,
+    if (reason != null) 'reason': reason,
+  };
+
+  factory VoiceCallSummary.fromJson(Map<String, dynamic> json) {
+    final callId = json['callId'] as String;
+    final peerDeviceId = json['peerDeviceId'] as String;
+    final startedAt = DateTime.parse(json['startedAt'] as String);
+    final endedAt = DateTime.parse(json['endedAt'] as String);
+    final outcome = json['outcome'] as String;
+    final reason = json['reason'] as String?;
+    if (json['version'] != 1 ||
+        callId.isEmpty ||
+        callId.length > 256 ||
+        peerDeviceId.isEmpty ||
+        peerDeviceId.length > 256 ||
+        !const {
+          'completed',
+          'missed',
+          'rejected',
+          'canceled',
+          'failed',
+        }.contains(outcome) ||
+        endedAt.isBefore(startedAt) ||
+        (reason?.length ?? 0) > 256) {
+      throw const FormatException('Invalid voice call summary.');
+    }
+    return VoiceCallSummary(
+      callId: callId,
+      peerDeviceId: peerDeviceId,
+      outgoing: json['outgoing'] as bool,
+      startedAt: startedAt,
+      endedAt: endedAt,
+      outcome: outcome,
+      reason: reason,
+    );
+  }
+}
+
 class VaultSnapshot {
   VaultSnapshot({
     required this.identity,
@@ -3709,6 +3776,7 @@ class VaultSnapshot {
     this.groupFilePreferences = const <GroupFilePreference>[],
     this.chatFolders = const <ChatFolder>[],
     this.scheduledMessages = const <ScheduledMessage>[],
+    this.voiceCallSummaries = const <VoiceCallSummary>[],
   });
 
   final IdentityRecord? identity;
@@ -3784,6 +3852,7 @@ class VaultSnapshot {
   final List<GroupFilePreference> groupFilePreferences;
   final List<ChatFolder> chatFolders;
   final List<ScheduledMessage> scheduledMessages;
+  final List<VoiceCallSummary> voiceCallSummaries;
 
   factory VaultSnapshot.empty() {
     return VaultSnapshot(
@@ -3809,6 +3878,7 @@ class VaultSnapshot {
       attachmentCacheReferences: const <AttachmentCacheReference>[],
       chatFolders: const <ChatFolder>[],
       scheduledMessages: const <ScheduledMessage>[],
+      voiceCallSummaries: const <VoiceCallSummary>[],
     );
   }
 
@@ -3836,6 +3906,7 @@ class VaultSnapshot {
     List<GroupFilePreference>? groupFilePreferences,
     List<ChatFolder>? chatFolders,
     List<ScheduledMessage>? scheduledMessages,
+    List<VoiceCallSummary>? voiceCallSummaries,
     bool clearIdentity = false,
   }) {
     return VaultSnapshot(
@@ -3871,6 +3942,7 @@ class VaultSnapshot {
       groupFilePreferences: groupFilePreferences ?? this.groupFilePreferences,
       chatFolders: chatFolders ?? this.chatFolders,
       scheduledMessages: scheduledMessages ?? this.scheduledMessages,
+      voiceCallSummaries: voiceCallSummaries ?? this.voiceCallSummaries,
     );
   }
 
@@ -3924,6 +3996,9 @@ class VaultSnapshot {
       'scheduledMessages': scheduledMessages
           .map((entry) => entry.toJson())
           .toList(),
+      'voiceCallSummaries': voiceCallSummaries
+          .map((entry) => entry.toJson())
+          .toList(),
     };
   }
 
@@ -3953,6 +4028,11 @@ class VaultSnapshot {
           (json['scheduledMessages'] as List<dynamic>? ?? const [])
               .whereType<Map<String, dynamic>>()
               .map(ScheduledMessage.fromJson)
+              .toList(),
+      voiceCallSummaries:
+          (json['voiceCallSummaries'] as List<dynamic>? ?? const [])
+              .whereType<Map<String, dynamic>>()
+              .map(VoiceCallSummary.fromJson)
               .toList(),
       contacts: (json['contacts'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>()

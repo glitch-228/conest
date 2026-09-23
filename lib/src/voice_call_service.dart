@@ -172,10 +172,14 @@ class VoiceCallService {
     DateTime Function()? now,
     Duration connectionTimeout = const Duration(seconds: 15),
     Duration mediaInactivityTimeout = const Duration(seconds: 5),
+    Iterable<String> terminalCallIds = const <String>[],
+    Future<void> Function(VoiceCallSummary summary)? onTerminal,
   }) : media = media ?? const UnavailableVoiceCallMediaEngine(),
        _now = now ?? DateTime.now,
        _connectionTimeout = connectionTimeout,
-       _mediaInactivityTimeout = mediaInactivityTimeout;
+       _mediaInactivityTimeout = mediaInactivityTimeout,
+       _terminalCallIds = LinkedHashSet<String>.of(terminalCallIds.take(128)),
+       _onTerminal = onTerminal;
 
   final String localDeviceId;
   final VoiceCallSignalTransport transport;
@@ -185,7 +189,8 @@ class VoiceCallService {
   final Duration _mediaInactivityTimeout;
   final StreamController<VoiceCallSession?> _changes =
       StreamController<VoiceCallSession?>.broadcast();
-  final LinkedHashSet<String> _terminalCallIds = LinkedHashSet<String>();
+  final LinkedHashSet<String> _terminalCallIds;
+  final Future<void> Function(VoiceCallSummary summary)? _onTerminal;
   VoiceCallSession? _active;
   Timer? _ringTimer;
   Timer? _reconnectTimer;
@@ -232,13 +237,17 @@ class VoiceCallService {
             failureReason: 'Could not send the call invitation: $error',
           ),
         );
-        _rememberTerminalCallId(session.callId);
+        final summarySaved = _recordTerminalSummary(
+          _active!,
+          priorState: session.state,
+        );
         try {
           await media.close();
         } catch (_) {
           // A failed invitation must release any media resources prepared
           // before transport or capability validation completed.
         }
+        await summarySaved;
       }
       rethrow;
     }
@@ -438,13 +447,21 @@ class VoiceCallService {
     _ringTimer?.cancel();
     _reconnectTimer?.cancel();
     _mediaInactivityTimer?.cancel();
-    _rememberTerminalCallId(session.callId);
     // Publish the terminal state before awaiting platform teardown or transport
     // I/O so a late permission/media completion cannot revive the call.
-    _set(session.copyWith(state: VoiceCallState.ended, failureReason: reason));
+    final ended = session.copyWith(
+      state: VoiceCallState.ended,
+      failureReason: reason,
+    );
+    _set(ended);
+    final summarySaved = _recordTerminalSummary(
+      ended,
+      priorState: session.state,
+    );
     try {
       await media.close();
     } catch (_) {}
+    await summarySaved;
     try {
       await transport.send(_signal(session, action));
     } catch (_) {
@@ -460,11 +477,19 @@ class VoiceCallService {
     _ringTimer?.cancel();
     _reconnectTimer?.cancel();
     _mediaInactivityTimer?.cancel();
-    _rememberTerminalCallId(session.callId);
-    _set(session.copyWith(state: VoiceCallState.ended, failureReason: reason));
+    final ended = session.copyWith(
+      state: VoiceCallState.ended,
+      failureReason: reason,
+    );
+    _set(ended);
+    final summarySaved = _recordTerminalSummary(
+      ended,
+      priorState: session.state,
+    );
     try {
       await media.close();
     } catch (_) {}
+    await summarySaved;
   }
 
   Future<void> dispose() async {
@@ -540,6 +565,44 @@ class VoiceCallService {
     _terminalCallIds.add(callId);
     while (_terminalCallIds.length > 128) {
       _terminalCallIds.remove(_terminalCallIds.first);
+    }
+  }
+
+  Future<void> _recordTerminalSummary(
+    VoiceCallSession ended, {
+    required VoiceCallState priorState,
+  }) async {
+    _rememberTerminalCallId(ended.callId);
+    final reason = ended.failureReason;
+    final lowerReason = reason?.toLowerCase() ?? '';
+    final outcome = priorState == VoiceCallState.ringing
+        ? lowerReason == 'no answer.' || lowerReason.contains('remote canceled')
+              ? 'missed'
+              : lowerReason.contains('busy') || lowerReason.contains('reject')
+              ? 'rejected'
+              : ended.outgoing
+              ? 'canceled'
+              : 'rejected'
+        : reason == 'Call ended' || reason == 'Remote hang-up'
+        ? 'completed'
+        : 'failed';
+    final now = _now();
+    try {
+      await _onTerminal?.call(
+        VoiceCallSummary(
+          callId: ended.callId,
+          peerDeviceId: ended.peerDeviceId,
+          outgoing: ended.outgoing,
+          startedAt: ended.startedAt,
+          endedAt: now.isBefore(ended.startedAt) ? ended.startedAt : now,
+          outcome: outcome,
+          reason: reason == null || reason.length > 256
+              ? reason?.substring(0, 256)
+              : reason,
+        ),
+      );
+    } catch (_) {
+      // Persistence failure must not strand audio resources or block hangup.
     }
   }
 

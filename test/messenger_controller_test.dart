@@ -6493,18 +6493,20 @@ void main() {
       ),
     );
     final search = find.byKey(const ValueKey('courier-search'));
+    final bobRow = ValueKey('courier-chat-${bob.identity!.deviceId}');
+    final carolRow = ValueKey('courier-chat-${carol.identity!.deviceId}');
     await tester.enterText(search, 'Bob');
     await tester.pump();
-    expect(find.text('Bob'), findsNothing);
+    expect(find.byKey(bobRow), findsNothing);
 
     await tester.enterText(search, '');
     await tester.pump();
     await tester.tap(find.text('Archived chats').first);
     await tester.pump();
-    await tester.enterText(search, 'Carol');
+    await tester.enterText(search, 'Bob');
     await tester.pump();
-    expect(find.text('Carol'), findsNothing);
-    expect(find.text('Bob'), findsOneWidget);
+    expect(find.byKey(bobRow), findsOneWidget);
+    expect(find.byKey(carolRow), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

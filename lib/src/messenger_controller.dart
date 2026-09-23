@@ -993,6 +993,10 @@ class MessengerController extends ChangeNotifier {
       transport: _ControllerVoiceCallTransport(this),
       media: PlatformVoiceCallMediaEngine(_platformBridge),
       now: _now,
+      terminalCallIds: _snapshot.voiceCallSummaries.map(
+        (summary) => summary.callId,
+      ),
+      onTerminal: _persistVoiceCallSummary,
     );
     _voiceCallChanges = _voiceCallService!.changes.listen((session) {
       if (_disposed) return;
@@ -1032,6 +1036,20 @@ class MessengerController extends ChangeNotifier {
       }
       notifyListeners();
     });
+  }
+
+  Future<void> _persistVoiceCallSummary(VoiceCallSummary summary) async {
+    final summaries = [
+      ..._snapshot.voiceCallSummaries.where(
+        (previous) => previous.callId != summary.callId,
+      ),
+      summary,
+    ];
+    final retained = summaries.length <= 128
+        ? summaries
+        : summaries.sublist(summaries.length - 128);
+    _snapshot = _snapshot.copyWith(voiceCallSummaries: retained);
+    await _saveSnapshotSilently(notify: false);
   }
 
   Future<void> _sendVoiceCallSignal(VoiceCallSignal signal) async {

@@ -3958,6 +3958,7 @@ class _CourierHomeState extends State<_CourierHome> {
                   ),
                 for (final entry in entries)
                   _CourierRow(
+                    key: ValueKey('courier-chat-${entry.seed}'),
                     palette: widget.palette,
                     seed: entry.seed,
                     title: entry.title,
@@ -4129,6 +4130,7 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
 /// One Telegram-style row in the [_CourierHome] list.
 class _CourierRow extends StatelessWidget {
   const _CourierRow({
+    super.key,
     required this.palette,
     required this.title,
     required this.preview,
@@ -8386,7 +8388,8 @@ class _GroupPollCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     OutlinedButton(
-                      onPressed: !canParticipate ||
+                      onPressed:
+                          !canParticipate ||
                               closed ||
                               poll.mode == PollChoiceMode.multiple
                           ? null

@@ -421,6 +421,29 @@ void main() {
   );
 
   test(
+    'legacy removal without a cutoff conservatively rejects new history',
+    () async {
+      final root = await membership(members: ['alice', 'bob']);
+      final unseenOldEpochEvent = await message(root, author: 'bob');
+      final legacyRemoval = await membership(
+        parents: [root],
+        members: ['alice'],
+      );
+      final index = history();
+      await index.import(root);
+      await index.import(legacyRemoval);
+
+      // This may discard authentic pre-removal history that had not reached this
+      // device before the legacy removal. Without a signed cutoff, accepting it
+      // would also accept events created after removal.
+      expect(
+        await index.canReceive(unseenOldEpochEvent, recipientDeviceId: 'alice'),
+        isFalse,
+      );
+    },
+  );
+
+  test(
     'admins can manage ordinary members but cannot extend their authority',
     () async {
       final root = await membership(
