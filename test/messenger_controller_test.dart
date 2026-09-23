@@ -2963,7 +2963,7 @@ void main() {
                   true;
         }),
         reason:
-            'all peers converge on Alice's checkpoint and retain Bob’s later vote as unconfirmed',
+            'all peers converge on the close checkpoint and retain the late vote as unconfirmed',
       );
 
       await dave.loadOlderGroupHistory(group.groupId);
