@@ -159,6 +159,12 @@ jobs:
         with:
           key: linux-debug
       - run: flutter pub get
+      - name: Build Linux native library with visible Rust diagnostics
+        run: |
+          cargo build --locked \
+            --manifest-path native/conest_native/Cargo.toml \
+            --target-dir build/linux/x64/debug/conest_native_target \
+            --release
       - name: Build Linux debug bundle
         run: |
           flutter config --enable-linux-desktop
@@ -203,6 +209,13 @@ jobs:
         with:
           key: windows-debug
       - run: flutter pub get
+      - name: Build Windows native library with visible Rust diagnostics
+        shell: bash
+        run: |
+          cargo build --locked \
+            --manifest-path native/conest_native/Cargo.toml \
+            --target-dir build/windows/x64/conest_native_target \
+            --release
       - name: Build Windows debug bundle
         shell: bash
         run: |
