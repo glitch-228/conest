@@ -223,6 +223,12 @@ class VoiceCallService {
             failureReason: 'Could not send the call invitation: $error',
           ),
         );
+        try {
+          await media.close();
+        } catch (_) {
+          // A failed invitation must release any media resources prepared
+          // before transport or capability validation completed.
+        }
       }
       rethrow;
     }
