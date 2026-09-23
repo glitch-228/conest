@@ -2425,6 +2425,7 @@ class MessengerController extends ChangeNotifier {
     final existing = _groupMessageById(groupId, event.eventId);
     if (existing != null) {
       final hasStableOrder =
+          existing.body == manifest.caption &&
           existing.groupHistoryEventId == event.eventId &&
           existing.groupHistoryLamport == event.lamport &&
           existing.groupHistoryAuthorDeviceId == event.authorDeviceId &&
@@ -2433,6 +2434,7 @@ class MessengerController extends ChangeNotifier {
         _upsertGroupMessage(
           groupId,
           existing.copyWith(
+            body: manifest.caption,
             groupHistoryLamport: event.lamport,
             groupHistoryAuthorDeviceId: event.authorDeviceId,
             groupHistorySequence: event.sequence,
@@ -2449,7 +2451,7 @@ class MessengerController extends ChangeNotifier {
         conversationId: groupId,
         senderDeviceId: event.authorDeviceId,
         recipientDeviceId: groupId,
-        body: '',
+        body: manifest.caption,
         groupFile: manifest,
         outbound: event.authorDeviceId == _requireIdentity().deviceId,
         state: event.authorDeviceId == _requireIdentity().deviceId
@@ -9207,6 +9209,7 @@ class MessengerController extends ChangeNotifier {
     required String path,
     required String fileName,
     required String mimeType,
+    String caption = '',
     String? scheduledOperationId,
     VoiceMessageMetadata? voiceMetadata,
   }) async {
@@ -9215,6 +9218,7 @@ class MessengerController extends ChangeNotifier {
       path: path,
       fileName: fileName,
       mimeType: mimeType,
+      caption: caption,
       voiceMetadata: voiceMetadata,
     );
     final event = await _groupHistory.publishFile(
@@ -11374,19 +11378,9 @@ class MessengerController extends ChangeNotifier {
             path: path,
             fileName: entry.attachmentFileName ?? 'attachment',
             mimeType: entry.attachmentMimeType ?? 'application/octet-stream',
+            caption: entry.body,
             scheduledOperationId: entry.id,
           );
-          if (entry.body.trim().isNotEmpty) {
-            // Group attachments are signed history events of their own. Keep
-            // the optional caption as a normal, idempotent group message so
-            // older clients can still display it and crash retries cannot
-            // duplicate it.
-            await sendGroupMessage(
-              groupId: entry.conversationId,
-              body: entry.body,
-              outgoingMessageId: entry.id,
-            );
-          }
         } else {
           await sendGroupMessage(
             groupId: entry.conversationId,
