@@ -9049,6 +9049,7 @@ class MessengerController extends ChangeNotifier {
     if (source?.poll == null) return null;
     final poll = source!.poll!;
     final latestVoteMessages = <String, ChatMessage>{};
+    final voteMessagesByEventId = <String, ChatMessage>{};
     var closedAt = poll.closedAt;
     String? closedCheckpointEventId;
     ({int lamport, String author, int sequence, String id})? closedEvent;
@@ -9057,6 +9058,8 @@ class MessengerController extends ChangeNotifier {
       if (vote?.pollId != pollId) continue;
       final currentVote = vote!;
       if (!(message.pollClosed && currentVote.optionIndexes.isEmpty)) {
+        final eventId = message.groupHistoryEventId;
+        if (eventId != null) voteMessagesByEventId[eventId] = message;
         final old = latestVoteMessages[currentVote.voterDeviceId];
         if (old == null || _comparePollEventOrder(message, old) > 0) {
           latestVoteMessages[currentVote.voterDeviceId] = message;
@@ -9101,21 +9104,29 @@ class MessengerController extends ChangeNotifier {
                     message.groupHistoryEventId == closedCheckpointEventId,
               )
               .firstOrNull;
+    final checkpoint =
+        checkpointMessage?.pollClosedCheckpoint ?? const <String, String>{};
+    if (closedAt != null) {
+      // A close record freezes event identities, not each member's latest vote.
+      // Keep the exact vote named by the signed checkpoint even when a newer
+      // concurrent or post-close vote has since arrived.
+      for (final entry in checkpoint.entries) {
+        final message = voteMessagesByEventId[entry.value];
+        final vote = message?.pollVote;
+        if (vote?.pollId == pollId && vote?.voterDeviceId == entry.key) {
+          votes[entry.key] = vote!;
+        }
+      }
+    }
     for (final entry in latestVoteMessages.entries) {
       final message = entry.value;
       final vote = message.pollVote!;
-      final expectedEventId =
-          checkpointMessage?.pollClosedCheckpoint[entry.key];
-      final included =
-          closedAt == null ||
-          (expectedEventId != null &&
-              expectedEventId == message.groupHistoryEventId) ||
-          (checkpointMessage?.pollClosedCheckpoint.isEmpty == true &&
-              checkpointMessage != null &&
-              _comparePollEventOrder(message, checkpointMessage) < 0);
-      if (included) {
+      if (closedAt == null) {
         votes[entry.key] = vote;
-      } else {
+      } else if (checkpoint[entry.key] != message.groupHistoryEventId) {
+        // An empty checkpoint means zero confirmed votes. Any vote outside the
+        // exact event set remains visible as unconfirmed, regardless of clock
+        // or Lamport ordering.
         unconfirmedVotes[entry.key] = vote;
       }
     }
@@ -11365,6 +11376,17 @@ class MessengerController extends ChangeNotifier {
             mimeType: entry.attachmentMimeType ?? 'application/octet-stream',
             scheduledOperationId: entry.id,
           );
+          if (entry.body.trim().isNotEmpty) {
+            // Group attachments are signed history events of their own. Keep
+            // the optional caption as a normal, idempotent group message so
+            // older clients can still display it and crash retries cannot
+            // duplicate it.
+            await sendGroupMessage(
+              groupId: entry.conversationId,
+              body: entry.body,
+              outgoingMessageId: entry.id,
+            );
+          }
         } else {
           await sendGroupMessage(
             groupId: entry.conversationId,
