@@ -165,6 +165,12 @@ jobs:
             --manifest-path native/conest_native/Cargo.toml \
             --target-dir build/linux/x64/debug/conest_native_target \
             --release
+      - name: Test native Opus and adaptive jitter behavior
+        run: |
+          cargo test --locked \
+            --manifest-path native/conest_native/Cargo.toml \
+            --target-dir build/linux/x64/debug/conest_native_target \
+            audio::tests
       - name: Build Linux debug bundle
         run: |
           flutter config --enable-linux-desktop
