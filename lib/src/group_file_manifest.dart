@@ -15,6 +15,7 @@ class GroupFileManifest {
     required this.sizeBytes,
     required this.fileHash,
     required List<String> pieceHashes,
+    this.caption = '',
     this.voiceMetadata,
   }) : pieceHashes = List.unmodifiable(pieceHashes) {
     if (fileName.isEmpty ||
@@ -22,6 +23,8 @@ class GroupFileManifest {
         fileName.contains(RegExp(r'[/\\\x00-\x1f]')) ||
         mimeType.isEmpty ||
         mimeType.length > 128 ||
+        caption.length > 4096 ||
+        (caption.isNotEmpty && caption.trim().isEmpty) ||
         sizeBytes <= 0 ||
         sizeBytes > maxSize ||
         this.pieceHashes.length != (sizeBytes + pieceSize - 1) ~/ pieceSize ||
@@ -42,6 +45,7 @@ class GroupFileManifest {
   static const onlineAutoDownloadLimit = 15 * 1024 * 1024;
   final String fileName;
   final String mimeType;
+  final String caption;
   final int sizeBytes;
   final String fileHash;
   final List<String> pieceHashes;
@@ -63,9 +67,10 @@ class GroupFileManifest {
       lan || sizeBytes < onlineAutoDownloadLimit;
 
   Map<String, Object?> toPayload() => {
-    'version': 1,
+    'version': caption.isEmpty ? 1 : 2,
     'fileName': fileName,
     'mimeType': mimeType,
+    if (caption.isNotEmpty) 'caption': caption,
     'sizeBytes': sizeBytes,
     'pieceSize': pieceSize,
     'fileHash': fileHash,
@@ -84,6 +89,8 @@ class GroupFileManifest {
     try {
       final hasOperationId = payload.containsKey('scheduledOperationId');
       final operationId = payload['scheduledOperationId'];
+      final hasCaption = payload.containsKey('caption');
+      final rawCaption = payload['caption'];
       final hasVoiceMetadata = payload.containsKey('voiceMetadata');
       final rawVoiceMetadata = payload['voiceMetadata'];
       if (hasVoiceMetadata && rawVoiceMetadata is! Map) {
@@ -93,6 +100,7 @@ class GroupFileManifest {
         'version',
         'fileName',
         'mimeType',
+        if (hasCaption) 'caption',
         'sizeBytes',
         'pieceSize',
         'fileHash',
@@ -102,17 +110,23 @@ class GroupFileManifest {
       };
       if (payload.keys.toSet().difference(allowedKeys).isNotEmpty ||
           payload.length != allowedKeys.length ||
+          (hasCaption &&
+              (rawCaption is! String ||
+                  rawCaption.isEmpty ||
+                  rawCaption.trim().isEmpty)) ||
           (hasOperationId &&
               (operationId is! String ||
                   operationId.isEmpty ||
                   operationId.length > 160)) ||
-          payload['version'] != 1 ||
+          (payload['version'] != 1 && payload['version'] != 2) ||
+          (hasCaption != (payload['version'] == 2)) ||
           payload['pieceSize'] != pieceSize) {
         throw const FormatException('Unsupported group file manifest.');
       }
       return GroupFileManifest(
         fileName: payload['fileName'] as String,
         mimeType: payload['mimeType'] as String,
+        caption: hasCaption ? rawCaption as String : '',
         sizeBytes: payload['sizeBytes'] as int,
         fileHash: payload['fileHash'] as String,
         pieceHashes: (payload['pieceHashes'] as List).cast<String>(),
@@ -134,6 +148,7 @@ Future<GroupFileManifest> hashGroupFile({
   required String path,
   required String fileName,
   required String mimeType,
+  String caption = '',
   VoiceMessageMetadata? voiceMetadata,
 }) {
   final metadataPayload = voiceMetadata?.toJson();
@@ -169,6 +184,7 @@ Future<GroupFileManifest> hashGroupFile({
       return GroupFileManifest(
         fileName: fileName,
         mimeType: mimeType,
+        caption: caption,
         sizeBytes: size,
         fileHash: result.value!.toString(),
         pieceHashes: pieces,
