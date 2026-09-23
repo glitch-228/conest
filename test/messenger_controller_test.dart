@@ -1239,7 +1239,7 @@ void main() {
   );
 
   test(
-    'scheduled messages recover interrupted pre-handoff dispatch after restart',
+    'scheduled messages recover before and after handoff without duplicates',
     () async {
       final vault = _MemoryVaultStore();
       final controller = await _createController(
@@ -1248,19 +1248,52 @@ void main() {
         vaultStore: vault,
         createIdentity: false,
       );
-      final scheduled = await controller.scheduleTextMessage(
+      var controllerDisposed = false;
+      addTearDown(() {
+        if (!controllerDisposed) controller.dispose();
+      });
+      final due = DateTime.now().toUtc().add(const Duration(hours: 1));
+      final beforeHandoff = await controller.scheduleTextMessage(
         kind: ConversationKind.direct,
         conversationId: 'peer',
-        body: 'deliver once the app resumes',
-        scheduledAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+        body: 'retry after restart',
+        scheduledAt: due,
       );
+      final afterHandoff = await controller.scheduleTextMessage(
+        kind: ConversationKind.direct,
+        conversationId: 'peer',
+        body: 'already in the outbox',
+        scheduledAt: due,
+      );
+      await controller.flushPendingChanges();
       controller.dispose();
+      controllerDisposed = true;
 
       final interrupted = await vault.load();
+      final handoffTime = DateTime.now().toUtc();
+      final queuedMessage = ChatMessage(
+        id: afterHandoff.id,
+        conversationId: 'peer',
+        senderDeviceId: 'local-device',
+        recipientDeviceId: 'peer',
+        body: afterHandoff.body,
+        outbound: true,
+        state: DeliveryState.queued,
+        createdAt: handoffTime,
+      );
       await vault.save(
         interrupted.copyWith(
           scheduledMessages: [
-            scheduled.copyWith(state: ScheduledMessageState.sending),
+            beforeHandoff.copyWith(state: ScheduledMessageState.sending),
+            afterHandoff.copyWith(state: ScheduledMessageState.sending),
+          ],
+          conversations: [
+            ConversationRecord(
+              id: 'peer',
+              kind: ConversationKind.direct,
+              peerDeviceId: 'peer',
+              messages: [queuedMessage],
+            ),
           ],
         ),
       );
@@ -1273,12 +1306,22 @@ void main() {
       );
       addTearDown(restored.dispose);
       expect(
-        restored.scheduledMessages.single.state,
+        restored.scheduledMessages
+            .singleWhere((entry) => entry.id == beforeHandoff.id)
+            .state,
         ScheduledMessageState.waiting,
       );
       expect(
-        restored.scheduledMessages.single.body,
-        'deliver once the app resumes',
+        restored.scheduledMessages
+            .singleWhere((entry) => entry.id == afterHandoff.id)
+            .state,
+        ScheduledMessageState.sent,
+      );
+      expect(
+        restored
+            .messagesFor('peer')
+            .where((message) => message.id == afterHandoff.id),
+        hasLength(1),
       );
     },
   );
