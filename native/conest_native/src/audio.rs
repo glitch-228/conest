@@ -28,6 +28,9 @@ const MAX_OPUS_PACKET: usize = 1_100;
 const CAPTURE_QUEUE_SAMPLES: usize = FRAME_SAMPLES * 6;
 const PLAYBACK_QUEUE_SAMPLES: usize = FRAME_SAMPLES * 8;
 const OPUS_PACKET_QUEUE: usize = 12;
+const ECHO_REFERENCE_QUEUE_SAMPLES: usize = VOICE_RATE as usize;
+const ECHO_DELAY_SAMPLES: usize = FRAME_SAMPLES * 4;
+const ECHO_FILTER_TAPS: usize = 128;
 const FRAME_PERIOD_NANOS: i128 = 20_000_000;
 const MIN_JITTER_WAIT: Duration = Duration::from_millis(20);
 const MAX_JITTER_WAIT: Duration = Duration::from_millis(100);
@@ -80,6 +83,54 @@ impl AdaptiveBitrate {
     }
 }
 
+/// Bounded normalized-LMS echo reduction using the rendered speaker signal as
+/// its reference. Processing stays on the audio worker, outside device callbacks.
+struct EchoCanceller {
+    history: [f32; ECHO_FILTER_TAPS],
+    weights: [f32; ECHO_FILTER_TAPS],
+    cursor: usize,
+}
+
+impl EchoCanceller {
+    fn new() -> Self {
+        Self {
+            history: [0.0; ECHO_FILTER_TAPS],
+            weights: [0.0; ECHO_FILTER_TAPS],
+            cursor: 0,
+        }
+    }
+
+    fn process_sample(&mut self, captured: f32, rendered: f32) -> f32 {
+        self.history[self.cursor] = rendered;
+        self.cursor = (self.cursor + 1) % ECHO_FILTER_TAPS;
+        let mut estimate = 0.0;
+        let mut energy = 1.0e-4;
+        for tap in 0..ECHO_FILTER_TAPS {
+            let index = (self.cursor + ECHO_FILTER_TAPS - 1 - tap) % ECHO_FILTER_TAPS;
+            let reference = self.history[index];
+            estimate += self.weights[tap] * reference;
+            energy += reference * reference;
+        }
+        let error = captured - estimate;
+        if energy > 1.0e-3 {
+            let adaptation = 0.15 * error / energy;
+            for tap in 0..ECHO_FILTER_TAPS {
+                let index = (self.cursor + ECHO_FILTER_TAPS - 1 - tap) % ECHO_FILTER_TAPS;
+                self.weights[tap] =
+                    (self.weights[tap] + adaptation * self.history[index]).clamp(-2.0, 2.0);
+            }
+        }
+        error.clamp(-1.0, 1.0)
+    }
+}
+
+fn push_render_reference(queue: &ArrayQueue<f32>, sample: f32) {
+    if queue.push(sample).is_err() {
+        let _ = queue.pop();
+        let _ = queue.push(sample);
+    }
+}
+
 pub struct VoiceAudioSession {
     running: Arc<AtomicBool>,
     muted: Arc<AtomicBool>,
@@ -89,6 +140,7 @@ pub struct VoiceAudioSession {
     incoming: Arc<ArrayQueue<(u64, Vec<u8>, Instant)>>,
     capture: Arc<ArrayQueue<f32>>,
     playback: Arc<ArrayQueue<f32>>,
+    render_reference: Arc<ArrayQueue<f32>>,
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     input_stream: Option<Stream>,
     #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -126,8 +178,12 @@ impl VoiceAudioSession {
             session.muted.clone(),
             session.failed.clone(),
         )?;
-        let output_stream =
-            open_output_stream(&output, session.playback.clone(), session.failed.clone())?;
+        let output_stream = open_output_stream(
+            &output,
+            session.playback.clone(),
+            session.render_reference.clone(),
+            session.failed.clone(),
+        )?;
         input_stream
             .play()
             .context("Could not start microphone capture")?;
@@ -162,8 +218,12 @@ impl VoiceAudioSession {
             .context("Could not enumerate audio output devices")?
             .find(|device| output_device_name(device).as_deref() == Some(name))
             .with_context(|| format!("Audio output device '{name}' is unavailable"))?;
-        let output_stream =
-            open_output_stream(&output, self.playback.clone(), self.failed.clone())?;
+        let output_stream = open_output_stream(
+            &output,
+            self.playback.clone(),
+            self.render_reference.clone(),
+            self.failed.clone(),
+        )?;
         output_stream
             .play()
             .context("Could not start the selected audio output")?;
@@ -196,6 +256,7 @@ impl VoiceAudioSession {
         let failed = Arc::new(AtomicBool::new(false));
         let capture = Arc::new(ArrayQueue::new(CAPTURE_QUEUE_SAMPLES));
         let playback = Arc::new(ArrayQueue::new(PLAYBACK_QUEUE_SAMPLES));
+        let render_reference = Arc::new(ArrayQueue::new(ECHO_REFERENCE_QUEUE_SAMPLES));
         let encoded = Arc::new(ArrayQueue::new(OPUS_PACKET_QUEUE));
         let incoming = Arc::new(ArrayQueue::new(OPUS_PACKET_QUEUE));
         let mut encoder = Encoder::new(VOICE_RATE, Channels::Mono, Application::Voip)
@@ -212,8 +273,18 @@ impl VoiceAudioSession {
                 let running = running.clone();
                 let capture = capture.clone();
                 let encoded = encoded.clone();
+                let render_reference = render_reference.clone();
                 let network_congested = network_congested.clone();
-                move || encode_loop(running, capture, encoded, encoder, network_congested)
+                move || {
+                    encode_loop(
+                        running,
+                        capture,
+                        encoded,
+                        render_reference,
+                        encoder,
+                        network_congested,
+                    )
+                }
             })
             .context("Could not start the call encoder")?;
         let decode_worker = match thread::Builder::new()
@@ -241,6 +312,7 @@ impl VoiceAudioSession {
             incoming,
             capture,
             playback,
+            render_reference,
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             input_stream: None,
             #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -309,6 +381,7 @@ impl VoiceAudioSession {
             let Some(sample) = self.playback.pop() else {
                 break;
             };
+            push_render_reference(&self.render_reference, sample);
             output[count] = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
             count += 1;
         }
@@ -387,6 +460,7 @@ fn open_input_stream(
 fn open_output_stream(
     device: &Device,
     samples: Arc<ArrayQueue<f32>>,
+    render_reference: Arc<ArrayQueue<f32>>,
     failed: Arc<AtomicBool>,
 ) -> Result<Stream> {
     let supported = device
@@ -402,9 +476,20 @@ fn open_output_stream(
         SampleFormat::F32 => {
             let mut phase = 0_u64;
             let mut held = 0.0_f32;
+            let render_reference = render_reference.clone();
             device.build_output_stream::<f32, _, _>(
                 config,
-                move |data, _| play_samples(data, channels, rate, &samples, &mut phase, &mut held),
+                move |data, _| {
+                    play_samples(
+                        data,
+                        channels,
+                        rate,
+                        &samples,
+                        &render_reference,
+                        &mut phase,
+                        &mut held,
+                    )
+                },
                 on_error,
                 Some(Duration::from_secs(2)),
             )?
@@ -412,9 +497,20 @@ fn open_output_stream(
         SampleFormat::I16 => {
             let mut phase = 0_u64;
             let mut held = 0.0_f32;
+            let render_reference = render_reference.clone();
             device.build_output_stream::<i16, _, _>(
                 config,
-                move |data, _| play_samples(data, channels, rate, &samples, &mut phase, &mut held),
+                move |data, _| {
+                    play_samples(
+                        data,
+                        channels,
+                        rate,
+                        &samples,
+                        &render_reference,
+                        &mut phase,
+                        &mut held,
+                    )
+                },
                 on_error,
                 Some(Duration::from_secs(2)),
             )?
@@ -422,9 +518,20 @@ fn open_output_stream(
         SampleFormat::U16 => {
             let mut phase = 0_u64;
             let mut held = 0.0_f32;
+            let render_reference = render_reference.clone();
             device.build_output_stream::<u16, _, _>(
                 config,
-                move |data, _| play_samples(data, channels, rate, &samples, &mut phase, &mut held),
+                move |data, _| {
+                    play_samples(
+                        data,
+                        channels,
+                        rate,
+                        &samples,
+                        &render_reference,
+                        &mut phase,
+                        &mut held,
+                    )
+                },
                 on_error,
                 Some(Duration::from_secs(2)),
             )?
@@ -513,6 +620,7 @@ fn play_samples<T: FromPcm>(
     channels: usize,
     rate: u32,
     queue: &ArrayQueue<f32>,
+    render_reference: &ArrayQueue<f32>,
     phase: &mut u64,
     held: &mut f32,
 ) {
@@ -527,6 +635,7 @@ fn play_samples<T: FromPcm>(
         while *phase >= rate as u64 {
             *phase -= rate as u64;
             *held = queue.pop().unwrap_or(0.0);
+            push_render_reference(render_reference, *held);
         }
     }
 }
@@ -535,11 +644,13 @@ fn encode_loop(
     running: Arc<AtomicBool>,
     capture: Arc<ArrayQueue<f32>>,
     encoded: Arc<ArrayQueue<Vec<u8>>>,
+    render_reference: Arc<ArrayQueue<f32>>,
     mut encoder: Encoder,
     network_congested: Arc<AtomicBool>,
 ) {
     let mut frame = vec![0.0_f32; FRAME_SAMPLES];
     let mut bitrate = AdaptiveBitrate::default();
+    let mut echo_canceller = EchoCanceller::new();
     while running.load(Ordering::Relaxed) {
         let mut count = 0;
         while count < FRAME_SAMPLES {
@@ -552,6 +663,17 @@ fn encode_loop(
                     return;
                 }
             }
+        }
+        while render_reference.len() > ECHO_DELAY_SAMPLES + FRAME_SAMPLES {
+            let _ = render_reference.pop();
+        }
+        for sample in &mut frame {
+            let rendered = if render_reference.len() > ECHO_DELAY_SAMPLES {
+                render_reference.pop().unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            *sample = echo_canceller.process_sample(*sample, rendered);
         }
         let queue_depth = if network_congested.load(Ordering::Relaxed) {
             HIGH_QUEUE_WATERMARK
@@ -682,8 +804,8 @@ impl PacketJitterBuffer {
 #[cfg(test)]
 mod tests {
     use super::{
-        AdaptiveBitrate, Application, Channels, Decoder, Encoder, MAX_JITTER_WAIT, MIN_JITTER_WAIT,
-        PacketJitterBuffer,
+        AdaptiveBitrate, Application, Channels, Decoder, EchoCanceller, Encoder, MAX_JITTER_WAIT,
+        MIN_JITTER_WAIT, PacketJitterBuffer,
     };
     use std::time::{Duration, Instant};
 
@@ -722,6 +844,28 @@ mod tests {
             recovery.extend(controller.observe(0));
         }
         assert_eq!(recovery, vec![24_000, 32_000]);
+    }
+
+    #[test]
+    fn echo_canceller_reduces_a_correlated_render_signal() {
+        let mut canceller = EchoCanceller::new();
+        let mut state = 0x1357_9bdf_u32;
+        let mut uncancelled_energy = 0.0_f64;
+        let mut cancelled_energy = 0.0_f64;
+        for index in 0..24_000 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let rendered = ((state >> 8) as f32 / 16_777_215.0 - 0.5) * 0.4;
+            let echo = rendered * 0.65;
+            let output = canceller.process_sample(echo, rendered);
+            if index >= 12_000 {
+                uncancelled_energy += f64::from(echo * echo);
+                cancelled_energy += f64::from(output * output);
+            }
+        }
+        assert!(
+            cancelled_energy < uncancelled_energy * 0.15,
+            "cancelled energy {cancelled_energy} should be below uncancelled energy {uncancelled_energy}",
+        );
     }
 
     #[test]
