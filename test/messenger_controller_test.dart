@@ -2268,21 +2268,33 @@ void main() {
   }
 
   test(
-    'signed group polls converge and freeze the creator checkpoint',
+    'Iroh group history signed polls and scheduled file captions converge',
     () async {
       final network = _InProcessIrohNetwork();
       final relayClient = _FakeRelayClient();
+      final attachmentRoot = await Directory.systemTemp.createTemp(
+        'conest-scheduled-group-caption-',
+      );
+      final aliceAttachmentRoot = Directory(
+        p.join(attachmentRoot.path, 'alice'),
+      );
+      final bobAttachmentRoot = Directory(p.join(attachmentRoot.path, 'bob'));
+      await aliceAttachmentRoot.create();
+      await bobAttachmentRoot.create();
+      addTearDown(() => attachmentRoot.delete(recursive: true));
       final alice = await _createController(
         relayClient: relayClient,
         displayName: 'Alice',
         internetRelayHost: null,
         transportRegistryFactory: network.registry,
+        attachmentRootProvider: () async => aliceAttachmentRoot,
       );
       final bob = await _createController(
         relayClient: relayClient,
         displayName: 'Bob',
         internetRelayHost: null,
         transportRegistryFactory: network.registry,
+        attachmentRootProvider: () async => bobAttachmentRoot,
       );
       addTearDown(alice.dispose);
       addTearDown(bob.dispose);
@@ -2380,6 +2392,47 @@ void main() {
         <String>['1'],
       );
       expect(afterLateVote.counts(), <int>[0, 1]);
+
+      final source = await File(
+        p.join(aliceAttachmentRoot.path, 'scheduled-caption.txt'),
+      ).writeAsBytes(<int>[1, 2, 3]);
+      final scheduled = await alice.scheduleGroupAttachment(
+        groupId: group.groupId,
+        source: StagedAttachment(
+          id: 'scheduled-caption-source',
+          fileName: 'scheduled-caption.txt',
+          mimeType: 'text/plain',
+          sizeBytes: 3,
+          filePath: source.path,
+        ),
+        scheduledAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+      );
+      await alice.editScheduledMessage(scheduled.id, 'Group file caption');
+      await alice.sendScheduledMessageNow(scheduled.id);
+      await _waitForIroh(
+        () => bob
+            .messagesForGroup(group.groupId)
+            .any(
+              (message) =>
+                  message.groupFile?.fileName == 'scheduled-caption.txt' &&
+                  message.body == 'Group file caption',
+            ),
+        reason: 'scheduled caption is signed with its group attachment',
+      );
+      final groupFileMessage = bob
+          .messagesForGroup(group.groupId)
+          .singleWhere(
+            (message) => message.groupFile?.fileName == 'scheduled-caption.txt',
+          );
+      final retryEventId = await alice.publishGroupFile(
+        groupId: group.groupId,
+        path: source.path,
+        fileName: 'scheduled-caption.txt',
+        mimeType: 'text/plain',
+        caption: 'Group file caption',
+        scheduledOperationId: scheduled.id,
+      );
+      expect(retryEventId, groupFileMessage.groupHistoryEventId);
       await expectLater(
         bob.voteInGroupPoll(
           groupId: group.groupId,
