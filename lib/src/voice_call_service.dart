@@ -75,6 +75,8 @@ abstract interface class VoiceCallMediaEngine {
   Future<void> open({required String peerDeviceId, required bool outgoing});
   Future<void> setMuted(bool muted);
   Future<bool> setSpeakerphoneEnabled(bool enabled);
+  Future<List<String>> availableOutputDevices();
+  Future<void> selectOutputDevice(String name);
   Future<void> close();
 }
 
@@ -97,6 +99,13 @@ class UnavailableVoiceCallMediaEngine implements VoiceCallMediaEngine {
 
   @override
   Future<bool> setSpeakerphoneEnabled(bool enabled) async => false;
+
+  @override
+  Future<List<String>> availableOutputDevices() async => const [];
+
+  @override
+  Future<void> selectOutputDevice(String name) =>
+      Future.error(StateError('Manual audio output selection is unavailable.'));
 
   @override
   Future<void> close() async {}
@@ -135,6 +144,14 @@ class PlatformVoiceCallMediaEngine implements VoiceCallMediaEngine {
   @override
   Future<bool> setSpeakerphoneEnabled(bool enabled) =>
       bridge.setVoiceCallSpeakerphoneEnabled(enabled);
+
+  @override
+  Future<List<String>> availableOutputDevices() =>
+      bridge.voiceCallOutputDevices();
+
+  @override
+  Future<void> selectOutputDevice(String name) =>
+      bridge.selectVoiceCallOutputDevice(name);
 
   @override
   Future<void> close() => bridge.closeVoiceCallMedia();
@@ -327,6 +344,12 @@ class VoiceCallService {
       _set(session.copyWith(speakerphoneEnabled: enabled));
     }
   }
+
+  Future<List<String>> availableOutputDevices() =>
+      media.availableOutputDevices();
+
+  Future<void> selectOutputDevice(String name) =>
+      media.selectOutputDevice(name);
 
   Future<void> reconnecting() async {
     final session = _active;

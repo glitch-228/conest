@@ -943,6 +943,7 @@ class IdentityRecord {
     required this.autoUseContactRelays,
     required this.notificationsEnabled,
     required this.androidBackgroundRuntimeEnabled,
+    this.androidBackgroundCallsEnabled = false,
     required this.suppressReadReceipts,
     this.connectivity = const GlobalConnectivityPreferences(),
     required this.lanAddresses,
@@ -967,6 +968,7 @@ class IdentityRecord {
   final bool autoUseContactRelays;
   final bool notificationsEnabled;
   final bool androidBackgroundRuntimeEnabled;
+  final bool androidBackgroundCallsEnabled;
   final bool suppressReadReceipts;
   final GlobalConnectivityPreferences connectivity;
   final List<String> lanAddresses;
@@ -1017,6 +1019,7 @@ class IdentityRecord {
     bool? autoUseContactRelays,
     bool? notificationsEnabled,
     bool? androidBackgroundRuntimeEnabled,
+    bool? androidBackgroundCallsEnabled,
     bool? suppressReadReceipts,
     GlobalConnectivityPreferences? connectivity,
     List<String>? lanAddresses,
@@ -1041,6 +1044,8 @@ class IdentityRecord {
       androidBackgroundRuntimeEnabled:
           androidBackgroundRuntimeEnabled ??
           this.androidBackgroundRuntimeEnabled,
+      androidBackgroundCallsEnabled:
+          androidBackgroundCallsEnabled ?? this.androidBackgroundCallsEnabled,
       suppressReadReceipts: suppressReadReceipts ?? this.suppressReadReceipts,
       connectivity: connectivity ?? this.connectivity,
       lanAddresses: lanAddresses ?? this.lanAddresses,
@@ -1072,6 +1077,7 @@ class IdentityRecord {
       'autoUseContactRelays': autoUseContactRelays,
       'notificationsEnabled': notificationsEnabled,
       'androidBackgroundRuntimeEnabled': androidBackgroundRuntimeEnabled,
+      'androidBackgroundCallsEnabled': androidBackgroundCallsEnabled,
       'suppressReadReceipts': suppressReadReceipts,
       'connectivity': connectivity.toJson(),
       'lanAddresses': lanAddresses,
@@ -1134,6 +1140,8 @@ class IdentityRecord {
       notificationsEnabled: json['notificationsEnabled'] as bool? ?? true,
       androidBackgroundRuntimeEnabled:
           json['androidBackgroundRuntimeEnabled'] as bool? ?? false,
+      androidBackgroundCallsEnabled:
+          json['androidBackgroundCallsEnabled'] as bool? ?? false,
       suppressReadReceipts: json['suppressReadReceipts'] as bool? ?? false,
       connectivity: json['connectivity'] is Map<String, dynamic>
           ? GlobalConnectivityPreferences.fromJson(

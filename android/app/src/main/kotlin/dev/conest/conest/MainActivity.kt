@@ -29,6 +29,7 @@ class MainActivity : FlutterActivity() {
     private var voiceCallPermissionResult: MethodChannel.Result? = null
     private var voiceCallAudio: VoiceCallAudioEngine? = null
     private var voiceAudioLibraryLoaded = false
+    private var voiceCallForegroundState = "idle"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -42,7 +43,22 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "setBackgroundRuntimeEnabled" -> {
                     val enabled = call.argument<Boolean>("enabled") == true
-                    setBackgroundRuntimeEnabled(enabled)
+                    updateBackgroundServicePreferences(
+                        enabled,
+                        call.argument<Boolean>("callsEnabled") == true,
+                    )
+                    result.success(null)
+                }
+                "updateVoiceCallForeground" -> {
+                    voiceCallForegroundState =
+                        call.argument<String>("callState") ?: "idle"
+                    updateBackgroundServiceState(
+                        call.argument<Boolean>("runtimeEnabled") == true,
+                        call.argument<Boolean>("callsEnabled") == true,
+                        call.argument<String>("peerName"),
+                        call.argument<String>("callState") ?: "idle",
+                        call.argument<Boolean>("incoming") == true,
+                    )
                     result.success(null)
                 }
                 "requestNotificationPermission" -> {
@@ -247,12 +263,38 @@ class MainActivity : FlutterActivity() {
         systemChannel?.invokeMethod("transferControl", mapOf("action" to action))
     }
 
-    private fun setBackgroundRuntimeEnabled(enabled: Boolean) {
+    private fun updateBackgroundServiceState(
+        runtimeEnabled: Boolean,
+        callsEnabled: Boolean,
+        peerName: String?,
+        callState: String,
+        incoming: Boolean,
+    ) {
         val intent = Intent(this, ConestBackgroundService::class.java).apply {
-            action = ConestBackgroundService.ACTION_BACKGROUND
-            putExtra(ConestBackgroundService.EXTRA_ENABLED, enabled)
+            action = ConestBackgroundService.ACTION_UPDATE_STATE
+            putExtra(ConestBackgroundService.EXTRA_ENABLED, runtimeEnabled)
+            putExtra(ConestBackgroundService.EXTRA_CALLS_ENABLED, callsEnabled)
+            putExtra(ConestBackgroundService.EXTRA_CALL_TITLE, peerName ?: "")
+            putExtra(ConestBackgroundService.EXTRA_CALL_STATE, callState)
+            putExtra(ConestBackgroundService.EXTRA_CALL_INCOMING, incoming)
         }
-        if (enabled) {
+        if (runtimeEnabled || callsEnabled) {
+            startService(intent)
+        } else {
+            startConestForegroundService(intent)
+        }
+    }
+
+    private fun updateBackgroundServicePreferences(
+        runtimeEnabled: Boolean,
+        callsEnabled: Boolean,
+    ) {
+        val intent = Intent(this, ConestBackgroundService::class.java).apply {
+            action = ConestBackgroundService.ACTION_UPDATE_PREFERENCES
+            putExtra(ConestBackgroundService.EXTRA_ENABLED, runtimeEnabled)
+            putExtra(ConestBackgroundService.EXTRA_CALLS_ENABLED, callsEnabled)
+        }
+        if (runtimeEnabled || callsEnabled) {
             startConestForegroundService(intent)
         } else {
             startService(intent)
@@ -382,6 +424,14 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         voiceCallAudio?.stop()
         voiceCallAudio = null
+        if (voiceCallForegroundState != "idle" &&
+            voiceCallForegroundState != "ended") {
+            startService(
+                Intent(this, ConestBackgroundService::class.java).apply {
+                    action = ConestBackgroundService.ACTION_END_CALL
+                }
+            )
+        }
         if (activeSystemChannel === systemChannel) activeSystemChannel = null
         super.onDestroy()
     }

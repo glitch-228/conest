@@ -57,13 +57,38 @@ class PlatformBridge {
 
   bool get _supportsAndroidSystemCalls => !kIsWeb && Platform.isAndroid;
 
-  Future<void> setAndroidBackgroundRuntimeEnabled(bool enabled) async {
+  Future<void> setAndroidBackgroundRuntimeEnabled(
+    bool enabled, {
+    bool callsEnabled = false,
+  }) async {
     if (!_supportsAndroidSystemCalls) {
       return;
     }
     try {
       await _channel.invokeMethod<void>('setBackgroundRuntimeEnabled', {
         'enabled': enabled,
+        'callsEnabled': callsEnabled,
+      });
+    } on MissingPluginException {
+      return;
+    }
+  }
+
+  Future<void> updateAndroidVoiceCallForeground({
+    required bool runtimeEnabled,
+    required bool callsEnabled,
+    required String? peerName,
+    required String callState,
+    required bool incoming,
+  }) async {
+    if (!_supportsAndroidSystemCalls) return;
+    try {
+      await _channel.invokeMethod<void>('updateVoiceCallForeground', {
+        'runtimeEnabled': runtimeEnabled,
+        'callsEnabled': callsEnabled,
+        'peerName': peerName,
+        'callState': callState,
+        'incoming': incoming,
       });
     } on MissingPluginException {
       return;
@@ -196,6 +221,26 @@ class PlatformBridge {
     } on MissingPluginException {
       return false;
     }
+  }
+
+  Future<List<String>> voiceCallOutputDevices() async {
+    if (kIsWeb || (!Platform.isLinux && !Platform.isWindows)) {
+      return const [];
+    }
+    final audio = _voiceAudio;
+    if (audio == null) return const [];
+    return audio.availableOutputDevices();
+  }
+
+  Future<void> selectVoiceCallOutputDevice(String name) async {
+    if (kIsWeb || (!Platform.isLinux && !Platform.isWindows)) {
+      throw StateError(
+        'Manual audio output selection is available on desktop.',
+      );
+    }
+    final audio = _voiceAudio;
+    if (audio == null) throw StateError('Native voice audio is unavailable.');
+    await audio.selectOutputDevice(name);
   }
 
   Future<void> closeVoiceCallMedia() async {

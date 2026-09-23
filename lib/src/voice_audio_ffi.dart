@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
@@ -21,6 +22,10 @@ typedef _PushNative = Bool Function(Uint64, Uint64, Pointer<Uint8>, UintPtr);
 typedef _PushDart = bool Function(int, int, Pointer<Uint8>, int);
 typedef _CloseNative = Void Function(Uint64);
 typedef _CloseDart = void Function(int);
+typedef _OutputDevicesNative = Pointer<Utf8> Function();
+typedef _OutputDevicesDart = Pointer<Utf8> Function();
+typedef _SelectOutputNative = Bool Function(Uint64, Pointer<Utf8>);
+typedef _SelectOutputDart = bool Function(int, Pointer<Utf8>);
 typedef _ErrorNative = Pointer<Utf8> Function();
 typedef _ErrorDart = Pointer<Utf8> Function();
 typedef _FreeNative = Void Function(Pointer<Utf8>);
@@ -50,6 +55,14 @@ class _NativeVoiceAudioBindings {
       close = library.lookupFunction<_CloseNative, _CloseDart>(
         'conest_voice_audio_close',
       ),
+      outputDevices = library
+          .lookupFunction<_OutputDevicesNative, _OutputDevicesDart>(
+            'conest_voice_audio_output_devices',
+          ),
+      selectOutput = library
+          .lookupFunction<_SelectOutputNative, _SelectOutputDart>(
+            'conest_voice_audio_set_output_device',
+          ),
       lastError = library.lookupFunction<_ErrorNative, _ErrorDart>(
         'conest_last_error',
       ),
@@ -64,6 +77,8 @@ class _NativeVoiceAudioBindings {
   final _NextDart nextPacket;
   final _PushDart pushPacket;
   final _CloseDart close;
+  final _OutputDevicesDart outputDevices;
+  final _SelectOutputDart selectOutput;
   final _ErrorDart lastError;
   final _FreeDart freeString;
 
@@ -140,6 +155,25 @@ class NativeVoiceCallAudio {
       await Isolate.run(() => _closeVoiceAudioNative(libraryPath, handle));
       rethrow;
     }
+  }
+
+  Future<List<String>> availableOutputDevices() async {
+    if (!Platform.isLinux && !Platform.isWindows) return const [];
+    return Isolate.run(() => _voiceAudioOutputDevicesNative(_libraryPath));
+  }
+
+  Future<void> selectOutputDevice(String name) async {
+    if (!Platform.isLinux && !Platform.isWindows) {
+      throw StateError(
+        'Manual output selection is available on desktop calls.',
+      );
+    }
+    final handle = _handle;
+    if (handle == null) throw StateError('Voice audio is not active.');
+    final result = await Isolate.run(
+      () => _voiceAudioSelectOutputNative(_libraryPath, handle, name),
+    );
+    if (!result) throw StateError('Could not select audio output device.');
   }
 
   bool setMuted(bool muted) {
@@ -256,6 +290,35 @@ int _openVoiceAudioNative(String libraryPath) {
   final handle = bindings.open();
   if (handle == 0) throw StateError(bindings.takeLastError());
   return handle;
+}
+
+List<String> _voiceAudioOutputDevicesNative(String libraryPath) {
+  final bindings = _NativeVoiceAudioBindings(DynamicLibrary.open(libraryPath));
+  final pointer = bindings.outputDevices();
+  if (pointer == nullptr) return const [];
+  try {
+    final decoded = jsonDecode(pointer.toDartString());
+    if (decoded is! List) return const [];
+    return decoded.whereType<String>().toList(growable: false);
+  } finally {
+    bindings.freeString(pointer);
+  }
+}
+
+bool _voiceAudioSelectOutputNative(
+  String libraryPath,
+  int handle,
+  String name,
+) {
+  final bindings = _NativeVoiceAudioBindings(DynamicLibrary.open(libraryPath));
+  final namePointer = name.toNativeUtf8();
+  try {
+    final selected = bindings.selectOutput(handle, namePointer);
+    if (!selected) throw StateError(bindings.takeLastError());
+    return true;
+  } finally {
+    calloc.free(namePointer);
+  }
 }
 
 void _closeVoiceAudioNative(String libraryPath, int handle) {

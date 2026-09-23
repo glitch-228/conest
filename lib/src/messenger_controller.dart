@@ -996,6 +996,21 @@ class MessengerController extends ChangeNotifier {
     );
     _voiceCallChanges = _voiceCallService!.changes.listen((session) {
       if (_disposed) return;
+      final currentIdentity = identity ?? me;
+      unawaited(
+        _platformBridge.updateAndroidVoiceCallForeground(
+          runtimeEnabled: currentIdentity.androidBackgroundRuntimeEnabled,
+          callsEnabled:
+              experimentalAndroidBackgroundRuntimeAvailable &&
+              _platformBridge.supportsVoiceCallMedia &&
+              currentIdentity.androidBackgroundCallsEnabled,
+          peerName: session == null
+              ? null
+              : _contactByDeviceId(session.peerDeviceId)?.alias,
+          callState: session == null ? 'idle' : session.state.name,
+          incoming: session != null && !session.outgoing,
+        ),
+      );
       if (session?.state == VoiceCallState.connected) {
         unawaited(voiceMessageService.stopPlayback());
         unawaited(voiceMessageService.stopForInterruption());
@@ -1431,7 +1446,8 @@ class MessengerController extends ChangeNotifier {
     if (!_appInForeground) {
       if (!kIsWeb &&
           Platform.isAndroid &&
-          !me.androidBackgroundRuntimeEnabled) {
+          !me.androidBackgroundRuntimeEnabled &&
+          !me.androidBackgroundCallsEnabled) {
         return _RuntimeMode.backgroundDisabledAndroid;
       }
       return _RuntimeMode.backgroundEnabled;
@@ -1564,9 +1580,12 @@ class MessengerController extends ChangeNotifier {
       me.notificationsEnabled
           ? 'Message notifications are enabled.'
           : 'Message notifications are disabled.',
-      me.androidBackgroundRuntimeEnabled
-          ? 'Android background runtime is requested; system battery/background policy can still delay or block notifications.'
+      (me.androidBackgroundRuntimeEnabled || me.androidBackgroundCallsEnabled)
+          ? 'Android background service is requested; system battery/background policy can still delay or stop it.'
           : 'Android background runtime is off.',
+      me.androidBackgroundCallsEnabled
+          ? 'Background call availability is enabled for approved contacts.'
+          : 'Background call availability is disabled.',
       'Availability checks test local/LAN reachability plus configured internet relays. Public inbound reachability still requires a remote client or relay route to confirm.',
       if (!kIsWeb && Platform.isAndroid)
         'Android starts with relay mode off; enable it only when you want this device to relay.',
@@ -2722,11 +2741,29 @@ class MessengerController extends ChangeNotifier {
       await _retireBundledRelayRoutes();
       final transportIdentityMigrated = await _ensureTransportIdentity();
       final protocolQueueMigrated = _markLegacyQueuedControlsIncompatible();
-      if (!experimentalAndroidBackgroundRuntimeAvailable &&
-          (_snapshot.identity?.androidBackgroundRuntimeEnabled ?? false)) {
+      final storedIdentity = _snapshot.identity;
+      final backgroundRuntimeUnavailable =
+          !kIsWeb &&
+          Platform.isAndroid &&
+          !experimentalAndroidBackgroundRuntimeAvailable &&
+          (storedIdentity?.androidBackgroundRuntimeEnabled == true ||
+              storedIdentity?.androidBackgroundCallsEnabled == true);
+      final backgroundCallsUnavailable =
+          !kIsWeb &&
+          Platform.isAndroid &&
+          storedIdentity?.androidBackgroundCallsEnabled == true &&
+          (!_platformBridge.supportsVoiceCallMedia ||
+              !experimentalAndroidBackgroundRuntimeAvailable);
+      if (storedIdentity != null &&
+          (backgroundRuntimeUnavailable || backgroundCallsUnavailable)) {
         _snapshot = _snapshot.copyWith(
-          identity: _snapshot.identity!.copyWith(
-            androidBackgroundRuntimeEnabled: false,
+          identity: storedIdentity.copyWith(
+            androidBackgroundRuntimeEnabled: backgroundRuntimeUnavailable
+                ? false
+                : storedIdentity.androidBackgroundRuntimeEnabled,
+            androidBackgroundCallsEnabled: backgroundCallsUnavailable
+                ? false
+                : storedIdentity.androidBackgroundCallsEnabled,
           ),
         );
         await _saveSnapshotSilently(notify: false);
@@ -3841,7 +3878,9 @@ class MessengerController extends ChangeNotifier {
     if (!Platform.isAndroid) {
       return true;
     }
-    return _appInForeground || me.androidBackgroundRuntimeEnabled;
+    return _appInForeground ||
+        me.androidBackgroundRuntimeEnabled ||
+        me.androidBackgroundCallsEnabled;
   }
 
   Future<void> refreshPairingAdvertisement() async {
@@ -3933,6 +3972,9 @@ class MessengerController extends ChangeNotifier {
       buffer.writeln('notificationsEnabled=${me.notificationsEnabled}');
       buffer.writeln(
         'androidBackgroundRuntimeEnabled=${me.androidBackgroundRuntimeEnabled}',
+      );
+      buffer.writeln(
+        'androidBackgroundCallsEnabled=${me.androidBackgroundCallsEnabled}',
       );
       buffer.writeln('suppressReadReceipts=${me.suppressReadReceipts}');
       buffer.writeln('localRelayPort=${me.localRelayPort}');
@@ -4952,13 +4994,49 @@ class MessengerController extends ChangeNotifier {
     if (enabled) {
       await _platformBridge.requestNotificationPermission();
     }
-    await _platformBridge.setAndroidBackgroundRuntimeEnabled(enabled);
+    await _platformBridge.setAndroidBackgroundRuntimeEnabled(
+      enabled,
+      callsEnabled:
+          me.androidBackgroundCallsEnabled &&
+          experimentalAndroidBackgroundRuntimeAvailable &&
+          _platformBridge.supportsVoiceCallMedia,
+    );
     _reschedulePolling();
     _scheduleScheduledMessagePump();
     await _persist(
       enabled
           ? 'Android background runtime enabled. If system battery/background access is blocked, notifications can still be late or never arrive.'
           : 'Android background runtime disabled.',
+    );
+  }
+
+  Future<void> updateAndroidBackgroundCallsEnabled(bool enabled) async {
+    if (enabled &&
+        (!Platform.isAndroid ||
+            !experimentalAndroidBackgroundRuntimeAvailable ||
+            !_platformBridge.supportsVoiceCallMedia)) {
+      throw StateError(
+        'Background calls require the experimental Android runtime and voice-call media in this build.',
+      );
+    }
+    final me = _requireIdentity();
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(androidBackgroundCallsEnabled: enabled),
+    );
+    if (enabled) await _platformBridge.requestNotificationPermission();
+    await _platformBridge.setAndroidBackgroundRuntimeEnabled(
+      experimentalAndroidBackgroundRuntimeAvailable &&
+          me.androidBackgroundRuntimeEnabled,
+      callsEnabled:
+          enabled &&
+          experimentalAndroidBackgroundRuntimeAvailable &&
+          _platformBridge.supportsVoiceCallMedia,
+    );
+    _reschedulePolling();
+    await _persist(
+      enabled
+          ? 'Background voice-call availability enabled for this device. Calls can arrive only while the Conest service is allowed to run.'
+          : 'Background voice-call availability disabled.',
     );
   }
 
@@ -12542,6 +12620,26 @@ class MessengerController extends ChangeNotifier {
         signal.recipientDeviceId != identity?.deviceId) {
       return;
     }
+    final me = identity;
+    if (signal.action == 'invite' &&
+        !kIsWeb &&
+        Platform.isAndroid &&
+        !_appInForeground &&
+        me?.androidBackgroundCallsEnabled != true) {
+      if (me != null) {
+        await _sendVoiceCallSignal(
+          VoiceCallSignal(
+            callId: signal.callId,
+            action: 'busy',
+            senderDeviceId: me.deviceId,
+            recipientDeviceId: contact.deviceId,
+            issuedAt: _now(),
+          ),
+        );
+      }
+      await _sendAck(contact: contact, envelope: envelope);
+      return;
+    }
     if (signal.action != 'invite' &&
         (service.active?.callId != signal.callId ||
             service.active?.peerDeviceId != contact.deviceId)) {
@@ -16660,7 +16758,10 @@ class MessengerController extends ChangeNotifier {
             'Notifications are disabled on $platform. Incoming messages are still stored locally.',
       );
     }
-    if (!kIsWeb && Platform.isAndroid && !me.androidBackgroundRuntimeEnabled) {
+    if (!kIsWeb &&
+        Platform.isAndroid &&
+        !me.androidBackgroundRuntimeEnabled &&
+        !me.androidBackgroundCallsEnabled) {
       return const DebugCheckResult(
         name: 'Notifications and background',
         status: DebugCheckStatus.warn,
@@ -16672,7 +16773,7 @@ class MessengerController extends ChangeNotifier {
       name: 'Notifications and background',
       status: DebugCheckStatus.pass,
       detail:
-          'Notifications are enabled on $platform${!kIsWeb && Platform.isAndroid ? ' and Android background runtime is requested.' : '.'}',
+          'Notifications are enabled on $platform${!kIsWeb && Platform.isAndroid ? ' and Android background service is requested.' : '.'}',
     );
   }
 
@@ -16691,7 +16792,9 @@ class MessengerController extends ChangeNotifier {
       );
     }
     if (Platform.isAndroid) {
-      final expectedBackground = me.androidBackgroundRuntimeEnabled;
+      final expectedBackground =
+          me.androidBackgroundRuntimeEnabled ||
+          me.androidBackgroundCallsEnabled;
       return DebugCheckResult(
         name: 'Background heartbeat policy',
         status: backgroundAllowed == expectedBackground
@@ -16723,7 +16826,10 @@ class MessengerController extends ChangeNotifier {
       _appInForeground = false;
       final backgroundInterval = _currentPollInterval();
       final expectedBackground =
-          !kIsWeb && Platform.isAndroid && !me.androidBackgroundRuntimeEnabled
+          !kIsWeb &&
+              Platform.isAndroid &&
+              !me.androidBackgroundRuntimeEnabled &&
+              !me.androidBackgroundCallsEnabled
           ? null
           : !kIsWeb && !Platform.isAndroid
           ? (awaitingRecipientAckCount > 0
@@ -21117,6 +21223,10 @@ class MessengerController extends ChangeNotifier {
       _platformBridge.setAndroidBackgroundRuntimeEnabled(
         experimentalAndroidBackgroundRuntimeAvailable &&
             me.androidBackgroundRuntimeEnabled,
+        callsEnabled:
+            experimentalAndroidBackgroundRuntimeAvailable &&
+            _platformBridge.supportsVoiceCallMedia &&
+            me.androidBackgroundCallsEnabled,
       ),
     );
     _scheduleScheduledMessagePump();

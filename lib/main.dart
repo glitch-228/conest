@@ -3208,6 +3208,49 @@ class _CourierHomeState extends State<_CourierHome> {
     }
   }
 
+  Future<void> _chooseCallOutput() async {
+    final service = widget.controller.voiceCallService;
+    if (service == null) return;
+    try {
+      final devices = await service.availableOutputDevices();
+      if (!mounted) return;
+      if (devices.isEmpty) {
+        widget.controller.setStatus('No audio output devices were found.');
+        return;
+      }
+      final selected = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Call audio output'),
+          content: SizedBox(
+            width: 440,
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                for (final device in devices)
+                  ListTile(
+                    title: Text(device),
+                    onTap: () => Navigator.of(context).pop(device),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+          ],
+        ),
+      );
+      if (selected == null || !mounted) return;
+      await service.selectOutputDevice(selected);
+      widget.controller.setStatus('Call audio routed to $selected.');
+    } catch (error) {
+      widget.controller.setStatus('Could not change call audio output: $error');
+    }
+  }
+
   Future<void> _chatActions(
     ConversationKind kind,
     String id, {
@@ -3670,6 +3713,13 @@ class _CourierHomeState extends State<_CourierHome> {
                               : 'Speaker',
                         ),
                       ),
+                  if ((Platform.isLinux || Platform.isWindows) &&
+                      (visibleCall.state == VoiceCallState.connected ||
+                          visibleCall.state == VoiceCallState.reconnecting))
+                    TextButton(
+                      onPressed: _chooseCallOutput,
+                      child: const Text('Audio output'),
+                    ),
                   if (visibleCall.state == VoiceCallState.connected ||
                       visibleCall.state == VoiceCallState.reconnecting)
                     TextButton(
@@ -12266,6 +12316,35 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 ),
                                 subtitle: const Text(
                                   'Disabled in release builds: the foreground service does not yet host a headless Flutter receiver.',
+                                ),
+                              ),
+                            if (!kIsWeb && Platform.isAndroid)
+                              SwitchListTile.adaptive(
+                                value:
+                                    experimentalAndroidBackgroundRuntimeAvailable &&
+                                    identity.androidBackgroundCallsEnabled,
+                                contentPadding: EdgeInsets.zero,
+                                onChanged:
+                                    _busy ||
+                                        !experimentalAndroidBackgroundRuntimeAvailable ||
+                                        widget
+                                                .controller
+                                                .voiceCallService
+                                                ?.media
+                                                .available !=
+                                            true
+                                    ? null
+                                    : (value) => _run(
+                                        () => widget.controller
+                                            .updateAndroidBackgroundCallsEnabled(
+                                              value,
+                                            ),
+                                      ),
+                                title: const Text(
+                                  'Allow voice calls in background',
+                                ),
+                                subtitle: const Text(
+                                  'Keeps call signaling active and shows an ongoing call notification while the Conest service runs. Android battery policy or force-stop can still end availability.',
                                 ),
                               ),
                             if (kDebugMode)

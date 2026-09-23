@@ -317,6 +317,51 @@ void main() {
       await service.dispose();
     },
   );
+
+  test(
+    'background call preference persists and defaults off for old vaults',
+    () {
+      final identity = IdentityRecord(
+        accountId: 'account',
+        deviceId: 'device',
+        displayName: 'me',
+        bio: '',
+        pairingNonce: 'nonce',
+        pairingEpochMs: 1,
+        publicKeyBase64: 'public',
+        privateKeyBase64: 'private',
+        configuredRelays: const [],
+        localRelayPort: 7667,
+        relayModeEnabled: false,
+        autoUseContactRelays: true,
+        notificationsEnabled: true,
+        androidBackgroundRuntimeEnabled: false,
+        androidBackgroundCallsEnabled: true,
+        suppressReadReceipts: false,
+        lanAddresses: const [],
+        safetyNumber: 'safety',
+        createdAt: DateTime.utc(2026),
+      );
+      expect(
+        IdentityRecord.fromJson(
+          identity.toJson(),
+        ).androidBackgroundCallsEnabled,
+        isTrue,
+      );
+      final legacy = Map<String, dynamic>.from(identity.toJson())
+        ..remove('androidBackgroundCallsEnabled');
+      expect(
+        IdentityRecord.fromJson(legacy).androidBackgroundCallsEnabled,
+        isFalse,
+      );
+      expect(
+        identity
+            .copyWith(androidBackgroundCallsEnabled: false)
+            .androidBackgroundCallsEnabled,
+        isFalse,
+      );
+    },
+  );
 }
 
 class _TestCallTransport implements VoiceCallSignalTransport {
@@ -343,6 +388,10 @@ class _WorkingMedia implements VoiceCallMediaEngine {
   @override
   Future<bool> setSpeakerphoneEnabled(bool enabled) async => true;
   @override
+  Future<List<String>> availableOutputDevices() async => const ['default'];
+  @override
+  Future<void> selectOutputDevice(String name) async {}
+  @override
   Future<void> close() async {}
 }
 
@@ -366,6 +415,10 @@ class _HangingPrepareMedia implements VoiceCallMediaEngine {
 
   @override
   Future<bool> setSpeakerphoneEnabled(bool enabled) async => true;
+  @override
+  Future<List<String>> availableOutputDevices() async => const [];
+  @override
+  Future<void> selectOutputDevice(String name) async {}
 
   @override
   Future<void> close() async {}

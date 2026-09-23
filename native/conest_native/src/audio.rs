@@ -89,13 +89,25 @@ pub struct VoiceAudioSession {
 impl VoiceAudioSession {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn open() -> Result<Self> {
+        Self::open_with_output(None)
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    pub fn open_with_output(output_name: Option<&str>) -> Result<Self> {
         let host = cpal::default_host();
         let input = host
             .default_input_device()
             .context("No default microphone device is available")?;
-        let output = host
-            .default_output_device()
-            .context("No default speaker or headphone device is available")?;
+        let output = match output_name {
+            Some(name) => host
+                .output_devices()
+                .context("Could not enumerate audio output devices")?
+                .find(|device| device.name().ok().as_deref() == Some(name))
+                .with_context(|| format!("Audio output device '{name}' is unavailable"))?,
+            None => host
+                .default_output_device()
+                .context("No default speaker or headphone device is available")?,
+        };
 
         let mut session = Self::create_codec()?;
         let input_stream = open_input_stream(
@@ -117,12 +129,54 @@ impl VoiceAudioSession {
         Ok(session)
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    pub fn output_device_names() -> Vec<String> {
+        cpal::default_host()
+            .output_devices()
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(|device| device.name().ok())
+            .fold(Vec::new(), |mut names, name| {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+                names
+            })
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    pub fn set_output_device(&mut self, name: &str) -> Result<()> {
+        let output = cpal::default_host()
+            .output_devices()
+            .context("Could not enumerate audio output devices")?
+            .find(|device| device.name().ok().as_deref() == Some(name))
+            .with_context(|| format!("Audio output device '{name}' is unavailable"))?;
+        let output_stream =
+            open_output_stream(&output, self.playback.clone(), self.failed.clone())?;
+        output_stream
+            .play()
+            .context("Could not start the selected audio output")?;
+        self.output_stream = Some(output_stream);
+        Ok(())
+    }
+
     /// Android owns its platform microphone/speaker threads through
     /// AudioRecord/AudioTrack. The native codec and bounded queues remain the
     /// same, and the platform threads exchange PCM through the JNI methods.
     #[cfg(target_os = "android")]
     pub fn open() -> Result<Self> {
         Self::create_codec()
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn output_device_names() -> Vec<String> {
+        Vec::new()
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn set_output_device(&mut self, _name: &str) -> Result<()> {
+        anyhow::bail!("Android audio routing is controlled by the system call route.")
     }
 
     fn create_codec() -> Result<Self> {

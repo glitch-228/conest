@@ -127,7 +127,9 @@ jobs:
           flutter build apk --debug --target-platform android-arm64 \
             --dart-define=CONEST_BUILD_TAG=${DEBUG_TAG} \
             --dart-define=CONEST_BUILD_CHANNEL=debug \
-            --dart-define=CONEST_BUILD_COMMIT=${GITHUB_SHA}
+            --dart-define=CONEST_BUILD_COMMIT=${GITHUB_SHA} \
+            --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
+            --dart-define=CONEST_EXPERIMENTAL_ANDROID_BACKGROUND_RUNTIME=true
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-debug.apk \
             "dist/conest-debug-android-arm64-${GITHUB_RUN_NUMBER}.apk"
@@ -163,7 +165,8 @@ jobs:
           flutter build linux --debug \
             --dart-define=CONEST_BUILD_TAG=${DEBUG_TAG} \
             --dart-define=CONEST_BUILD_CHANNEL=debug \
-            --dart-define=CONEST_BUILD_COMMIT=${GITHUB_SHA}
+            --dart-define=CONEST_BUILD_COMMIT=${GITHUB_SHA} \
+            --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true
           mkdir -p dist-stage/conest-debug-linux-x64 dist
           cp -a build/linux/x64/debug/bundle/. dist-stage/conest-debug-linux-x64/
           (cd dist-stage && zip -r ../dist/conest-debug-linux-x64-${GITHUB_RUN_NUMBER}.zip conest-debug-linux-x64)
@@ -207,7 +210,8 @@ jobs:
           flutter build windows --debug \
             --dart-define=CONEST_BUILD_TAG=${DEBUG_TAG} \
             --dart-define=CONEST_BUILD_CHANNEL=debug \
-            --dart-define=CONEST_BUILD_COMMIT=${GITHUB_SHA}
+            --dart-define=CONEST_BUILD_COMMIT=${GITHUB_SHA} \
+            --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true
           mkdir -p dist-stage/conest-debug-windows-x64 dist
           cp -a build/windows/x64/runner/Debug/. dist-stage/conest-debug-windows-x64/
           powershell -Command "Compress-Archive -Path dist-stage/conest-debug-windows-x64 -DestinationPath dist/conest-debug-windows-x64-${GITHUB_RUN_NUMBER}.zip"

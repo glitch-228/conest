@@ -33,7 +33,9 @@ dependencies:
   connectivity_plus: ^6.0.5
   video_player_media_kit: ^2.0.0
   media_kit: ^1.2.6
-  record: ^7.1.1
+  # 7.1.x requires Dart 3.12 while the project CI is pinned to Flutter
+  # 3.41.9 / Dart 3.11.5. Keep the same Opus capture API on the supported SDK.
+  record: ^6.2.1
   just_audio: ^0.10.6
   # Pinned because transfer admission relies on platform-specific free-space
   # reporting and should not change underneath a security release.

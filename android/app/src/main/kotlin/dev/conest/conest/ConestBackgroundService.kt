@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.ServiceInfo
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -17,6 +18,10 @@ class ConestBackgroundService : Service() {
     private var transferredBytes = 0L
     private var totalBytes = 0L
     private var transferPaused = false
+    private var callsEnabled = false
+    private var callTitle = ""
+    private var callState = "idle"
+    private var callIncoming = false
 
     override fun onCreate() {
         super.onCreate()
@@ -25,7 +30,22 @@ class ConestBackgroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_BACKGROUND -> backgroundEnabled = intent.getBooleanExtra(EXTRA_ENABLED, false)
+            ACTION_END_CALL -> {
+                callTitle = ""
+                callState = "idle"
+                callIncoming = false
+            }
+            ACTION_UPDATE_PREFERENCES -> {
+                backgroundEnabled = intent.getBooleanExtra(EXTRA_ENABLED, false)
+                callsEnabled = intent.getBooleanExtra(EXTRA_CALLS_ENABLED, false)
+            }
+            ACTION_UPDATE_STATE -> {
+                backgroundEnabled = intent.getBooleanExtra(EXTRA_ENABLED, false)
+                callsEnabled = intent.getBooleanExtra(EXTRA_CALLS_ENABLED, false)
+                callTitle = intent.getStringExtra(EXTRA_CALL_TITLE) ?: ""
+                callState = intent.getStringExtra(EXTRA_CALL_STATE) ?: "idle"
+                callIncoming = intent.getBooleanExtra(EXTRA_CALL_INCOMING, false)
+            }
             ACTION_UPDATE_TRANSFER -> {
                 transferActive = true
                 transferTitle = intent.getStringExtra(EXTRA_TITLE) ?: "Transferring files"
@@ -35,12 +55,23 @@ class ConestBackgroundService : Service() {
             }
             ACTION_STOP_TRANSFER -> transferActive = false
         }
-        if (!backgroundEnabled && !transferActive) {
+        if (!backgroundEnabled && !callsEnabled && !hasCall() && !transferActive) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
-        startForeground(NOTIFICATION_ID, buildNotification())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            var types = 0
+            if (transferActive || backgroundEnabled || callsEnabled) {
+                types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            }
+            if (callUsesMicrophone()) {
+                types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            }
+            startForeground(NOTIFICATION_ID, buildNotification(), types)
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
         return START_STICKY
     }
 
@@ -55,7 +86,10 @@ class ConestBackgroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, MainActivity.BACKGROUND_CHANNEL_ID)
+            Notification.Builder(
+                this,
+                if (hasCall()) CALL_CHANNEL_ID else MainActivity.BACKGROUND_CHANNEL_ID
+            )
         } else {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
@@ -65,7 +99,20 @@ class ConestBackgroundService : Service() {
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setPriority(Notification.PRIORITY_LOW)
-        if (transferActive) {
+        if (hasCall()) {
+            builder
+                .setCategory(Notification.CATEGORY_CALL)
+                .setOnlyAlertOnce(callState != "ringing")
+                .setContentTitle(
+                    when (callState) {
+                        "ringing" -> if (callIncoming) "Incoming Conest call" else "Calling"
+                        "connecting", "reconnecting" -> "Conest call · $callState"
+                        "connected" -> "Conest call in progress"
+                        else -> "Conest voice call"
+                    }
+                )
+                .setContentText(callTitle.ifBlank { "Tap to return to Conest" })
+        } else if (transferActive) {
             val progress = if (totalBytes > 0) {
                 ((transferredBytes.coerceIn(0L, totalBytes) * 1000L) / totalBytes).toInt()
             } else 0
@@ -83,10 +130,14 @@ class ConestBackgroundService : Service() {
                     )
                 )
                 .addAction(action("Cancel all", CONTROL_CANCEL_ALL, 2))
+        } else if (callsEnabled) {
+            builder
+                .setContentTitle("Conest call availability")
+                .setContentText("Ready for approved-contact calls while this service runs")
         } else {
             builder
                 .setContentTitle("Conest background service")
-                .setContentText("Reopen Conest to receive messages.")
+                .setContentText("Conest keeps its active session available in the background")
         }
         return builder.build()
     }
@@ -120,14 +171,37 @@ class ConestBackgroundService : Service() {
                 )
             )
         }
+        if (manager.getNotificationChannel(CALL_CHANNEL_ID) == null) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    CALL_CHANNEL_ID,
+                    "Voice calls",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Incoming and active Conest voice calls"
+                    lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+                }
+            )
+        }
     }
+
+    private fun hasCall(): Boolean = callState != "idle" && callState != "ended"
+
+    private fun callUsesMicrophone(): Boolean =
+        callState == "connecting" || callState == "connected" || callState == "reconnecting"
 
     companion object {
         private const val NOTIFICATION_ID = 6018
-        const val ACTION_BACKGROUND = "dev.conest.action.BACKGROUND"
+        const val ACTION_UPDATE_STATE = "dev.conest.action.UPDATE_STATE"
+        const val ACTION_UPDATE_PREFERENCES = "dev.conest.action.UPDATE_PREFERENCES"
+        const val ACTION_END_CALL = "dev.conest.action.END_CALL"
         const val ACTION_UPDATE_TRANSFER = "dev.conest.action.UPDATE_TRANSFER"
         const val ACTION_STOP_TRANSFER = "dev.conest.action.STOP_TRANSFER"
         const val EXTRA_ENABLED = "enabled"
+        const val EXTRA_CALLS_ENABLED = "callsEnabled"
+        const val EXTRA_CALL_TITLE = "callTitle"
+        const val EXTRA_CALL_STATE = "callState"
+        const val EXTRA_CALL_INCOMING = "callIncoming"
         const val EXTRA_TITLE = "title"
         const val EXTRA_TRANSFERRED = "transferred"
         const val EXTRA_TOTAL = "total"
@@ -136,5 +210,6 @@ class ConestBackgroundService : Service() {
         const val CONTROL_PAUSE_ALL = "pause_all"
         const val CONTROL_RESUME_ALL = "resume_all"
         const val CONTROL_CANCEL_ALL = "cancel_all"
+        private const val CALL_CHANNEL_ID = "conest_calls"
     }
 }

@@ -127,6 +127,55 @@ pub extern "C" fn conest_voice_audio_open() -> u64 {
     }
 }
 
+/// JSON-encoded audio output device names. The returned string is freed with
+/// `conest_string_free`; Android returns an empty list because the OS owns its
+/// communication route selection.
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_audio_output_devices() -> *mut c_char {
+    let value = serde_json::to_string(&VoiceAudioSession::output_device_names())
+        .unwrap_or_else(|_| "[]".to_owned());
+    CString::new(value)
+        .map(CString::into_raw)
+        .unwrap_or_else(|_| std::ptr::null_mut())
+}
+
+/// Switches a live desktop call to a named output. Android routing is selected
+/// through AudioManager and therefore rejects this operation.
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_voice_audio_set_output_device(
+    handle: u64,
+    name: *const c_char,
+) -> bool {
+    if name.is_null() {
+        record_error("missing audio output device name");
+        return false;
+    }
+    let name = match unsafe { CStr::from_ptr(name) }.to_str() {
+        Ok(name) => name,
+        Err(error) => {
+            record_error(error);
+            return false;
+        }
+    };
+    let Ok(mut sessions) = VOICE_AUDIO_SESSIONS.lock() else {
+        record_error("voice audio session registry lock poisoned");
+        return false;
+    };
+    let Some(session) = sessions.get_mut(&handle) else {
+        record_error("unknown voice audio session handle");
+        return false;
+    };
+    match session.set_output_device(name) {
+        Ok(()) => true,
+        Err(error) => {
+            record_error(error);
+            false
+        }
+    }
+}
+
 #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn conest_voice_audio_set_muted(handle: u64, muted: bool) -> bool {
