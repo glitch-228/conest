@@ -3818,11 +3818,15 @@ class _CourierHomeState extends State<_CourierHome> {
                   icon: Icon(_showArchived ? Icons.arrow_back : Icons.menu),
                 ),
                 const SizedBox(width: 8),
-                Text(
-                  _showArchived ? 'Archived chats' : 'Conest',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                Flexible(
+                  child: Text(
+                    _showArchived ? 'Archived chats' : 'Conest',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
                 const Spacer(),
                 IconButton(
