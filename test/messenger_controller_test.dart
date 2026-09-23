@@ -2354,6 +2354,32 @@ void main() {
       final closed = bob.groupPollProjection(group.groupId, poll.id)!;
       expect(closed.definition.isClosed, isTrue);
       expect(closed.counts(), <int>[0, 1]);
+      await bob.sendGroupMessage(
+        groupId: group.groupId,
+        body: 'late signed vote',
+        pollVote: PollVote(
+          pollId: poll.id,
+          voterDeviceId: bob.identity!.deviceId,
+          optionIndexes: const <String>['0'],
+          changedAt: DateTime.now().toUtc(),
+        ),
+      );
+      await _waitForIroh(
+        () =>
+            alice
+                .groupPollProjection(group.groupId, poll.id)
+                ?.unconfirmedVotes[bob.identity!.deviceId]
+                ?.optionIndexes
+                .join(',') ==
+            '0',
+        reason: 'late vote remains visible as unconfirmed',
+      );
+      final afterLateVote = alice.groupPollProjection(group.groupId, poll.id)!;
+      expect(
+        afterLateVote.votes[bob.identity!.deviceId]?.optionIndexes,
+        <String>['1'],
+      );
+      expect(afterLateVote.counts(), <int>[0, 1]);
       await expectLater(
         bob.voteInGroupPoll(
           groupId: group.groupId,
