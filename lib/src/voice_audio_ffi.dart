@@ -30,6 +30,12 @@ typedef _ErrorNative = Pointer<Utf8> Function();
 typedef _ErrorDart = Pointer<Utf8> Function();
 typedef _FreeNative = Void Function(Pointer<Utf8>);
 typedef _FreeDart = void Function(Pointer<Utf8>);
+typedef _StartMessageRecordingNative = Uint64 Function(Pointer<Utf8>);
+typedef _StartMessageRecordingDart = int Function(Pointer<Utf8>);
+typedef _StopMessageRecordingNative = Pointer<Utf8> Function(Uint64);
+typedef _StopMessageRecordingDart = Pointer<Utf8> Function(int);
+typedef _CancelMessageRecordingNative = Void Function(Uint64);
+typedef _CancelMessageRecordingDart = void Function(int);
 
 class _NativeVoiceAudioBindings {
   _NativeVoiceAudioBindings(DynamicLibrary library)
@@ -68,7 +74,22 @@ class _NativeVoiceAudioBindings {
       ),
       freeString = library.lookupFunction<_FreeNative, _FreeDart>(
         'conest_string_free',
-      );
+      ),
+      startMessageRecording = library
+          .lookupFunction<
+            _StartMessageRecordingNative,
+            _StartMessageRecordingDart
+          >('conest_voice_message_recording_start'),
+      stopMessageRecording = library
+          .lookupFunction<
+            _StopMessageRecordingNative,
+            _StopMessageRecordingDart
+          >('conest_voice_message_recording_stop'),
+      cancelMessageRecording = library
+          .lookupFunction<
+            _CancelMessageRecordingNative,
+            _CancelMessageRecordingDart
+          >('conest_voice_message_recording_cancel');
 
   final _OpenDart open;
   final _SetMutedDart setMuted;
@@ -81,6 +102,9 @@ class _NativeVoiceAudioBindings {
   final _SelectOutputDart selectOutput;
   final _ErrorDart lastError;
   final _FreeDart freeString;
+  final _StartMessageRecordingDart startMessageRecording;
+  final _StopMessageRecordingDart stopMessageRecording;
+  final _CancelMessageRecordingDart cancelMessageRecording;
 
   String takeLastError() {
     final pointer = lastError();
@@ -107,6 +131,7 @@ class NativeVoiceCallAudio {
   final StreamController<Uint8List> _frames =
       StreamController<Uint8List>.broadcast();
   int? _handle;
+  int? _messageRecordingHandle;
   Isolate? _pollIsolate;
   ReceivePort? _pollEvents;
   SendPort? _pollStopPort;
@@ -174,6 +199,38 @@ class NativeVoiceCallAudio {
       () => _voiceAudioSelectOutputNative(_libraryPath, handle, name),
     );
     if (!result) throw StateError('Could not select audio output device.');
+  }
+
+  Future<void> startVoiceMessageRecording(String path) async {
+    if (!Platform.isLinux && !Platform.isWindows) {
+      throw StateError('Native voice-message capture is desktop-only.');
+    }
+    if (_messageRecordingHandle != null) {
+      throw StateError('A native voice-message recording is already active.');
+    }
+    final handle = await Isolate.run(
+      () => _startVoiceMessageRecordingNative(_libraryPath, path),
+    );
+    _messageRecordingHandle = handle;
+  }
+
+  Future<Map<String, dynamic>> stopVoiceMessageRecording() async {
+    final handle = _messageRecordingHandle;
+    if (handle == null)
+      throw StateError('No native voice recording is active.');
+    _messageRecordingHandle = null;
+    return Isolate.run(
+      () => _stopVoiceMessageRecordingNative(_libraryPath, handle),
+    );
+  }
+
+  Future<void> cancelVoiceMessageRecording() async {
+    final handle = _messageRecordingHandle;
+    _messageRecordingHandle = null;
+    if (handle == null) return;
+    await Isolate.run(
+      () => _cancelVoiceMessageRecordingNative(_libraryPath, handle),
+    );
   }
 
   bool setMuted(bool muted) {
@@ -325,6 +382,41 @@ void _closeVoiceAudioNative(String libraryPath, int handle) {
   try {
     _NativeVoiceAudioBindings(DynamicLibrary.open(libraryPath)).close(handle);
   } catch (_) {}
+}
+
+int _startVoiceMessageRecordingNative(String libraryPath, String path) {
+  final bindings = _NativeVoiceAudioBindings(DynamicLibrary.open(libraryPath));
+  final pathPointer = path.toNativeUtf8();
+  try {
+    final handle = bindings.startMessageRecording(pathPointer);
+    if (handle == 0) throw StateError(bindings.takeLastError());
+    return handle;
+  } finally {
+    calloc.free(pathPointer);
+  }
+}
+
+Map<String, dynamic> _stopVoiceMessageRecordingNative(
+  String libraryPath,
+  int handle,
+) {
+  final bindings = _NativeVoiceAudioBindings(DynamicLibrary.open(libraryPath));
+  final pointer = bindings.stopMessageRecording(handle);
+  if (pointer == nullptr) throw StateError(bindings.takeLastError());
+  try {
+    final value = jsonDecode(pointer.toDartString());
+    if (value is! Map) {
+      throw StateError('Native voice recording returned invalid metadata.');
+    }
+    return value.map((key, item) => MapEntry('$key', item));
+  } finally {
+    bindings.freeString(pointer);
+  }
+}
+
+void _cancelVoiceMessageRecordingNative(String libraryPath, int handle) {
+  final bindings = _NativeVoiceAudioBindings(DynamicLibrary.open(libraryPath));
+  bindings.cancelMessageRecording(handle);
 }
 
 void _voiceAudioPollEntry(List<Object?> startup) {
