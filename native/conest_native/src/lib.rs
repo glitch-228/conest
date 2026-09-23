@@ -10,5 +10,7 @@ pub mod beam;
 mod desktop_camera;
 mod ffi;
 pub mod transfer;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod voice_recording;
 
 pub use api::*;
