@@ -2777,7 +2777,9 @@ void main() {
       await _waitForIroh(
         () => carol.messagesForGroup(group.groupId).length == 2,
       );
-      network.bridges.remove(bob.identity!.irohEndpointId);
+      final bobBridge = network.bridges.remove(
+        bob.identity!.irohEndpointId,
+      )!;
       network.bridges[dave.identity!.irohEndpointId!] = daveBridge;
       dave.requestGroupHistoryCatchUp(group.groupId);
       await _waitForIroh(
@@ -2883,6 +2885,87 @@ void main() {
             .any((message) => message.id == original.id),
         isFalse,
       );
+
+      // Close a poll in Alice's partition while Bob casts a vote in the
+      // connected partition. The signed checkpoint must remain stable when
+      // the carrier later brings Bob's vote to all four peers.
+      network.bridges[alice.identity!.irohEndpointId!] = aliceBridge;
+      network.bridges[bob.identity!.irohEndpointId!] = bobBridge;
+      await alice.createGroupPoll(
+        groupId: group.groupId,
+        question: 'Partitioned close',
+        options: const ['Alice side', 'Bob side'],
+      );
+      await _waitForIroh(
+        () => peers.every(
+          (peer) => peer.messagesForGroup(group.groupId).any(
+            (message) => message.poll?.question == 'Partitioned close',
+          ),
+        ),
+        reason: 'poll definition reaches every member before partition',
+      );
+      final partitionPoll = alice
+          .messagesForGroup(group.groupId)
+          .singleWhere(
+            (message) => message.poll?.question == 'Partitioned close',
+          )
+          .poll!;
+      final isolatedAlice = network.bridges.remove(
+        alice.identity!.irohEndpointId,
+      )!;
+      await alice.voteInGroupPoll(
+        groupId: group.groupId,
+        pollId: partitionPoll.id,
+        optionIndexes: const [0],
+      );
+      await alice.closeGroupPoll(
+        groupId: group.groupId,
+        pollId: partitionPoll.id,
+      );
+      await bob.voteInGroupPoll(
+        groupId: group.groupId,
+        pollId: partitionPoll.id,
+        optionIndexes: const [1],
+      );
+      await _waitForIroh(
+        () =>
+            carol
+                .groupPollProjection(group.groupId, partitionPoll.id)
+                ?.votes[bob.identity!.deviceId]
+                ?.optionIndexes
+                .single ==
+            '1',
+        reason: 'the connected partition receives Bob's authenticated vote',
+      );
+      network.bridges[alice.identity!.irohEndpointId!] = isolatedAlice;
+      for (final peer in peers) {
+        if (peer == alice) continue;
+        await peer.synchronizeGroupHistory(
+          groupId: group.groupId,
+          peerDeviceId: alice.identity!.deviceId,
+        );
+      }
+      await alice.synchronizeGroupHistory(
+        groupId: group.groupId,
+        peerDeviceId: bob.identity!.deviceId,
+      );
+      await _waitForIroh(
+        () => peers.every((peer) {
+          final projection = peer.groupPollProjection(
+            group.groupId,
+            partitionPoll.id,
+          );
+          return projection?.definition.isClosed == true &&
+              projection?.counts().join(',') == '1,0' &&
+              projection?.unconfirmedVotes.containsKey(
+                    bob.identity!.deviceId,
+                  ) ==
+                  true;
+        }),
+        reason:
+            'all peers converge on Alice's checkpoint and retain Bob’s later vote as unconfirmed',
+      );
+
       await dave.loadOlderGroupHistory(group.groupId);
       expect(
         dave
