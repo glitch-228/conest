@@ -1044,6 +1044,22 @@ class MessengerController extends ChangeNotifier {
     if (contact == null || !contact.canSendOutbound) {
       throw StateError('Voice calls require an approved contact.');
     }
+    if (signal.action == 'invite' &&
+        (contact.featureCapabilityVersion != 1 ||
+            !contact.featureCapabilities.contains(
+              ApplicationCapability.voiceCallsV1,
+            ))) {
+      unawaited(
+        _sendReciprocalContactExchange(
+          contact,
+          recipientKnowsIdentity: true,
+          requestPeerCapabilities: true,
+        ),
+      );
+      throw StateError(
+        'This contact has not confirmed voice-call support. Both devices need a compatible Conest build; retry after their profile updates.',
+      );
+    }
     final envelope = await _crypto.encryptPayloadEnvelope(
       kind: 'voice_call_signal',
       messageId: _randomId('call'),
@@ -8993,6 +9009,11 @@ class MessengerController extends ChangeNotifier {
     for (final message in messagesForGroup(groupId)) {
       final vote = message.pollVote;
       if (vote?.pollId != pollId ||
+          !_groupMemberSupportsFeature(
+            _requireGroup(groupId),
+            vote!.voterDeviceId,
+            ApplicationCapability.groupPollsV1,
+          ) ||
           (message.pollClosed && vote!.optionIndexes.isEmpty)) {
         continue;
       }
@@ -9045,11 +9066,20 @@ class MessengerController extends ChangeNotifier {
 
   PollProjection? groupPollProjection(String groupId, String pollId) {
     final messages = messagesForGroup(groupId);
+    final group = _groupById(groupId);
+    if (group == null) return null;
     final source = messages
         .where((message) => message.poll?.id == pollId)
         .firstOrNull;
     if (source?.poll == null) return null;
     final poll = source!.poll!;
+    if (!_groupMemberSupportsFeature(
+      group,
+      poll.creatorDeviceId,
+      ApplicationCapability.groupPollsV1,
+    )) {
+      return null;
+    }
     final latestVoteMessages = <String, ChatMessage>{};
     final voteMessagesByEventId = <String, ChatMessage>{};
     var closedAt = poll.closedAt;
@@ -9059,6 +9089,13 @@ class MessengerController extends ChangeNotifier {
       final vote = message.pollVote;
       if (vote?.pollId != pollId) continue;
       final currentVote = vote!;
+      if (!_groupMemberSupportsFeature(
+        group,
+        currentVote.voterDeviceId,
+        ApplicationCapability.groupPollsV1,
+      )) {
+        continue;
+      }
       if (!(message.pollClosed && currentVote.optionIndexes.isEmpty)) {
         final eventId = message.groupHistoryEventId;
         if (eventId != null) voteMessagesByEventId[eventId] = message;
@@ -9151,6 +9188,27 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  bool _groupMemberSupportsFeature(
+    GroupRecord group,
+    String deviceId,
+    ApplicationCapability feature,
+  ) {
+    if (deviceId == identity?.deviceId) return true;
+    final profile = group.memberProfileFor(deviceId);
+    return profile != null &&
+        profile.featureCapabilityVersion == 1 &&
+        profile.featureCapabilities.contains(feature);
+  }
+
+  bool _groupSupportsFeatureForAllOtherMembers(
+    GroupRecord group,
+    ApplicationCapability feature,
+  ) => group.activeMemberDeviceIds
+      .where((deviceId) => deviceId != identity?.deviceId)
+      .every(
+        (deviceId) => _groupMemberSupportsFeature(group, deviceId, feature),
+      );
+
   void _attachGroupHistoryOrder(
     String groupId,
     String messageId,
@@ -9214,12 +9272,27 @@ class MessengerController extends ChangeNotifier {
     VoiceMessageMetadata? voiceMetadata,
   }) async {
     final group = _requireGroup(groupId);
+    final captionSupported = _groupSupportsFeatureForAllOtherMembers(
+      group,
+      ApplicationCapability.groupFileCaptionsV2,
+    );
+    if (caption.trim().isNotEmpty && !captionSupported) {
+      throw StateError(
+        'Captioned group files require every active member to update Conest. '
+        'You can still share the file without a caption.',
+      );
+    }
+    final voiceMetadataSupported = _groupSupportsFeatureForAllOtherMembers(
+      group,
+      ApplicationCapability.voiceMessageAttachmentsV1,
+    );
+    final manifestVoiceMetadata = voiceMetadataSupported ? voiceMetadata : null;
     final manifest = await hashGroupFile(
       path: path,
       fileName: fileName,
       mimeType: mimeType,
       caption: caption,
-      voiceMetadata: voiceMetadata,
+      voiceMetadata: manifestVoiceMetadata,
     );
     final event = await _groupHistory.publishFile(
       group,
@@ -9242,7 +9315,11 @@ class MessengerController extends ChangeNotifier {
         }),
       );
     }
-    setStatus('Shared $fileName with the group.');
+    setStatus(
+      voiceMetadata != null && !voiceMetadataSupported
+          ? 'Shared $fileName with the group as a regular attachment; some members need an update for voice playback.'
+          : 'Shared $fileName with the group.',
+    );
     return event.eventId;
   }
 
@@ -10133,44 +10210,65 @@ class MessengerController extends ChangeNotifier {
   Future<bool> _sendReciprocalContactExchange(
     ContactRecord contact, {
     bool recipientKnowsIdentity = false,
+    bool requestPeerCapabilities = false,
   }) async {
     if (!contact.canSendOutbound) return false;
     final me = _requireIdentity();
-    final payload = (await _inviteForIdentity(me)).encodePayload();
-    // Bootstrap is an untrusted v1 request because the recipient may not
-    // know our public key yet. It has no effects until explicit approval.
-    final exchange = recipientKnowsIdentity
-        ? await _crypto.encryptPayloadEnvelope(
-            kind: 'contact_exchange',
-            messageId: _randomId('xchg'),
-            conversationId: 'contact-exchange-${contact.deviceId}',
-            senderAccountId: me.accountId,
-            senderDeviceId: me.deviceId,
-            recipientDeviceId: contact.deviceId,
-            contact: contact,
-            plaintext: payload,
-          )
-        : RelayEnvelope(
-            protocolVersion: 1,
-            kind: 'contact_exchange',
-            messageId: _randomId('xchg'),
-            conversationId: 'contact-exchange-${contact.deviceId}',
-            senderAccountId: me.accountId,
-            senderDeviceId: me.deviceId,
-            recipientDeviceId: contact.deviceId,
-            createdAt: _now().toUtc(),
-            payloadBase64: base64Encode(utf8.encode(payload)),
-          );
-    try {
-      await _deliverToContact(
-        contact: contact,
-        recipientDeviceId: contact.deviceId,
-        envelope: exchange,
-      );
-      return true;
-    } catch (_) {
-      return false;
+    final invitePayload = (await _inviteForIdentity(me)).encodePayload();
+    final payloads = recipientKnowsIdentity
+        ? <String>[
+            // Keep sending the legacy signed invite as its own envelope so
+            // older clients still refresh the contact profile and routes.
+            invitePayload,
+            jsonEncode({
+              'exchangeVersion': 1,
+              'invitePayload': invitePayload,
+              'featureCapabilityVersion': 1,
+              'featureCapabilities': _localApplicationCapabilities()
+                  .map((capability) => capability.name)
+                  .toList(),
+              'requestPeerCapabilities': requestPeerCapabilities,
+            }),
+          ]
+        : <String>[invitePayload];
+    var delivered = false;
+    for (final payload in payloads) {
+      // Bootstrap is an untrusted v1 request because the recipient may not
+      // know our public key yet. It has no effects until explicit approval.
+      final exchange = recipientKnowsIdentity
+          ? await _crypto.encryptPayloadEnvelope(
+              kind: 'contact_exchange',
+              messageId: _randomId('xchg'),
+              conversationId: 'contact-exchange-${contact.deviceId}',
+              senderAccountId: me.accountId,
+              senderDeviceId: me.deviceId,
+              recipientDeviceId: contact.deviceId,
+              contact: contact,
+              plaintext: payload,
+            )
+          : RelayEnvelope(
+              protocolVersion: 1,
+              kind: 'contact_exchange',
+              messageId: _randomId('xchg'),
+              conversationId: 'contact-exchange-${contact.deviceId}',
+              senderAccountId: me.accountId,
+              senderDeviceId: me.deviceId,
+              recipientDeviceId: contact.deviceId,
+              createdAt: _now().toUtc(),
+              payloadBase64: base64Encode(utf8.encode(payload)),
+            );
+      try {
+        await _deliverToContact(
+          contact: contact,
+          recipientDeviceId: contact.deviceId,
+          envelope: exchange,
+        );
+        delivered = true;
+      } catch (_) {
+        // A later authenticated profile exchange can retry failed updates.
+      }
     }
+    return delivered;
   }
 
   Future<bool> _sendContactRemoval(ContactRecord contact) async {
@@ -12696,6 +12794,33 @@ class MessengerController extends ChangeNotifier {
         signal.recipientDeviceId != identity?.deviceId) {
       return;
     }
+    if (signal.action == 'invite' &&
+        (contact.featureCapabilityVersion != 1 ||
+            !contact.featureCapabilities.contains(
+              ApplicationCapability.voiceCallsV1,
+            ))) {
+      final me = identity;
+      unawaited(
+        _sendReciprocalContactExchange(
+          contact,
+          recipientKnowsIdentity: true,
+          requestPeerCapabilities: true,
+        ),
+      );
+      if (me != null) {
+        await _sendVoiceCallSignal(
+          VoiceCallSignal(
+            callId: signal.callId,
+            action: 'busy',
+            senderDeviceId: me.deviceId,
+            recipientDeviceId: contact.deviceId,
+            issuedAt: _now(),
+          ),
+        );
+      }
+      await _sendAck(contact: contact, envelope: envelope);
+      return;
+    }
     final me = identity;
     if (signal.action == 'invite' &&
         !kIsWeb &&
@@ -14666,7 +14791,10 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> _handleContactExchange(RelayEnvelope envelope) async {
     final existing = _contactByDeviceId(envelope.senderDeviceId);
-    final String payload;
+    String payload;
+    List<ApplicationCapability>? featureCapabilities;
+    var featureCapabilityVersion = 0;
+    var requestPeerCapabilities = false;
     if (envelope.protocolVersion == 1) {
       if (existing != null) return;
       final rawPayload = envelope.payloadBase64;
@@ -14678,6 +14806,30 @@ class MessengerController extends ChangeNotifier {
         contact: existing,
         envelope: envelope,
       );
+      try {
+        final decodedExchange = jsonDecode(payload);
+        if (decodedExchange is Map<String, dynamic> &&
+            decodedExchange.containsKey('exchangeVersion')) {
+          if (decodedExchange['exchangeVersion'] != 1) return;
+          final invitePayload = decodedExchange['invitePayload'];
+          final version = decodedExchange['featureCapabilityVersion'];
+          final capabilities = decodedExchange['featureCapabilities'];
+          final request = decodedExchange['requestPeerCapabilities'];
+          if (invitePayload is! String ||
+              version != 1 ||
+              capabilities is! List ||
+              capabilities.length > ApplicationCapability.values.length ||
+              (request != null && request is! bool)) {
+            return;
+          }
+          payload = invitePayload;
+          featureCapabilities = applicationCapabilitiesFromJson(capabilities);
+          featureCapabilityVersion = 1;
+          requestPeerCapabilities = request == true;
+        }
+      } on FormatException {
+        // Existing peers send the signed invite payload without the wrapper.
+      }
     }
     final invite = ContactInvite.tryDecodePayload(payload);
     if (invite == null ||
@@ -14706,11 +14858,48 @@ class MessengerController extends ChangeNotifier {
         );
         return;
       }
-      await _updateExistingContactFromInvite(
+      final capabilitySet = featureCapabilities?.toSet();
+      final capabilitiesChanged =
+          featureCapabilityVersion > 0 &&
+          (existing.featureCapabilityVersion != featureCapabilityVersion ||
+              capabilitySet == null ||
+              existing.featureCapabilities.length != capabilitySet.length ||
+              !existing.featureCapabilities.toSet().containsAll(capabilitySet));
+      final updated = await _updateExistingContactFromInvite(
         invite,
+        featureCapabilities: featureCapabilities,
+        featureCapabilityVersion: featureCapabilityVersion,
         statusBuilder: (contact) =>
             'Updated ${contact.alias} profile and route hints.',
       );
+      if (featureCapabilityVersion == 1 &&
+          (capabilitiesChanged || requestPeerCapabilities) &&
+          updated != null) {
+        await _sendReciprocalContactExchange(
+          updated,
+          recipientKnowsIdentity: true,
+        );
+      }
+      final me = identity;
+      if (featureCapabilityVersion == 1 && updated != null && me != null) {
+        for (final group in _snapshot.groups.where(
+          (group) =>
+              group.ownerDeviceId == me.deviceId &&
+              group.hasActiveMember(updated.deviceId),
+        )) {
+          final refreshed = _refreshGroupMemberProfiles(group);
+          if (_sameGroupMemberProfiles(refreshed, group)) continue;
+          _upsertGroup(refreshed);
+          await _saveSnapshotSilently(notify: false);
+          await _sendGroupMembershipUpdate(
+            refreshed,
+            targetDeviceIds: refreshed.activeMemberDeviceIds
+                .where((deviceId) => deviceId != me.deviceId)
+                .toList(growable: false),
+            reason: 'member_capabilities',
+          );
+        }
+      }
       return;
     }
     final cutoff = _now().subtract(_pendingContactRequestTtl);
@@ -15160,6 +15349,8 @@ class MessengerController extends ChangeNotifier {
 
   Future<ContactRecord?> _updateExistingContactFromInvite(
     ContactInvite invite, {
+    List<ApplicationCapability>? featureCapabilities,
+    int featureCapabilityVersion = 0,
     required String Function(ContactRecord contact) statusBuilder,
     bool persistStatus = true,
   }) async {
@@ -15192,6 +15383,14 @@ class MessengerController extends ChangeNotifier {
       signingPublicKeyBase64: invite.signingPublicKeyBase64,
       irohEndpointId: invite.irohEndpointId,
       capabilities: invite.capabilities,
+      featureCapabilities:
+          featureCapabilities == null ||
+              featureCapabilityVersion < existing.featureCapabilityVersion
+          ? existing.featureCapabilities
+          : featureCapabilities,
+      featureCapabilityVersion: featureCapabilities == null
+          ? existing.featureCapabilityVersion
+          : max(featureCapabilityVersion, existing.featureCapabilityVersion),
       transportIdentityVerifiedAt: invite.version >= 6
           ? (existing.transportIdentityVerifiedAt ?? _now())
           : existing.transportIdentityVerifiedAt,
@@ -20113,8 +20312,23 @@ class MessengerController extends ChangeNotifier {
       signingPublicKeyBase64: identity.signingPublicKeyBase64,
       irohEndpointId: identity.irohEndpointId,
       capabilities: const [TransportKind.iroh],
+      featureCapabilities: _localApplicationCapabilities(),
+      featureCapabilityVersion: 1,
       routeHints: _inviteRouteHintsForIdentity(identity),
     );
+  }
+
+  List<ApplicationCapability> _localApplicationCapabilities() {
+    final enabled = <ApplicationCapability>{
+      ApplicationCapability.groupPollsV1,
+      ApplicationCapability.voiceMessageAttachmentsV1,
+      ApplicationCapability.groupFileCaptionsV2,
+      if (_platformBridge.supportsVoiceCallMedia)
+        ApplicationCapability.voiceCallsV1,
+    };
+    return ApplicationCapability.values
+        .where(enabled.contains)
+        .toList(growable: false);
   }
 
   GroupMemberProfile _groupProfileForContact(ContactRecord contact) {
@@ -20128,6 +20342,8 @@ class MessengerController extends ChangeNotifier {
       signingPublicKeyBase64: contact.signingPublicKeyBase64,
       irohEndpointId: contact.irohEndpointId,
       capabilities: contact.capabilities,
+      featureCapabilities: contact.featureCapabilities,
+      featureCapabilityVersion: contact.featureCapabilityVersion,
       routeHints: contact.routeHints,
     );
   }
@@ -20143,6 +20359,17 @@ class MessengerController extends ChangeNotifier {
     capabilities: profile.capabilities.isEmpty
         ? prior?.capabilities
         : profile.capabilities,
+    featureCapabilities:
+        prior != null &&
+            prior.featureCapabilityVersion > profile.featureCapabilityVersion
+        ? prior.featureCapabilities
+        : (profile.featureCapabilityVersion > 0
+              ? profile.featureCapabilities
+              : (prior?.featureCapabilities ?? profile.featureCapabilities)),
+    featureCapabilityVersion: max(
+      profile.featureCapabilityVersion,
+      prior?.featureCapabilityVersion ?? 0,
+    ),
   );
 
   GroupRecord _refreshGroupMemberProfiles(
@@ -20296,6 +20523,8 @@ class MessengerController extends ChangeNotifier {
         profile.signingPublicKeyBase64 ?? '',
         profile.irohEndpointId ?? '',
         profile.capabilities.map((kind) => kind.name).join(','),
+        profile.featureCapabilityVersion.toString(),
+        profile.featureCapabilities.map((feature) => feature.name).join(','),
         routeKeys.join(','),
       ].join('|');
     }).toList()..sort();
@@ -20311,6 +20540,8 @@ class MessengerController extends ChangeNotifier {
         profile.signingPublicKeyBase64 ?? '',
         profile.irohEndpointId ?? '',
         profile.capabilities.map((kind) => kind.name).join(','),
+        profile.featureCapabilityVersion.toString(),
+        profile.featureCapabilities.map((feature) => feature.name).join(','),
         routeKeys.join(','),
       ].join('|');
     }).toList()..sort();
