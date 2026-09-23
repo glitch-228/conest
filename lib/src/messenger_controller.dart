@@ -1297,6 +1297,20 @@ class MessengerController extends ChangeNotifier {
   void _resumePendingTransfersAfterForeground({
     bool reconnectOutbound = false,
   }) {
+    if (reconnectOutbound) {
+      // Retry timers can be suspended with the app while their route and
+      // exponential backoff continue ageing. Drop that stale delay on return:
+      // active sends are restarted below, and queued sends become runnable
+      // immediately instead of inheriting a minutes-long background retry.
+      for (final state in _outboundAttachments.values) {
+        if (state.paused) continue;
+        final attachmentId = state.descriptor.id;
+        _outboundRetryTimers.remove(attachmentId)?.cancel();
+        state
+          ..autoRetries = 0
+          ..nextRetryAt = null;
+      }
+    }
     for (final state in _inboundAttachments.values.toList(growable: false)) {
       if (state.paused ||
           state.finalizing ||
