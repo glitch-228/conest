@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -87,10 +89,38 @@ val conestAndroidTargets =
         .map { it.trim() }
         .filter { it.isNotEmpty() }
 
+val conestAndroidSdk =
+    providers.environmentVariable("ANDROID_SDK_ROOT").orNull
+        ?: providers.environmentVariable("ANDROID_HOME").orNull
+        ?: run {
+            val localPropertiesFile = rootProject.file("local.properties")
+            if (!localPropertiesFile.isFile) {
+                null
+            } else {
+                val localProperties = Properties()
+                localPropertiesFile.inputStream().use { input ->
+                    localProperties.load(input)
+                }
+                localProperties.getProperty("sdk.dir")
+            }
+        }
+val conestAndroidNdkHome =
+    providers.environmentVariable("ANDROID_NDK_HOME").orNull
+        ?: providers.environmentVariable("ANDROID_NDK_ROOT").orNull
+        ?: conestAndroidSdk?.let { sdk ->
+            File(sdk, "ndk/${android.ndkVersion}").takeIf { it.isDirectory }?.absolutePath
+        }
+
 val buildConestNative by tasks.registering(Exec::class) {
     val repositoryRoot = rootProject.projectDir.parentFile
     val outputDirectory = layout.buildDirectory.dir("conestNativeJniLibs")
     workingDir(repositoryRoot)
+    if (conestAndroidNdkHome != null) {
+        // opusic-sys needs the NDK root for its bundled CMake build. cargo-ndk
+        // can locate the NDK independently but does not expose this variable
+        // to dependency build scripts on every supported version.
+        environment("ANDROID_NDK_HOME", conestAndroidNdkHome)
+    }
     commandLine(
         buildList {
             add("cargo")

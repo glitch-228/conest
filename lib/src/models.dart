@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 
 import 'transport_models.dart';
 import 'group_file_manifest.dart';
+import 'feature_models.dart';
+
+export 'feature_models.dart';
 
 export 'transport_models.dart';
 
@@ -1928,6 +1931,10 @@ class ChatMessage {
     this.replySenderDisplayName,
     this.attachment,
     this.groupFile,
+    this.poll,
+    this.pollVote,
+    this.pollClosed = false,
+    Map<String, String>? pollClosedCheckpoint,
     this.groupHistoryLamport,
     this.groupHistoryAuthorDeviceId,
     this.groupHistorySequence,
@@ -1949,6 +1956,9 @@ class ChatMessage {
        }),
        reactionClocks = Map.unmodifiable(
          reactionClocks ?? const <String, DateTime>{},
+       ),
+       pollClosedCheckpoint = Map.unmodifiable(
+         pollClosedCheckpoint ?? const <String, String>{},
        );
 
   final String id;
@@ -1976,6 +1986,16 @@ class ChatMessage {
 
   /// Signed group event ID is [id]; bytes may come from any authorized provider.
   final GroupFileManifest? groupFile;
+
+  /// Optional signed group poll payload carried by a normal message event.
+  /// Older clients render the accompanying [body] fallback text.
+  final PollDefinition? poll;
+  final PollVote? pollVote;
+  final bool pollClosed;
+
+  /// Latest vote event per voter known to the creator when closing the poll.
+  /// A later-arriving vote outside this signed checkpoint stays unconfirmed.
+  final Map<String, String> pollClosedCheckpoint;
 
   /// Stable journal ordering metadata for projected group history. The
   /// displayed [createdAt] remains the author's timestamp, while these fields
@@ -2022,6 +2042,10 @@ class ChatMessage {
     String? replySenderDisplayName,
     AttachmentDescriptor? attachment,
     bool clearAttachment = false,
+    PollDefinition? poll,
+    PollVote? pollVote,
+    bool? pollClosed,
+    Map<String, String>? pollClosedCheckpoint,
     int? groupHistoryLamport,
     String? groupHistoryAuthorDeviceId,
     int? groupHistorySequence,
@@ -2054,6 +2078,10 @@ class ChatMessage {
           replySenderDisplayName ?? this.replySenderDisplayName,
       attachment: clearAttachment ? null : (attachment ?? this.attachment),
       groupFile: groupFile,
+      poll: poll ?? this.poll,
+      pollVote: pollVote ?? this.pollVote,
+      pollClosed: pollClosed ?? this.pollClosed,
+      pollClosedCheckpoint: pollClosedCheckpoint ?? this.pollClosedCheckpoint,
       groupHistoryLamport: groupHistoryLamport ?? this.groupHistoryLamport,
       groupHistoryAuthorDeviceId:
           groupHistoryAuthorDeviceId ?? this.groupHistoryAuthorDeviceId,
@@ -2089,6 +2117,11 @@ class ChatMessage {
       'replySenderDisplayName': replySenderDisplayName,
       if (attachment != null) 'attachment': attachment!.toJson(),
       if (groupFile != null) 'groupFile': groupFile!.toPayload(),
+      if (poll != null) 'poll': poll!.toJson(),
+      if (pollVote != null) 'pollVote': pollVote!.toJson(),
+      if (pollClosed) 'pollClosed': true,
+      if (pollClosedCheckpoint.isNotEmpty || pollClosed)
+        'pollClosedCheckpoint': pollClosedCheckpoint,
       if (groupHistoryLamport != null)
         'groupHistoryLamport': groupHistoryLamport,
       if (groupHistoryAuthorDeviceId != null)
@@ -2160,6 +2193,16 @@ class ChatMessage {
               json['groupFile'] as Map<String, dynamic>,
             )
           : null,
+      poll: json['poll'] is Map<String, dynamic>
+          ? PollDefinition.fromJson(json['poll'] as Map<String, dynamic>)
+          : null,
+      pollVote: json['pollVote'] is Map<String, dynamic>
+          ? PollVote.fromJson(json['pollVote'] as Map<String, dynamic>)
+          : null,
+      pollClosed: json['pollClosed'] == true,
+      pollClosedCheckpoint: (json['pollClosedCheckpoint'] as Map?)?.map(
+        (key, value) => MapEntry(key as String, value as String),
+      ),
       groupHistoryLamport: json['groupHistoryLamport'] as int?,
       groupHistoryAuthorDeviceId: json['groupHistoryAuthorDeviceId'] as String?,
       groupHistorySequence: json['groupHistorySequence'] as int?,
@@ -2746,6 +2789,7 @@ class AttachmentDescriptor {
     this.noncePrefixBase64 = '',
     this.presentation = AttachmentPresentation.media,
     this.thumbnailBase64,
+    this.voiceMetadata,
   });
 
   final String id;
@@ -2765,6 +2809,7 @@ class AttachmentDescriptor {
   final String noncePrefixBase64;
   final AttachmentPresentation presentation;
   final String? thumbnailBase64;
+  final VoiceMessageMetadata? voiceMetadata;
 
   int get effectiveChunkCount =>
       chunkCount > 0 ? chunkCount : chunkHashes.length;
@@ -2783,6 +2828,7 @@ class AttachmentDescriptor {
       if (noncePrefixBase64.isNotEmpty) 'noncePrefixBase64': noncePrefixBase64,
       'presentation': presentation.name,
       if (thumbnailBase64 != null) 'thumbnailBase64': thumbnailBase64,
+      if (voiceMetadata != null) 'voiceMetadata': voiceMetadata!.toJson(),
       'encryptionKeyBase64': encryptionKeyBase64,
       'createdAt': createdAt.toIso8601String(),
     };
@@ -2809,6 +2855,11 @@ class AttachmentDescriptor {
               .firstOrNull ??
           AttachmentPresentation.media,
       thumbnailBase64: json['thumbnailBase64'] as String?,
+      voiceMetadata: json['voiceMetadata'] is Map<String, dynamic>
+          ? VoiceMessageMetadata.fromJson(
+              json['voiceMetadata'] as Map<String, dynamic>,
+            )
+          : null,
       encryptionKeyBase64: json['encryptionKeyBase64'] as String,
       createdAt: DateTime.parse(json['createdAt'] as String),
     );
@@ -3285,7 +3336,8 @@ enum PendingAckKind {
   debugProbe,
   debugProbeAck,
   debugTwoWayMessage,
-  debugTwoWayReply;
+  debugTwoWayReply,
+  voiceCallSignal;
 
   String get wireValue => name;
 
@@ -3611,6 +3663,8 @@ class VaultSnapshot {
     this.transferSessions = const <TransferSession>[],
     this.attachmentCacheReferences = const <AttachmentCacheReference>[],
     this.groupFilePreferences = const <GroupFilePreference>[],
+    this.chatFolders = const <ChatFolder>[],
+    this.scheduledMessages = const <ScheduledMessage>[],
   });
 
   final IdentityRecord? identity;
@@ -3684,6 +3738,8 @@ class VaultSnapshot {
   final List<TransferSession> transferSessions;
   final List<AttachmentCacheReference> attachmentCacheReferences;
   final List<GroupFilePreference> groupFilePreferences;
+  final List<ChatFolder> chatFolders;
+  final List<ScheduledMessage> scheduledMessages;
 
   factory VaultSnapshot.empty() {
     return VaultSnapshot(
@@ -3707,6 +3763,8 @@ class VaultSnapshot {
       pendingContactRequests: const <PendingContactRequest>[],
       transferSessions: const <TransferSession>[],
       attachmentCacheReferences: const <AttachmentCacheReference>[],
+      chatFolders: const <ChatFolder>[],
+      scheduledMessages: const <ScheduledMessage>[],
     );
   }
 
@@ -3732,6 +3790,8 @@ class VaultSnapshot {
     List<TransferSession>? transferSessions,
     List<AttachmentCacheReference>? attachmentCacheReferences,
     List<GroupFilePreference>? groupFilePreferences,
+    List<ChatFolder>? chatFolders,
+    List<ScheduledMessage>? scheduledMessages,
     bool clearIdentity = false,
   }) {
     return VaultSnapshot(
@@ -3765,6 +3825,8 @@ class VaultSnapshot {
       attachmentCacheReferences:
           attachmentCacheReferences ?? this.attachmentCacheReferences,
       groupFilePreferences: groupFilePreferences ?? this.groupFilePreferences,
+      chatFolders: chatFolders ?? this.chatFolders,
+      scheduledMessages: scheduledMessages ?? this.scheduledMessages,
     );
   }
 
@@ -3814,6 +3876,10 @@ class VaultSnapshot {
       'groupFilePreferences': groupFilePreferences
           .map((entry) => entry.toJson())
           .toList(),
+      'chatFolders': chatFolders.map((entry) => entry.toJson()).toList(),
+      'scheduledMessages': scheduledMessages
+          .map((entry) => entry.toJson())
+          .toList(),
     };
   }
 
@@ -3834,6 +3900,15 @@ class VaultSnapshot {
           (json['groupFilePreferences'] as List<dynamic>? ?? const [])
               .cast<Map<String, dynamic>>()
               .map(GroupFilePreference.fromJson)
+              .toList(),
+      chatFolders: (json['chatFolders'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(ChatFolder.fromJson)
+          .toList(),
+      scheduledMessages:
+          (json['scheduledMessages'] as List<dynamic>? ?? const [])
+              .whereType<Map<String, dynamic>>()
+              .map(ScheduledMessage.fromJson)
               .toList(),
       contacts: (json['contacts'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>()

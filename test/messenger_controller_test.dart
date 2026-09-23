@@ -1139,12 +1139,15 @@ class _InProcessIrohBridge implements NativeIrohBridge {
   Future<void> close() => _inbound.close();
 }
 
-Future<void> _waitForIroh(bool Function() ready) async {
+Future<void> _waitForIroh(
+  bool Function() ready, {
+  String reason = 'Iroh delivery did not finish',
+}) async {
   final deadline = DateTime.now().add(const Duration(seconds: 5));
   while (!ready() && DateTime.now().isBefore(deadline)) {
     await Future<void>.delayed(const Duration(milliseconds: 10));
   }
-  expect(ready(), isTrue, reason: 'Iroh delivery did not finish');
+  expect(ready(), isTrue, reason: reason);
 }
 
 const _irohOnlyConnectivity = GlobalConnectivityPreferences(
@@ -2263,6 +2266,105 @@ void main() {
       },
     );
   }
+
+  test(
+    'signed group polls converge and freeze the creator checkpoint',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        internetRelayHost: null,
+        transportRegistryFactory: network.registry,
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        internetRelayHost: null,
+        transportRegistryFactory: network.registry,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await alice.addContactFromInvite(
+        alias: bob.identity!.displayName,
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await _waitForIroh(() => bob.pendingContactRequests.isNotEmpty);
+      await bob.approvePendingContactRequest(
+        bob.pendingContactRequests.single.id,
+      );
+      final bobContact = alice.contacts.single;
+      final group = await alice.createGroup(
+        title: 'Poll delivery',
+        members: <ContactRecord>[bobContact],
+      );
+      await _waitForIroh(
+        () =>
+            bob.groups.any((candidate) => candidate.groupId == group.groupId) &&
+            alice.pendingGroupMembershipDeliveries.isEmpty,
+        reason: 'group membership delivery',
+      );
+
+      await alice.createGroupPoll(
+        groupId: group.groupId,
+        question: 'Choose one',
+        options: const <String>['First', 'Second'],
+      );
+      await _waitForIroh(
+        () => bob
+            .messagesForGroup(group.groupId)
+            .any((message) => message.poll?.question == 'Choose one'),
+        reason: 'poll delivery',
+      );
+      final poll = bob
+          .messagesForGroup(group.groupId)
+          .singleWhere((message) => message.poll?.question == 'Choose one')
+          .poll!;
+
+      await bob.voteInGroupPoll(
+        groupId: group.groupId,
+        pollId: poll.id,
+        optionIndexes: const <int>[1],
+      );
+      await _waitForIroh(
+        () =>
+            alice
+                .groupPollProjection(group.groupId, poll.id)
+                ?.votes[bob.identity!.deviceId]
+                ?.optionIndexes
+                .join(',') ==
+            '1',
+        reason: 'vote delivery',
+      );
+      await alice.closeGroupPoll(groupId: group.groupId, pollId: poll.id);
+      await _waitForIroh(
+        () =>
+            bob
+                .groupPollProjection(group.groupId, poll.id)
+                ?.definition
+                .isClosed ==
+            true,
+        reason: 'close checkpoint delivery',
+      );
+
+      final closed = bob.groupPollProjection(group.groupId, poll.id)!;
+      expect(closed.definition.isClosed, isTrue);
+      expect(closed.counts(), <int>[0, 1]);
+      await expectLater(
+        bob.voteInGroupPoll(
+          groupId: group.groupId,
+          pollId: poll.id,
+          optionIndexes: const <int>[0],
+        ),
+        throwsStateError,
+      );
+    },
+    timeout: const Timeout(Duration(seconds: 20)),
+  );
 
   test(
     'Iroh group history crosses partitions through a group-only carrier',
@@ -8823,6 +8925,8 @@ void main() {
     );
     // Drop the relay copy so a background poll can't add a third delivery.
     relayClient._queues[bob.identity!.deviceId]?.clear();
+    var receivedUiNotifications = 0;
+    bob.addListener(() => receivedUiNotifications++);
 
     final processed = await Future.wait([
       bob.processEnvelopesForTesting([envelope]),
@@ -8839,6 +8943,11 @@ void main() {
           .where((message) => message.id == envelope.messageId)
           .length,
       1,
+    );
+    expect(
+      receivedUiNotifications,
+      greaterThan(0),
+      reason: 'new inbound messages must refresh listeners for every ingress',
     );
     final ackIds = relayClient.storedEnvelopes
         .where(
@@ -9276,6 +9385,112 @@ void main() {
             .toList();
         expect(positions.where((p) => p == 0).length, greaterThanOrEqualTo(1));
       },
+    );
+
+    test(
+      'a second small attachment can bypass a stalled small transfer',
+      () async {
+        final relayClient = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final bobContact = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+        final revisionBeforeSend = alice.conversationRevision.value;
+
+        await alice.sendAttachment(
+          contact: bobContact,
+          bytes: Uint8List.fromList(List<int>.filled(1024, 1)),
+          fileName: 'first.bin',
+        );
+        await alice.sendAttachment(
+          contact: bobContact,
+          bytes: Uint8List.fromList(List<int>.filled(1024, 2)),
+          fileName: 'photo.png',
+        );
+
+        // Bob has not polled the offers, so neither attachment has completed.
+        // Both remain active, proving the small item did not wait behind the
+        // first one. A third item remains queued by the per-contact bound.
+        final active = alice
+            .messagesFor(bobContact.deviceId)
+            .where((message) => message.outbound && message.attachment != null)
+            .where(
+              (message) =>
+                  alice.outboundAttachmentProgress(message.attachment!.id) !=
+                  null,
+            )
+            .toList();
+        expect(active.length, 2);
+        expect(
+          alice.conversationRevision.value,
+          greaterThan(revisionBeforeSend),
+        );
+
+        await alice.sendAttachment(
+          contact: bobContact,
+          bytes: Uint8List.fromList(List<int>.filled(1024, 3)),
+          fileName: 'third.bin',
+        );
+        final third = alice
+            .messagesFor(bobContact.deviceId)
+            .singleWhere(
+              (message) => message.attachment?.fileName == 'third.bin',
+            );
+        expect(
+          alice.outboundQueuePositionFor(third.attachment!.id),
+          greaterThan(0),
+        );
+      },
+      timeout: const Timeout(Duration(seconds: 20)),
+    );
+
+    test(
+      'resuming after backgrounding restarts the active transfer promptly',
+      () async {
+        var now = DateTime.utc(2026, 9, 23, 12);
+        final relayClient = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+          nowProvider: () => now,
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final bobContact = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+
+        await alice.sendAttachment(
+          contact: bobContact,
+          bytes: Uint8List.fromList(List<int>.filled(1024, 5)),
+          fileName: 'resume.bin',
+        );
+        final message = alice
+            .messagesFor(bobContact.deviceId)
+            .singleWhere((entry) => entry.attachment?.fileName == 'resume.bin');
+        final attachmentId = message.attachment!.id;
+
+        alice.setAppForegroundState(false);
+        now = now.add(const Duration(seconds: 4));
+        alice.setAppForegroundState(true);
+
+        final transfer = alice.transferSnapshots.singleWhere(
+          (entry) => entry.id == attachmentId,
+        );
+        expect(transfer.phase, TransferPhase.reconnecting);
+      },
+      timeout: const Timeout(Duration(seconds: 20)),
     );
   });
 
@@ -10533,175 +10748,169 @@ void main() {
       timeout: const Timeout(Duration(seconds: 90)),
     );
 
-    test(
-      'large transfer resumes missing chunks after both peers restart',
-      () async {
-        final sourceDir = Directory.systemTemp.createTempSync(
-          'conest_resume_source_',
-        );
-        final aliceRoot = Directory.systemTemp.createTempSync(
-          'conest_resume_alice_',
-        );
-        final bobRoot = Directory.systemTemp.createTempSync(
-          'conest_resume_bob_',
-        );
-        addTearDown(() {
-          for (final directory in [sourceDir, aliceRoot, bobRoot]) {
-            try {
-              directory.deleteSync(recursive: true);
-            } catch (_) {}
-          }
-        });
-        const size = MessengerController.maxAttachmentSizeBytes + 1024 * 1024;
-        final source = File(p.join(sourceDir.path, 'resume.bin'));
-        final sourceHandle = await source.open(mode: FileMode.write);
-        try {
-          await sourceHandle.setPosition(size - 1);
-          await sourceHandle.writeByte(0x7c);
-          await sourceHandle.flush();
-        } finally {
-          await sourceHandle.close();
+    test('large transfer resumes missing chunks after both peers restart', () async {
+      final sourceDir = Directory.systemTemp.createTempSync(
+        'conest_resume_source_',
+      );
+      final aliceRoot = Directory.systemTemp.createTempSync(
+        'conest_resume_alice_',
+      );
+      final bobRoot = Directory.systemTemp.createTempSync('conest_resume_bob_');
+      addTearDown(() {
+        for (final directory in [sourceDir, aliceRoot, bobRoot]) {
+          try {
+            directory.deleteSync(recursive: true);
+          } catch (_) {}
         }
+      });
+      const size = MessengerController.maxAttachmentSizeBytes + 1024 * 1024;
+      final source = File(p.join(sourceDir.path, 'resume.bin'));
+      final sourceHandle = await source.open(mode: FileMode.write);
+      try {
+        await sourceHandle.setPosition(size - 1);
+        await sourceHandle.writeByte(0x7c);
+        await sourceHandle.flush();
+      } finally {
+        await sourceHandle.close();
+      }
 
-        final relayClient = _FakeRelayClient();
-        final aliceVault = _MemoryVaultStore();
-        final bobVault = _MemoryVaultStore();
-        final aliceChannel = _InProcessLanDirectChannel(host: '192.168.52.10');
-        final bobChannel = _InProcessLanDirectChannel(host: '192.168.52.11')
-          ..rejectAfterAcceptedEnvelopes = 4;
-        var alice = await _createController(
-          relayClient: relayClient,
-          displayName: 'Alice',
-          lanAddresses: const ['192.168.52.10'],
-          lanDirectChannel: aliceChannel,
-          attachmentRootProvider: () async => aliceRoot,
-          vaultStore: aliceVault,
-        );
-        var bob = await _createController(
-          relayClient: relayClient,
-          displayName: 'Bob',
-          lanAddresses: const ['192.168.52.11'],
-          lanDirectChannel: bobChannel,
-          attachmentRootProvider: () async => bobRoot,
-          vaultStore: bobVault,
-        );
-        await _pairControllers(alice, bob);
-        final bobOnAlice = alice.contacts.firstWhere((c) => c.alias == 'Bob');
-        await alice.sendAttachmentSource(
-          contact: bobOnAlice,
-          source: StagedAttachment(
-            id: 'resume-source',
-            fileName: 'resume.bin',
-            mimeType: 'application/octet-stream',
-            sizeBytes: size,
-            filePath: source.path,
-          ),
-        );
+      final relayClient = _FakeRelayClient();
+      final aliceVault = _MemoryVaultStore();
+      final bobVault = _MemoryVaultStore();
+      final aliceChannel = _InProcessLanDirectChannel(host: '192.168.52.10');
+      final bobChannel = _InProcessLanDirectChannel(host: '192.168.52.11')
+        ..rejectAfterAcceptedEnvelopes = 4;
+      var alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        lanAddresses: const ['192.168.52.10'],
+        lanDirectChannel: aliceChannel,
+        attachmentRootProvider: () async => aliceRoot,
+        vaultStore: aliceVault,
+      );
+      var bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        lanAddresses: const ['192.168.52.11'],
+        lanDirectChannel: bobChannel,
+        attachmentRootProvider: () async => bobRoot,
+        vaultStore: bobVault,
+      );
+      await _pairControllers(alice, bob);
+      final bobOnAlice = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+      await alice.sendAttachmentSource(
+        contact: bobOnAlice,
+        source: StagedAttachment(
+          id: 'resume-source',
+          fileName: 'resume.bin',
+          mimeType: 'application/octet-stream',
+          sizeBytes: size,
+          filePath: source.path,
+        ),
+      );
 
-        for (var step = 0; step < 120; step++) {
-          await bob.pollNow();
-          await alice.pollNow();
-          final received = bob
-              .messagesFor(alice.identity!.deviceId)
-              .where((message) => message.attachment?.fileName == 'resume.bin')
-              .firstOrNull;
-          if (received != null &&
-              bob.attachmentAwaitingAcceptance(received.attachment!.id)) {
-            await bob.acceptIncomingAttachment(received.attachment!.id);
-          }
-          if (bobChannel.acceptedEnvelopes >= 4) break;
-          await Future<void>.delayed(const Duration(milliseconds: 20));
+      for (var step = 0; step < 120; step++) {
+        await bob.pollNow();
+        await alice.pollNow();
+        final received = bob
+            .messagesFor(alice.identity!.deviceId)
+            .where((message) => message.attachment?.fileName == 'resume.bin')
+            .firstOrNull;
+        if (received != null &&
+            bob.attachmentAwaitingAcceptance(received.attachment!.id)) {
+          await bob.acceptIncomingAttachment(received.attachment!.id);
         }
-        expect(bobChannel.acceptedEnvelopes, 4);
-        await Future<void>.delayed(const Duration(milliseconds: 2300));
-        final interrupted = await bobVault.load();
-        final interruptedSession = interrupted.transferSessions.single;
-        expect(interruptedSession.direction, TransferDirection.inbound);
-        expect(interruptedSession.completedChunks, isNotEmpty);
-        expect(
-          interruptedSession.completedChunks.length,
-          lessThan(interruptedSession.attachment.effectiveChunkCount),
-        );
+        if (bobChannel.acceptedEnvelopes >= 4) break;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(bobChannel.acceptedEnvelopes, 4);
+      await Future<void>.delayed(const Duration(milliseconds: 2300));
+      final interrupted = await bobVault.load();
+      final interruptedSession = interrupted.transferSessions.single;
+      expect(interruptedSession.direction, TransferDirection.inbound);
+      expect(interruptedSession.completedChunks, isNotEmpty);
+      expect(
+        interruptedSession.completedChunks.length,
+        lessThan(interruptedSession.attachment.effectiveChunkCount),
+      );
 
-        alice.dispose();
-        bob.dispose();
-        await aliceChannel.stop();
-        await bobChannel.stop();
+      alice.dispose();
+      bob.dispose();
+      await aliceChannel.stop();
+      await bobChannel.stop();
 
-        final resumedAliceChannel = _InProcessLanDirectChannel(
-          host: '192.168.52.10',
-        );
-        final resumedBobChannel = _InProcessLanDirectChannel(
-          host: '192.168.52.11',
-        );
-        addTearDown(resumedAliceChannel.stop);
-        addTearDown(resumedBobChannel.stop);
-        alice = await _createController(
-          relayClient: relayClient,
-          displayName: 'unused',
-          lanAddresses: const ['192.168.52.10'],
-          lanDirectChannel: resumedAliceChannel,
-          attachmentRootProvider: () async => aliceRoot,
-          vaultStore: aliceVault,
-          createIdentity: false,
-        );
-        bob = await _createController(
-          relayClient: relayClient,
-          displayName: 'unused',
-          lanAddresses: const ['192.168.52.11'],
-          lanDirectChannel: resumedBobChannel,
-          attachmentRootProvider: () async => bobRoot,
-          vaultStore: bobVault,
-          createIdentity: false,
-        );
-        addTearDown(alice.dispose);
-        addTearDown(bob.dispose);
-        alice.onConnectivityChanged(interfaceLabel: 'restart');
-        bob.onConnectivityChanged(interfaceLabel: 'restart');
+      final resumedAliceChannel = _InProcessLanDirectChannel(
+        host: '192.168.52.10',
+      );
+      final resumedBobChannel = _InProcessLanDirectChannel(
+        host: '192.168.52.11',
+      );
+      addTearDown(resumedAliceChannel.stop);
+      addTearDown(resumedBobChannel.stop);
+      alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'unused',
+        lanAddresses: const ['192.168.52.10'],
+        lanDirectChannel: resumedAliceChannel,
+        attachmentRootProvider: () async => aliceRoot,
+        vaultStore: aliceVault,
+        createIdentity: false,
+      );
+      bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'unused',
+        lanAddresses: const ['192.168.52.11'],
+        lanDirectChannel: resumedBobChannel,
+        attachmentRootProvider: () async => bobRoot,
+        vaultStore: bobVault,
+        createIdentity: false,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      alice.onConnectivityChanged(interfaceLabel: 'restart');
+      bob.onConnectivityChanged(interfaceLabel: 'restart');
 
-        ChatMessage? received;
-        for (var step = 0; step < 1200; step++) {
-          await alice.pollNow();
-          await bob.pollNow();
-          received = bob
-              .messagesFor(alice.identity!.deviceId)
-              .where((message) => message.attachment?.fileName == 'resume.bin')
-              .firstOrNull;
-          if (received?.state == DeliveryState.delivered &&
-              bob.attachmentAvailableLocally(received!.attachment!.id)) {
-            break;
-          }
-          await Future<void>.delayed(const Duration(milliseconds: 20));
+      ChatMessage? received;
+      for (var step = 0; step < 1200; step++) {
+        await alice.pollNow();
+        await bob.pollNow();
+        received = bob
+            .messagesFor(alice.identity!.deviceId)
+            .where((message) => message.attachment?.fileName == 'resume.bin')
+            .firstOrNull;
+        if (received?.state == DeliveryState.delivered &&
+            bob.attachmentAvailableLocally(received!.attachment!.id)) {
+          break;
         }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
 
-        expect(received, isNotNull);
-        expect(
-          received!.state,
-          DeliveryState.delivered,
-          reason:
-              'resumedBobAccepted=${resumedBobChannel.acceptedEnvelopes}; '
-              'resumedAliceAccepted=${resumedAliceChannel.acceptedEnvelopes}; '
-              'inbound=${bob.inboundTransferDebugForTesting(received.attachment!.id)}; '
-              'bob=${bob.transferSnapshots.map((s) => '${s.phase.name}:${s.bytesTransferred}/${s.totalBytes}:${s.error}').join(',')}; '
-              'alice=${alice.transferSnapshots.map((s) => '${s.phase.name}:${s.bytesTransferred}/${s.totalBytes}:${s.error}').join(',')}; '
-              'bobLog=${bob.recentDebugLog.reversed.take(8).join(' | ')}; '
-              'aliceLog=${alice.recentDebugLog.reversed.take(8).join(' | ')}',
-        );
-        final cachePath = await bob.attachmentCachePathFor(
-          received.attachment!.id,
-        );
-        expect(cachePath, isNotNull);
-        expect(await File(cachePath!).length(), size);
-        expect(
-          relayClient.storedEnvelopes.where(
-            (envelope) => envelope.kind == 'attachment_chunk',
-          ),
-          isEmpty,
-          reason: 'large restart-resume bytes must remain LAN-only',
-        );
-      },
-      timeout: const Timeout(Duration(seconds: 120)),
-    );
+      expect(received, isNotNull);
+      expect(
+        received!.state,
+        DeliveryState.delivered,
+        reason:
+            'resumedBobAccepted=${resumedBobChannel.acceptedEnvelopes}; '
+            'resumedAliceAccepted=${resumedAliceChannel.acceptedEnvelopes}; '
+            'inbound=${bob.inboundTransferDebugForTesting(received.attachment!.id)}; '
+            'bob=${bob.transferSnapshots.map((s) => '${s.phase.name}:${s.bytesTransferred}/${s.totalBytes}:${s.error}').join(',')}; '
+            'alice=${alice.transferSnapshots.map((s) => '${s.phase.name}:${s.bytesTransferred}/${s.totalBytes}:${s.error}').join(',')}; '
+            'bobLog=${bob.recentDebugLog.reversed.take(8).join(' | ')}; '
+            'aliceLog=${alice.recentDebugLog.reversed.take(8).join(' | ')}',
+      );
+      final cachePath = await bob.attachmentCachePathFor(
+        received.attachment!.id,
+      );
+      expect(cachePath, isNotNull);
+      expect(await File(cachePath!).length(), size);
+      expect(
+        relayClient.storedEnvelopes.where(
+          (envelope) => envelope.kind == 'attachment_chunk',
+        ),
+        isEmpty,
+        reason: 'large restart-resume bytes must remain LAN-only',
+      );
+    }, timeout: const Timeout(Duration(seconds: 120)));
   });
 
   group('native direct-Iroh attachment certification', () {
@@ -10977,62 +11186,58 @@ void main() {
   });
 
   group('nightly.9 album bulk actions + retry', () {
-    test(
-      'deleteAlbum removes every member tagged with that albumId',
-      () async {
-        final relayClient = _FakeRelayClient();
-        final alice = await _createController(
-          relayClient: relayClient,
-          displayName: 'Alice',
-        );
-        final bob = await _createController(
-          relayClient: relayClient,
-          displayName: 'Bob',
-        );
-        addTearDown(alice.dispose);
-        addTearDown(bob.dispose);
-        await _pairControllers(alice, bob);
-        final bobOnAlice = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+    test('deleteAlbum removes every member tagged with that albumId', () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobOnAlice = alice.contacts.firstWhere((c) => c.alias == 'Bob');
 
-        final albumId = alice.newAlbumId();
-        // Three tiny attachments, all in the same album.
-        for (var i = 0; i < 3; i++) {
-          final payload = Uint8List.fromList(
-            List<int>.generate(64, (j) => (i * 7 + j) & 0xff),
-          );
-          await alice.sendAttachment(
-            contact: bobOnAlice,
-            bytes: payload,
-            fileName: 'a$i.bin',
-            albumId: albumId,
-          );
-        }
-        // A standalone message that must NOT be deleted.
-        await alice.sendMessage(contact: bobOnAlice, body: 'standalone');
-
-        final beforeDelete = alice.messagesFor(bobOnAlice.deviceId);
-        expect(
-          beforeDelete.where((m) => m.albumId == albumId).length,
-          3,
-          reason: 'three album members seeded',
+      final albumId = alice.newAlbumId();
+      // Three tiny attachments, all in the same album.
+      for (var i = 0; i < 3; i++) {
+        final payload = Uint8List.fromList(
+          List<int>.generate(64, (j) => (i * 7 + j) & 0xff),
         );
-
-        await alice.deleteAlbum(albumId);
-
-        final afterDelete = alice.messagesFor(bobOnAlice.deviceId);
-        expect(
-          afterDelete.where((m) => m.albumId == albumId),
-          isEmpty,
-          reason: 'all album members removed',
+        await alice.sendAttachment(
+          contact: bobOnAlice,
+          bytes: payload,
+          fileName: 'a$i.bin',
+          albumId: albumId,
         );
-        expect(
-          afterDelete.where((m) => m.body == 'standalone').length,
-          1,
-          reason: 'standalone message untouched',
-        );
-      },
-      timeout: const Timeout(Duration(seconds: 20)),
-    );
+      }
+      // A standalone message that must NOT be deleted.
+      await alice.sendMessage(contact: bobOnAlice, body: 'standalone');
+
+      final beforeDelete = alice.messagesFor(bobOnAlice.deviceId);
+      expect(
+        beforeDelete.where((m) => m.albumId == albumId).length,
+        3,
+        reason: 'three album members seeded',
+      );
+
+      await alice.deleteAlbum(albumId);
+
+      final afterDelete = alice.messagesFor(bobOnAlice.deviceId);
+      expect(
+        afterDelete.where((m) => m.albumId == albumId),
+        isEmpty,
+        reason: 'all album members removed',
+      );
+      expect(
+        afterDelete.where((m) => m.body == 'standalone').length,
+        1,
+        reason: 'standalone message untouched',
+      );
+    }, timeout: const Timeout(Duration(seconds: 20)));
 
     test(
       'retryAttachment on a Failed bubble resets state + flips to pending',

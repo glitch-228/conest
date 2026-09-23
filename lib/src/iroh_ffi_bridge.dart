@@ -32,8 +32,39 @@ typedef _SendDart =
       int,
       bool,
     );
+typedef _SendDatagramNative =
+    Pointer<Utf8> Function(
+      Uint64,
+      Pointer<Utf8>,
+      Pointer<Uint8>,
+      UintPtr,
+      Bool,
+    );
+typedef _SendDatagramDart =
+    Pointer<Utf8> Function(int, Pointer<Utf8>, Pointer<Uint8>, int, bool);
 typedef _NextNative = Pointer<Utf8> Function(Uint64);
 typedef _NextDart = Pointer<Utf8> Function(int);
+
+_SendDatagramDart? _optionalDatagramSender(DynamicLibrary library) {
+  try {
+    return library.lookupFunction<_SendDatagramNative, _SendDatagramDart>(
+      'conest_iroh_send_datagram',
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+_NextDart? _optionalDatagramReader(DynamicLibrary library) {
+  try {
+    return library.lookupFunction<_NextNative, _NextDart>(
+      'conest_iroh_next_datagram',
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
 typedef _CloseNative = Void Function(Uint64);
 typedef _CloseDart = void Function(int);
 typedef _ErrorNative = Pointer<Utf8> Function();
@@ -61,12 +92,16 @@ class _NativeIrohBindings {
       ),
       freeString = library.lookupFunction<_FreeNative, _FreeDart>(
         'conest_string_free',
-      );
+      ),
+      sendDatagram = _optionalDatagramSender(library),
+      nextDatagram = _optionalDatagramReader(library);
 
   final _StartDart start;
   final _StatusDart status;
   final _SendDart send;
   final _NextDart next;
+  final _SendDatagramDart? sendDatagram;
+  final _NextDart? nextDatagram;
   final _CloseDart close;
   final _ErrorDart lastError;
   final _FreeDart freeString;
@@ -95,7 +130,7 @@ class _NativeIrohBindings {
 /// Loads the platform `conest_native` library and presents the narrow bridge
 /// expected by [IrohTransportAdapter]. Network calls run off the Flutter UI
 /// isolate; inbound delivery is a bounded non-blocking native queue.
-class FfiNativeIrohBridge implements NativeIrohBridge {
+class FfiNativeIrohBridge implements NativeIrohDatagramBridge {
   FfiNativeIrohBridge._(this._libraryPath);
 
   // Matches the direct attachment range window: enough parallel QUIC streams
@@ -110,11 +145,14 @@ class FfiNativeIrohBridge implements NativeIrohBridge {
   final String _libraryPath;
   final StreamController<IrohBridgeInbound> _inbound =
       StreamController<IrohBridgeInbound>.broadcast();
+  final StreamController<IrohBridgeDatagram> _datagrams =
+      StreamController<IrohBridgeDatagram>.broadcast();
   int? _handle;
   Timer? _poller;
   bool _polling = false;
   final List<Isolate> _sendWorkerIsolates = <Isolate>[];
   final List<SendPort> _sendWorkerPorts = <SendPort>[];
+  final Set<int> _busyDatagramWorkers = <int>{};
   int _nextSendWorker = 0;
 
   static FfiNativeIrohBridge? tryCreate() {
@@ -133,6 +171,9 @@ class FfiNativeIrohBridge implements NativeIrohBridge {
 
   @override
   Stream<IrohBridgeInbound> get inbound => _inbound.stream;
+
+  @override
+  Stream<IrohBridgeDatagram> get datagrams => _datagrams.stream;
 
   @override
   Future<IrohBridgeStatus> start({
@@ -217,6 +258,68 @@ class FfiNativeIrohBridge implements NativeIrohBridge {
     }
   }
 
+  @override
+  Future<IrohBridgeReceipt> sendDatagram({
+    required String remoteEndpointId,
+    required Uint8List bytes,
+    required bool allowRelay,
+  }) async {
+    final handle = _handle;
+    if (handle == null) throw StateError('Iroh bridge is not running.');
+    if (bytes.isEmpty || bytes.length > 1200) {
+      throw ArgumentError('Iroh media datagrams must be 1–1200 bytes.');
+    }
+    if (_sendWorkerPorts.isEmpty) {
+      throw StateError('Iroh send workers are not running.');
+    }
+    int? workerIndex;
+    for (var offset = 0; offset < _sendWorkerCount; offset++) {
+      final candidate = (_nextSendWorker + offset) % _sendWorkerCount;
+      if (_busyDatagramWorkers.add(candidate)) {
+        workerIndex = candidate;
+        _nextSendWorker = (candidate + 1) % _sendWorkerCount;
+        break;
+      }
+    }
+    if (workerIndex == null) {
+      throw StateError('Voice datagram workers are busy; dropping this frame.');
+    }
+    final reply = ReceivePort();
+    final response = reply.first;
+    _sendWorkerPorts[workerIndex].send(<Object?>[
+      reply.sendPort,
+      handle,
+      'sendDatagram',
+      remoteEndpointId,
+      TransferableTypedData.fromList(<Uint8List>[bytes]),
+      allowRelay,
+    ]);
+    unawaited(
+      response.then<void>((_) {
+        _busyDatagramWorkers.remove(workerIndex);
+        reply.close();
+      }, onError: (Object _) {
+        _busyDatagramWorkers.remove(workerIndex);
+        reply.close();
+      }),
+    );
+    final result = await response.timeout(const Duration(milliseconds: 40));
+    if (result is! List<Object?> || result.length < 2 || result.first != true) {
+      throw StateError(
+        result is List<Object?> && result.length > 1
+            ? result[1].toString()
+            : 'Iroh voice datagram send failed.',
+      );
+    }
+    final value = (result[1] as Map<Object?, Object?>)
+        .cast<String, dynamic>();
+    return IrohBridgeReceipt(
+      endpointId: value['endpoint_id'] as String,
+      relayed: value['path'] == 'Relayed',
+      accepted: value['accepted'] as bool? ?? false,
+    );
+  }
+
   Future<void> _replaceTimedOutSendWorker(
     int workerIndex,
     SendPort timedOutPort,
@@ -267,6 +370,34 @@ class FfiNativeIrohBridge implements NativeIrohBridge {
             ),
           );
         }
+        final datagramReply = ReceivePort();
+        try {
+          _sendWorkerPorts.last.send(<Object?>[
+            datagramReply.sendPort,
+            handle,
+            'datagrams',
+          ]);
+          final datagramResult =
+              await datagramReply.first.timeout(const Duration(seconds: 5))
+                  as List<Object?>;
+          if (datagramResult[0] != true) {
+            throw StateError(datagramResult[1] as String);
+          }
+          for (final entry in datagramResult[1] as List) {
+            final value = entry as List;
+            _datagrams.add(
+              IrohBridgeDatagram(
+                senderEndpointId: value[0] as String,
+                bytes: (value[1] as TransferableTypedData)
+                    .materialize()
+                    .asUint8List(),
+                relayed: value[2] as bool,
+              ),
+            );
+          }
+        } finally {
+          datagramReply.close();
+        }
       } finally {
         reply.close();
       }
@@ -288,6 +419,7 @@ class FfiNativeIrohBridge implements NativeIrohBridge {
       final libraryPath = _libraryPath;
       await Isolate.run(() => _closeNative(libraryPath, handle));
     }
+    await _datagrams.close();
   }
 
   Future<void> _stopSendWorkers() async {
@@ -375,16 +507,30 @@ void _irohSendWorkerMain(List<Object?> startup) {
       return;
     }
     try {
-      if (message.length == 2) {
+      if (message.length == 2 ||
+          (message.length == 3 && message[2] == 'datagrams')) {
         reply.send(<Object?>[
           true,
-          _drainNativeInbound(bindings, message[1] as int),
+          message.length == 2
+              ? _drainNativeInbound(bindings, message[1] as int)
+              : _drainNativeDatagrams(bindings, message[1] as int),
         ]);
         return;
       }
       final bytes = (message[4] as TransferableTypedData)
           .materialize()
           .asUint8List();
+      if (message.length >= 6 && message[2] == 'sendDatagram') {
+        final value = _sendDatagramWithBindings(
+          bindings,
+          message[1] as int,
+          message[3] as String,
+          bytes,
+          message[5] as bool,
+        );
+        reply.send(<Object?>[true, value]);
+        return;
+      }
       final value = _sendNativeWithBindings(
         bindings,
         message[1] as int,
@@ -458,6 +604,33 @@ Map<String, dynamic> _sendNativeWithBindings(
   }
 }
 
+Map<String, dynamic> _sendDatagramWithBindings(
+  _NativeIrohBindings bindings,
+  int handle,
+  String endpoint,
+  Uint8List bytes,
+  bool allowRelay,
+) {
+  final sender = bindings.sendDatagram;
+  if (sender == null) {
+    throw StateError('This native Iroh build has no datagram support.');
+  }
+  final endpointPointer = endpoint.toNativeUtf8();
+  final bytesPointer = calloc<Uint8>(bytes.length);
+  try {
+    bytesPointer.asTypedList(bytes.length).setAll(0, bytes);
+    final value = _decodeObject(
+      bindings.takeString(
+        sender(handle, endpointPointer, bytesPointer, bytes.length, allowRelay),
+      ),
+    );
+    return value;
+  } finally {
+    calloc.free(endpointPointer);
+    calloc.free(bytesPointer);
+  }
+}
+
 void _closeNative(String libraryPath, int handle) {
   _NativeIrohBindings(DynamicLibrary.open(libraryPath)).close(handle);
 }
@@ -489,6 +662,29 @@ List<List<Object?>> _drainNativeInbound(
   var bytes = 0;
   for (var count = 0; count < 8 && bytes < 8 * 1024 * 1024; count++) {
     final pointer = bindings.next(handle);
+    if (pointer == nullptr) break;
+    final value = _decodeObject(bindings.takeString(pointer));
+    final payload = base64Decode(value['bytesBase64'] as String);
+    bytes += payload.length;
+    batch.add([
+      value['senderEndpointId'] as String,
+      TransferableTypedData.fromList([payload]),
+      value['relayed'] as bool? ?? false,
+    ]);
+  }
+  return batch;
+}
+
+List<List<Object?>> _drainNativeDatagrams(
+  _NativeIrohBindings bindings,
+  int handle,
+) {
+  final reader = bindings.nextDatagram;
+  if (reader == null) return const [];
+  final batch = <List<Object?>>[];
+  var bytes = 0;
+  for (var count = 0; count < 32 && bytes < 64 * 1024; count++) {
+    final pointer = reader(handle);
     if (pointer == nullptr) break;
     final value = _decodeObject(bindings.takeString(pointer));
     final payload = base64Decode(value['bytesBase64'] as String);

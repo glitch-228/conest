@@ -9,6 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use bytes::Bytes;
 use flutter_rust_bridge::frb;
 use iroh::{
     Endpoint, EndpointAddr, EndpointId, RelayMap, RelayMode, SecretKey,
@@ -54,11 +55,20 @@ pub struct NativeInboundEnvelope {
     pub path: NativePathKind,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NativeInboundDatagram {
+    pub sender_endpoint_id: String,
+    pub bytes: Vec<u8>,
+    pub path: NativePathKind,
+}
+
 #[frb(opaque)]
 pub struct NativeTransport {
     endpoint: Endpoint,
     inbox: Arc<Mutex<mpsc::Receiver<NativeInboundEnvelope>>>,
     inbox_tx: mpsc::Sender<NativeInboundEnvelope>,
+    datagram_inbox: Arc<Mutex<mpsc::Receiver<NativeInboundDatagram>>>,
+    datagram_tx: mpsc::Sender<NativeInboundDatagram>,
     /// QUIC is designed to multiplex streams. Keeping the established
     /// connection here avoids a full discovery/NAT/TLS handshake for every
     /// message or attachment block.
@@ -121,16 +131,20 @@ impl NativeTransport {
 
     fn from_endpoint(endpoint: Endpoint, relay_enabled: bool) -> Self {
         let (inbox_tx, inbox_rx) = mpsc::channel(INBOX_CAPACITY);
+        let (datagram_tx, datagram_rx) = mpsc::channel(INBOX_CAPACITY);
         let connections = Arc::new(Mutex::new(HashMap::new()));
         tokio::spawn(run_accept_loop(
             endpoint.clone(),
             inbox_tx.clone(),
+            datagram_tx.clone(),
             Arc::clone(&connections),
         ));
         Self {
             endpoint,
             inbox: Arc::new(Mutex::new(inbox_rx)),
             inbox_tx,
+            datagram_inbox: Arc::new(Mutex::new(datagram_rx)),
+            datagram_tx,
             connections,
             connect_locks: Mutex::new(HashMap::new()),
             #[cfg(test)]
@@ -290,6 +304,7 @@ impl NativeTransport {
         tokio::spawn(run_connection(
             connection.clone(),
             self.inbox_tx.clone(),
+            self.datagram_tx.clone(),
             Arc::clone(&self.connections),
         ));
         Ok(connection)
@@ -356,8 +371,57 @@ impl NativeTransport {
         }
     }
 
+    /// Sends one bounded, lossy media datagram over the pooled Iroh path.
+    /// Audio callers should drop expired frames instead of retrying them.
+    #[frb]
+    pub async fn send_datagram(
+        &self,
+        remote_endpoint_id: String,
+        bytes: Vec<u8>,
+        allow_relay: bool,
+    ) -> Result<NativeDeliveryReceipt, String> {
+        if bytes.is_empty() || bytes.len() > 1200 {
+            return Err("Iroh media datagrams must be 1–1200 bytes.".to_owned());
+        }
+        let endpoint_id = EndpointId::from_str(&remote_endpoint_id)
+            .map_err(|error| format!("parse remote Iroh EndpointId: {error}"))?;
+        let connection = self
+            .connection_for(EndpointAddr::new(endpoint_id))
+            .await
+            .map_err(|error| format!("connect media datagram: {error:#}"))?;
+        let path = path_kind(&connection);
+        if (!self.relay_enabled || !allow_relay) && path == NativePathKind::Relayed {
+            return Err("Iroh relay path is disabled by policy.".to_owned());
+        }
+        let max = connection
+            .max_datagram_size()
+            .ok_or_else(|| "Iroh datagrams are unavailable on this path.".to_owned())?;
+        if bytes.len() > max {
+            return Err(format!(
+                "Iroh datagram exceeds negotiated MTU ({max} bytes)."
+            ));
+        }
+        connection
+            .send_datagram(Bytes::from(bytes))
+            .map_err(|error| format!("send Iroh media datagram: {error}"))?;
+        Ok(NativeDeliveryReceipt {
+            endpoint_id: endpoint_id.to_string(),
+            path,
+            accepted: true,
+        })
+    }
+
+    #[frb]
+    pub async fn next_datagram(&self) -> Option<NativeInboundDatagram> {
+        self.datagram_inbox.lock().await.recv().await
+    }
+
     pub(crate) async fn try_next_envelope(&self) -> Option<NativeInboundEnvelope> {
         self.inbox.lock().await.try_recv().ok()
+    }
+
+    pub(crate) async fn try_next_datagram(&self) -> Option<NativeInboundDatagram> {
+        self.datagram_inbox.lock().await.try_recv().ok()
     }
 
     #[frb]
@@ -370,10 +434,12 @@ impl NativeTransport {
 async fn run_accept_loop(
     endpoint: Endpoint,
     inbox: mpsc::Sender<NativeInboundEnvelope>,
+    datagrams: mpsc::Sender<NativeInboundDatagram>,
     connections: ConnectionPool,
 ) {
     while let Some(incoming) = endpoint.accept().await {
         let inbox = inbox.clone();
+        let datagrams = datagrams.clone();
         let connections = Arc::clone(&connections);
         tokio::spawn(async move {
             let Ok(Ok(connection)) = tokio::time::timeout(CONNECT_TIMEOUT, incoming).await else {
@@ -384,7 +450,7 @@ async fn run_accept_loop(
                 .lock()
                 .await
                 .insert(sender_endpoint, connection.clone());
-            run_connection(connection, inbox, connections).await;
+            run_connection(connection, inbox, datagrams, connections).await;
         });
     }
 }
@@ -392,9 +458,28 @@ async fn run_accept_loop(
 async fn run_connection(
     connection: Connection,
     inbox: mpsc::Sender<NativeInboundEnvelope>,
+    datagrams: mpsc::Sender<NativeInboundDatagram>,
     connections: ConnectionPool,
 ) {
     let sender_endpoint = connection.remote_id();
+    let datagram_sender_endpoint = sender_endpoint;
+    let datagram_connection = connection.clone();
+    let datagram_sender = datagrams.clone();
+    tokio::spawn(async move {
+        while let Ok(bytes) = datagram_connection.read_datagram().await {
+            if datagram_sender
+                .send(NativeInboundDatagram {
+                    sender_endpoint_id: datagram_sender_endpoint.to_string(),
+                    bytes: bytes.to_vec(),
+                    path: path_kind(&datagram_connection),
+                })
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
     let mut streams = tokio::task::JoinSet::new();
     loop {
         // Bound concurrent buffers while allowing a slow stream to coexist

@@ -12,6 +12,7 @@
 #include <flutter_secure_storage_linux/flutter_secure_storage_linux_plugin.h>
 #include <irondash_engine_context/irondash_engine_context_plugin.h>
 #include <media_kit_video/media_kit_video_plugin.h>
+#include <record_linux/record_linux_plugin.h>
 #include <super_native_extensions/super_native_extensions_plugin.h>
 
 void fl_register_plugins(FlPluginRegistry* registry) {
@@ -33,6 +34,9 @@ void fl_register_plugins(FlPluginRegistry* registry) {
   g_autoptr(FlPluginRegistrar) media_kit_video_registrar =
       fl_plugin_registry_get_registrar_for_plugin(registry, "MediaKitVideoPlugin");
   media_kit_video_plugin_register_with_registrar(media_kit_video_registrar);
+  g_autoptr(FlPluginRegistrar) record_linux_registrar =
+      fl_plugin_registry_get_registrar_for_plugin(registry, "RecordLinuxPlugin");
+  record_linux_plugin_register_with_registrar(record_linux_registrar);
   g_autoptr(FlPluginRegistrar) super_native_extensions_registrar =
       fl_plugin_registry_get_registrar_for_plugin(registry, "SuperNativeExtensionsPlugin");
   super_native_extensions_plugin_register_with_registrar(super_native_extensions_registrar);

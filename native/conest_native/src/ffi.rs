@@ -17,17 +17,29 @@ use chacha20poly1305::{
     Tag, XChaCha20Poly1305, XNonce,
     aead::{AeadInPlace, KeyInit},
 };
+#[cfg(target_os = "android")]
+use jni::{
+    EnvUnowned,
+    errors::ThrowRuntimeExAndDefault,
+    objects::{JObject, JShortArray},
+    sys::{JNI_FALSE, JNI_TRUE, jboolean, jint, jlong},
+};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio::runtime::Runtime;
 
-use crate::api::{NativeInboundEnvelope, NativeTransport};
+use crate::api::{NativeInboundDatagram, NativeInboundEnvelope, NativeTransport};
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+use crate::audio::VoiceAudioSession;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::desktop_camera::DesktopBeamCamera;
 
 static RUNTIME: LazyLock<Runtime> =
     LazyLock::new(|| Runtime::new().expect("create Conest native Tokio runtime"));
 static TRANSPORTS: LazyLock<Mutex<HashMap<u64, Arc<NativeTransport>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+static VOICE_AUDIO_SESSIONS: LazyLock<Mutex<HashMap<u64, VoiceAudioSession>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 static BEAM_CAMERAS: LazyLock<Mutex<HashMap<u64, DesktopBeamCamera>>> =
@@ -44,6 +56,14 @@ const MAX_FFI_ATTACHMENT_BLOCK_LEN: usize = 4 * 1024 * 1024;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InboundJson {
+    sender_endpoint_id: String,
+    bytes_base64: String,
+    relayed: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InboundDatagramJson {
     sender_endpoint_id: String,
     bytes_base64: String,
     relayed: bool,
@@ -70,6 +90,226 @@ fn json_string(value: &impl Serialize) -> *mut c_char {
 
 fn transport(handle: u64) -> Option<Arc<NativeTransport>> {
     TRANSPORTS.lock().ok()?.get(&handle).cloned()
+}
+
+/// Opens native microphone capture, Opus encoding/decoding and speaker
+/// playback. The returned handle must be closed on every call exit path.
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_audio_open() -> u64 {
+    let session = match VoiceAudioSession::open() {
+        Ok(session) => session,
+        Err(error) => {
+            record_error(error);
+            return 0;
+        }
+    };
+    let handle = match NEXT_HANDLE.lock() {
+        Ok(mut next) => {
+            let value = *next;
+            *next = next.saturating_add(1).max(1);
+            value
+        }
+        Err(error) => {
+            record_error(error);
+            return 0;
+        }
+    };
+    match VOICE_AUDIO_SESSIONS.lock() {
+        Ok(mut sessions) => {
+            sessions.insert(handle, session);
+            handle
+        }
+        Err(error) => {
+            record_error(error);
+            0
+        }
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_audio_set_muted(handle: u64, muted: bool) -> bool {
+    let Ok(sessions) = VOICE_AUDIO_SESSIONS.lock() else {
+        record_error("voice audio session registry lock poisoned");
+        return false;
+    };
+    let Some(session) = sessions.get(&handle) else {
+        record_error("unknown voice audio session handle");
+        return false;
+    };
+    session.set_muted(muted);
+    true
+}
+
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_audio_set_network_congested(handle: u64, congested: bool) -> bool {
+    let Ok(sessions) = VOICE_AUDIO_SESSIONS.lock() else {
+        record_error("voice audio session registry lock poisoned");
+        return false;
+    };
+    let Some(session) = sessions.get(&handle) else {
+        record_error("unknown voice audio session handle");
+        return false;
+    };
+    session.set_network_congested(congested);
+    true
+}
+
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_audio_is_healthy(handle: u64) -> bool {
+    VOICE_AUDIO_SESSIONS
+        .lock()
+        .ok()
+        .and_then(|sessions| sessions.get(&handle).map(VoiceAudioSession::is_healthy))
+        .unwrap_or(false)
+}
+
+/// Non-blocking poll for one encoded 20 ms Opus packet. Returns false when
+/// no complete packet is ready or the caller's buffer is too small.
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_voice_audio_next_packet(
+    handle: u64,
+    output: *mut u8,
+    output_capacity: usize,
+    output_length: *mut usize,
+) -> bool {
+    if output.is_null() || output_length.is_null() || output_capacity == 0 {
+        record_error("invalid voice packet output buffer");
+        return false;
+    }
+    let packet = VOICE_AUDIO_SESSIONS.lock().ok().and_then(|sessions| {
+        sessions
+            .get(&handle)
+            .and_then(VoiceAudioSession::try_next_packet)
+    });
+    let Some(packet) = packet else {
+        return false;
+    };
+    if packet.len() > output_capacity {
+        record_error("voice packet output buffer is too small");
+        return false;
+    }
+    // SAFETY: Dart supplies a writable output buffer of `output_capacity` bytes
+    // and the packet length was checked to fit before copying.
+    unsafe { slice::from_raw_parts_mut(output, packet.len()) }.copy_from_slice(&packet);
+    // SAFETY: Dart passes a writable pointer to one usize for this call.
+    unsafe {
+        *output_length = packet.len();
+    }
+    true
+}
+
+/// Queues a bounded authenticated Opus packet for native decoding/playback.
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_voice_audio_push_packet(
+    handle: u64,
+    sequence: u64,
+    packet: *const u8,
+    packet_length: usize,
+) -> bool {
+    if packet.is_null() || packet_length == 0 || packet_length > 1100 {
+        record_error("invalid voice audio packet");
+        return false;
+    }
+    // SAFETY: Dart provides a readable packet buffer for the duration of this
+    // synchronous call; the native session copies it into its bounded queue.
+    let packet = unsafe { slice::from_raw_parts(packet, packet_length) };
+    VOICE_AUDIO_SESSIONS
+        .lock()
+        .ok()
+        .and_then(|sessions| {
+            sessions
+                .get(&handle)
+                .map(|session| session.push_packet(sequence, packet))
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_audio_close(handle: u64) {
+    let removed = VOICE_AUDIO_SESSIONS
+        .lock()
+        .ok()
+        .and_then(|mut sessions| sessions.remove(&handle));
+    drop(removed);
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_conest_conest_MainActivity_nativeVoiceAudioPushCapture(
+    mut unowned_env: EnvUnowned<'_>,
+    _this: JObject<'_>,
+    handle: jlong,
+    samples: JShortArray<'_>,
+    sample_count: jint,
+) -> jboolean {
+    let outcome = unowned_env.with_env(|env| -> jni::errors::Result<jboolean> {
+        if sample_count <= 0 || sample_count as usize > 3_840 {
+            return Ok(JNI_FALSE);
+        }
+        let mut pcm = vec![0_i16; sample_count as usize];
+        samples.get_region(env, 0, &mut pcm)?;
+        let accepted = VOICE_AUDIO_SESSIONS
+            .lock()
+            .ok()
+            .and_then(|sessions| {
+                sessions
+                    .get(&(handle as u64))
+                    .map(|session| session.push_capture_pcm16(&pcm))
+            })
+            .unwrap_or(false);
+        Ok(if accepted { JNI_TRUE } else { JNI_FALSE })
+    });
+    outcome.resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_conest_conest_MainActivity_nativeVoiceAudioReadPlayback(
+    mut unowned_env: EnvUnowned<'_>,
+    _this: JObject<'_>,
+    handle: jlong,
+    output: JShortArray<'_>,
+    requested_count: jint,
+) -> jint {
+    let outcome = unowned_env.with_env(|env| -> jni::errors::Result<jint> {
+        if requested_count <= 0 || requested_count as usize > 3_840 {
+            return Ok(0);
+        }
+        let mut pcm = vec![0_i16; requested_count as usize];
+        let count = VOICE_AUDIO_SESSIONS
+            .lock()
+            .ok()
+            .and_then(|sessions| {
+                sessions
+                    .get(&(handle as u64))
+                    .map(|session| session.read_playback_pcm16(&mut pcm))
+            })
+            .unwrap_or(0);
+        output.set_region(env, 0, &pcm[..count])?;
+        Ok(count as jint)
+    });
+    outcome.resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_conest_conest_MainActivity_nativeVoiceAudioMarkFailed(
+    _unowned_env: EnvUnowned<'_>,
+    _this: JObject<'_>,
+    handle: jlong,
+) {
+    if let Ok(sessions) = VOICE_AUDIO_SESSIONS.lock() {
+        if let Some(session) = sessions.get(&(handle as u64)) {
+            session.mark_failed();
+        }
+    }
 }
 
 /// Hashes a file with bounded memory. Called from a Dart worker isolate.
@@ -451,6 +691,39 @@ pub unsafe extern "C" fn conest_iroh_send_v3(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_iroh_send_datagram(
+    handle: u64,
+    remote_endpoint_id: *const c_char,
+    bytes: *const u8,
+    bytes_len: usize,
+    allow_relay: bool,
+) -> *mut c_char {
+    let Some(transport) = transport(handle) else {
+        record_error("unknown native transport handle");
+        return std::ptr::null_mut();
+    };
+    if remote_endpoint_id.is_null() || bytes.is_null() {
+        record_error("null Iroh datagram argument");
+        return std::ptr::null_mut();
+    }
+    let endpoint = match unsafe { CStr::from_ptr(remote_endpoint_id) }.to_str() {
+        Ok(value) => value.to_owned(),
+        Err(error) => {
+            record_error(error);
+            return std::ptr::null_mut();
+        }
+    };
+    let payload = unsafe { slice::from_raw_parts(bytes, bytes_len) }.to_vec();
+    match RUNTIME.block_on(transport.send_datagram(endpoint, payload, allow_relay)) {
+        Ok(receipt) => json_string(&receipt),
+        Err(error) => {
+            record_error(error);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn conest_iroh_next(handle: u64) -> *mut c_char {
     let Some(transport) = transport(handle) else {
         record_error("unknown native transport handle");
@@ -465,6 +738,27 @@ pub extern "C" fn conest_iroh_next(handle: u64) -> *mut c_char {
         return std::ptr::null_mut();
     };
     json_string(&InboundJson {
+        sender_endpoint_id,
+        bytes_base64: BASE64.encode(bytes),
+        relayed: matches!(path, crate::api::NativePathKind::Relayed),
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_iroh_next_datagram(handle: u64) -> *mut c_char {
+    let Some(transport) = transport(handle) else {
+        record_error("unknown native transport handle");
+        return std::ptr::null_mut();
+    };
+    let Some(NativeInboundDatagram {
+        sender_endpoint_id,
+        bytes,
+        path,
+    }) = RUNTIME.block_on(transport.try_next_datagram())
+    else {
+        return std::ptr::null_mut();
+    };
+    json_string(&InboundDatagramJson {
         sender_endpoint_id,
         bytes_base64: BASE64.encode(bytes),
         relayed: matches!(path, crate::api::NativePathKind::Relayed),

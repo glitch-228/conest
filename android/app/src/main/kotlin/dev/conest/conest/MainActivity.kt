@@ -20,11 +20,15 @@ import android.widget.Toast
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
 class MainActivity : FlutterActivity() {
     private var systemChannel: MethodChannel? = null
+    private var voiceCallPermissionResult: MethodChannel.Result? = null
+    private var voiceCallAudio: VoiceCallAudioEngine? = null
+    private var voiceAudioLibraryLoaded = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -33,6 +37,7 @@ class MainActivity : FlutterActivity() {
             CHANNEL
         )
         systemChannel = channel
+        activeSystemChannel = channel
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "setBackgroundRuntimeEnabled" -> {
@@ -42,6 +47,46 @@ class MainActivity : FlutterActivity() {
                 }
                 "requestNotificationPermission" -> {
                     requestNotificationPermissionIfNeeded()
+                    result.success(null)
+                }
+                "requestVoiceCallMicrophonePermission" -> {
+                    requestVoiceCallMicrophonePermission(result)
+                }
+                "openVoiceCallMedia" -> openVoiceCallMedia(call, result)
+                "scheduleScheduledMessageWakeup" -> {
+                    val timestampMs = call.argument<Number>("timestampMs")?.toLong()
+                    try {
+                        scheduleScheduledMessageWakeup(timestampMs)
+                        result.success(null)
+                    } catch (error: Throwable) {
+                        result.error(
+                            "scheduled_wakeup_failed",
+                            error.message ?: "Could not schedule the background send.",
+                            null
+                        )
+                    }
+                }
+                "setVoiceCallSpeakerphoneEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") == true
+                    try {
+                        val engine = voiceCallAudio
+                        if (engine == null) {
+                            result.error("audio_not_open", "Voice audio is not active.", null)
+                        } else {
+                            engine.setSpeakerphoneEnabled(enabled)
+                            result.success(enabled)
+                        }
+                    } catch (error: Throwable) {
+                        result.error(
+                            "audio_route_failed",
+                            error.message ?: "Could not change the voice output.",
+                            null
+                        )
+                    }
+                }
+                "closeVoiceCallMedia" -> {
+                    voiceCallAudio?.stop()
+                    voiceCallAudio = null
                     result.success(null)
                 }
                 "updateTransferForeground" -> {
@@ -231,6 +276,144 @@ class MainActivity : FlutterActivity() {
             requestPermissions(
                 arrayOf(Manifest.permission.POST_NOTIFICATIONS),
                 NOTIFICATION_PERMISSION_REQUEST
+            )
+        }
+    }
+
+    private fun requestVoiceCallMicrophonePermission(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            result.success(true)
+            return
+        }
+        if (voiceCallPermissionResult != null) {
+            result.error(
+                "permission_pending",
+                "Microphone permission is already being requested.",
+                null
+            )
+            return
+        }
+        voiceCallPermissionResult = result
+        requestPermissions(
+            arrayOf(Manifest.permission.RECORD_AUDIO),
+            VOICE_CALL_PERMISSION_REQUEST
+        )
+    }
+
+    @Deprecated("Deprecated in Android, retained for permission callbacks.")
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == VOICE_CALL_PERMISSION_REQUEST) {
+            val result = voiceCallPermissionResult
+            voiceCallPermissionResult = null
+            result?.success(
+                grantResults.isNotEmpty() &&
+                    grantResults[0] == PackageManager.PERMISSION_GRANTED
+            )
+        }
+    }
+
+    private fun openVoiceCallMedia(
+        call: MethodCall,
+        result: MethodChannel.Result
+    ) {
+        if (voiceCallAudio != null) {
+            result.error("audio_busy", "Voice audio is already active.", null)
+            return
+        }
+        val handle = (call.argument<Number>("handle"))?.toLong()
+        if (handle == null || handle == 0L) {
+            result.error("missing_audio_handle", "Native voice audio handle is missing.", null)
+            return
+        }
+        try {
+            if (!voiceAudioLibraryLoaded) {
+                System.loadLibrary("conest_native")
+                voiceAudioLibraryLoaded = true
+            }
+            val engine = VoiceCallAudioEngine(
+                activity = this,
+                handle = handle,
+                pushCapture = ::nativeVoiceAudioPushCapture,
+                readPlayback = ::nativeVoiceAudioReadPlayback,
+                markFailed = ::nativeVoiceAudioMarkFailed,
+                onFailure = { reason ->
+                    systemChannel?.invokeMethod(
+                        "voiceCallAudioFailure",
+                        mapOf("reason" to reason)
+                    )
+                },
+            )
+            engine.start()
+            voiceCallAudio = engine
+            result.success(true)
+        } catch (error: Throwable) {
+            voiceCallAudio?.stop()
+            voiceCallAudio = null
+            result.error(
+                "audio_start_failed",
+                error.message ?: "Could not start Android voice audio.",
+                null
+            )
+        }
+    }
+
+    private external fun nativeVoiceAudioPushCapture(
+        handle: Long,
+        samples: ShortArray,
+        count: Int
+    ): Boolean
+
+    private external fun nativeVoiceAudioReadPlayback(
+        handle: Long,
+        output: ShortArray,
+        count: Int
+    ): Int
+
+    private external fun nativeVoiceAudioMarkFailed(handle: Long)
+
+    override fun onDestroy() {
+        voiceCallAudio?.stop()
+        voiceCallAudio = null
+        if (activeSystemChannel === systemChannel) activeSystemChannel = null
+        super.onDestroy()
+    }
+
+    private fun scheduleScheduledMessageWakeup(timestampMs: Long?) {
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+        val intent = Intent(this, ScheduledMessageWakeupReceiver::class.java).apply {
+            action = ScheduledMessageWakeupReceiver.ACTION_SCHEDULED_MESSAGE_DUE
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            this,
+            SCHEDULED_MESSAGE_WAKEUP_REQUEST,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        if (timestampMs == null) {
+            alarmManager.cancel(pendingIntent)
+            pendingIntent.cancel()
+            return
+        }
+        val triggerAt = maxOf(timestampMs, System.currentTimeMillis())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setAndAllowWhileIdle(
+                android.app.AlarmManager.RTC_WAKEUP,
+                triggerAt,
+                pendingIntent
+            )
+        } else {
+            alarmManager.setExact(
+                android.app.AlarmManager.RTC_WAKEUP,
+                triggerAt,
+                pendingIntent
             )
         }
     }
@@ -582,10 +765,24 @@ class MainActivity : FlutterActivity() {
     }
 
     companion object {
+        @Volatile
+        private var activeSystemChannel: MethodChannel? = null
+
+        fun requestScheduledMessagePump() {
+            try {
+                activeSystemChannel?.invokeMethod("scheduledMessageDue", null)
+            } catch (_: RuntimeException) {
+                // If the activity engine is going away, the next foreground
+                // startup still dispatches every overdue persisted item.
+            }
+        }
+
         private const val CHANNEL = "dev.conest.conest/system"
         private const val MESSAGES_CHANNEL_ID = "conest_messages"
         const val BACKGROUND_CHANNEL_ID = "conest_background"
         private const val NOTIFICATION_PERMISSION_REQUEST = 6017
+        private const val VOICE_CALL_PERMISSION_REQUEST = 6018
+        private const val SCHEDULED_MESSAGE_WAKEUP_REQUEST = 6019
         private const val GROUP_KEY_MESSAGES = "dev.conest.conest.messages"
         private const val SUMMARY_NOTIFICATION_ID = 0x100b1ade
     }

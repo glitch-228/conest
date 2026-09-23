@@ -31,6 +31,8 @@ import 'native_attachment_crypto.dart';
 import 'platform_bridge.dart';
 import 'reachability_tracker.dart';
 import 'staged_attachment.dart';
+import 'voice_call_service.dart';
+import 'voice_message_service.dart';
 
 export 'staged_attachment.dart' show StagedAttachment;
 export 'beam_protocol.dart'
@@ -215,6 +217,7 @@ const Set<String> _v2PairwiseKinds = <String>{
   'debug_file_test_probe',
   'debug_file_test_probe_ack',
   'debug_file_test_result',
+  'voice_call_signal',
 };
 
 /// Outcome of a [`MessengerController.refreshDefaultRelays`] call.
@@ -420,8 +423,23 @@ class MessengerController extends ChangeNotifier {
       onAttempt: _recordRelayAttemptFromShim,
       nowProvider: () => (nowProvider ?? DateTime.now)(),
     );
+    voiceMessageService = VoiceMessageService();
     _transferControlSubscription = _platformBridge.transferControlEvents.listen(
       _handleNativeTransferControl,
+    );
+    _scheduledMessageWakeupSubscription = _platformBridge
+        .scheduledMessageWakeupEvents
+        .listen((_) {
+          if (!_disposed) unawaited(_pumpScheduledMessages());
+        });
+    _voiceCallAudioSubscription = _platformBridge.voiceCallAudioFrames.listen(
+      (frame) => unawaited(_sendVoiceCallAudioFrame(frame)),
+      onError: (Object error, StackTrace stackTrace) {
+        appendDebugLog('Voice audio device stopped: $error');
+        unawaited(
+          _voiceCallService?.end(reason: 'Voice audio device stopped.'),
+        );
+      },
     );
     _crypto = CryptoService(identityProvider: _requireIdentity);
     _reachability = ReachabilityTracker(
@@ -441,6 +459,7 @@ class MessengerController extends ChangeNotifier {
   late final ReachabilityTracker _reachability;
   late final RouteHealthTracker _routeHealthTracker;
   late final StreamSubscription<String> _transferControlSubscription;
+  late final StreamSubscription<int> _scheduledMessageWakeupSubscription;
   Timer? _transferNotificationTimer;
   final bool _longPollEnabled;
   final bool _pairingBeaconEnabled;
@@ -455,6 +474,11 @@ class MessengerController extends ChangeNotifier {
   // call finished before its overlapping inner call (a5b93fe regression).
   int _notificationsDeferredDepth = 0;
   bool _deferredNotificationPending = false;
+  bool _conversationMutationPending = false;
+  Timer? _deferredNotificationTimer;
+  static const Duration _deferredNotificationInterval = Duration(
+    milliseconds: 250,
+  );
   // True after `dispose()` returns. Late-firing Timers and async
   // continuations that try to call notifyListeners would otherwise hit
   // ChangeNotifier's debug assertion ("used after being disposed");
@@ -464,6 +488,7 @@ class MessengerController extends ChangeNotifier {
   final ChangeNotifier _transferProgressNotifier = ChangeNotifier();
   final LocalRelayNode _localRelayNode;
   final PlatformBridge _platformBridge;
+  final Chacha20 _voiceCallFrameCipher = Chacha20.poly1305Aead();
   PlatformBridge get platformBridge => _platformBridge;
   final Future<List<String>> Function() _lanAddressProvider;
   final DateTime Function() _nowProvider;
@@ -521,6 +546,20 @@ class MessengerController extends ChangeNotifier {
   /// between contacts doesn't lose the staged items.
   final Map<String, List<StagedAttachment>> _stagedAttachments = {};
   VaultSnapshot _snapshot = VaultSnapshot.empty();
+  VoiceCallService? _voiceCallService;
+  late final VoiceMessageService voiceMessageService;
+  StreamSubscription<VoiceCallSession?>? _voiceCallChanges;
+  StreamSubscription<Uint8List>? _voiceCallAudioSubscription;
+  StreamSubscription<IrohMediaDatagram>? _voiceCallDatagramSubscription;
+  final Map<String, _VoiceMediaReplayWindow> _voiceCallReplayWindows = {};
+  final Map<String, Future<SecretKey>> _voiceCallPeerKeys = {};
+  String? _voiceCallFrameCallId;
+  int _voiceCallFrameSequence = 0;
+  Uint8List? _voiceCallNoncePrefix;
+  int _voiceCallFramesInFlight = 0;
+  bool _voiceCallNetworkCongested = false;
+  DateTime? _voiceCallLastMediaFailureLog;
+  final Set<String> _scheduledDispatches = <String>{};
 
   /// Rolling cap on the persisted seen-envelope ledger. Envelopes older
   /// than the cap window are also long past every relay's queue TTL, so
@@ -549,9 +588,11 @@ class MessengerController extends ChangeNotifier {
   final Set<String> _servingAttachmentBlocks = <String>{};
   final Set<String> _receivingAttachmentBlocks = <String>{};
   Timer? _pollTimer;
+  Timer? _scheduledMessageTimer;
   bool _ready = false;
   Completer<void>? _pollCompleter;
   bool _appInForeground = true;
+  DateTime? _appBackgroundedAtUtc;
   NetworkCostClass _networkCostClass = NetworkCostClass.unmetered;
   String? _statusMessage;
   String _lastRelayStatus = 'relay not checked yet';
@@ -636,20 +677,37 @@ class MessengerController extends ChangeNotifier {
   /// poster shipped with the offer.
   Uint8List? videoPosterFor(String attachmentId) => _videoPosters[attachmentId];
 
-  // v0.3.3-nightly.6 per-contact serial transfer queue. Each contact gets
-  // a FIFO of pending attachment ids; the worker dispatches one offer at
-  // a time and only advances when `attachment_complete` lands (or a
-  // stall timeout fires). Multi-contact sends still run in parallel.
+  // Per-contact transfer queue. Large transfers remain serial, but one small
+  // attachment can bypass a large active transfer so a photo does not wait
+  // behind a stalled video. The fast lane is bounded to one attachment.
   final Map<String, List<String>> _outboundQueueByContact =
       <String, List<String>>{};
   final Map<String, String> _activeOutboundByContact = <String, String>{};
+  final Map<String, String> _fastOutboundByContact = <String, String>{};
   final Map<String, Timer> _outboundStallTimers = <String, Timer>{};
+  final Map<String, Timer> _fastOutboundTimers = <String, Timer>{};
+  final Map<String, Timer> _outboundRetryTimers = <String, Timer>{};
 
   static const Duration _outboundStallTimeout = Duration(seconds: 60);
+  static const int _outboundSmallFileFastLaneBytes = 8 * 1024 * 1024;
 
   bool get isReady => _ready;
   bool get hasIdentity => _snapshot.identity != null;
   IdentityRecord? get identity => _snapshot.identity;
+  VoiceCallService? get voiceCallService => _voiceCallService;
+
+  Future<void> acceptVoiceCall() async {
+    final service = _voiceCallService;
+    if (service == null) throw StateError('Voice calls are not initialized.');
+    await service.accept();
+  }
+
+  Future<void> rejectVoiceCall() async {
+    final service = _voiceCallService;
+    if (service == null) return;
+    await service.end(reason: 'Call rejected.');
+  }
+
   List<ContactRecord> get contacts => List.unmodifiable(_snapshot.contacts);
 
   /// Every group the controller knows about, including ones the local user
@@ -918,13 +976,289 @@ class MessengerController extends ChangeNotifier {
 
   DateTime _now() => _nowProvider().toUtc();
 
+  void _ensureVoiceCallService() {
+    final me = _snapshot.identity;
+    if (me == null) {
+      unawaited(_voiceCallChanges?.cancel());
+      _voiceCallChanges = null;
+      unawaited(_voiceCallService?.dispose());
+      _voiceCallService = null;
+      return;
+    }
+    if (_voiceCallService?.localDeviceId == me.deviceId) return;
+    unawaited(_voiceCallChanges?.cancel());
+    unawaited(_voiceCallService?.dispose());
+    _voiceCallService = VoiceCallService(
+      localDeviceId: me.deviceId,
+      transport: _ControllerVoiceCallTransport(this),
+      media: PlatformVoiceCallMediaEngine(_platformBridge),
+      now: _now,
+    );
+    _voiceCallChanges = _voiceCallService!.changes.listen((session) {
+      if (_disposed) return;
+      if (session?.state == VoiceCallState.connected) {
+        unawaited(voiceMessageService.stopPlayback());
+        unawaited(voiceMessageService.stopForInterruption());
+      }
+      if (session == null || session.state == VoiceCallState.ended) {
+        _setVoiceCallNetworkCongested(false);
+        _voiceCallReplayWindows.clear();
+        _voiceCallPeerKeys.clear();
+        _voiceCallFrameCallId = null;
+        _voiceCallFrameSequence = 0;
+        _voiceCallNoncePrefix = null;
+      }
+      if (session?.state == VoiceCallState.ringing) {
+        _setTransientStatus(
+          session!.outgoing
+              ? 'Calling ${_contactByDeviceId(session.peerDeviceId)?.alias ?? "contact"}…'
+              : 'Incoming voice call',
+        );
+      }
+      notifyListeners();
+    });
+  }
+
+  Future<void> _sendVoiceCallSignal(VoiceCallSignal signal) async {
+    final me = _requireIdentity();
+    if (signal.senderDeviceId != me.deviceId ||
+        signal.recipientDeviceId == me.deviceId) {
+      throw StateError('Invalid local voice-call signal identity.');
+    }
+    final contact = _contactByDeviceId(signal.recipientDeviceId);
+    if (contact == null || !contact.canSendOutbound) {
+      throw StateError('Voice calls require an approved contact.');
+    }
+    final envelope = await _crypto.encryptPayloadEnvelope(
+      kind: 'voice_call_signal',
+      messageId: _randomId('call'),
+      conversationId: _crypto.conversationIdFor(contact.deviceId),
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: contact.deviceId,
+      contact: contact,
+      plaintext: signal.encode(),
+    );
+    await _enqueueAndDeliverEnvelope(
+      contact: contact,
+      envelope: envelope,
+      kind: PendingAckKind.voiceCallSignal,
+    );
+  }
+
+  Future<void> _sendVoiceCallAudioFrame(Uint8List frame) async {
+    final session = _voiceCallService?.active;
+    final me = identity;
+    if (_disposed ||
+        session == null ||
+        me == null ||
+        session.state != VoiceCallState.connected ||
+        session.muted ||
+        frame.isEmpty ||
+        frame.length > 1100 ||
+        _voiceCallFramesInFlight >= 3) {
+      return;
+    }
+    final adapter = _transportRegistry?.adapterFor(TransportKind.iroh);
+    final contact = _contactByDeviceId(session.peerDeviceId);
+    if (adapter is! IrohCallMediaAdapter ||
+        contact == null ||
+        !contact.canSendOutbound ||
+        !contact.hasPinnedIrohIdentity ||
+        !_canUseIrohForContact(contact)) {
+      return;
+    }
+    _voiceCallFramesInFlight++;
+    if (_voiceCallFramesInFlight >= 3) {
+      _setVoiceCallNetworkCongested(true);
+    }
+    try {
+      if (_voiceCallFrameCallId != session.callId) {
+        _voiceCallFrameCallId = session.callId;
+        _voiceCallFrameSequence = 0;
+        final secureRandom = Random.secure();
+        _voiceCallNoncePrefix = Uint8List.fromList(
+          List<int>.generate(8, (_) => secureRandom.nextInt(256)),
+        );
+      }
+      final sequence = ++_voiceCallFrameSequence;
+      if (sequence > 0xffffffff) {
+        throw StateError('Voice call exhausted its nonce sequence.');
+      }
+      final issuedAt = DateTime.now().toUtc().millisecondsSinceEpoch;
+      final noncePrefix = _voiceCallNoncePrefix!;
+      final nonce = Uint8List(12)..setRange(0, 8, noncePrefix);
+      ByteData.sublistView(nonce).setUint32(8, sequence, Endian.big);
+      final key = await _voiceCallPeerKeyFor(contact);
+      final aad = _voiceCallFrameAad(
+        callId: session.callId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: contact.deviceId,
+        sequence: sequence,
+        issuedAtMs: issuedAt,
+      );
+      final encrypted = await _voiceCallFrameCipher.encrypt(
+        frame,
+        secretKey: key,
+        nonce: nonce,
+        aad: aad,
+      );
+      final header = ByteData(16)
+        ..setUint64(0, sequence, Endian.big)
+        ..setUint64(8, issuedAt, Endian.big);
+      final packet = Uint8List(1 + 16 + 12 + encrypted.cipherText.length + 16)
+        ..[0] = 1
+        ..setRange(1, 17, header.buffer.asUint8List())
+        ..setRange(17, 29, nonce)
+        ..setRange(29, 29 + encrypted.cipherText.length, encrypted.cipherText)
+        ..setRange(
+          packetLength(encrypted.cipherText.length) - 16,
+          packetLength(encrypted.cipherText.length),
+          encrypted.mac.bytes,
+        );
+      if (packet.length > 1200) return;
+      await adapter.sendCallDatagram(
+        peer: _transportPeerForContact(contact, allowRelay: true),
+        bytes: packet,
+      );
+    } catch (error) {
+      final now = _now();
+      if (_voiceCallLastMediaFailureLog == null ||
+          now.difference(_voiceCallLastMediaFailureLog!) >=
+              const Duration(seconds: 5)) {
+        _voiceCallLastMediaFailureLog = now;
+        appendDebugLog('Voice media frames are dropping: $error');
+      }
+    } finally {
+      if (_voiceCallFramesInFlight > 0) _voiceCallFramesInFlight--;
+      if (_voiceCallFramesInFlight <= 1) {
+        _setVoiceCallNetworkCongested(false);
+      }
+    }
+  }
+
+  void _setVoiceCallNetworkCongested(bool congested) {
+    if (_voiceCallNetworkCongested == congested) return;
+    _voiceCallNetworkCongested = congested;
+    _platformBridge.setVoiceCallNetworkCongested(congested);
+  }
+
+  int packetLength(int cipherBytes) => 1 + 16 + 12 + cipherBytes + 16;
+
+  List<int> _voiceCallFrameAad({
+    required String callId,
+    required String senderDeviceId,
+    required String recipientDeviceId,
+    required int sequence,
+    required int issuedAtMs,
+  }) => utf8.encode(
+    'conest.voice.media.v1|$callId|$senderDeviceId|$recipientDeviceId|$sequence|$issuedAtMs',
+  );
+
+  Future<SecretKey> _voiceCallPeerKeyFor(ContactRecord contact) =>
+      _voiceCallPeerKeys.putIfAbsent(
+        '${contact.deviceId}|${contact.publicKeyBase64}',
+        () => _crypto.sessionKeyFor(contact),
+      );
+
+  Future<void> _handleVoiceCallDatagram(IrohMediaDatagram datagram) async {
+    final session = _voiceCallService?.active;
+    final me = identity;
+    if (_disposed ||
+        session == null ||
+        session.state != VoiceCallState.connected ||
+        me == null) {
+      return;
+    }
+    final contact = _snapshot.contacts
+        .where(
+          (candidate) =>
+              candidate.irohEndpointId == datagram.senderEndpointId &&
+              candidate.deviceId == session.peerDeviceId &&
+              candidate.canSendOutbound &&
+              candidate.hasPinnedIrohIdentity,
+        )
+        .firstOrNull;
+    final packet = datagram.bytes;
+    if (contact == null ||
+        packet.length < 45 ||
+        packet.length > 1200 ||
+        packet[0] != 1) {
+      return;
+    }
+    final header = ByteData.sublistView(packet, 1, 17);
+    final sequence = header.getUint64(0, Endian.big);
+    final issuedAtMs = header.getUint64(8, Endian.big);
+    final issuedAt = DateTime.fromMillisecondsSinceEpoch(
+      issuedAtMs,
+      isUtc: true,
+    );
+    if (DateTime.now().toUtc().difference(issuedAt).abs() >
+        const Duration(seconds: 5)) {
+      return;
+    }
+    final replayKey = '${session.callId}|${contact.deviceId}';
+    final replay = _voiceCallReplayWindows.putIfAbsent(
+      replayKey,
+      _VoiceMediaReplayWindow.new,
+    );
+    if (!replay.canAccept(sequence)) return;
+    final nonce = packet.sublist(17, 29);
+    final macStart = packet.length - 16;
+    final aad = _voiceCallFrameAad(
+      callId: session.callId,
+      senderDeviceId: contact.deviceId,
+      recipientDeviceId: me.deviceId,
+      sequence: sequence,
+      issuedAtMs: issuedAtMs,
+    );
+    try {
+      final clear = await _voiceCallFrameCipher.decrypt(
+        SecretBox(
+          packet.sublist(29, macStart),
+          nonce: nonce,
+          mac: Mac(packet.sublist(macStart)),
+        ),
+        secretKey: await _voiceCallPeerKeyFor(contact),
+        aad: aad,
+      );
+      if (!replay.accept(sequence)) return;
+      final active = _voiceCallService?.active;
+      if (active?.callId != session.callId ||
+          active?.peerDeviceId != contact.deviceId ||
+          active?.state != VoiceCallState.connected) {
+        return;
+      }
+      await _platformBridge.playVoiceCallAudioFrame(
+        Uint8List.fromList(clear),
+        sequence: sequence,
+      );
+    } catch (_) {
+      // Media packets are lossy by design; an invalid/authentication-failed
+      // packet is dropped without disrupting call signaling.
+    }
+  }
+
   void setAppForegroundState(bool value) {
     if (_appInForeground == value) {
       return;
     }
+    final backgroundedAt = _appBackgroundedAtUtc;
+    final resumedAfterTransferSuspension =
+        value &&
+        backgroundedAt != null &&
+        _now().difference(backgroundedAt) >= const Duration(seconds: 3);
     _appInForeground = value;
+    _appBackgroundedAtUtc = value ? null : _now();
     if (value && hasIdentity) {
       _markRuntimeActivity();
+      _resumePendingTransfersAfterForeground(
+        reconnectOutbound: resumedAfterTransferSuspension,
+      );
+      // Timer callbacks may have been suspended while the process was in the
+      // background. Catch up overdue schedules immediately on return; dispatch
+      // identities make this safe alongside a timer callback already queued.
+      unawaited(_pumpScheduledMessages());
       unawaited(_pollLocalInboxOnly());
       unawaited(pollNow());
       // Resume the long-poll loop on foreground entry. Stopping on
@@ -932,10 +1266,84 @@ class MessengerController extends ChangeNotifier {
       // (especially Android) tries to suspend the app.
       unawaited(_startLongPollIfEnabled());
     } else if (!value) {
+      unawaited(voiceMessageService.stopForInterruption());
       savePendingChangesForLifecycle();
       _stopLongPoll();
     }
     _reschedulePolling();
+    _scheduleScheduledMessagePump();
+  }
+
+  /// A suspended process can lose in-flight socket work while retaining its
+  /// durable partial files. On foreground return, immediately rebuild the
+  /// receive request windows instead of waiting for the next exponential
+  /// retry timer. Duplicate requests are safe: blocks are verified and
+  /// deduplicated before they are committed.
+  void _resumePendingTransfersAfterForeground({
+    bool reconnectOutbound = false,
+  }) {
+    for (final state in _inboundAttachments.values.toList(growable: false)) {
+      if (state.paused ||
+          state.finalizing ||
+          !state.accepted ||
+          state.awaitingAcceptance ||
+          state.partialPath == null) {
+        continue;
+      }
+      final peer = _contactByDeviceId(state.peerDeviceId);
+      if (peer == null) continue;
+      state.requestedInFlight.clear();
+      _scheduleAttachmentRetry(state.descriptor.id);
+      _startInboundRequestWindow(state, peer);
+    }
+    for (final state in _outboundAttachments.values) {
+      if (state.paused) continue;
+      final peer = _contactByDeviceId(state.peerDeviceId);
+      if (peer == null) continue;
+      if (_activeOutboundByContact[peer.deviceId] == state.descriptor.id) {
+        if (reconnectOutbound) {
+          // Socket operations may have been suspended while the app was
+          // backgrounded. Free the per-contact queue slot immediately and
+          // retry the same verified attachment after a short backoff; the
+          // receiver's durable block map makes this restart idempotent.
+          _onOutboundStall(peer);
+          continue;
+        }
+        final lastProgress = state.lastChunkAt ?? state.activatedAt;
+        final elapsed = lastProgress == null
+            ? _outboundStallTimeout
+            : DateTime.now().toUtc().difference(lastProgress);
+        if (elapsed >= _outboundStallTimeout) {
+          // Desktop/Android backgrounding can suspend Dart timers. Account for
+          // the real elapsed time on resume so a dead route does not retain
+          // this contact's serial queue slot for another full timeout.
+          _onOutboundStall(peer);
+        } else {
+          _armOutboundStallTimer(peer, delay: _outboundStallTimeout - elapsed);
+        }
+      } else if (_fastOutboundByContact[peer.deviceId] == state.descriptor.id) {
+        if (reconnectOutbound) {
+          _onFastOutboundStall(peer, state.descriptor.id);
+          continue;
+        }
+        final lastProgress = state.lastChunkAt ?? state.activatedAt;
+        final elapsed = lastProgress == null
+            ? _outboundStallTimeout
+            : DateTime.now().toUtc().difference(lastProgress);
+        if (elapsed >= _outboundStallTimeout) {
+          _onFastOutboundStall(peer, state.descriptor.id);
+        } else {
+          _armOutboundStallTimer(
+            peer,
+            attachmentId: state.descriptor.id,
+            delay: _outboundStallTimeout - elapsed,
+          );
+        }
+      } else {
+        _enqueueOutbound(peer, state.descriptor.id);
+        _pumpOutboundQueue(peer);
+      }
+    }
   }
 
   void activatePairingSession() {
@@ -1064,7 +1472,9 @@ class MessengerController extends ChangeNotifier {
   /// poll cadence so chunk envelopes don't queue behind the idle 15 s
   /// poll interval. Public so the Debug bundle can surface the boost.
   bool get hasActiveTransfer =>
-      _inboundAttachments.isNotEmpty || _activeOutboundByContact.isNotEmpty;
+      _inboundAttachments.isNotEmpty ||
+      _activeOutboundByContact.isNotEmpty ||
+      _fastOutboundByContact.isNotEmpty;
 
   Duration _heartbeatIntervalForCurrentRuntime(IdentityRecord me) {
     if (!_appInForeground) {
@@ -2040,6 +2450,86 @@ class MessengerController extends ChangeNotifier {
     }
     final at = DateTime.tryParse(created);
     if (at == null) return;
+    PollDefinition? poll;
+    PollVote? pollVote;
+    Map<String, String>? pollClosedCheckpoint;
+    if (payload['poll'] is Map<String, dynamic>) {
+      try {
+        poll = PollDefinition.fromJson(payload['poll'] as Map<String, dynamic>);
+      } catch (_) {
+        return;
+      }
+    }
+    if (payload['pollVote'] is Map<String, dynamic>) {
+      try {
+        pollVote = PollVote.fromJson(
+          payload['pollVote'] as Map<String, dynamic>,
+        );
+      } catch (_) {
+        return;
+      }
+    }
+    final rawPollCheckpoint = payload['pollClosedCheckpoint'];
+    if (rawPollCheckpoint != null) {
+      if (rawPollCheckpoint is! Map || rawPollCheckpoint.length > 16) return;
+      pollClosedCheckpoint = <String, String>{};
+      for (final entry in rawPollCheckpoint.entries) {
+        if (entry.key is! String ||
+            (entry.key as String).isEmpty ||
+            (entry.key as String).length > 160 ||
+            entry.value is! String ||
+            !RegExp(r'^[0-9a-f]{64}$').hasMatch(entry.value as String)) {
+          return;
+        }
+        pollClosedCheckpoint[entry.key as String] = entry.value as String;
+      }
+    }
+    final pollClosed = payload['pollClosed'] == true;
+    final votePoll =
+        poll ??
+        _groupConversation(groupId).messages
+            .map((message) => message.poll)
+            .whereType<PollDefinition>()
+            .where((candidate) => candidate.id == pollVote?.pollId)
+            .firstOrNull;
+    // Group history signatures authenticate the event author. Never trust a
+    // payload that claims to be another member's vote or creator checkpoint.
+    if (poll != null &&
+        (!poll.hasValidShape || poll.creatorDeviceId != event.authorDeviceId)) {
+      return;
+    }
+    if (pollVote != null &&
+        (!pollVote.hasValidShape ||
+            pollVote.voterDeviceId != event.authorDeviceId)) {
+      return;
+    }
+    if (pollVote != null && votePoll == null) return;
+    if (pollClosed &&
+        (pollVote == null ||
+            pollVote.voterDeviceId != votePoll?.creatorDeviceId ||
+            pollVote.optionIndexes.isNotEmpty)) {
+      return;
+    }
+    if (!pollClosed && pollClosedCheckpoint != null) return;
+    if (pollVote != null &&
+        votePoll != null &&
+        pollVote.pollId != votePoll.id) {
+      return;
+    }
+    if (pollVote != null &&
+        pollVote.optionIndexes.any((value) {
+          final index = int.tryParse(value);
+          return index == null ||
+              index < 0 ||
+              index >= (votePoll?.options.length ?? 0);
+        })) {
+      return;
+    }
+    if (pollVote != null &&
+        votePoll?.mode == PollChoiceMode.single &&
+        pollVote.optionIndexes.length > 1) {
+      return;
+    }
     var projectedId = id;
     for (final existing in _groupConversation(groupId).messages) {
       if (existing.id != id) continue;
@@ -2067,6 +2557,11 @@ class MessengerController extends ChangeNotifier {
             editedAt: projection.editedAt,
             deleted: existing.deleted || projection.deleted,
             reactions: projection.reactions,
+            poll: poll ?? existing.poll,
+            pollVote: pollVote ?? existing.pollVote,
+            pollClosed: pollClosed || existing.pollClosed,
+            pollClosedCheckpoint:
+                pollClosedCheckpoint ?? existing.pollClosedCheckpoint,
             groupHistoryLamport: event.lamport,
             groupHistoryAuthorDeviceId: event.authorDeviceId,
             groupHistorySequence: event.sequence,
@@ -2105,6 +2600,11 @@ class MessengerController extends ChangeNotifier {
             editedAt: projection.editedAt,
             deleted: retained.deleted || projection.deleted,
             reactions: projection.reactions,
+            poll: poll ?? retained.poll,
+            pollVote: pollVote ?? retained.pollVote,
+            pollClosed: pollClosed || retained.pollClosed,
+            pollClosedCheckpoint:
+                pollClosedCheckpoint ?? retained.pollClosedCheckpoint,
             groupHistoryLamport: event.lamport,
             groupHistoryAuthorDeviceId: event.authorDeviceId,
             groupHistorySequence: event.sequence,
@@ -2127,6 +2627,10 @@ class MessengerController extends ChangeNotifier {
         editedAt: projection.editedAt,
         deleted: projection.deleted,
         reactions: projection.reactions,
+        poll: poll,
+        pollVote: pollVote,
+        pollClosed: pollClosed,
+        pollClosedCheckpoint: pollClosedCheckpoint,
         outbound: event.authorDeviceId == _requireIdentity().deviceId,
         state: event.authorDeviceId == _requireIdentity().deviceId
             ? DeliveryState.pending
@@ -2213,6 +2717,8 @@ class MessengerController extends ChangeNotifier {
   Future<void> initialize() async {
     try {
       _snapshot = await _vaultStore.load();
+      await VoiceMessageService.cleanupAbandonedRecordings();
+      await _recoverScheduledMessageTransitions();
       await _retireBundledRelayRoutes();
       final transportIdentityMigrated = await _ensureTransportIdentity();
       final protocolQueueMigrated = _markLegacyQueuedControlsIncompatible();
@@ -2251,6 +2757,7 @@ class MessengerController extends ChangeNotifier {
       await _restoreTransferSessionsAndCleanAttachments();
       await _ingestSignedDefaultRelaysIfNeeded();
       if (_snapshot.identity != null) {
+        _ensureVoiceCallService();
         await _startTransportRegistry();
         await _refreshLanAddresses(persist: false);
         await _ensureLocalRelayRunning();
@@ -2264,12 +2771,79 @@ class MessengerController extends ChangeNotifier {
         unawaited(pollNow());
         unawaited(_startLongPollIfEnabled());
         _requestVisibleGroupCatchUp();
+        _scheduleScheduledMessagePump();
       }
     } catch (error) {
       _statusMessage = 'Vault unlock failed: $error';
     } finally {
       _ready = true;
       notifyListeners();
+    }
+  }
+
+  Future<void> _recoverScheduledMessageTransitions() async {
+    final entries = [..._snapshot.scheduledMessages];
+    final handedOff = <ScheduledMessage>[];
+    var changed = false;
+    for (var index = 0; index < entries.length; index++) {
+      final entry = entries[index];
+      if (entry.state != ScheduledMessageState.sending) continue;
+      final message = _snapshot.conversations
+          .expand((conversation) => conversation.messages)
+          .where((message) => message.id == entry.id && message.outbound)
+          .firstOrNull;
+      final outboundTransfer = _snapshot.transferSessions
+          .where((session) => session.messageId == entry.id)
+          .firstOrNull;
+      final attachmentHandoff =
+          entry.attachmentPath != null &&
+          entry.conversationKind != ConversationKind.group.name &&
+          message != null &&
+          outboundTransfer != null &&
+          outboundTransfer.state != TransferState.preparing &&
+          outboundTransfer.state != TransferState.failed &&
+          outboundTransfer.state != TransferState.canceled;
+      final groupFileWasCommitted =
+          entry.conversationKind == ConversationKind.group.name &&
+          entry.attachmentPath != null &&
+          entry.outgoingMessageId != null &&
+          _groupConversation(entry.conversationId).messages.any(
+            (message) =>
+                message.groupFile != null &&
+                message.id == entry.outgoingMessageId,
+          );
+      final textWasCommitted = entry.attachmentPath == null && message != null;
+      final found =
+          textWasCommitted || attachmentHandoff || groupFileWasCommitted;
+      if (!found &&
+          entry.attachmentPath != null &&
+          entry.conversationKind != ConversationKind.group.name &&
+          message != null) {
+        // The provisional direct bubble is saved before attachment hashing.
+        // It does not mean that handoff to the normal transfer queue finished.
+        _deleteMessage(entry.conversationId, entry.id);
+        if (outboundTransfer != null) {
+          _removeTransferSession(outboundTransfer.id);
+          _outboundRetryTimers.remove(outboundTransfer.id)?.cancel();
+          _outboundAttachments.remove(outboundTransfer.id);
+          _preparationProgressBytes.remove(outboundTransfer.id);
+        }
+      }
+      entries[index] = entry.copyWith(
+        state: found
+            ? ScheduledMessageState.sent
+            : ScheduledMessageState.waiting,
+        clearFailureReason: true,
+      );
+      changed = true;
+      if (found) handedOff.add(entry);
+    }
+    if (changed) {
+      _snapshot = _snapshot.copyWith(scheduledMessages: entries);
+      await _saveSnapshotSilently(notify: false);
+    }
+    for (final entry in handedOff) {
+      await _deleteScheduledAttachment(entry);
     }
   }
 
@@ -2297,6 +2871,15 @@ class MessengerController extends ChangeNotifier {
           ),
         );
       }
+      final irohMedia = registry.adapterFor(TransportKind.iroh);
+      if (irohMedia is IrohCallMediaAdapter) {
+        await _voiceCallDatagramSubscription?.cancel();
+        _voiceCallDatagramSubscription = irohMedia.inboundCallDatagrams.listen(
+          (datagram) => unawaited(_handleVoiceCallDatagram(datagram)),
+          onError: (Object error) =>
+              appendDebugLog('Iroh call media receive failed: $error'),
+        );
+      }
     } catch (error) {
       appendDebugLog('Native transport startup failed: $error');
       _setTransientStatus(
@@ -2321,6 +2904,8 @@ class MessengerController extends ChangeNotifier {
       await subscription.cancel();
     }
     _transportInboundSubscriptions.clear();
+    await _voiceCallDatagramSubscription?.cancel();
+    _voiceCallDatagramSubscription = null;
     final registry = _transportRegistry;
     _transportRegistry = null;
     if (registry != null) await registry.stop();
@@ -2448,7 +3033,9 @@ class MessengerController extends ChangeNotifier {
         // heartbeat reply made Beam-added contacts remain "discovering" even
         // while messages and receipts were flowing.
         _reachability.noteTwoWaySuccess(contact.deviceId);
-        await _saveSnapshotSilently(debounce: true);
+        if (!_isHighFrequencyTransferEnvelope(envelope)) {
+          await _saveSnapshotSilently(debounce: true);
+        }
       }
     } catch (error) {
       appendDebugLog('Rejected malformed Iroh envelope: $error');
@@ -2547,10 +3134,12 @@ class MessengerController extends ChangeNotifier {
     final root = await _attachmentRoot();
     final cacheDir = Directory(p.join(root.path, 'cache'));
     final spoolDir = Directory(p.join(root.path, 'spool'));
+    final scheduledDir = Directory(p.join(root.path, 'scheduled'));
     final partialDir = Directory(p.join(root.path, 'partial'));
     await Future.wait(<Future<void>>[
       cacheDir.create(recursive: true),
       spoolDir.create(recursive: true),
+      scheduledDir.create(recursive: true),
       partialDir.create(recursive: true),
     ]);
 
@@ -2627,6 +3216,12 @@ class MessengerController extends ChangeNotifier {
       for (final session in _snapshot.transferSessions)
         if (session.relativePath.isNotEmpty)
           p.normalize(p.join(root.path, session.relativePath)),
+      for (final entry in _snapshot.scheduledMessages)
+        if (entry.state != ScheduledMessageState.sent &&
+            entry.state != ScheduledMessageState.canceled &&
+            entry.attachmentPath != null &&
+            entry.attachmentPath!.isNotEmpty)
+          p.normalize(p.join(root.path, entry.attachmentPath!)),
     };
 
     Future<void> cleanDirectory(
@@ -2655,6 +3250,7 @@ class MessengerController extends ChangeNotifier {
 
     await cleanDirectory(cacheDir, cache: true);
     await cleanDirectory(spoolDir, cache: false);
+    await cleanDirectory(scheduledDir, cache: false);
     await cleanDirectory(partialDir, cache: false);
     // Pre-hardening caches stored attacker-controlled ids directly under the
     // root. They are never trusted as paths after v2; remove regular files
@@ -4358,6 +4954,7 @@ class MessengerController extends ChangeNotifier {
     }
     await _platformBridge.setAndroidBackgroundRuntimeEnabled(enabled);
     _reschedulePolling();
+    _scheduleScheduledMessagePump();
     await _persist(
       enabled
           ? 'Android background runtime enabled. If system battery/background access is blocked, notifications can still be late or never arrive.'
@@ -4813,6 +5410,7 @@ class MessengerController extends ChangeNotifier {
     );
     _reachability.remove(deviceId);
     for (final attachmentId in attachmentIds) {
+      _outboundRetryTimers.remove(attachmentId)?.cancel();
       _outboundAttachments.remove(attachmentId);
       _inboundAttachments.remove(attachmentId)?.retryTimer?.cancel();
       _assembledAttachments.remove(attachmentId);
@@ -4847,6 +5445,8 @@ class MessengerController extends ChangeNotifier {
   /// of the display-name screen. Failures inside the hook are swallowed;
   /// the user can manually restart the app if needed.
   Future<void> resetIdentity({Future<void> Function()? onPostReset}) async {
+    _scheduledMessageTimer?.cancel();
+    _scheduledMessageTimer = null;
     for (final timer in _groupHistoryTimers.values) {
       timer.cancel();
     }
@@ -4882,6 +5482,10 @@ class MessengerController extends ChangeNotifier {
     }
     await _vaultStore.clear();
     _snapshot = VaultSnapshot.empty();
+    unawaited(_voiceCallChanges?.cancel());
+    _voiceCallChanges = null;
+    unawaited(_voiceCallService?.dispose());
+    _voiceCallService = null;
     _rebuildSeenEnvelopeIdSet();
     _pairingSessionActiveUntil = null;
     _lastPairingBeaconSentAt = null;
@@ -4906,6 +5510,12 @@ class MessengerController extends ChangeNotifier {
     for (final timer in _outboundStallTimers.values) {
       timer.cancel();
     }
+    for (final timer in _fastOutboundTimers.values) {
+      timer.cancel();
+    }
+    for (final timer in _outboundRetryTimers.values) {
+      timer.cancel();
+    }
     _inboundAttachments.clear();
     _outboundAttachments.clear();
     _assembledAttachments.clear();
@@ -4913,7 +5523,10 @@ class MessengerController extends ChangeNotifier {
     _videoPosters.clear();
     _outboundQueueByContact.clear();
     _activeOutboundByContact.clear();
+    _fastOutboundByContact.clear();
     _outboundStallTimers.clear();
+    _fastOutboundTimers.clear();
+    _outboundRetryTimers.clear();
     _peerLanDirect.clear();
     notifyListeners();
     if (onPostReset != null) {
@@ -4980,6 +5593,7 @@ class MessengerController extends ChangeNotifier {
       ),
     );
     _snapshot = _snapshot.copyWith(identity: created);
+    _ensureVoiceCallService();
     await _startTransportRegistry();
     await _ingestSignedDefaultRelaysIfNeeded();
     await _ensureLocalRelayRunning();
@@ -4989,6 +5603,7 @@ class MessengerController extends ChangeNotifier {
       'Device created. Share a QR invite or the current codephrase to add this contact.',
     );
     _reschedulePolling();
+    _scheduleScheduledMessagePump();
     await _pollLocalInboxOnly();
     await pollNow();
   }
@@ -5552,6 +6167,7 @@ class MessengerController extends ChangeNotifier {
     required ContactRecord contact,
     required String body,
     ChatMessage? replyTo,
+    String? outgoingMessageId,
   }) async {
     final me = _requireIdentity();
     final trimmed = body.trim();
@@ -5570,7 +6186,7 @@ class MessengerController extends ChangeNotifier {
     }
 
     final message = ChatMessage(
-      id: _randomId('msg'),
+      id: outgoingMessageId ?? _randomId('msg'),
       conversationId: _crypto.conversationIdFor(contact.deviceId),
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
@@ -5738,6 +6354,75 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  /// Sends an already encoded voice recording through the ordinary verified
+  /// attachment pipeline. Native recording is intentionally separate from
+  /// transfer; callers may use any platform recorder that produces Ogg/Opus.
+  Future<void> sendVoiceMessage({
+    required ContactRecord contact,
+    required StagedAttachment source,
+    required VoiceMessageMetadata metadata,
+  }) {
+    if (metadata.durationMs <= 0 || metadata.durationMs > 10 * 60 * 1000) {
+      throw ArgumentError(
+        'Voice recordings must be between 1 second and 10 minutes.',
+      );
+    }
+    if (metadata.codec != 'opus' || metadata.container != 'ogg') {
+      throw ArgumentError('Voice recordings must use Ogg/Opus.');
+    }
+    if (!source.mimeType.toLowerCase().contains('ogg')) {
+      throw ArgumentError('Voice recordings must be encoded as Ogg audio.');
+    }
+    return sendAttachmentSource(
+      contact: contact,
+      source: source,
+      caption: '',
+      voiceMetadata: metadata,
+    );
+  }
+
+  Future<void> sendRecordedVoiceMessage({
+    required ContactRecord contact,
+  }) async {
+    final recording = voiceMessageService.preview;
+    if (recording == null) throw StateError('No voice preview is available.');
+    if (voiceMessageService.previewDestinationKey !=
+        'direct:${contact.deviceId}') {
+      throw StateError('This voice preview belongs to another conversation.');
+    }
+    await sendVoiceMessage(
+      contact: contact,
+      source: StagedAttachment(
+        id: _randomId('voice'),
+        fileName: 'voice-message.ogg',
+        mimeType: 'audio/ogg; codecs=opus',
+        sizeBytes: recording.sizeBytes,
+        filePath: recording.path,
+        presentation: AttachmentPresentation.media,
+      ),
+      metadata: recording.metadata,
+    );
+    await voiceMessageService.completePreview();
+  }
+
+  Future<void> sendRecordedVoiceMessageToGroup({
+    required String groupId,
+  }) async {
+    final recording = voiceMessageService.preview;
+    if (recording == null) throw StateError('No voice preview is available.');
+    if (voiceMessageService.previewDestinationKey != 'group:$groupId') {
+      throw StateError('This voice preview belongs to another conversation.');
+    }
+    await publishGroupFile(
+      groupId: groupId,
+      path: recording.path,
+      fileName: 'voice-message.ogg',
+      mimeType: 'audio/ogg; codecs=opus',
+      voiceMetadata: recording.metadata,
+    );
+    await voiceMessageService.completePreview();
+  }
+
   Future<void> sendAttachmentSource({
     required ContactRecord contact,
     required StagedAttachment source,
@@ -5747,6 +6432,8 @@ class MessengerController extends ChangeNotifier {
     bool forceLanOnly = false,
     DebugAttachmentTestSpec? debugTest,
     bool debugUseSourceInPlace = false,
+    VoiceMessageMetadata? voiceMetadata,
+    String? outgoingMessageId,
   }) async {
     final me = _requireIdentity();
     if (!contact.canSendOutbound) {
@@ -5803,11 +6490,12 @@ class MessengerController extends ChangeNotifier {
           source.poster != null && source.poster!.length <= 32 * 1024
           ? base64Encode(source.poster!)
           : null,
+      voiceMetadata: voiceMetadata,
       createdAt: createdAt,
     );
 
     var message = ChatMessage(
-      id: _randomId('msg'),
+      id: outgoingMessageId ?? _randomId('msg'),
       conversationId: _crypto.conversationIdFor(contact.deviceId),
       senderDeviceId: me.deviceId,
       recipientDeviceId: contact.deviceId,
@@ -5878,11 +6566,12 @@ class MessengerController extends ChangeNotifier {
       noncePrefixBase64: provisionalDescriptor.noncePrefixBase64,
       presentation: provisionalDescriptor.presentation,
       thumbnailBase64: provisionalDescriptor.thumbnailBase64,
+      voiceMetadata: provisionalDescriptor.voiceMetadata,
       createdAt: createdAt,
     );
     message = message.copyWith(attachment: descriptor);
     _upsertMessage(contact.deviceId, message);
-    _outboundAttachments[attachmentId] = _OutboundAttachmentState(
+    final outboundState = _OutboundAttachmentState(
       messageId: message.id,
       peerDeviceId: contact.deviceId,
       sourcePath: prepared.path,
@@ -5891,6 +6580,7 @@ class MessengerController extends ChangeNotifier {
       requiresLan: requiresLan,
       lanOnly: forceLanOnly,
     );
+    _outboundAttachments[attachmentId] = outboundState;
     if (debugTest != null) {
       _outboundDebugAttachmentTests[attachmentId] = debugTest;
     }
@@ -5926,11 +6616,13 @@ class MessengerController extends ChangeNotifier {
     _markRuntimeActivity();
     await _saveSnapshotSilently(notify: true);
 
-    // Enqueue for this contact's serial transfer worker. The worker
-    // dispatches the offer envelope when the previous outbound for the
-    // same contact finishes — or immediately if the queue was empty.
-    _enqueueOutbound(contact, attachmentId);
-    _pumpOutboundQueue(contact);
+    // Let one small image/file proceed beside the current transfer. A
+    // smaller stalled attachment must not block later photos, and the
+    // secondary lane still caps per-contact file concurrency at two.
+    if (!_tryStartSmallAttachmentFastLane(contact, outboundState)) {
+      _enqueueOutbound(contact, attachmentId);
+      _pumpOutboundQueue(contact);
+    }
   }
 
   /// Generates an app-owned deterministic file and sends it through the
@@ -6403,19 +7095,77 @@ class MessengerController extends ChangeNotifier {
       () => <String>[],
     );
     if (!queue.contains(attachmentId) &&
-        _activeOutboundByContact[contact.deviceId] != attachmentId) {
+        _activeOutboundByContact[contact.deviceId] != attachmentId &&
+        _fastOutboundByContact[contact.deviceId] != attachmentId) {
       queue.add(attachmentId);
     }
   }
+
+  bool _tryStartSmallAttachmentFastLane(
+    ContactRecord contact,
+    _OutboundAttachmentState state,
+  ) {
+    final primaryId = _activeOutboundByContact[contact.deviceId];
+    if (primaryId == null ||
+        state.descriptor.sizeBytes > _outboundSmallFileFastLaneBytes ||
+        _fastOutboundByContact.containsKey(contact.deviceId)) {
+      return false;
+    }
+    final now = DateTime.now().toUtc();
+    _fastOutboundByContact[contact.deviceId] = state.descriptor.id;
+    state
+      ..activatedAt = now
+      ..lastChunkAt = now;
+    _armOutboundStallTimer(contact, attachmentId: state.descriptor.id);
+    unawaited(_dispatchAttachmentOffer(contact, state));
+    notifyListeners();
+    return true;
+  }
+
+  bool _isActiveOutbound(String peerDeviceId, String attachmentId) =>
+      _activeOutboundByContact[peerDeviceId] == attachmentId ||
+      _fastOutboundByContact[peerDeviceId] == attachmentId;
 
   /// If no transfer is currently active for [contact], pops the head of the
   /// queue and dispatches its offer envelope. Called from sendAttachment
   /// after enqueue + from attachment_complete / cancel / delete cleanup.
   void _pumpOutboundQueue(ContactRecord contact) {
-    if (_activeOutboundByContact.containsKey(contact.deviceId)) return;
     final queue = _outboundQueueByContact[contact.deviceId];
     if (queue == null || queue.isEmpty) return;
-    final next = queue.removeAt(0);
+    final now = DateTime.now().toUtc();
+    final primaryActive = _activeOutboundByContact.containsKey(
+      contact.deviceId,
+    );
+    if (primaryActive) {
+      if (_fastOutboundByContact.containsKey(contact.deviceId)) return;
+      // Keep the bounded fast lane useful for later photos that were queued
+      // while its previous small transfer was running.
+      final fastIndex = queue.indexWhere((attachmentId) {
+        final candidate = _outboundAttachments[attachmentId];
+        final retryAt = candidate?.nextRetryAt;
+        return candidate != null &&
+            candidate.descriptor.sizeBytes <= _outboundSmallFileFastLaneBytes &&
+            (retryAt == null || !retryAt.isAfter(now));
+      });
+      if (fastIndex < 0) return;
+      final fastId = queue.removeAt(fastIndex);
+      final fastState = _outboundAttachments[fastId];
+      if (fastState == null ||
+          !_tryStartSmallAttachmentFastLane(contact, fastState)) {
+        queue.insert(fastIndex.clamp(0, queue.length).toInt(), fastId);
+      }
+      return;
+    }
+    // A stalled attachment stays resumable, but its backoff must not hold up
+    // unrelated ready attachments for the same contact. Select the first
+    // runnable entry and leave delayed retries in place for its own timer.
+    final nextIndex = queue.indexWhere((attachmentId) {
+      final candidate = _outboundAttachments[attachmentId];
+      final retryAt = candidate?.nextRetryAt;
+      return candidate == null || retryAt == null || !retryAt.isAfter(now);
+    });
+    if (nextIndex < 0) return;
+    final next = queue.removeAt(nextIndex);
     final state = _outboundAttachments[next];
     if (state == null) {
       // Sender-side cancel happened between enqueue + pump. Move on.
@@ -6439,50 +7189,48 @@ class MessengerController extends ChangeNotifier {
     ContactRecord contact,
     _OutboundAttachmentState state,
   ) async {
-    if (!hasIdentity) return;
-    final me = _requireIdentity();
+    if (!hasIdentity) {
+      _clearActiveOutbound(contact.deviceId, state.descriptor.id);
+      _pumpOutboundQueue(contact);
+      return;
+    }
     final descriptor = state.descriptor;
     final message = _messageById(contact.deviceId, state.messageId);
     if (message == null) {
       // Parent ChatMessage was deleted between enqueue + dispatch.
+      _outboundRetryTimers.remove(descriptor.id)?.cancel();
       _outboundAttachments.remove(descriptor.id);
       _clearActiveOutbound(contact.deviceId, descriptor.id);
       _pumpOutboundQueue(contact);
       return;
     }
-    // nightly.10: embed our LAN-direct endpoint hint in the offer so the
-    // receiver can issue chunk_requests directly via HTTP from the very
-    // first chunk — no relay round-trip required even for the request
-    // direction. Empty map when the LAN-direct channel isn't available
-    // (web, sandboxed CI), so peers gracefully fall back to relay.
-    final lanHint = _localLanDirectHintPayload();
-    final debugTest = _outboundDebugAttachmentTests[descriptor.id];
-    final envelope = await _crypto.encryptPayloadEnvelope(
-      kind: 'attachment_offer',
-      messageId: _randomId('aoff'),
-      conversationId: message.conversationId,
-      senderAccountId: me.accountId,
-      senderDeviceId: me.deviceId,
-      recipientDeviceId: contact.deviceId,
-      contact: contact,
-      plaintext: jsonEncode({
-        'descriptor': descriptor.toJson(),
-        'parentMessageId': message.id,
-        'caption': message.body,
-        if (message.albumId != null) 'albumId': message.albumId,
-        // Video poster (small JPEG thumbnail) so the receiver can render
-        // a preview before the full video bytes finish transferring.
-        // Capped at ~32 KB at the sender to keep the offer envelope
-        // under the relay's 256 KB cap.
-        if (_videoPosters[descriptor.id] != null &&
-            _videoPosters[descriptor.id]!.length <= 32 * 1024)
-          'posterBase64': base64Encode(_videoPosters[descriptor.id]!),
-        if (debugTest != null) 'debugFileTest': debugTest.toJson(),
-        ...lanHint,
-      }),
-      createdAt: message.createdAt,
-    );
     try {
+      final me = _requireIdentity();
+      // Keep encryption inside the queue's recovery boundary too: crypto
+      // worker failures must free this slot just like route failures.
+      final lanHint = _localLanDirectHintPayload();
+      final debugTest = _outboundDebugAttachmentTests[descriptor.id];
+      final envelope = await _crypto.encryptPayloadEnvelope(
+        kind: 'attachment_offer',
+        messageId: _randomId('aoff'),
+        conversationId: message.conversationId,
+        senderAccountId: me.accountId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: contact.deviceId,
+        contact: contact,
+        plaintext: jsonEncode({
+          'descriptor': descriptor.toJson(),
+          'parentMessageId': message.id,
+          'caption': message.body,
+          if (message.albumId != null) 'albumId': message.albumId,
+          if (_videoPosters[descriptor.id] != null &&
+              _videoPosters[descriptor.id]!.length <= 32 * 1024)
+            'posterBase64': base64Encode(_videoPosters[descriptor.id]!),
+          if (debugTest != null) 'debugFileTest': debugTest.toJson(),
+          ...lanHint,
+        }),
+        createdAt: message.createdAt,
+      );
       final route = await _deliverToContact(
         contact: contact,
         recipientDeviceId: contact.deviceId,
@@ -6512,10 +7260,23 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  void _armOutboundStallTimer(ContactRecord contact) {
+  void _armOutboundStallTimer(
+    ContactRecord contact, {
+    String? attachmentId,
+    Duration delay = _outboundStallTimeout,
+  }) {
+    if (attachmentId != null &&
+        _fastOutboundByContact[contact.deviceId] == attachmentId) {
+      _fastOutboundTimers.remove(attachmentId)?.cancel();
+      _fastOutboundTimers[attachmentId] = Timer(
+        delay.isNegative ? Duration.zero : delay,
+        () => _onFastOutboundStall(contact, attachmentId),
+      );
+      return;
+    }
     _outboundStallTimers[contact.deviceId]?.cancel();
     _outboundStallTimers[contact.deviceId] = Timer(
-      _outboundStallTimeout,
+      delay.isNegative ? Duration.zero : delay,
       () => _onOutboundStall(contact),
     );
   }
@@ -6548,6 +7309,7 @@ class MessengerController extends ChangeNotifier {
     _OutboundAttachmentState state,
     String reason,
   ) {
+    final attachmentId = state.descriptor.id;
     state.autoRetries = min(state.autoRetries + 1, 1 << 20);
     final delay =
         _transferRetryBackoff[min(
@@ -6567,11 +7329,15 @@ class MessengerController extends ChangeNotifier {
     );
     _clearActiveOutbound(contact.deviceId, state.descriptor.id);
     _enqueueOutbound(contact, state.descriptor.id);
-    _outboundStallTimers[contact.deviceId]?.cancel();
-    _outboundStallTimers[contact.deviceId] = Timer(delay, () {
+    _outboundRetryTimers.remove(attachmentId)?.cancel();
+    _outboundRetryTimers[attachmentId] = Timer(delay, () {
+      _outboundRetryTimers.remove(attachmentId);
       state.nextRetryAt = null;
       _pumpOutboundQueue(contact);
     });
+    // Let other ready files for this contact proceed while this attachment
+    // waits for its retry backoff.
+    _pumpOutboundQueue(contact);
     notifyListeners();
   }
 
@@ -6603,13 +7369,61 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  void _onFastOutboundStall(ContactRecord contact, String attachmentId) {
+    if (_fastOutboundByContact[contact.deviceId] != attachmentId) return;
+    final state = _outboundAttachments[attachmentId];
+    if (state == null) {
+      _clearActiveOutbound(contact.deviceId, attachmentId);
+      _pumpOutboundQueue(contact);
+      return;
+    }
+    if (state.paused ||
+        _transferSessionById(attachmentId)?.lastError == _irohLimitMessage) {
+      _armOutboundStallTimer(contact, attachmentId: attachmentId);
+      return;
+    }
+    state.autoRetries = min(state.autoRetries + 1, 1 << 20);
+    final delay =
+        _transferRetryBackoff[min(
+          state.autoRetries - 1,
+          _transferRetryBackoff.length - 1,
+        )];
+    state.nextRetryAt = DateTime.now().toUtc().add(delay);
+    _setTransferSessionState(
+      attachmentId,
+      TransferState.reconnecting,
+      error: 'No verified block acknowledgement; retrying the small file.',
+    );
+    _updateMessageState(
+      contact.deviceId,
+      state.messageId,
+      DeliveryState.pending,
+    );
+    _clearActiveOutbound(contact.deviceId, attachmentId);
+    _enqueueOutbound(contact, attachmentId);
+    _outboundRetryTimers.remove(attachmentId)?.cancel();
+    _outboundRetryTimers[attachmentId] = Timer(delay, () {
+      _outboundRetryTimers.remove(attachmentId);
+      state.nextRetryAt = null;
+      _pumpOutboundQueue(contact);
+    });
+    // Keep the normal transfer queue moving while this bounded fast-lane
+    // item backs off. The primary lane has its own stall timer.
+    _pumpOutboundQueue(contact);
+    notifyListeners();
+  }
+
   void _clearActiveOutbound(String peerDeviceId, String attachmentId) {
     if (_activeOutboundByContact[peerDeviceId] == attachmentId) {
       _activeOutboundByContact.remove(peerDeviceId);
       _outboundStallTimers.remove(peerDeviceId)?.cancel();
-      // Drop back to idle cadence if no transfer is in flight anywhere.
-      if (!hasActiveTransfer) _reschedulePolling();
     }
+    if (_fastOutboundByContact[peerDeviceId] == attachmentId) {
+      _fastOutboundByContact.remove(peerDeviceId);
+      _fastOutboundTimers.remove(attachmentId)?.cancel();
+    }
+    // Drop back to idle cadence if no transfer is in flight anywhere.
+    if (!hasActiveTransfer) _reschedulePolling();
   }
 
   /// Returns the queue position of [attachmentId] for its contact. Returns
@@ -6624,14 +7438,13 @@ class MessengerController extends ChangeNotifier {
   }
 
   /// Returns the sender-side transfer progress (0..1) for an active outbound
-  /// attachment, or null if the attachment isn't currently active (queued,
-  /// finished, or unknown). UI uses null to mean "show queued/idle status
-  /// instead of a progress bar".
+  /// attachment (including the bounded small-file lane), or null if it is
+  /// queued, finished, or unknown.
   double? outboundAttachmentProgress(String attachmentId) {
     final state = _outboundAttachments[attachmentId];
     if (state == null) return null;
     // Only show progress for the active item per contact.
-    if (_activeOutboundByContact[state.peerDeviceId] != attachmentId) {
+    if (!_isActiveOutbound(state.peerDeviceId, attachmentId)) {
       return null;
     }
     final total = state.descriptor.effectiveChunkCount;
@@ -7874,6 +8687,11 @@ class MessengerController extends ChangeNotifier {
     required String groupId,
     required String body,
     ChatMessage? replyTo,
+    PollDefinition? poll,
+    PollVote? pollVote,
+    bool pollClosed = false,
+    Map<String, String>? pollClosedCheckpoint,
+    String? outgoingMessageId,
   }) async {
     final me = _requireIdentity();
     final group = _requireGroup(groupId);
@@ -7884,6 +8702,60 @@ class MessengerController extends ChangeNotifier {
     if (!group.hasActiveMember(me.deviceId)) {
       throw ArgumentError('You are no longer a member of this group.');
     }
+    if (poll != null && pollVote != null) {
+      throw ArgumentError(
+        'A poll definition and a vote cannot share an event.',
+      );
+    }
+    if (poll != null && !poll.hasValidShape) {
+      throw ArgumentError('The poll definition is invalid.');
+    }
+    if (pollVote != null && !pollVote.hasValidShape) {
+      throw ArgumentError('The poll vote is invalid.');
+    }
+    if (pollVote != null &&
+        !pollClosed &&
+        messagesForGroup(groupId)
+                .where((message) => message.poll?.id == pollVote.pollId)
+                .firstOrNull
+                ?.poll
+                ?.mode ==
+            PollChoiceMode.single &&
+        pollVote.optionIndexes.length > 1) {
+      throw ArgumentError('Single-choice polls accept only one option.');
+    }
+    if (poll != null && poll.creatorDeviceId != me.deviceId) {
+      throw StateError('Only the poll creator may publish the poll.');
+    }
+    if (pollVote != null) {
+      if (pollVote.voterDeviceId != me.deviceId) {
+        throw StateError('A poll vote must be signed by its voter.');
+      }
+      if (pollClosed && pollVote.optionIndexes.isNotEmpty) {
+        throw ArgumentError('A closing checkpoint cannot contain new choices.');
+      }
+      if (pollClosed) {
+        if (pollClosedCheckpoint == null ||
+            pollClosedCheckpoint.length > 16 ||
+            pollClosedCheckpoint.entries.any(
+              (entry) =>
+                  entry.key.isEmpty ||
+                  entry.key.length > 160 ||
+                  !RegExp(r'^[0-9a-f]{64}$').hasMatch(entry.value),
+            )) {
+          throw ArgumentError('The poll close checkpoint is invalid.');
+        }
+        final source = messagesForGroup(groupId).firstWhere(
+          (message) => message.poll?.id == pollVote.pollId,
+          orElse: () => throw StateError('Poll not found.'),
+        );
+        if (source.poll?.creatorDeviceId != me.deviceId) {
+          throw StateError('Only the poll creator may close this poll.');
+        }
+      }
+    } else if (pollClosed || pollClosedCheckpoint != null) {
+      throw ArgumentError('Poll closure requires a creator vote checkpoint.');
+    }
     final profiledGroup = _refreshGroupMemberProfiles(group);
     if (!_sameGroupMemberProfiles(profiledGroup, group)) {
       _upsertGroup(profiledGroup);
@@ -7893,7 +8765,7 @@ class MessengerController extends ChangeNotifier {
       throw ArgumentError('No reachable group member profiles are available.');
     }
     final message = ChatMessage(
-      id: _randomId('gmsg'),
+      id: outgoingMessageId ?? _randomId('gmsg'),
       conversationId: profiledGroup.groupId,
       senderDeviceId: me.deviceId,
       recipientDeviceId: profiledGroup.groupId,
@@ -7908,6 +8780,10 @@ class MessengerController extends ChangeNotifier {
       replySenderDisplayName: replyTo == null
           ? null
           : _replySenderDisplayName(replyTo),
+      poll: poll,
+      pollVote: pollVote,
+      pollClosed: pollClosed,
+      pollClosedCheckpoint: pollClosedCheckpoint,
       recipientStates: {
         for (final contact in recipientContacts)
           contact.deviceId: DeliveryState.pending,
@@ -7931,6 +8807,243 @@ class MessengerController extends ChangeNotifier {
         message: message,
       );
     }
+  }
+
+  Future<void> createGroupPoll({
+    required String groupId,
+    required String question,
+    required List<String> options,
+    PollChoiceMode mode = PollChoiceMode.single,
+  }) async {
+    final cleanQuestion = question.trim();
+    final cleanOptions = options.map((value) => value.trim()).toList();
+    if (cleanQuestion.isEmpty || cleanQuestion.length > 512) {
+      throw ArgumentError('Poll questions must contain 1–512 characters.');
+    }
+    if (cleanOptions.length < 2 ||
+        cleanOptions.length > 10 ||
+        cleanOptions.any((value) => value.isEmpty || value.length > 128) ||
+        cleanOptions.toSet().length != cleanOptions.length) {
+      throw ArgumentError('Polls need 2–10 unique non-empty options.');
+    }
+    final me = _requireIdentity();
+    final poll = PollDefinition(
+      id: _randomId('poll'),
+      question: cleanQuestion,
+      options: cleanOptions,
+      mode: mode,
+      creatorDeviceId: me.deviceId,
+      createdAt: _now().toUtc(),
+    );
+    await sendGroupMessage(
+      groupId: groupId,
+      body: 'Poll: ${poll.question}',
+      poll: poll,
+    );
+  }
+
+  Future<void> voteInGroupPoll({
+    required String groupId,
+    required String pollId,
+    required Iterable<int> optionIndexes,
+  }) async {
+    final messages = messagesForGroup(groupId);
+    final source = messages.firstWhere(
+      (message) => message.poll?.id == pollId,
+      orElse: () => throw StateError('Poll not found.'),
+    );
+    final poll = source.poll!;
+    if (groupPollProjection(groupId, pollId)?.definition.isClosed == true ||
+        poll.isClosed) {
+      throw StateError('This poll is closed.');
+    }
+    final selected = optionIndexes.toSet().toList()..sort();
+    if (selected.any((index) => index < 0 || index >= poll.options.length)) {
+      throw ArgumentError('Poll option is out of range.');
+    }
+    if (poll.mode == PollChoiceMode.single &&
+        selected.isNotEmpty &&
+        selected.length != 1) {
+      throw ArgumentError('Choose exactly one option.');
+    }
+    final me = _requireIdentity();
+    final vote = PollVote(
+      pollId: pollId,
+      voterDeviceId: me.deviceId,
+      optionIndexes: selected.map((value) => '$value'),
+      changedAt: _now().toUtc(),
+    );
+    await sendGroupMessage(
+      groupId: groupId,
+      body: selected.isEmpty
+          ? 'Poll vote retracted'
+          : 'Poll vote: ${selected.join(', ')}',
+      pollVote: vote,
+    );
+  }
+
+  Future<void> closeGroupPoll({
+    required String groupId,
+    required String pollId,
+  }) async {
+    _requireGroup(groupId);
+    final me = _requireIdentity();
+    final source = messagesForGroup(groupId).firstWhere(
+      (message) => message.poll?.id == pollId,
+      orElse: () => throw StateError('Poll not found.'),
+    );
+    if (source.poll!.creatorDeviceId != me.deviceId) {
+      throw StateError('Only the poll creator can close it.');
+    }
+    final latestVotes = <String, ChatMessage>{};
+    for (final message in messagesForGroup(groupId)) {
+      final vote = message.pollVote;
+      if (vote?.pollId != pollId ||
+          (message.pollClosed && vote!.optionIndexes.isEmpty)) {
+        continue;
+      }
+      final current = latestVotes[vote!.voterDeviceId];
+      if (current == null || _comparePollEventOrder(message, current) > 0) {
+        latestVotes[vote.voterDeviceId] = message;
+      }
+    }
+    final checkpoint = <String, String>{
+      for (final entry in latestVotes.entries)
+        if (entry.value.groupHistoryEventId != null)
+          entry.key: entry.value.groupHistoryEventId!,
+    };
+    await sendGroupMessage(
+      groupId: groupId,
+      body: 'Poll closed',
+      pollVote: PollVote(
+        pollId: pollId,
+        voterDeviceId: me.deviceId,
+        optionIndexes: const <String>[],
+        changedAt: _now().toUtc(),
+      ),
+      pollClosed: true,
+      pollClosedCheckpoint: checkpoint,
+    );
+  }
+
+  int _comparePollEventOrder(ChatMessage left, ChatMessage right) {
+    final leftHasOrder = left.groupHistoryEventId != null;
+    final rightHasOrder = right.groupHistoryEventId != null;
+    if (leftHasOrder && rightHasOrder) {
+      final lamport = (left.groupHistoryLamport ?? 0).compareTo(
+        right.groupHistoryLamport ?? 0,
+      );
+      if (lamport != 0) return lamport;
+      final author = (left.groupHistoryAuthorDeviceId ?? left.senderDeviceId)
+          .compareTo(right.groupHistoryAuthorDeviceId ?? right.senderDeviceId);
+      if (author != 0) return author;
+      final sequence = (left.groupHistorySequence ?? 0).compareTo(
+        right.groupHistorySequence ?? 0,
+      );
+      if (sequence != 0) return sequence;
+      return left.groupHistoryEventId!.compareTo(right.groupHistoryEventId!);
+    }
+    if (leftHasOrder != rightHasOrder) return leftHasOrder ? 1 : -1;
+    final time = left.createdAt.compareTo(right.createdAt);
+    if (time != 0) return time;
+    return left.id.compareTo(right.id);
+  }
+
+  PollProjection? groupPollProjection(String groupId, String pollId) {
+    final messages = messagesForGroup(groupId);
+    final source = messages
+        .where((message) => message.poll?.id == pollId)
+        .firstOrNull;
+    if (source?.poll == null) return null;
+    final poll = source!.poll!;
+    final latestVoteMessages = <String, ChatMessage>{};
+    var closedAt = poll.closedAt;
+    String? closedCheckpointEventId;
+    ({int lamport, String author, int sequence, String id})? closedEvent;
+    for (final message in messages) {
+      final vote = message.pollVote;
+      if (vote?.pollId != pollId) continue;
+      final currentVote = vote!;
+      if (!(message.pollClosed && currentVote.optionIndexes.isEmpty)) {
+        final old = latestVoteMessages[currentVote.voterDeviceId];
+        if (old == null || _comparePollEventOrder(message, old) > 0) {
+          latestVoteMessages[currentVote.voterDeviceId] = message;
+        }
+      }
+      if (message.pollClosed &&
+          currentVote.voterDeviceId == poll.creatorDeviceId) {
+        final eventId = message.groupHistoryEventId;
+        final candidate = eventId == null
+            ? null
+            : (
+                lamport: message.groupHistoryLamport ?? 0,
+                author: message.groupHistoryAuthorDeviceId ?? '',
+                sequence: message.groupHistorySequence ?? 0,
+                id: eventId,
+              );
+        final previousClosedEvent = closedEvent;
+        final isEarlier =
+            candidate != null &&
+            (previousClosedEvent == null ||
+                candidate.lamport < previousClosedEvent.lamport ||
+                (candidate.lamport == previousClosedEvent.lamport &&
+                    (candidate.author.compareTo(previousClosedEvent.author) <
+                            0 ||
+                        (candidate.author == previousClosedEvent.author &&
+                            candidate.sequence <
+                                previousClosedEvent.sequence))));
+        if (closedEvent == null || isEarlier) {
+          closedAt = message.createdAt;
+          closedCheckpointEventId = eventId;
+          closedEvent = candidate;
+        }
+      }
+    }
+    final votes = <String, PollVote>{};
+    final unconfirmedVotes = <String, PollVote>{};
+    final checkpointMessage = closedCheckpointEventId == null
+        ? null
+        : messages
+              .where(
+                (message) =>
+                    message.groupHistoryEventId == closedCheckpointEventId,
+              )
+              .firstOrNull;
+    for (final entry in latestVoteMessages.entries) {
+      final message = entry.value;
+      final vote = message.pollVote!;
+      final expectedEventId =
+          checkpointMessage?.pollClosedCheckpoint[entry.key];
+      final included =
+          closedAt == null ||
+          (expectedEventId != null &&
+              expectedEventId == message.groupHistoryEventId) ||
+          (checkpointMessage?.pollClosedCheckpoint.isEmpty == true &&
+              checkpointMessage != null &&
+              _comparePollEventOrder(message, checkpointMessage) < 0);
+      if (included) {
+        votes[entry.key] = vote;
+      } else {
+        unconfirmedVotes[entry.key] = vote;
+      }
+    }
+    final definition = closedAt == null
+        ? poll
+        : PollDefinition(
+            id: poll.id,
+            question: poll.question,
+            options: poll.options,
+            mode: poll.mode,
+            creatorDeviceId: poll.creatorDeviceId,
+            createdAt: poll.createdAt,
+            closedAt: closedAt,
+          );
+    return PollProjection(
+      definition: definition,
+      votes: votes,
+      unconfirmedVotes: unconfirmedVotes,
+      closedCheckpointEventId: closedCheckpointEventId,
+    );
   }
 
   void _attachGroupHistoryOrder(
@@ -7986,19 +9099,26 @@ class MessengerController extends ChangeNotifier {
   /// Publish a group attachment from an app-owned staged path, then seed the
   /// local verified cache so other members can fetch pieces from this device.
   /// The signed history event is durable before any peer announcement.
-  Future<void> publishGroupFile({
+  Future<String> publishGroupFile({
     required String groupId,
     required String path,
     required String fileName,
     required String mimeType,
+    String? scheduledOperationId,
+    VoiceMessageMetadata? voiceMetadata,
   }) async {
     final group = _requireGroup(groupId);
     final manifest = await hashGroupFile(
       path: path,
       fileName: fileName,
       mimeType: mimeType,
+      voiceMetadata: voiceMetadata,
     );
-    final event = await _groupHistory.publishFile(group, manifest);
+    final event = await _groupHistory.publishFile(
+      group,
+      manifest,
+      scheduledOperationId: scheduledOperationId,
+    );
     _projectGroupFile(groupId, event, manifest);
     final session = await _registerGroupFile(event);
     await session.seedExisting(path);
@@ -8016,6 +9136,7 @@ class MessengerController extends ChangeNotifier {
       );
     }
     setStatus('Shared $fileName with the group.');
+    return event.eventId;
   }
 
   Future<void> setGroupFilePreference(
@@ -8183,14 +9304,16 @@ class MessengerController extends ChangeNotifier {
         } else {
           unawaited(_sendAttachmentCancel(entry.contact, attachmentId));
           _clearOutboundAttempt(entry.contact.deviceId, entry.message.id);
+          _outboundRetryTimers.remove(attachmentId)?.cancel();
           _outboundAttachments.remove(attachmentId);
-          _activeOutboundByContact.remove(entry.contact.deviceId);
+          _clearActiveOutbound(entry.contact.deviceId, attachmentId);
           _outboundQueueByContact[entry.contact.deviceId]?.remove(attachmentId);
           _updateMessageState(
             entry.contact.deviceId,
             entry.message.id,
             DeliveryState.canceled,
           );
+          _pumpOutboundQueue(entry.contact);
         }
       } catch (_) {
         // Best-effort; per-member failure should not block the rest.
@@ -8476,6 +9599,7 @@ class MessengerController extends ChangeNotifier {
     if (contact == null) return;
     unawaited(_sendAttachmentCancel(contact, attachmentId));
     _clearOutboundAttempt(contact.deviceId, state.messageId);
+    _outboundRetryTimers.remove(attachmentId)?.cancel();
     _outboundAttachments.remove(attachmentId);
     _clearActiveOutbound(contact.deviceId, attachmentId);
     _outboundQueueByContact[contact.deviceId]?.remove(attachmentId);
@@ -9426,6 +10550,7 @@ class MessengerController extends ChangeNotifier {
       final me = _requireIdentity();
       final pollRoutes = _pollRoutesForIdentity(me);
       var processed = 0;
+      var displayableProcessed = 0;
       var attemptedRelay = false;
       var relaySuccess = false;
       final routeNotes = <String>[];
@@ -9461,14 +10586,17 @@ class MessengerController extends ChangeNotifier {
           if (route.kind == PeerRouteKind.relay) {
             relaySuccess = true;
           }
-          processed += await _processEnvelopes(
+          final routeProcessed = await _processEnvelopes(
             envelopes,
             failOnProcessingError: true,
           );
+          processed += routeProcessed;
           // The lease is the relay's durability boundary. Persist message,
-          // range-journal and dedupe mutations before deleting its rows so a
-          // process crash can only replay, never lose, an accepted envelope.
-          if (envelopes.isNotEmpty) {
+          // range-journal and dedupe mutations before deleting its rows. Pure
+          // transfer telemetry is idempotent and may safely replay if the
+          // process stops before a later durable snapshot.
+          if (_needsEnvelopeDurability(envelopes)) {
+            displayableProcessed += routeProcessed;
             await _saveSnapshotSilently(notify: false);
           }
           if (batch.leaseId case final leaseId?) {
@@ -9491,7 +10619,9 @@ class MessengerController extends ChangeNotifier {
           }
         }
       }
-      processed += await _pollLanLobbyMailbox();
+      final lobbyProcessed = await _pollLanLobbyMailbox();
+      processed += lobbyProcessed;
+      displayableProcessed += lobbyProcessed;
       await _retryUnacknowledgedMessages();
       final heartbeatResult = await _runHeartbeatPass();
 
@@ -9500,10 +10630,12 @@ class MessengerController extends ChangeNotifier {
         internetRelayHealthy: attemptedRelay ? relaySuccess : null,
       );
       if (processed > 0) {
-        _markRuntimeActivity();
-        _setTransientStatus(
-          'Received $processed item(s) via ${routeNotes.isEmpty ? 'known routes' : routeNotes.join(', ')}.',
-        );
+        if (displayableProcessed > 0) {
+          _markRuntimeActivity();
+          _setTransientStatus(
+            'Received $displayableProcessed item(s) via ${routeNotes.isEmpty ? 'known routes' : routeNotes.join(', ')}.',
+          );
+        }
       } else if (heartbeatResult.changed) {
         await _saveSnapshotSilently(debounce: true);
       } else {
@@ -9615,7 +10747,10 @@ class MessengerController extends ChangeNotifier {
       if (envelopes.isNotEmpty) {
         try {
           await _processEnvelopes(envelopes, failOnProcessingError: true);
-          await _saveSnapshotSilently(notify: false);
+          final needsDurability = _needsEnvelopeDurability(envelopes);
+          if (needsDurability) {
+            await _saveSnapshotSilently(notify: false);
+          }
           if (batch.leaseId case final leaseId?) {
             await _relayClient.acknowledgeLease(
               host: route.host,
@@ -9636,8 +10771,10 @@ class MessengerController extends ChangeNotifier {
           );
           continue;
         }
-        _markRuntimeActivity();
-        notifyListeners();
+        if (_needsEnvelopeDurability(envelopes)) {
+          _markRuntimeActivity();
+          notifyListeners();
+        }
       } else if (stopwatch.elapsed < const Duration(seconds: 1)) {
         // Relay returned empty almost instantly — either it doesn't speak
         // `wait_ms` (older build) or there's nothing in the mailbox. Sleep
@@ -9698,8 +10835,489 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  List<ChatFolder> get chatFolders =>
+      List<ChatFolder>.unmodifiable(_snapshot.chatFolders);
+
+  List<ScheduledMessage> get scheduledMessages =>
+      List<ScheduledMessage>.unmodifiable(_snapshot.scheduledMessages);
+
+  List<String> conversationIdsForFolder(String? folderId) {
+    if (folderId == null || folderId == 'all') return const <String>[];
+    return _snapshot.chatFolders
+        .firstWhere(
+          (folder) => folder.id == folderId,
+          orElse: () => ChatFolder(
+            id: folderId,
+            name: '',
+            conversationIds: const <String>[],
+            createdAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+            updatedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+          ),
+        )
+        .conversationIds;
+  }
+
+  Future<ChatFolder> createChatFolder(
+    String name, {
+    Iterable<String> conversationIds = const <String>[],
+  }) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty || trimmed.length > 48) {
+      throw ArgumentError('Folder names must contain 1–48 characters.');
+    }
+    final now = _now().toUtc();
+    final folder = ChatFolder(
+      id: _randomId('folder'),
+      name: trimmed,
+      conversationIds: conversationIds,
+      createdAt: now,
+      updatedAt: now,
+    );
+    _snapshot = _snapshot.copyWith(
+      chatFolders: [..._snapshot.chatFolders, folder],
+    );
+    await _saveSnapshotSilently();
+    return folder;
+  }
+
+  Future<void> updateChatFolder(
+    String folderId, {
+    String? name,
+    Iterable<String>? conversationIds,
+  }) async {
+    final index = _snapshot.chatFolders.indexWhere(
+      (folder) => folder.id == folderId,
+    );
+    if (index < 0) throw StateError('Folder not found.');
+    final current = _snapshot.chatFolders[index];
+    final trimmed = name?.trim();
+    if (trimmed != null && (trimmed.isEmpty || trimmed.length > 48)) {
+      throw ArgumentError('Folder names must contain 1–48 characters.');
+    }
+    final folders = [..._snapshot.chatFolders];
+    folders[index] = current.copyWith(
+      name: trimmed,
+      conversationIds: conversationIds,
+      updatedAt: _now().toUtc(),
+    );
+    _snapshot = _snapshot.copyWith(chatFolders: folders);
+    await _saveSnapshotSilently();
+  }
+
+  Future<void> deleteChatFolder(String folderId) async {
+    final folders = _snapshot.chatFolders
+        .where((folder) => folder.id != folderId)
+        .toList(growable: false);
+    if (folders.length == _snapshot.chatFolders.length) return;
+    _snapshot = _snapshot.copyWith(chatFolders: folders);
+    await _saveSnapshotSilently();
+  }
+
+  Future<void> reorderChatFolders(int oldIndex, int newIndex) async {
+    final folders = [..._snapshot.chatFolders];
+    if (oldIndex < 0 || oldIndex >= folders.length) return;
+    if (newIndex > oldIndex) newIndex--;
+    newIndex = newIndex.clamp(0, folders.length - 1);
+    final folder = folders.removeAt(oldIndex);
+    folders.insert(newIndex, folder.copyWith(updatedAt: _now().toUtc()));
+    _snapshot = _snapshot.copyWith(chatFolders: folders);
+    await _saveSnapshotSilently();
+  }
+
+  Future<ScheduledMessage> scheduleTextMessage({
+    required ConversationKind kind,
+    required String conversationId,
+    required String body,
+    required DateTime scheduledAt,
+  }) async {
+    final trimmed = body.trim();
+    if (trimmed.isEmpty) throw ArgumentError('Scheduled message is empty.');
+    final due = scheduledAt.toUtc();
+    final entry = ScheduledMessage(
+      id: _randomId('scheduled'),
+      conversationId: conversationId,
+      conversationKind: kind.name,
+      body: trimmed,
+      scheduledAtUtc: due,
+      createdAt: _now().toUtc(),
+    );
+    _snapshot = _snapshot.copyWith(
+      scheduledMessages: [..._snapshot.scheduledMessages, entry],
+    );
+    await _saveSnapshotSilently();
+    _scheduleScheduledMessagePump();
+    return entry;
+  }
+
+  /// Stages a scheduled direct attachment into app-owned storage before the
+  /// schedule is confirmed. The original picker path is never retained, so
+  /// dispatch remains safe after restart or source removal.
+  Future<({String id, String path, String relativePath})>
+  _stageScheduledAttachmentSource(StagedAttachment source) async {
+    final id = _randomId('scheduled');
+    final root = await _attachmentRoot();
+    final capacity = await _storageCapacityProvider(root.path);
+    if (!_canAllocateStorage(capacity, source.sizeBytes)) {
+      throw AttachmentSpoolException(
+        _storageReserveFraction > 0
+            ? 'Not enough storage to stage this scheduled file while keeping the 10% free-space reserve.'
+            : 'Not enough free storage to stage this scheduled file.',
+      );
+    }
+    final directory = Directory(p.join(root.path, 'scheduled'));
+    await directory.create(recursive: true);
+    final relativePath = p.join('scheduled', '$id.bin');
+    final target = File(p.join(root.path, relativePath));
+    final temporary = File('${target.path}.tmp');
+    try {
+      await temporary.create(recursive: true);
+      await restrictFileToOwner(temporary);
+      await copyAndHashAttachment(source, temporary.path);
+      await temporary.rename(target.path);
+    } catch (_) {
+      try {
+        if (await temporary.exists()) await temporary.delete();
+      } catch (_) {}
+      rethrow;
+    }
+    return (id: id, path: target.path, relativePath: relativePath);
+  }
+
+  Future<ScheduledMessage> scheduleAttachment({
+    required ContactRecord contact,
+    required StagedAttachment source,
+    required DateTime scheduledAt,
+    String caption = '',
+  }) async {
+    if (!contact.canSendOutbound) {
+      throw StateError('This contact is not approved for scheduled delivery.');
+    }
+    final trimmedCaption = caption.trim();
+    if (trimmedCaption.length > 4096) {
+      throw ArgumentError('Scheduled captions are limited to 4096 characters.');
+    }
+    final staged = await _stageScheduledAttachmentSource(source);
+    final id = staged.id;
+    final entry = ScheduledMessage(
+      id: id,
+      conversationId: contact.deviceId,
+      conversationKind: ConversationKind.direct.name,
+      body: trimmedCaption,
+      scheduledAtUtc: scheduledAt.toUtc(),
+      createdAt: _now().toUtc(),
+      attachmentId: id,
+      attachmentPath: staged.relativePath,
+      attachmentFileName: source.fileName,
+      attachmentMimeType: source.mimeType,
+      attachmentSizeBytes: source.sizeBytes,
+    );
+    try {
+      _snapshot = _snapshot.copyWith(
+        scheduledMessages: [..._snapshot.scheduledMessages, entry],
+      );
+      await _saveSnapshotSilently();
+    } catch (_) {
+      try {
+        if (await File(staged.path).exists()) await File(staged.path).delete();
+      } catch (_) {}
+      rethrow;
+    }
+    _scheduleScheduledMessagePump();
+    return entry;
+  }
+
+  Future<ScheduledMessage> scheduleGroupAttachment({
+    required String groupId,
+    required StagedAttachment source,
+    required DateTime scheduledAt,
+  }) async {
+    final group = _requireGroup(groupId);
+    final me = _requireIdentity();
+    if (!group.hasActiveMember(me.deviceId)) {
+      throw StateError('You are no longer a member of this group.');
+    }
+    if (group.activeMemberDeviceIds.length < 2) {
+      throw StateError('A group file needs at least one other member.');
+    }
+    final staged = await _stageScheduledAttachmentSource(source);
+    final entry = ScheduledMessage(
+      id: staged.id,
+      conversationId: groupId,
+      conversationKind: ConversationKind.group.name,
+      body: '',
+      scheduledAtUtc: scheduledAt.toUtc(),
+      createdAt: _now().toUtc(),
+      attachmentId: staged.id,
+      attachmentPath: staged.relativePath,
+      attachmentFileName: source.fileName,
+      attachmentMimeType: source.mimeType,
+      attachmentSizeBytes: source.sizeBytes,
+    );
+    try {
+      _snapshot = _snapshot.copyWith(
+        scheduledMessages: [..._snapshot.scheduledMessages, entry],
+      );
+      await _saveSnapshotSilently();
+    } catch (_) {
+      await _deleteScheduledAttachment(entry);
+      rethrow;
+    }
+    _scheduleScheduledMessagePump();
+    return entry;
+  }
+
+  Future<void> cancelScheduledMessage(String id) async {
+    final entries = _snapshot.scheduledMessages;
+    final index = entries.indexWhere((entry) => entry.id == id);
+    if (index < 0) return;
+    if (_scheduledDispatches.contains(id) ||
+        entries[index].state == ScheduledMessageState.sending) {
+      throw StateError('This message is already being handed to delivery.');
+    }
+    if (entries[index].state == ScheduledMessageState.sent) return;
+    final updated = [...entries];
+    updated[index] = updated[index].copyWith(
+      state: ScheduledMessageState.canceled,
+    );
+    _snapshot = _snapshot.copyWith(scheduledMessages: updated);
+    await _saveSnapshotSilently();
+    await _deleteScheduledAttachment(updated[index]);
+    _scheduleScheduledMessagePump();
+  }
+
+  Future<void> rescheduleMessage(String id, DateTime scheduledAt) async {
+    final entries = _snapshot.scheduledMessages;
+    final index = entries.indexWhere((entry) => entry.id == id);
+    if (index < 0) throw StateError('Scheduled message not found.');
+    if (_scheduledDispatches.contains(id) ||
+        entries[index].state == ScheduledMessageState.sending ||
+        entries[index].state == ScheduledMessageState.sent ||
+        entries[index].state == ScheduledMessageState.canceled) {
+      throw StateError('Only a waiting or blocked message can be rescheduled.');
+    }
+    final updated = [...entries];
+    updated[index] = updated[index].copyWith(
+      scheduledAtUtc: scheduledAt.toUtc(),
+      state: ScheduledMessageState.waiting,
+      clearFailureReason: true,
+    );
+    _snapshot = _snapshot.copyWith(scheduledMessages: updated);
+    await _saveSnapshotSilently();
+    _scheduleScheduledMessagePump();
+  }
+
+  Future<void> editScheduledMessage(String id, String body) async {
+    final entries = [..._snapshot.scheduledMessages];
+    final index = entries.indexWhere((entry) => entry.id == id);
+    if (index < 0) throw StateError('Scheduled message not found.');
+    final entry = entries[index];
+    if (_scheduledDispatches.contains(id) ||
+        entry.state == ScheduledMessageState.sending ||
+        entry.state == ScheduledMessageState.sent ||
+        entry.state == ScheduledMessageState.canceled) {
+      throw StateError('Only a waiting or blocked message can be edited.');
+    }
+    final trimmed = body.trim();
+    if (entry.attachmentPath == null && trimmed.isEmpty) {
+      throw ArgumentError('Scheduled message is empty.');
+    }
+    if (trimmed.length > 4096) {
+      throw ArgumentError('Scheduled message is too long.');
+    }
+    entries[index] = entry.copyWith(
+      body: trimmed,
+      state: ScheduledMessageState.waiting,
+      clearFailureReason: true,
+    );
+    _snapshot = _snapshot.copyWith(scheduledMessages: entries);
+    await _saveSnapshotSilently();
+    _scheduleScheduledMessagePump();
+  }
+
+  Future<void> sendScheduledMessageNow(String id) async {
+    final entry = _snapshot.scheduledMessages.firstWhere(
+      (value) => value.id == id,
+      orElse: () => throw StateError('Scheduled message not found.'),
+    );
+    if (entry.state == ScheduledMessageState.canceled) {
+      throw StateError('This scheduled message was canceled.');
+    }
+    await _dispatchScheduledMessage(entry);
+  }
+
+  void _scheduleScheduledMessagePump() {
+    _scheduledMessageTimer?.cancel();
+    final next = _snapshot.scheduledMessages
+        .where((entry) => entry.state == ScheduledMessageState.waiting)
+        .fold<DateTime?>(null, (current, entry) {
+          if (current == null || entry.scheduledAtUtc.isBefore(current)) {
+            return entry.scheduledAtUtc;
+          }
+          return current;
+        });
+    final identity = _snapshot.identity;
+    final wakeupEnabled =
+        !_appInForeground &&
+        !kIsWeb &&
+        Platform.isAndroid &&
+        experimentalAndroidBackgroundRuntimeAvailable &&
+        (identity?.androidBackgroundRuntimeEnabled ?? false);
+    unawaited(
+      _platformBridge.scheduleAndroidScheduledMessageWakeup(
+        wakeupEnabled ? next : null,
+      ),
+    );
+    if (next == null) return;
+    final delay = next.difference(_now().toUtc());
+    _scheduledMessageTimer = Timer(
+      delay.isNegative ? Duration.zero : delay,
+      () => unawaited(_pumpScheduledMessages()),
+    );
+  }
+
+  Future<void> _pumpScheduledMessages() async {
+    final due = _snapshot.scheduledMessages
+        .where(
+          (entry) =>
+              entry.state == ScheduledMessageState.waiting &&
+              !entry.scheduledAtUtc.isAfter(_now().toUtc()),
+        )
+        .toList(growable: false);
+    for (final entry in due) {
+      await _dispatchScheduledMessage(entry);
+    }
+    _scheduleScheduledMessagePump();
+  }
+
+  Future<void> _dispatchScheduledMessage(ScheduledMessage entry) async {
+    final entries = [..._snapshot.scheduledMessages];
+    final index = entries.indexWhere((value) => value.id == entry.id);
+    if (index < 0 ||
+        _scheduledDispatches.contains(entry.id) ||
+        entries[index].state == ScheduledMessageState.sent ||
+        entries[index].state == ScheduledMessageState.canceled ||
+        entries[index].state == ScheduledMessageState.sending) {
+      return;
+    }
+    _scheduledDispatches.add(entry.id);
+    entries[index] = entries[index].copyWith(
+      state: ScheduledMessageState.sending,
+    );
+    _snapshot = _snapshot.copyWith(scheduledMessages: entries);
+    try {
+      await _saveSnapshotSilently(notify: false);
+      var dispatchedMessageId = entry.id;
+      if (entry.conversationKind == ConversationKind.group.name) {
+        if (entry.attachmentPath != null) {
+          final root = await _attachmentRoot();
+          final path = p.normalize(p.join(root.path, entry.attachmentPath!));
+          if (!isContainedPath(root.path, path)) {
+            throw StateError('Scheduled group attachment path is invalid.');
+          }
+          final file = File(path);
+          if (!await file.exists()) {
+            throw StateError(
+              'Scheduled group attachment is no longer available.',
+            );
+          }
+          dispatchedMessageId = await publishGroupFile(
+            groupId: entry.conversationId,
+            path: path,
+            fileName: entry.attachmentFileName ?? 'attachment',
+            mimeType: entry.attachmentMimeType ?? 'application/octet-stream',
+            scheduledOperationId: entry.id,
+          );
+        } else {
+          await sendGroupMessage(
+            groupId: entry.conversationId,
+            body: entry.body,
+            outgoingMessageId: entry.id,
+          );
+        }
+      } else {
+        final contact = _contactByDeviceId(entry.conversationId);
+        if (contact == null) {
+          throw StateError('Contact is no longer available.');
+        }
+        if (entry.attachmentPath != null) {
+          final root = await _attachmentRoot();
+          final path = p.normalize(p.join(root.path, entry.attachmentPath!));
+          if (!isContainedPath(root.path, path)) {
+            throw StateError('Scheduled attachment path is invalid.');
+          }
+          final file = File(path);
+          if (!await file.exists()) {
+            throw StateError('Scheduled attachment is no longer available.');
+          }
+          await sendAttachmentSource(
+            contact: contact,
+            source: StagedAttachment(
+              id: entry.attachmentId ?? entry.id,
+              fileName: entry.attachmentFileName ?? 'attachment',
+              mimeType: entry.attachmentMimeType ?? 'application/octet-stream',
+              sizeBytes: entry.attachmentSizeBytes ?? await file.length(),
+              filePath: path,
+            ),
+            caption: entry.body,
+            outgoingMessageId: entry.id,
+          );
+        } else {
+          await sendMessage(
+            contact: contact,
+            body: entry.body,
+            outgoingMessageId: entry.id,
+          );
+        }
+      }
+      final latest = [..._snapshot.scheduledMessages];
+      final latestIndex = latest.indexWhere((value) => value.id == entry.id);
+      if (latestIndex >= 0) {
+        latest[latestIndex] = latest[latestIndex].copyWith(
+          state: ScheduledMessageState.sent,
+          outgoingMessageId: dispatchedMessageId,
+          clearFailureReason: true,
+        );
+        _snapshot = _snapshot.copyWith(scheduledMessages: latest);
+        await _saveSnapshotSilently();
+        await _deleteScheduledAttachment(latest[latestIndex]);
+      }
+    } catch (error) {
+      final latest = [..._snapshot.scheduledMessages];
+      final latestIndex = latest.indexWhere((value) => value.id == entry.id);
+      if (latestIndex >= 0) {
+        latest[latestIndex] = latest[latestIndex].copyWith(
+          state: ScheduledMessageState.blocked,
+          failureReason: '$error',
+        );
+        _snapshot = _snapshot.copyWith(scheduledMessages: latest);
+        await _saveSnapshotSilently();
+      }
+    } finally {
+      _scheduledDispatches.remove(entry.id);
+    }
+  }
+
+  Future<void> _deleteScheduledAttachment(ScheduledMessage entry) async {
+    final relative = entry.attachmentPath;
+    if (relative == null || relative.isEmpty) return;
+    try {
+      final root = await _attachmentRoot();
+      final path = p.normalize(p.join(root.path, relative));
+      if (isContainedPath(root.path, path)) {
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+        final temporary = File('$path.tmp');
+        if (await temporary.exists()) await temporary.delete();
+      }
+    } catch (_) {}
+  }
+
   /// Notifies only conversation-list listeners when local draft text changes.
   final ValueNotifier<int> localConversationRevision = ValueNotifier<int>(0);
+
+  /// Refreshes mounted chat views while a long relay batch is processing,
+  /// without rebuilding MaterialApp and the whole application shell.
+  final ValueNotifier<int> conversationRevision = ValueNotifier<int>(0);
 
   String conversationDraft(ConversationKind kind, String id) =>
       _draftConversation(kind, id).draft;
@@ -10007,7 +11625,7 @@ class MessengerController extends ChangeNotifier {
         recipientDeviceId: _lanLobbyMailboxId,
         timeout: const Duration(milliseconds: 900),
       );
-      return _processEnvelopes(envelopes);
+      return await _processEnvelopes(envelopes);
     } catch (_) {
       return 0;
     }
@@ -10346,14 +11964,29 @@ class MessengerController extends ChangeNotifier {
     }
     if (_notificationsDeferredDepth > 0) {
       _deferredNotificationPending = true;
+      _scheduleDeferredNotificationFlush();
       return;
     }
     super.notifyListeners();
     _scheduleTransferForegroundSync();
   }
 
+  void _scheduleDeferredNotificationFlush() {
+    if (_disposed || _deferredNotificationTimer?.isActive == true) return;
+    _deferredNotificationTimer = Timer(_deferredNotificationInterval, () {
+      _deferredNotificationTimer = null;
+      if (_disposed || !_deferredNotificationPending) return;
+      _deferredNotificationPending = false;
+      _conversationMutationPending = false;
+      // Long relay batches may contain slow attachment or receipt work.
+      // Refresh chat views without rebuilding MaterialApp and the full shell;
+      // byte progress has its own notifier.
+      conversationRevision.value++;
+    });
+  }
+
   void _scheduleTransferForegroundSync() {
-    if (_transferNotificationTimer?.isActive == true) return;
+    if (_disposed || _transferNotificationTimer?.isActive == true) return;
     _transferNotificationTimer = Timer(
       const Duration(milliseconds: 500),
       _syncTransferForeground,
@@ -10420,10 +12053,18 @@ class MessengerController extends ChangeNotifier {
     try {
       outcome = await _processEnvelopesInternal(envelopes, ingressKind);
     } finally {
+      // Conversation upserts and state changes mark this batch dirty. Flush
+      // them once here; transfer progress alone does not rebuild the shell.
       _notificationsDeferredDepth--;
       if (_notificationsDeferredDepth == 0 && _deferredNotificationPending) {
+        _deferredNotificationTimer?.cancel();
+        _deferredNotificationTimer = null;
         _deferredNotificationPending = false;
+        final refreshConversations = _conversationMutationPending;
+        _conversationMutationPending = false;
         if (!_disposed) super.notifyListeners();
+        if (!_disposed && refreshConversations) conversationRevision.value++;
+        _scheduleTransferForegroundSync();
       }
     }
     if (failOnProcessingError && outcome.failed > 0) {
@@ -10433,6 +12074,18 @@ class MessengerController extends ChangeNotifier {
     }
     return outcome.processed;
   }
+
+  static const Set<String> _highFrequencyTransferEnvelopeKinds = <String>{
+    'attachment_chunk_request',
+    'attachment_chunk',
+    'attachment_progress',
+  };
+
+  bool _isHighFrequencyTransferEnvelope(RelayEnvelope envelope) =>
+      _highFrequencyTransferEnvelopeKinds.contains(envelope.kind);
+
+  bool _needsEnvelopeDurability(List<RelayEnvelope> envelopes) =>
+      envelopes.any((envelope) => !_isHighFrequencyTransferEnvelope(envelope));
 
   Future<_EnvelopeProcessingOutcome> _processEnvelopesInternal(
     List<RelayEnvelope> envelopes,
@@ -10651,6 +12304,12 @@ class MessengerController extends ChangeNotifier {
           continue;
         }
 
+        if (envelope.kind == 'voice_call_signal') {
+          await _handleVoiceCallSignal(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
         ContactRecord? contact;
         for (final candidate in _snapshot.contacts) {
           if (candidate.deviceId == envelope.senderDeviceId) {
@@ -10862,6 +12521,58 @@ class MessengerController extends ChangeNotifier {
       }
     }
     _reachability.noteTwoWaySuccess(contact.deviceId);
+  }
+
+  Future<void> _handleVoiceCallSignal(RelayEnvelope envelope) async {
+    final service = _voiceCallService;
+    final contact = _contactByDeviceId(envelope.senderDeviceId);
+    if (service == null || contact == null || !contact.canSendOutbound) return;
+    if (envelope.conversationId !=
+        _crypto.conversationIdFor(contact.deviceId)) {
+      return;
+    }
+    final decoded = await _crypto.decryptMessage(
+      contact: contact,
+      envelope: envelope,
+    );
+    final value = jsonDecode(decoded);
+    if (value is! Map<String, dynamic>) return;
+    final signal = VoiceCallSignal.fromJson(value);
+    if (signal.senderDeviceId != contact.deviceId ||
+        signal.recipientDeviceId != identity?.deviceId) {
+      return;
+    }
+    if (signal.action != 'invite' &&
+        (service.active?.callId != signal.callId ||
+            service.active?.peerDeviceId != contact.deviceId)) {
+      return;
+    }
+    switch (signal.action) {
+      case 'invite':
+        await service.receiveInvite(signal);
+      case 'accept':
+        await service.onAccepted();
+      case 'busy':
+      case 'cancel':
+      case 'reject':
+      case 'hangup':
+        await service.endRemote(
+          reason: switch (signal.action) {
+            'busy' => 'Busy',
+            'cancel' => 'Remote canceled the call.',
+            'reject' => 'Call rejected.',
+            _ => 'Remote hang-up',
+          },
+        );
+      case 'mute':
+      case 'unmute':
+        // The remote mute state is informational; local capture remains
+        // governed by the media engine and local mute control.
+        break;
+      default:
+        return;
+    }
+    await _sendAck(contact: contact, envelope: envelope);
   }
 
   /// Receiver-side dispatcher for the five v0.3.2 attachment envelope
@@ -11161,6 +12872,15 @@ class MessengerController extends ChangeNotifier {
             base64Decode(descriptor.thumbnailBase64!).length > 32 * 1024)) {
       throw const FormatException('Attachment descriptor keys are invalid.');
     }
+    final voice = descriptor.voiceMetadata;
+    if (voice != null &&
+        (voice.durationMs <= 0 ||
+            voice.durationMs > 10 * 60 * 1000 ||
+            voice.codec != 'opus' ||
+            voice.container != 'ogg' ||
+            voice.waveform.length > 256)) {
+      throw const FormatException('Voice metadata is invalid.');
+    }
     return AttachmentDescriptor(
       id: descriptor.id,
       fileName: safeFileName,
@@ -11175,6 +12895,7 @@ class MessengerController extends ChangeNotifier {
       noncePrefixBase64: descriptor.noncePrefixBase64,
       presentation: descriptor.presentation,
       thumbnailBase64: descriptor.thumbnailBase64,
+      voiceMetadata: descriptor.voiceMetadata,
       createdAt: createdAt,
     );
   }
@@ -11359,6 +13080,7 @@ class MessengerController extends ChangeNotifier {
     if (_messageById(state.peerDeviceId, state.messageId) == null) {
       // Parent message was locally deleted; tear down outbound state and
       // notify the receiver.
+      _outboundRetryTimers.remove(attachmentId)?.cancel();
       _outboundAttachments.remove(attachmentId);
       _clearActiveOutbound(state.peerDeviceId, attachmentId);
       final peerContact = _contactByDeviceId(state.peerDeviceId);
@@ -11478,12 +13200,12 @@ class MessengerController extends ChangeNotifier {
       );
       if (ok) {
         _onLanDirectPutSuccess(requester.deviceId);
-        if (_activeOutboundByContact[state.peerDeviceId] == attachmentId) {
+        if (_isActiveOutbound(state.peerDeviceId, attachmentId)) {
           if (index > state.highestChunkSent) state.highestChunkSent = index;
           state.lastChunkAt = DateTime.now().toUtc();
           state.consecutiveChunkFailures = 0;
           state.lastDeliveryRoute = OutboundDeliveryRoute.lanDirect;
-          _armOutboundStallTimer(requester);
+          _armOutboundStallTimer(requester, attachmentId: attachmentId);
           _notifyTransferProgress();
         }
         return;
@@ -11530,7 +13252,7 @@ class MessengerController extends ChangeNotifier {
             'Iroh-binary stream chunk[$index] to ${requester.alias} '
             'path=${receipt.route.path.name}',
           );
-          if (_activeOutboundByContact[state.peerDeviceId] == attachmentId) {
+          if (_isActiveOutbound(state.peerDeviceId, attachmentId)) {
             if (index > state.highestChunkSent) {
               state.highestChunkSent = index;
             }
@@ -11540,7 +13262,7 @@ class MessengerController extends ChangeNotifier {
                 receipt.route.path == TransportPathKind.relayed
                 ? OutboundDeliveryRoute.irohRelay
                 : OutboundDeliveryRoute.irohDirect;
-            _armOutboundStallTimer(requester);
+            _armOutboundStallTimer(requester, attachmentId: attachmentId);
             _notifyTransferProgress();
           }
           return;
@@ -11620,14 +13342,14 @@ class MessengerController extends ChangeNotifier {
       );
       if (ok) {
         _onLanDirectPutSuccess(requester.deviceId);
-        if (_activeOutboundByContact[state.peerDeviceId] == attachmentId) {
+        if (_isActiveOutbound(state.peerDeviceId, attachmentId)) {
           if (index > state.highestChunkSent) {
             state.highestChunkSent = index;
           }
           state.lastChunkAt = DateTime.now().toUtc();
           state.consecutiveChunkFailures = 0;
           state.lastDeliveryRoute = OutboundDeliveryRoute.lanDirect;
-          _armOutboundStallTimer(requester);
+          _armOutboundStallTimer(requester, attachmentId: attachmentId);
           _notifyTransferProgress();
         }
         return;
@@ -11671,7 +13393,7 @@ class MessengerController extends ChangeNotifier {
       // Sender progress + stall-timer activity refresh. Only advance if
       // this is the active outbound for this contact (the receiver could
       // be re-requesting after a stale state).
-      if (_activeOutboundByContact[state.peerDeviceId] == attachmentId) {
+      if (_isActiveOutbound(state.peerDeviceId, attachmentId)) {
         if (index > state.highestChunkSent) {
           state.highestChunkSent = index;
         }
@@ -11694,7 +13416,7 @@ class MessengerController extends ChangeNotifier {
             deliveredVia.routeKey != preferredPrimaryKey) {
           state.lastRouteFallbackAt = DateTime.now().toUtc();
         }
-        _armOutboundStallTimer(requester);
+        _armOutboundStallTimer(requester, attachmentId: attachmentId);
         // Chunk acknowledgements are high-frequency data-plane updates. Keep
         // them on the transfer-only notifier so the conversation shell does
         // not rebuild once per block on the legacy envelope path.
@@ -12586,17 +14308,21 @@ class MessengerController extends ChangeNotifier {
     }
     state.peerReceivedCount = received;
     state.peerVerifying = received == state.descriptor.effectiveChunkCount;
-    if (_activeOutboundByContact[sender.deviceId] == attachmentId) {
-      _armOutboundStallTimer(sender);
+    if (_isActiveOutbound(sender.deviceId, attachmentId)) {
+      _armOutboundStallTimer(sender, attachmentId: attachmentId);
       // Byte acknowledgements are rendered through the throttled transfer
-      // notifier below. Avoid invalidating the whole app shell for every
-      // verified block while still persisting the state in the debounced
-      // vault checkpoint.
-      _setTransferSessionState(
-        attachmentId,
-        TransferState.transferring,
-        notify: false,
-      );
+      // notifier below. Only persist a changed transfer state; rewriting the
+      // encrypted vault for every progress envelope stalls busy desktops.
+      final session = _transferSessionById(attachmentId);
+      if (session != null &&
+          (session.state != TransferState.transferring ||
+              session.lastError != null)) {
+        _setTransferSessionState(
+          attachmentId,
+          TransferState.transferring,
+          notify: false,
+        );
+      }
     }
     state.recordPeerProgress(
       exactBytes ??
@@ -12620,11 +14346,15 @@ class MessengerController extends ChangeNotifier {
       // Receiver completed an attachment whose state we already cleared
       // (cancel, delete, stall). Still advance the queue so a later
       // queued item can dispatch.
+      _outboundRetryTimers.remove(attachmentId)?.cancel();
+      _outboundQueueByContact[sender.deviceId]?.remove(attachmentId);
       _clearActiveOutbound(sender.deviceId, attachmentId);
       _pumpOutboundQueue(sender);
       return;
     }
     _outboundAttachments.remove(attachmentId);
+    _outboundRetryTimers.remove(attachmentId)?.cancel();
+    _outboundQueueByContact[sender.deviceId]?.remove(attachmentId);
     final session = _transferSessionById(attachmentId);
     await state.closeFile();
     if (state.sourceKind == TransferSourceKind.privateSpool) {
@@ -12701,13 +14431,12 @@ class MessengerController extends ChangeNotifier {
     // If the peer canceled an attachment we were actively shipping, free
     // the queue slot so the next item dispatches.
     if (outboundState != null) {
-      // nightly.12: cancel the stall timer too — without this it kept
-      // firing after the queue slot was freed, generating spurious
-      // "Auto-retrying…" log noise on the sender side when the receiver
-      // had already torn down. Also flip the parent ChatMessage to
+      // Cancel retry state as well as the active slot so it cannot be
+      // re-enqueued after the receiver has already torn the transfer down.
+      // Also flip the parent ChatMessage to
       // `canceled` so the sender's bubble visually mirrors the peer's
       // cancel.
-      _outboundStallTimers.remove(outboundState.peerDeviceId)?.cancel();
+      _outboundRetryTimers.remove(attachmentId)?.cancel();
       _clearActiveOutbound(outboundState.peerDeviceId, attachmentId);
       _outboundQueueByContact[outboundState.peerDeviceId]?.remove(attachmentId);
       _updateMessageState(
@@ -14074,7 +15803,7 @@ class MessengerController extends ChangeNotifier {
     _outboundDebugAttachmentTests.remove(attachmentId);
     if (state != null) {
       await state.closeFile();
-      _outboundStallTimers.remove(state.peerDeviceId)?.cancel();
+      _outboundRetryTimers.remove(attachmentId)?.cancel();
       _clearActiveOutbound(state.peerDeviceId, attachmentId);
       _outboundQueueByContact[state.peerDeviceId]?.remove(attachmentId);
       await _deleteAttachmentArtifacts(attachmentId);
@@ -18700,6 +20429,7 @@ class MessengerController extends ChangeNotifier {
       );
     }
     _snapshot = _snapshot.copyWith(conversations: conversations);
+    _markConversationMutationForBatch();
   }
 
   void _upsertGroupMessage(String groupId, ChatMessage message) {
@@ -18731,6 +20461,7 @@ class MessengerController extends ChangeNotifier {
       );
     }
     _snapshot = _snapshot.copyWith(conversations: conversations);
+    _markConversationMutationForBatch();
   }
 
   void _upsertLanLobbyMessage(ChatMessage message) {
@@ -18760,6 +20491,25 @@ class MessengerController extends ChangeNotifier {
       );
     }
     _snapshot = _snapshot.copyWith(conversations: conversations);
+    _markConversationMutationForBatch();
+  }
+
+  /// Inbound handlers mutate conversations without notifying on every
+  /// intermediate field change. Remember those mutations while an envelope
+  /// batch is open so the batch boundary can refresh the UI once. Transfer
+  /// progress envelopes do not touch conversations and remain throttled.
+  void _markConversationMutationForBatch() {
+    if (_notificationsDeferredDepth > 0) {
+      _deferredNotificationPending = true;
+      _conversationMutationPending = true;
+      _scheduleDeferredNotificationFlush();
+    } else if (!_disposed) {
+      // Asynchronous delivery-state and attachment-offer updates can mutate a
+      // conversation outside an inbound envelope batch. The controller's
+      // root listener does not reliably rebuild the mounted chat subtree, so
+      // refresh its dedicated revision stream directly.
+      conversationRevision.value++;
+    }
   }
 
   void _updateMessageState(
@@ -18804,6 +20554,7 @@ class MessengerController extends ChangeNotifier {
     conversations[conversationIndex] = conversations[conversationIndex]
         .copyWith(messages: updatedMessages);
     _snapshot = _snapshot.copyWith(conversations: conversations);
+    _markConversationMutationForBatch();
     if (!state.awaitsRecipientAck) {
       _clearOutboundAttempt(peerDeviceId, messageId);
     }
@@ -18860,6 +20611,7 @@ class MessengerController extends ChangeNotifier {
     conversations[conversationIndex] = conversations[conversationIndex]
         .copyWith(messages: updatedMessages);
     _snapshot = _snapshot.copyWith(conversations: conversations);
+    _markConversationMutationForBatch();
   }
 
   DeliveryState _aggregateGroupDeliveryState(
@@ -18931,6 +20683,7 @@ class MessengerController extends ChangeNotifier {
     conversations[conversationIndex] = conversations[conversationIndex]
         .copyWith(messages: updatedMessages);
     _snapshot = _snapshot.copyWith(conversations: conversations);
+    _markConversationMutationForBatch();
   }
 
   void _updateMessageBody(
@@ -18961,6 +20714,7 @@ class MessengerController extends ChangeNotifier {
     conversations[conversationIndex] = conversations[conversationIndex]
         .copyWith(messages: updatedMessages);
     _snapshot = _snapshot.copyWith(conversations: conversations);
+    _markConversationMutationForBatch();
   }
 
   void _updateMessageReactions(
@@ -18994,6 +20748,7 @@ class MessengerController extends ChangeNotifier {
     conversations[conversationIndex] = conversations[conversationIndex]
         .copyWith(messages: updatedMessages);
     _snapshot = _snapshot.copyWith(conversations: conversations);
+    _markConversationMutationForBatch();
   }
 
   void _deleteMessage(String peerDeviceId, String messageId) {
@@ -19026,7 +20781,9 @@ class MessengerController extends ChangeNotifier {
     conversations[conversationIndex] = conversations[conversationIndex]
         .copyWith(messages: updatedMessages);
     _snapshot = _snapshot.copyWith(conversations: conversations);
+    _markConversationMutationForBatch();
     if (attachmentId != null) {
+      _outboundRetryTimers.remove(attachmentId)?.cancel();
       _outboundAttachments.remove(attachmentId);
       final inbound = _inboundAttachments.remove(attachmentId);
       inbound?.retryTimer?.cancel();
@@ -19282,16 +21039,19 @@ class MessengerController extends ChangeNotifier {
     if (!hasIdentity) {
       return;
     }
+    final highFrequencyTransfer = _isHighFrequencyTransferEnvelope(envelope);
     final processed = await _processEnvelopes([
       envelope,
     ], ingressKind: PeerRouteKind.lan);
     if (processed > 0) {
-      _markRuntimeActivity();
-      _setTransientStatus(
-        'Received $processed item(s) instantly via local relay.',
-      );
-      await _saveSnapshotSilently(debounce: true);
-    } else {
+      if (!highFrequencyTransfer) {
+        _markRuntimeActivity();
+        _setTransientStatus(
+          'Received $processed item(s) instantly via local relay.',
+        );
+        await _saveSnapshotSilently(debounce: true);
+      }
+    } else if (!highFrequencyTransfer) {
       notifyListeners();
     }
   }
@@ -19302,7 +21062,7 @@ class MessengerController extends ChangeNotifier {
     }
     try {
       final me = _requireIdentity();
-      var processed = 0;
+      var displayableProcessed = 0;
       final routes = <PeerEndpoint>[
         PeerEndpoint(
           kind: PeerRouteKind.lan,
@@ -19327,15 +21087,20 @@ class MessengerController extends ChangeNotifier {
             fetch: true,
             latency: stopwatch.elapsed,
           );
-          processed += await _processEnvelopes(envelopes);
+          final routeProcessed = await _processEnvelopes(envelopes);
+          if (_needsEnvelopeDurability(envelopes)) {
+            displayableProcessed += routeProcessed;
+          }
         } catch (error) {
           _routeHealthTracker.recordFailure(route, error: error.toString());
           // Full polling handles status reporting; this path only reduces LAN latency.
         }
       }
-      if (processed > 0) {
+      if (displayableProcessed > 0) {
         _markRuntimeActivity();
-        _setTransientStatus('Received $processed item(s) via local inbox.');
+        _setTransientStatus(
+          'Received $displayableProcessed item(s) via local inbox.',
+        );
         await _saveSnapshotSilently(debounce: true);
       }
     } finally {
@@ -19354,6 +21119,7 @@ class MessengerController extends ChangeNotifier {
             me.androidBackgroundRuntimeEnabled,
       ),
     );
+    _scheduleScheduledMessagePump();
   }
 
   bool _sameAddresses(List<String> left, List<String> right) {
@@ -19377,6 +21143,17 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _scheduledMessageTimer?.cancel();
+    _scheduledMessageTimer = null;
+    unawaited(_voiceCallChanges?.cancel());
+    _voiceCallChanges = null;
+    unawaited(_voiceCallService?.dispose());
+    _voiceCallService = null;
+    unawaited(_voiceCallAudioSubscription?.cancel());
+    _voiceCallAudioSubscription = null;
+    unawaited(voiceMessageService.dispose());
+    unawaited(_voiceCallDatagramSubscription?.cancel());
+    _voiceCallDatagramSubscription = null;
     savePendingChangesForLifecycle();
     _disposed = true;
     for (final timer in _groupHistoryTimers.values) {
@@ -19386,12 +21163,24 @@ class MessengerController extends ChangeNotifier {
     unawaited(_groupHistoryService?.close());
     _attachmentBlockWorker.close();
     _transferProgressUiTimer?.cancel();
+    _deferredNotificationTimer?.cancel();
     _transferProgressNotifier.dispose();
     _stopLongPoll();
     _pollTimer?.cancel();
     _pendingSaveTimer?.cancel();
     _transferNotificationTimer?.cancel();
+    for (final timer in _outboundStallTimers.values) {
+      timer.cancel();
+    }
+    for (final timer in _fastOutboundTimers.values) {
+      timer.cancel();
+    }
+    for (final timer in _outboundRetryTimers.values) {
+      timer.cancel();
+    }
     unawaited(_transferControlSubscription.cancel());
+    unawaited(_scheduledMessageWakeupSubscription.cancel());
+    unawaited(_platformBridge.scheduleAndroidScheduledMessageWakeup(null));
     unawaited(_platformBridge.stopTransferForeground());
     _localRelayNode.onEnvelopeStored = null;
     unawaited(_stopPairingBeacon());
@@ -19409,6 +21198,7 @@ class MessengerController extends ChangeNotifier {
     _authorizedInboundDebugFileTests.clear();
     _outboundDebugAttachmentTests.clear();
     localConversationRevision.dispose();
+    conversationRevision.dispose();
     super.dispose();
   }
 }
@@ -19425,6 +21215,16 @@ class _AuthorizedDebugFileTest {
   final DateTime expiresAt;
   final bool irohOnly;
   final bool allowIrohRelay;
+}
+
+class _ControllerVoiceCallTransport implements VoiceCallSignalTransport {
+  const _ControllerVoiceCallTransport(this.controller);
+
+  final MessengerController controller;
+
+  @override
+  Future<void> send(VoiceCallSignal signal) =>
+      controller._sendVoiceCallSignal(signal);
 }
 
 class _PairingBeaconRoute {
@@ -20093,4 +21893,37 @@ class _DeferredDirectReaction {
   final String emoji;
   final bool active;
   final DateTime changedAt;
+}
+
+/// Sliding anti-replay window for lossy call audio. It accepts a small amount
+/// of packet reordering without buffering stale audio or retaining call data.
+class _VoiceMediaReplayWindow {
+  int? _highest;
+  int _bitmap = 0;
+
+  bool canAccept(int sequence) {
+    final highest = _highest;
+    if (sequence <= 0 || highest == null || sequence > highest) {
+      return sequence > 0;
+    }
+    final distance = highest - sequence;
+    if (distance >= 64) return false;
+    return (_bitmap & (1 << distance)) == 0;
+  }
+
+  bool accept(int sequence) {
+    if (!canAccept(sequence)) return false;
+    final highest = _highest;
+    if (highest == null) {
+      _highest = sequence;
+      _bitmap = 1;
+    } else if (sequence > highest) {
+      final shift = sequence - highest;
+      _bitmap = shift >= 64 ? 1 : ((_bitmap << shift) | 1) & 0xffffffffffffffff;
+      _highest = sequence;
+    } else {
+      _bitmap |= 1 << (highest - sequence);
+    }
+    return true;
+  }
 }

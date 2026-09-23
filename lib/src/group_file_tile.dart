@@ -19,6 +19,7 @@ class GroupFileTile extends StatelessWidget {
     this.onStopSharing,
     this.onEvict,
     this.onOpen,
+    this.playbackControls,
     this.error,
   });
 
@@ -35,6 +36,7 @@ class GroupFileTile extends StatelessWidget {
   final VoidCallback? onStopSharing;
   final VoidCallback? onEvict;
   final VoidCallback? onOpen;
+  final Widget? playbackControls;
   final String? error;
 
   @override
@@ -77,6 +79,7 @@ class GroupFileTile extends StatelessWidget {
             error != null)
           Text(error!),
         if (sharing) const Text('Sharing with group'),
+        if (complete && playbackControls != null) playbackControls!,
         Wrap(
           spacing: 8,
           children: [

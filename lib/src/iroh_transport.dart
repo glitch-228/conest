@@ -136,6 +136,32 @@ class IrohBridgeInbound {
   final bool relayed;
 }
 
+class IrohBridgeDatagram {
+  const IrohBridgeDatagram({
+    required this.senderEndpointId,
+    required this.bytes,
+    required this.relayed,
+  });
+
+  final String senderEndpointId;
+  final Uint8List bytes;
+  final bool relayed;
+}
+
+class IrohMediaDatagram {
+  const IrohMediaDatagram({
+    required this.senderEndpointId,
+    required this.bytes,
+    required this.path,
+    required this.receivedAt,
+  });
+
+  final String senderEndpointId;
+  final Uint8List bytes;
+  final TransportPathKind path;
+  final DateTime receivedAt;
+}
+
 /// Narrow seam around generated flutter_rust_bridge bindings. Keeping this
 /// interface hand-written makes routing and identity tests deterministic and
 /// isolates generated-code churn from the rest of the application.
@@ -155,7 +181,27 @@ abstract interface class NativeIrohBridge {
   Future<void> close();
 }
 
-class IrohTransportAdapter implements TransportAdapter {
+/// Optional media extension. Existing bridges remain valid for messaging and
+/// attachments; native builds that expose Iroh datagrams can opt in without
+/// changing the reliable envelope contract.
+abstract interface class NativeIrohDatagramBridge implements NativeIrohBridge {
+  Future<IrohBridgeReceipt> sendDatagram({
+    required String remoteEndpointId,
+    required Uint8List bytes,
+    required bool allowRelay,
+  });
+  Stream<IrohBridgeDatagram> get datagrams;
+}
+
+abstract interface class IrohCallMediaAdapter implements TransportAdapter {
+  Stream<IrohMediaDatagram> get inboundCallDatagrams;
+  Future<DeliveryReceipt> sendCallDatagram({
+    required TransportPeer peer,
+    required Uint8List bytes,
+  });
+}
+
+class IrohTransportAdapter implements IrohCallMediaAdapter {
   IrohTransportAdapter({
     required NativeIrohBridge bridge,
     required Uint8List secretKeySeed,
@@ -175,7 +221,10 @@ class IrohTransportAdapter implements TransportAdapter {
       StreamController<RouteCandidate>.broadcast();
   final StreamController<TransportInboundEnvelope> _inbound =
       StreamController<TransportInboundEnvelope>.broadcast();
+  final StreamController<IrohMediaDatagram> _callDatagrams =
+      StreamController<IrohMediaDatagram>.broadcast();
   StreamSubscription<IrohBridgeInbound>? _inboundSubscription;
+  StreamSubscription<IrohBridgeDatagram>? _datagramSubscription;
   IrohBridgeStatus? _status;
   final Map<String, TransportPathKind> _lastPathByEndpoint = {};
 
@@ -199,6 +248,9 @@ class IrohTransportAdapter implements TransportAdapter {
 
   @override
   Stream<TransportInboundEnvelope> get inboundEnvelopes => _inbound.stream;
+
+  @override
+  Stream<IrohMediaDatagram> get inboundCallDatagrams => _callDatagrams.stream;
 
   @override
   Future<void> start() async {
@@ -230,14 +282,80 @@ class IrohTransportAdapter implements TransportAdapter {
         ),
       );
     });
+    if (_bridge case final NativeIrohDatagramBridge datagramBridge) {
+      _datagramSubscription = datagramBridge.datagrams.listen((event) {
+        _callDatagrams.add(
+          IrohMediaDatagram(
+            senderEndpointId: event.senderEndpointId,
+            bytes: event.bytes,
+            path: event.relayed
+                ? TransportPathKind.relayed
+                : TransportPathKind.direct,
+            receivedAt: DateTime.now().toUtc(),
+          ),
+        );
+      });
+    }
   }
 
   @override
   Future<void> stop() async {
     await _inboundSubscription?.cancel();
     _inboundSubscription = null;
+    await _datagramSubscription?.cancel();
+    _datagramSubscription = null;
     if (_status != null) await _bridge.close();
     _status = null;
+  }
+
+  @override
+  Future<DeliveryReceipt> sendCallDatagram({
+    required TransportPeer peer,
+    required Uint8List bytes,
+  }) async {
+    final endpoint = peer.transportIdentity;
+    final bridge = _bridge;
+    if (_status == null ||
+        endpoint == null ||
+        endpoint.isEmpty ||
+        !peer.identityPinned) {
+      throw StateError('Iroh call requires the pinned endpoint identity.');
+    }
+    if (bridge is! NativeIrohDatagramBridge) {
+      throw StateError('Native Iroh datagrams are unavailable.');
+    }
+    final receipt = await bridge.sendDatagram(
+      remoteEndpointId: endpoint,
+      bytes: bytes,
+      allowRelay: peer.allowRelay,
+    );
+    if (receipt.endpointId != endpoint) {
+      throw StateError('Iroh endpoint identity changed during call media.');
+    }
+    final path = receipt.relayed
+        ? TransportPathKind.relayed
+        : TransportPathKind.direct;
+    if (path == TransportPathKind.relayed && (!peer.allowRelay || !_relayEnabled)) {
+      throw StateError('Iroh call relay fallback is disabled.');
+    }
+    final candidate = RouteCandidate(
+      transport: TransportKind.iroh,
+      path: path,
+      routeId: 'iroh:$endpoint',
+      label: path == TransportPathKind.relayed ? 'Iroh relay' : 'Direct online',
+      trust: TransportTrustState.pinnedTransport,
+      detail: endpoint,
+    );
+    _lastPathByEndpoint[endpoint] = path;
+    _pathChanges.add(candidate);
+    return DeliveryReceipt(
+      state: receipt.accepted
+          ? DeliveryReceiptState.deliveredToPeer
+          : DeliveryReceiptState.failed,
+      route: candidate,
+      at: DateTime.now().toUtc(),
+      detail: 'Unreliable Iroh media datagram queued.',
+    );
   }
 
   @override

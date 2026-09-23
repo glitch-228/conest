@@ -9,6 +9,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   flutter_secure_storage_linux
   irondash_engine_context
   media_kit_video
+  record_linux
   super_native_extensions
 )
 

@@ -32,6 +32,9 @@ dependencies:
   video_player: ^2.9.2
   connectivity_plus: ^6.0.5
   video_player_media_kit: ^2.0.0
+  media_kit: ^1.2.6
+  record: ^7.1.1
+  just_audio: ^0.10.6
   # Pinned because transfer admission relies on platform-specific free-space
   # reporting and should not change underneath a security release.
   disk_space_2: 1.0.12
@@ -40,6 +43,11 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+
+dependency_overrides:
+  # 0.2.4 requires AGP 9.0.1, while the app's supported Flutter/Gradle toolchain
+  # is on AGP 8.x. The 0.2.3 API is compatible with just_audio 0.10.6.
+  audio_session: 0.2.3
 
 flutter:
   uses-material-design: true

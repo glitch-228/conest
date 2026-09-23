@@ -13,6 +13,7 @@
 .swiftpm/
 migrate_working_dir/
 .release-secrets/
+PLAN.md
 
 # IntelliJ related
 *.iml

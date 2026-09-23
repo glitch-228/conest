@@ -42,6 +42,7 @@ import 'src/platform_bridge.dart';
 import 'src/qr_scan_screen.dart';
 import 'src/relay_client.dart';
 import 'src/storage.dart';
+import 'src/voice_message_service.dart';
 import 'src/swipe_to_reply.dart';
 import 'src/transport.dart';
 import 'src/ui/seal_avatar.dart';
@@ -105,20 +106,16 @@ Future<void> _runConestWithProfile(
     runApp(ConestAlreadyRunningApp(themeController: themeController));
     return;
   }
-  // nightly.10: register the libmpv-backed VideoPlayer platform impl on
-  // Linux + Windows. Without this, video_player throws
-  // `UnimplementedError: init() has not been implemented` on those
-  // platforms (the federated plugin only ships Android/iOS/macOS/web by
-  // default). Cheap no-op on the other platforms.
-  //
-  // nightly.11: wrap in try/catch — when libmpv isn't installed on the
-  // host (common on a fresh Linux box) the dlopen crashes the process.
-  // Failure flips _mediaKitAvailable to false and `_VideoPlayerScreen`
-  // instantly routes to xdg-open / start instead of attempting inline
-  // playback. README mentions libmpv as an optional Linux runtime dep.
-  if (Platform.isLinux || Platform.isWindows) {
+  // Use the bundled media-kit implementation on Windows. Linux delegates to
+  // the system player because a libmpv native crash cannot be caught in Dart.
+  if (Platform.isLinux) {
+    // libmpv can terminate the Linux process while loading or initializing,
+    // which Dart's exception handler cannot recover from. Use the desktop's
+    // registered video player instead of loading the native backend in Conest.
+    _mediaKitAvailable = false;
+  } else if (Platform.isWindows) {
     try {
-      VideoPlayerMediaKit.ensureInitialized(linux: true, windows: true);
+      VideoPlayerMediaKit.ensureInitialized(linux: false, windows: true);
       _mediaKitAvailable = true;
     } catch (error) {
       _mediaKitAvailable = false;
@@ -1415,6 +1412,26 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _sidebarWidth = widget.themeController.sidebarWidth;
+    widget.controller.conversationRevision.addListener(
+      _handleConversationRevision,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant HomeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.conversationRevision.removeListener(
+        _handleConversationRevision,
+      );
+      widget.controller.conversationRevision.addListener(
+        _handleConversationRevision,
+      );
+    }
+  }
+
+  void _handleConversationRevision() {
+    if (mounted) setState(() {});
   }
 
   void _saveSidebarWidth() {
@@ -1429,6 +1446,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    widget.controller.conversationRevision.removeListener(
+      _handleConversationRevision,
+    );
     for (final composer in _composers.values) {
       composer.dispose();
     }
@@ -2137,6 +2157,57 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _scheduleGroupAttachment() async {
+    final group = _selectedGroup;
+    if (group == null) return;
+    final result = await FilePicker.pickFiles(
+      type: FileType.any,
+      allowMultiple: false,
+      withData: false,
+    );
+    if (!mounted || result == null || result.files.isEmpty) return;
+    final file = result.files.single;
+    final path = file.path;
+    if (path == null || path.isEmpty) {
+      widget.controller.setStatus('${file.name}: local file path unavailable.');
+      return;
+    }
+    final date = await showDatePicker(
+      context: context,
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      initialDate: DateTime.now(),
+    );
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+    );
+    if (time == null || !mounted) return;
+    try {
+      await widget.controller.scheduleGroupAttachment(
+        groupId: group.groupId,
+        source: StagedAttachment(
+          id: 'scheduled-file-${DateTime.now().microsecondsSinceEpoch}',
+          fileName: file.name,
+          mimeType: _guessMimeType(file.name),
+          sizeBytes: file.size,
+          filePath: path,
+        ),
+        scheduledAt: DateTime(
+          date.year,
+          date.month,
+          date.day,
+          time.hour,
+          time.minute,
+        ),
+      );
+      widget.controller.setStatus('Group file scheduled.');
+    } catch (error) {
+      widget.controller.setStatus('Could not schedule ${file.name}: $error');
+    }
+  }
+
   Future<void> _pickAndSendAttachment() async {
     final contact = _selectedContact;
     if (contact == null) {
@@ -2449,6 +2520,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           onSend: _sendCurrentGroupMessage,
                           onDropFiles: _handleDroppedFilesForGroup,
                           onAttach: _openMediaPicker,
+                          onScheduleAttachment: _scheduleGroupAttachment,
                           onSmartPaste: () => unawaited(_handleSmartPaste()),
                         );
                       }
@@ -2589,6 +2661,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                       onSend: _sendCurrentGroupMessage,
                                       onDropFiles: _handleDroppedFilesForGroup,
                                       onAttach: _openMediaPicker,
+                                      onScheduleAttachment:
+                                          _scheduleGroupAttachment,
                                       onSmartPaste: () =>
                                           unawaited(_handleSmartPaste()),
                                     )
@@ -2956,6 +3030,7 @@ class _CourierHome extends StatefulWidget {
 
 class _CourierHomeState extends State<_CourierHome> {
   bool _showArchived = false;
+  String _activeFolderId = 'all';
   List<({String id, bool selected, VoidCallback open})> _navigation = const [];
 
   void navigateChat(int direction) {
@@ -3005,6 +3080,112 @@ class _CourierHomeState extends State<_CourierHome> {
     ),
   );
 
+  Future<void> _showScheduledMessages() => Navigator.of(context).push<void>(
+    MaterialPageRoute(
+      builder: (_) => _ScheduledMessagesScreen(
+        controller: widget.controller,
+        palette: widget.palette,
+      ),
+    ),
+  );
+
+  Future<void> _createFolder() async {
+    final name = TextEditingController();
+    final value = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('New folder'),
+        content: TextField(
+          controller: name,
+          autofocus: true,
+          maxLength: 48,
+          decoration: const InputDecoration(hintText: 'Folder name'),
+          onSubmitted: (value) => Navigator.pop(context, value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, name.text),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+    name.dispose();
+    if (value == null || value.trim().isEmpty || !mounted) return;
+    try {
+      final folder = await widget.controller.createChatFolder(value);
+      if (mounted) setState(() => _activeFolderId = folder.id);
+    } catch (error) {
+      if (mounted)
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+    }
+  }
+
+  Future<void> _editFolder(ChatFolder folder) async {
+    final name = TextEditingController(text: folder.name);
+    final folderIndex = widget.controller.chatFolders.indexWhere(
+      (value) => value.id == folder.id,
+    );
+    final action = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Edit ${folder.name}'),
+        content: TextField(
+          controller: name,
+          autofocus: true,
+          maxLength: 48,
+          decoration: const InputDecoration(labelText: 'Folder name'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'delete'),
+            child: const Text('Delete'),
+          ),
+          if (folderIndex > 0)
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'moveUp'),
+              child: const Text('Move earlier'),
+            ),
+          if (folderIndex >= 0 &&
+              folderIndex < widget.controller.chatFolders.length - 1)
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'moveDown'),
+              child: const Text('Move later'),
+            ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, 'save'),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    final updatedName = name.text.trim();
+    name.dispose();
+    if (!mounted) return;
+    if (action == 'delete') {
+      await widget.controller.deleteChatFolder(folder.id);
+      if (mounted && _activeFolderId == folder.id) {
+        setState(() => _activeFolderId = 'all');
+      }
+    } else if (action == 'save' && updatedName.isNotEmpty) {
+      await widget.controller.updateChatFolder(folder.id, name: updatedName);
+    } else if (action == 'moveUp' && folderIndex > 0) {
+      await widget.controller.reorderChatFolders(folderIndex, folderIndex - 1);
+    } else if (action == 'moveDown' && folderIndex >= 0) {
+      await widget.controller.reorderChatFolders(folderIndex, folderIndex + 1);
+    }
+  }
+
   Future<void> _newChat() async {
     final action = await Navigator.of(context).push<Object>(
       MaterialPageRoute(
@@ -3045,6 +3226,7 @@ class _CourierHomeState extends State<_CourierHome> {
         Icons.archive_outlined,
         prefs.archived ? 'Unarchive' : 'Archive',
       ),
+      ('folder', Icons.create_new_folder_outlined, 'Add to folder'),
     ];
     final String? selected;
     if (at != null) {
@@ -3085,6 +3267,73 @@ class _CourierHomeState extends State<_CourierHome> {
       );
     }
     if (selected == null || !mounted) return;
+    if (selected == 'folder') {
+      final folders = widget.controller.chatFolders;
+      if (folders.isEmpty) {
+        await _createFolder();
+        return;
+      }
+      final currentId =
+          kind == ConversationKind.group || kind == ConversationKind.direct
+          ? id
+          : id;
+      final chosen = await showDialog<Set<String>>(
+        context: context,
+        builder: (context) {
+          final values = <String>{
+            for (final folder in folders)
+              if (folder.conversationIds.contains(currentId)) folder.id,
+          };
+          return StatefulBuilder(
+            builder: (context, setDialogState) => AlertDialog(
+              title: const Text('Add to folder'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final folder in folders)
+                      CheckboxListTile(
+                        value: values.contains(folder.id),
+                        title: Text(folder.name),
+                        onChanged: (checked) => setDialogState(() {
+                          if (checked == true) {
+                            values.add(folder.id);
+                          } else {
+                            values.remove(folder.id);
+                          }
+                        }),
+                      ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, values),
+                  child: const Text('Save'),
+                ),
+              ],
+            ),
+          );
+        },
+      );
+      if (chosen == null) return;
+      for (final folder in folders) {
+        final ids = [...folder.conversationIds];
+        if (chosen.contains(folder.id) && !ids.contains(currentId))
+          ids.add(currentId);
+        if (!chosen.contains(folder.id)) ids.remove(currentId);
+        await widget.controller.updateChatFolder(
+          folder.id,
+          conversationIds: ids,
+        );
+      }
+      if (mounted) setState(() {});
+      return;
+    }
     try {
       await widget.controller.updateConversationPreferences(
         kind,
@@ -3164,6 +3413,11 @@ class _CourierHomeState extends State<_CourierHome> {
               () => unawaited(_showRequests()),
             ),
             action(Icons.swap_vert, 'Transfers', widget.onShowTransfers),
+            action(
+              Icons.schedule_send_outlined,
+              'Scheduled messages',
+              () => unawaited(_showScheduledMessages()),
+            ),
             const Divider(),
             action(
               Icons.qr_code_2,
@@ -3213,6 +3467,9 @@ class _CourierHomeState extends State<_CourierHome> {
     }
 
     // Unified, recency-sorted conversation entries.
+    final folderIds = widget.controller
+        .conversationIdsForFolder(_activeFolderId)
+        .toSet();
     final entries =
         <
           ({
@@ -3233,6 +3490,8 @@ class _CourierHomeState extends State<_CourierHome> {
           })
         >[];
     for (final contact in widget.controller.contacts) {
+      if (_activeFolderId != 'all' && !folderIds.contains(contact.deviceId))
+        continue;
       final last = widget.controller.lastMessageFor(contact.deviceId);
       final prefs = widget.controller.conversationPreferences(
         ConversationKind.direct,
@@ -3264,6 +3523,8 @@ class _CourierHomeState extends State<_CourierHome> {
       ));
     }
     for (final group in widget.controller.visibleGroups) {
+      if (_activeFolderId != 'all' && !folderIds.contains(group.groupId))
+        continue;
       final last = widget.controller.lastGroupMessageFor(group.groupId);
       final prefs = widget.controller.conversationPreferences(
         ConversationKind.group,
@@ -3322,6 +3583,32 @@ class _CourierHomeState extends State<_CourierHome> {
         (id: entry.seed, selected: entry.selected, open: entry.onTap),
     ];
 
+    final activeCall = widget.controller.voiceCallService?.active;
+    final visibleCall =
+        activeCall != null && activeCall.state != VoiceCallState.ended
+        ? activeCall
+        : null;
+    final incomingCall =
+        visibleCall != null &&
+        !visibleCall.outgoing &&
+        visibleCall.state == VoiceCallState.ringing;
+    final callContact = visibleCall == null
+        ? null
+        : widget.controller.contacts
+              .where((contact) => contact.deviceId == visibleCall.peerDeviceId)
+              .firstOrNull;
+    final callStatus = visibleCall == null
+        ? null
+        : switch (visibleCall.state) {
+            VoiceCallState.ringing =>
+              visibleCall.outgoing ? 'Calling' : 'Incoming voice call',
+            VoiceCallState.connecting => 'Connecting voice call',
+            VoiceCallState.connected => 'Voice call connected',
+            VoiceCallState.reconnecting => 'Reconnecting voice call',
+            VoiceCallState.ended => null,
+            VoiceCallState.idle => 'Voice call',
+          };
+
     return Scaffold(
       key: _scaffold,
       backgroundColor: widget.palette.panel,
@@ -3336,6 +3623,82 @@ class _CourierHomeState extends State<_CourierHome> {
       ),
       body: Column(
         children: [
+          if (visibleCall != null)
+            MaterialBanner(
+              leading: Icon(
+                visibleCall.outgoing
+                    ? Icons.call_made_outlined
+                    : Icons.call_received_outlined,
+              ),
+              content: Text(
+                '$callStatus${callContact == null ? '' : ' ${visibleCall.outgoing ? 'to' : 'from'} ${callContact.alias}'}',
+              ),
+              actions: [
+                if (incomingCall) ...[
+                  TextButton(
+                    onPressed: () => unawaited(
+                      widget.controller.rejectVoiceCall().catchError(
+                        (Object error) => widget.controller.setStatus('$error'),
+                      ),
+                    ),
+                    child: const Text('Reject'),
+                  ),
+                  FilledButton(
+                    onPressed: () => unawaited(
+                      widget.controller.acceptVoiceCall().catchError(
+                        (Object error) => widget.controller.setStatus('$error'),
+                      ),
+                    ),
+                    child: const Text('Accept'),
+                  ),
+                ] else ...[
+                  if (visibleCall.state == VoiceCallState.connected ||
+                      visibleCall.state == VoiceCallState.reconnecting)
+                    if (!kIsWeb && Platform.isAndroid)
+                      TextButton(
+                        onPressed: () => unawaited(
+                          widget.controller.voiceCallService!
+                              .toggleSpeakerphone()
+                              .catchError(
+                                (Object error) =>
+                                    widget.controller.setStatus('$error'),
+                              ),
+                        ),
+                        child: Text(
+                          visibleCall.speakerphoneEnabled
+                              ? 'Use earpiece'
+                              : 'Speaker',
+                        ),
+                      ),
+                  if (visibleCall.state == VoiceCallState.connected ||
+                      visibleCall.state == VoiceCallState.reconnecting)
+                    TextButton(
+                      onPressed: () => unawaited(
+                        widget.controller.voiceCallService!
+                            .toggleMute()
+                            .catchError(
+                              (Object error) =>
+                                  widget.controller.setStatus('$error'),
+                            ),
+                      ),
+                      child: Text(visibleCall.muted ? 'Unmute' : 'Mute'),
+                    ),
+                  TextButton(
+                    onPressed: () => unawaited(
+                      widget.controller.voiceCallService!.end().catchError(
+                        (Object error) => widget.controller.setStatus('$error'),
+                      ),
+                    ),
+                    child: Text(
+                      visibleCall.outgoing &&
+                              visibleCall.state == VoiceCallState.ringing
+                          ? 'Cancel'
+                          : 'Hang up',
+                    ),
+                  ),
+                ],
+              ],
+            ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 12, 8),
             child: Row(
@@ -3367,6 +3730,54 @@ class _CourierHomeState extends State<_CourierHome> {
               ],
             ),
           ),
+          if (!_showArchived && query.isEmpty)
+            SizedBox(
+              height: 42,
+              child: ListView(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                scrollDirection: Axis.horizontal,
+                children: [
+                  ChoiceChip(
+                    label: const Text('All chats'),
+                    selected: _activeFolderId == 'all',
+                    onSelected: (_) => setState(() => _activeFolderId = 'all'),
+                  ),
+                  for (final folder in widget.controller.chatFolders) ...[
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onLongPress: () => _editFolder(folder),
+                      child: InputChip(
+                        label: Text(folder.name),
+                        selected: _activeFolderId == folder.id,
+                        onSelected: (_) =>
+                            setState(() => _activeFolderId = folder.id),
+                        onDeleted: () async {
+                          await widget.controller.deleteChatFolder(folder.id);
+                          if (mounted && _activeFolderId == folder.id) {
+                            setState(() => _activeFolderId = 'all');
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                  const SizedBox(width: 8),
+                  ActionChip(
+                    avatar: const Icon(Icons.add, size: 18),
+                    label: const Text('New folder'),
+                    onPressed: _createFolder,
+                  ),
+                ],
+              ),
+            ),
+          if (_activeFolderId != 'all' && query.isNotEmpty)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => setState(() => _activeFolderId = 'all'),
+                icon: const Icon(Icons.search),
+                label: const Text('Search all chats'),
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: TextField(
@@ -5932,6 +6343,7 @@ class _TelegramChatHeader extends StatelessWidget {
     required this.onSearch,
     this.onBack,
     this.onConnectionDetails,
+    this.onCall,
   });
   final ConestPalette palette;
   final String title;
@@ -5941,6 +6353,7 @@ class _TelegramChatHeader extends StatelessWidget {
   final VoidCallback onSearch;
   final VoidCallback? onBack;
   final VoidCallback? onConnectionDetails;
+  final VoidCallback? onCall;
 
   @override
   Widget build(BuildContext context) => Material(
@@ -6001,6 +6414,12 @@ class _TelegramChatHeader extends StatelessWidget {
             onPressed: onSearch,
             icon: const Icon(Icons.search),
           ),
+          if (onCall != null)
+            IconButton(
+              tooltip: 'Start voice call',
+              onPressed: onCall,
+              icon: const Icon(Icons.call_outlined),
+            ),
           PopupMenuButton<String>(
             tooltip: 'Chat options',
             icon: const Icon(Icons.more_vert),
@@ -6039,6 +6458,7 @@ class _GroupChatPanel extends StatefulWidget {
     required this.onShowDetails,
     required this.onDropFiles,
     this.onAttach,
+    this.onScheduleAttachment,
     this.onBack,
     this.onSmartPaste,
   });
@@ -6055,11 +6475,96 @@ class _GroupChatPanel extends StatefulWidget {
   final VoidCallback onShowDetails;
   final ValueChanged<List<XFile>> onDropFiles;
   final VoidCallback? onAttach;
+  final VoidCallback? onScheduleAttachment;
   final VoidCallback? onBack;
   final VoidCallback? onSmartPaste;
 
   @override
   State<_GroupChatPanel> createState() => _GroupChatPanelState();
+}
+
+class _GroupVoiceControls extends StatelessWidget {
+  const _GroupVoiceControls({
+    required this.controller,
+    required this.messageId,
+    required this.durationMs,
+    required this.palette,
+  });
+
+  final MessengerController controller;
+  final String messageId;
+  final int durationMs;
+  final ConestPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    final service = controller.voiceMessageService;
+    final total = Duration(milliseconds: durationMs);
+    return StreamBuilder<Duration>(
+      stream: service.playbackPositionStream,
+      initialData: Duration.zero,
+      builder: (context, snapshot) {
+        final isCurrent = service.playingItemId == messageId;
+        final position = snapshot.data ?? Duration.zero;
+        final value = (position.inMilliseconds / durationMs).clamp(0.0, 1.0);
+        final label =
+            '${total.inMinutes}:${(total.inSeconds % 60).toString().padLeft(2, '0')}';
+        final path = controller.groupFilePathFor(messageId);
+        return Row(
+          children: [
+            IconButton(
+              tooltip: isCurrent && service.isPlaying
+                  ? 'Pause voice message'
+                  : 'Play voice message',
+              onPressed: path == null
+                  ? null
+                  : () => unawaited(
+                      service
+                          .togglePlayback(path, itemId: messageId)
+                          .catchError(
+                            (Object error) => controller.setStatus('$error'),
+                          ),
+                    ),
+              icon: Icon(
+                isCurrent && service.isPlaying
+                    ? Icons.pause_circle_outline
+                    : Icons.play_circle_outline,
+                color: palette.primary,
+              ),
+            ),
+            Expanded(
+              child: isCurrent
+                  ? Slider(
+                      value: value,
+                      onChanged: (next) => unawaited(
+                        service.seekPlayback(
+                          Duration(milliseconds: (next * durationMs).round()),
+                        ),
+                      ),
+                    )
+                  : Text('Voice message · $label'),
+            ),
+            PopupMenuButton<double>(
+              tooltip: 'Playback speed',
+              icon: const Icon(Icons.speed),
+              onSelected: (rate) => unawaited(
+                service
+                    .setPlaybackRate(rate)
+                    .catchError(
+                      (Object error) => controller.setStatus('$error'),
+                    ),
+              ),
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 1, child: Text('1×')),
+                PopupMenuItem(value: 1.5, child: Text('1.5×')),
+                PopupMenuItem(value: 2, child: Text('2×')),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
 }
 
 class _GroupChatPanelState extends State<_GroupChatPanel> {
@@ -6158,6 +6663,232 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   MessengerController get controller => widget.controller;
   ConestPalette get palette => widget.palette;
   GroupRecord get group => widget.group;
+
+  Future<void> _scheduleText() async {
+    final body = widget.composerController.text.trim();
+    if (body.isEmpty) return;
+    final date = await showDatePicker(
+      context: context,
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      initialDate: DateTime.now(),
+    );
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+    );
+    if (time == null || !mounted) return;
+    final due = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      time.hour,
+      time.minute,
+    );
+    await controller.scheduleTextMessage(
+      kind: ConversationKind.group,
+      conversationId: group.groupId,
+      body: body,
+      scheduledAt: due,
+    );
+    widget.composerController.clear();
+    controller.setStatus('Message scheduled for ${due.toLocal()}.');
+  }
+
+  bool _voiceRecordingStarting = false;
+  bool _voiceRecordingLocked = false;
+  bool _voiceRecordingCancelGesture = false;
+
+  bool get _voiceRecording => controller.voiceMessageService.isRecording;
+
+  Future<void> _beginGroupVoiceRecording() async {
+    if (_voiceRecording || _voiceRecordingStarting) return;
+    setState(() {
+      _voiceRecordingStarting = true;
+      _voiceRecordingLocked = false;
+      _voiceRecordingCancelGesture = false;
+    });
+    try {
+      await controller.voiceMessageService.start(
+        destinationKey: 'group:${group.groupId}',
+      );
+      if (!mounted) {
+        await controller.voiceMessageService.stopForInterruption();
+        return;
+      }
+    } catch (error) {
+      if (error is! StateError ||
+          (!error.message.toString().contains('startup') &&
+              !error.message.toString().contains('before it started'))) {
+        controller.setStatus('$error');
+      }
+    } finally {
+      if (mounted) setState(() => _voiceRecordingStarting = false);
+    }
+  }
+
+  void _moveGroupVoiceRecording(LongPressMoveUpdateDetails details) {
+    if ((!_voiceRecording && !_voiceRecordingStarting) ||
+        _voiceRecordingLocked) {
+      return;
+    }
+    final cancel = details.offsetFromOrigin.dx <= -96;
+    final locked = !cancel && details.offsetFromOrigin.dy <= -96;
+    if (cancel == _voiceRecordingCancelGesture &&
+        locked == _voiceRecordingLocked) {
+      return;
+    }
+    setState(() {
+      _voiceRecordingCancelGesture = cancel;
+      _voiceRecordingLocked = locked;
+    });
+  }
+
+  Future<void> _cancelGroupVoiceRecording() async {
+    final service = controller.voiceMessageService;
+    await service.cancel();
+    if (mounted && !_voiceRecordingStarting) {
+      setState(() {
+        _voiceRecordingLocked = false;
+        _voiceRecordingCancelGesture = false;
+      });
+    }
+  }
+
+  Future<void> _releaseGroupVoiceRecording() async {
+    if (_voiceRecordingCancelGesture) {
+      await _cancelGroupVoiceRecording();
+    } else if (!_voiceRecordingLocked) {
+      await _finishGroupVoiceRecording();
+    }
+  }
+
+  Future<void> _finishGroupVoiceRecording() async {
+    final voiceService = controller.voiceMessageService;
+    if (_voiceRecordingStarting) {
+      await voiceService.stopForInterruption();
+      return;
+    }
+    if (!_voiceRecording && voiceService.preview == null) return;
+    if (mounted) {
+      setState(() {
+        _voiceRecordingLocked = false;
+        _voiceRecordingCancelGesture = false;
+      });
+    }
+    try {
+      if (voiceService.preview == null) await voiceService.stop();
+      if (!mounted) return;
+      final send = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Group voice message ready'),
+          content: const Text(
+            'Send this recording to the group or discard it?',
+          ),
+          actions: [
+            TextButton.icon(
+              onPressed: () => unawaited(
+                voiceService.playPreview().catchError(
+                  (Object error) => controller.setStatus('$error'),
+                ),
+              ),
+              icon: const Icon(Icons.play_arrow),
+              label: const Text('Preview'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Delete'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Send'),
+            ),
+          ],
+        ),
+      );
+      if (send == true) {
+        await controller.sendRecordedVoiceMessageToGroup(
+          groupId: group.groupId,
+        );
+      } else {
+        await voiceService.cancel();
+      }
+    } catch (error) {
+      if (voiceService.isRecording) await voiceService.stopForInterruption();
+      controller.setStatus('$error');
+    }
+  }
+
+  Future<void> _createPoll() async {
+    final question = TextEditingController();
+    final options = TextEditingController();
+    var mode = PollChoiceMode.single;
+    final value = await showDialog<(String, List<String>, PollChoiceMode)>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('New poll'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: question,
+                decoration: const InputDecoration(labelText: 'Question'),
+              ),
+              TextField(
+                controller: options,
+                minLines: 2,
+                maxLines: 6,
+                decoration: const InputDecoration(
+                  labelText: 'Options (one per line)',
+                ),
+              ),
+              DropdownButton<PollChoiceMode>(
+                value: mode,
+                onChanged: (value) =>
+                    setDialogState(() => mode = value ?? mode),
+                items: const [
+                  DropdownMenuItem(
+                    value: PollChoiceMode.single,
+                    child: Text('Single choice'),
+                  ),
+                  DropdownMenuItem(
+                    value: PollChoiceMode.multiple,
+                    child: Text('Multiple choice'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, (
+                question.text,
+                options.text.split('\n'),
+                mode,
+              )),
+              child: const Text('Create'),
+            ),
+          ],
+        ),
+      ),
+    );
+    question.dispose();
+    options.dispose();
+    if (value == null) return;
+    await controller.createGroupPoll(
+      groupId: group.groupId,
+      question: value.$1,
+      options: value.$2,
+      mode: value.$3,
+    );
+  }
 
   Future<void> _changeGroupMessage(
     ChatMessage message, {
@@ -6424,6 +7155,11 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
 
   @override
   void dispose() {
+    final voiceService = controller.voiceMessageService;
+    if (voiceService.isRecording &&
+        voiceService.previewDestinationKey == 'group:${group.groupId}') {
+      unawaited(voiceService.stopForInterruption());
+    }
     _readSweepDebounce?.cancel();
     _flashTimer?.cancel();
     _scrollController.removeListener(_scheduleReadSweep);
@@ -6530,6 +7266,17 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     final path = controller.groupFilePathFor(message.id);
     if (manifest == null || path == null) {
       controller.setStatus('The group file is not available locally.');
+      return;
+    }
+    if (manifest.voiceMetadata != null) {
+      try {
+        await controller.voiceMessageService.togglePlayback(
+          path,
+          itemId: message.id,
+        );
+      } catch (error) {
+        controller.setStatus('$error');
+      }
       return;
     }
     if (!kIsWeb && Platform.isAndroid) {
@@ -6785,6 +7532,14 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           sharing: controller
                               .groupFilePreference(group.groupId, message.id)
                               .sharing,
+                          playbackControls: file.voiceMetadata == null
+                              ? null
+                              : _GroupVoiceControls(
+                                  controller: controller,
+                                  messageId: message.id,
+                                  durationMs: file.voiceMetadata!.durationMs,
+                                  palette: palette,
+                                ),
                           accepted: controller
                               .groupFilePreference(group.groupId, message.id)
                               .accepted,
@@ -6805,6 +7560,15 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         ),
                       ),
                       if (message.body.isNotEmpty) const SizedBox(height: 8),
+                    ],
+                    if (message.poll case final poll?) ...[
+                      _GroupPollCard(
+                        groupId: group.groupId,
+                        poll: poll,
+                        controller: controller,
+                        palette: palette,
+                      ),
+                      const SizedBox(height: 8),
                     ],
                     if (message.body.isNotEmpty ||
                         (!message.hasAttachment && message.groupFile == null))
@@ -7183,13 +7947,123 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                   Row(
                     children: [
                       if (widget.onAttach != null) ...[
-                        IconButton(
-                          onPressed: canSend ? widget.onAttach : null,
+                        PopupMenuButton<String>(
+                          enabled: canSend,
+                          tooltip: 'Share or schedule a group file',
                           icon: const Icon(Icons.attach_file_outlined),
-                          tooltip: 'Share a file with this group',
+                          onSelected: (action) {
+                            if (action == 'schedule') {
+                              widget.onScheduleAttachment?.call();
+                            } else {
+                              widget.onAttach?.call();
+                            }
+                          },
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(
+                              value: 'send',
+                              child: Text('Share file now'),
+                            ),
+                            PopupMenuItem(
+                              value: 'schedule',
+                              child: Text('Schedule file'),
+                            ),
+                          ],
                         ),
                         const SizedBox(width: 4),
                       ],
+                      StreamBuilder<VoiceRecordingState>(
+                        stream: controller.voiceMessageService.states,
+                        initialData: controller.voiceMessageService.state,
+                        builder: (context, snapshot) {
+                          final state =
+                              snapshot.data ?? VoiceRecordingState.idle;
+                          final recording =
+                              state == VoiceRecordingState.recording;
+                          final ownsPreview =
+                              controller
+                                  .voiceMessageService
+                                  .previewDestinationKey ==
+                              'group:${group.groupId}';
+                          final preview =
+                              state == VoiceRecordingState.preview &&
+                              ownsPreview;
+                          final foreignRecording = recording && !ownsPreview;
+                          final foreignPreview =
+                              state == VoiceRecordingState.preview &&
+                              !ownsPreview;
+                          return GestureDetector(
+                            onLongPressStart:
+                                preview ||
+                                    foreignPreview ||
+                                    foreignRecording ||
+                                    _voiceRecordingStarting
+                                ? null
+                                : (_) => _beginGroupVoiceRecording(),
+                            onLongPressMoveUpdate:
+                                preview || foreignPreview || foreignRecording
+                                ? null
+                                : _moveGroupVoiceRecording,
+                            onLongPressEnd:
+                                preview || foreignPreview || foreignRecording
+                                ? null
+                                : (_) =>
+                                      unawaited(_releaseGroupVoiceRecording()),
+                            child: IconButton(
+                              onPressed:
+                                  canSend &&
+                                      !foreignPreview &&
+                                      !foreignRecording
+                                  ? (_voiceRecordingStarting
+                                        ? _cancelGroupVoiceRecording
+                                        : recording || preview
+                                        ? _finishGroupVoiceRecording
+                                        : _beginGroupVoiceRecording)
+                                  : null,
+                              tooltip: foreignRecording
+                                  ? 'Recording belongs to another conversation'
+                                  : foreignPreview
+                                  ? 'Finish the voice preview in its original chat'
+                                  : preview
+                                  ? 'Review unsent voice message'
+                                  : _voiceRecordingStarting
+                                  ? 'Cancel microphone startup'
+                                  : _voiceRecordingCancelGesture
+                                  ? 'Release to discard recording'
+                                  : _voiceRecordingLocked
+                                  ? 'Recording locked · tap to finish'
+                                  : recording
+                                  ? 'Release to stop · slide left to cancel · slide up to lock'
+                                  : 'Hold to record a group voice message',
+                              icon: Icon(
+                                _voiceRecordingCancelGesture
+                                    ? Icons.delete_outline
+                                    : _voiceRecordingLocked
+                                    ? Icons.lock_clock_outlined
+                                    : recording
+                                    ? Icons.stop_circle_outlined
+                                    : preview
+                                    ? Icons.play_circle_outline
+                                    : Icons.mic_none_outlined,
+                                color: _voiceRecordingCancelGesture || recording
+                                    ? palette.danger
+                                    : null,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                      IconButton(
+                        onPressed: canSend
+                            ? () => unawaited(
+                                _createPoll().catchError(
+                                  (Object error) =>
+                                      controller.setStatus('$error'),
+                                ),
+                              )
+                            : null,
+                        icon: const Icon(Icons.poll_outlined),
+                        tooltip: 'Create poll',
+                      ),
                       Expanded(
                         child: Shortcuts(
                           shortcuts: <ShortcutActivator, Intent>{
@@ -7254,6 +8128,11 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         ),
                       ),
                       const SizedBox(width: 12),
+                      IconButton(
+                        tooltip: 'Schedule message',
+                        onPressed: canSend ? _scheduleText : null,
+                        icon: const Icon(Icons.schedule_send_outlined),
+                      ),
                       FilledButton.icon(
                         onPressed: canSend ? widget.onSend : null,
                         icon: const Icon(Icons.north_east),
@@ -7318,6 +8197,207 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   }
 }
 
+class _GroupPollCard extends StatelessWidget {
+  const _GroupPollCard({
+    required this.groupId,
+    required this.poll,
+    required this.controller,
+    required this.palette,
+  });
+
+  final String groupId;
+  final PollDefinition poll;
+  final MessengerController controller;
+  final ConestPalette palette;
+
+  Future<void> _chooseMultiple(BuildContext context) async {
+    final selected = <int>{};
+    final result = await showDialog<List<int>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(poll.question),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var index = 0; index < poll.options.length; index++)
+                CheckboxListTile(
+                  value: selected.contains(index),
+                  title: Text(poll.options[index]),
+                  onChanged: (value) => setDialogState(() {
+                    if (value == true) {
+                      selected.add(index);
+                    } else {
+                      selected.remove(index);
+                    }
+                  }),
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, selected.toList()),
+              child: const Text('Vote'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result == null || result.isEmpty) return;
+    await controller.voteInGroupPoll(
+      groupId: groupId,
+      pollId: poll.id,
+      optionIndexes: result,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final projection = controller.groupPollProjection(groupId, poll.id);
+    final counts =
+        projection?.counts() ?? List<int>.filled(poll.options.length, 0);
+    final closed = projection?.definition.isClosed ?? poll.isClosed;
+    return Card(
+      margin: EdgeInsets.zero,
+      elevation: 0,
+      color: palette.panel2.withValues(alpha: 0.65),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              poll.question,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            for (var index = 0; index < poll.options.length; index++)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    OutlinedButton(
+                      onPressed: closed || poll.mode == PollChoiceMode.multiple
+                          ? null
+                          : () => unawaited(
+                              controller
+                                  .voteInGroupPoll(
+                                    groupId: groupId,
+                                    pollId: poll.id,
+                                    optionIndexes: [index],
+                                  )
+                                  .catchError(
+                                    (Object error) =>
+                                        controller.setStatus('$error'),
+                                  ),
+                            ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              poll.options[index],
+                              textAlign: TextAlign.left,
+                            ),
+                          ),
+                          Text('${counts[index]}'),
+                        ],
+                      ),
+                    ),
+                    if (projection != null && projection.votes.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 8, bottom: 4),
+                        child: Text(
+                          projection.votes.entries
+                              .where(
+                                (entry) => entry.value.optionIndexes.contains(
+                                  '$index',
+                                ),
+                              )
+                              .map(
+                                (entry) =>
+                                    controller.groupMemberLabel(entry.key),
+                              )
+                              .join(', '),
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(color: palette.inkSoft),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            if (!closed && poll.mode == PollChoiceMode.multiple)
+              FilledButton.tonal(
+                onPressed: () => unawaited(
+                  _chooseMultiple(context).catchError(
+                    (Object error) => controller.setStatus('$error'),
+                  ),
+                ),
+                child: const Text('Choose options'),
+              ),
+            if (!closed &&
+                projection
+                        ?.votes[controller.identity?.deviceId]
+                        ?.optionIndexes
+                        .isNotEmpty ==
+                    true)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () => unawaited(
+                    controller
+                        .voteInGroupPoll(
+                          groupId: groupId,
+                          pollId: poll.id,
+                          optionIndexes: const <int>[],
+                        )
+                        .catchError(
+                          (Object error) => controller.setStatus('$error'),
+                        ),
+                  ),
+                  child: const Text('Retract vote'),
+                ),
+              ),
+            Text(
+              closed ? 'Closed' : 'Visible votes',
+              style: Theme.of(
+                context,
+              ).textTheme.labelSmall?.copyWith(color: palette.inkSoft),
+            ),
+            if (closed && (projection?.unconfirmedVotes.isNotEmpty ?? false))
+              Text(
+                '${projection!.unconfirmedVotes.length} vote(s) were not in the creator’s close checkpoint.',
+                style: Theme.of(
+                  context,
+                ).textTheme.labelSmall?.copyWith(color: palette.inkSoft),
+              ),
+            if (!closed &&
+                controller.identity?.deviceId == poll.creatorDeviceId)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () => unawaited(
+                    controller
+                        .closeGroupPoll(groupId: groupId, pollId: poll.id)
+                        .catchError(
+                          (Object error) => controller.setStatus('$error'),
+                        ),
+                  ),
+                  icon: const Icon(Icons.lock_outline, size: 16),
+                  label: const Text('Close poll'),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ChatPanel extends StatefulWidget {
   const _ChatPanel({
     super.key,
@@ -7369,6 +8449,11 @@ class _ChatPanelState extends State<_ChatPanel> {
   String? _flashingMessageId;
   Timer? _flashTimer;
   bool _routeInspectorOpen = false;
+  bool _voiceRecordingStarting = false;
+  bool _voiceRecordingLocked = false;
+  bool _voiceRecordingCancelGesture = false;
+
+  bool get _voiceRecording => controller.voiceMessageService.isRecording;
 
   static const Duration _readSweepDelay = Duration(milliseconds: 800);
   static const Duration _replyFlashDuration = Duration(milliseconds: 320);
@@ -7378,6 +8463,173 @@ class _ChatPanelState extends State<_ChatPanel> {
   MessengerController get controller => widget.controller;
   ConestPalette get palette => widget.palette;
   ContactRecord get contact => widget.contact;
+
+  Future<void> _scheduleText() async {
+    final body = widget.composerController.text.trim();
+    final staged = controller.stagedAttachmentsFor(contact.deviceId);
+    if (staged.length > 1) {
+      controller.setStatus('Schedule one attachment at a time.');
+      return;
+    }
+    if (body.isEmpty && staged.isEmpty) return;
+    final date = await showDatePicker(
+      context: context,
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      initialDate: DateTime.now(),
+    );
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+    );
+    if (time == null || !mounted) return;
+    final due = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      time.hour,
+      time.minute,
+    );
+    if (staged case [final attachment]) {
+      await controller.scheduleAttachment(
+        contact: contact,
+        source: attachment,
+        scheduledAt: due,
+        caption: body,
+      );
+      controller.removeStaged(
+        deviceId: contact.deviceId,
+        stagedId: attachment.id,
+      );
+    } else {
+      await controller.scheduleTextMessage(
+        kind: ConversationKind.direct,
+        conversationId: contact.deviceId,
+        body: body,
+        scheduledAt: due,
+      );
+    }
+    widget.composerController.clear();
+    controller.setStatus('Message scheduled for ${due.toLocal()}.');
+  }
+
+  Future<void> _beginVoiceRecording() async {
+    if (_voiceRecording || _voiceRecordingStarting) return;
+    setState(() {
+      _voiceRecordingStarting = true;
+      _voiceRecordingLocked = false;
+      _voiceRecordingCancelGesture = false;
+    });
+    try {
+      await controller.voiceMessageService.start(
+        destinationKey: 'direct:${contact.deviceId}',
+      );
+      if (!mounted) {
+        await controller.voiceMessageService.stopForInterruption();
+        return;
+      }
+    } catch (error) {
+      if (error is! StateError ||
+          (!error.message.toString().contains('startup') &&
+              !error.message.toString().contains('before it started'))) {
+        controller.setStatus('$error');
+      }
+    } finally {
+      if (mounted) setState(() => _voiceRecordingStarting = false);
+    }
+  }
+
+  void _moveVoiceRecording(LongPressMoveUpdateDetails details) {
+    if ((!_voiceRecording && !_voiceRecordingStarting) ||
+        _voiceRecordingLocked) {
+      return;
+    }
+    final cancel = details.offsetFromOrigin.dx <= -96;
+    final locked = !cancel && details.offsetFromOrigin.dy <= -96;
+    if (cancel == _voiceRecordingCancelGesture &&
+        locked == _voiceRecordingLocked) {
+      return;
+    }
+    setState(() {
+      _voiceRecordingCancelGesture = cancel;
+      _voiceRecordingLocked = locked;
+    });
+  }
+
+  Future<void> _cancelVoiceRecording() async {
+    final service = controller.voiceMessageService;
+    await service.cancel();
+    if (mounted && !_voiceRecordingStarting) {
+      setState(() {
+        _voiceRecordingLocked = false;
+        _voiceRecordingCancelGesture = false;
+      });
+    }
+  }
+
+  Future<void> _releaseVoiceRecording() async {
+    if (_voiceRecordingCancelGesture) {
+      await _cancelVoiceRecording();
+    } else if (!_voiceRecordingLocked) {
+      await _finishVoiceRecording();
+    }
+  }
+
+  Future<void> _finishVoiceRecording() async {
+    final voiceService = controller.voiceMessageService;
+    if (_voiceRecordingStarting) {
+      await voiceService.stopForInterruption();
+      return;
+    }
+    if (!_voiceRecording && voiceService.preview == null) return;
+    if (mounted) {
+      setState(() {
+        _voiceRecordingLocked = false;
+        _voiceRecordingCancelGesture = false;
+      });
+    }
+    try {
+      if (voiceService.preview == null) await voiceService.stop();
+      if (!mounted) return;
+      final send = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Voice message ready'),
+          content: const Text('Send this recording or discard it?'),
+          actions: [
+            TextButton.icon(
+              onPressed: () => unawaited(
+                voiceService.playPreview().catchError(
+                  (Object error) => controller.setStatus('$error'),
+                ),
+              ),
+              icon: const Icon(Icons.play_arrow),
+              label: const Text('Preview'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Delete'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Send'),
+            ),
+          ],
+        ),
+      );
+      if (send == true) {
+        await controller.sendRecordedVoiceMessage(contact: contact);
+      } else {
+        await controller.voiceMessageService.cancel();
+      }
+    } catch (error) {
+      if (voiceService.isRecording) {
+        await voiceService.stopForInterruption();
+      }
+      controller.setStatus('$error');
+    }
+  }
 
   /// Derives the LAN/relay paths for the [RouteInspector] from the contact's
   /// route hints and the live route-health tracker. The lower-RTT reachable
@@ -7595,6 +8847,11 @@ class _ChatPanelState extends State<_ChatPanel> {
 
   @override
   void dispose() {
+    final voiceService = controller.voiceMessageService;
+    if (voiceService.isRecording &&
+        voiceService.previewDestinationKey == 'direct:${contact.deviceId}') {
+      unawaited(voiceService.stopForInterruption());
+    }
     _readSweepDebounce?.cancel();
     _flashTimer?.cancel();
     _scrollController.removeListener(_handleScroll);
@@ -8171,6 +9428,17 @@ class _ChatPanelState extends State<_ChatPanel> {
                 onDetails: widget.onShowProfile,
                 onConnectionDetails: () =>
                     setState(() => _routeInspectorOpen = !_routeInspectorOpen),
+                onCall: () => unawaited(
+                  controller.voiceCallService
+                      ?.startOutgoing(contact.deviceId)
+                      .then(
+                        (_) =>
+                            controller.setStatus('Calling ${contact.alias}…'),
+                      )
+                      .catchError(
+                        (Object error) => controller.setStatus('$error'),
+                      ),
+                ),
               )
             else
               Padding(
@@ -8484,6 +9752,93 @@ class _ChatPanelState extends State<_ChatPanel> {
                         ),
                       ),
                       const SizedBox(width: 12),
+                      StreamBuilder<VoiceRecordingState>(
+                        stream: controller.voiceMessageService.states,
+                        initialData: controller.voiceMessageService.state,
+                        builder: (context, snapshot) {
+                          final state =
+                              snapshot.data ?? VoiceRecordingState.idle;
+                          final recording =
+                              state == VoiceRecordingState.recording;
+                          final ownsPreview =
+                              controller
+                                  .voiceMessageService
+                                  .previewDestinationKey ==
+                              'direct:${contact.deviceId}';
+                          final preview =
+                              state == VoiceRecordingState.preview &&
+                              ownsPreview;
+                          final foreignRecording = recording && !ownsPreview;
+                          final foreignPreview =
+                              state == VoiceRecordingState.preview &&
+                              !ownsPreview;
+                          return GestureDetector(
+                            onLongPressStart:
+                                preview ||
+                                    foreignPreview ||
+                                    foreignRecording ||
+                                    _voiceRecordingStarting
+                                ? null
+                                : (_) => _beginVoiceRecording(),
+                            onLongPressMoveUpdate:
+                                preview || foreignPreview || foreignRecording
+                                ? null
+                                : _moveVoiceRecording,
+                            onLongPressEnd:
+                                preview || foreignPreview || foreignRecording
+                                ? null
+                                : (_) => unawaited(_releaseVoiceRecording()),
+                            child: IconButton(
+                              tooltip: foreignRecording
+                                  ? 'Recording belongs to another conversation'
+                                  : foreignPreview
+                                  ? 'Finish the voice preview in its original chat'
+                                  : preview
+                                  ? 'Review unsent voice message'
+                                  : _voiceRecordingStarting
+                                  ? 'Cancel microphone startup'
+                                  : _voiceRecordingCancelGesture
+                                  ? 'Release to discard recording'
+                                  : _voiceRecordingLocked
+                                  ? 'Recording locked · tap to finish'
+                                  : recording
+                                  ? 'Release to stop · slide left to cancel · slide up to lock'
+                                  : 'Hold to record a voice message',
+                              onPressed:
+                                  contact.canSendOutbound &&
+                                      !foreignPreview &&
+                                      !foreignRecording
+                                  ? (_voiceRecordingStarting
+                                        ? _cancelVoiceRecording
+                                        : recording || preview
+                                        ? _finishVoiceRecording
+                                        : _beginVoiceRecording)
+                                  : null,
+                              icon: Icon(
+                                _voiceRecordingCancelGesture
+                                    ? Icons.delete_outline
+                                    : _voiceRecordingLocked
+                                    ? Icons.lock_clock_outlined
+                                    : recording
+                                    ? Icons.stop_circle_outlined
+                                    : preview
+                                    ? Icons.play_circle_outline
+                                    : Icons.mic_none_outlined,
+                                color: _voiceRecordingCancelGesture || recording
+                                    ? palette.danger
+                                    : null,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                      IconButton(
+                        tooltip: 'Schedule message',
+                        onPressed: contact.canSendOutbound
+                            ? _scheduleText
+                            : null,
+                        icon: const Icon(Icons.schedule_send_outlined),
+                      ),
                       if (widget.telegramLayout)
                         IconButton.filled(
                           tooltip: 'Send',
@@ -15535,6 +16890,21 @@ class _AttachmentRow extends StatelessWidget {
       );
       return;
     }
+    if (Platform.isLinux) {
+      // Keep Linux playback outside Flutter's native video plugins. The
+      // transient player route had no playback controls on Linux: it only
+      // launched xdg-open and closed itself after handing the file off.
+      try {
+        await Process.start('xdg-open', [
+          path,
+        ], mode: ProcessStartMode.detached);
+      } catch (error) {
+        controller.setStatus(
+          'Could not open video in the system player: $error',
+        );
+      }
+      return;
+    }
     final bytes = controller.attachmentBytesFor(descriptor.id);
     navigator.push(
       MaterialPageRoute<void>(
@@ -16015,6 +17385,130 @@ class _AttachmentRow extends StatelessWidget {
                   ),
                 ),
               ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (descriptor.voiceMetadata case final voice?) {
+      final duration = Duration(milliseconds: voice.durationMs);
+      final durationLabel =
+          '${duration.inMinutes}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}';
+      return _wrapContextMenu(
+        context: context,
+        child: InkWell(
+          onTap: hasLocalFile
+              ? () async {
+                  try {
+                    final path = await controller.attachmentCachePathFor(
+                      descriptor.id,
+                    );
+                    if (path == null) {
+                      controller.setStatus(
+                        'Voice message bytes are not ready.',
+                      );
+                      return;
+                    }
+                    await controller.voiceMessageService.togglePlayback(
+                      path,
+                      itemId: descriptor.id,
+                    );
+                  } catch (error) {
+                    controller.setStatus('$error');
+                  }
+                }
+              : null,
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            constraints: const BoxConstraints(minWidth: 220, maxWidth: 360),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: outbound
+                  ? palette.outboundBubble.withValues(alpha: 0.72)
+                  : palette.inboundBubble,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: StreamBuilder<Duration>(
+              stream: controller.voiceMessageService.playbackPositionStream,
+              initialData: Duration.zero,
+              builder: (context, snapshot) {
+                final service = controller.voiceMessageService;
+                final isCurrent = service.playingItemId == descriptor.id;
+                final fraction =
+                    ((snapshot.data?.inMilliseconds ?? 0) / voice.durationMs)
+                        .clamp(0.0, 1.0);
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          hasLocalFile
+                              ? (isCurrent && service.isPlaying
+                                    ? Icons.pause_circle_outline
+                                    : Icons.play_circle_outline)
+                              : Icons.mic_none,
+                          color: textColor,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Voice message',
+                                style: TextStyle(color: textColor),
+                              ),
+                              Text(
+                                '$durationLabel · ${_formatBytes(descriptor.sizeBytes)}',
+                                style: TextStyle(color: metaColor),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (hasLocalFile)
+                          PopupMenuButton<double>(
+                            tooltip: 'Playback speed',
+                            icon: Icon(Icons.speed, color: textColor, size: 20),
+                            onSelected: (rate) => unawaited(
+                              service
+                                  .setPlaybackRate(rate)
+                                  .catchError(
+                                    (Object error) =>
+                                        controller.setStatus('$error'),
+                                  ),
+                            ),
+                            itemBuilder: (context) => const [
+                              PopupMenuItem(value: 1, child: Text('1×')),
+                              PopupMenuItem(value: 1.5, child: Text('1.5×')),
+                              PopupMenuItem(value: 2, child: Text('2×')),
+                            ],
+                          ),
+                        if (transferInFlight)
+                          SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(
+                              value: progress,
+                              strokeWidth: 2,
+                            ),
+                          ),
+                      ],
+                    ),
+                    if (hasLocalFile && isCurrent)
+                      Slider(
+                        value: fraction,
+                        onChanged: (value) => unawaited(
+                          service.seekPlayback(
+                            Duration(
+                              milliseconds: (value * voice.durationMs).round(),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
             ),
           ),
         ),
@@ -16951,11 +18445,9 @@ class _VideoPlayerScreenState extends State<_VideoPlayerScreen> {
   @override
   void initState() {
     super.initState();
-    // nightly.11: when the libmpv platform impl failed to initialize at
-    // app boot (libmpv missing on this desktop), don't even try inline
-    // playback — instantly route to xdg-open / start / open. Avoids the
-    // crash that battle-tested users on Linux without libmpv hit.
-    if (!_mediaKitAvailable && (Platform.isLinux || Platform.isWindows)) {
+    // Linux always uses xdg-open: libmpv can crash the process natively,
+    // outside Dart's initialize().catchError recovery path.
+    if (Platform.isLinux || (!_mediaKitAvailable && Platform.isWindows)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _openInSystemPlayer();
       });
@@ -16996,15 +18488,24 @@ class _VideoPlayerScreenState extends State<_VideoPlayerScreen> {
   Future<void> _openInSystemPlayer() async {
     try {
       if (Platform.isLinux) {
-        await Process.start('xdg-open', [widget.cachePath]);
+        await Process.start('xdg-open', [
+          widget.cachePath,
+        ], mode: ProcessStartMode.detached);
       } else if (Platform.isMacOS) {
-        await Process.start('open', [widget.cachePath]);
+        await Process.start('open', [
+          widget.cachePath,
+        ], mode: ProcessStartMode.detached);
       } else if (Platform.isWindows) {
-        await Process.start('cmd', ['/c', 'start', '', widget.cachePath]);
+        await Process.start('cmd', [
+          '/c',
+          'start',
+          '',
+          widget.cachePath,
+        ], mode: ProcessStartMode.detached);
       }
       if (mounted) Navigator.of(context).pop();
-    } catch (_) {
-      // Best-effort; the error UI already shows the underlying problem.
+    } catch (error) {
+      if (mounted) setState(() => _initError = error);
     }
   }
 
@@ -17336,3 +18837,148 @@ bool get _isWindowsPlatform => !kIsWeb && Platform.isWindows;
 
 Brightness get _platformBrightness =>
     WidgetsBinding.instance.platformDispatcher.platformBrightness;
+
+class _ScheduledMessagesScreen extends StatelessWidget {
+  const _ScheduledMessagesScreen({
+    required this.controller,
+    required this.palette,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Scheduled messages')),
+      body: ListenableBuilder(
+        listenable: controller,
+        builder: (context, _) {
+          final entries = controller.scheduledMessages
+              .where(
+                (entry) =>
+                    entry.state != ScheduledMessageState.sent &&
+                    entry.state != ScheduledMessageState.canceled,
+              )
+              .toList(growable: false);
+          if (entries.isEmpty) {
+            return const Center(child: Text('No scheduled messages'));
+          }
+          return ListView.separated(
+            padding: const EdgeInsets.all(16),
+            itemCount: entries.length,
+            separatorBuilder: (_, index) => const Divider(height: 1),
+            itemBuilder: (context, index) {
+              final entry = entries[index];
+              return ListTile(
+                leading: Icon(
+                  entry.state == ScheduledMessageState.blocked
+                      ? Icons.error_outline
+                      : Icons.schedule_send_outlined,
+                  color: entry.state == ScheduledMessageState.blocked
+                      ? palette.danger
+                      : palette.primary,
+                ),
+                title: Text(
+                  entry.body.isEmpty
+                      ? (entry.attachmentFileName ?? 'Scheduled attachment')
+                      : entry.body,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  '${entry.conversationKind} • ${entry.scheduledAtUtc.toLocal()}\n${entry.failureReason ?? entry.state.name}',
+                ),
+                isThreeLine: true,
+                trailing: PopupMenuButton<String>(
+                  onSelected: (value) async {
+                    if (value == 'edit') {
+                      final editor = TextEditingController(text: entry.body);
+                      final body = await showDialog<String>(
+                        context: context,
+                        builder: (dialogContext) => AlertDialog(
+                          title: const Text('Edit scheduled message'),
+                          content: TextField(
+                            controller: editor,
+                            autofocus: true,
+                            minLines: 1,
+                            maxLines: 5,
+                            decoration: InputDecoration(
+                              hintText: entry.attachmentPath == null
+                                  ? 'Message'
+                                  : 'Caption',
+                            ),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(dialogContext),
+                              child: const Text('Cancel'),
+                            ),
+                            FilledButton(
+                              onPressed: () =>
+                                  Navigator.pop(dialogContext, editor.text),
+                              child: const Text('Save'),
+                            ),
+                          ],
+                        ),
+                      );
+                      editor.dispose();
+                      if (body != null) {
+                        try {
+                          await controller.editScheduledMessage(entry.id, body);
+                        } catch (error) {
+                          controller.setStatus('$error');
+                        }
+                      }
+                    } else if (value == 'send') {
+                      await controller.sendScheduledMessageNow(entry.id);
+                    } else if (value == 'reschedule') {
+                      final local = entry.scheduledAtUtc.toLocal();
+                      final date = await showDatePicker(
+                        context: context,
+                        firstDate: DateTime.now(),
+                        lastDate: DateTime.now().add(
+                          const Duration(days: 3650),
+                        ),
+                        initialDate: local.isBefore(DateTime.now())
+                            ? DateTime.now()
+                            : local,
+                      );
+                      if (date == null || !context.mounted) return;
+                      final time = await showTimePicker(
+                        context: context,
+                        initialTime: TimeOfDay.fromDateTime(local),
+                      );
+                      if (time == null) return;
+                      await controller.rescheduleMessage(
+                        entry.id,
+                        DateTime(
+                          date.year,
+                          date.month,
+                          date.day,
+                          time.hour,
+                          time.minute,
+                        ),
+                      );
+                    } else if (value == 'cancel') {
+                      await controller.cancelScheduledMessage(entry.id);
+                    }
+                  },
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                    const PopupMenuItem(value: 'send', child: Text('Send now')),
+                    const PopupMenuItem(
+                      value: 'reschedule',
+                      child: Text('Reschedule'),
+                    ),
+                    const PopupMenuItem(value: 'cancel', child: Text('Cancel')),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}

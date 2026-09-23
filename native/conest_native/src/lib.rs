@@ -3,6 +3,8 @@
 #![allow(unexpected_cfgs)]
 
 mod api;
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+mod audio;
 pub mod beam;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod desktop_camera;

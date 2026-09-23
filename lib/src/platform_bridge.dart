@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import 'voice_audio_ffi.dart';
+
 class PlatformBridge {
   PlatformBridge({MethodChannel? channel})
     : _channel = channel ?? const MethodChannel('dev.conest.conest/system') {
@@ -18,6 +20,15 @@ class PlatformBridge {
               ? (call.arguments as Map)['action'] as String?
               : null;
           if (action != null) _transferControls.add(action);
+        } else if (call.method == 'voiceCallAudioFailure') {
+          final reason = call.arguments is Map
+              ? (call.arguments as Map)['reason']?.toString()
+              : null;
+          _voiceAudio?.reportPlatformFailure(
+            reason ?? 'Android voice audio stopped.',
+          );
+        } else if (call.method == 'scheduledMessageDue') {
+          _scheduledMessageWakeups.add(1);
         }
       });
     } on AssertionError {
@@ -28,8 +39,21 @@ class PlatformBridge {
   final MethodChannel _channel;
   final StreamController<String> _transferControls =
       StreamController<String>.broadcast();
+  final StreamController<int> _scheduledMessageWakeups =
+      StreamController<int>.broadcast();
+  final NativeVoiceCallAudio? _voiceAudio = NativeVoiceCallAudio.tryCreate();
 
   Stream<String> get transferControlEvents => _transferControls.stream;
+  Stream<int> get scheduledMessageWakeupEvents =>
+      _scheduledMessageWakeups.stream;
+  Stream<Uint8List> get voiceCallAudioFrames =>
+      _voiceAudio?.frames ?? const Stream<Uint8List>.empty();
+
+  /// True only when a platform plugin implements a complete foreground audio
+  /// session. Datagram framing alone does not make calls available.
+  bool get supportsVoiceCallMedia =>
+      const bool.fromEnvironment('CONEST_EXPERIMENTAL_VOICE_CALLS') &&
+      _voiceAudio != null;
 
   bool get _supportsAndroidSystemCalls => !kIsWeb && Platform.isAndroid;
 
@@ -42,6 +66,21 @@ class PlatformBridge {
         'enabled': enabled,
       });
     } on MissingPluginException {
+      return;
+    }
+  }
+
+  Future<void> scheduleAndroidScheduledMessageWakeup(DateTime? dueAt) async {
+    if (!_supportsAndroidSystemCalls) return;
+    try {
+      await _channel.invokeMethod<void>('scheduleScheduledMessageWakeup', {
+        'timestampMs': dueAt?.toUtc().millisecondsSinceEpoch,
+      });
+    } on MissingPluginException {
+      return;
+    } on PlatformException {
+      // The normal Dart timer remains active while Conest is running. This
+      // native alarm only improves dispatch reliability during Android sleep.
       return;
     }
   }
@@ -80,6 +119,154 @@ class PlatformBridge {
     }
     try {
       await _channel.invokeMethod<void>('requestNotificationPermission');
+    } on MissingPluginException {
+      return;
+    }
+  }
+
+  /// Audio hooks are optional until the native Opus engine is bundled. The
+  /// Dart call state machine treats a missing plugin as an unavailable media
+  /// engine and ends the call cleanly.
+  Future<bool> openVoiceCallMedia({
+    required String peerDeviceId,
+    required bool outgoing,
+  }) async {
+    final nativeAudio = _voiceAudio;
+    if (!supportsVoiceCallMedia || nativeAudio == null) return false;
+    await prepareVoiceCallMedia();
+    await nativeAudio.open();
+    if (Platform.isAndroid) {
+      try {
+        final started = await _channel
+            .invokeMethod<bool>('openVoiceCallMedia', {
+              'handle': nativeAudio.handle,
+              'peerDeviceId': peerDeviceId,
+              'outgoing': outgoing,
+            });
+        if (started != true) {
+          await nativeAudio.close();
+          return false;
+        }
+      } catch (_) {
+        await nativeAudio.close();
+        rethrow;
+      }
+    }
+    return nativeAudio.isOpen;
+  }
+
+  Future<void> prepareVoiceCallMedia() async {
+    if (!supportsVoiceCallMedia) {
+      throw StateError('Native voice audio is unavailable in this build.');
+    }
+    if (Platform.isAndroid && !await _requestVoiceCallMicrophonePermission()) {
+      throw StateError('Microphone permission is required for voice calls.');
+    }
+  }
+
+  Future<bool> _requestVoiceCallMicrophonePermission() async {
+    try {
+      return await _channel.invokeMethod<bool>(
+            'requestVoiceCallMicrophonePermission',
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  Future<void> setVoiceCallMuted(bool muted) async {
+    if (!(_voiceAudio?.setMuted(muted) ?? false)) {
+      throw StateError('Could not update microphone mute state.');
+    }
+  }
+
+  void setVoiceCallNetworkCongested(bool congested) {
+    _voiceAudio?.setNetworkCongested(congested);
+  }
+
+  Future<bool> setVoiceCallSpeakerphoneEnabled(bool enabled) async {
+    if (!_supportsAndroidSystemCalls) return false;
+    try {
+      return await _channel.invokeMethod<bool>(
+            'setVoiceCallSpeakerphoneEnabled',
+            {'enabled': enabled},
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  Future<void> closeVoiceCallMedia() async {
+    final nativeAudio = _voiceAudio;
+    if (nativeAudio == null) return;
+    if (Platform.isAndroid && nativeAudio.isOpen) {
+      try {
+        await _channel.invokeMethod<void>('closeVoiceCallMedia');
+      } on MissingPluginException {
+        // Still close Rust workers below if the platform implementation is
+        // unexpectedly absent.
+      } finally {
+        await nativeAudio.close();
+      }
+    } else {
+      await nativeAudio.close();
+    }
+  }
+
+  Future<void> playVoiceCallAudioFrame(
+    Uint8List bytes, {
+    required int sequence,
+  }) async {
+    if (sequence <= 0 || bytes.isEmpty || bytes.length > 1100) return;
+    _voiceAudio?.playPacket(sequence, bytes);
+  }
+
+  Future<Map<String, dynamic>?> startVoiceRecording() async {
+    try {
+      final value = await _channel.invokeMethod<dynamic>('startVoiceRecording');
+      return value is Map
+          ? value.map((key, value) => MapEntry('$key', value))
+          : null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>?> stopVoiceRecording() async {
+    try {
+      final value = await _channel.invokeMethod<dynamic>('stopVoiceRecording');
+      return value is Map
+          ? value.map((key, value) => MapEntry('$key', value))
+          : null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  Future<void> cancelVoiceRecording() async {
+    try {
+      await _channel.invokeMethod<void>('cancelVoiceRecording');
+    } on MissingPluginException {
+      return;
+    }
+  }
+
+  Future<bool> playVoiceMessage({required String path}) async {
+    try {
+      return await _channel.invokeMethod<bool>('playVoiceMessage', {
+            'path': path,
+          }) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  Future<void> stopVoicePlayback() async {
+    try {
+      await _channel.invokeMethod<void>('stopVoicePlayback');
     } on MissingPluginException {
       return;
     }

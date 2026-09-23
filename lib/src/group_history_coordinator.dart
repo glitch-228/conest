@@ -49,8 +49,13 @@ class GroupHistoryCoordinator {
   /// is the transfer identity; provider identities never replace its author.
   Future<GroupHistoryEvent> publishFile(
     GroupRecord snapshot,
-    GroupFileManifest manifest,
-  ) async {
+    GroupFileManifest manifest, {
+    String? scheduledOperationId,
+  }) async {
+    if (scheduledOperationId != null &&
+        (scheduledOperationId.isEmpty || scheduledOperationId.length > 160)) {
+      throw ArgumentError('Invalid scheduled file operation id.');
+    }
     await prepareMembership(snapshot);
     return _write(snapshot.groupId, () async {
       final current = group(snapshot.groupId);
@@ -63,12 +68,44 @@ class GroupHistoryCoordinator {
       if (membership == null) {
         throw StateError('Waiting for signed membership history.');
       }
+      if (scheduledOperationId != null) {
+        String? before;
+        while (true) {
+          final page = await replica.journal.readPage(
+            beforeEventId: before,
+            limit: 128,
+          );
+          final existing = page.where(
+            (event) =>
+                event.kind == GroupEventKind.attachment &&
+                event.authorDeviceId == identity().deviceId &&
+                event.payload['scheduledOperationId'] == scheduledOperationId,
+          );
+          final match = existing.firstOrNull;
+          if (match != null) {
+            final prior = GroupFileManifest.fromEvent(match);
+            if (jsonEncode(prior.toPayload()) !=
+                jsonEncode(manifest.toPayload())) {
+              throw StateError(
+                'This scheduled file identity was already used for different content.',
+              );
+            }
+            return match;
+          }
+          if (page.length < 128) break;
+          before = page.last.eventId;
+        }
+      }
       final event = await _sign(
         replica.journal,
         groupId: snapshot.groupId,
         membershipId: membership.id,
         kind: GroupEventKind.attachment,
-        payload: manifest.toPayload(),
+        payload: {
+          ...manifest.toPayload(),
+          if (scheduledOperationId != null)
+            'scheduledOperationId': scheduledOperationId,
+        },
       );
       await replica.importEvent(event, carrierDeviceId: identity().deviceId);
       return event;
@@ -345,6 +382,11 @@ class GroupHistoryCoordinator {
           'replySnippet': message.replySnippet,
           'replySenderDeviceId': message.replySenderDeviceId,
           'replySenderDisplayName': message.replySenderDisplayName,
+          if (message.poll != null) 'poll': message.poll!.toJson(),
+          if (message.pollVote != null) 'pollVote': message.pollVote!.toJson(),
+          if (message.pollClosed) 'pollClosed': true,
+          if (message.pollClosedCheckpoint.isNotEmpty || message.pollClosed)
+            'pollClosedCheckpoint': message.pollClosedCheckpoint,
         },
       );
       await replica.importEvent(event, carrierDeviceId: identity().deviceId);
