@@ -1278,7 +1278,7 @@ void main() {
         recipientDeviceId: 'peer',
         body: afterHandoff.body,
         outbound: true,
-        state: DeliveryState.queued,
+        state: DeliveryState.pending,
         createdAt: handoffTime,
       );
       await vault.save(
