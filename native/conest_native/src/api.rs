@@ -904,8 +904,8 @@ mod tests {
 
         let receipt = tokio::time::timeout(
             Duration::from_secs(5),
-            sender.send_to(
-                receiver.endpoint.id().to_string(),
+            sender.send_to_addr_with_policy(
+                receiver.endpoint.addr(),
                 b"control remains live".to_vec(),
                 false,
             ),
