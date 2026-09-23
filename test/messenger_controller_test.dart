@@ -2978,7 +2978,7 @@ void main() {
                 ?.optionIndexes
                 .single ==
             '1',
-        reason: 'the connected partition receives Bob's authenticated vote',
+        reason: 'the connected partition received the authenticated vote',
       );
       network.bridges[alice.identity!.irohEndpointId!] = isolatedAlice;
       for (final peer in peers) {
