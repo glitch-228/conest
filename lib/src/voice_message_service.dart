@@ -40,6 +40,8 @@ class VoiceMessageService {
   bool _interruptCaptureStartup = false;
   bool _cancelCaptureStartup = false;
   bool _ignoreRecorderStateEvents = false;
+  Future<VoiceRecordingResult>? _stopInFlight;
+  Future<void>? _cancelInFlight;
   final List<int> _waveform = <int>[];
 
   static bool _mediaKitInitialized = false;
@@ -197,10 +199,18 @@ class VoiceMessageService {
   }
 
   Future<VoiceRecordingResult> stop() async {
+    final inFlight = _stopInFlight;
+    if (inFlight != null) return inFlight;
     if (_state != VoiceRecordingState.recording) {
       throw StateError('No voice recording is active.');
     }
-    return _stopAndStore();
+    final operation = _stopAndStore();
+    _stopInFlight = operation;
+    try {
+      return await operation;
+    } finally {
+      if (identical(_stopInFlight, operation)) _stopInFlight = null;
+    }
   }
 
   /// Interruptions and app backgrounding stop capture but preserve a preview;
@@ -212,7 +222,7 @@ class VoiceMessageService {
     }
     if (_state != VoiceRecordingState.recording) return;
     try {
-      await _stopAndStore();
+      await stop();
     } catch (_) {
       await cancel();
     }
@@ -433,6 +443,26 @@ class VoiceMessageService {
       _interruptCaptureStartup = true;
       return;
     }
+    final inFlight = _cancelInFlight;
+    if (inFlight != null) return inFlight;
+    final operation = _cancelRecording();
+    _cancelInFlight = operation;
+    try {
+      await operation;
+    } finally {
+      if (identical(_cancelInFlight, operation)) _cancelInFlight = null;
+    }
+  }
+
+  Future<void> _cancelRecording() async {
+    final stopInFlight = _stopInFlight;
+    if (stopInFlight != null) {
+      try {
+        await stopInFlight;
+      } catch (_) {
+        // A failed stop falls through to recorder.cancel below.
+      }
+    }
     _durationTimer?.cancel();
     _durationTimer = null;
     await _amplitudeSubscription?.cancel();
@@ -452,17 +482,7 @@ class VoiceMessageService {
   }
 
   Future<void> dispose() async {
-    _durationTimer?.cancel();
-    await _amplitudeSubscription?.cancel();
-    if (_state == VoiceRecordingState.recording) {
-      _ignoreRecorderStateEvents = true;
-      try {
-        await _captureRecorder.cancel();
-      } catch (_) {}
-      _ignoreRecorderStateEvents = false;
-    }
-    await _recorderStateSubscription?.cancel();
-    _recorderStateSubscription = null;
+    await cancel();
     await stopPlayback();
     await _recorder?.dispose();
     await _mobilePositionSubscription?.cancel();
