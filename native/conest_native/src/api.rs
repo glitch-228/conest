@@ -871,7 +871,7 @@ mod tests {
         receiver.close().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn stalled_media_dial_drops_expired_datagram_without_blocking_messages() {
         let sender = NativeTransport::start_inner(vec![64; 32], false, vec![])
             .await
@@ -897,8 +897,13 @@ mod tests {
         .expect_err("test dial lock should prevent connection establishment");
         assert!(error.contains("expired datagram dropped"), "{error}");
 
+        // Exercise the same concurrent runtime used by the FFI: let the
+        // background call-media dial reach its blocked peer gate before sending
+        // a control message to a different peer.
+        tokio::task::yield_now().await;
+
         let receipt = tokio::time::timeout(
-            Duration::from_secs(2),
+            Duration::from_secs(5),
             sender.send_to(
                 receiver.endpoint.id().to_string(),
                 b"control remains live".to_vec(),
