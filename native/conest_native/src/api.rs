@@ -895,7 +895,7 @@ mod tests {
         .await
         .expect("stalled media dial held a native worker")
         .expect_err("test dial lock should prevent connection establishment");
-        assert!(error.contains("dropped expired datagram"), "{error}");
+        assert!(error.contains("expired datagram dropped"), "{error}");
 
         let receipt = tokio::time::timeout(
             Duration::from_secs(2),
