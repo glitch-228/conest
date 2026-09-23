@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart' as path_provider;
 import 'package:record/record.dart';
 
 import 'feature_models.dart';
+import 'platform_bridge.dart';
 
 enum VoiceRecordingState { idle, recording, preview }
 
@@ -15,7 +16,9 @@ enum VoiceRecordingState { idle, recording, preview }
 /// and Opus encoding are provided by native recorder implementations; the
 /// resulting Ogg file is handed to Conest only after explicit send.
 class VoiceMessageService {
-  VoiceMessageService();
+  VoiceMessageService({PlatformBridge? platformBridge})
+    : _platformBridge = platformBridge;
+  final PlatformBridge? _platformBridge;
   AudioRecorder? _recorder;
   AudioRecorder get _captureRecorder => _recorder ??= AudioRecorder();
   VoiceRecordingState _state = VoiceRecordingState.idle;
@@ -36,6 +39,7 @@ class VoiceMessageService {
   String? _playingItemId;
   double _playbackRate = 1;
   DateTime? _startedAt;
+  String? _nativeRecordingPath;
   bool _captureStarting = false;
   bool _interruptCaptureStartup = false;
   bool _cancelCaptureStartup = false;
@@ -98,6 +102,16 @@ class VoiceMessageService {
     if (!_stateChanges.isClosed) _stateChanges.add(value);
   }
 
+  List<int> _nativeWaveform(Map<String, dynamic>? result) {
+    final samples = result?['waveform'];
+    if (samples is! List) return List<int>.unmodifiable(_waveform);
+    return samples
+        .whereType<num>()
+        .take(256)
+        .map((sample) => sample.toInt().clamp(0, 255))
+        .toList(growable: false);
+  }
+
   Stream<Duration> get playbackPositionStream => _playbackPositions.stream;
 
   Future<void> start({required String destinationKey}) async {
@@ -115,11 +129,17 @@ class VoiceMessageService {
       // playback before opening the microphone, including while permission is
       // being requested.
       await stopPlayback();
-      final recorder = _captureRecorder;
-      if (!await recorder.hasPermission()) {
+      final bridge = _platformBridge;
+      final useNativeRecorder =
+          bridge?.supportsNativeVoiceMessageRecording ?? false;
+      final AudioRecorder? recorder = useNativeRecorder
+          ? null
+          : _captureRecorder;
+      if (recorder != null && !await recorder.hasPermission()) {
         throw StateError('Microphone permission was not granted.');
       }
-      if (!await recorder.isEncoderSupported(AudioEncoder.opus)) {
+      if (recorder != null &&
+          !await recorder.isEncoderSupported(AudioEncoder.opus)) {
         throw StateError('Ogg/Opus recording is unavailable on this device.');
       }
       final support = await path_provider.getApplicationSupportDirectory();
@@ -139,33 +159,39 @@ class VoiceMessageService {
       _waveform.clear();
       _previewDestinationKey = destinationKey;
       _startedAt = DateTime.now().toUtc();
-      _recorderStateSubscription = recorder.onStateChanged().listen(
-        _handleRecorderState,
-        onError: (Object _) {},
-      );
-      await recorder.start(
-        const RecordConfig(
-          encoder: AudioEncoder.opus,
-          bitRate: 24000,
-          sampleRate: 48000,
-          numChannels: 1,
-          echoCancel: true,
-          noiseSuppress: true,
-          audioInterruption: AudioInterruptionMode.pause,
-        ),
-        path: path,
-      );
+      if (useNativeRecorder) {
+        _nativeRecordingPath = path;
+        await bridge!.startVoiceMessageRecording(path);
+      } else {
+        _recorderStateSubscription = recorder!.onStateChanged().listen(
+          _handleRecorderState,
+          onError: (Object _) {},
+        );
+        await recorder!.start(
+          const RecordConfig(
+            encoder: AudioEncoder.opus,
+            bitRate: 24000,
+            sampleRate: 48000,
+            numChannels: 1,
+            echoCancel: true,
+            noiseSuppress: true,
+            audioInterruption: AudioInterruptionMode.pause,
+          ),
+          path: path,
+        );
+      }
       _setState(VoiceRecordingState.recording);
-      _amplitudeSubscription = recorder
-          .onAmplitudeChanged(const Duration(milliseconds: 100))
-          .listen((amplitude) {
-            if (_waveform.length >= 256) return;
-            final sample = ((amplitude.current + 60) * 255 / 60).round().clamp(
-              0,
-              255,
-            );
-            _waveform.add(sample);
-          });
+      if (recorder != null) {
+        _amplitudeSubscription = recorder
+            .onAmplitudeChanged(const Duration(milliseconds: 100))
+            .listen((amplitude) {
+              if (_waveform.length >= 256) return;
+              final sample = ((amplitude.current + 60) * 255 / 60)
+                  .round()
+                  .clamp(0, 255);
+              _waveform.add(sample);
+            });
+      }
       _durationTimer = Timer(maximumDuration, () {
         unawaited(stopForInterruption());
       });
@@ -178,9 +204,16 @@ class VoiceMessageService {
       }
       if (interrupted) await stopForInterruption();
     } catch (_) {
-      try {
-        await _captureRecorder.cancel();
-      } catch (_) {}
+      if (_nativeRecordingPath != null) {
+        try {
+          await _platformBridge?.cancelVoiceMessageRecording();
+        } catch (_) {}
+        _nativeRecordingPath = null;
+      } else {
+        try {
+          await _captureRecorder.cancel();
+        } catch (_) {}
+      }
       _durationTimer?.cancel();
       _durationTimer = null;
       await _amplitudeSubscription?.cancel();
@@ -234,16 +267,30 @@ class VoiceMessageService {
     _durationTimer = null;
     await _amplitudeSubscription?.cancel();
     _amplitudeSubscription = null;
-    final String? recordedPath;
-    _ignoreRecorderStateEvents = true;
-    try {
-      recordedPath = await _captureRecorder.stop();
-    } finally {
-      _ignoreRecorderStateEvents = false;
-      await _recorderStateSubscription?.cancel();
-      _recorderStateSubscription = null;
+    String? path;
+    Map<String, dynamic>? nativeResult;
+    if (_nativeRecordingPath case final nativePath?) {
+      path = nativePath;
+      try {
+        nativeResult = await _platformBridge!.stopVoiceMessageRecording();
+      } catch (_) {
+        _nativeRecordingPath = null;
+        _startedAt = null;
+        _previewDestinationKey = null;
+        _setState(VoiceRecordingState.idle);
+        rethrow;
+      }
+      _nativeRecordingPath = null;
+    } else {
+      _ignoreRecorderStateEvents = true;
+      try {
+        path = await _captureRecorder.stop() ?? _preview?.path;
+      } finally {
+        _ignoreRecorderStateEvents = false;
+        await _recorderStateSubscription?.cancel();
+        _recorderStateSubscription = null;
+      }
     }
-    final path = recordedPath ?? _preview?.path;
     _startedAt = null;
     if (path == null) {
       _setState(VoiceRecordingState.idle);
@@ -287,7 +334,7 @@ class VoiceMessageService {
       sizeBytes: await file.length(),
       metadata: VoiceMessageMetadata(
         durationMs: durationMs,
-        waveform: List<int>.unmodifiable(_waveform),
+        waveform: List<int>.unmodifiable(_nativeWaveform(nativeResult)),
       ),
     );
     _preview = result;
@@ -467,7 +514,12 @@ class VoiceMessageService {
     _durationTimer = null;
     await _amplitudeSubscription?.cancel();
     _amplitudeSubscription = null;
-    if (_state == VoiceRecordingState.recording) {
+    if (_nativeRecordingPath != null) {
+      try {
+        await _platformBridge?.cancelVoiceMessageRecording();
+      } catch (_) {}
+      _nativeRecordingPath = null;
+    } else if (_state == VoiceRecordingState.recording) {
       _ignoreRecorderStateEvents = true;
       try {
         await _captureRecorder.cancel();
