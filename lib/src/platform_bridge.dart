@@ -55,6 +55,33 @@ class PlatformBridge {
       const bool.fromEnvironment('CONEST_EXPERIMENTAL_VOICE_CALLS') &&
       _voiceAudio != null;
 
+  bool get supportsNativeVoiceMessageRecording =>
+      !kIsWeb &&
+      (Platform.isLinux || Platform.isWindows) &&
+      _voiceAudio != null;
+
+  Future<void> startVoiceMessageRecording(String path) async {
+    if (!supportsNativeVoiceMessageRecording) {
+      throw StateError(
+        'Native Ogg/Opus recording is unavailable on this device.',
+      );
+    }
+    await _voiceAudio!.startVoiceMessageRecording(path);
+  }
+
+  Future<Map<String, dynamic>> stopVoiceMessageRecording() async {
+    if (!supportsNativeVoiceMessageRecording) {
+      throw StateError(
+        'Native Ogg/Opus recording is unavailable on this device.',
+      );
+    }
+    return _voiceAudio!.stopVoiceMessageRecording();
+  }
+
+  Future<void> cancelVoiceMessageRecording() async {
+    await _voiceAudio?.cancelVoiceMessageRecording();
+  }
+
   bool get _supportsAndroidSystemCalls => !kIsWeb && Platform.isAndroid;
 
   Future<void> setAndroidBackgroundRuntimeEnabled(
