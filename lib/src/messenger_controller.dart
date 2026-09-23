@@ -423,7 +423,7 @@ class MessengerController extends ChangeNotifier {
       onAttempt: _recordRelayAttemptFromShim,
       nowProvider: () => (nowProvider ?? DateTime.now)(),
     );
-    voiceMessageService = VoiceMessageService();
+    voiceMessageService = VoiceMessageService(platformBridge: _platformBridge);
     _transferControlSubscription = _platformBridge.transferControlEvents.listen(
       _handleNativeTransferControl,
     );
