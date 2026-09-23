@@ -1239,7 +1239,7 @@ void main() {
   );
 
   test(
-    'scheduled messages recover before and after handoff without duplicates',
+    'scheduled messages recover across handoff and recheck send authorization',
     () async {
       final vault = _MemoryVaultStore();
       final controller = await _createController(
@@ -1316,6 +1316,15 @@ void main() {
             .singleWhere((entry) => entry.id == afterHandoff.id)
             .state,
         ScheduledMessageState.sent,
+      );
+      await restored.sendScheduledMessageNow(beforeHandoff.id);
+      final unauthorized = restored.scheduledMessages.singleWhere(
+        (entry) => entry.id == beforeHandoff.id,
+      );
+      expect(unauthorized.state, ScheduledMessageState.blocked);
+      expect(
+        unauthorized.failureReason,
+        contains('Contact is no longer available.'),
       );
       expect(
         restored
