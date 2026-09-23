@@ -1,5 +1,29 @@
 import 'dart:convert';
 
+/// Application protocol support advertised independently from transport
+/// routes. Unknown/absent values are treated as unsupported by new features.
+enum ApplicationCapability {
+  groupPollsV1,
+  voiceMessageAttachmentsV1,
+  voiceCallsV1,
+  groupFileCaptionsV2,
+}
+
+List<ApplicationCapability> applicationCapabilitiesFromJson(Object? value) {
+  if (value is! List || value.length > ApplicationCapability.values.length) {
+    return const <ApplicationCapability>[];
+  }
+  final result = <ApplicationCapability>{};
+  for (final name in value.whereType<String>()) {
+    for (final capability in ApplicationCapability.values) {
+      if (capability.name == name) result.add(capability);
+    }
+  }
+  return ApplicationCapability.values
+      .where(result.contains)
+      .toList(growable: false);
+}
+
 /// A local conversation collection. Folder membership is deliberately local
 /// in the first version; deleting a folder never deletes its conversations.
 class ChatFolder {
