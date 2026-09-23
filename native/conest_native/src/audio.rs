@@ -34,6 +34,14 @@ const LOW_QUEUE_WATERMARK: usize = OPUS_PACKET_QUEUE / 6;
 const MIN_BITRATE: u32 = 16_000;
 const MAX_BITRATE: u32 = 32_000;
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn output_device_name(device: &Device) -> Option<String> {
+    device
+        .description()
+        .ok()
+        .map(|description| description.name().to_owned())
+}
+
 #[derive(Default)]
 struct AdaptiveBitrate {
     current: u32,
@@ -102,7 +110,7 @@ impl VoiceAudioSession {
             Some(name) => host
                 .output_devices()
                 .context("Could not enumerate audio output devices")?
-                .find(|device| device.name().ok().as_deref() == Some(name))
+                .find(|device| output_device_name(device).as_deref() == Some(name))
                 .with_context(|| format!("Audio output device '{name}' is unavailable"))?,
             None => host
                 .default_output_device()
@@ -136,7 +144,7 @@ impl VoiceAudioSession {
             .ok()
             .into_iter()
             .flatten()
-            .filter_map(|device| device.name().ok())
+            .filter_map(|device| output_device_name(&device))
             .fold(Vec::new(), |mut names, name| {
                 if !names.contains(&name) {
                     names.push(name);
@@ -150,7 +158,7 @@ impl VoiceAudioSession {
         let output = cpal::default_host()
             .output_devices()
             .context("Could not enumerate audio output devices")?
-            .find(|device| device.name().ok().as_deref() == Some(name))
+            .find(|device| output_device_name(device).as_deref() == Some(name))
             .with_context(|| format!("Audio output device '{name}' is unavailable"))?;
         let output_stream =
             open_output_stream(&output, self.playback.clone(), self.failed.clone())?;
