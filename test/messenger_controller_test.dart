@@ -1239,6 +1239,51 @@ void main() {
   );
 
   test(
+    'scheduled messages recover interrupted pre-handoff dispatch after restart',
+    () async {
+      final vault = _MemoryVaultStore();
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Scheduler',
+        vaultStore: vault,
+        createIdentity: false,
+      );
+      final scheduled = await controller.scheduleTextMessage(
+        kind: ConversationKind.direct,
+        conversationId: 'peer',
+        body: 'deliver once the app resumes',
+        scheduledAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+      );
+      controller.dispose();
+
+      final interrupted = await vault.load();
+      await vault.save(
+        interrupted.copyWith(
+          scheduledMessages: [
+            scheduled.copyWith(state: ScheduledMessageState.sending),
+          ],
+        ),
+      );
+
+      final restored = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Scheduler',
+        vaultStore: vault,
+        createIdentity: false,
+      );
+      addTearDown(restored.dispose);
+      expect(
+        restored.scheduledMessages.single.state,
+        ScheduledMessageState.waiting,
+      );
+      expect(
+        restored.scheduledMessages.single.body,
+        'deliver once the app resumes',
+      );
+    },
+  );
+
+  test(
     'draft updates during a delayed vault write schedule a new snapshot',
     () async {
       final vault = _DelayedVaultStore();
