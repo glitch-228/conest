@@ -818,12 +818,17 @@ class ConestApp extends StatefulWidget {
 class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   String? _activeUpdatePromptTag;
+  late bool _controllerReady;
+  late bool _controllerHasIdentity;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addTimingsCallback(_recordFrameTimings);
+    _controllerReady = widget.controller.isReady;
+    _controllerHasIdentity = widget.controller.hasIdentity;
+    widget.controller.addListener(_handleControllerChanged);
     widget.controller.setAppForegroundState(true);
     widget.updateService.addListener(_handleUpdateServiceChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -832,6 +837,27 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
       }
       unawaited(widget.updateService.ensureStartupCheck());
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant ConestApp oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_handleControllerChanged);
+      widget.controller.addListener(_handleControllerChanged);
+      _handleControllerChanged();
+    }
+  }
+
+  void _handleControllerChanged() {
+    final ready = widget.controller.isReady;
+    final hasIdentity = widget.controller.hasIdentity;
+    if (ready == _controllerReady && hasIdentity == _controllerHasIdentity) {
+      return;
+    }
+    _controllerReady = ready;
+    _controllerHasIdentity = hasIdentity;
+    if (mounted) setState(() {});
   }
 
   @override
@@ -849,6 +875,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeTimingsCallback(_recordFrameTimings);
     WidgetsBinding.instance.removeObserver(this);
+    widget.controller.removeListener(_handleControllerChanged);
     widget.updateService.removeListener(_handleUpdateServiceChanged);
     widget.updateService.dispose();
     widget.controller.dispose();
@@ -905,10 +932,10 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     return DynamicColorBuilder(
       builder: (lightDynamic, darkDynamic) {
         return AnimatedBuilder(
-          animation: Listenable.merge([
-            widget.controller,
-            widget.themeController,
-          ]),
+          // Message and transfer updates belong to HomeScreen's narrower
+          // listeners. Rebuilding MaterialApp here on every controller event
+          // recreates the entire desktop chat shell during active transfers.
+          animation: widget.themeController,
           builder: (context, _) {
             final palette = widget.themeController.resolve(
               platformBrightness: _platformBrightness,
@@ -922,8 +949,8 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
               theme: palette.themeData(
                 courier: widget.themeController.shell == ConestShell.courier,
               ),
-              home: widget.controller.isReady
-                  ? widget.controller.hasIdentity
+              home: _controllerReady
+                  ? _controllerHasIdentity
                         ? HomeScreen(
                             controller: widget.controller,
                             updateService: widget.updateService,
@@ -1412,6 +1439,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _sidebarWidth = widget.themeController.sidebarWidth;
+    widget.controller.addListener(_handleControllerChanged);
     widget.controller.conversationRevision.addListener(
       _handleConversationRevision,
     );
@@ -1421,13 +1449,19 @@ class _HomeScreenState extends State<HomeScreen> {
   void didUpdateWidget(covariant HomeScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_handleControllerChanged);
       oldWidget.controller.conversationRevision.removeListener(
         _handleConversationRevision,
       );
+      widget.controller.addListener(_handleControllerChanged);
       widget.controller.conversationRevision.addListener(
         _handleConversationRevision,
       );
     }
+  }
+
+  void _handleControllerChanged() {
+    if (mounted) setState(() {});
   }
 
   void _handleConversationRevision() {
@@ -1446,6 +1480,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    widget.controller.removeListener(_handleControllerChanged);
     widget.controller.conversationRevision.removeListener(
       _handleConversationRevision,
     );
@@ -2360,6 +2395,24 @@ class _HomeScreenState extends State<HomeScreen> {
       return 'text/plain';
     }
     if (lowered.endsWith('.json')) return 'application/json';
+    if (lowered.endsWith('.mp4') || lowered.endsWith('.m4v')) {
+      return 'video/mp4';
+    }
+    if (lowered.endsWith('.mov')) return 'video/quicktime';
+    if (lowered.endsWith('.webm')) return 'video/webm';
+    if (lowered.endsWith('.mkv')) return 'video/x-matroska';
+    if (lowered.endsWith('.avi')) return 'video/x-msvideo';
+    if (lowered.endsWith('.3gp')) return 'video/3gpp';
+    if (lowered.endsWith('.mpg') || lowered.endsWith('.mpeg')) {
+      return 'video/mpeg';
+    }
+    if (lowered.endsWith('.mp3')) return 'audio/mpeg';
+    if (lowered.endsWith('.m4a')) return 'audio/mp4';
+    if (lowered.endsWith('.wav')) return 'audio/wav';
+    if (lowered.endsWith('.ogg') || lowered.endsWith('.opus')) {
+      return 'audio/ogg';
+    }
+    if (lowered.endsWith('.flac')) return 'audio/flac';
     return 'application/octet-stream';
   }
 
@@ -16523,7 +16576,20 @@ class _AttachmentRow extends StatelessWidget {
   };
 
   bool get _isImage => descriptor.mimeType.startsWith('image/');
-  bool get _isVideo => descriptor.mimeType.startsWith('video/');
+  bool get _isVideo =>
+      descriptor.mimeType.startsWith('video/') ||
+      const {
+        '.3gp',
+        '.avi',
+        '.m4v',
+        '.mkv',
+        '.mov',
+        '.mp4',
+        '.mpeg',
+        '.mpg',
+        '.webm',
+        '.wmv',
+      }.contains(p.extension(descriptor.fileName).toLowerCase());
 
   /// Wraps an image/video thumbnail so it never overflows its parent. In a
   /// tight (bounded-height) context — e.g. the album grid's square cells —
