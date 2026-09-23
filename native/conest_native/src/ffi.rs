@@ -33,6 +33,8 @@ use crate::api::{NativeInboundDatagram, NativeInboundEnvelope, NativeTransport};
 use crate::audio::VoiceAudioSession;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::desktop_camera::DesktopBeamCamera;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use crate::voice_recording::{VoiceMessageRecorder, VoiceMessageRecordingResult};
 
 static RUNTIME: LazyLock<Runtime> =
     LazyLock::new(|| Runtime::new().expect("create Conest native Tokio runtime"));
@@ -43,6 +45,9 @@ static VOICE_AUDIO_SESSIONS: LazyLock<Mutex<HashMap<u64, VoiceAudioSession>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 static BEAM_CAMERAS: LazyLock<Mutex<HashMap<u64, DesktopBeamCamera>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+static VOICE_MESSAGE_RECORDINGS: LazyLock<Mutex<HashMap<u64, VoiceMessageRecorder>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static NEXT_HANDLE: LazyLock<Mutex<u64>> = LazyLock::new(|| Mutex::new(1));
 static LAST_ERROR: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
@@ -67,6 +72,24 @@ struct InboundDatagramJson {
     sender_endpoint_id: String,
     bytes_base64: String,
     relayed: bool,
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VoiceMessageRecordingJson {
+    size_bytes: u64,
+    waveform: Vec<u8>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+impl From<VoiceMessageRecordingResult> for VoiceMessageRecordingJson {
+    fn from(value: VoiceMessageRecordingResult) -> Self {
+        Self {
+            size_bytes: value.size_bytes,
+            waveform: value.waveform,
+        }
+    }
 }
 
 fn record_error(error: impl std::fmt::Display) {
@@ -288,6 +311,109 @@ pub extern "C" fn conest_voice_audio_close(handle: u64) {
         .and_then(|mut sessions| sessions.remove(&handle));
     drop(removed);
 }
+
+/// Starts a desktop Opus capture session and writes it as an Ogg stream to the
+/// app-private path supplied by Flutter. Stop or cancel the handle exactly once.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_voice_message_recording_start(path: *const c_char) -> u64 {
+    if path.is_null() {
+        record_error("missing voice-message recording path");
+        return 0;
+    }
+    let path = match unsafe { CStr::from_ptr(path) }.to_str() {
+        Ok(path) if !path.is_empty() => path,
+        Ok(_) => {
+            record_error("empty voice-message recording path");
+            return 0;
+        }
+        Err(error) => {
+            record_error(error);
+            return 0;
+        }
+    };
+    let recorder = match VoiceMessageRecorder::open(path) {
+        Ok(recorder) => recorder,
+        Err(error) => {
+            record_error(error);
+            return 0;
+        }
+    };
+    let handle = match NEXT_HANDLE.lock() {
+        Ok(mut next) => {
+            let value = *next;
+            *next = next.saturating_add(1).max(1);
+            value
+        }
+        Err(error) => {
+            record_error(error);
+            return 0;
+        }
+    };
+    match VOICE_MESSAGE_RECORDINGS.lock() {
+        Ok(mut recordings) => {
+            recordings.insert(handle, recorder);
+            handle
+        }
+        Err(error) => {
+            record_error(error);
+            0
+        }
+    }
+}
+
+/// Stops capture, finalizes the Ogg EOS page, and returns size/waveform JSON.
+/// The returned string is released with `conest_string_free`.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_message_recording_stop(handle: u64) -> *mut c_char {
+    let recorder = VOICE_MESSAGE_RECORDINGS
+        .lock()
+        .ok()
+        .and_then(|mut recordings| recordings.remove(&handle));
+    let Some(recorder) = recorder else {
+        record_error("unknown voice-message recording handle");
+        return std::ptr::null_mut();
+    };
+    match recorder.stop() {
+        Ok(result) => json_string(&VoiceMessageRecordingJson::from(result)),
+        Err(error) => {
+            record_error(error);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Stops capture and removes its private partial file.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_message_recording_cancel(handle: u64) {
+    let recorder = VOICE_MESSAGE_RECORDINGS
+        .lock()
+        .ok()
+        .and_then(|mut recordings| recordings.remove(&handle));
+    drop(recorder);
+}
+
+// Keep the narrow ABI present on Android, where Dart resolves all audio
+// symbols at library load time. Android voice notes continue to use MediaCodec.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_voice_message_recording_start(_path: *const c_char) -> u64 {
+    record_error("Desktop voice-message capture is unavailable on Android.");
+    0
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_message_recording_stop(_handle: u64) -> *mut c_char {
+    record_error("Desktop voice-message capture is unavailable on Android.");
+    std::ptr::null_mut()
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_message_recording_cancel(_handle: u64) {}
 
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
