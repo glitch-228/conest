@@ -195,6 +195,9 @@ fn record_loop(
     if waveform_samples > 0 {
         push_waveform(&mut waveform, waveform_energy, waveform_samples);
     }
+    if valid_samples == 0 {
+        bail!("Microphone produced no audio samples");
+    }
     if let Some(packet) = pending_packet {
         ogg.write_packet(&packet, PRE_SKIP + valid_samples, true)
             .context("Could not finish Ogg audio stream")?;

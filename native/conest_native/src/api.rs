@@ -1,7 +1,7 @@
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::SocketAddr,
     str::FromStr,
     sync::{Arc, Weak},
@@ -26,6 +26,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_INBOUND_STREAMS: usize = 8;
 
 type ConnectionPool = Arc<Mutex<HashMap<EndpointId, Connection>>>;
+type ConnectLockPool = Arc<Mutex<HashMap<EndpointId, Weak<Mutex<()>>>>>;
+type DatagramDialPool = Arc<Mutex<HashSet<EndpointId>>>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NativeEndpointStatus {
@@ -73,7 +75,8 @@ pub struct NativeTransport {
     /// connection here avoids a full discovery/NAT/TLS handshake for every
     /// message or attachment block.
     connections: ConnectionPool,
-    connect_locks: Mutex<HashMap<EndpointId, Weak<Mutex<()>>>>,
+    connect_locks: ConnectLockPool,
+    datagram_dials: DatagramDialPool,
     #[cfg(test)]
     connection_attempts: Arc<AtomicUsize>,
     relay_enabled: bool,
@@ -146,7 +149,8 @@ impl NativeTransport {
             datagram_inbox: Arc::new(Mutex::new(datagram_rx)),
             datagram_tx,
             connections,
-            connect_locks: Mutex::new(HashMap::new()),
+            connect_locks: Arc::new(Mutex::new(HashMap::new())),
+            datagram_dials: Arc::new(Mutex::new(HashSet::new())),
             #[cfg(test)]
             connection_attempts: Arc::new(AtomicUsize::new(0)),
             relay_enabled,
@@ -266,48 +270,17 @@ impl NativeTransport {
     }
 
     async fn connection_for(&self, remote_addr: EndpointAddr) -> Result<Connection> {
-        let endpoint_id = remote_addr.id;
-        // Coalesce dials for one peer without blocking other peers or inbound
-        // accepts behind an unreachable endpoint's handshake.
-        let gate = {
-            let mut locks = self.connect_locks.lock().await;
-            locks.retain(|_, gate| gate.strong_count() > 0);
-            if let Some(gate) = locks.get(&endpoint_id).and_then(Weak::upgrade) {
-                gate
-            } else {
-                let gate = Arc::new(Mutex::new(()));
-                locks.insert(endpoint_id, Arc::downgrade(&gate));
-                gate
-            }
-        };
-        let _connecting = gate.lock().await;
-        if let Some(connection) = self.connections.lock().await.get(&endpoint_id).cloned()
-            && connection.close_reason().is_none()
-        {
-            return Ok(connection);
-        }
-        #[cfg(test)]
-        self.connection_attempts.fetch_add(1, Ordering::Relaxed);
-        let connection = tokio::time::timeout(
-            CONNECT_TIMEOUT,
-            self.endpoint.connect(remote_addr, CONEST_ALPN),
-        )
-        .await
-        .context("Iroh connection timed out")?
-        .context("connect to Iroh peer")?;
-        self.connections
-            .lock()
-            .await
-            .insert(endpoint_id, connection.clone());
-        // Both dialed and accepted connections are duplex. The remote can
-        // open reply/control streams on this same pooled connection.
-        tokio::spawn(run_connection(
-            connection.clone(),
+        pooled_connection(
+            self.endpoint.clone(),
+            Arc::clone(&self.connections),
+            Arc::clone(&self.connect_locks),
             self.inbox_tx.clone(),
             self.datagram_tx.clone(),
-            Arc::clone(&self.connections),
-        ));
-        Ok(connection)
+            remote_addr,
+            #[cfg(test)]
+            Arc::clone(&self.connection_attempts),
+        )
+        .await
     }
 
     async fn evict_if_same(&self, endpoint_id: EndpointId, failed: &Connection) {
@@ -385,10 +358,18 @@ impl NativeTransport {
         }
         let endpoint_id = EndpointId::from_str(&remote_endpoint_id)
             .map_err(|error| format!("parse remote Iroh EndpointId: {error}"))?;
-        let connection = self
-            .connection_for(EndpointAddr::new(endpoint_id))
-            .await
-            .map_err(|error| format!("connect media datagram: {error:#}"))?;
+        let cached = self.connections.lock().await.get(&endpoint_id).cloned();
+        let Some(connection) = cached
+            .as_ref()
+            .filter(|connection| connection.close_reason().is_none())
+            .cloned()
+        else {
+            if let Some(closed) = cached {
+                self.evict_if_same(endpoint_id, &closed).await;
+            }
+            self.warm_datagram_connection(endpoint_id).await;
+            return Err("Iroh media route is reconnecting; expired datagram dropped".to_owned());
+        };
         let path = path_kind(&connection);
         if (!self.relay_enabled || !allow_relay) && path == NativePathKind::Relayed {
             return Err("Iroh relay path is disabled by policy.".to_owned());
@@ -401,14 +382,48 @@ impl NativeTransport {
                 "Iroh datagram exceeds negotiated MTU ({max} bytes)."
             ));
         }
-        connection
-            .send_datagram(Bytes::from(bytes))
-            .map_err(|error| format!("send Iroh media datagram: {error}"))?;
+        if let Err(error) = connection.send_datagram(Bytes::from(bytes)) {
+            self.evict_if_same(endpoint_id, &connection).await;
+            self.warm_datagram_connection(endpoint_id).await;
+            return Err(format!("send Iroh media datagram: {error}"));
+        }
         Ok(NativeDeliveryReceipt {
             endpoint_id: endpoint_id.to_string(),
             path,
             accepted: true,
         })
+    }
+
+    /// Starts a normal Iroh discovery/dial in the background when call media
+    /// has no usable pooled connection. Audio frames remain lossy and return
+    /// immediately; one coalesced dial can warm the shared connection pool
+    /// without holding any of the synchronous Dart FFI workers for seconds.
+    async fn warm_datagram_connection(&self, endpoint_id: EndpointId) {
+        if !self.datagram_dials.lock().await.insert(endpoint_id) {
+            return;
+        }
+        let endpoint = self.endpoint.clone();
+        let connections = Arc::clone(&self.connections);
+        let connect_locks = Arc::clone(&self.connect_locks);
+        let inbox = self.inbox_tx.clone();
+        let datagrams = self.datagram_tx.clone();
+        let pending = Arc::clone(&self.datagram_dials);
+        #[cfg(test)]
+        let connection_attempts = Arc::clone(&self.connection_attempts);
+        tokio::spawn(async move {
+            let _ = pooled_connection(
+                endpoint,
+                connections,
+                connect_locks,
+                inbox,
+                datagrams,
+                EndpointAddr::new(endpoint_id),
+                #[cfg(test)]
+                connection_attempts,
+            )
+            .await;
+            pending.lock().await.remove(&endpoint_id);
+        });
     }
 
     #[frb]
@@ -426,9 +441,61 @@ impl NativeTransport {
 
     #[frb]
     pub async fn close(&self) {
+        self.datagram_dials.lock().await.clear();
         self.connections.lock().await.clear();
         self.endpoint.close().await;
     }
+}
+
+async fn pooled_connection(
+    endpoint: Endpoint,
+    connections: ConnectionPool,
+    connect_locks: ConnectLockPool,
+    inbox: mpsc::Sender<NativeInboundEnvelope>,
+    datagrams: mpsc::Sender<NativeInboundDatagram>,
+    remote_addr: EndpointAddr,
+    #[cfg(test)] connection_attempts: Arc<AtomicUsize>,
+) -> Result<Connection> {
+    let endpoint_id = remote_addr.id;
+    // Coalesce dials for one peer without blocking other peers or inbound
+    // accepts behind an unreachable endpoint's handshake.
+    let gate = {
+        let mut locks = connect_locks.lock().await;
+        locks.retain(|_, gate| gate.strong_count() > 0);
+        if let Some(gate) = locks.get(&endpoint_id).and_then(Weak::upgrade) {
+            gate
+        } else {
+            let gate = Arc::new(Mutex::new(()));
+            locks.insert(endpoint_id, Arc::downgrade(&gate));
+            gate
+        }
+    };
+    let _connecting = gate.lock().await;
+    if let Some(connection) = connections.lock().await.get(&endpoint_id).cloned()
+        && connection.close_reason().is_none()
+    {
+        return Ok(connection);
+    }
+    #[cfg(test)]
+    connection_attempts.fetch_add(1, Ordering::Relaxed);
+    let connection =
+        tokio::time::timeout(CONNECT_TIMEOUT, endpoint.connect(remote_addr, CONEST_ALPN))
+            .await
+            .context("Iroh connection timed out")?
+            .context("connect to Iroh peer")?;
+    connections
+        .lock()
+        .await
+        .insert(endpoint_id, connection.clone());
+    // Both dialed and accepted connections are duplex. The remote can open
+    // reply/control streams on this same pooled connection.
+    tokio::spawn(run_connection(
+        connection.clone(),
+        inbox,
+        datagrams,
+        connections,
+    ));
+    Ok(connection)
 }
 
 async fn run_accept_loop(
@@ -800,6 +867,53 @@ mod tests {
                 assert!(receipt.expect("another peer's dial blocked delivery").unwrap().accepted);
             }
         }
+        sender.close().await;
+        receiver.close().await;
+    }
+
+    #[tokio::test]
+    async fn stalled_media_dial_drops_expired_datagram_without_blocking_messages() {
+        let sender = NativeTransport::start_inner(vec![64; 32], false, vec![])
+            .await
+            .unwrap();
+        let receiver = NativeTransport::start_inner(vec![65; 32], false, vec![])
+            .await
+            .unwrap();
+        let stalled_peer = SecretKey::from_bytes(&[66; 32]).public();
+        let blocked_gate = Arc::new(Mutex::new(()));
+        sender
+            .connect_locks
+            .lock()
+            .await
+            .insert(stalled_peer, Arc::downgrade(&blocked_gate));
+        let _blocked = blocked_gate.lock().await;
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            sender.send_datagram(stalled_peer.to_string(), vec![1, 2, 3], false),
+        )
+        .await
+        .expect("stalled media dial held a native worker")
+        .expect_err("test dial lock should prevent connection establishment");
+        assert!(error.contains("dropped expired datagram"), "{error}");
+
+        let receipt = tokio::time::timeout(
+            Duration::from_secs(2),
+            sender.send_to(
+                receiver.endpoint.id().to_string(),
+                b"control remains live".to_vec(),
+                false,
+            ),
+        )
+        .await
+        .expect("stalled media dial blocked a separate message")
+        .unwrap();
+        assert!(receipt.accepted);
+        assert_eq!(
+            receiver.next_envelope().await.unwrap().bytes,
+            b"control remains live"
+        );
+        drop(_blocked);
         sender.close().await;
         receiver.close().await;
     }

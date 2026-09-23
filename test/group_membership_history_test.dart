@@ -347,11 +347,39 @@ void main() {
       final removed = await membership(
         parents: [root],
         members: ['alice', 'carol'],
+        checkpoints: {
+          'bob': GroupHistoryCheckpoint(
+            sequence: old.sequence,
+            eventId: old.eventId,
+          ),
+        },
+      );
+      final postRemoval = await message(root, author: 'bob');
+      final forkAtFence = await GroupHistoryEvent.sign(
+        groupId: 'group-1',
+        authorAccountId: 'account-bob',
+        authorDeviceId: 'bob',
+        keyPair: keys['bob']!,
+        sequence: old.sequence,
+        previousEventId: null,
+        lamport: ++lamport,
+        membershipId: root.id,
+        kind: GroupEventKind.message,
+        payload: {'text': 'different event at removal fence'},
       );
       final index = history();
       await index.import(root);
       await index.import(removed);
       expect(await index.canReceive(old, recipientDeviceId: 'bob'), isFalse);
+      expect(await index.canReceive(old, recipientDeviceId: 'carol'), isTrue);
+      expect(
+        await index.canReceive(postRemoval, recipientDeviceId: 'carol'),
+        isFalse,
+      );
+      expect(
+        await index.canReceive(forkAtFence, recipientDeviceId: 'carol'),
+        isFalse,
+      );
       expect(
         await index.canForward(
           old,

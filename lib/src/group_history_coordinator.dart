@@ -285,11 +285,18 @@ class GroupHistoryCoordinator {
     if (current == null && snapshot.ownerDeviceId != me.deviceId) return null;
     final parents = history.heads;
     final checkpoints = <String, GroupHistoryCheckpoint>{};
-    // Capture retained event boundaries for new admissions, including authors
-    // no longer active. Wall clocks are not admission boundaries.
-    if (snapshot.activeMemberDeviceIds.any(
+    final needsAdmissionBoundary = snapshot.activeMemberDeviceIds.any(
       (device) => current?.admissions[device] == null,
-    )) {
+    );
+    final departedMembers = current == null
+        ? const <String>{}
+        : current.group.activeMemberDeviceIds
+              .toSet()
+              .difference(snapshot.activeMemberDeviceIds.toSet());
+    // Admission and departure fences use signed author-sequence checkpoints,
+    // never wall clocks. New admissions need a boundary for every author;
+    // removals need at least the departing author's last retained event.
+    if (needsAdmissionBoundary) {
       String? afterAuthor;
       while (true) {
         final authors = await replica.journal.authors(after: afterAuthor);
@@ -304,6 +311,16 @@ class GroupHistoryCoordinator {
           }
         }
         afterAuthor = authors.last;
+      }
+    } else {
+      for (final author in departedMembers) {
+        final head = await replica.journal.authorHead(author);
+        if (head != null) {
+          checkpoints[author] = GroupHistoryCheckpoint(
+            sequence: head.sequence,
+            eventId: head.eventId,
+          );
+        }
       }
     }
     final proof = await _sign(

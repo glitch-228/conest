@@ -284,40 +284,48 @@ class FfiNativeIrohBridge implements NativeIrohDatagramBridge {
     if (workerIndex == null) {
       throw StateError('Voice datagram workers are busy; dropping this frame.');
     }
+    final worker = _sendWorkerPorts[workerIndex];
     final reply = ReceivePort();
     final response = reply.first;
-    _sendWorkerPorts[workerIndex].send(<Object?>[
-      reply.sendPort,
-      handle,
-      'sendDatagram',
-      remoteEndpointId,
-      TransferableTypedData.fromList(<Uint8List>[bytes]),
-      allowRelay,
-    ]);
-    unawaited(
-      response.then<void>((_) {
-        _busyDatagramWorkers.remove(workerIndex);
-        reply.close();
-      }, onError: (Object _) {
-        _busyDatagramWorkers.remove(workerIndex);
-        reply.close();
-      }),
-    );
-    final result = await response.timeout(const Duration(milliseconds: 40));
-    if (result is! List<Object?> || result.length < 2 || result.first != true) {
-      throw StateError(
-        result is List<Object?> && result.length > 1
-            ? result[1].toString()
-            : 'Iroh voice datagram send failed.',
+    try {
+      worker.send(<Object?>[
+        reply.sendPort,
+        handle,
+        'sendDatagram',
+        remoteEndpointId,
+        TransferableTypedData.fromList(<Uint8List>[bytes]),
+        allowRelay,
+      ]);
+      final result = await response.timeout(const Duration(milliseconds: 150));
+      if (result is! List<Object?> ||
+          result.length < 2 ||
+          result.first != true) {
+        throw StateError(
+          result is List<Object?> && result.length > 1
+              ? result[1].toString()
+              : 'Iroh voice datagram send failed.',
+        );
+      }
+      final value = (result[1] as Map<Object?, Object?>)
+          .cast<String, dynamic>();
+      return IrohBridgeReceipt(
+        endpointId: value['endpoint_id'] as String,
+        relayed: value['path'] == 'Relayed',
+        accepted: value['accepted'] as bool? ?? false,
       );
+    } on TimeoutException {
+      // Native datagram reconnects run in the background. Replace any worker
+      // that still exceeds the bounded send budget so it cannot reserve a
+      // datagram slot for every following frame.
+      await _replaceTimedOutSendWorker(workerIndex, worker);
+      throw TimeoutException(
+        'Iroh native media worker did not release its expired frame.',
+        const Duration(milliseconds: 150),
+      );
+    } finally {
+      _busyDatagramWorkers.remove(workerIndex);
+      reply.close();
     }
-    final value = (result[1] as Map<Object?, Object?>)
-        .cast<String, dynamic>();
-    return IrohBridgeReceipt(
-      endpointId: value['endpoint_id'] as String,
-      relayed: value['path'] == 'Relayed',
-      accepted: value['accepted'] as bool? ?? false,
-    );
   }
 
   Future<void> _replaceTimedOutSendWorker(

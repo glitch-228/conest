@@ -372,6 +372,35 @@ class GroupMembershipHistory {
     return result;
   }
 
+  bool _isBeforeRemovalFences(
+    GroupHistoryEvent event,
+    GroupMembershipRecord head,
+  ) {
+    final ancestors = _ancestors(head.id);
+    for (final recordId in ancestors) {
+      final removal = _records[recordId]!;
+      if (!removal.group.hasActiveMember(event.authorDeviceId) &&
+          _isAncestor(event.membershipId, removal.id) &&
+          removal.parents.any((parentId) {
+            final parent = _records[parentId]!;
+            return _isAncestor(event.membershipId, parentId) &&
+                parent.group.hasActiveMember(event.authorDeviceId);
+          })) {
+        final checkpoint = removal.checkpoints[event.authorDeviceId];
+        // Older removal records have no signed departure checkpoint. Reject
+        // new-carried events at that boundary rather than guessing from time.
+        if (checkpoint == null || event.sequence > checkpoint.sequence) {
+          return false;
+        }
+        if (event.sequence == checkpoint.sequence &&
+            event.eventId != checkpoint.eventId) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   bool _isAncestor(String ancestor, String descendant) =>
       _ancestors(descendant).contains(ancestor);
 
@@ -397,6 +426,7 @@ class GroupMembershipHistory {
     final author = membership.group.memberProfileFor(event.authorDeviceId)!;
     final admission = _records[head.admissions[recipientDeviceId]];
     if (admission == null) return false;
+    if (!_isBeforeRemovalFences(event, head)) return false;
     if (admission.historyVisibility == GroupHistoryVisibility.sinceAdmission) {
       if (!_isAncestor(admission.id, membership.id) ||
           event.sequence <=

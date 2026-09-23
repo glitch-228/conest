@@ -3234,7 +3234,9 @@ class _CourierHomeState extends State<_CourierHome> {
       await widget.controller.updateChatFolder(folder.id, name: updatedName);
     } else if (action == 'moveUp' && folderIndex > 0) {
       await widget.controller.reorderChatFolders(folderIndex, folderIndex - 1);
-    } else if (action == 'moveDown' && folderIndex >= 0) {
+    } else if (action == 'moveDown' &&
+        folderIndex >= 0 &&
+        folderIndex < widget.controller.chatFolders.length - 1) {
       await widget.controller.reorderChatFolders(folderIndex, folderIndex + 1);
     }
   }
@@ -3655,9 +3657,7 @@ class _CourierHomeState extends State<_CourierHome> {
       ));
     }
     final archivedCount = entries.where((entry) => entry.archived).length;
-    entries.removeWhere(
-      (entry) => query.isEmpty && entry.archived != _showArchived,
-    );
+    entries.removeWhere((entry) => entry.archived != _showArchived);
     entries.sort((a, b) {
       if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
       final at = a.at;
@@ -8361,6 +8361,7 @@ class _GroupPollCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final projection = controller.groupPollProjection(groupId, poll.id);
+    final canParticipate = projection != null;
     final counts =
         projection?.counts() ?? List<int>.filled(poll.options.length, 0);
     final closed = projection?.definition.isClosed ?? poll.isClosed;
@@ -8385,7 +8386,9 @@ class _GroupPollCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     OutlinedButton(
-                      onPressed: closed || poll.mode == PollChoiceMode.multiple
+                      onPressed: !canParticipate ||
+                              closed ||
+                              poll.mode == PollChoiceMode.multiple
                           ? null
                           : () => unawaited(
                               controller
@@ -8433,7 +8436,9 @@ class _GroupPollCard extends StatelessWidget {
                   ],
                 ),
               ),
-            if (!closed && poll.mode == PollChoiceMode.multiple)
+            if (canParticipate &&
+                !closed &&
+                poll.mode == PollChoiceMode.multiple)
               FilledButton.tonal(
                 onPressed: () => unawaited(
                   _chooseMultiple(context).catchError(
@@ -8442,7 +8447,8 @@ class _GroupPollCard extends StatelessWidget {
                 ),
                 child: const Text('Choose options'),
               ),
-            if (!closed &&
+            if (canParticipate &&
+                !closed &&
                 projection
                         ?.votes[controller.identity?.deviceId]
                         ?.optionIndexes
@@ -8478,7 +8484,15 @@ class _GroupPollCard extends StatelessWidget {
                   context,
                 ).textTheme.labelSmall?.copyWith(color: palette.inkSoft),
               ),
-            if (!closed &&
+            if (!canParticipate)
+              Text(
+                'Voting is unavailable with this Conest version.',
+                style: Theme.of(
+                  context,
+                ).textTheme.labelSmall?.copyWith(color: palette.inkSoft),
+              ),
+            if (canParticipate &&
+                !closed &&
                 controller.identity?.deviceId == poll.creatorDeviceId)
               Align(
                 alignment: Alignment.centerRight,

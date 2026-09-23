@@ -1157,6 +1157,29 @@ const _irohOnlyConnectivity = GlobalConnectivityPreferences(
 );
 
 void main() {
+  test('chat folders move later and persist their final order', () async {
+    final vault = _MemoryVaultStore();
+    final controller = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Folders',
+      vaultStore: vault,
+      createIdentity: false,
+    );
+    addTearDown(controller.dispose);
+
+    await controller.createChatFolder('First');
+    await controller.createChatFolder('Second');
+    await controller.createChatFolder('Third');
+    await controller.reorderChatFolders(0, 1);
+
+    final expected = <String>['Second', 'First', 'Third'];
+    expect(controller.chatFolders.map((folder) => folder.name), expected);
+    expect(
+      (await vault.load()).chatFolders.map((folder) => folder.name),
+      expected,
+    );
+  });
+
   test(
     'draft updates during a delayed vault write schedule a new snapshot',
     () async {
@@ -2372,6 +2395,22 @@ void main() {
           .singleWhere((message) => message.poll?.question == 'Choose one')
           .poll!;
 
+      await expectLater(
+        bob.sendGroupMessage(
+          groupId: group.groupId,
+          body: 'Conflicting poll ID',
+          poll: PollDefinition(
+            id: poll.id,
+            question: 'Different immutable question',
+            options: const <String>['Yes', 'No'],
+            mode: PollChoiceMode.single,
+            creatorDeviceId: bob.identity!.deviceId,
+            createdAt: DateTime.now().toUtc(),
+          ),
+        ),
+        throwsStateError,
+      );
+
       await bob.voteInGroupPoll(
         groupId: group.groupId,
         pollId: poll.id,
@@ -2396,6 +2435,10 @@ void main() {
                 .isClosed ==
             true,
         reason: 'close checkpoint delivery',
+      );
+      await expectLater(
+        alice.closeGroupPoll(groupId: group.groupId, pollId: poll.id),
+        throwsStateError,
       );
 
       final closed = bob.groupPollProjection(group.groupId, poll.id)!;
@@ -2509,7 +2552,8 @@ void main() {
       expect(
         dispatchedSchedule.state,
         ScheduledMessageState.sent,
-        reason: dispatchedSchedule.failureReason ??
+        reason:
+            dispatchedSchedule.failureReason ??
             'The scheduled group attachment was not handed off.',
       );
       await _waitForIroh(
@@ -6405,6 +6449,63 @@ void main() {
     alice.dispose();
     bob.dispose();
     await tester.pump(const Duration(milliseconds: 100));
+  });
+
+  testWidgets('Courier search keeps archived chats in the archive view', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    late MessengerController alice;
+    late MessengerController bob;
+    late MessengerController carol;
+    await tester.runAsync(() async {
+      final relay = _FakeRelayClient();
+      alice = await _createController(relayClient: relay, displayName: 'Alice');
+      bob = await _createController(relayClient: relay, displayName: 'Bob');
+      carol = await _createController(relayClient: relay, displayName: 'Carol');
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      await alice.updateConversationPreferences(
+        ConversationKind.direct,
+        bob.identity!.deviceId,
+        archived: true,
+      );
+    });
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    addTearDown(carol.dispose);
+    final theme = app.ConestThemeController.memory();
+    final updates = _createUpdateService();
+    addTearDown(theme.dispose);
+    addTearDown(updates.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: app.HomeScreen(
+          controller: alice,
+          updateService: updates,
+          buildInfo: _createBuildInfo(),
+          themeController: theme,
+          palette: app.ConestPalette(),
+        ),
+      ),
+    );
+    final search = find.byKey(const ValueKey('courier-search'));
+    await tester.enterText(search, 'Bob');
+    await tester.pump();
+    expect(find.text('Bob'), findsNothing);
+
+    await tester.enterText(search, '');
+    await tester.pump();
+    await tester.tap(find.text('Archived chats').first);
+    await tester.pump();
+    await tester.enterText(search, 'Carol');
+    await tester.pump();
+    expect(find.text('Carol'), findsNothing);
+    expect(find.text('Bob'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   testWidgets(

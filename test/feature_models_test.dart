@@ -150,7 +150,7 @@ void main() {
       expect(session.state, VoiceCallState.ringing);
       expect(signals.single.action, 'invite');
       expect(() => service.startOutgoing('other'), throwsStateError);
-      await service.onAccepted();
+      await service.onAccepted(callId: session.callId);
       expect(service.active!.state, VoiceCallState.connected);
       await service.toggleMute();
       expect(service.active!.muted, isTrue);
@@ -173,7 +173,7 @@ void main() {
         now: () => DateTime.utc(2026, 1, 1),
       );
       final outgoing = await service.startOutgoing('peer');
-      await service.onAccepted();
+      await service.onAccepted(callId: outgoing.callId);
 
       final accepted = await service.receiveInvite(
         VoiceCallSignal(
@@ -231,6 +231,77 @@ void main() {
       await incoming.end(reason: 'Rejected by user.');
       expect(incomingSignals.single.action, 'reject');
       await incoming.dispose();
+    },
+  );
+
+  test(
+    'ended call IDs cannot ring again or revive on a delayed accept',
+    () async {
+      final signals = <VoiceCallSignal>[];
+      final service = VoiceCallService(
+        localDeviceId: 'me',
+        transport: _TestCallTransport(signals),
+        media: const _WorkingMedia(),
+        now: () => DateTime.utc(2026, 1, 1),
+      );
+      final outgoing = await service.startOutgoing('peer');
+      await service.end(reason: 'User rejected retry.', signalAction: 'cancel');
+
+      await service.onAccepted(callId: outgoing.callId);
+      final replayedInvite = await service.receiveInvite(
+        VoiceCallSignal(
+          callId: outgoing.callId,
+          action: 'invite',
+          senderDeviceId: 'peer',
+          recipientDeviceId: 'me',
+          issuedAt: DateTime.utc(2026, 1, 1),
+        ),
+      );
+
+      expect(replayedInvite, isFalse);
+      expect(service.active?.state, VoiceCallState.ended);
+      expect(signals.map((signal) => signal.action), ['invite', 'cancel']);
+      await service.dispose();
+    },
+  );
+
+  test(
+    'media silence and repeated send errors enter reconnecting safely',
+    () async {
+      final signals = <VoiceCallSignal>[];
+      final service = VoiceCallService(
+        localDeviceId: 'me',
+        transport: _TestCallTransport(signals),
+        media: const _WorkingMedia(),
+        now: () => DateTime.utc(2026, 1, 1),
+        mediaInactivityTimeout: const Duration(milliseconds: 30),
+      );
+      await service.receiveInvite(
+        VoiceCallSignal(
+          callId: 'peer:media-watchdog',
+          action: 'invite',
+          senderDeviceId: 'peer',
+          recipientDeviceId: 'me',
+          issuedAt: DateTime.utc(2026, 1, 1),
+        ),
+      );
+      await service.accept();
+      expect(service.active?.state, VoiceCallState.connected);
+
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(service.active?.state, VoiceCallState.reconnecting);
+      service.noteMediaReceived('peer:media-watchdog');
+      expect(service.active?.state, VoiceCallState.connected);
+
+      service.noteMediaSendFailed('peer:media-watchdog');
+      service.noteMediaSendFailed('peer:media-watchdog');
+      service.noteMediaSendFailed('peer:media-watchdog');
+      await Future<void>.delayed(Duration.zero);
+      expect(service.active?.state, VoiceCallState.reconnecting);
+      service.noteMediaReceived('peer:media-watchdog');
+      expect(service.active?.state, VoiceCallState.connected);
+      await service.end();
+      await service.dispose();
     },
   );
 

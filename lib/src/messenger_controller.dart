@@ -1044,6 +1044,11 @@ class MessengerController extends ChangeNotifier {
     if (contact == null || !contact.canSendOutbound) {
       throw StateError('Voice calls require an approved contact.');
     }
+    if (signal.action == 'invite' && !_canUseIrohForContact(contact)) {
+      throw StateError(
+        'Voice calls require Iroh to be enabled for this contact.',
+      );
+    }
     if (signal.action == 'invite' &&
         (contact.featureCapabilityVersion != 1 ||
             !contact.featureCapabilities.contains(
@@ -1083,8 +1088,8 @@ class MessengerController extends ChangeNotifier {
     if (_disposed ||
         session == null ||
         me == null ||
-        session.state != VoiceCallState.connected ||
-        session.muted ||
+        (session.state != VoiceCallState.connected &&
+            session.state != VoiceCallState.reconnecting) ||
         frame.isEmpty ||
         frame.length > 1100 ||
         _voiceCallFramesInFlight >= 3) {
@@ -1092,11 +1097,24 @@ class MessengerController extends ChangeNotifier {
     }
     final adapter = _transportRegistry?.adapterFor(TransportKind.iroh);
     final contact = _contactByDeviceId(session.peerDeviceId);
-    if (adapter is! IrohCallMediaAdapter ||
-        contact == null ||
+    if (contact == null ||
         !contact.canSendOutbound ||
-        !contact.hasPinnedIrohIdentity ||
-        !_canUseIrohForContact(contact)) {
+        !contact.hasPinnedIrohIdentity) {
+      unawaited(
+        _voiceCallService?.end(
+          reason: 'The approved contact is no longer available.',
+        ),
+      );
+      return;
+    }
+    if (!_canUseIrohForContact(contact)) {
+      unawaited(
+        _voiceCallService?.end(reason: 'Iroh voice transport was disabled.'),
+      );
+      return;
+    }
+    if (adapter is! IrohCallMediaAdapter) {
+      _voiceCallService?.noteMediaSendFailed(session.callId);
       return;
     }
     _voiceCallFramesInFlight++;
@@ -1149,10 +1167,15 @@ class MessengerController extends ChangeNotifier {
         );
       if (packet.length > 1200) return;
       await adapter.sendCallDatagram(
-        peer: _transportPeerForContact(contact, allowRelay: true),
+        peer: _transportPeerForContact(
+          contact,
+          allowRelay: _irohRelayEnabledFor(contact),
+        ),
         bytes: packet,
       );
+      _voiceCallService?.noteMediaSendSucceeded(session.callId);
     } catch (error) {
+      _voiceCallService?.noteMediaSendFailed(session.callId);
       final now = _now();
       if (_voiceCallLastMediaFailureLog == null ||
           now.difference(_voiceCallLastMediaFailureLog!) >=
@@ -1197,21 +1220,27 @@ class MessengerController extends ChangeNotifier {
     final me = identity;
     if (_disposed ||
         session == null ||
-        session.state != VoiceCallState.connected ||
+        (session.state != VoiceCallState.connected &&
+            session.state != VoiceCallState.reconnecting) ||
         me == null) {
       return;
     }
-    final contact = _snapshot.contacts
-        .where(
-          (candidate) =>
-              candidate.irohEndpointId == datagram.senderEndpointId &&
-              candidate.deviceId == session.peerDeviceId &&
-              candidate.canSendOutbound &&
-              candidate.hasPinnedIrohIdentity,
-        )
-        .firstOrNull;
+    final contact = _contactByDeviceId(session.peerDeviceId);
     final packet = datagram.bytes;
     if (contact == null ||
+        !contact.canSendOutbound ||
+        !contact.hasPinnedIrohIdentity) {
+      unawaited(
+        _voiceCallService?.endRemote(
+          reason: 'The approved contact is no longer available.',
+        ),
+      );
+      return;
+    }
+    if (contact.irohEndpointId != datagram.senderEndpointId ||
+        !_canUseIrohForContact(contact) ||
+        (datagram.path == TransportPathKind.relayed &&
+            !_irohRelayEnabledFor(contact)) ||
         packet.length < 45 ||
         packet.length > 1200 ||
         packet[0] != 1) {
@@ -1220,14 +1249,6 @@ class MessengerController extends ChangeNotifier {
     final header = ByteData.sublistView(packet, 1, 17);
     final sequence = header.getUint64(0, Endian.big);
     final issuedAtMs = header.getUint64(8, Endian.big);
-    final issuedAt = DateTime.fromMillisecondsSinceEpoch(
-      issuedAtMs,
-      isUtc: true,
-    );
-    if (DateTime.now().toUtc().difference(issuedAt).abs() >
-        const Duration(seconds: 5)) {
-      return;
-    }
     final replayKey = '${session.callId}|${contact.deviceId}';
     final replay = _voiceCallReplayWindows.putIfAbsent(
       replayKey,
@@ -1257,9 +1278,11 @@ class MessengerController extends ChangeNotifier {
       final active = _voiceCallService?.active;
       if (active?.callId != session.callId ||
           active?.peerDeviceId != contact.deviceId ||
-          active?.state != VoiceCallState.connected) {
+          (active?.state != VoiceCallState.connected &&
+              active?.state != VoiceCallState.reconnecting)) {
         return;
       }
+      _voiceCallService?.noteMediaReceived(session.callId);
       await _platformBridge.playVoiceCallAudioFrame(
         Uint8List.fromList(clear),
         sequence: sequence,
@@ -2546,8 +2569,21 @@ class MessengerController extends ChangeNotifier {
     // Group history signatures authenticate the event author. Never trust a
     // payload that claims to be another member's vote or creator checkpoint.
     if (poll != null &&
-        (!poll.hasValidShape || poll.creatorDeviceId != event.authorDeviceId)) {
+        (!poll.hasValidShape ||
+            poll.closedAt != null ||
+            poll.creatorDeviceId != event.authorDeviceId)) {
       return;
+    }
+    if (poll != null) {
+      final existingDefinitions = _groupConversation(groupId).messages
+          .map((message) => message.poll)
+          .whereType<PollDefinition>()
+          .where((definition) => definition.id == poll!.id);
+      if (existingDefinitions.any(
+        (existing) => !_samePollDefinition(existing, poll!),
+      )) {
+        return;
+      }
     }
     if (pollVote != null &&
         (!pollVote.hasValidShape ||
@@ -8817,11 +8853,33 @@ class MessengerController extends ChangeNotifier {
         'A poll definition and a vote cannot share an event.',
       );
     }
-    if (poll != null && !poll.hasValidShape) {
+    if (poll != null && (!poll.hasValidShape || poll.closedAt != null)) {
       throw ArgumentError('The poll definition is invalid.');
+    }
+    if (poll != null) {
+      final existingDefinitions = messagesForGroup(groupId)
+          .map((message) => message.poll)
+          .whereType<PollDefinition>()
+          .where((definition) => definition.id == poll.id);
+      if (existingDefinitions.any(
+        (existing) => !_samePollDefinition(existing, poll),
+      )) {
+        throw StateError('A poll ID cannot be reused for another definition.');
+      }
     }
     if (pollVote != null && !pollVote.hasValidShape) {
       throw ArgumentError('The poll vote is invalid.');
+    }
+    if (pollVote != null) {
+      final projection = groupPollProjection(groupId, pollVote.pollId);
+      if (projection == null) {
+        throw StateError(
+          'This poll is unsupported or its signed definition is conflicting.',
+        );
+      }
+      if (pollClosed && projection.definition.isClosed) {
+        throw StateError('This poll is already closed.');
+      }
     }
     if (pollVote != null &&
         !pollClosed &&
@@ -9005,6 +9063,10 @@ class MessengerController extends ChangeNotifier {
     if (source.poll!.creatorDeviceId != me.deviceId) {
       throw StateError('Only the poll creator can close it.');
     }
+    if (groupPollProjection(groupId, pollId)?.definition.isClosed == true ||
+        source.poll!.isClosed) {
+      throw StateError('This poll is already closed.');
+    }
     final latestVotes = <String, ChatMessage>{};
     for (final message in messagesForGroup(groupId)) {
       final vote = message.pollVote;
@@ -9068,11 +9130,17 @@ class MessengerController extends ChangeNotifier {
     final messages = messagesForGroup(groupId);
     final group = _groupById(groupId);
     if (group == null) return null;
-    final source = messages
+    final definitions = messages
         .where((message) => message.poll?.id == pollId)
-        .firstOrNull;
-    if (source?.poll == null) return null;
-    final poll = source!.poll!;
+        .map((message) => message.poll!)
+        .toList(growable: false);
+    if (definitions.isEmpty ||
+        definitions.any(
+          (definition) => !_samePollDefinition(definitions.first, definition),
+        )) {
+      return null;
+    }
+    final poll = definitions.first;
     if (!_groupMemberSupportsFeature(
       group,
       poll.creatorDeviceId,
@@ -9186,6 +9254,25 @@ class MessengerController extends ChangeNotifier {
       unconfirmedVotes: unconfirmedVotes,
       closedCheckpointEventId: closedCheckpointEventId,
     );
+  }
+
+  bool _samePollDefinition(PollDefinition left, PollDefinition right) {
+    if (left.id != right.id ||
+        left.question != right.question ||
+        left.mode != right.mode ||
+        left.creatorDeviceId != right.creatorDeviceId ||
+        left.options.length != right.options.length ||
+        !left.createdAt.isAtSameMomentAs(right.createdAt)) {
+      return false;
+    }
+    for (var index = 0; index < left.options.length; index++) {
+      if (left.options[index] != right.options[index]) return false;
+    }
+    final leftClosedAt = left.closedAt;
+    final rightClosedAt = right.closedAt;
+    return leftClosedAt == null
+        ? rightClosedAt == null
+        : rightClosedAt != null && leftClosedAt.isAtSameMomentAs(rightClosedAt);
   }
 
   bool _groupMemberSupportsFeature(
@@ -11166,9 +11253,13 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> reorderChatFolders(int oldIndex, int newIndex) async {
     final folders = [..._snapshot.chatFolders];
-    if (oldIndex < 0 || oldIndex >= folders.length) return;
-    if (newIndex > oldIndex) newIndex--;
-    newIndex = newIndex.clamp(0, folders.length - 1);
+    if (oldIndex < 0 ||
+        oldIndex >= folders.length ||
+        newIndex < 0 ||
+        newIndex >= folders.length ||
+        oldIndex == newIndex) {
+      return;
+    }
     final folder = folders.removeAt(oldIndex);
     folders.insert(newIndex, folder.copyWith(updatedAt: _now().toUtc()));
     _snapshot = _snapshot.copyWith(chatFolders: folders);
@@ -12794,6 +12885,22 @@ class MessengerController extends ChangeNotifier {
         signal.recipientDeviceId != identity?.deviceId) {
       return;
     }
+    if (signal.action == 'invite' && !_canUseIrohForContact(contact)) {
+      final me = identity;
+      if (me != null) {
+        await _sendVoiceCallSignal(
+          VoiceCallSignal(
+            callId: signal.callId,
+            action: 'busy',
+            senderDeviceId: me.deviceId,
+            recipientDeviceId: contact.deviceId,
+            issuedAt: _now().toUtc(),
+          ),
+        );
+      }
+      await _sendAck(contact: contact, envelope: envelope);
+      return;
+    }
     if (signal.action == 'invite' &&
         (contact.featureCapabilityVersion != 1 ||
             !contact.featureCapabilities.contains(
@@ -12850,7 +12957,7 @@ class MessengerController extends ChangeNotifier {
       case 'invite':
         await service.receiveInvite(signal);
       case 'accept':
-        await service.onAccepted();
+        await service.onAccepted(callId: signal.callId);
       case 'busy':
       case 'cancel':
       case 'reject':

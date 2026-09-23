@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 
 import 'models.dart';
@@ -170,20 +171,27 @@ class VoiceCallService {
     VoiceCallMediaEngine? media,
     DateTime Function()? now,
     Duration connectionTimeout = const Duration(seconds: 15),
+    Duration mediaInactivityTimeout = const Duration(seconds: 5),
   }) : media = media ?? const UnavailableVoiceCallMediaEngine(),
        _now = now ?? DateTime.now,
-       _connectionTimeout = connectionTimeout;
+       _connectionTimeout = connectionTimeout,
+       _mediaInactivityTimeout = mediaInactivityTimeout;
 
   final String localDeviceId;
   final VoiceCallSignalTransport transport;
   final VoiceCallMediaEngine media;
   final DateTime Function() _now;
   final Duration _connectionTimeout;
+  final Duration _mediaInactivityTimeout;
   final StreamController<VoiceCallSession?> _changes =
       StreamController<VoiceCallSession?>.broadcast();
+  final LinkedHashSet<String> _terminalCallIds = LinkedHashSet<String>();
   VoiceCallSession? _active;
   Timer? _ringTimer;
   Timer? _reconnectTimer;
+  Timer? _mediaInactivityTimer;
+  int _outboundMediaFailures = 0;
+  int _outgoingCallSequence = 0;
 
   VoiceCallSession? get active => _active;
   Stream<VoiceCallSession?> get changes => _changes.stream;
@@ -196,7 +204,8 @@ class VoiceCallService {
       throw StateError('Voice calls are not available on this build yet.');
     }
     await media.prepare().timeout(_connectionTimeout);
-    final callId = '$localDeviceId:${_now().microsecondsSinceEpoch}';
+    final callId =
+        '$localDeviceId:${_now().microsecondsSinceEpoch}:${++_outgoingCallSequence}';
     final session = VoiceCallSession(
       callId: callId,
       peerDeviceId: peerDeviceId,
@@ -223,6 +232,7 @@ class VoiceCallService {
             failureReason: 'Could not send the call invitation: $error',
           ),
         );
+        _rememberTerminalCallId(session.callId);
         try {
           await media.close();
         } catch (_) {
@@ -239,7 +249,8 @@ class VoiceCallService {
     final signalAge = _now().toUtc().difference(signal.issuedAt.toUtc());
     if (signal.recipientDeviceId != localDeviceId ||
         signalAge > const Duration(seconds: 45) ||
-        signalAge < const Duration(seconds: -5)) {
+        signalAge < const Duration(seconds: -5) ||
+        _terminalCallIds.contains(signal.callId)) {
       return false;
     }
     if (!media.available) {
@@ -288,8 +299,12 @@ class VoiceCallService {
   }
 
   Future<void> accept() async {
-    final session = _requireActive();
-    if (session.outgoing || session.state != VoiceCallState.ringing) return;
+    final session = _active;
+    if (session == null ||
+        session.outgoing ||
+        session.state != VoiceCallState.ringing) {
+      return;
+    }
     final connecting = session.copyWith(state: VoiceCallState.connecting);
     _ringTimer?.cancel();
     _set(connecting);
@@ -305,16 +320,21 @@ class VoiceCallService {
           .open(peerDeviceId: session.peerDeviceId, outgoing: false)
           .timeout(_connectionTimeout);
       if (!_isConnecting(connecting.callId)) return;
-      _reconnectTimer?.cancel();
-      _set(_active!.copyWith(state: VoiceCallState.connected));
+      _markConnected(connecting.callId);
     } catch (error) {
       await end(reason: 'Could not establish voice media: $error');
     }
   }
 
-  Future<void> onAccepted() async {
-    final session = _requireActive();
-    if (!session.outgoing || session.state != VoiceCallState.ringing) return;
+  Future<void> onAccepted({required String callId}) async {
+    final session = _active;
+    if (session == null ||
+        session.callId != callId ||
+        session.state == VoiceCallState.ended ||
+        !session.outgoing ||
+        session.state != VoiceCallState.ringing) {
+      return;
+    }
     _ringTimer?.cancel();
     final connecting = session.copyWith(state: VoiceCallState.connecting);
     _set(connecting);
@@ -324,8 +344,7 @@ class VoiceCallService {
           .open(peerDeviceId: session.peerDeviceId, outgoing: true)
           .timeout(_connectionTimeout);
       if (!_isConnecting(connecting.callId)) return;
-      _reconnectTimer?.cancel();
-      _set(_active!.copyWith(state: VoiceCallState.connected));
+      _markConnected(connecting.callId);
     } catch (error) {
       await end(reason: 'Could not establish voice media: $error');
     }
@@ -357,11 +376,55 @@ class VoiceCallService {
   Future<void> selectOutputDevice(String name) =>
       media.selectOutputDevice(name);
 
-  Future<void> reconnecting() async {
+  Future<void> reconnecting({required String callId}) async {
     final session = _active;
-    if (session == null || session.state == VoiceCallState.ended) return;
+    if (session == null ||
+        session.callId != callId ||
+        session.state == VoiceCallState.ended ||
+        session.state == VoiceCallState.reconnecting) {
+      return;
+    }
+    _mediaInactivityTimer?.cancel();
     _set(session.copyWith(state: VoiceCallState.reconnecting));
     _startConnectionExpiry(session, reason: 'Voice connection timed out.');
+  }
+
+  /// Records authenticated inbound media. A reconnecting call becomes
+  /// connected again only after a fresh frame from the same peer arrives.
+  void noteMediaReceived(String callId) {
+    var session = _active;
+    if (session == null ||
+        session.callId != callId ||
+        (session.state != VoiceCallState.connected &&
+            session.state != VoiceCallState.reconnecting)) {
+      return;
+    }
+    _outboundMediaFailures = 0;
+    if (session.state == VoiceCallState.reconnecting) {
+      _reconnectTimer?.cancel();
+      session = session.copyWith(state: VoiceCallState.connected);
+      _set(session);
+    }
+    _armMediaInactivityTimer(session);
+  }
+
+  void noteMediaSendSucceeded(String callId) {
+    if (_active?.callId == callId) _outboundMediaFailures = 0;
+  }
+
+  void noteMediaSendFailed(String callId) {
+    final session = _active;
+    if (session == null ||
+        session.callId != callId ||
+        (session.state != VoiceCallState.connected &&
+            session.state != VoiceCallState.reconnecting)) {
+      return;
+    }
+    _outboundMediaFailures++;
+    if (_outboundMediaFailures >= 3) {
+      _outboundMediaFailures = 0;
+      unawaited(reconnecting(callId: callId));
+    }
   }
 
   Future<void> end({String reason = 'Call ended', String? signalAction}) async {
@@ -374,6 +437,8 @@ class VoiceCallService {
             : 'hangup');
     _ringTimer?.cancel();
     _reconnectTimer?.cancel();
+    _mediaInactivityTimer?.cancel();
+    _rememberTerminalCallId(session.callId);
     // Publish the terminal state before awaiting platform teardown or transport
     // I/O so a late permission/media completion cannot revive the call.
     _set(session.copyWith(state: VoiceCallState.ended, failureReason: reason));
@@ -394,6 +459,8 @@ class VoiceCallService {
     if (session == null || session.state == VoiceCallState.ended) return;
     _ringTimer?.cancel();
     _reconnectTimer?.cancel();
+    _mediaInactivityTimer?.cancel();
+    _rememberTerminalCallId(session.callId);
     _set(session.copyWith(state: VoiceCallState.ended, failureReason: reason));
     try {
       await media.close();
@@ -441,6 +508,40 @@ class VoiceCallService {
 
   bool _isConnecting(String callId) =>
       _active?.callId == callId && _active?.state == VoiceCallState.connecting;
+
+  void _markConnected(String callId) {
+    final session = _active;
+    if (session == null || session.callId != callId) return;
+    if (session.state != VoiceCallState.connecting &&
+        session.state != VoiceCallState.reconnecting) {
+      return;
+    }
+    _reconnectTimer?.cancel();
+    _outboundMediaFailures = 0;
+    final connected = session.copyWith(state: VoiceCallState.connected);
+    _set(connected);
+    _armMediaInactivityTimer(connected);
+  }
+
+  void _armMediaInactivityTimer(VoiceCallSession session) {
+    _mediaInactivityTimer?.cancel();
+    if (session.state != VoiceCallState.connected) return;
+    _mediaInactivityTimer = Timer(_mediaInactivityTimeout, () {
+      final active = _active;
+      if (active?.callId == session.callId &&
+          active?.state == VoiceCallState.connected) {
+        unawaited(reconnecting(callId: session.callId));
+      }
+    });
+  }
+
+  void _rememberTerminalCallId(String callId) {
+    _terminalCallIds.remove(callId);
+    _terminalCallIds.add(callId);
+    while (_terminalCallIds.length > 128) {
+      _terminalCallIds.remove(_terminalCallIds.first);
+    }
+  }
 
   void _startConnectionExpiry(
     VoiceCallSession session, {
