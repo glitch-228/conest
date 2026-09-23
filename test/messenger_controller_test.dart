@@ -1181,6 +1181,64 @@ void main() {
   });
 
   test(
+    'chat folders create rename membership delete persist across vault reload',
+    () async {
+      final vault = _MemoryVaultStore();
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Folders',
+        vaultStore: vault,
+      );
+      var controllerDisposed = false;
+      addTearDown(() {
+        if (!controllerDisposed) controller.dispose();
+      });
+      await controller.updateConversationPreferences(
+        ConversationKind.direct,
+        'peer',
+        pinned: true,
+      );
+
+      final folder = await controller.createChatFolder(
+        '  Research  ',
+        conversationIds: const ['peer'],
+      );
+      await controller.updateChatFolder(
+        folder.id,
+        name: '  Work  ',
+        conversationIds: const ['peer', 'group'],
+      );
+      await controller.flushPendingChanges();
+      controller.dispose();
+      controllerDisposed = true;
+
+      final restored = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Folders',
+        vaultStore: vault,
+        createIdentity: false,
+      );
+      addTearDown(restored.dispose);
+      expect(restored.chatFolders.single.name, 'Work');
+      expect(
+        restored.conversationIdsForFolder(folder.id),
+        ['peer', 'group'],
+      );
+
+      await restored.deleteChatFolder(folder.id);
+      expect(restored.chatFolders, isEmpty);
+      expect(
+        restored
+            .conversationPreferences(ConversationKind.direct, 'peer')
+            .pinned,
+        isTrue,
+        reason:
+            'deleting a folder must preserve the conversation and its local settings',
+      );
+    },
+  );
+
+  test(
     'draft updates during a delayed vault write schedule a new snapshot',
     () async {
       final vault = _DelayedVaultStore();
