@@ -28,7 +28,9 @@ const MAX_OPUS_PACKET: usize = 1_100;
 const CAPTURE_QUEUE_SAMPLES: usize = FRAME_SAMPLES * 6;
 const PLAYBACK_QUEUE_SAMPLES: usize = FRAME_SAMPLES * 8;
 const OPUS_PACKET_QUEUE: usize = 12;
-const JITTER_WAIT: Duration = Duration::from_millis(40);
+const FRAME_PERIOD_NANOS: i128 = 20_000_000;
+const MIN_JITTER_WAIT: Duration = Duration::from_millis(20);
+const MAX_JITTER_WAIT: Duration = Duration::from_millis(100);
 const HIGH_QUEUE_WATERMARK: usize = OPUS_PACKET_QUEUE * 2 / 3;
 const LOW_QUEUE_WATERMARK: usize = OPUS_PACKET_QUEUE / 6;
 const MIN_BITRATE: u32 = 16_000;
@@ -84,7 +86,7 @@ pub struct VoiceAudioSession {
     network_congested: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
     encoded: Arc<ArrayQueue<Vec<u8>>>,
-    incoming: Arc<ArrayQueue<(u64, Vec<u8>)>>,
+    incoming: Arc<ArrayQueue<(u64, Vec<u8>, Instant)>>,
     capture: Arc<ArrayQueue<f32>>,
     playback: Arc<ArrayQueue<f32>>,
     #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -267,11 +269,14 @@ impl VoiceAudioSession {
         if sequence == 0 || packet.is_empty() || packet.len() > MAX_OPUS_PACKET {
             return false;
         }
-        if self.incoming.push((sequence, packet.to_vec())).is_err() {
+        let incoming = (sequence, packet.to_vec(), Instant::now());
+        if self.incoming.push(incoming).is_err() {
             // The audio path is lossy by design. Replace stale queued audio
             // with the freshest packet instead of building latency.
             let _ = self.incoming.pop();
-            self.incoming.push((sequence, packet.to_vec())).is_ok()
+            self.incoming
+                .push((sequence, packet.to_vec(), Instant::now()))
+                .is_ok()
         } else {
             true
         }
@@ -566,15 +571,15 @@ fn encode_loop(
 
 fn decode_loop(
     running: Arc<AtomicBool>,
-    incoming: Arc<ArrayQueue<(u64, Vec<u8>)>>,
+    incoming: Arc<ArrayQueue<(u64, Vec<u8>, Instant)>>,
     playback: Arc<ArrayQueue<f32>>,
     mut decoder: Decoder,
 ) {
     let mut pcm = vec![0.0_f32; FRAME_SAMPLES * 6];
     let mut jitter = PacketJitterBuffer::new(1);
     while running.load(Ordering::Relaxed) {
-        while let Some((sequence, packet)) = incoming.pop() {
-            jitter.insert(sequence, packet);
+        while let Some((sequence, packet, arrived_at)) = incoming.pop() {
+            jitter.insert(sequence, packet, arrived_at);
         }
         let Some(packet) = jitter.pop_ready(Instant::now()) else {
             thread::sleep(Duration::from_millis(2));
@@ -598,6 +603,9 @@ struct PacketJitterBuffer {
     expected: u64,
     pending: BTreeMap<u64, Vec<u8>>,
     gap_started: Option<Instant>,
+    previous_arrival: Option<(u64, Instant)>,
+    arrival_jitter_nanos: u64,
+    gap_wait: Duration,
 }
 
 impl PacketJitterBuffer {
@@ -606,10 +614,13 @@ impl PacketJitterBuffer {
             expected: first_sequence,
             pending: BTreeMap::new(),
             gap_started: None,
+            previous_arrival: None,
+            arrival_jitter_nanos: 0,
+            gap_wait: MIN_JITTER_WAIT,
         }
     }
 
-    fn insert(&mut self, sequence: u64, packet: Vec<u8>) {
+    fn insert(&mut self, sequence: u64, packet: Vec<u8>, arrived_at: Instant) {
         if sequence < self.expected || self.pending.contains_key(&sequence) {
             return;
         }
@@ -622,7 +633,33 @@ impl PacketJitterBuffer {
             }
             self.pending.pop_last();
         }
+        self.observe_arrival(sequence, arrived_at);
         self.pending.insert(sequence, packet);
+    }
+
+    fn observe_arrival(&mut self, sequence: u64, arrived_at: Instant) {
+        if let Some((previous_sequence, previous_at)) = self.previous_arrival {
+            let arrival_delta = if arrived_at >= previous_at {
+                arrived_at.duration_since(previous_at).as_nanos() as i128
+            } else {
+                -(previous_at.duration_since(arrived_at).as_nanos() as i128)
+            };
+            let sequence_delta = sequence as i128 - previous_sequence as i128;
+            let deviation = arrival_delta
+                .abs_diff(sequence_delta * FRAME_PERIOD_NANOS)
+                .min(u64::MAX as u128) as u64;
+            self.arrival_jitter_nanos = if deviation >= self.arrival_jitter_nanos {
+                self.arrival_jitter_nanos
+                    .saturating_add((deviation - self.arrival_jitter_nanos) / 16)
+            } else {
+                self.arrival_jitter_nanos
+                    .saturating_sub((self.arrival_jitter_nanos - deviation) / 16)
+            };
+        }
+        self.previous_arrival = Some((sequence, arrived_at));
+        let target_nanos = (MIN_JITTER_WAIT.as_nanos() + u128::from(self.arrival_jitter_nanos) * 4)
+            .min(MAX_JITTER_WAIT.as_nanos()) as u64;
+        self.gap_wait = Duration::from_nanos(target_nanos);
     }
 
     fn pop_ready(&mut self, now: Instant) -> Option<Vec<u8>> {
@@ -633,7 +670,7 @@ impl PacketJitterBuffer {
         }
         let next_sequence = *self.pending.first_key_value()?.0;
         let gap_started = *self.gap_started.get_or_insert(now);
-        if now.duration_since(gap_started) < JITTER_WAIT {
+        if now.duration_since(gap_started) < self.gap_wait {
             return None;
         }
         self.expected = next_sequence;
@@ -645,7 +682,8 @@ impl PacketJitterBuffer {
 #[cfg(test)]
 mod tests {
     use super::{
-        AdaptiveBitrate, Application, Channels, Decoder, Encoder, JITTER_WAIT, PacketJitterBuffer,
+        AdaptiveBitrate, Application, Channels, Decoder, Encoder, MAX_JITTER_WAIT, MIN_JITTER_WAIT,
+        PacketJitterBuffer,
     };
     use std::time::{Duration, Instant};
 
@@ -690,16 +728,29 @@ mod tests {
     fn jitter_buffer_reorders_nearby_packets_and_skips_expired_gaps() {
         let start = Instant::now();
         let mut jitter = PacketJitterBuffer::new(1);
-        jitter.insert(2, vec![2]);
-        jitter.insert(1, vec![1]);
+        jitter.insert(2, vec![2], start + Duration::from_millis(20));
+        jitter.insert(1, vec![1], start);
         assert_eq!(jitter.pop_ready(start), Some(vec![1]));
         assert_eq!(jitter.pop_ready(start), Some(vec![2]));
 
-        jitter.insert(4, vec![4]);
+        jitter.insert(4, vec![4], start + Duration::from_millis(60));
         assert_eq!(jitter.pop_ready(start), None);
         assert_eq!(
-            jitter.pop_ready(start + JITTER_WAIT + Duration::from_millis(1)),
+            jitter.pop_ready(start + MIN_JITTER_WAIT + Duration::from_millis(1)),
             Some(vec![4]),
         );
+    }
+
+    #[test]
+    fn jitter_buffer_adapts_gap_wait_to_arrival_variation_with_a_hard_bound() {
+        let start = Instant::now();
+        let mut jitter = PacketJitterBuffer::new(1);
+        jitter.insert(1, vec![1], start);
+        assert_eq!(jitter.gap_wait, MIN_JITTER_WAIT);
+        jitter.insert(2, vec![2], start + Duration::from_millis(20));
+        assert_eq!(jitter.gap_wait, MIN_JITTER_WAIT);
+        jitter.insert(3, vec![3], start + Duration::from_millis(90));
+        assert!(jitter.gap_wait > MIN_JITTER_WAIT);
+        assert!(jitter.gap_wait <= MAX_JITTER_WAIT);
     }
 }
