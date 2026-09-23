@@ -60,17 +60,26 @@ impl VoiceMessageRecorder {
         let file = File::create(&path).context("Could not create voice recording")?;
         let serial = NEXT_OGG_SERIAL.fetch_add(1, Ordering::Relaxed).max(1);
         let mut ogg = OggOpusWriter::new(file, serial);
-        ogg.write_headers().context("Could not write Ogg headers")?;
+        if let Err(error) = ogg.write_headers() {
+            drop(ogg);
+            let _ = fs::remove_file(&path);
+            return Err(error).context("Could not write Ogg headers");
+        }
 
         let running = Arc::new(AtomicBool::new(true));
-        let worker = thread::Builder::new()
+        let worker = match thread::Builder::new()
             .name("conest-voice-message-encoder".into())
             .spawn({
                 let running = running.clone();
                 let queue = queue.clone();
                 move || record_loop(running, queue, ogg)
-            })
-            .context("Could not start voice recording encoder")?;
+            }) {
+            Ok(worker) => worker,
+            Err(error) => {
+                let _ = fs::remove_file(&path);
+                return Err(error).context("Could not start voice recording encoder");
+            }
+        };
 
         if let Err(error) = input_stream.play() {
             running.store(false, Ordering::Relaxed);
@@ -285,24 +294,24 @@ fn capture_samples<T: IntoPcm>(
 }
 
 trait IntoPcm {
-    fn into_pcm(self) -> f32;
+    fn into_pcm(&self) -> f32;
 }
 
 impl IntoPcm for f32 {
-    fn into_pcm(self) -> f32 {
-        self.clamp(-1.0, 1.0)
+    fn into_pcm(&self) -> f32 {
+        (*self).clamp(-1.0, 1.0)
     }
 }
 
 impl IntoPcm for i16 {
-    fn into_pcm(self) -> f32 {
-        self as f32 / 32768.0
+    fn into_pcm(&self) -> f32 {
+        *self as f32 / 32768.0
     }
 }
 
 impl IntoPcm for u16 {
-    fn into_pcm(self) -> f32 {
-        (self as f32 - 32768.0) / 32768.0
+    fn into_pcm(&self) -> f32 {
+        (*self as f32 - 32768.0) / 32768.0
     }
 }
 
@@ -423,8 +432,35 @@ fn ogg_crc(page: &[u8]) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Application, Channels, Encoder, OggOpusWriter, PRE_SKIP, RATE, ogg_crc};
+    use super::{
+        Application, Channels, Encoder, OggOpusWriter, PRE_SKIP, RATE, capture_samples, ogg_crc,
+    };
+    use crossbeam_queue::ArrayQueue;
     use std::io::Cursor;
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn capture_converts_supported_sample_formats_without_losing_samples() {
+        let failed = AtomicBool::new(false);
+        let queue = ArrayQueue::new(8);
+        let mut phase = 0;
+        capture_samples(&[0.5_f32, -0.5], 1, RATE, &queue, &failed, &mut phase);
+        assert_eq!(queue.pop(), Some(0.5));
+        assert_eq!(queue.pop(), Some(-0.5));
+
+        let queue = ArrayQueue::new(8);
+        phase = 0;
+        capture_samples(&[16_384_i16, -16_384], 1, RATE, &queue, &failed, &mut phase);
+        assert_eq!(queue.pop(), Some(0.5));
+        assert_eq!(queue.pop(), Some(-0.5));
+
+        let queue = ArrayQueue::new(8);
+        phase = 0;
+        capture_samples(&[49_152_u16, 16_384], 1, RATE, &queue, &failed, &mut phase);
+        assert_eq!(queue.pop(), Some(0.5));
+        assert_eq!(queue.pop(), Some(-0.5));
+        assert!(!failed.load(std::sync::atomic::Ordering::Relaxed));
+    }
 
     #[test]
     fn muxer_writes_valid_ogg_opus_headers_and_final_granule() {
