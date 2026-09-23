@@ -1560,6 +1560,8 @@ class ContactRecord {
     this.signingPublicKeyBase64,
     this.irohEndpointId,
     this.capabilities = const <TransportKind>[],
+    this.featureCapabilities = const <ApplicationCapability>[],
+    this.featureCapabilityVersion = 0,
     this.transportIdentityVerifiedAt,
   });
 
@@ -1577,6 +1579,8 @@ class ContactRecord {
   final String? signingPublicKeyBase64;
   final String? irohEndpointId;
   final List<TransportKind> capabilities;
+  final List<ApplicationCapability> featureCapabilities;
+  final int featureCapabilityVersion;
   final DateTime? transportIdentityVerifiedAt;
 
   /// True when this contact arrived with a `displayName` matching an existing
@@ -1642,6 +1646,8 @@ class ContactRecord {
     String? signingPublicKeyBase64,
     String? irohEndpointId,
     List<TransportKind>? capabilities,
+    List<ApplicationCapability>? featureCapabilities,
+    int? featureCapabilityVersion,
     DateTime? transportIdentityVerifiedAt,
   }) {
     return ContactRecord(
@@ -1673,6 +1679,9 @@ class ContactRecord {
           signingPublicKeyBase64 ?? this.signingPublicKeyBase64,
       irohEndpointId: irohEndpointId ?? this.irohEndpointId,
       capabilities: capabilities ?? this.capabilities,
+      featureCapabilities: featureCapabilities ?? this.featureCapabilities,
+      featureCapabilityVersion:
+          featureCapabilityVersion ?? this.featureCapabilityVersion,
       transportIdentityVerifiedAt:
           transportIdentityVerifiedAt ?? this.transportIdentityVerifiedAt,
     );
@@ -1761,6 +1770,12 @@ class ContactRecord {
       if (irohEndpointId != null) 'irohEndpointId': irohEndpointId,
       if (capabilities.isNotEmpty)
         'capabilities': capabilities.map((entry) => entry.name).toList(),
+      if (featureCapabilityVersion > 0) ...{
+        'featureCapabilityVersion': featureCapabilityVersion,
+        'featureCapabilities': featureCapabilities
+            .map((entry) => entry.name)
+            .toList(),
+      },
       if (transportIdentityVerifiedAt != null)
         'transportIdentityVerifiedAt': transportIdentityVerifiedAt!
             .toUtc()
@@ -1840,6 +1855,10 @@ class ContactRecord {
           )
           .nonNulls
           .toList(growable: false),
+      featureCapabilities: applicationCapabilitiesFromJson(
+        json['featureCapabilities'],
+      ),
+      featureCapabilityVersion: json['featureCapabilityVersion'] as int? ?? 0,
       transportIdentityVerifiedAt: DateTime.tryParse(
         json['transportIdentityVerifiedAt'] as String? ?? '',
       )?.toUtc(),
@@ -2247,6 +2266,8 @@ class GroupMemberProfile {
     this.signingPublicKeyBase64,
     this.irohEndpointId,
     this.capabilities = const <TransportKind>[],
+    this.featureCapabilities = const <ApplicationCapability>[],
+    this.featureCapabilityVersion = 0,
   }) : routeHints = prunePeerEndpointsByKind(routeHints);
 
   final String accountId;
@@ -2259,6 +2280,8 @@ class GroupMemberProfile {
   final String? signingPublicKeyBase64;
   final String? irohEndpointId;
   final List<TransportKind> capabilities;
+  final List<ApplicationCapability> featureCapabilities;
+  final int featureCapabilityVersion;
 
   GroupMemberProfile copyWith({
     String? displayName,
@@ -2268,6 +2291,8 @@ class GroupMemberProfile {
     String? signingPublicKeyBase64,
     String? irohEndpointId,
     List<TransportKind>? capabilities,
+    List<ApplicationCapability>? featureCapabilities,
+    int? featureCapabilityVersion,
   }) {
     return GroupMemberProfile(
       accountId: accountId,
@@ -2281,16 +2306,23 @@ class GroupMemberProfile {
           signingPublicKeyBase64 ?? this.signingPublicKeyBase64,
       irohEndpointId: irohEndpointId ?? this.irohEndpointId,
       capabilities: capabilities ?? this.capabilities,
+      featureCapabilities: featureCapabilities ?? this.featureCapabilities,
+      featureCapabilityVersion:
+          featureCapabilityVersion ?? this.featureCapabilityVersion,
     );
   }
 
   Map<String, dynamic> toJson() {
     return {
-      'profileVersion': 2,
+      'profileVersion': 3,
       if (signingPublicKeyBase64 != null)
         'signingPublicKeyBase64': signingPublicKeyBase64,
       if (irohEndpointId != null) 'irohEndpointId': irohEndpointId,
       'capabilities': capabilities.map((entry) => entry.name).toList(),
+      'featureCapabilities': featureCapabilities
+          .map((entry) => entry.name)
+          .toList(),
+      'featureCapabilityVersion': featureCapabilityVersion,
       'accountId': accountId,
       'deviceId': deviceId,
       'displayName': displayName,
@@ -2311,6 +2343,10 @@ class GroupMemberProfile {
             (name) => TransportKind.values.where((kind) => kind.name == name),
           )
           .toList(),
+      featureCapabilities: applicationCapabilitiesFromJson(
+        json['featureCapabilities'],
+      ),
+      featureCapabilityVersion: json['featureCapabilityVersion'] as int? ?? 0,
       accountId: json['accountId'] as String,
       deviceId: json['deviceId'] as String,
       displayName: json['displayName'] as String,
