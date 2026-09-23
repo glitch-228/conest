@@ -171,6 +171,10 @@ jobs:
             --manifest-path native/conest_native/Cargo.toml \
             --target-dir build/linux/x64/debug/conest_native_target \
             audio::tests
+          cargo test --locked \
+            --manifest-path native/conest_native/Cargo.toml \
+            --target-dir build/linux/x64/debug/conest_native_target \
+            voice_recording::tests
       - name: Build Linux debug bundle
         run: |
           flutter config --enable-linux-desktop
