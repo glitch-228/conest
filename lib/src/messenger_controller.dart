@@ -9539,10 +9539,36 @@ class MessengerController extends ChangeNotifier {
     }
     if (current.isNotEmpty) albums.add(current);
 
+    var fallbackDialogTail = Future<void>.value();
+    Future<bool> confirmFallback(
+      StagedAttachment entry,
+      AttachmentSpoolException error,
+    ) {
+      final confirm = confirmOriginalSourceFallback;
+      if (confirm == null || !error.canUseOriginal) {
+        return Future<bool>.value(false);
+      }
+      final previous = fallbackDialogTail;
+      final result = Completer<bool>();
+      fallbackDialogTail = () async {
+        await previous;
+        try {
+          result.complete(await confirm(entry, error));
+        } catch (callbackError) {
+          appendDebugLog(
+            'sendStagedBundle: fallback confirmation failed for '
+            '${entry.fileName}: $callbackError',
+          );
+          result.complete(false);
+        }
+      }();
+      return result.future;
+    }
+
     for (var a = 0; a < albums.length; a++) {
       final album = albums[a];
       final albumId = album.length > 1 ? newAlbumId() : null;
-      for (var i = 0; i < album.length; i++) {
+      Future<void> sendEntry(int i) async {
         final entry = album[i];
         try {
           await sendAttachmentSource(
@@ -9554,10 +9580,7 @@ class MessengerController extends ChangeNotifier {
             albumId: albumId,
           );
         } on AttachmentSpoolException catch (error) {
-          final useOriginal =
-              error.canUseOriginal &&
-              confirmOriginalSourceFallback != null &&
-              await confirmOriginalSourceFallback(entry, error);
+          final useOriginal = await confirmFallback(entry, error);
           if (useOriginal) {
             await sendAttachmentSource(
               contact: contact,
@@ -9576,12 +9599,35 @@ class MessengerController extends ChangeNotifier {
         } catch (error) {
           appendDebugLog('sendStagedBundle: ${entry.fileName} failed — $error');
         }
-        if (i < album.length - 1) {
-          await Future<void>.delayed(
-            const Duration(milliseconds: albumOfferIntervalMs),
-          );
+      }
+
+      // File copying and hashing happen before an attachment can enter the
+      // per-contact fast lane. Prepare two album members at a time so one
+      // large video cannot hold a later small photo in the staging loop.
+      // Each call creates its message synchronously before its first await,
+      // preserving the selected timeline order and keeping album members
+      // contiguous; offers and block sends still use the bounded transfer
+      // queue. Bound concurrency to avoid turning a large multi-select into
+      // unbounded disk and crypto work.
+      var nextEntry = 0;
+      Future<void> prepareAlbumEntries() async {
+        while (nextEntry < album.length) {
+          final index = nextEntry++;
+          await sendEntry(index);
+          if (nextEntry < album.length) {
+            await Future<void>.delayed(
+              const Duration(milliseconds: albumOfferIntervalMs),
+            );
+          }
         }
       }
+
+      await Future.wait(
+        List<Future<void>>.generate(
+          min(2, album.length),
+          (_) => prepareAlbumEntries(),
+        ),
+      );
       if (a < albums.length - 1) {
         await Future<void>.delayed(
           const Duration(milliseconds: albumGapIntervalMs),
