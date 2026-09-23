@@ -2309,6 +2309,28 @@ void main() {
       await bob.approvePendingContactRequest(
         bob.pendingContactRequests.single.id,
       );
+      await _waitForIroh(
+        () =>
+            alice.contacts.single.featureCapabilityVersion == 1 &&
+            bob.contacts.single.featureCapabilityVersion == 1,
+        reason: 'authenticated application capability exchange',
+      );
+      expect(
+        alice.contacts.single.featureCapabilities,
+        contains(ApplicationCapability.groupPollsV1),
+      );
+      expect(
+        bob.contacts.single.featureCapabilities,
+        contains(ApplicationCapability.groupFileCaptionsV2),
+      );
+      final restoredContact = ContactRecord.fromJson(
+        alice.contacts.single.toJson(),
+      );
+      expect(restoredContact.featureCapabilityVersion, 1);
+      expect(
+        restoredContact.featureCapabilities,
+        alice.contacts.single.featureCapabilities,
+      );
       final bobContact = alice.contacts.single;
       final group = await alice.createGroup(
         title: 'Poll delivery',
@@ -2319,6 +2341,19 @@ void main() {
             bob.groups.any((candidate) => candidate.groupId == group.groupId) &&
             alice.pendingGroupMembershipDeliveries.isEmpty,
         reason: 'group membership delivery',
+      );
+      final aliceGroup = alice.groups.singleWhere(
+        (candidate) => candidate.groupId == group.groupId,
+      );
+      final bobProfile = aliceGroup.memberProfileFor(bob.identity!.deviceId)!;
+      expect(bobProfile.featureCapabilityVersion, 1);
+      expect(
+        bobProfile.featureCapabilities,
+        contains(ApplicationCapability.groupPollsV1),
+      );
+      expect(
+        GroupMemberProfile.fromJson(bobProfile.toJson()).featureCapabilities,
+        bobProfile.featureCapabilities,
       );
 
       await alice.createGroupPoll(
