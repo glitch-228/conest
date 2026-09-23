@@ -195,6 +195,7 @@ class VoiceCallService {
   Timer? _ringTimer;
   Timer? _reconnectTimer;
   Timer? _mediaInactivityTimer;
+  Future<void>? _terminalTransition;
   int _outboundMediaFailures = 0;
   int _outgoingCallSequence = 0;
 
@@ -202,6 +203,8 @@ class VoiceCallService {
   Stream<VoiceCallSession?> get changes => _changes.stream;
 
   Future<VoiceCallSession> startOutgoing(String peerDeviceId) async {
+    final terminalTransition = _terminalTransition;
+    if (terminalTransition != null) await terminalTransition;
     if (_active != null && _active!.state != VoiceCallState.ended) {
       throw StateError('Only one voice call can be active on this device.');
     }
@@ -259,6 +262,14 @@ class VoiceCallService {
     if (signal.recipientDeviceId != localDeviceId ||
         signalAge > const Duration(seconds: 45) ||
         signalAge < const Duration(seconds: -5) ||
+        _terminalCallIds.contains(signal.callId)) {
+      return false;
+    }
+    final terminalTransition = _terminalTransition;
+    if (terminalTransition != null) await terminalTransition;
+    final refreshedAge = _now().toUtc().difference(signal.issuedAt.toUtc());
+    if (refreshedAge > const Duration(seconds: 45) ||
+        refreshedAge < const Duration(seconds: -5) ||
         _terminalCallIds.contains(signal.callId)) {
       return false;
     }
@@ -436,60 +447,76 @@ class VoiceCallService {
     }
   }
 
-  Future<void> end({String reason = 'Call ended', String? signalAction}) async {
-    final session = _active;
-    if (session == null || session.state == VoiceCallState.ended) return;
-    final action =
-        signalAction ??
-        (session.state == VoiceCallState.ringing
-            ? (session.outgoing ? 'cancel' : 'reject')
-            : 'hangup');
-    _ringTimer?.cancel();
-    _reconnectTimer?.cancel();
-    _mediaInactivityTimer?.cancel();
-    // Publish the terminal state before awaiting platform teardown or transport
-    // I/O so a late permission/media completion cannot revive the call.
-    final ended = session.copyWith(
-      state: VoiceCallState.ended,
-      failureReason: reason,
-    );
-    _set(ended);
-    final summarySaved = _recordTerminalSummary(
-      ended,
-      priorState: session.state,
-    );
-    try {
-      await media.close();
-    } catch (_) {}
-    await summarySaved;
-    try {
-      await transport.send(_signal(session, action));
-    } catch (_) {
-      // Local teardown must finish even when the peer cannot be reached.
-    }
-  }
+  Future<void> end({String reason = 'Call ended', String? signalAction}) =>
+      _terminate(reason: reason, signalAction: signalAction, notifyPeer: true);
 
   /// Closes a session in response to authenticated remote signaling without
   /// echoing another terminal signal back to the caller.
-  Future<void> endRemote({required String reason}) async {
+  Future<void> endRemote({required String reason}) =>
+      _terminate(reason: reason, notifyPeer: false);
+
+  Future<void> _terminate({
+    required String reason,
+    String? signalAction,
+    required bool notifyPeer,
+  }) {
+    final pending = _terminalTransition;
+    if (pending != null) return pending;
     final session = _active;
-    if (session == null || session.state == VoiceCallState.ended) return;
-    _ringTimer?.cancel();
-    _reconnectTimer?.cancel();
-    _mediaInactivityTimer?.cancel();
-    final ended = session.copyWith(
-      state: VoiceCallState.ended,
-      failureReason: reason,
+    if (session == null || session.state == VoiceCallState.ended) {
+      return Future<void>.value();
+    }
+    final completer = Completer<void>();
+    final completion = completer.future;
+    _terminalTransition = completion;
+    Future<void> finish() async {
+      final action =
+          signalAction ??
+          (session.state == VoiceCallState.ringing
+              ? (session.outgoing ? 'cancel' : 'reject')
+              : 'hangup');
+      _ringTimer?.cancel();
+      _reconnectTimer?.cancel();
+      _mediaInactivityTimer?.cancel();
+      // Publish the terminal state before awaiting platform teardown or disk
+      // I/O so a late permission/media completion cannot revive this call.
+      final ended = session.copyWith(
+        state: VoiceCallState.ended,
+        failureReason: reason,
+      );
+      _set(ended);
+      final summarySaved = _recordTerminalSummary(
+        ended,
+        priorState: session.state,
+      );
+      try {
+        await media.close();
+      } catch (_) {}
+      await summarySaved;
+      if (notifyPeer) {
+        try {
+          await transport.send(_signal(session, action));
+        } catch (_) {
+          // Local teardown must finish even when the peer cannot be reached.
+        }
+      }
+    }
+
+    finish().then(
+      (_) {
+        if (identical(_terminalTransition, completion)) {
+          _terminalTransition = null;
+        }
+        completer.complete();
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (identical(_terminalTransition, completion)) {
+          _terminalTransition = null;
+        }
+        completer.completeError(error, stackTrace);
+      },
     );
-    _set(ended);
-    final summarySaved = _recordTerminalSummary(
-      ended,
-      priorState: session.state,
-    );
-    try {
-      await media.close();
-    } catch (_) {}
-    await summarySaved;
+    return completion;
   }
 
   Future<void> dispose() async {
