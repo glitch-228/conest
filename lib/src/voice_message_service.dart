@@ -16,9 +16,18 @@ enum VoiceRecordingState { idle, recording, preview }
 /// and Opus encoding are provided by native recorder implementations; the
 /// resulting Ogg file is handed to Conest only after explicit send.
 class VoiceMessageService {
-  VoiceMessageService({PlatformBridge? platformBridge})
-    : _platformBridge = platformBridge;
+  VoiceMessageService({
+    PlatformBridge? platformBridge,
+    Future<Directory> Function()? applicationSupportDirectory,
+    DateTime Function()? now,
+  }) : _platformBridge = platformBridge,
+       _applicationSupportDirectory =
+           applicationSupportDirectory ??
+           path_provider.getApplicationSupportDirectory,
+       _now = now ?? DateTime.now;
   final PlatformBridge? _platformBridge;
+  final Future<Directory> Function() _applicationSupportDirectory;
+  final DateTime Function() _now;
   AudioRecorder? _recorder;
   AudioRecorder get _captureRecorder => _recorder ??= AudioRecorder();
   VoiceRecordingState _state = VoiceRecordingState.idle;
@@ -121,6 +130,9 @@ class VoiceMessageService {
     if (destinationKey.isEmpty || destinationKey.length > 256) {
       throw ArgumentError.value(destinationKey, 'destinationKey');
     }
+    final bridge = _platformBridge;
+    final useNativeRecorder =
+        bridge?.supportsNativeVoiceMessageRecording ?? false;
     _captureStarting = true;
     _interruptCaptureStartup = false;
     _cancelCaptureStartup = false;
@@ -129,9 +141,6 @@ class VoiceMessageService {
       // playback before opening the microphone, including while permission is
       // being requested.
       await stopPlayback();
-      final bridge = _platformBridge;
-      final useNativeRecorder =
-          bridge?.supportsNativeVoiceMessageRecording ?? false;
       final AudioRecorder? recorder = useNativeRecorder
           ? null
           : _captureRecorder;
@@ -142,7 +151,7 @@ class VoiceMessageService {
           !await recorder.isEncoderSupported(AudioEncoder.opus)) {
         throw StateError('Ogg/Opus recording is unavailable on this device.');
       }
-      final support = await path_provider.getApplicationSupportDirectory();
+      final support = await _applicationSupportDirectory();
       final directory = Directory(p.join(support.path, 'voice-recordings'));
       await directory.create(recursive: true);
       if (_interruptCaptureStartup || _cancelCaptureStartup) {
@@ -154,11 +163,11 @@ class VoiceMessageService {
       }
       final path = p.join(
         directory.path,
-        'voice-${DateTime.now().toUtc().microsecondsSinceEpoch}.ogg',
+        'voice-${_now().toUtc().microsecondsSinceEpoch}.ogg',
       );
       _waveform.clear();
       _previewDestinationKey = destinationKey;
-      _startedAt = DateTime.now().toUtc();
+      _startedAt = _now().toUtc();
       if (useNativeRecorder) {
         _nativeRecordingPath = path;
         await bridge!.startVoiceMessageRecording(path);
@@ -204,11 +213,13 @@ class VoiceMessageService {
       }
       if (interrupted) await stopForInterruption();
     } catch (_) {
-      if (_nativeRecordingPath != null) {
-        try {
-          await _platformBridge?.cancelVoiceMessageRecording();
-        } catch (_) {}
-        _nativeRecordingPath = null;
+      if (useNativeRecorder) {
+        if (_nativeRecordingPath != null) {
+          try {
+            await bridge!.cancelVoiceMessageRecording();
+          } catch (_) {}
+          _nativeRecordingPath = null;
+        }
       } else {
         try {
           await _captureRecorder.cancel();
@@ -316,9 +327,8 @@ class VoiceMessageService {
       _previewDestinationKey = null;
       throw StateError('The recorder did not produce an Ogg/Opus file.');
     }
-    final elapsed = DateTime.now().toUtc().difference(
-      startedAt ?? DateTime.now().toUtc(),
-    );
+    final stoppedAt = _now().toUtc();
+    final elapsed = stoppedAt.difference(startedAt ?? stoppedAt);
     final durationMs = elapsed.inMilliseconds.clamp(
       1,
       maximumDuration.inMilliseconds,

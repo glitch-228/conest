@@ -1,12 +1,231 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:conest/src/models.dart';
+import 'package:conest/src/platform_bridge.dart';
 import 'package:conest/src/voice_call_service.dart';
 import 'package:conest/src/voice_message_service.dart';
+import 'package:record/record.dart';
+
+class _CountingRecordPlatform extends RecordPlatform {
+  int createCalls = 0;
+  int cancelCalls = 0;
+
+  @override
+  Future<void> create(String recorderId) async {
+    createCalls++;
+  }
+
+  @override
+  Future<void> cancel(String recorderId) async {
+    cancelCalls++;
+  }
+
+  @override
+  Future<void> dispose(String recorderId) async {}
+
+  @override
+  Future<String?> stop(String recorderId) async => null;
+
+  @override
+  Future<bool> hasPermission(String recorderId, {bool request = true}) async =>
+      true;
+
+  @override
+  Future<bool> isEncoderSupported(
+    String recorderId,
+    AudioEncoder encoder,
+  ) async => true;
+
+  @override
+  Future<void> start(
+    String recorderId,
+    RecordConfig config, {
+    required String path,
+  }) async {}
+
+  @override
+  Future<Stream<Uint8List>> startStream(
+    String recorderId,
+    RecordConfig config,
+  ) async => const Stream<Uint8List>.empty();
+
+  @override
+  Future<void> pause(String recorderId) async {}
+
+  @override
+  Future<void> resume(String recorderId) async {}
+
+  @override
+  Future<bool> isRecording(String recorderId) async => false;
+
+  @override
+  Future<bool> isPaused(String recorderId) async => false;
+
+  @override
+  Future<Amplitude> getAmplitude(String recorderId) async =>
+      Amplitude(current: -60, max: -60);
+
+  @override
+  Future<List<InputDevice>> listInputDevices(String recorderId) async => [];
+
+  @override
+  Stream<RecordState> onStateChanged(String recorderId) =>
+      const Stream<RecordState>.empty();
+}
+
+class _FakeVoiceCaptureBridge extends PlatformBridge {
+  _FakeVoiceCaptureBridge({this.startGate, this.stopGate});
+
+  final Completer<void>? startGate;
+  final Completer<void>? stopGate;
+  final Completer<void> started = Completer<void>();
+  final Completer<void> stopEntered = Completer<void>();
+  String? recordingPath;
+  int startCalls = 0;
+  int stopCalls = 0;
+  int cancelCalls = 0;
+
+  @override
+  bool get supportsNativeVoiceMessageRecording => true;
+
+  @override
+  Future<void> startVoiceMessageRecording(String path) async {
+    startCalls++;
+    recordingPath = path;
+    if (!started.isCompleted) started.complete();
+    if (startGate != null) await startGate!.future;
+    await File(path).writeAsBytes([0x4f, 0x67, 0x67, 0x53, 0x00]);
+  }
+
+  @override
+  Future<Map<String, dynamic>> stopVoiceMessageRecording() async {
+    stopCalls++;
+    if (!stopEntered.isCompleted) stopEntered.complete();
+    if (stopGate != null) await stopGate!.future;
+    return {
+      'waveform': [12, 128, 244],
+    };
+  }
+
+  @override
+  Future<void> cancelVoiceMessageRecording() async {
+    cancelCalls++;
+    final path = recordingPath;
+    if (path != null) {
+      final file = File(path);
+      if (await file.exists()) await file.delete();
+    }
+  }
+}
 
 void main() {
+  test(
+    'voice interruption during native startup keeps an unsent preview',
+    () async {
+      final support = await Directory.systemTemp.createTemp('conest-voice-');
+      addTearDown(() => support.delete(recursive: true));
+      final startGate = Completer<void>();
+      final bridge = _FakeVoiceCaptureBridge(startGate: startGate);
+      var now = DateTime.utc(2026, 9, 23, 12);
+      final service = VoiceMessageService(
+        platformBridge: bridge,
+        applicationSupportDirectory: () async => support,
+        now: () => now,
+      );
+      addTearDown(service.dispose);
+
+      final starting = service.start(destinationKey: 'direct:peer');
+      await bridge.started.future;
+      await service.stopForInterruption();
+      now = now.add(const Duration(seconds: 2));
+      startGate.complete();
+      await starting;
+
+      expect(service.state, VoiceRecordingState.preview);
+      expect(service.previewDestinationKey, 'direct:peer');
+      expect(service.preview?.metadata.durationMs, 2000);
+      expect(bridge.stopCalls, 1);
+      expect(bridge.cancelCalls, 0);
+      expect(await File(bridge.recordingPath!).exists(), isTrue);
+
+      await service.completePreview();
+      expect(service.state, VoiceRecordingState.idle);
+      expect(await File(bridge.recordingPath!).exists(), isFalse);
+    },
+  );
+
+  test(
+    'cancel during native startup never invokes the plugin recorder',
+    () async {
+      final support = await Directory.systemTemp.createTemp('conest-voice-');
+      addTearDown(() => support.delete(recursive: true));
+      final previousRecordPlatform = RecordPlatform.instance;
+      final recordPlatform = _CountingRecordPlatform();
+      RecordPlatform.instance = recordPlatform;
+      final startGate = Completer<void>();
+      final bridge = _FakeVoiceCaptureBridge(startGate: startGate);
+      final service = VoiceMessageService(
+        platformBridge: bridge,
+        applicationSupportDirectory: () async => support,
+        now: () => DateTime.utc(2026, 9, 23, 12),
+      );
+      addTearDown(() async {
+        await service.dispose();
+        RecordPlatform.instance = previousRecordPlatform;
+      });
+
+      final starting = service.start(destinationKey: 'direct:peer');
+      await bridge.started.future;
+      await service.cancel();
+      startGate.complete();
+      await expectLater(starting, throwsA(isA<StateError>()));
+
+      expect(bridge.cancelCalls, 1);
+      expect(recordPlatform.createCalls, 0);
+      expect(recordPlatform.cancelCalls, 0);
+      expect(service.state, VoiceRecordingState.idle);
+      expect(await File(bridge.recordingPath!).exists(), isFalse);
+    },
+  );
+
+  test(
+    'overlapping voice stop interruption and cancel stop native capture once',
+    () async {
+      final support = await Directory.systemTemp.createTemp('conest-voice-');
+      addTearDown(() => support.delete(recursive: true));
+      final stopGate = Completer<void>();
+      final bridge = _FakeVoiceCaptureBridge(stopGate: stopGate);
+      var now = DateTime.utc(2026, 9, 23, 13);
+      final service = VoiceMessageService(
+        platformBridge: bridge,
+        applicationSupportDirectory: () async => support,
+        now: () => now,
+      );
+      addTearDown(service.dispose);
+
+      await service.start(destinationKey: 'group:chat');
+      final stopping = service.stop();
+      await bridge.stopEntered.future;
+      final interrupted = service.stopForInterruption();
+      final canceled = service.cancel();
+      now = now.add(const Duration(seconds: 2));
+      stopGate.complete();
+      final preview = await stopping;
+      await interrupted;
+      await canceled;
+
+      expect(preview.metadata.durationMs, 2000);
+      expect(bridge.stopCalls, 1);
+      expect(bridge.cancelCalls, 0);
+      expect(service.state, VoiceRecordingState.idle);
+      expect(service.preview, isNull);
+      expect(await File(preview.path).exists(), isFalse);
+    },
+  );
+
   test('voice startup cleanup removes only abandoned recordings', () async {
     final directory = await Directory.systemTemp.createTemp('conest-voice-');
     addTearDown(() => directory.delete(recursive: true));
