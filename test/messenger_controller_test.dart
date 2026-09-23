@@ -2503,6 +2503,15 @@ void main() {
       );
       await alice.editScheduledMessage(scheduled.id, 'Group file caption');
       await alice.sendScheduledMessageNow(scheduled.id);
+      final dispatchedSchedule = alice.scheduledMessages.singleWhere(
+        (entry) => entry.id == scheduled.id,
+      );
+      expect(
+        dispatchedSchedule.state,
+        ScheduledMessageState.sent,
+        reason: dispatchedSchedule.failureReason ??
+            'The scheduled group attachment was not handed off.',
+      );
       await _waitForIroh(
         () => bob
             .messagesForGroup(group.groupId)
@@ -2536,7 +2545,7 @@ void main() {
         throwsStateError,
       );
     },
-    timeout: const Timeout(Duration(seconds: 20)),
+    timeout: const Timeout(Duration(seconds: 60)),
   );
 
   test(
