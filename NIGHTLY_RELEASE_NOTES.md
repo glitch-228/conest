@@ -1,52 +1,53 @@
 ## Conest 0.3.10 nightly
 
-### Group chat history and membership
+This nightly builds on signed group history, Iroh group messaging, and the
+Courier chat layout. It adds the first usable versions of chat folders,
+scheduled messages, group polls, voice messages, and experimental direct voice
+calls.
 
-- Group events are now signed and covered by an encrypted, peer-carried
-  history journal, with authenticated group membership history and admission
-  boundaries.
-- Adds durable group catch-up with bounded, resumable exchanges: joining or
-  reconnecting members fetch authorized group history automatically on
-  startup reconnect and when a chat is opened, and catch-up resumes on fresh
-  connections.
-- Group owners can control history visibility for members, and admission
-  checkpoints are captured so later-joined members receive only the history
-  they are authorized to read.
-- Authorized older group history pages are now exposed in chat, so members
-  can scroll back into history fetched before they joined.
+### Chat and groups
 
-### Groups over Iroh and relay changes
+- Create, rename, reorder, and delete local chat folders; filter folders with
+  chat search and switch to Search all chats. Folder settings stay encrypted on
+  this device. Folder memberships do not sync between devices.
+- Schedule direct and group text messages and attachments. Edit, reschedule,
+  send now, and cancel them from the scheduled list. Files are staged in private
+  app storage. Due messages send when Conest is running and reconnects; delivery
+  is not guaranteed while the app is stopped.
+- Create single or multiple choice group polls with visible voter identities.
+  Members can change or retract votes; the creator can close a poll with a
+  signed vote checkpoint. Offline votes outside that checkpoint remain visible
+  as unconfirmed.
+- Group history and attachments continue to use signed events and verified
+  transfers. Synchronization and multi-provider recovery still need physical
+  partition and network qualification.
 
-- Group messaging now works over Iroh with peers who are not individual
-  contacts.
-- Bundled Conest relay servers are retired: previously bundled routes are
-  removed on upgrade. Explicitly configured relays and Iroh
-  discovery/fallback remain available.
+### Voice
 
-### Everyday chat interface
+- Record, preview, discard, send, and play Ogg/Opus voice messages in direct and
+  group chats, including seeking and playback speed controls.
+- Adds opt-in one-to-one voice calls over encrypted Iroh datagrams with Opus
+  audio, ringing, mute, reconnect handling, and call summaries. Calls remain
+  experimental and are disabled by default. Enable only for testing on trusted
+  devices; audio quality, route changes, background lifecycle, and battery use
+  have not been physically qualified.
+- Fixes races around microphone startup, recorder disposal, overlapping call
+  setup, and late audio controls after hangup.
 
-- Begins the Telegram-style interface: Courier layout is the default for new
-  installations; existing preference files migrate once, retaining brightness,
-  decoration intensity, and the older home-layout choice.
-- Replaces the decorative search with a working, editable and clearable
-  search across contact/group names and currently loaded message previews.
-  Full journal search and result highlighting remain outstanding.
-- Courier chat-list rows now show a compact reachability mark (colored dot
-  plus online/seen-recently/known/unknown label) for contact conversations,
-  matching the reachability chip in the chat header.
-- Direct, group, and LAN-lobby composers keep separate encrypted text
-  drafts. Drafts persist locally in the encrypted vault, are never sent as
-  network events, and are cleared when the message is sent.
+### Reliability and qualification
 
-### Validation
+- Scheduled delivery now rereads the current persisted item before dispatch,
+  avoiding stale content or sending an item after it was rescheduled.
+- Group partition tests require disconnected peers to be unreachable in both
+  directions and synchronize missing signed-history predecessors before voting.
+- The remote debug workflow for this source passed its focused Flutter
+  verification. Linux, Android, and Windows debug artifact jobs must complete
+  successfully before this release is considered build-qualified.
+- Physical Android/Linux/Windows testing remains necessary for group-history
+  partitions, folder interactions, scheduled wake behavior, file-transfer
+  recovery, voice recording/playback, and call routes/audio. Calls remain
+  disabled by default pending those checks.
 
-- CI green at this nightly's commit: Flutter 348 tests passed, 6 skipped;
-  analysis and formatting clean; Rust workspace 56 tests passed with clippy
-  and rustfmt gates.
-- Search widget/screenshot review, group history physical-network
-  qualification, and draft lifecycle flush qualification remain outstanding.
-
-Update both peers to this nightly to use matching group history and
-admission behavior. With the bundled relays retired, devices that relied on
-the previously bundled Conest relay should add an explicit relay or keep
-Iroh discovery enabled.
+Update both peers to matching builds for group history, poll, and attachment
+compatibility. This nightly is prerelease software; keep important data backed
+up and report failures with the build identifier and debug snapshot.
