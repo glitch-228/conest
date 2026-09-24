@@ -198,6 +198,7 @@ class VoiceCallService {
   Future<void>? _terminalTransition;
   int _outboundMediaFailures = 0;
   int _outgoingCallSequence = 0;
+  bool _disposed = false;
 
   VoiceCallSession? get active => _active;
   Stream<VoiceCallSession?> get changes => _changes.stream;
@@ -205,13 +206,13 @@ class VoiceCallService {
   Future<VoiceCallSession> startOutgoing(String peerDeviceId) async {
     final terminalTransition = _terminalTransition;
     if (terminalTransition != null) await terminalTransition;
+    if (_disposed) throw StateError('Call service is disposed.');
     if (_active != null && _active!.state != VoiceCallState.ended) {
       throw StateError('Only one voice call can be active on this device.');
     }
     if (!media.available) {
       throw StateError('Voice calls are not available on this build yet.');
     }
-    await media.prepare().timeout(_connectionTimeout);
     final callId =
         '$localDeviceId:${_now().microsecondsSinceEpoch}:${++_outgoingCallSequence}';
     final session = VoiceCallSession(
@@ -223,6 +224,14 @@ class VoiceCallService {
     _set(session);
     _startRingExpiry(session, issuedAt: session.startedAt);
     try {
+      // Reserve the call slot before awaiting microphone permission. A second
+      // outgoing call or an incoming invitation must see this pending call.
+      await media.prepare().timeout(_connectionTimeout);
+      if (_disposed ||
+          _active?.callId != session.callId ||
+          _active?.state == VoiceCallState.ended) {
+        throw StateError('The call ended before microphone setup completed.');
+      }
       await transport
           .send(_signal(session, 'invite'))
           .timeout(const Duration(seconds: 45));
@@ -259,7 +268,8 @@ class VoiceCallService {
 
   Future<bool> receiveInvite(VoiceCallSignal signal) async {
     final signalAge = _now().toUtc().difference(signal.issuedAt.toUtc());
-    if (signal.recipientDeviceId != localDeviceId ||
+    if (_disposed ||
+        signal.recipientDeviceId != localDeviceId ||
         signalAge > const Duration(seconds: 45) ||
         signalAge < const Duration(seconds: -5) ||
         _terminalCallIds.contains(signal.callId)) {
@@ -268,7 +278,8 @@ class VoiceCallService {
     final terminalTransition = _terminalTransition;
     if (terminalTransition != null) await terminalTransition;
     final refreshedAge = _now().toUtc().difference(signal.issuedAt.toUtc());
-    if (refreshedAge > const Duration(seconds: 45) ||
+    if (_disposed ||
+        refreshedAge > const Duration(seconds: 45) ||
         refreshedAge < const Duration(seconds: -5) ||
         _terminalCallIds.contains(signal.callId)) {
       return false;
@@ -342,7 +353,9 @@ class VoiceCallService {
       if (!_isConnecting(connecting.callId)) return;
       _markConnected(connecting.callId);
     } catch (error) {
-      await end(reason: 'Could not establish voice media: $error');
+      if (_active?.callId == connecting.callId) {
+        await end(reason: 'Could not establish voice media: $error');
+      }
     }
   }
 
@@ -366,7 +379,9 @@ class VoiceCallService {
       if (!_isConnecting(connecting.callId)) return;
       _markConnected(connecting.callId);
     } catch (error) {
-      await end(reason: 'Could not establish voice media: $error');
+      if (_active?.callId == connecting.callId) {
+        await end(reason: 'Could not establish voice media: $error');
+      }
     }
   }
 
@@ -520,6 +535,7 @@ class VoiceCallService {
   }
 
   Future<void> dispose() async {
+    _disposed = true;
     await end(reason: 'Call service disposed');
     await _changes.close();
   }

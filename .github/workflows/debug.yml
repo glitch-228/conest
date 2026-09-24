@@ -91,7 +91,7 @@ jobs:
           flutter test test/group_history_test.dart test/group_history_sync_test.dart test/group_history_wire_test.dart test/group_membership_history_test.dart test/storage_test.dart
           flutter test test/storage_capacity_test.dart test/lan_direct_test.dart test/attachment_file_io_test.dart test/attachment_block_worker_test.dart
           flutter test test/messenger_controller_test.dart \
-            --name "Iroh group admission|Iroh group history|Iroh group-only|real socket group-only|legacy group updates|retired default|Iroh pairing|Iroh bootstrap|storage reserve|Download anyway|manual Download storage|spool reserve|Beam pairing receives|rejected contact messages|discarded message duplicates|Iroh limit blocks|automatic online file|different-network|verification progress|repeated LAN hints|chat folders|scheduled messages recover|Courier search keeps archived chats in the archive view"
+            --name "Iroh group admission|Iroh group history|Iroh group-only|real socket group-only|legacy group updates|retired default|Iroh pairing|Iroh bootstrap|storage reserve|Download anyway|manual Download storage|spool reserve|Beam pairing receives|rejected contact messages|discarded message duplicates|Iroh limit blocks|automatic online file|different-network|verification progress|repeated LAN hints|chat folders|scheduled messages recover|scheduled messages recheck|Courier search keeps archived chats in the archive view"
           flutter test test/messenger_controller_test.dart \
             --plain-name "matching debug builds auto-accept, verify, report, and clean a real LAN test"
           flutter test test/messenger_controller_test.dart \

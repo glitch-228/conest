@@ -1111,6 +1111,9 @@ class _InProcessIrohBridge implements NativeIrohBridge {
     required bool allowRelay,
     List<String> directAddresses = const [],
   }) async {
+    if (!network.bridges.containsKey(endpointId)) {
+      throw StateError('Sender offline');
+    }
     if (network.relayed && !allowRelay) throw StateError('Relay disabled');
     final recipient = network.bridges[remoteEndpointId];
     if (recipient == null) throw StateError('Peer offline');
@@ -1334,6 +1337,56 @@ void main() {
       );
     },
   );
+
+  test('scheduled messages recheck rescheduling during a due batch', () async {
+    final vault = _DelayedVaultStore();
+    var now = DateTime.now().toUtc();
+    final controller = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Scheduler',
+      vaultStore: vault,
+      nowProvider: () => now,
+    );
+    addTearDown(controller.dispose);
+    final due = now.add(const Duration(hours: 1));
+    final first = await controller.scheduleTextMessage(
+      kind: ConversationKind.direct,
+      conversationId: 'removed-peer',
+      body: 'first due message',
+      scheduledAt: due,
+    );
+    final second = await controller.scheduleTextMessage(
+      kind: ConversationKind.direct,
+      conversationId: 'removed-peer',
+      body: 'reschedule while first dispatch waits',
+      scheduledAt: due,
+    );
+    controller.setAppForegroundState(false);
+    await controller.flushPendingChanges();
+    now = due.add(const Duration(minutes: 1));
+    final release = Completer<void>();
+    vault.releaseWrite = release;
+    vault.writeStarted = Completer<void>();
+    controller.setAppForegroundState(true);
+    await vault.writeStarted!.future.timeout(const Duration(seconds: 5));
+    final rescheduling = controller.rescheduleMessage(
+      second.id,
+      now.add(const Duration(hours: 1)),
+    );
+    release.complete();
+    await rescheduling;
+    await _waitForIroh(
+      () => controller.scheduledMessages
+          .singleWhere((entry) => entry.id == first.id).state ==
+          ScheduledMessageState.blocked,
+    );
+    await controller.flushPendingChanges();
+    expect(
+      controller.scheduledMessages
+          .singleWhere((entry) => entry.id == second.id).state,
+      ScheduledMessageState.waiting,
+    );
+  });
 
   test(
     'draft updates during a delayed vault write schedule a new snapshot',
@@ -2948,6 +3001,15 @@ void main() {
         question: 'Partitioned close',
         options: const ['Alice side', 'Bob side'],
       );
+      // Bob missed the synthetic journal page above. Rejoin through history
+      // sync before voting, rather than assuming a live poll envelope also
+      // supplies every predecessor in its signed author chain.
+      for (final peer in [bob, carol, dave]) {
+        await peer.synchronizeGroupHistory(
+          groupId: group.groupId,
+          peerDeviceId: alice.identity!.deviceId,
+        );
+      }
       await _waitForIroh(
         () => peers.every(
           (peer) => peer.messagesForGroup(group.groupId).any(

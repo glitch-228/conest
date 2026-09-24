@@ -226,6 +226,56 @@ void main() {
     },
   );
 
+  test('voice disposal waits for startup cancellation and prevents reuse', () async {
+    final support = await Directory.systemTemp.createTemp('conest-voice-');
+    addTearDown(() => support.delete(recursive: true));
+    final gate = Completer<void>();
+    final bridge = _FakeVoiceCaptureBridge(startGate: gate);
+    final service = VoiceMessageService(
+      platformBridge: bridge,
+      applicationSupportDirectory: () async => support,
+    );
+    final starting = service.start(destinationKey: 'direct:peer');
+    final failedStart = expectLater(starting, throwsStateError);
+    await bridge.started.future;
+    var disposed = false;
+    final disposing = service.dispose().then((_) => disposed = true);
+    await Future<void>.delayed(Duration.zero);
+    expect(disposed, isFalse);
+    gate.complete();
+    await failedStart;
+    await disposing;
+    expect(bridge.cancelCalls, 1);
+    expect(await File(bridge.recordingPath!).exists(), isFalse);
+    expect(service.state, VoiceRecordingState.idle);
+    await expectLater(
+      service.start(destinationKey: 'direct:peer'),
+      throwsStateError,
+    );
+    await service.dispose();
+    expect(bridge.cancelCalls, 1);
+  });
+
+  test('outgoing microphone setup reserves its call slot and cannot revive', () async {
+    final media = _GatedPrepareMedia();
+    final signals = <VoiceCallSignal>[];
+    final service = VoiceCallService(
+      localDeviceId: 'me',
+      transport: _TestCallTransport(signals),
+      media: media,
+    );
+    final starting = service.startOutgoing('peer');
+    final failedStart = expectLater(starting, throwsStateError);
+    await media.entered.future;
+    await expectLater(service.startOutgoing('other'), throwsStateError);
+    await service.dispose();
+    media.gate.complete();
+    await failedStart;
+    expect(service.active?.state, VoiceCallState.ended);
+    expect(signals.where((signal) => signal.action == 'invite'), isEmpty);
+    await expectLater(service.startOutgoing('peer'), throwsStateError);
+  });
+
   test('voice startup cleanup removes only abandoned recordings', () async {
     final directory = await Directory.systemTemp.createTemp('conest-voice-');
     addTearDown(() => directory.delete(recursive: true));
@@ -763,4 +813,15 @@ class _HangingPrepareMedia implements VoiceCallMediaEngine {
 
   @override
   Future<void> close() async {}
+}
+
+class _GatedPrepareMedia extends _WorkingMedia {
+  final entered = Completer<void>();
+  final gate = Completer<void>();
+
+  @override
+  Future<void> prepare() async {
+    entered.complete();
+    await gate.future;
+  }
 }

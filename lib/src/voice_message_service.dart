@@ -50,6 +50,9 @@ class VoiceMessageService {
   DateTime? _startedAt;
   String? _nativeRecordingPath;
   bool _captureStarting = false;
+  bool _disposed = false;
+  Completer<void>? _captureStartupDone;
+  Future<void>? _disposeInFlight;
   bool _interruptCaptureStartup = false;
   bool _cancelCaptureStartup = false;
   bool _ignoreRecorderStateEvents = false;
@@ -124,6 +127,7 @@ class VoiceMessageService {
   Stream<Duration> get playbackPositionStream => _playbackPositions.stream;
 
   Future<void> start({required String destinationKey}) async {
+    if (_disposed) throw StateError('Voice recorder is disposed.');
     if (_state != VoiceRecordingState.idle || _captureStarting) {
       throw StateError('A voice recording is already active.');
     }
@@ -134,6 +138,8 @@ class VoiceMessageService {
     final useNativeRecorder =
         bridge?.supportsNativeVoiceMessageRecording ?? false;
     _captureStarting = true;
+    final startupDone = Completer<void>();
+    _captureStartupDone = startupDone;
     _interruptCaptureStartup = false;
     _cancelCaptureStartup = false;
     try {
@@ -239,6 +245,10 @@ class VoiceMessageService {
       _captureStarting = false;
       _interruptCaptureStartup = false;
       _cancelCaptureStartup = false;
+      startupDone.complete();
+      if (identical(_captureStartupDone, startupDone)) {
+        _captureStartupDone = null;
+      }
     }
   }
 
@@ -378,6 +388,7 @@ class VoiceMessageService {
   }
 
   Future<void> togglePlayback(String path, {String? itemId}) async {
+    if (_disposed) throw StateError('Voice recorder is disposed.');
     if (_captureStarting) {
       throw StateError('Wait for the voice recording to start or cancel.');
     }
@@ -543,8 +554,15 @@ class VoiceMessageService {
     await completePreview();
   }
 
-  Future<void> dispose() async {
+  Future<void> dispose() => _disposeInFlight ??= _dispose();
+
+  Future<void> _dispose() async {
+    _disposed = true;
+    final startupDone = _captureStartupDone;
     await cancel();
+    // cancel() marks pending permission/native startup for cancellation. Wait
+    // for its teardown before releasing devices and closing event streams.
+    if (startupDone != null) await startupDone.future;
     await stopPlayback();
     await _recorder?.dispose();
     await _mobilePositionSubscription?.cancel();

@@ -11544,12 +11544,15 @@ class MessengerController extends ChangeNotifier {
         )
         .toList(growable: false);
     for (final entry in due) {
-      await _dispatchScheduledMessage(entry);
+      await _dispatchScheduledMessage(entry, onlyIfDue: true);
     }
     _scheduleScheduledMessagePump();
   }
 
-  Future<void> _dispatchScheduledMessage(ScheduledMessage entry) async {
+  Future<void> _dispatchScheduledMessage(
+    ScheduledMessage entry, {
+    bool onlyIfDue = false,
+  }) async {
     final entries = [..._snapshot.scheduledMessages];
     final index = entries.indexWhere((value) => value.id == entry.id);
     if (index < 0 ||
@@ -11557,6 +11560,14 @@ class MessengerController extends ChangeNotifier {
         entries[index].state == ScheduledMessageState.sent ||
         entries[index].state == ScheduledMessageState.canceled ||
         entries[index].state == ScheduledMessageState.sending) {
+      return;
+    }
+    // A due-item batch can wait behind another dispatch while this item is
+    // edited or rescheduled. Always use the current durable payload.
+    entry = entries[index];
+    if (onlyIfDue &&
+        (entry.state != ScheduledMessageState.waiting ||
+            entry.scheduledAtUtc.isAfter(_now().toUtc()))) {
       return;
     }
     _scheduledDispatches.add(entry.id);
