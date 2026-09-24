@@ -389,8 +389,14 @@ class VoiceCallService {
     final session = _requireActive();
     final muted = !session.muted;
     await media.setMuted(muted);
-    _set(session.copyWith(muted: muted));
-    await transport.send(_signal(_requireActive(), muted ? 'mute' : 'unmute'));
+    final current = _active;
+    if (current == null ||
+        current.callId != session.callId ||
+        current.state == VoiceCallState.ended) {
+      return;
+    }
+    _set(current.copyWith(muted: muted));
+    await transport.send(_signal(current, muted ? 'mute' : 'unmute'));
   }
 
   Future<void> toggleSpeakerphone() async {
@@ -399,9 +405,11 @@ class VoiceCallService {
     if (!await media.setSpeakerphoneEnabled(enabled)) {
       throw StateError('Speakerphone routing is unavailable on this device.');
     }
-    if (_active?.callId == session.callId &&
-        _active?.state != VoiceCallState.ended) {
-      _set(session.copyWith(speakerphoneEnabled: enabled));
+    final current = _active;
+    if (current != null &&
+        current.callId == session.callId &&
+        current.state != VoiceCallState.ended) {
+      _set(current.copyWith(speakerphoneEnabled: enabled));
     }
   }
 

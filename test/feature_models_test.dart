@@ -276,6 +276,25 @@ void main() {
     await expectLater(service.startOutgoing('peer'), throwsStateError);
   });
 
+  test('delayed mute cannot revive a call after hangup', () async {
+    final media = _GatedMuteMedia();
+    final signals = <VoiceCallSignal>[];
+    final service = VoiceCallService(
+      localDeviceId: 'me',
+      transport: _TestCallTransport(signals),
+      media: media,
+    );
+    await service.startOutgoing('peer');
+    final muting = service.toggleMute();
+    await media.entered.future;
+    await service.end();
+    media.gate.complete();
+    await muting;
+    expect(service.active?.state, VoiceCallState.ended);
+    expect(signals.where((signal) => signal.action == 'mute'), isEmpty);
+    await service.dispose();
+  });
+
   test('voice startup cleanup removes only abandoned recordings', () async {
     final directory = await Directory.systemTemp.createTemp('conest-voice-');
     addTearDown(() => directory.delete(recursive: true));
@@ -821,6 +840,17 @@ class _GatedPrepareMedia extends _WorkingMedia {
 
   @override
   Future<void> prepare() async {
+    entered.complete();
+    await gate.future;
+  }
+}
+
+class _GatedMuteMedia extends _WorkingMedia {
+  final entered = Completer<void>();
+  final gate = Completer<void>();
+
+  @override
+  Future<void> setMuted(bool muted) async {
     entered.complete();
     await gate.future;
   }
