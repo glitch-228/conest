@@ -560,6 +560,7 @@ class MessengerController extends ChangeNotifier {
   bool _voiceCallNetworkCongested = false;
   DateTime? _voiceCallLastMediaFailureLog;
   final Set<String> _scheduledDispatches = <String>{};
+  final Set<String> _contactPairingInFlight = <String>{};
 
   /// Rolling cap on the persisted seen-envelope ledger. Envelopes older
   /// than the cap window are also long past every relay's queue TTL, so
@@ -689,6 +690,7 @@ class MessengerController extends ChangeNotifier {
   final Map<String, Timer> _outboundRetryTimers = <String, Timer>{};
 
   static const Duration _outboundStallTimeout = Duration(seconds: 60);
+  static const Duration _contactPairingRetryDelay = Duration(seconds: 30);
   static const int _outboundSmallFileFastLaneBytes = 8 * 1024 * 1024;
 
   bool get isReady => _ready;
@@ -1007,6 +1009,7 @@ class MessengerController extends ChangeNotifier {
           callsEnabled:
               experimentalAndroidBackgroundRuntimeAvailable &&
               _platformBridge.supportsVoiceCallMedia &&
+              currentIdentity.experimentalVoiceCallsEnabled &&
               currentIdentity.androidBackgroundCallsEnabled,
           peerName: session == null
               ? null
@@ -1061,6 +1064,12 @@ class MessengerController extends ChangeNotifier {
     final contact = _contactByDeviceId(signal.recipientDeviceId);
     if (contact == null || !contact.canSendOutbound) {
       throw StateError('Voice calls require an approved contact.');
+    }
+    if (signal.action == 'invite' &&
+        me.experimentalVoiceCallsEnabled != true) {
+      throw StateError(
+        'Experimental voice calls are off. Enable them in Settings to call.',
+      );
     }
     if (signal.action == 'invite' && !_canUseIrohForContact(contact)) {
       throw StateError(
@@ -3079,9 +3088,18 @@ class MessengerController extends ChangeNotifier {
             !_isValidInboundEnvelope(envelope)) {
           return;
         }
-        final invite = ContactInvite.tryDecodePayload(
-          utf8.decode(base64Decode(envelope.payloadBase64!)),
-        );
+        var contactPayload = utf8.decode(base64Decode(envelope.payloadBase64!));
+        try {
+          final wrapper = jsonDecode(contactPayload);
+          if (wrapper is Map<String, dynamic> &&
+              wrapper['exchangeVersion'] == 2 &&
+              wrapper['invitePayload'] is String) {
+            contactPayload = wrapper['invitePayload'] as String;
+          }
+        } on FormatException {
+          // Older peers send a bare signed invite.
+        }
+        final invite = ContactInvite.tryDecodePayload(contactPayload);
         if (invite == null ||
             !invite.usesSignedFormat ||
             invite.irohEndpointId != inbound.senderTransportIdentity ||
@@ -3099,11 +3117,15 @@ class MessengerController extends ChangeNotifier {
         );
         return;
       }
-      if (!contact.hasPinnedIrohIdentity || !contact.canSendOutbound) {
+      if (!contact.hasPinnedIrohIdentity) {
         appendDebugLog('Rejected Iroh envelope from an untrusted contact.');
         return;
       }
       if (range != null) {
+        if (!contact.canSendOutbound) {
+          appendDebugLog('Rejected Iroh file traffic before contact approval.');
+          return;
+        }
         final state = _inboundAttachments[range.attachmentId];
         if (state == null || range.offset % state.descriptor.chunkSize != 0) {
           throw const FormatException(
@@ -3141,6 +3163,14 @@ class MessengerController extends ChangeNotifier {
       if (envelope.senderDeviceId != contact.deviceId ||
           envelope.recipientDeviceId != _snapshot.identity?.deviceId) {
         throw const FormatException('Iroh envelope identity mismatch.');
+      }
+      if (!contact.canSendOutbound &&
+          (envelope.kind != 'contact_exchange' ||
+              envelope.protocolVersion != 2)) {
+        appendDebugLog(
+          'Rejected non-pairing Iroh traffic before contact approval.',
+        );
+        return;
       }
       final processed = await _processEnvelopes(
         [envelope],
@@ -4061,6 +4091,9 @@ class MessengerController extends ChangeNotifier {
       );
       buffer.writeln(
         'androidBackgroundCallsEnabled=${me.androidBackgroundCallsEnabled}',
+      );
+      buffer.writeln(
+        'experimentalVoiceCallsEnabled=${me.experimentalVoiceCallsEnabled}',
       );
       buffer.writeln('suppressReadReceipts=${me.suppressReadReceipts}');
       buffer.writeln('localRelayPort=${me.localRelayPort}');
@@ -5067,6 +5100,46 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  Future<void> updateExperimentalVoiceCallsEnabled(bool enabled) async {
+    final me = _requireIdentity();
+    if (enabled && !_platformBridge.supportsVoiceCallMedia) {
+      throw StateError('Voice-call audio is unavailable in this build.');
+    }
+    if (!enabled && _voiceCallService?.active != null) {
+      await _voiceCallService!.end(reason: 'Voice calls were disabled.');
+    }
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(experimentalVoiceCallsEnabled: enabled),
+    );
+    await _platformBridge.setAndroidBackgroundRuntimeEnabled(
+      experimentalAndroidBackgroundRuntimeAvailable &&
+          me.androidBackgroundRuntimeEnabled,
+      callsEnabled:
+          enabled &&
+          experimentalAndroidBackgroundRuntimeAvailable &&
+          _platformBridge.supportsVoiceCallMedia &&
+          me.androidBackgroundCallsEnabled,
+    );
+    await _persist(
+      enabled
+          ? 'Experimental voice calls enabled on this device.'
+          : 'Experimental voice calls disabled on this device.',
+    );
+    for (final contact in _snapshot.contacts.where(
+      (contact) => contact.canSendOutbound,
+    )) {
+      unawaited(
+        _sendReciprocalContactExchange(
+          contact,
+          recipientKnowsIdentity: true,
+        ).catchError((Object error) {
+          appendDebugLog('Voice-call availability update queued: $error');
+          return false;
+        }),
+      );
+    }
+  }
+
   Future<void> updateAndroidBackgroundRuntimeEnabled(bool enabled) async {
     if (enabled && !experimentalAndroidBackgroundRuntimeAvailable) {
       throw StateError(
@@ -5084,6 +5157,7 @@ class MessengerController extends ChangeNotifier {
       enabled,
       callsEnabled:
           me.androidBackgroundCallsEnabled &&
+          me.experimentalVoiceCallsEnabled &&
           experimentalAndroidBackgroundRuntimeAvailable &&
           _platformBridge.supportsVoiceCallMedia,
     );
@@ -5100,9 +5174,10 @@ class MessengerController extends ChangeNotifier {
     if (enabled &&
         (!Platform.isAndroid ||
             !experimentalAndroidBackgroundRuntimeAvailable ||
-            !_platformBridge.supportsVoiceCallMedia)) {
+            !_platformBridge.supportsVoiceCallMedia ||
+            identity?.experimentalVoiceCallsEnabled != true)) {
       throw StateError(
-        'Background calls require the experimental Android runtime and voice-call media in this build.',
+        'Background calls require experimental voice calls, Android background runtime, and voice-call media.',
       );
     }
     final me = _requireIdentity();
@@ -5115,6 +5190,7 @@ class MessengerController extends ChangeNotifier {
           me.androidBackgroundRuntimeEnabled,
       callsEnabled:
           enabled &&
+          me.experimentalVoiceCallsEnabled &&
           experimentalAndroidBackgroundRuntimeAvailable &&
           _platformBridge.supportsVoiceCallMedia,
     );
@@ -5552,10 +5628,6 @@ class MessengerController extends ChangeNotifier {
         break;
       }
     }
-    var remoteNotified = false;
-    if (notifyPeer && removed != null) {
-      remoteNotified = await _sendContactRemoval(removed);
-    }
     final attachmentIds = <String>{
       for (final conversation in _snapshot.conversations)
         if (conversation.peerDeviceId == deviceId)
@@ -5571,6 +5643,15 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(
       contacts: contacts,
       conversations: conversations,
+      contactRemovalTombstones: <String, ContactRemovalTombstone>{
+        ..._snapshot.contactRemovalTombstones,
+        if (removed != null)
+          removed.deviceId: ContactRemovalTombstone(
+            deviceId: removed.deviceId,
+            pairingRequestId: removed.pairingRequestId,
+            removedAt: _now().toUtc(),
+          ),
+      },
     );
     _reachability.remove(deviceId);
     for (final attachmentId in attachmentIds) {
@@ -5588,13 +5669,15 @@ class MessengerController extends ChangeNotifier {
       }
       return contact.routeHints.any((route) => route.routeKey == key);
     });
-    await _persist(
-      notifyPeer && removed != null
-          ? remoteNotified
-                ? 'Contact removed here and removal was sent to the other side.'
-                : 'Contact removed here. The other side could not be notified yet.'
-          : 'Contact removed.',
-    );
+    await _persist(removed == null ? 'Contact removed.' : 'Contact removed locally. Sending a removal notice in the background.');
+    if (notifyPeer && removed != null) {
+      unawaited(
+        _sendContactRemoval(removed).catchError((Object error) {
+          appendDebugLog('Contact removal notice remains best-effort: $error');
+          return false;
+        }),
+      );
+    }
   }
 
   /// Wipes the in-memory identity and the on-disk vault. Each potentially-
@@ -6036,6 +6119,8 @@ class MessengerController extends ChangeNotifier {
     required String alias,
     bool attemptReciprocalExchange = true,
     bool recipientKnowsIdentity = false,
+    bool approvalGranted = false,
+    String? pairingRequestId,
   }) async {
     final me = _requireIdentity();
     if (invite.version >= 6 && !await _crypto.verifyContactInvite(invite)) {
@@ -6084,6 +6169,12 @@ class MessengerController extends ChangeNotifier {
       irohEndpointId: invite.irohEndpointId,
       capabilities: invite.capabilities,
       transportIdentityVerifiedAt: invite.version >= 6 ? _now() : null,
+      pairingState: approvalGranted
+          ? ContactPairingState.accepted
+          : ContactPairingState.queued,
+      pairingRequestId: approvalGranted
+          ? pairingRequestId
+          : _randomId('pair'),
     );
     final conversations = List<ConversationRecord>.from(_snapshot.conversations)
       ..add(
@@ -6096,32 +6187,45 @@ class MessengerController extends ChangeNotifier {
         ),
       );
     final contacts = List<ContactRecord>.from(_snapshot.contacts)..add(contact);
+    final removalTombstones = Map<String, ContactRemovalTombstone>.of(
+      _snapshot.contactRemovalTombstones,
+    )..remove(contact.deviceId);
     final reachabilityRecords = List<ContactReachabilityRecord>.from(
       _snapshot.reachabilityRecords,
     )..add(ContactReachabilityRecord(deviceId: contact.deviceId));
     _snapshot = _snapshot.copyWith(
       contacts: contacts,
+      contactRemovalTombstones: removalTombstones,
       reachabilityRecords: reachabilityRecords,
       conversations: conversations,
     );
-    var exchangeStatus = ContactExchangeStatus.manualActionRequired;
-    if (attemptReciprocalExchange) {
-      exchangeStatus =
-          await _sendReciprocalContactExchange(
+    await _persist(
+      approvalGranted
+          ? 'Contact ${contact.alias} accepted. Sending approval over available routes.'
+          : 'Contact ${contact.alias} saved. Waiting for the other person to approve the request.',
+    );
+    if (attemptReciprocalExchange && !contact.pendingVerification) {
+      if (approvalGranted) {
+        unawaited(
+          _sendReciprocalContactExchange(
             contact,
             recipientKnowsIdentity: recipientKnowsIdentity,
-          )
-          ? ContactExchangeStatus.automatic
-          : ContactExchangeStatus.manualActionRequired;
+            pairingRequestId: pairingRequestId,
+            pairingResponse: 'accepted',
+          ).catchError((Object error) {
+            appendDebugLog('Contact approval response remains retryable: $error');
+            return false;
+          }),
+        );
+      } else {
+        unawaited(_attemptContactPairing(contact.deviceId, force: true));
+      }
     }
-    await _persist(
-      exchangeStatus == ContactExchangeStatus.automatic
-          ? 'Contact ${contact.alias} added. Your invite was sent back automatically.'
-          : 'Contact ${contact.alias} added, but the other side still needs your invite from their side.',
-    );
     return ContactAdditionResult(
       contact: contact,
-      exchangeStatus: exchangeStatus,
+      exchangeStatus: approvalGranted
+          ? ContactExchangeStatus.automatic
+          : ContactExchangeStatus.pendingApproval,
     );
   }
 
@@ -6305,6 +6409,8 @@ class MessengerController extends ChangeNotifier {
     final result = await _trustInvite(
       invite: invite,
       recipientKnowsIdentity: true,
+      approvalGranted: true,
+      pairingRequestId: request.id,
       alias: alias?.trim().isNotEmpty == true
           ? alias!.trim()
           : invite.displayName,
@@ -6319,12 +6425,189 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> rejectPendingContactRequest(String requestId) async {
+    final request = _snapshot.pendingContactRequests
+        .where((entry) => entry.id == requestId)
+        .firstOrNull;
     final filtered = _snapshot.pendingContactRequests
         .where((entry) => entry.id != requestId)
         .toList(growable: false);
     if (filtered.length == _snapshot.pendingContactRequests.length) return;
-    _snapshot = _snapshot.copyWith(pendingContactRequests: filtered);
+    if (request == null) return;
+    _snapshot = _snapshot.copyWith(
+      pendingContactRequests: filtered,
+      contactRemovalTombstones: <String, ContactRemovalTombstone>{
+        ..._snapshot.contactRemovalTombstones,
+        request.senderDeviceId: ContactRemovalTombstone(
+          deviceId: request.senderDeviceId,
+          pairingRequestId: request.id,
+          removedAt: _now().toUtc(),
+        ),
+      },
+    );
     await _persist('Contact request rejected.');
+    unawaited(_sendPairingResponse(request, 'declined'));
+  }
+
+  Future<void> cancelContactPairing(String deviceId) async {
+    final contact = _contactByDeviceId(deviceId);
+    if (contact == null || contact.pairingState == ContactPairingState.accepted) {
+      return;
+    }
+    _replaceContactRecord(
+      contact.copyWith(
+        pairingState: ContactPairingState.cancelled,
+        clearPairingLastAttemptAt: true,
+      ),
+    );
+    await _persist('Contact request cancelled. Queued items remain blocked.');
+  }
+
+  Future<void> _sendPairingResponse(
+    PendingContactRequest request,
+    String response,
+  ) async {
+    try {
+      final invite = ContactInvite.decodePayload(request.invitePayload);
+      if (invite.version >= 6 && !await _crypto.verifyContactInvite(invite)) {
+        return;
+      }
+      final me = _requireIdentity();
+      final peer = ContactRecord(
+        accountId: invite.accountId,
+        deviceId: invite.deviceId,
+        alias: invite.displayName,
+        displayName: invite.displayName,
+        bio: invite.bio,
+        relayCapable: invite.relayCapable,
+        publicKeyBase64: invite.publicKeyBase64,
+        routeHints: prunePeerEndpointsByKind(invite.routeHints),
+        safetyNumber: await _crypto.deriveSafetyNumber([
+          base64Decode(me.publicKeyBase64),
+          base64Decode(invite.publicKeyBase64),
+        ]),
+        trustedAt: _now().toUtc(),
+        signingPublicKeyBase64: invite.signingPublicKeyBase64,
+        irohEndpointId: invite.irohEndpointId,
+        capabilities: invite.capabilities,
+        transportIdentityVerifiedAt: invite.version >= 6 ? _now() : null,
+        pairingState: ContactPairingState.accepted,
+        pairingRequestId: request.id,
+      );
+      await _sendReciprocalContactExchange(
+        peer,
+        recipientKnowsIdentity: true,
+        pairingRequestId: request.id,
+        pairingResponse: response,
+      );
+    } catch (error) {
+      appendDebugLog('Could not send contact pairing response: $error');
+    }
+  }
+
+  Future<void> retryContactPairingNow(String deviceId) async {
+    var contact = _contactByDeviceId(deviceId);
+    if (contact == null || contact.pendingVerification || contact.isArchived) {
+      return;
+    }
+    if (contact.pairingState == ContactPairingState.declined ||
+        contact.pairingState == ContactPairingState.cancelled) {
+      contact = contact.copyWith(
+        pairingState: ContactPairingState.queued,
+        pairingRequestId: _randomId('pair'),
+        pairingAttempts: 0,
+        clearPairingLastAttemptAt: true,
+      );
+      _replaceContactRecord(contact);
+      await _saveSnapshotSilently(notify: true);
+    }
+    await _attemptContactPairing(deviceId, force: true);
+  }
+
+  void _schedulePendingContactPairingRetries({bool force = false}) {
+    for (final contact in _snapshot.contacts) {
+      if (contact.pairingState == ContactPairingState.accepted ||
+          contact.pairingState == ContactPairingState.declined ||
+          contact.pairingState == ContactPairingState.cancelled ||
+          contact.pendingVerification ||
+          contact.isArchived) {
+        continue;
+      }
+      final lastAttempt = contact.pairingLastAttemptAt;
+      if (!force &&
+          lastAttempt != null &&
+          _now().difference(lastAttempt) < _contactPairingRetryDelay) {
+        continue;
+      }
+      unawaited(_attemptContactPairing(contact.deviceId, force: force));
+    }
+  }
+
+  Future<bool> _attemptContactPairing(
+    String deviceId, {
+    bool force = false,
+  }) async {
+    if (!_contactPairingInFlight.add(deviceId)) return false;
+    try {
+      var contact = _contactByDeviceId(deviceId);
+      if (contact == null ||
+          !contact.canComposeOutbound ||
+          contact.pairingState == ContactPairingState.accepted ||
+          contact.pairingState == ContactPairingState.declined ||
+          contact.pairingState == ContactPairingState.cancelled) {
+        return false;
+      }
+      final lastAttempt = contact.pairingLastAttemptAt;
+      if (!force &&
+          lastAttempt != null &&
+          _now().difference(lastAttempt) < _contactPairingRetryDelay) {
+        return false;
+      }
+      final requestId = contact.pairingRequestId ?? _randomId('pair');
+      contact = contact.copyWith(
+        pairingState: ContactPairingState.sending,
+        pairingRequestId: requestId,
+        pairingLastAttemptAt: _now(),
+        pairingAttempts: contact.pairingAttempts + 1,
+      );
+      _replaceContactRecord(contact);
+      await _saveSnapshotSilently(notify: true);
+      var sent = false;
+      try {
+        sent = await _sendReciprocalContactExchange(
+          contact,
+          pairingRequestId: requestId,
+        );
+      } catch (error) {
+        appendDebugLog('Contact pairing send remains queued: $error');
+      }
+      final current = _contactByDeviceId(deviceId);
+      if (current == null ||
+          current.pairingRequestId != requestId ||
+          current.pairingState == ContactPairingState.accepted ||
+          current.pairingState == ContactPairingState.declined ||
+          current.pairingState == ContactPairingState.cancelled) {
+        return sent;
+      }
+      _replaceContactRecord(
+        current.copyWith(
+          pairingState: sent
+              ? ContactPairingState.awaitingAcceptance
+              : ContactPairingState.queued,
+        ),
+      );
+      await _saveSnapshotSilently(notify: true);
+      return sent;
+    } finally {
+      _contactPairingInFlight.remove(deviceId);
+    }
+  }
+
+  void _replaceContactRecord(ContactRecord contact) {
+    final contacts = List<ContactRecord>.of(_snapshot.contacts);
+    final index = contacts.indexWhere((entry) => entry.deviceId == contact.deviceId);
+    if (index < 0) return;
+    contacts[index] = contact;
+    _snapshot = _snapshot.copyWith(contacts: contacts);
   }
 
   Future<void> sendMessage({
@@ -6338,10 +6621,8 @@ class MessengerController extends ChangeNotifier {
     if (trimmed.isEmpty) {
       return;
     }
-    if (contact.pendingVerification) {
-      throw StateError(
-        'Cannot send to ${contact.alias} until the identity is verified.',
-      );
+    if (!contact.canComposeOutbound) {
+      throw StateError('Cannot compose to ${contact.alias} while blocked.');
     }
     if (contact.isArchived) {
       throw StateError(
@@ -6367,6 +6648,12 @@ class MessengerController extends ChangeNotifier {
     );
     _upsertMessage(contact.deviceId, message);
     _markRuntimeActivity();
+    if (!contact.canSendOutbound) {
+      await _persist(
+        'Message saved locally. It will send after ${contact.alias} accepts the contact request.',
+      );
+      return;
+    }
     await _persist('Trying LAN first, then relay for ${contact.alias}.');
 
     final delivered = await _tryDeliverExistingMessage(
@@ -6600,9 +6887,9 @@ class MessengerController extends ChangeNotifier {
     String? outgoingMessageId,
   }) async {
     final me = _requireIdentity();
-    if (!contact.canSendOutbound) {
+    if (!contact.canComposeOutbound) {
       throw StateError(
-        'Cannot send to ${contact.alias} until the identity is verified.',
+        'Cannot stage an attachment for ${contact.alias} while blocked.',
       );
     }
     if (source.sizeBytes <= 0) {
@@ -9865,6 +10152,7 @@ class MessengerController extends ChangeNotifier {
     // An address learned on the old interface is no longer trusted as a LAN
     // destination. Both peers exchange fresh, authenticated endpoint hints.
     _peerLanDirect.clear();
+    _schedulePendingContactPairingRetries(force: true);
     for (final session in _groupFileSessions.values.toList(growable: false)) {
       unawaited(
         _startGroupFileDownload(session).catchError((Object error) {
@@ -10316,26 +10604,27 @@ class MessengerController extends ChangeNotifier {
     ContactRecord contact, {
     bool recipientKnowsIdentity = false,
     bool requestPeerCapabilities = false,
+    String? pairingRequestId,
+    String? pairingResponse,
   }) async {
-    if (!contact.canSendOutbound) return false;
+    if (!contact.canComposeOutbound) return false;
     final me = _requireIdentity();
     final invitePayload = (await _inviteForIdentity(me)).encodePayload();
-    final payloads = recipientKnowsIdentity
-        ? <String>[
-            // Keep sending the legacy signed invite as its own envelope so
-            // older clients still refresh the contact profile and routes.
-            invitePayload,
-            jsonEncode({
-              'exchangeVersion': 1,
-              'invitePayload': invitePayload,
-              'featureCapabilityVersion': 1,
-              'featureCapabilities': _localApplicationCapabilities()
-                  .map((capability) => capability.name)
-                  .toList(),
-              'requestPeerCapabilities': requestPeerCapabilities,
-            }),
-          ]
-        : <String>[invitePayload];
+    final requestId = pairingRequestId ?? contact.pairingRequestId;
+    final structuredPayload = jsonEncode({
+      'exchangeVersion': 2,
+      'invitePayload': invitePayload,
+      if (requestId != null) 'pairingRequestId': requestId,
+      'featureCapabilityVersion': 1,
+      'featureCapabilities': _localApplicationCapabilities()
+          .map((capability) => capability.name)
+          .toList(),
+      'requestPeerCapabilities': requestPeerCapabilities,
+      if (pairingResponse != null) 'pairingResponse': pairingResponse,
+    });
+    final payloads = pairingResponse == null
+        ? <String>[structuredPayload, invitePayload]
+        : <String>[structuredPayload];
     var delivered = false;
     for (final payload in payloads) {
       // Bootstrap is an untrusted v1 request because the recipient may not
@@ -10367,6 +10656,7 @@ class MessengerController extends ChangeNotifier {
           contact: contact,
           recipientDeviceId: contact.deviceId,
           envelope: exchange,
+          irohFirst: true,
         );
         delivered = true;
       } catch (_) {
@@ -10898,6 +11188,7 @@ class MessengerController extends ChangeNotifier {
     _pollCompleter = pollCompleter;
     notifyListeners();
     try {
+      _schedulePendingContactPairingRetries();
       await _ensureLocalRelayRunning();
       await _refreshLanAddresses(persist: false);
       await _ensurePairingBeaconRunning();
@@ -12914,6 +13205,23 @@ class MessengerController extends ChangeNotifier {
         signal.recipientDeviceId != identity?.deviceId) {
       return;
     }
+    if (signal.action == 'invite' &&
+        identity?.experimentalVoiceCallsEnabled != true) {
+      final me = identity;
+      if (me != null) {
+        await _sendVoiceCallSignal(
+          VoiceCallSignal(
+            callId: signal.callId,
+            action: 'busy',
+            senderDeviceId: me.deviceId,
+            recipientDeviceId: contact.deviceId,
+            issuedAt: _now().toUtc(),
+          ),
+        );
+      }
+      await _sendAck(contact: contact, envelope: envelope);
+      return;
+    }
     if (signal.action == 'invite' && !_canUseIrohForContact(contact)) {
       final me = identity;
       if (me != null) {
@@ -14928,6 +15236,8 @@ class MessengerController extends ChangeNotifier {
   Future<void> _handleContactExchange(RelayEnvelope envelope) async {
     final existing = _contactByDeviceId(envelope.senderDeviceId);
     String payload;
+    String? pairingRequestId;
+    String? pairingResponse;
     List<ApplicationCapability>? featureCapabilities;
     var featureCapabilityVersion = 0;
     var requestPeerCapabilities = false;
@@ -14936,6 +15246,23 @@ class MessengerController extends ChangeNotifier {
       final rawPayload = envelope.payloadBase64;
       if (rawPayload == null || rawPayload.isEmpty) return;
       payload = utf8.decode(base64Decode(rawPayload));
+      try {
+        final wrapper = jsonDecode(payload);
+        if (wrapper is Map<String, dynamic> &&
+            wrapper['exchangeVersion'] == 2) {
+          final invitePayload = wrapper['invitePayload'];
+          final requestId = wrapper['pairingRequestId'];
+          if (invitePayload is! String ||
+              (requestId != null &&
+                  (requestId is! String || requestId.isEmpty || requestId.length > 128))) {
+            return;
+          }
+          payload = invitePayload;
+          pairingRequestId = requestId as String?;
+        }
+      } on FormatException {
+        // Older peers send a bare signed invite.
+      }
     } else {
       if (existing == null || existing.pendingVerification) return;
       payload = await _crypto.decryptMessage(
@@ -14946,21 +15273,32 @@ class MessengerController extends ChangeNotifier {
         final decodedExchange = jsonDecode(payload);
         if (decodedExchange is Map<String, dynamic> &&
             decodedExchange.containsKey('exchangeVersion')) {
-          if (decodedExchange['exchangeVersion'] != 1) return;
+          if (decodedExchange['exchangeVersion'] != 1 &&
+              decodedExchange['exchangeVersion'] != 2) return;
           final invitePayload = decodedExchange['invitePayload'];
           final version = decodedExchange['featureCapabilityVersion'];
           final capabilities = decodedExchange['featureCapabilities'];
           final request = decodedExchange['requestPeerCapabilities'];
+          final requestId = decodedExchange['pairingRequestId'];
+          final response = decodedExchange['pairingResponse'];
           if (invitePayload is! String ||
-              version != 1 ||
-              capabilities is! List ||
-              capabilities.length > ApplicationCapability.values.length ||
+              version != null && version != 1 ||
+              capabilities != null &&
+                  (capabilities is! List ||
+                      capabilities.length > ApplicationCapability.values.length) ||
+              requestId != null &&
+                  (requestId is! String || requestId.isEmpty || requestId.length > 128) ||
+              response != null && response != 'accepted' && response != 'declined' ||
               (request != null && request is! bool)) {
             return;
           }
           payload = invitePayload;
-          featureCapabilities = applicationCapabilitiesFromJson(capabilities);
-          featureCapabilityVersion = 1;
+          pairingRequestId = requestId as String?;
+          pairingResponse = response as String?;
+          if (capabilities is List) {
+            featureCapabilities = applicationCapabilitiesFromJson(capabilities);
+            featureCapabilityVersion = 1;
+          }
           requestPeerCapabilities = request == true;
         }
       } on FormatException {
@@ -14980,6 +15318,15 @@ class MessengerController extends ChangeNotifier {
       );
       return;
     }
+    final tombstone = _snapshot.contactRemovalTombstones[invite.deviceId];
+    if (tombstone != null &&
+        ((pairingRequestId != null &&
+                pairingRequestId == tombstone.pairingRequestId) ||
+            (pairingRequestId == null &&
+                !envelope.createdAt.isAfter(tombstone.removedAt)))) {
+      appendDebugLog('Ignored late pairing traffic from a removed contact.');
+      return;
+    }
     if (existing != null) {
       if (invite.publicKeyBase64 != existing.publicKeyBase64 ||
           invite.accountId != existing.accountId ||
@@ -14994,6 +15341,18 @@ class MessengerController extends ChangeNotifier {
         );
         return;
       }
+      if (envelope.protocolVersion == 1 &&
+          existing.pairingState == ContactPairingState.accepted) {
+        unawaited(
+          _sendReciprocalContactExchange(
+            existing,
+            recipientKnowsIdentity: true,
+            pairingRequestId: pairingRequestId ?? existing.pairingRequestId,
+            pairingResponse: 'accepted',
+          ),
+        );
+        return;
+      }
       final capabilitySet = featureCapabilities?.toSet();
       final capabilitiesChanged =
           featureCapabilityVersion > 0 &&
@@ -15001,13 +15360,48 @@ class MessengerController extends ChangeNotifier {
               capabilitySet == null ||
               existing.featureCapabilities.length != capabilitySet.length ||
               !existing.featureCapabilities.toSet().containsAll(capabilitySet));
-      final updated = await _updateExistingContactFromInvite(
+      var updated = await _updateExistingContactFromInvite(
         invite,
         featureCapabilities: featureCapabilities,
         featureCapabilityVersion: featureCapabilityVersion,
         statusBuilder: (contact) =>
             'Updated ${contact.alias} profile and route hints.',
       );
+      final matchesPendingRequest = pairingRequestId == null ||
+          pairingRequestId == existing.pairingRequestId;
+      if (updated != null &&
+          pairingResponse == 'declined' &&
+          (existing.pairingState == ContactPairingState.queued ||
+              existing.pairingState == ContactPairingState.sending ||
+              existing.pairingState == ContactPairingState.awaitingAcceptance) &&
+          matchesPendingRequest) {
+        updated = updated.copyWith(
+          pairingState: ContactPairingState.declined,
+          clearPairingLastAttemptAt: true,
+        );
+        _replaceContactRecord(updated);
+        await _persist(
+          '${updated.alias} declined the request. Queued messages and files remain blocked.',
+        );
+        return;
+      }
+      if (updated != null &&
+          pairingResponse == 'accepted' &&
+          (existing.pairingState == ContactPairingState.queued ||
+              existing.pairingState == ContactPairingState.sending ||
+              existing.pairingState == ContactPairingState.awaitingAcceptance) &&
+          matchesPendingRequest) {
+        updated = updated.copyWith(
+          pairingState: ContactPairingState.accepted,
+          clearPairingLastAttemptAt: true,
+        );
+        _replaceContactRecord(updated);
+        await _saveSnapshotSilently(notify: true);
+        if (_outboundQueueByContact[updated.deviceId]?.isNotEmpty ?? false) {
+          _pumpOutboundQueue(updated);
+        }
+        unawaited(_retryUnacknowledgedMessages(force: true));
+      }
       if (featureCapabilityVersion == 1 &&
           (capabilitiesChanged || requestPeerCapabilities) &&
           updated != null) {
@@ -15039,23 +15433,26 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final cutoff = _now().subtract(_pendingContactRequestTtl);
-    final pending =
-        _snapshot.pendingContactRequests
-            .where(
-              (entry) =>
-                  entry.receivedAt.isAfter(cutoff) &&
-                  entry.senderDeviceId != invite.deviceId,
-            )
-            .toList(growable: true)
-          ..add(
-            PendingContactRequest(
-              id: envelope.messageId,
-              senderAccountId: invite.accountId,
-              senderDeviceId: invite.deviceId,
-              invitePayload: payload,
-              receivedAt: _now().toUtc(),
-            ),
-          );
+    final existingRequest = _snapshot.pendingContactRequests
+        .where((entry) => entry.senderDeviceId == invite.deviceId)
+        .firstOrNull;
+    final requestId = pairingRequestId ?? existingRequest?.id ?? envelope.messageId;
+    final pending = _snapshot.pendingContactRequests
+        .where(
+          (entry) =>
+              entry.receivedAt.isAfter(cutoff) &&
+              entry.senderDeviceId != invite.deviceId,
+        )
+        .toList(growable: true)
+      ..add(
+        PendingContactRequest(
+          id: requestId,
+          senderAccountId: invite.accountId,
+          senderDeviceId: invite.deviceId,
+          invitePayload: payload,
+          receivedAt: _now().toUtc(),
+        ),
+      );
     if (pending.length > _maxPendingContactRequests) {
       pending.removeRange(0, pending.length - _maxPendingContactRequests);
     }
@@ -17955,6 +18352,7 @@ class MessengerController extends ChangeNotifier {
     bool allowRelayedPaths = true,
     bool allowLegacyRoutes = true,
     Set<TransportKind>? allowedUnifiedKinds,
+    bool irohFirst = false,
   }) async {
     // Defense in depth: the crypto layer already can't derive a shared
     // secret for a pending or archived contact (publicKeyBase64 is empty
@@ -18052,6 +18450,10 @@ class MessengerController extends ChangeNotifier {
     final preferredConestRelays = preferredRoutes.where(
       (route) => route.kind == PeerRouteKind.relay,
     );
+
+    if (irohFirst && _transportRegistry != null) {
+      await tryUnifiedTransports();
+    }
 
     // Attachment protocol v2 has one deterministic route order on every
     // platform. In particular, an Iroh relay is still an Iroh path and must
@@ -20455,11 +20857,13 @@ class MessengerController extends ChangeNotifier {
   }
 
   List<ApplicationCapability> _localApplicationCapabilities() {
+    final me = identity;
     final enabled = <ApplicationCapability>{
       ApplicationCapability.groupPollsV1,
       ApplicationCapability.voiceMessageAttachmentsV1,
       ApplicationCapability.groupFileCaptionsV2,
-      if (_platformBridge.supportsVoiceCallMedia)
+      if (_platformBridge.supportsVoiceCallMedia &&
+          me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,
     };
     return ApplicationCapability.values
@@ -21669,6 +22073,7 @@ class MessengerController extends ChangeNotifier {
         callsEnabled:
             experimentalAndroidBackgroundRuntimeAvailable &&
             _platformBridge.supportsVoiceCallMedia &&
+            me.experimentalVoiceCallsEnabled &&
             me.androidBackgroundCallsEnabled,
       ),
     );

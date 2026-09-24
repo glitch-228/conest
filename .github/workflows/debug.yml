@@ -91,7 +91,7 @@ jobs:
           flutter test test/group_history_test.dart test/group_history_sync_test.dart test/group_history_wire_test.dart test/group_membership_history_test.dart test/storage_test.dart
           flutter test test/storage_capacity_test.dart test/lan_direct_test.dart test/attachment_file_io_test.dart test/attachment_block_worker_test.dart
           flutter test test/messenger_controller_test.dart \
-            --name "Iroh group admission|Iroh group history|Iroh group-only|real socket group-only|legacy group updates|retired default|Iroh pairing|Iroh bootstrap|storage reserve|Download anyway|manual Download storage|spool reserve|Beam pairing receives|rejected contact messages|discarded message duplicates|Iroh limit blocks|automatic online file|different-network|verification progress|repeated LAN hints|chat folders|scheduled messages recover|scheduled messages recheck|Courier search keeps archived chats in the archive view"
+            --name "Iroh group admission|Iroh group history|Iroh group-only|real socket group-only|legacy group updates|retired default|Iroh pairing|Iroh bootstrap|storage reserve|Download anyway|manual Download storage|spool reserve|Beam pairing receives|rejected contact messages|discarded message duplicates|Contact approval releases locally queued messages|cancelled pairing ignores a late acceptance response|Iroh limit blocks|automatic online file|different-network|verification progress|repeated LAN hints|chat folders|scheduled messages recover|scheduled messages recheck|Courier search keeps archived chats in the archive view"
           flutter test test/messenger_controller_test.dart \
             --plain-name "matching debug builds auto-accept, verify, report, and clean a real LAN test"
           flutter test test/messenger_controller_test.dart \
@@ -149,7 +149,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake clang pkg-config libgtk-3-dev liblzma-dev libsecret-1-dev libjsoncpp-dev libasound2-dev
+          sudo apt-get install -y ninja-build cmake clang pkg-config libgtk-3-dev liblzma-dev libsecret-1-dev libjsoncpp-dev libasound2-dev mpv
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -189,6 +189,7 @@ jobs:
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true
           mkdir -p dist-stage/conest-debug-linux-x64 dist
           cp -a build/linux/x64/debug/bundle/. dist-stage/conest-debug-linux-x64/
+          bash tool/package_linux_mpv.sh dist-stage/conest-debug-linux-x64
           (cd dist-stage && zip -r ../dist/conest-debug-linux-x64-${GITHUB_RUN_NUMBER}.zip conest-debug-linux-x64)
       - name: Qualify native group transports
         if: ${{ !inputs.quick_build }}

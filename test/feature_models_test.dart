@@ -747,6 +747,7 @@ void main() {
         notificationsEnabled: true,
         androidBackgroundRuntimeEnabled: false,
         androidBackgroundCallsEnabled: true,
+        experimentalVoiceCallsEnabled: true,
         suppressReadReceipts: false,
         lanAddresses: const [],
         safetyNumber: 'safety',
@@ -758,10 +759,19 @@ void main() {
         ).androidBackgroundCallsEnabled,
         isTrue,
       );
+      expect(
+        IdentityRecord.fromJson(identity.toJson()).experimentalVoiceCallsEnabled,
+        isTrue,
+      );
       final legacy = Map<String, dynamic>.from(identity.toJson())
-        ..remove('androidBackgroundCallsEnabled');
+        ..remove('androidBackgroundCallsEnabled')
+        ..remove('experimentalVoiceCallsEnabled');
       expect(
         IdentityRecord.fromJson(legacy).androidBackgroundCallsEnabled,
+        isFalse,
+      );
+      expect(
+        IdentityRecord.fromJson(legacy).experimentalVoiceCallsEnabled,
         isFalse,
       );
       expect(

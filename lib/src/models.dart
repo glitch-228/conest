@@ -13,6 +13,8 @@ export 'transport_models.dart';
 
 enum ConversationKind { direct, group, lanLobby }
 
+enum ContactPairingState { queued, sending, awaitingAcceptance, accepted, declined, cancelled }
+
 enum GroupMemberRole {
   owner('Owner'),
   admin('Admin'),
@@ -944,6 +946,7 @@ class IdentityRecord {
     required this.notificationsEnabled,
     required this.androidBackgroundRuntimeEnabled,
     this.androidBackgroundCallsEnabled = false,
+    this.experimentalVoiceCallsEnabled = false,
     required this.suppressReadReceipts,
     this.connectivity = const GlobalConnectivityPreferences(),
     required this.lanAddresses,
@@ -969,6 +972,7 @@ class IdentityRecord {
   final bool notificationsEnabled;
   final bool androidBackgroundRuntimeEnabled;
   final bool androidBackgroundCallsEnabled;
+  final bool experimentalVoiceCallsEnabled;
   final bool suppressReadReceipts;
   final GlobalConnectivityPreferences connectivity;
   final List<String> lanAddresses;
@@ -1020,6 +1024,7 @@ class IdentityRecord {
     bool? notificationsEnabled,
     bool? androidBackgroundRuntimeEnabled,
     bool? androidBackgroundCallsEnabled,
+    bool? experimentalVoiceCallsEnabled,
     bool? suppressReadReceipts,
     GlobalConnectivityPreferences? connectivity,
     List<String>? lanAddresses,
@@ -1046,6 +1051,8 @@ class IdentityRecord {
           this.androidBackgroundRuntimeEnabled,
       androidBackgroundCallsEnabled:
           androidBackgroundCallsEnabled ?? this.androidBackgroundCallsEnabled,
+      experimentalVoiceCallsEnabled:
+          experimentalVoiceCallsEnabled ?? this.experimentalVoiceCallsEnabled,
       suppressReadReceipts: suppressReadReceipts ?? this.suppressReadReceipts,
       connectivity: connectivity ?? this.connectivity,
       lanAddresses: lanAddresses ?? this.lanAddresses,
@@ -1078,6 +1085,7 @@ class IdentityRecord {
       'notificationsEnabled': notificationsEnabled,
       'androidBackgroundRuntimeEnabled': androidBackgroundRuntimeEnabled,
       'androidBackgroundCallsEnabled': androidBackgroundCallsEnabled,
+      'experimentalVoiceCallsEnabled': experimentalVoiceCallsEnabled,
       'suppressReadReceipts': suppressReadReceipts,
       'connectivity': connectivity.toJson(),
       'lanAddresses': lanAddresses,
@@ -1142,6 +1150,8 @@ class IdentityRecord {
           json['androidBackgroundRuntimeEnabled'] as bool? ?? false,
       androidBackgroundCallsEnabled:
           json['androidBackgroundCallsEnabled'] as bool? ?? false,
+      experimentalVoiceCallsEnabled:
+          json['experimentalVoiceCallsEnabled'] as bool? ?? false,
       suppressReadReceipts: json['suppressReadReceipts'] as bool? ?? false,
       connectivity: json['connectivity'] is Map<String, dynamic>
           ? GlobalConnectivityPreferences.fromJson(
@@ -1563,6 +1573,10 @@ class ContactRecord {
     this.featureCapabilities = const <ApplicationCapability>[],
     this.featureCapabilityVersion = 0,
     this.transportIdentityVerifiedAt,
+    this.pairingState = ContactPairingState.accepted,
+    this.pairingRequestId,
+    this.pairingLastAttemptAt,
+    this.pairingAttempts = 0,
   });
 
   final String accountId;
@@ -1582,6 +1596,10 @@ class ContactRecord {
   final List<ApplicationCapability> featureCapabilities;
   final int featureCapabilityVersion;
   final DateTime? transportIdentityVerifiedAt;
+  final ContactPairingState pairingState;
+  final String? pairingRequestId;
+  final DateTime? pairingLastAttemptAt;
+  final int pairingAttempts;
 
   /// True when this contact arrived with a `displayName` matching an existing
   /// trusted contact AND a different identity public key — i.e. possibly a
@@ -1621,7 +1639,13 @@ class ContactRecord {
   String get shortSafetyNumber => _truncateSafetyNumber(safetyNumber);
 
   bool get isArchived => replacedByDeviceId != null || remoteRemovedAt != null;
-  bool get canSendOutbound => !pendingVerification && !isArchived;
+  bool get canComposeOutbound =>
+      !pendingVerification &&
+      !isArchived &&
+      pairingState != ContactPairingState.declined &&
+      pairingState != ContactPairingState.cancelled;
+  bool get canSendOutbound =>
+      canComposeOutbound && pairingState == ContactPairingState.accepted;
   bool get hasPinnedIrohIdentity =>
       irohEndpointId?.isNotEmpty == true &&
       signingPublicKeyBase64?.isNotEmpty == true;
@@ -1649,6 +1673,12 @@ class ContactRecord {
     List<ApplicationCapability>? featureCapabilities,
     int? featureCapabilityVersion,
     DateTime? transportIdentityVerifiedAt,
+    ContactPairingState? pairingState,
+    String? pairingRequestId,
+    bool clearPairingRequestId = false,
+    DateTime? pairingLastAttemptAt,
+    bool clearPairingLastAttemptAt = false,
+    int? pairingAttempts,
   }) {
     return ContactRecord(
       accountId: accountId,
@@ -1684,6 +1714,14 @@ class ContactRecord {
           featureCapabilityVersion ?? this.featureCapabilityVersion,
       transportIdentityVerifiedAt:
           transportIdentityVerifiedAt ?? this.transportIdentityVerifiedAt,
+      pairingState: pairingState ?? this.pairingState,
+      pairingRequestId: clearPairingRequestId
+          ? null
+          : (pairingRequestId ?? this.pairingRequestId),
+      pairingLastAttemptAt: clearPairingLastAttemptAt
+          ? null
+          : (pairingLastAttemptAt ?? this.pairingLastAttemptAt),
+      pairingAttempts: pairingAttempts ?? this.pairingAttempts,
     );
   }
 
@@ -1780,6 +1818,11 @@ class ContactRecord {
         'transportIdentityVerifiedAt': transportIdentityVerifiedAt!
             .toUtc()
             .toIso8601String(),
+      'pairingState': pairingState.name,
+      if (pairingRequestId != null) 'pairingRequestId': pairingRequestId,
+      if (pairingLastAttemptAt != null)
+        'pairingLastAttemptAt': pairingLastAttemptAt!.toUtc().toIso8601String(),
+      if (pairingAttempts > 0) 'pairingAttempts': pairingAttempts,
     };
   }
 
@@ -1862,6 +1905,14 @@ class ContactRecord {
       transportIdentityVerifiedAt: DateTime.tryParse(
         json['transportIdentityVerifiedAt'] as String? ?? '',
       )?.toUtc(),
+      pairingState: ContactPairingState.values
+          .where((entry) => entry.name == json['pairingState'])
+          .firstOrNull ?? ContactPairingState.accepted,
+      pairingRequestId: json['pairingRequestId'] as String?,
+      pairingLastAttemptAt: DateTime.tryParse(
+        json['pairingLastAttemptAt'] as String? ?? '',
+      )?.toUtc(),
+      pairingAttempts: (json['pairingAttempts'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -3551,6 +3602,32 @@ class PendingContactRequest {
   }
 }
 
+class ContactRemovalTombstone {
+  const ContactRemovalTombstone({
+    required this.deviceId,
+    required this.removedAt,
+    this.pairingRequestId,
+  });
+
+  final String deviceId;
+  final DateTime removedAt;
+  final String? pairingRequestId;
+
+  Map<String, dynamic> toJson() => {
+    'deviceId': deviceId,
+    'removedAt': removedAt.toUtc().toIso8601String(),
+    if (pairingRequestId != null) 'pairingRequestId': pairingRequestId,
+  };
+
+  factory ContactRemovalTombstone.fromJson(Map<String, dynamic> json) =>
+      ContactRemovalTombstone(
+        deviceId: json['deviceId'] as String,
+        removedAt: DateTime.tryParse(json['removedAt'] as String? ?? '')?.toUtc() ??
+            DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+        pairingRequestId: json['pairingRequestId'] as String?,
+      );
+}
+
 /// A user-imported relay list, fetched from an arbitrary URL. Unlike the
 /// signed default-relay manifest these are NOT marked as defaults in the UI;
 /// the UI still shows them by host:port. Imported endpoints can be removed
@@ -3771,6 +3848,7 @@ class VaultSnapshot {
     this.customRelaySources = const <CustomRelaySource>[],
     this.heldUnverifiedEnvelopes = const <HeldEnvelope>[],
     this.pendingContactRequests = const <PendingContactRequest>[],
+    this.contactRemovalTombstones = const <String, ContactRemovalTombstone>{},
     this.transferSessions = const <TransferSession>[],
     this.attachmentCacheReferences = const <AttachmentCacheReference>[],
     this.groupFilePreferences = const <GroupFilePreference>[],
@@ -3847,6 +3925,7 @@ class VaultSnapshot {
   /// Bootstrap contact exchanges from unknown devices awaiting an explicit
   /// local approval decision.
   final List<PendingContactRequest> pendingContactRequests;
+  final Map<String, ContactRemovalTombstone> contactRemovalTombstones;
   final List<TransferSession> transferSessions;
   final List<AttachmentCacheReference> attachmentCacheReferences;
   final List<GroupFilePreference> groupFilePreferences;
@@ -3901,6 +3980,7 @@ class VaultSnapshot {
     List<CustomRelaySource>? customRelaySources,
     List<HeldEnvelope>? heldUnverifiedEnvelopes,
     List<PendingContactRequest>? pendingContactRequests,
+    Map<String, ContactRemovalTombstone>? contactRemovalTombstones,
     List<TransferSession>? transferSessions,
     List<AttachmentCacheReference>? attachmentCacheReferences,
     List<GroupFilePreference>? groupFilePreferences,
@@ -3936,6 +4016,8 @@ class VaultSnapshot {
           heldUnverifiedEnvelopes ?? this.heldUnverifiedEnvelopes,
       pendingContactRequests:
           pendingContactRequests ?? this.pendingContactRequests,
+      contactRemovalTombstones:
+          contactRemovalTombstones ?? this.contactRemovalTombstones,
       transferSessions: transferSessions ?? this.transferSessions,
       attachmentCacheReferences:
           attachmentCacheReferences ?? this.attachmentCacheReferences,
@@ -3982,6 +4064,9 @@ class VaultSnapshot {
       'pendingContactRequests': pendingContactRequests
           .map((entry) => entry.toJson())
           .toList(),
+      'contactRemovalTombstones': contactRemovalTombstones.map(
+        (key, value) => MapEntry(key, value.toJson()),
+      ),
       'transferSessions': transferSessions
           .map((entry) => entry.toJson())
           .toList(),
@@ -4102,6 +4187,16 @@ class VaultSnapshot {
               .cast<Map<String, dynamic>>()
               .map(PendingContactRequest.fromJson)
               .toList(),
+      contactRemovalTombstones: <String, ContactRemovalTombstone>{
+        for (final entry in (json['contactRemovalTombstones'] as Map<String, dynamic>? ?? const <String, dynamic>{}).entries)
+          if (entry.key.isNotEmpty && entry.value is Map<String, dynamic>)
+            entry.key: ContactRemovalTombstone.fromJson(entry.value as Map<String, dynamic>)
+          else if (entry.key.isNotEmpty && entry.value is String)
+            entry.key: ContactRemovalTombstone(
+              deviceId: entry.key,
+              removedAt: DateTime.tryParse(entry.value as String)?.toUtc() ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+            ),
+      },
       transferSessions: (json['transferSessions'] as List<dynamic>? ?? const [])
           .whereType<Map<String, dynamic>>()
           .map(TransferSession.fromJson)
@@ -4125,7 +4220,7 @@ class PairingCodeSnapshot {
   final int secondsRemaining;
 }
 
-enum ContactExchangeStatus { automatic, manualActionRequired }
+enum ContactExchangeStatus { automatic, manualActionRequired, pendingApproval }
 
 class ContactAdditionResult {
   const ContactAdditionResult({
