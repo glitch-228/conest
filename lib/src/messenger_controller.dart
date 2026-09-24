@@ -665,6 +665,9 @@ class MessengerController extends ChangeNotifier {
   // in-flight transfer without probing the filesystem during build.
   final Set<String> _locallyAvailableAttachments = <String>{};
   final Map<String, int> _preparationProgressBytes = <String, int>{};
+  // Preparation runs in a worker isolate and cannot be interrupted safely;
+  // remember cancellation so it discards its spool instead of queuing a send.
+  final Set<String> _canceledTransferPreparations = <String>{};
   final Set<String> _dismissedTransferIds = <String>{};
 
   // Small JPEG posters shipped alongside video offers so the receiver
@@ -6690,6 +6693,7 @@ class MessengerController extends ChangeNotifier {
       ),
     );
     await _saveSnapshotSilently(notify: true);
+    if (_canceledTransferPreparations.remove(attachmentId)) return;
 
     final _PreparedAttachmentSource prepared;
     try {
@@ -6709,12 +6713,42 @@ class MessengerController extends ChangeNotifier {
       );
     } catch (_) {
       _preparationProgressBytes.remove(attachmentId);
+      if (_canceledTransferPreparations.remove(attachmentId)) {
+        _setTransferSessionState(attachmentId, TransferState.canceled);
+        _updateMessageState(
+          contact.deviceId,
+          message.id,
+          DeliveryState.canceled,
+        );
+        await _saveSnapshotSilently(notify: true);
+        return;
+      }
       _removeTransferSession(attachmentId);
       _deleteMessage(contact.deviceId, message.id);
       await _saveSnapshotSilently(notify: true);
       rethrow;
     }
     _preparationProgressBytes.remove(attachmentId);
+    if (_canceledTransferPreparations.remove(attachmentId)) {
+      if (prepared.sourceKind == TransferSourceKind.privateSpool) {
+        try {
+          final root = await _attachmentRoot();
+          final path = p.normalize(p.absolute(prepared.path));
+          if (isContainedPath(root.path, path)) {
+            final file = File(path);
+            if (await file.exists()) await file.delete();
+          }
+        } catch (_) {}
+      }
+      _setTransferSessionState(attachmentId, TransferState.canceled);
+      _updateMessageState(
+        contact.deviceId,
+        message.id,
+        DeliveryState.canceled,
+      );
+      await _saveSnapshotSilently(notify: true);
+      return;
+    }
     _locallyAvailableAttachments.add(attachmentId);
     final descriptor = AttachmentDescriptor(
       id: provisionalDescriptor.id,
@@ -7883,6 +7917,31 @@ class MessengerController extends ChangeNotifier {
       attachmentId: attachmentId,
       paused: false,
     );
+  }
+
+  /// Cancels every active item through the normal inbound/outbound cleanup
+  /// paths, then clears the transfer manager while keeping chat messages and
+  /// successfully downloaded files intact.
+  Future<void> cancelAndClearAllTransfers() async {
+    final snapshots = transferSnapshots;
+    final activeIds = snapshots
+        .where(
+          (entry) =>
+              entry.phase.isActive ||
+              entry.phase == TransferPhase.paused ||
+              entry.phase == TransferPhase.awaitingApproval,
+        )
+        .map((entry) => entry.id)
+        .toList(growable: false);
+    for (final id in activeIds) {
+      try {
+        await cancelTransfer(id);
+      } catch (error) {
+        appendDebugLog('Could not cancel transfer $id while clearing all: $error');
+      }
+    }
+    _dismissedTransferIds.addAll(snapshots.map((entry) => entry.id));
+    notifyListeners();
   }
 
   void clearCompletedTransfers() {
@@ -9952,6 +10011,18 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> cancelTransfer(String attachmentId) async {
+    final session = _transferSessionById(attachmentId);
+    if (session?.state == TransferState.preparing) {
+      _canceledTransferPreparations.add(attachmentId);
+      _setTransferSessionState(attachmentId, TransferState.canceled);
+      final peerId = session!.peerDeviceIds.firstOrNull;
+      if (peerId != null && session.messageId.isNotEmpty) {
+        _updateMessageState(peerId, session.messageId, DeliveryState.canceled);
+      }
+      notifyListeners();
+      await _saveSnapshotSilently(notify: true);
+      return;
+    }
     if (_outboundAttachments.containsKey(attachmentId)) {
       await cancelAttachmentById(attachmentId);
       return;
@@ -12402,16 +12473,7 @@ class MessengerController extends ChangeNotifier {
       case 'resume_all':
         unawaited(resumeAllTransfers());
       case 'cancel_all':
-        final ids = transferSnapshots
-            .where(
-              (entry) =>
-                  entry.phase.isActive || entry.phase == TransferPhase.paused,
-            )
-            .map((entry) => entry.id)
-            .toList(growable: false);
-        for (final id in ids) {
-          unawaited(cancelTransfer(id));
-        }
+        unawaited(cancelAndClearAllTransfers());
     }
   }
 

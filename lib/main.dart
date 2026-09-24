@@ -16231,6 +16231,35 @@ class _TransfersScreen extends StatelessWidget {
     return '${value.inSeconds}s';
   }
 
+  Future<void> _cancelAndClearAll(
+    BuildContext context, {
+    required int activeCount,
+  }) async {
+    if (activeCount > 0) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Cancel and clear all transfers?'),
+          content: Text(
+            'This will cancel $activeCount active transfer${activeCount == 1 ? '' : 's'} and clear the transfer list. Chat messages and completed downloaded files will stay.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Keep transfers'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Cancel and clear'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+    await controller.cancelAndClearAllTransfers();
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -16271,6 +16300,18 @@ class _TransfersScreen extends StatelessWidget {
                     ? () => unawaited(controller.resumeAllTransfers())
                     : null,
                 icon: const Icon(Icons.play_circle_outline),
+              ),
+              IconButton(
+                tooltip: 'Cancel and clear all transfers',
+                onPressed: snapshots.isEmpty
+                    ? null
+                    : () => unawaited(
+                        _cancelAndClearAll(
+                          context,
+                          activeCount: active.length,
+                        ),
+                      ),
+                icon: const Icon(Icons.delete_sweep_outlined),
               ),
               IconButton(
                 tooltip: 'Clear completed',
