@@ -2543,7 +2543,7 @@ void main() {
           payload: (await bob.buildInvite()).encodePayload(),
           codephrase: '',
         );
-        expect(result.exchangeStatus, ContactExchangeStatus.automatic);
+        expect(result.exchangeStatus, ContactExchangeStatus.pendingApproval);
         await _waitForIroh(() => bob.pendingContactRequests.isNotEmpty);
         expect(
           bob.contacts,
@@ -3974,7 +3974,7 @@ void main() {
 
     expect(controller.contacts.single.alias, 'Bob');
     expect(controller.contacts.single.deviceId, invite.deviceId);
-    expect(result.exchangeStatus, ContactExchangeStatus.automatic);
+    expect(result.exchangeStatus, ContactExchangeStatus.pendingApproval);
   });
 
   test(
@@ -4006,7 +4006,7 @@ void main() {
 
       expect(receiver.contacts.single.deviceId, sender.identity!.deviceId);
       expect(receiver.contacts.single.alias, 'Alice');
-      expect(result.exchangeStatus, ContactExchangeStatus.automatic);
+      expect(result.exchangeStatus, ContactExchangeStatus.pendingApproval);
     },
   );
 
@@ -4038,7 +4038,7 @@ void main() {
       );
 
       expect(receiver.contacts.single.deviceId, sender.identity!.deviceId);
-      expect(result.exchangeStatus, ContactExchangeStatus.automatic);
+      expect(result.exchangeStatus, ContactExchangeStatus.pendingApproval);
     },
   );
 
@@ -4250,7 +4250,7 @@ void main() {
         payload: (await bob.buildInvite()).encodePayload(),
         codephrase: '',
       );
-      expect(result.exchangeStatus, ContactExchangeStatus.automatic);
+      expect(result.exchangeStatus, ContactExchangeStatus.pendingApproval);
       await bob.pollNow();
       expect(bob.contacts, isEmpty);
       expect(bob.pendingContactRequests, hasLength(1));
@@ -11681,7 +11681,7 @@ void main() {
           payload: (await bob.buildInvite()).encodePayload(),
           codephrase: '',
         );
-        expect(pairing.exchangeStatus, ContactExchangeStatus.automatic);
+        expect(pairing.exchangeStatus, ContactExchangeStatus.pendingApproval);
         await _waitForIroh(() => bob.pendingContactRequests.isNotEmpty);
         await bob.approvePendingContactRequest(
           bob.pendingContactRequests.single.id,
