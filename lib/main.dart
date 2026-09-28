@@ -6930,13 +6930,13 @@ class _GroupVoiceControls extends StatelessWidget {
             ),
               ],
             ),
-            if (isCurrent && service.playbackError case final error?)
+            if (isCurrent && service.playbackError != null)
               Align(
                 alignment: Alignment.centerLeft,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Text(
-                    'Playback failed: $error',
+                    'Playback failed: ${service.playbackError}',
                     style: TextStyle(color: palette.danger, fontSize: 12),
                   ),
                 ),
@@ -7111,11 +7111,11 @@ class _VoiceComposerPanel extends StatelessWidget {
                           Text(_duration(duration)),
                         ],
                       ),
-                      if (isCurrent && service.playbackError case final error?)
+                      if (isCurrent && service.playbackError != null)
                         Align(
                           alignment: Alignment.centerLeft,
                           child: Text(
-                            'Playback failed: $error',
+                            'Playback failed: ${service.playbackError}',
                             style: TextStyle(color: palette.danger),
                           ),
                         ),
@@ -18385,11 +18385,11 @@ class _AttachmentRow extends StatelessWidget {
                           ),
                         ),
                       ),
-                    if (isCurrent && service.playbackError case final error?)
+                    if (isCurrent && service.playbackError != null)
                       Align(
                         alignment: Alignment.centerLeft,
                         child: Text(
-                          'Playback failed: $error',
+                          'Playback failed: ${service.playbackError}',
                           style: TextStyle(
                             color: palette.danger,
                             fontSize: 12,

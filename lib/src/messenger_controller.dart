@@ -15411,11 +15411,15 @@ class MessengerController extends ChangeNotifier {
         );
       }
       final me = identity;
-      if (featureCapabilityVersion == 1 && updated != null && me != null) {
+      final capabilityContact = updated;
+      if (featureCapabilityVersion == 1 &&
+          capabilityContact != null &&
+          me != null) {
+        final capabilityDeviceId = capabilityContact.deviceId;
         for (final group in _snapshot.groups.where(
           (group) =>
               group.ownerDeviceId == me.deviceId &&
-              group.hasActiveMember(updated.deviceId),
+              group.hasActiveMember(capabilityDeviceId),
         )) {
           final refreshed = _refreshGroupMemberProfiles(group);
           if (_sameGroupMemberProfiles(refreshed, group)) continue;
