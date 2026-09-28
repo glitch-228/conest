@@ -39,6 +39,7 @@ class LinuxMpvPlayer {
         .transform(const LineSplitter())
         .listen(_rememberOutput);
     _socketSubscription = _socket
+        .map((bytes) => bytes.toList())
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen(
