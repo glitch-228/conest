@@ -29,10 +29,12 @@ class LinuxMpvSnapshot {
 class LinuxMpvPlayer {
   LinuxMpvPlayer._(this._process, this._socket, this._socketDirectory) {
     _stdoutSubscription = _process.stdout
+        .map((bytes) => bytes.toList())
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen(_rememberOutput);
     _stderrSubscription = _process.stderr
+        .map((bytes) => bytes.toList())
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen(_rememberOutput);
@@ -75,9 +77,10 @@ class LinuxMpvPlayer {
     final executable = _resolveExecutable();
     final base = Directory.systemTemp;
     final shortName =
-        'conest-mpv-${pid}-${DateTime.now().microsecondsSinceEpoch}';
-    final socketDirectory = Directory(p.join(base.path, shortName));
-    await socketDirectory.create(recursive: true, mode: 0x1c0);
+        'conest-mpv-${pid}-${DateTime.now().microsecondsSinceEpoch}-';
+    // createTemp uses owner-only permissions on POSIX, keeping the local IPC
+    // socket private without relying on a Directory.create mode option.
+    final socketDirectory = await base.createTemp(shortName);
     final socketPath = p.join(socketDirectory.path, 'ipc.sock');
     if (socketPath.length >= _maxSocketPathLength) {
       await socketDirectory.delete(recursive: true);
