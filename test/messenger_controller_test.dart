@@ -1015,14 +1015,28 @@ Future<void> _pairControllers(
     payload: (await second.buildInvite()).encodePayload(),
     codephrase: '',
   );
-  await second.pollNow();
   if (!second.contacts.any(
     (contact) => contact.deviceId == first.identity!.deviceId,
   )) {
-    final request = second.pendingContactRequests.singleWhere(
-      (entry) => entry.senderDeviceId == first.identity!.deviceId,
+    final senderDeviceId = first.identity!.deviceId;
+    var request = second.pendingContactRequests
+        .where((entry) => entry.senderDeviceId == senderDeviceId)
+        .firstOrNull;
+    for (var attempt = 0; attempt < 50 && request == null; attempt++) {
+      await second.pollNow();
+      request = second.pendingContactRequests
+          .where((entry) => entry.senderDeviceId == senderDeviceId)
+          .firstOrNull;
+      if (request == null) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    }
+    expect(
+      request,
+      isNotNull,
+      reason: 'Pairing request should arrive before the helper approves it.',
     );
-    await second.approvePendingContactRequest(request.id);
+    await second.approvePendingContactRequest(request!.id);
   }
   for (var attempt = 0; attempt < 50; attempt++) {
     await first.pollNow();
