@@ -31,6 +31,9 @@ opus = "0.4"
 cpal = "0.18.2"
 nokhwa = { version = "0.10.11", features = ["input-native"] }
 rxing = { version = "0.9.1", default-features = false, features = ["decoders", "encoding_rs", "qrcode"] }
+# Pure-Rust port of WebRTC audio processing (AEC3), the echo canceller used
+# by WebRTC-based voice stacks such as Discord's and Telegram's.
+sonora = "0.2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.22.4"

@@ -29,8 +29,8 @@ const CAPTURE_QUEUE_SAMPLES: usize = FRAME_SAMPLES * 6;
 const PLAYBACK_QUEUE_SAMPLES: usize = FRAME_SAMPLES * 8;
 const OPUS_PACKET_QUEUE: usize = 12;
 const ECHO_REFERENCE_QUEUE_SAMPLES: usize = VOICE_RATE as usize;
-const ECHO_DELAY_SAMPLES: usize = FRAME_SAMPLES * 4;
-const ECHO_FILTER_TAPS: usize = 128;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+const APM_FRAME_SAMPLES: usize = VOICE_RATE as usize / 100; // AEC3 runs on 10 ms.
 const FRAME_PERIOD_NANOS: i128 = 20_000_000;
 const MIN_JITTER_WAIT: Duration = Duration::from_millis(20);
 const MAX_JITTER_WAIT: Duration = Duration::from_millis(100);
@@ -83,44 +83,101 @@ impl AdaptiveBitrate {
     }
 }
 
-/// Bounded normalized-LMS echo reduction using the rendered speaker signal as
-/// its reference. Processing stays on the audio worker, outside device callbacks.
-struct EchoCanceller {
-    history: [f32; ECHO_FILTER_TAPS],
-    weights: [f32; ECHO_FILTER_TAPS],
-    cursor: usize,
+/// Desktop echo cancellation with WebRTC AEC3, the canceller used by
+/// WebRTC-based voice stacks such as Discord's and Telegram's. AEC3 estimates
+/// the speaker-to-microphone delay itself and handles double-talk, so device
+/// latency does not need to match a fixed constant.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+struct EchoProcessor {
+    apm: sonora::AudioProcessing,
+    render: Vec<f32>,
+    render_out: Vec<f32>,
+    capture_out: Vec<f32>,
 }
 
-impl EchoCanceller {
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+impl EchoProcessor {
     fn new() -> Self {
+        let config = sonora::Config {
+            echo_canceller: Some(sonora::config::EchoCanceller::default()),
+            ..Default::default()
+        };
+        let stream = sonora::StreamConfig::new(VOICE_RATE, 1);
         Self {
-            history: [0.0; ECHO_FILTER_TAPS],
-            weights: [0.0; ECHO_FILTER_TAPS],
-            cursor: 0,
+            apm: sonora::AudioProcessing::builder()
+                .config(config)
+                .capture_config(stream)
+                .render_config(stream)
+                .build(),
+            render: Vec::with_capacity(APM_FRAME_SAMPLES),
+            render_out: vec![0.0; APM_FRAME_SAMPLES],
+            capture_out: vec![0.0; APM_FRAME_SAMPLES],
         }
     }
 
-    fn process_sample(&mut self, captured: f32, rendered: f32) -> f32 {
-        self.history[self.cursor] = rendered;
-        self.cursor = (self.cursor + 1) % ECHO_FILTER_TAPS;
-        let mut estimate = 0.0;
-        let mut energy = 1.0e-4;
-        for tap in 0..ECHO_FILTER_TAPS {
-            let index = (self.cursor + ECHO_FILTER_TAPS - 1 - tap) % ECHO_FILTER_TAPS;
-            let reference = self.history[index];
-            estimate += self.weights[tap] * reference;
-            energy += reference * reference;
-        }
-        let error = captured - estimate;
-        if energy > 1.0e-3 {
-            let adaptation = 0.15 * error / energy;
-            for tap in 0..ECHO_FILTER_TAPS {
-                let index = (self.cursor + ECHO_FILTER_TAPS - 1 - tap) % ECHO_FILTER_TAPS;
-                self.weights[tap] =
-                    (self.weights[tap] + adaptation * self.history[index]).clamp(-2.0, 2.0);
+    /// Cancels echo in one capture frame in place. Every rendered sample is
+    /// analyzed before the capture that may contain its echo. While muted the
+    /// canceller still sees both streams so it stays converged, but the frame
+    /// is replaced with silence.
+    fn process_frame(
+        &mut self,
+        frame: &mut [f32],
+        render_reference: &ArrayQueue<f32>,
+        capture_backlog_samples: usize,
+        muted: bool,
+    ) {
+        while let Some(sample) = render_reference.pop() {
+            self.render.push(sample);
+            if self.render.len() == APM_FRAME_SAMPLES {
+                let _ = self
+                    .apm
+                    .process_render_f32(&[&self.render], &mut [&mut self.render_out]);
+                self.render.clear();
             }
         }
-        error.clamp(-1.0, 1.0)
+        // Only a hint: AEC3 runs its own delay estimator. Capture samples
+        // still queued behind this frame are the delay the app adds itself.
+        let backlog_ms = (capture_backlog_samples * 1_000 / VOICE_RATE as usize) as i32;
+        let _ = self.apm.set_stream_delay_ms(backlog_ms);
+        if muted {
+            frame.fill(0.0);
+        }
+        let (chunks, _) = frame.as_chunks_mut::<APM_FRAME_SAMPLES>();
+        for chunk in chunks {
+            if self
+                .apm
+                .process_capture_f32(&[chunk], &mut [&mut self.capture_out])
+                .is_ok()
+                && !muted
+            {
+                chunk.copy_from_slice(&self.capture_out);
+            }
+        }
+    }
+}
+
+/// Android captures with `VOICE_COMMUNICATION`, which enables the platform
+/// echo canceller. Like WebRTC on Android, skip software AEC on top of it.
+#[cfg(target_os = "android")]
+struct EchoProcessor;
+
+#[cfg(target_os = "android")]
+impl EchoProcessor {
+    fn new() -> Self {
+        Self
+    }
+
+    fn process_frame(
+        &mut self,
+        frame: &mut [f32],
+        render_reference: &ArrayQueue<f32>,
+        _capture_backlog_samples: usize,
+        muted: bool,
+    ) {
+        while render_reference.pop().is_some() {}
+        if muted {
+            frame.fill(0.0);
+        }
     }
 }
 
@@ -274,6 +331,7 @@ impl VoiceAudioSession {
                 let capture = capture.clone();
                 let encoded = encoded.clone();
                 let render_reference = render_reference.clone();
+                let muted = muted.clone();
                 let network_congested = network_congested.clone();
                 move || {
                     encode_loop(
@@ -281,6 +339,7 @@ impl VoiceAudioSession {
                         capture,
                         encoded,
                         render_reference,
+                        muted,
                         encoder,
                         network_congested,
                     )
@@ -645,12 +704,13 @@ fn encode_loop(
     capture: Arc<ArrayQueue<f32>>,
     encoded: Arc<ArrayQueue<Vec<u8>>>,
     render_reference: Arc<ArrayQueue<f32>>,
+    muted: Arc<AtomicBool>,
     mut encoder: Encoder,
     network_congested: Arc<AtomicBool>,
 ) {
     let mut frame = vec![0.0_f32; FRAME_SAMPLES];
     let mut bitrate = AdaptiveBitrate::default();
-    let mut echo_canceller = EchoCanceller::new();
+    let mut echo = EchoProcessor::new();
     while running.load(Ordering::Relaxed) {
         let mut count = 0;
         while count < FRAME_SAMPLES {
@@ -664,17 +724,12 @@ fn encode_loop(
                 }
             }
         }
-        while render_reference.len() > ECHO_DELAY_SAMPLES + FRAME_SAMPLES {
-            let _ = render_reference.pop();
-        }
-        for sample in &mut frame {
-            let rendered = if render_reference.len() > ECHO_DELAY_SAMPLES {
-                render_reference.pop().unwrap_or(0.0)
-            } else {
-                0.0
-            };
-            *sample = echo_canceller.process_sample(*sample, rendered);
-        }
+        echo.process_frame(
+            &mut frame,
+            &render_reference,
+            capture.len(),
+            muted.load(Ordering::Relaxed),
+        );
         let queue_depth = if network_congested.load(Ordering::Relaxed) {
             HIGH_QUEUE_WATERMARK
         } else {
@@ -683,10 +738,11 @@ fn encode_loop(
         if let Some(bits_per_second) = bitrate.observe(queue_depth) {
             let _ = encoder.set_bitrate(opus::Bitrate::Bits(bits_per_second as i32));
         }
-        if let Ok(packet) = encoder.encode_vec_float(&frame, MAX_OPUS_PACKET) {
-            if !packet.is_empty() && encoded.push(packet).is_err() {
-                let _ = encoded.pop();
-            }
+        if let Ok(packet) = encoder.encode_vec_float(&frame, MAX_OPUS_PACKET)
+            && !packet.is_empty()
+            && encoded.push(packet).is_err()
+        {
+            let _ = encoded.pop();
         }
     }
 }
@@ -804,8 +860,8 @@ impl PacketJitterBuffer {
 #[cfg(test)]
 mod tests {
     use super::{
-        AdaptiveBitrate, Application, Channels, Decoder, EchoCanceller, Encoder, MAX_JITTER_WAIT,
-        MIN_JITTER_WAIT, PacketJitterBuffer,
+        AdaptiveBitrate, Application, Channels, Decoder, Encoder, MAX_JITTER_WAIT, MIN_JITTER_WAIT,
+        PacketJitterBuffer,
     };
     use std::time::{Duration, Instant};
 
@@ -846,26 +902,101 @@ mod tests {
         assert_eq!(recovery, vec![24_000, 32_000]);
     }
 
-    #[test]
-    fn echo_canceller_reduces_a_correlated_render_signal() {
-        let mut canceller = EchoCanceller::new();
+    /// Runs `seconds` of far-end noise through a simulated room with the
+    /// given speaker-to-microphone delay, optionally mixing in near-end
+    /// speech for the second half. Returns (echo, residual, near, output)
+    /// energies over the final second.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    fn simulate_echo_path(delay_ms: usize, double_talk: bool) -> (f64, f64, f64, f64) {
+        use super::{EchoProcessor, FRAME_SAMPLES, VOICE_RATE};
+        use crossbeam_queue::ArrayQueue;
+
+        let seconds = 6;
+        let total = VOICE_RATE as usize * seconds;
+        let delay = VOICE_RATE as usize * delay_ms / 1_000;
         let mut state = 0x1357_9bdf_u32;
-        let mut uncancelled_energy = 0.0_f64;
-        let mut cancelled_energy = 0.0_f64;
-        for index in 0..24_000 {
+        let mut noise = || {
             state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            let rendered = ((state >> 8) as f32 / 16_777_215.0 - 0.5) * 0.4;
-            let echo = rendered * 0.65;
-            let output = canceller.process_sample(echo, rendered);
-            if index >= 12_000 {
-                uncancelled_energy += f64::from(echo * echo);
-                cancelled_energy += f64::from(output * output);
+            ((state >> 8) as f32 / 16_777_215.0 - 0.5) * 0.4
+        };
+        let far: Vec<f32> = (0..total).map(|_| noise()).collect();
+        let near: Vec<f32> = (0..total)
+            .map(|index| {
+                if double_talk && index >= total / 2 {
+                    (index as f32 * 310.0 * std::f32::consts::TAU / VOICE_RATE as f32).sin() * 0.2
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        let render = ArrayQueue::new(VOICE_RATE as usize);
+        let mut processor = EchoProcessor::new();
+        let measure_from = total - VOICE_RATE as usize;
+        let (mut echo_energy, mut residual_energy) = (0.0_f64, 0.0_f64);
+        let (mut near_energy, mut output_energy) = (0.0_f64, 0.0_f64);
+        for start in (0..total).step_by(FRAME_SAMPLES) {
+            for sample in &far[start..start + FRAME_SAMPLES] {
+                let _ = render.push(*sample);
+            }
+            let echo: Vec<f32> = (start..start + FRAME_SAMPLES)
+                .map(|index| index.checked_sub(delay).map_or(0.0, |at| far[at] * 0.5))
+                .collect();
+            let mut frame: Vec<f32> = echo
+                .iter()
+                .zip(&near[start..start + FRAME_SAMPLES])
+                .map(|(echo, near)| echo + near)
+                .collect();
+            processor.process_frame(&mut frame, &render, 0, false);
+            if start >= measure_from {
+                for (offset, output) in frame.iter().enumerate() {
+                    let near = near[start + offset];
+                    echo_energy += f64::from(echo[offset] * echo[offset]);
+                    residual_energy += f64::from((output - near) * (output - near));
+                    near_energy += f64::from(near * near);
+                    output_energy += f64::from(output * output);
+                }
             }
         }
+        (echo_energy, residual_energy, near_energy, output_energy)
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn aec3_cancels_echo_across_realistic_device_delays() {
+        for delay_ms in [30, 80, 150] {
+            let (echo, residual, _, _) = simulate_echo_path(delay_ms, false);
+            assert!(
+                residual < echo * 0.01,
+                "{delay_ms} ms: residual {residual} should be 20 dB below echo {echo}",
+            );
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn aec3_keeps_near_end_speech_during_double_talk() {
+        let (_, _, near, output) = simulate_echo_path(80, true);
         assert!(
-            cancelled_energy < uncancelled_energy * 0.15,
-            "cancelled energy {cancelled_energy} should be below uncancelled energy {uncancelled_energy}",
+            output > near * 0.25,
+            "near-end speech energy {near} was suppressed to {output}",
         );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn muted_frames_are_silent_while_the_canceller_keeps_running() {
+        use super::{EchoProcessor, FRAME_SAMPLES};
+        use crossbeam_queue::ArrayQueue;
+
+        let render = ArrayQueue::new(FRAME_SAMPLES * 2);
+        for index in 0..FRAME_SAMPLES {
+            let _ = render.push((index as f32 * 0.03).sin() * 0.3);
+        }
+        let mut processor = EchoProcessor::new();
+        let mut frame = vec![0.25_f32; FRAME_SAMPLES];
+        processor.process_frame(&mut frame, &render, 0, true);
+        assert!(frame.iter().all(|sample| *sample == 0.0));
+        assert!(render.is_empty());
     }
 
     #[test]
