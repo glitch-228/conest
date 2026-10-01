@@ -57,7 +57,9 @@ class ConestBackgroundService : Service() {
             }
             ACTION_START_CALL_AUDIO -> {
                 val handle = intent.getLongExtra(EXTRA_CALL_AUDIO_HANDLE, 0L)
-                if (handle != 0L) {
+                // Dart may close (and free) the native handle before this
+                // queued intent runs. Only start the handle still requested.
+                if (handle != 0L && handle == requestedCallAudioHandle) {
                     if (callState == "idle" || callState == "ended") {
                         callState = "connecting"
                     }
@@ -131,6 +133,15 @@ class ConestBackgroundService : Service() {
             )
             engine.start()
             voiceCallAudio = engine
+            requestedSpeakerphone?.let { enabled ->
+                try {
+                    engine.setSpeakerphoneEnabled(enabled)
+                } catch (error: Throwable) {
+                    MainActivity.reportVoiceCallAudioFailure(
+                        error.message ?: "Could not change the voice output."
+                    )
+                }
+            }
         } catch (error: Throwable) {
             stopVoiceCallAudio()
             MainActivity.reportVoiceCallAudioFailure(
@@ -313,14 +324,31 @@ class ConestBackgroundService : Service() {
                 service.transferActive
         }
 
+        // Call audio starts asynchronously through a service intent. These
+        // track what Dart last asked for so a close or route change that
+        // arrives before the service runs is not lost or misapplied.
+        @Volatile
+        private var requestedCallAudioHandle = 0L
+
+        @Volatile
+        private var requestedSpeakerphone: Boolean? = null
+
+        fun requestVoiceCallMedia(handle: Long) {
+            requestedCallAudioHandle = handle
+            requestedSpeakerphone = null
+        }
+
         fun setVoiceCallSpeakerphoneEnabled(enabled: Boolean): Boolean {
-            val service = currentInstance ?: return false
-            val engine = service.voiceCallAudio ?: return false
-            engine.setSpeakerphoneEnabled(enabled)
+            val engine = currentInstance?.voiceCallAudio
+            if (engine == null && requestedCallAudioHandle == 0L) return false
+            requestedSpeakerphone = enabled
+            engine?.setSpeakerphoneEnabled(enabled)
             return true
         }
 
         fun stopVoiceCallMedia() {
+            requestedCallAudioHandle = 0L
+            requestedSpeakerphone = null
             currentInstance?.stopVoiceCallAudio()
         }
     }

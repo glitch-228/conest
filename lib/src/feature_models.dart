@@ -9,8 +9,12 @@ enum ApplicationCapability {
   groupFileCaptionsV2,
 }
 
+/// Upper bound on an advertised capability list. Newer builds may advertise
+/// names this build does not know; those are ignored rather than rejected.
+const int maxAdvertisedApplicationCapabilities = 64;
+
 List<ApplicationCapability> applicationCapabilitiesFromJson(Object? value) {
-  if (value is! List || value.length > ApplicationCapability.values.length) {
+  if (value is! List || value.length > maxAdvertisedApplicationCapabilities) {
     return const <ApplicationCapability>[];
   }
   final result = <ApplicationCapability>{};

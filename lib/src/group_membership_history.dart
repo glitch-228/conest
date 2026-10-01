@@ -166,6 +166,13 @@ class GroupMembershipHistory {
   final _records = <String, GroupMembershipRecord>{};
   final _heads = <String>{};
   final _identities = <String, GroupMemberProfile>{};
+  // A record's parents must be imported before it and never change, so its
+  // ancestor set and departures are fixed once computed. canReceive runs per
+  // history event, so these avoid re-walking the DAG and re-decoding groups.
+  final _ancestorCache = <String, Set<String>>{};
+  final _departureCache = <String, Map<String, List<String>>>{};
+  final _activeCache = <String, Set<String>>{};
+  final _departureCheckpointCache = <String, GroupHistoryCheckpoint?>{};
   Future<void> _tail = Future.value();
 
   bool get hasConflict => _heads.length > 1;
@@ -363,13 +370,99 @@ class GroupMembershipHistory {
   }
 
   Set<String> _ancestors(String id) {
+    final cached = _ancestorCache[id];
+    if (cached != null) return cached;
     final result = <String>{};
     final pending = [id];
     while (pending.isNotEmpty) {
       final next = pending.removeLast();
       if (result.add(next)) pending.addAll(_records[next]?.parents ?? const []);
     }
-    return result;
+    // Unknown IDs may still arrive later with parents; only cache records.
+    if (!_records.containsKey(id)) return result;
+    return _ancestorCache[id] = Set.unmodifiable(result);
+  }
+
+  /// Devices active in some parent but not in [recordId], each mapped to the
+  /// parents in which it was still active.
+  Map<String, List<String>> _departures(String recordId) =>
+      _departureCache.putIfAbsent(recordId, () {
+        final remaining = _active(recordId);
+        final result = <String, List<String>>{};
+        for (final parentId in _records[recordId]!.parents) {
+          for (final device in _active(parentId)) {
+            if (!remaining.contains(device)) {
+              (result[device] ??= <String>[]).add(parentId);
+            }
+          }
+        }
+        return result;
+      });
+
+  Set<String> _active(String recordId) => _activeCache.putIfAbsent(
+    recordId,
+    () => Set.unmodifiable(_records[recordId]!.group.activeMemberDeviceIds),
+  );
+
+  /// The signed cutoff for [author]'s departure at [removalId], as seen from
+  /// [headId]. Removal records created before departure checkpoints existed
+  /// carry none; for those, the earliest later record signed while [author]
+  /// stayed departed supplies it. Admission records already capture every
+  /// author's journal head, and owners sign a dedicated record otherwise, so
+  /// authentic pre-removal history stays retrievable while anything signed
+  /// past the cutoff is still rejected.
+  GroupHistoryCheckpoint? _departureCheckpoint(
+    String removalId,
+    String author,
+    String headId,
+  ) {
+    final direct = _records[removalId]!.checkpoints[author];
+    if (direct != null) return direct;
+    final key = '$headId\n$removalId\n$author';
+    if (_departureCheckpointCache.containsKey(key)) {
+      return _departureCheckpointCache[key];
+    }
+    GroupHistoryCheckpoint? earliest;
+    for (final id in _ancestors(headId)) {
+      if (id == removalId || !_isAncestor(removalId, id)) continue;
+      final attested = _records[id]!.checkpoints[author];
+      if (attested == null ||
+          (earliest != null && attested.sequence >= earliest.sequence)) {
+        continue;
+      }
+      // A cutoff signed after a readmission could cover the later epoch.
+      if (_staysDeparted(removalId, author, id)) earliest = attested;
+    }
+    return _departureCheckpointCache[key] = earliest;
+  }
+
+  /// Whether [author] is inactive in every record from [removalId] through
+  /// [recordId].
+  bool _staysDeparted(String removalId, String author, String recordId) =>
+      !_ancestors(recordId).any(
+        (id) =>
+            id != removalId &&
+            _isAncestor(removalId, id) &&
+            _active(id).contains(author),
+      );
+
+  /// Departed authors whose removal has no signed cutoff from the current
+  /// head, and who stayed departed so a new record can still supply one.
+  /// Their history from before removal stays rejected until a record carries
+  /// a cutoff; group owners sign that record from their own journal.
+  Set<String> departuresMissingCheckpoints() {
+    final head = current;
+    if (head == null) return const <String>{};
+    final missing = <String>{};
+    for (final recordId in _ancestors(head.id)) {
+      for (final author in _departures(recordId).keys) {
+        if (_staysDeparted(recordId, author, head.id) &&
+            _departureCheckpoint(recordId, author, head.id) == null) {
+          missing.add(author);
+        }
+      }
+    }
+    return missing;
   }
 
   bool _isBeforeRemovalFences(
@@ -378,17 +471,19 @@ class GroupMembershipHistory {
   ) {
     final ancestors = _ancestors(head.id);
     for (final recordId in ancestors) {
-      final removal = _records[recordId]!;
-      if (!removal.group.hasActiveMember(event.authorDeviceId) &&
-          _isAncestor(event.membershipId, removal.id) &&
-          removal.parents.any((parentId) {
-            final parent = _records[parentId]!;
-            return _isAncestor(event.membershipId, parentId) &&
-                parent.group.hasActiveMember(event.authorDeviceId);
-          })) {
-        final checkpoint = removal.checkpoints[event.authorDeviceId];
-        // Older removal records have no signed departure checkpoint. Reject
-        // new-carried events at that boundary rather than guessing from time.
+      final departedFrom = _departures(recordId)[event.authorDeviceId];
+      if (departedFrom != null &&
+          _isAncestor(event.membershipId, recordId) &&
+          departedFrom.any(
+            (parentId) => _isAncestor(event.membershipId, parentId),
+          )) {
+        final checkpoint = _departureCheckpoint(
+          recordId,
+          event.authorDeviceId,
+          head.id,
+        );
+        // Without any signed cutoff, reject new-carried events at the removal
+        // boundary rather than guessing from time.
         if (checkpoint == null || event.sequence > checkpoint.sequence) {
           return false;
         }

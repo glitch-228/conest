@@ -309,6 +309,29 @@ void main() {
     expect(await unrelated.readAsString(), 'user data');
   });
 
+  test('capability lists from newer builds keep known names', () {
+    final advertised = <Object?>[
+      'futureFeatureV1',
+      'groupPollsV1',
+      'anotherFutureFeatureV3',
+      'voiceCallsV1',
+      'groupFileCaptionsV2',
+      'yetAnotherFeatureV2',
+      42,
+    ];
+    expect(applicationCapabilitiesFromJson(advertised), <ApplicationCapability>[
+      ApplicationCapability.groupPollsV1,
+      ApplicationCapability.voiceCallsV1,
+      ApplicationCapability.groupFileCaptionsV2,
+    ]);
+    expect(
+      applicationCapabilitiesFromJson(
+        List<String>.filled(maxAdvertisedApplicationCapabilities + 1, 'x'),
+      ),
+      isEmpty,
+    );
+  });
+
   test('folders and scheduled messages round trip with UTC instants', () {
     final now = DateTime.utc(2026, 9, 22, 18);
     final folder = ChatFolder(

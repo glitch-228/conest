@@ -264,6 +264,16 @@ class GroupHistoryCoordinator {
       (await _replica(id)).membership.current?.historyVisibility ??
       GroupHistoryVisibility.allRetained;
 
+  /// Whether this device can sign a cutoff for an earlier removal that has
+  /// none, because its journal holds history from that departed author.
+  Future<bool> needsDepartureCheckpoints(String id) async {
+    final replica = await _replica(id);
+    for (final author in replica.membership.departuresMissingCheckpoints()) {
+      if (await replica.journal.authorHead(author) != null) return true;
+    }
+    return false;
+  }
+
   Future<GroupHistoryEvent?> prepareMembership(
     GroupRecord snapshot, {
     GroupHistoryVisibility? visibility,
@@ -290,9 +300,9 @@ class GroupHistoryCoordinator {
     );
     final departedMembers = current == null
         ? const <String>{}
-        : current.group.activeMemberDeviceIds
-              .toSet()
-              .difference(snapshot.activeMemberDeviceIds.toSet());
+        : current.group.activeMemberDeviceIds.toSet().difference(
+            snapshot.activeMemberDeviceIds.toSet(),
+          );
     // Admission and departure fences use signed author-sequence checkpoints,
     // never wall clocks. New admissions need a boundary for every author;
     // removals need at least the departing author's last retained event.
@@ -321,6 +331,22 @@ class GroupHistoryCoordinator {
             eventId: head.eventId,
           );
         }
+      }
+    }
+    // Earlier removals may predate departure checkpoints. Any record signed
+    // now carries this journal's head for those authors, so their authentic
+    // pre-removal history becomes retrievable again (see
+    // GroupMembershipHistory._departureCheckpoint).
+    for (final author in history.departuresMissingCheckpoints()) {
+      if (snapshot.hasActiveMember(author) || checkpoints.containsKey(author)) {
+        continue;
+      }
+      final head = await replica.journal.authorHead(author);
+      if (head != null) {
+        checkpoints[author] = GroupHistoryCheckpoint(
+          sequence: head.sequence,
+          eventId: head.eventId,
+        );
       }
     }
     final proof = await _sign(

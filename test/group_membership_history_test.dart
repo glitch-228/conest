@@ -444,6 +444,101 @@ void main() {
   );
 
   test(
+    'a later signed cutoff restores legacy pre-removal history only',
+    () async {
+      final root = await membership(members: ['alice', 'bob', 'carol']);
+      final preRemoval = await message(root, author: 'bob');
+      final legacyRemoval = await membership(
+        parents: [root],
+        members: ['alice', 'carol'],
+      );
+      final postRemoval = await message(root, author: 'bob');
+      final index = history();
+      await index.import(root);
+      await index.import(legacyRemoval);
+      expect(index.departuresMissingCheckpoints(), {'bob'});
+      expect(
+        await index.canReceive(preRemoval, recipientDeviceId: 'carol'),
+        isFalse,
+      );
+
+      // The owner signs a record without member changes that carries Bob's
+      // journal head, as an admission record would.
+      final cutoff = await membership(
+        parents: [legacyRemoval],
+        members: ['alice', 'carol'],
+        checkpoints: {
+          'bob': GroupHistoryCheckpoint(
+            sequence: preRemoval.sequence,
+            eventId: preRemoval.eventId,
+          ),
+        },
+      );
+      await index.import(cutoff);
+      expect(index.departuresMissingCheckpoints(), isEmpty);
+      expect(
+        await index.canReceive(preRemoval, recipientDeviceId: 'carol'),
+        isTrue,
+      );
+      expect(
+        await index.canReceive(postRemoval, recipientDeviceId: 'carol'),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'a cutoff signed after readmission does not fence the earlier removal',
+    () async {
+      final root = await membership(members: ['alice', 'bob']);
+      await message(root, author: 'bob');
+      final legacyRemoval = await membership(
+        parents: [root],
+        members: ['alice'],
+      );
+      final readmitted = await membership(
+        parents: [legacyRemoval],
+        members: ['alice', 'bob'],
+      );
+      final laterEpoch = await message(readmitted, author: 'bob');
+      final secondRemoval = await membership(
+        parents: [readmitted],
+        members: ['alice'],
+        checkpoints: {
+          'bob': GroupHistoryCheckpoint(
+            sequence: laterEpoch.sequence,
+            eventId: laterEpoch.eventId,
+          ),
+        },
+      );
+      // Bob forges an old-epoch event below the later cutoff's sequence.
+      final forged = await GroupHistoryEvent.sign(
+        groupId: 'group-1',
+        authorAccountId: 'account-bob',
+        authorDeviceId: 'bob',
+        keyPair: keys['bob']!,
+        sequence: 1,
+        previousEventId: null,
+        lamport: ++lamport,
+        membershipId: root.id,
+        kind: GroupEventKind.message,
+        payload: {'text': 'forged into the first epoch'},
+      );
+      final index = history();
+      for (final record in [root, legacyRemoval, readmitted, secondRemoval]) {
+        await index.import(record);
+      }
+      expect(
+        await index.canReceive(forged, recipientDeviceId: 'alice'),
+        isFalse,
+      );
+      // No new record could fence the first epoch, so owners must not keep
+      // signing one.
+      expect(index.departuresMissingCheckpoints(), isEmpty);
+    },
+  );
+
+  test(
     'admins can manage ordinary members but cannot extend their authority',
     () async {
       final root = await membership(

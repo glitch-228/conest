@@ -1071,7 +1071,7 @@ class MessengerController extends ChangeNotifier {
       );
     }
     if (signal.action == 'invite' &&
-        (contact.featureCapabilityVersion != 1 ||
+        (contact.featureCapabilityVersion < 1 ||
             !contact.featureCapabilities.contains(
               ApplicationCapability.voiceCallsV1,
             ))) {
@@ -1805,6 +1805,7 @@ class MessengerController extends ChangeNotifier {
   final _groupHistoryTimers = <String, Timer>{};
   final _groupHistoryLastSync = <String, DateTime>{};
   final _groupLegacyMigrations = <String, Future<void>>{};
+  final _groupDepartureCheckpointChecks = <String>{};
   final _groupProjectionRestores = <String, Future<void>>{};
 
   /// Called on conversation open and after an interface change. Every active
@@ -1820,6 +1821,7 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     _migrateLegacyGroupHistory(group);
+    _signLegacyGroupDepartureCheckpoints(group);
     _restoreJournalBackedGroupProjection(group);
     _restoreRetainedGroupFileSessions(group);
     for (final peer in group.activeMemberDeviceIds) {
@@ -1845,6 +1847,55 @@ class MessengerController extends ChangeNotifier {
         })
         .whenComplete(() => _groupProjectionRestores.remove(group.groupId));
     _groupProjectionRestores[group.groupId] = restore;
+  }
+
+  /// Removals signed by older builds carry no departure cutoff, so every
+  /// pre-removal event from that member is rejected. The owner signs one
+  /// membership record without member changes that carries the cutoff from
+  /// its own journal, restoring that history for all members, including
+  /// later joiners, while events past the cutoff stay rejected.
+  void _signLegacyGroupDepartureCheckpoints(GroupRecord group) {
+    final me = _snapshot.identity;
+    if (me == null ||
+        group.ownerDeviceId != me.deviceId ||
+        group.isDissolved ||
+        !_groupDepartureCheckpointChecks.add(group.groupId)) {
+      return;
+    }
+    unawaited(() async {
+      try {
+        if (!await _groupHistory.needsDepartureCheckpoints(group.groupId)) {
+          return;
+        }
+        final current = _groupById(group.groupId);
+        if (_disposed ||
+            current == null ||
+            current.ownerDeviceId != me.deviceId ||
+            current.isDissolved) {
+          return;
+        }
+        await _groupHistory.prepareMembership(current);
+        final updated = current.copyWith(
+          membershipVersion: current.membershipVersion + 1,
+          updatedAt: _now(),
+        );
+        await _groupHistory.prepareMembership(updated);
+        _upsertGroup(updated);
+        await _saveSnapshotSilently(notify: true);
+        await _sendGroupMembershipUpdate(
+          updated,
+          targetDeviceIds: updated.activeMemberDeviceIds
+              .where((device) => device != me.deviceId)
+              .toList(),
+          reason: 'departure_checkpoints',
+        );
+      } catch (error) {
+        _groupDepartureCheckpointChecks.remove(group.groupId);
+        if (!_disposed) {
+          appendDebugLog('Group departure checkpoints waiting: $error');
+        }
+      }
+    }());
   }
 
   void _migrateLegacyGroupHistory(GroupRecord group) {
@@ -9148,11 +9199,6 @@ class MessengerController extends ChangeNotifier {
     for (final message in messagesForGroup(groupId)) {
       final vote = message.pollVote;
       if (vote?.pollId != pollId ||
-          !_groupMemberSupportsFeature(
-            _requireGroup(groupId),
-            vote!.voterDeviceId,
-            ApplicationCapability.groupPollsV1,
-          ) ||
           (message.pollClosed && vote!.optionIndexes.isEmpty)) {
         continue;
       }
@@ -9205,8 +9251,7 @@ class MessengerController extends ChangeNotifier {
 
   PollProjection? groupPollProjection(String groupId, String pollId) {
     final messages = messagesForGroup(groupId);
-    final group = _groupById(groupId);
-    if (group == null) return null;
+    if (_groupById(groupId) == null) return null;
     final definitions = messages
         .where((message) => message.poll?.id == pollId)
         .map((message) => message.poll!)
@@ -9217,14 +9262,11 @@ class MessengerController extends ChangeNotifier {
         )) {
       return null;
     }
+    // A signed poll or vote event is itself proof that its author's build
+    // supports polls, so projection does not consult advertised capabilities.
+    // Profiles saved before capability exchange, and departed members, have
+    // none, and gating on them would hide polls that already shipped.
     final poll = definitions.first;
-    if (!_groupMemberSupportsFeature(
-      group,
-      poll.creatorDeviceId,
-      ApplicationCapability.groupPollsV1,
-    )) {
-      return null;
-    }
     final latestVoteMessages = <String, ChatMessage>{};
     final voteMessagesByEventId = <String, ChatMessage>{};
     var closedAt = poll.closedAt;
@@ -9234,13 +9276,6 @@ class MessengerController extends ChangeNotifier {
       final vote = message.pollVote;
       if (vote?.pollId != pollId) continue;
       final currentVote = vote!;
-      if (!_groupMemberSupportsFeature(
-        group,
-        currentVote.voterDeviceId,
-        ApplicationCapability.groupPollsV1,
-      )) {
-        continue;
-      }
       if (!(message.pollClosed && currentVote.optionIndexes.isEmpty)) {
         final eventId = message.groupHistoryEventId;
         if (eventId != null) voteMessagesByEventId[eventId] = message;
@@ -9360,7 +9395,7 @@ class MessengerController extends ChangeNotifier {
     if (deviceId == identity?.deviceId) return true;
     final profile = group.memberProfileFor(deviceId);
     return profile != null &&
-        profile.featureCapabilityVersion == 1 &&
+        profile.featureCapabilityVersion >= 1 &&
         profile.featureCapabilities.contains(feature);
   }
 
@@ -11662,14 +11697,26 @@ class MessengerController extends ChangeNotifier {
               'Scheduled group attachment is no longer available.',
             );
           }
+          // Older members reject captioned manifests. Deliver the scheduled
+          // text as a follow-up message instead of failing the whole item.
+          final captionSupported = _groupSupportsFeatureForAllOtherMembers(
+            _requireGroup(entry.conversationId),
+            ApplicationCapability.groupFileCaptionsV2,
+          );
           dispatchedMessageId = await publishGroupFile(
             groupId: entry.conversationId,
             path: path,
             fileName: entry.attachmentFileName ?? 'attachment',
             mimeType: entry.attachmentMimeType ?? 'application/octet-stream',
-            caption: entry.body,
+            caption: captionSupported ? entry.body : '',
             scheduledOperationId: entry.id,
           );
+          if (!captionSupported) {
+            await sendGroupMessage(
+              groupId: entry.conversationId,
+              body: entry.body,
+            );
+          }
         } else {
           await sendGroupMessage(
             groupId: entry.conversationId,
@@ -12993,7 +13040,7 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     if (signal.action == 'invite' &&
-        (contact.featureCapabilityVersion != 1 ||
+        (contact.featureCapabilityVersion < 1 ||
             !contact.featureCapabilities.contains(
               ApplicationCapability.voiceCallsV1,
             ))) {
@@ -15008,15 +15055,22 @@ class MessengerController extends ChangeNotifier {
         final decodedExchange = jsonDecode(payload);
         if (decodedExchange is Map<String, dynamic> &&
             decodedExchange.containsKey('exchangeVersion')) {
-          if (decodedExchange['exchangeVersion'] != 1) return;
+          // Versions only grow additively: newer peers keep these fields and
+          // their meaning, and an incompatible change must use new field
+          // names. Accept any version >= 1 so profile and route updates from
+          // newer builds are not dropped. Capability names carry their own
+          // feature versions; unknown names are ignored.
+          final exchangeVersion = decodedExchange['exchangeVersion'];
+          if (exchangeVersion is! int || exchangeVersion < 1) return;
           final invitePayload = decodedExchange['invitePayload'];
           final version = decodedExchange['featureCapabilityVersion'];
           final capabilities = decodedExchange['featureCapabilities'];
           final request = decodedExchange['requestPeerCapabilities'];
           if (invitePayload is! String ||
-              version != 1 ||
+              version is! int ||
+              version < 1 ||
               capabilities is! List ||
-              capabilities.length > ApplicationCapability.values.length ||
+              capabilities.length > maxAdvertisedApplicationCapabilities ||
               (request != null && request is! bool)) {
             return;
           }

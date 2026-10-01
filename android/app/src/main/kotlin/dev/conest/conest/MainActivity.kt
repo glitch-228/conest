@@ -372,6 +372,7 @@ class MainActivity : FlutterActivity() {
             return
         }
         try {
+            ConestBackgroundService.requestVoiceCallMedia(handle)
             startConestForegroundService(
                 Intent(this, ConestBackgroundService::class.java).apply {
                     action = ConestBackgroundService.ACTION_START_CALL_AUDIO
@@ -380,6 +381,7 @@ class MainActivity : FlutterActivity() {
             )
             result.success(true)
         } catch (error: Throwable) {
+            ConestBackgroundService.stopVoiceCallMedia()
             result.error(
                 "audio_start_failed",
                 error.message ?: "Could not start Android voice audio.",

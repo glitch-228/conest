@@ -142,6 +142,13 @@ class FfiNativeIrohBridge implements NativeIrohDatagramBridge {
   // attachment range, so replacing the worker is safe and bounded.
   static const Duration _sendWorkerTimeout = Duration(seconds: 20);
 
+  // Voice datagrams get their own worker after the reliable send workers so a
+  // frame never queues behind an attachment range, and replacing a stalled
+  // media worker cannot drop reliable sends. The final worker stays reserved
+  // for inbound polling.
+  static const int _mediaWorkerIndex = _sendWorkerCount;
+  static const Duration _datagramSendTimeout = Duration(milliseconds: 150);
+
   final String _libraryPath;
   final StreamController<IrohBridgeInbound> _inbound =
       StreamController<IrohBridgeInbound>.broadcast();
@@ -152,7 +159,7 @@ class FfiNativeIrohBridge implements NativeIrohDatagramBridge {
   bool _polling = false;
   final List<Isolate> _sendWorkerIsolates = <Isolate>[];
   final List<SendPort> _sendWorkerPorts = <SendPort>[];
-  final Set<int> _busyDatagramWorkers = <int>{};
+  bool _mediaWorkerBusy = false;
   int _nextSendWorker = 0;
 
   static FfiNativeIrohBridge? tryCreate() {
@@ -188,7 +195,7 @@ class FfiNativeIrohBridge implements NativeIrohDatagramBridge {
     );
     _handle = started.handle;
     try {
-      for (var index = 0; index < _sendWorkerCount + 1; index++) {
+      for (var index = 0; index < _sendWorkerCount + 2; index++) {
         final worker = await _spawnIrohSendWorker(libraryPath, index);
         _sendWorkerIsolates.add(worker.isolate);
         _sendWorkerPorts.add(worker.port);
@@ -272,18 +279,11 @@ class FfiNativeIrohBridge implements NativeIrohDatagramBridge {
     if (_sendWorkerPorts.isEmpty) {
       throw StateError('Iroh send workers are not running.');
     }
-    int? workerIndex;
-    for (var offset = 0; offset < _sendWorkerCount; offset++) {
-      final candidate = (_nextSendWorker + offset) % _sendWorkerCount;
-      if (_busyDatagramWorkers.add(candidate)) {
-        workerIndex = candidate;
-        _nextSendWorker = (candidate + 1) % _sendWorkerCount;
-        break;
-      }
+    if (_mediaWorkerBusy) {
+      throw StateError('Voice datagram worker is busy; dropping this frame.');
     }
-    if (workerIndex == null) {
-      throw StateError('Voice datagram workers are busy; dropping this frame.');
-    }
+    _mediaWorkerBusy = true;
+    const workerIndex = _mediaWorkerIndex;
     final worker = _sendWorkerPorts[workerIndex];
     final reply = ReceivePort();
     final response = reply.first;
@@ -296,7 +296,7 @@ class FfiNativeIrohBridge implements NativeIrohDatagramBridge {
         TransferableTypedData.fromList(<Uint8List>[bytes]),
         allowRelay,
       ]);
-      final result = await response.timeout(const Duration(milliseconds: 150));
+      final result = await response.timeout(_datagramSendTimeout);
       if (result is! List<Object?> ||
           result.length < 2 ||
           result.first != true) {
@@ -314,16 +314,16 @@ class FfiNativeIrohBridge implements NativeIrohDatagramBridge {
         accepted: value['accepted'] as bool? ?? false,
       );
     } on TimeoutException {
-      // Native datagram reconnects run in the background. Replace any worker
-      // that still exceeds the bounded send budget so it cannot reserve a
-      // datagram slot for every following frame.
+      // Native datagram reconnects run in the background. Replace a media
+      // worker that still exceeds the bounded send budget so it cannot hold
+      // every following frame; only expired voice frames are queued on it.
       await _replaceTimedOutSendWorker(workerIndex, worker);
       throw TimeoutException(
         'Iroh native media worker did not release its expired frame.',
-        const Duration(milliseconds: 150),
+        _datagramSendTimeout,
       );
     } finally {
-      _busyDatagramWorkers.remove(workerIndex);
+      _mediaWorkerBusy = false;
       reply.close();
     }
   }

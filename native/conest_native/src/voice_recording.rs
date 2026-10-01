@@ -198,6 +198,20 @@ fn record_loop(
     if valid_samples == 0 {
         bail!("Microphone produced no audio samples");
     }
+    // Opus output lags input by PRE_SKIP samples. Encode silent frames until
+    // every captured sample is decodable, so the end granule (RFC 7845 §4)
+    // never claims more audio than the stream holds and the tail is kept.
+    while encoded_samples < PRE_SKIP + valid_samples {
+        frame.fill(0.0);
+        let packet_len = encoder
+            .encode_float(&frame, &mut packet_buffer)
+            .context("Could not flush voice-message audio")?;
+        if let Some(packet) = pending_packet.replace(packet_buffer[..packet_len].to_vec()) {
+            ogg.write_packet(&packet, encoded_samples, false)
+                .context("Could not write Ogg audio page")?;
+        }
+        encoded_samples += FRAME_SAMPLES as u64;
+    }
     if let Some(packet) = pending_packet {
         ogg.write_packet(&packet, PRE_SKIP + valid_samples, true)
             .context("Could not finish Ogg audio stream")?;
@@ -270,7 +284,7 @@ fn open_input_stream(
     Ok(stream)
 }
 
-fn capture_samples<T: IntoPcm>(
+fn capture_samples<T: ToPcm>(
     data: &[T],
     channels: usize,
     rate: u32,
@@ -282,7 +296,7 @@ fn capture_samples<T: IntoPcm>(
         return;
     }
     for frame in data.chunks_exact(channels) {
-        let mono = frame.iter().map(|sample| sample.into_pcm()).sum::<f32>() / channels as f32;
+        let mono = frame.iter().map(|sample| sample.to_pcm()).sum::<f32>() / channels as f32;
         *phase += RATE as u64;
         while *phase >= rate as u64 {
             *phase -= rate as u64;
@@ -296,24 +310,24 @@ fn capture_samples<T: IntoPcm>(
     }
 }
 
-trait IntoPcm {
-    fn into_pcm(&self) -> f32;
+trait ToPcm {
+    fn to_pcm(&self) -> f32;
 }
 
-impl IntoPcm for f32 {
-    fn into_pcm(&self) -> f32 {
+impl ToPcm for f32 {
+    fn to_pcm(&self) -> f32 {
         (*self).clamp(-1.0, 1.0)
     }
 }
 
-impl IntoPcm for i16 {
-    fn into_pcm(&self) -> f32 {
+impl ToPcm for i16 {
+    fn to_pcm(&self) -> f32 {
         *self as f32 / 32768.0
     }
 }
 
-impl IntoPcm for u16 {
-    fn into_pcm(&self) -> f32 {
+impl ToPcm for u16 {
+    fn to_pcm(&self) -> f32 {
         (*self as f32 - 32768.0) / 32768.0
     }
 }
@@ -436,11 +450,13 @@ fn ogg_crc(page: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        Application, Channels, Encoder, OggOpusWriter, PRE_SKIP, RATE, capture_samples, ogg_crc,
+        Application, Channels, Encoder, FRAME_SAMPLES, OggOpusWriter, PRE_SKIP, RATE,
+        capture_samples, ogg_crc, record_loop,
     };
     use crossbeam_queue::ArrayQueue;
+    use std::fs::{self, File};
     use std::io::Cursor;
-    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, atomic::AtomicBool};
 
     #[test]
     fn capture_converts_supported_sample_formats_without_losing_samples() {
@@ -514,5 +530,48 @@ mod tests {
             page_index += 1;
         }
         assert_eq!(page_index, 3);
+    }
+
+    #[test]
+    fn final_granule_never_exceeds_encoded_audio() {
+        // A last frame holding more than FRAME_SAMPLES - PRE_SKIP samples needs
+        // one silent flush frame before the end granule is decodable.
+        let valid = FRAME_SAMPLES + 700;
+        let queue = Arc::new(ArrayQueue::new(valid));
+        for sample in 0..valid {
+            let _ = queue.push((sample as f32 * 0.05).sin() * 0.2);
+        }
+        let path =
+            std::env::temp_dir().join(format!("conest-voice-granule-{}.ogg", std::process::id()));
+        let mut ogg = OggOpusWriter::new(File::create(&path).unwrap(), 9);
+        ogg.write_headers().unwrap();
+        record_loop(Arc::new(AtomicBool::new(false)), queue, ogg).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let _ = fs::remove_file(&path);
+
+        let mut offset = 0;
+        let mut audio_packets = 0_u64;
+        let mut final_granule = None;
+        let mut page_index = 0;
+        while offset < bytes.len() {
+            let segment_count = bytes[offset + 26] as usize;
+            let body_len: usize = bytes[offset + 27..offset + 27 + segment_count]
+                .iter()
+                .map(|length| *length as usize)
+                .sum();
+            if page_index >= 2 {
+                audio_packets += 1;
+                if bytes[offset + 5] & 0x04 != 0 {
+                    final_granule = Some(u64::from_le_bytes(
+                        bytes[offset + 6..offset + 14].try_into().unwrap(),
+                    ));
+                }
+            }
+            offset += 27 + segment_count + body_len;
+            page_index += 1;
+        }
+        let final_granule = final_granule.expect("stream must end with EOS");
+        assert_eq!(final_granule, PRE_SKIP + valid as u64);
+        assert!(final_granule <= audio_packets * FRAME_SAMPLES as u64);
     }
 }

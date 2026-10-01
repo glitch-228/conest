@@ -2499,6 +2499,64 @@ void main() {
   }
 
   test(
+    'native Iroh direct contact adding works without LAN or any relay',
+    () async {
+      final relay = _FakeRelayClient()
+        ..shouldFailStore = (_, _, _, _, _) => true;
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        internetRelayHost: null,
+        transportRegistryFactory: _directNativeIrohRegistry,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        internetRelayHost: null,
+        transportRegistryFactory: _directNativeIrohRegistry,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      for (final peer in [alice, bob]) {
+        await peer.updateGlobalConnectivity(_irohOnlyConnectivity);
+        expect(peer.identity!.connectivity.lanEnabled, isFalse);
+      }
+
+      final result = await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      expect(result.exchangeStatus, ContactExchangeStatus.automatic);
+      await _waitForIroh(() => bob.pendingContactRequests.isNotEmpty);
+      await bob.approvePendingContactRequest(
+        bob.pendingContactRequests.single.id,
+      );
+      expect(bob.contacts.single.hasPinnedIrohIdentity, isTrue);
+      await _waitForIroh(
+        () => alice.contacts.single.featureCapabilityVersion == 1,
+      );
+
+      await alice.sendMessage(
+        contact: alice.contacts.single,
+        body: 'Direct hello',
+      );
+      await _waitForIroh(
+        () => bob
+            .messagesFor(alice.identity!.deviceId)
+            .any((m) => m.body == 'Direct hello'),
+      );
+      await bob.sendMessage(contact: bob.contacts.single, body: 'Direct reply');
+      await _waitForIroh(
+        () => alice
+            .messagesFor(bob.identity!.deviceId)
+            .any((m) => m.body == 'Direct reply'),
+      );
+      expect(relay.storedEnvelopes, isEmpty);
+    },
+  );
+
+  test(
     'Iroh group history signed polls and scheduled file captions converge',
     () async {
       final network = _InProcessIrohNetwork();
