@@ -13,6 +13,7 @@ class GroupFileBinaryHeader {
     required this.requestId,
     required this.sender,
     required this.recipient,
+    this.epoch,
   });
   final String groupId;
   final String eventId;
@@ -20,18 +21,29 @@ class GroupFileBinaryHeader {
   final String sender;
   final String recipient;
 
+  /// Version 2 frames name the sender's bulk epoch key (delivered over a
+  /// forward-secret session) instead of using the static pairwise key.
+  final String? epoch;
+
   Map<String, Object?> toJson() => {
-    'version': 1,
+    'version': epoch == null ? 1 : 2,
     'groupId': groupId,
     'eventId': eventId,
     'requestId': requestId,
     'sender': sender,
     'recipient': recipient,
+    if (epoch != null) 'epoch': epoch,
   };
 
   static GroupFileBinaryHeader decode(Map<String, dynamic> json) {
-    if (json.length != 6 ||
-        json['version'] != 1 ||
+    final epoch = json['epoch'];
+    final versioned =
+        (json.length == 6 && json['version'] == 1 && epoch == null) ||
+        (json.length == 7 &&
+            json['version'] == 2 &&
+            epoch is String &&
+            RegExp(r'^[0-9a-f]{32}$').hasMatch(epoch));
+    if (!versioned ||
         !['groupId', 'sender', 'recipient'].every(
           (field) =>
               json[field] is String &&
@@ -50,6 +62,7 @@ class GroupFileBinaryHeader {
       requestId: json['requestId'],
       sender: json['sender'],
       recipient: json['recipient'],
+      epoch: epoch as String?,
     );
   }
 }
@@ -100,11 +113,13 @@ Future<Uint8List> encryptGroupFileBinary({
   return _encrypt(pairwiseKey, header, Uint8List.fromList(cleartext));
 }
 
-Future<SecretKey> _key(List<int> pairwiseKey) =>
+Future<SecretKey> _key(List<int> pairwiseKey, {required bool epoch}) =>
     Hkdf(hmac: Hmac.sha256(), outputLength: 32).deriveKey(
       secretKey: SecretKey(pairwiseKey),
       nonce: const [],
-      info: utf8.encode('conest.group-file.binary.v1'),
+      info: utf8.encode(
+        epoch ? 'conest.group-file.binary.v2' : 'conest.group-file.binary.v1',
+      ),
     );
 
 Future<Uint8List> _encrypt(
@@ -118,7 +133,7 @@ Future<Uint8List> _encrypt(
   aad.setRange(8, aad.length, metadata);
   final box = await Chacha20.poly1305Aead().encrypt(
     cleartext,
-    secretKey: await _key(pairwiseKey),
+    secretKey: await _key(pairwiseKey, epoch: header.epoch != null),
     aad: aad,
   );
   final result = Uint8List(aad.length + 12 + box.cipherText.length + 16);
@@ -138,23 +153,30 @@ Future<Uint8List> decryptGroupFileBinary({
   if (jsonEncode(header.toJson()) != jsonEncode(expected.toJson())) {
     throw const FormatException('Group binary identity mismatch.');
   }
-  return _decrypt(pairwiseKey, Uint8List.fromList(frame));
+  return _decrypt(
+    pairwiseKey,
+    Uint8List.fromList(frame),
+    epoch: header.epoch != null,
+  );
 }
 
-Future<Uint8List> _decrypt(List<int> pairwiseKey, Uint8List frame) =>
-    Isolate.run(() async {
-      final end = _headerEnd(frame);
-      final clear = await Chacha20.poly1305Aead().decrypt(
-        SecretBox(
-          Uint8List.sublistView(frame, end + 12, frame.length - 16),
-          nonce: Uint8List.sublistView(frame, end, end + 12),
-          mac: Mac(Uint8List.sublistView(frame, frame.length - 16)),
-        ),
-        secretKey: await _key(pairwiseKey),
-        aad: Uint8List.sublistView(frame, 0, end),
-      );
-      if (clear.isEmpty || clear.length > _maxClearBytes) {
-        throw const FormatException('Invalid decrypted group file length.');
-      }
-      return Uint8List.fromList(clear);
-    });
+Future<Uint8List> _decrypt(
+  List<int> pairwiseKey,
+  Uint8List frame, {
+  required bool epoch,
+}) => Isolate.run(() async {
+  final end = _headerEnd(frame);
+  final clear = await Chacha20.poly1305Aead().decrypt(
+    SecretBox(
+      Uint8List.sublistView(frame, end + 12, frame.length - 16),
+      nonce: Uint8List.sublistView(frame, end, end + 12),
+      mac: Mac(Uint8List.sublistView(frame, frame.length - 16)),
+    ),
+    secretKey: await _key(pairwiseKey, epoch: epoch),
+    aad: Uint8List.sublistView(frame, 0, end),
+  );
+  if (clear.isEmpty || clear.length > _maxClearBytes) {
+    throw const FormatException('Invalid decrypted group file length.');
+  }
+  return Uint8List.fromList(clear);
+});

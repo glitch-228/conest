@@ -8,6 +8,43 @@ import 'package:cryptography/cryptography.dart';
 import 'beam_protocol.dart';
 import 'models.dart';
 import 'group_file_crypto.dart';
+import 'ratchet.dart';
+
+/// Envelope kinds that travel in forward-secret Olm sessions (protocol
+/// version 3) once a session with the recipient exists. Bootstrap, debug and
+/// high-volume transfer kinds keep the static pairwise key: transfer content
+/// is already encrypted under per-transfer keys carried by ratcheted kinds.
+const Set<String> ratchetedEnvelopeKinds = <String>{
+  'ratchet_hello',
+  'ratchet_bulk_key',
+  'direct_message',
+  'group_message',
+  'group_history',
+  'group_membership',
+  'group_membership_ack',
+  'group_leave',
+  'ack',
+  'contact_remove',
+  'route_update',
+  'attachment_offer',
+  'attachment_complete',
+  'attachment_cancel',
+  'attachment_pause_control',
+  'message_edit',
+  'message_delete',
+  'message_reaction',
+  'voice_call_signal',
+};
+
+/// A static-key envelope of a ratcheted kind from a peer already known to
+/// use the ratchet.
+class RatchetDowngradeException implements Exception {
+  const RatchetDowngradeException();
+
+  @override
+  String toString() =>
+      'RatchetDowngradeException: static-key envelope from a ratchet peer.';
+}
 
 /// Owns pairwise key derivation and envelope encrypt/decrypt for the
 /// messenger controller. Lifted out of [MessengerController] so the
@@ -22,23 +59,47 @@ class CryptoService {
 
   final IdentityRecord Function() _identityProvider;
 
+  /// Forward-secret sessions; null when this build or device has none.
+  RatchetSessions? ratchet;
+
+  /// Called when a ratcheted envelope cannot be decrypted, or a ratchet peer
+  /// sent static-key traffic ([downgrade]). The controller answers with a
+  /// fresh bundle so the peer can start a new session.
+  void Function(String peerDeviceId, {required bool downgrade})?
+  onRatchetFailure;
+
+  /// Recent ratchet plaintexts by sender and message id. Olm consumes each
+  /// message key, so an identical copy arriving again (a second route) must
+  /// be answered from here rather than failing as a desync.
+  final _ratchetPlaintexts = <String, (String, String)>{};
+
+  /// This device's bulk key toward a peer for group-file frames, already
+  /// delivered over the ratchet; null keeps the static pairwise key.
+  Future<RatchetBulkKey?> Function(ContactRecord peer)? groupFileSendKey;
+  static const int _ratchetPlaintextCacheSize = 256;
+
   Future<Uint8List> encryptGroupFile({
     required ContactRecord peer,
     required String groupId,
     required String eventId,
     required String requestId,
     required Uint8List bytes,
-  }) async => encryptGroupFileBinary(
-    pairwiseKey: await (await sessionKeyFor(peer)).extractBytes(),
-    header: GroupFileBinaryHeader(
-      groupId: groupId,
-      eventId: eventId,
-      requestId: requestId,
-      sender: _identityProvider().deviceId,
-      recipient: peer.deviceId,
-    ),
-    cleartext: bytes,
-  );
+  }) async {
+    final bulk = await groupFileSendKey?.call(peer);
+    return encryptGroupFileBinary(
+      pairwiseKey:
+          bulk?.key ?? await (await sessionKeyFor(peer)).extractBytes(),
+      header: GroupFileBinaryHeader(
+        groupId: groupId,
+        eventId: eventId,
+        requestId: requestId,
+        sender: _identityProvider().deviceId,
+        recipient: peer.deviceId,
+        epoch: bulk?.id,
+      ),
+      cleartext: bytes,
+    );
+  }
 
   Future<Uint8List> decryptGroupFile({
     required ContactRecord peer,
@@ -46,17 +107,37 @@ class CryptoService {
     required String eventId,
     required String requestId,
     required Uint8List bytes,
-  }) async => decryptGroupFileBinary(
-    pairwiseKey: await (await sessionKeyFor(peer)).extractBytes(),
-    expected: GroupFileBinaryHeader(
-      groupId: groupId,
-      eventId: eventId,
-      requestId: requestId,
-      sender: peer.deviceId,
-      recipient: _identityProvider().deviceId,
-    ),
-    frame: bytes,
-  );
+  }) async {
+    final epoch = peekGroupFileBinary(bytes).epoch;
+    final List<int> key;
+    if (epoch == null) {
+      key = await (await sessionKeyFor(peer)).extractBytes();
+    } else {
+      // The sender delivers a new key just before its first frame, but the
+      // two travel separately; give the key a moment to be processed.
+      var bulk = await ratchet?.receivedBulkKey(peer.deviceId, epoch);
+      for (var attempt = 0; bulk == null && attempt < 40; attempt++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        bulk = await ratchet?.receivedBulkKey(peer.deviceId, epoch);
+      }
+      if (bulk == null) {
+        throw const FormatException('Unknown or expired group file key.');
+      }
+      key = bulk;
+    }
+    return decryptGroupFileBinary(
+      pairwiseKey: key,
+      expected: GroupFileBinaryHeader(
+        groupId: groupId,
+        eventId: eventId,
+        requestId: requestId,
+        sender: peer.deviceId,
+        recipient: _identityProvider().deviceId,
+        epoch: epoch,
+      ),
+      frame: bytes,
+    );
+  }
 
   Future<({String publicKeyBase64, String privateKeyBase64})>
   createSigningIdentity() async {
@@ -284,10 +365,49 @@ class CryptoService {
     DateTime? createdAt,
     String? acknowledgedMessageId,
   }) async {
+    final effectiveCreatedAt = (createdAt ?? DateTime.now()).toUtc();
+    final sessions = ratchet;
+    if (sessions != null &&
+        ratchetedEnvelopeKinds.contains(kind) &&
+        await sessions.hasSession(recipientDeviceId)) {
+      final header = RelayEnvelope(
+        protocolVersion: 3,
+        kind: kind,
+        messageId: messageId,
+        conversationId: conversationId,
+        senderAccountId: senderAccountId,
+        senderDeviceId: senderDeviceId,
+        recipientDeviceId: recipientDeviceId,
+        createdAt: effectiveCreatedAt,
+        acknowledgedMessageId: acknowledgedMessageId,
+      );
+      // Olm has no associated data: bind the header inside the plaintext.
+      final message = await sessions.encrypt(
+        recipientDeviceId,
+        utf8.encode(
+          jsonEncode({
+            'h': utf8.decode(header.authenticatedHeaderBytes()),
+            'p': plaintext,
+          }),
+        ),
+      );
+      return RelayEnvelope(
+        protocolVersion: 3,
+        kind: kind,
+        messageId: messageId,
+        conversationId: conversationId,
+        senderAccountId: senderAccountId,
+        senderDeviceId: senderDeviceId,
+        recipientDeviceId: recipientDeviceId,
+        createdAt: effectiveCreatedAt,
+        ciphertextBase64: base64Encode(message.ciphertext),
+        ratchetType: message.type,
+        acknowledgedMessageId: acknowledgedMessageId,
+      );
+    }
     final secretKey = await sessionKeyFor(contact);
     final cipher = Chacha20.poly1305Aead();
     final nonce = _secureRandomBytes(cipher.nonceLength);
-    final effectiveCreatedAt = (createdAt ?? DateTime.now()).toUtc();
     final header = RelayEnvelope(
       protocolVersion: 2,
       kind: kind,
@@ -325,8 +445,22 @@ class CryptoService {
     required ContactRecord contact,
     required RelayEnvelope envelope,
   }) async {
+    if (envelope.protocolVersion == 3) {
+      return _decryptRatchetMessage(contact: contact, envelope: envelope);
+    }
     if (envelope.protocolVersion != 2) {
       throw const FormatException('Legacy unauthenticated envelope rejected.');
+    }
+    final sessions = ratchet;
+    if (sessions != null && ratchetedEnvelopeKinds.contains(envelope.kind)) {
+      // Static-key traffic sent before the peer switched is still accepted;
+      // anything created after the peer's first ratcheted message is not.
+      final confirmedAt = await sessions.confirmedAt(contact.deviceId);
+      if (confirmedAt != null &&
+          envelope.createdAt.toUtc().isAfter(confirmedAt)) {
+        onRatchetFailure?.call(contact.deviceId, downgrade: true);
+        throw const RatchetDowngradeException();
+      }
     }
     final cipher = Chacha20.poly1305Aead();
     final secretKey = await sessionKeyFor(contact);
@@ -340,6 +474,47 @@ class CryptoService {
       aad: envelope.authenticatedHeaderBytes(),
     );
     return utf8.decode(cleartext);
+  }
+
+  Future<String> _decryptRatchetMessage({
+    required ContactRecord contact,
+    required RelayEnvelope envelope,
+  }) async {
+    final sessions = ratchet;
+    final ciphertext = envelope.ciphertextBase64;
+    final type = envelope.ratchetType;
+    if (sessions == null ||
+        !ratchetedEnvelopeKinds.contains(envelope.kind) ||
+        ciphertext == null ||
+        (type != 0 && type != 1)) {
+      throw const FormatException('Unsupported ratchet envelope.');
+    }
+    final cacheKey = '${contact.deviceId}|${envelope.messageId}';
+    final cached = _ratchetPlaintexts[cacheKey];
+    if (cached != null && cached.$1 == ciphertext) return cached.$2;
+    final List<int> clear;
+    try {
+      clear = await sessions.decrypt(
+        contact.deviceId,
+        RatchetMessage(type: type!, ciphertext: base64Decode(ciphertext)),
+      );
+    } on RatchetDecryptException {
+      onRatchetFailure?.call(contact.deviceId, downgrade: false);
+      rethrow;
+    }
+    final inner = jsonDecode(utf8.decode(clear));
+    if (inner is! Map<String, dynamic> ||
+        inner['h'] != utf8.decode(envelope.authenticatedHeaderBytes()) ||
+        inner['p'] is! String) {
+      throw const FormatException('Ratchet envelope header mismatch.');
+    }
+    final plaintext = inner['p'] as String;
+    _ratchetPlaintexts.remove(cacheKey);
+    _ratchetPlaintexts[cacheKey] = (ciphertext, plaintext);
+    if (_ratchetPlaintexts.length > _ratchetPlaintextCacheSize) {
+      _ratchetPlaintexts.remove(_ratchetPlaintexts.keys.first);
+    }
+    return plaintext;
   }
 
   Future<DecodedDirectMessage> decryptDirectMessage({

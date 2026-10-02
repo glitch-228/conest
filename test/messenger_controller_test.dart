@@ -13,6 +13,7 @@ import 'package:conest/main.dart' as app;
 import 'package:conest/main.dart' show sniffImageMimeType;
 import 'package:conest/src/build_info.dart';
 import 'package:conest/src/crypto_service.dart';
+import 'package:conest/src/group_file_crypto.dart';
 import 'package:conest/src/group_file_download.dart';
 import 'package:conest/src/group_history_event.dart';
 import 'package:conest/src/iroh_ffi_bridge.dart';
@@ -23,6 +24,7 @@ import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/native_attachment_crypto.dart';
 import 'package:conest/src/platform_bridge.dart';
+import 'package:conest/src/ratchet.dart';
 import 'package:conest/src/relay_client.dart'
     show
         RelayClient,
@@ -34,6 +36,9 @@ import 'package:conest/src/storage.dart';
 import 'package:conest/src/storage_capacity.dart';
 import 'package:conest/src/transport.dart';
 import 'package:conest/src/update_service.dart';
+import 'package:conest/src/voice_call_service.dart';
+
+import 'support/fake_ratchet_engine.dart';
 
 const _fakeRelayIdentityKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
 
@@ -936,6 +941,7 @@ Future<MessengerController> _createController({
   Future<TransportRegistry?> Function(IdentityRecord identity)?
   transportRegistryFactory,
   String? debugBuildId,
+  RatchetEngine? ratchetEngine,
 }) async {
   final controller = MessengerController(
     vaultStore: vaultStore ?? _MemoryVaultStore(),
@@ -950,6 +956,7 @@ Future<MessengerController> _createController({
     lanDirectChannel: lanDirectChannel,
     transportRegistryFactory: transportRegistryFactory,
     debugBuildId: debugBuildId,
+    ratchetEngine: ratchetEngine,
     storageCapacityProvider:
         storageCapacityProvider ??
         (_) async => const StorageCapacity(
@@ -1086,6 +1093,7 @@ class _InProcessIrohNetwork {
   final bool relayed;
   final bridges = <String, _InProcessIrohBridge>{};
   final envelopes = <RelayEnvelope>[];
+  final groupFileHeaders = <GroupFileBinaryHeader>[];
 
   Future<TransportRegistry?> registry(IdentityRecord identity) async {
     final bridge = _InProcessIrohBridge(this, identity.irohEndpointId!);
@@ -1147,7 +1155,11 @@ class _InProcessIrohBridge implements NativeIrohBridge {
     if (network.relayed && !allowRelay) throw StateError('Relay disabled');
     final recipient = network.bridges[remoteEndpointId];
     if (recipient == null) throw StateError('Peer offline');
-    if (decodeIrohAttachmentRangeFrame(bytes) == null) {
+    final range = decodeIrohAttachmentRangeFrame(bytes);
+    if (range != null && isGroupFileBinary(range.bytes)) {
+      network.groupFileHeaders.add(peekGroupFileBinary(range.bytes));
+    }
+    if (range == null) {
       network.envelopes.add(
         RelayEnvelope.fromJson(
           jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>,
@@ -10925,6 +10937,383 @@ void main() {
       // Third + subsequent chunks succeed — interruption consumed.
       await sendChunk();
       await sendChunk();
+    });
+  });
+
+  group('forward-secret sessions', () {
+    Future<void> settle(
+      List<MessengerController> controllers, {
+      int rounds = 8,
+    }) async {
+      for (var round = 0; round < rounds; round++) {
+        for (final controller in controllers) {
+          await controller.retryUnacknowledgedMessagesNow();
+          await controller.pollNow();
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    }
+
+    Future<MessengerController> ratchetController(
+      _FakeRelayClient relay,
+      String name, {
+      bool ratchet = true,
+      VaultStore? vaultStore,
+      bool createIdentity = true,
+    }) => _createController(
+      relayClient: relay,
+      displayName: name,
+      vaultStore: vaultStore,
+      createIdentity: createIdentity,
+      ratchetEngine: ratchet ? FakeRatchetEngine() : null,
+    );
+
+    /// Pairs two ratchet controllers and exchanges one message each way.
+    Future<void> establish(
+      MessengerController alice,
+      MessengerController bob,
+    ) async {
+      await _pairControllers(alice, bob);
+      await settle([alice, bob]);
+      await alice.sendMessage(contact: alice.contacts.single, body: 'a1');
+      await bob.sendMessage(contact: bob.contacts.single, body: 'b1');
+      await settle([alice, bob]);
+    }
+
+    test('ratchet peers switch to forward-secret envelopes', () async {
+      final relay = _FakeRelayClient();
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await establish(alice, bob);
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      expect(await alice.hasRatchetSessionForTesting(bobId), isTrue);
+      expect(await bob.hasRatchetSessionForTesting(aliceId), isTrue);
+      expect(bob.messagesFor(aliceId).map((m) => m.body), contains('a1'));
+      expect(alice.messagesFor(bobId).map((m) => m.body), contains('b1'));
+      final directs = relay.storedEnvelopes
+          .where((envelope) => envelope.kind == 'direct_message')
+          .toList();
+      expect(directs, hasLength(greaterThanOrEqualTo(2)));
+      expect(directs.map((envelope) => envelope.protocolVersion).toSet(), {
+        3,
+      });
+      expect(
+        directs.every((envelope) => envelope.nonceBase64 == null),
+        isTrue,
+      );
+    });
+
+    test('a peer without the ratchet keeps static-key envelopes', () async {
+      final relay = _FakeRelayClient();
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob', ratchet: false);
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await establish(alice, bob);
+      expect(
+        await alice.hasRatchetSessionForTesting(bob.identity!.deviceId),
+        isFalse,
+      );
+      expect(
+        bob.messagesFor(alice.identity!.deviceId).map((m) => m.body),
+        contains('a1'),
+      );
+      expect(
+        alice.messagesFor(bob.identity!.deviceId).map((m) => m.body),
+        contains('b1'),
+      );
+      expect(
+        relay.storedEnvelopes.where(
+          (envelope) =>
+              envelope.protocolVersion == 3 ||
+              envelope.kind == 'ratchet_bundle',
+        ),
+        isEmpty,
+      );
+    });
+
+    test('static-key messages from a ratchet peer are rejected', () async {
+      final relay = _FakeRelayClient();
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await establish(alice, bob);
+      final me = alice.identity!;
+      final bobOnAlice = alice.contacts.single;
+      final staticOnly = CryptoService(identityProvider: () => me);
+      final downgraded = await staticOnly.encryptPayloadEnvelope(
+        kind: 'direct_message',
+        messageId: 'downgraded-1',
+        conversationId: staticOnly.conversationIdFor(bobOnAlice.deviceId),
+        senderAccountId: me.accountId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: bobOnAlice.deviceId,
+        contact: bobOnAlice,
+        plaintext: 'downgraded',
+        createdAt: DateTime.now().toUtc(),
+      );
+      expect(downgraded.protocolVersion, 2);
+      await bob.processEnvelopesForTesting([downgraded]);
+      expect(
+        bob.messagesFor(me.deviceId).map((m) => m.body),
+        isNot(contains('downgraded')),
+      );
+    });
+
+    test('sessions survive a restart', () async {
+      final relay = _FakeRelayClient();
+      final bobVault = _MemoryVaultStore();
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob', vaultStore: bobVault);
+      addTearDown(alice.dispose);
+      await establish(alice, bob);
+      bob.dispose();
+      final restarted = await ratchetController(
+        relay,
+        'Bob',
+        vaultStore: bobVault,
+        createIdentity: false,
+      );
+      addTearDown(restarted.dispose);
+      final sentBefore = relay.storedEnvelopes.length;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'after');
+      await settle([alice, restarted]);
+      expect(
+        restarted.messagesFor(alice.identity!.deviceId).map((m) => m.body),
+        contains('after'),
+      );
+      final after = relay.storedEnvelopes
+          .skip(sentBefore)
+          .where((envelope) => envelope.kind == 'direct_message');
+      expect(after.map((envelope) => envelope.protocolVersion).toSet(), {3});
+    });
+
+    test('call invites over a session carry a per-call media key', () async {
+      final relay = _FakeRelayClient();
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob');
+      final carol = await ratchetController(relay, 'Carol', ratchet: false);
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      addTearDown(carol.dispose);
+      await establish(alice, bob);
+      await _pairControllers(alice, carol);
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      VoiceCallSignal invite(String callId, String recipient) =>
+          VoiceCallSignal(
+            callId: callId,
+            action: 'invite',
+            senderDeviceId: aliceId,
+            recipientDeviceId: recipient,
+            issuedAt: DateTime.now().toUtc(),
+          );
+      final plaintext = jsonDecode(
+        await alice.voiceCallSignalPlaintextForTesting(invite('call-1', bobId)),
+      ) as Map<String, dynamic>;
+      final secret = base64Decode(plaintext['mediaSecret'] as String);
+      expect(secret, hasLength(32));
+      final aliceKey = await alice.voiceCallMediaKeyForTesting(bobId, 'call-1');
+      final bobKey = await bob.voiceCallMediaKeyForTesting(
+        aliceId,
+        'call-1',
+        receivedSecret: secret,
+      );
+      expect(aliceKey, bobKey);
+      final staticKey = await alice.voiceCallMediaKeyForTesting(
+        bobId,
+        'call-without-secret',
+      );
+      expect(staticKey, isNot(aliceKey));
+
+      final legacy = jsonDecode(
+        await alice.voiceCallSignalPlaintextForTesting(
+          invite('call-2', carol.identity!.deviceId),
+        ),
+      ) as Map<String, dynamic>;
+      expect(legacy.containsKey('mediaSecret'), isFalse);
+    });
+
+    test('group file frames between ratchet peers use bulk epoch keys', () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final aliceRoot = await Directory.systemTemp.createTemp('conest_fs_a-');
+      final bobRoot = await Directory.systemTemp.createTemp('conest_fs_b-');
+      addTearDown(() async {
+        await aliceRoot.delete(recursive: true);
+        await bobRoot.delete(recursive: true);
+      });
+      Future<MessengerController> create(String name, Directory root) =>
+          _createController(
+            relayClient: relay,
+            displayName: name,
+            internetRelayHost: null,
+            transportRegistryFactory: network.registry,
+            attachmentRootProvider: () async => root,
+            ratchetEngine: FakeRatchetEngine(),
+          );
+      final alice = await create('Alice', aliceRoot);
+      final bob = await create('Bob', bobRoot);
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await _pairControllers(alice, bob);
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      Future<void> pump() async {
+        await alice.retryUnacknowledgedMessagesNow();
+        await bob.retryUnacknowledgedMessagesNow();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (DateTime.now().isBefore(deadline) &&
+          !(await alice.hasRatchetSessionForTesting(bobId) &&
+              await bob.hasRatchetSessionForTesting(aliceId))) {
+        await pump();
+      }
+      expect(await alice.hasRatchetSessionForTesting(bobId), isTrue);
+      expect(await bob.hasRatchetSessionForTesting(aliceId), isTrue);
+      // One message each way confirms both sides speak the ratchet.
+      await alice.sendMessage(contact: alice.contacts.single, body: 'hi');
+      await bob.sendMessage(contact: bob.contacts.single, body: 'hey');
+      await _waitForIroh(
+        () =>
+            bob.messagesFor(aliceId).any((m) => m.body == 'hi') &&
+            alice.messagesFor(bobId).any((m) => m.body == 'hey'),
+        reason: 'ratcheted messages',
+      );
+
+      final group = await alice.createGroup(
+        title: 'Secret files',
+        members: [alice.contacts.single],
+      );
+      await _waitForIroh(() => bob.groups.isNotEmpty, reason: 'group');
+      final source = await File(
+        '${aliceRoot.path}/source.bin',
+      ).writeAsBytes([4, 2, 4, 2]);
+      await alice.publishGroupFile(
+        groupId: group.groupId,
+        path: source.path,
+        fileName: 'secret.bin',
+        mimeType: 'application/octet-stream',
+      );
+      final eventId = alice
+          .messagesForGroup(group.groupId)
+          .singleWhere((message) => message.groupFile != null)
+          .id;
+      await _waitForIroh(
+        () =>
+            bob.groupFileSession(eventId)?.download.state ==
+            GroupFileDownloadState.complete,
+        reason: 'group file download',
+      );
+      expect(await File(bob.groupFilePathFor(eventId)!).readAsBytes(), [
+        4,
+        2,
+        4,
+        2,
+      ]);
+      final frames = network.groupFileHeaders
+          .where((header) => header.eventId == eventId)
+          .toList();
+      expect(frames, isNotEmpty);
+      expect(frames.every((header) => header.epoch != null), isTrue);
+      expect(
+        network.envelopes.where(
+          (envelope) =>
+              envelope.kind == 'ratchet_bulk_key' &&
+              envelope.protocolVersion != 3,
+        ),
+        isEmpty,
+      );
+    });
+
+    test('groups mix ratchet and static members, including non-contacts',
+        () async {
+      final relay = _FakeRelayClient();
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob');
+      final carol = await ratchetController(relay, 'Carol', ratchet: false);
+      final dave = await ratchetController(relay, 'Dave');
+      for (final controller in [alice, bob, carol, dave]) {
+        addTearDown(controller.dispose);
+      }
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      await _pairControllers(alice, dave);
+      final group = await alice.createGroup(
+        title: 'Mixed',
+        members: alice.contacts,
+      );
+      final everyone = [alice, bob, carol, dave];
+      await settle(everyone);
+      final bobId = bob.identity!.deviceId;
+      final daveId = dave.identity!.deviceId;
+      expect(bob.contacts.where((c) => c.deviceId == daveId), isEmpty);
+      // Bob and Dave share only the group, yet still open a session.
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (DateTime.now().isBefore(deadline) &&
+          !(await bob.hasRatchetSessionForTesting(daveId) &&
+              await dave.hasRatchetSessionForTesting(bobId))) {
+        await settle(everyone, rounds: 1);
+      }
+      expect(await bob.hasRatchetSessionForTesting(daveId), isTrue);
+      expect(await dave.hasRatchetSessionForTesting(bobId), isTrue);
+
+      final before = relay.storedEnvelopes.length;
+      await bob.sendGroupMessage(groupId: group.groupId, body: 'from bob');
+      await settle(everyone);
+      for (final member in [alice, carol, dave]) {
+        expect(
+          member.messagesForGroup(group.groupId).map((m) => m.body),
+          contains('from bob'),
+          reason: '${member.identity!.displayName} receives the message',
+        );
+      }
+      final carolId = carol.identity!.deviceId;
+      final fromBob = relay.storedEnvelopes
+          .skip(before)
+          .where(
+            (envelope) =>
+                envelope.kind == 'group_message' &&
+                envelope.senderDeviceId == bobId,
+          )
+          .toList();
+      expect(
+        fromBob
+            .where((envelope) => envelope.recipientDeviceId == carolId)
+            .map((envelope) => envelope.protocolVersion)
+            .toSet(),
+        {2},
+      );
+      expect(
+        fromBob
+            .where((envelope) => envelope.recipientDeviceId == daveId)
+            .map((envelope) => envelope.protocolVersion)
+            .toSet(),
+        {3},
+      );
+    });
+
+    test('a lost session recovers through a reset bundle', () async {
+      final relay = _FakeRelayClient();
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await establish(alice, bob);
+      final aliceId = alice.identity!.deviceId;
+      await bob.forgetRatchetSessionsForTesting(aliceId);
+      await alice.sendMessage(contact: alice.contacts.single, body: 'lost');
+      await settle([alice, bob], rounds: 12);
+      expect(bob.messagesFor(aliceId).map((m) => m.body), contains('lost'));
+      expect(await bob.hasRatchetSessionForTesting(aliceId), isTrue);
     });
   });
 

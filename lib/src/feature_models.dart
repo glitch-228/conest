@@ -7,6 +7,9 @@ enum ApplicationCapability {
   voiceMessageAttachmentsV1,
   voiceCallsV1,
   groupFileCaptionsV2,
+
+  /// Forward-secret Olm sessions (protocolVersion 3 envelopes).
+  ratchetV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

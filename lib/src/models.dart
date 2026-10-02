@@ -2782,6 +2782,7 @@ class RelayEnvelope {
     this.macBase64,
     this.acknowledgedMessageId,
     this.payloadBase64,
+    this.ratchetType,
   });
 
   final int protocolVersion;
@@ -2797,6 +2798,9 @@ class RelayEnvelope {
   final String? macBase64;
   final String? acknowledgedMessageId;
   final String? payloadBase64;
+
+  /// Olm message type for protocolVersion 3: 0 opens a session, 1 continues.
+  final int? ratchetType;
 
   /// Stable v2 AEAD associated-data representation. Map insertion order is
   /// intentional and covered by crypto tests; null acknowledgement targets
@@ -2830,6 +2834,7 @@ class RelayEnvelope {
       'macBase64': macBase64,
       'acknowledgedMessageId': acknowledgedMessageId,
       'payloadBase64': payloadBase64,
+      if (ratchetType != null) 'ratchetType': ratchetType,
     };
   }
 
@@ -2848,6 +2853,7 @@ class RelayEnvelope {
       macBase64: json['macBase64'] as String?,
       acknowledgedMessageId: json['acknowledgedMessageId'] as String?,
       payloadBase64: json['payloadBase64'] as String?,
+      ratchetType: (json['ratchetType'] as num?)?.toInt(),
     );
   }
 }

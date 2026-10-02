@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:math';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:ffi/ffi.dart';
 
 /// Stateless Olm operations (`native/conest_native/src/ratchet.rs`). Every
@@ -199,17 +201,73 @@ class RatchetSessionState {
       );
 }
 
+/// A symmetric key for high-volume frames to or from one peer. The sender
+/// creates it, delivers it inside a ratcheted message, and rotates it; both
+/// sides delete expired epochs, which keeps the frames forward-secret.
+class RatchetBulkKey {
+  const RatchetBulkKey({
+    required this.id,
+    required this.key,
+    required this.createdAtMs,
+  });
+
+  /// 32 lowercase hex characters.
+  final String id;
+  final List<int> key;
+  final int createdAtMs;
+
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'key': base64Encode(key),
+    'createdAtMs': createdAtMs,
+  };
+
+  static RatchetBulkKey fromJson(Object? json) {
+    if (json is! Map<String, dynamic>) {
+      throw const FormatException('Invalid bulk key.');
+    }
+    final id = json['id'];
+    final key = json['key'];
+    final createdAtMs = json['createdAtMs'];
+    if (id is! String ||
+        !RegExp(r'^[0-9a-f]{32}$').hasMatch(id) ||
+        key is! String ||
+        createdAtMs is! int) {
+      throw const FormatException('Invalid bulk key.');
+    }
+    final bytes = base64Decode(key);
+    if (bytes.length != 32) throw const FormatException('Invalid bulk key.');
+    return RatchetBulkKey(id: id, key: bytes, createdAtMs: createdAtMs);
+  }
+}
+
 /// Everything stored for one peer device. Sessions are ordered most
 /// recently used first.
 class RatchetPeerState {
-  const RatchetPeerState({this.peerIdentityKey, this.sessions = const []});
+  const RatchetPeerState({
+    this.peerIdentityKey,
+    this.sessions = const [],
+    this.confirmedAtMs,
+    this.bulkKeys,
+  });
 
   final String? peerIdentityKey;
   final List<RatchetSessionState> sessions;
 
+  /// When a ratcheted message from this peer first decrypted. Static-key
+  /// traffic of ratcheted kinds created after this is a downgrade.
+  final int? confirmedAtMs;
+
+  bool get confirmed => confirmedAtMs != null;
+
+  /// Sent and received bulk keys, encrypted under the store's pickle key.
+  final String? bulkKeys;
+
   Map<String, Object?> toJson() => {
     'version': 1,
     'peerIdentityKey': peerIdentityKey,
+    if (confirmedAtMs != null) 'confirmedAtMs': confirmedAtMs,
+    if (bulkKeys != null) 'bulkKeys': bulkKeys,
     'sessions': [for (final session in sessions) session.toJson()],
   };
 
@@ -219,6 +277,8 @@ class RatchetPeerState {
     }
     return RatchetPeerState(
       peerIdentityKey: json['peerIdentityKey'] as String?,
+      confirmedAtMs: json['confirmedAtMs'] as int?,
+      bulkKeys: json['bulkKeys'] as String?,
       sessions: [
         for (final session in json['sessions'] as List)
           RatchetSessionState.fromJson(session as Map<String, dynamic>),
@@ -338,6 +398,35 @@ class RatchetSessions {
   Future<bool> hasSession(String peerDeviceId) async =>
       (await _store.readPeer(peerDeviceId))?.sessions.isNotEmpty ?? false;
 
+  /// When a ratcheted message from this peer first decrypted, if ever.
+  Future<DateTime?> confirmedAt(String peerDeviceId) async {
+    final ms = (await _store.readPeer(peerDeviceId))?.confirmedAtMs;
+    return ms == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true);
+  }
+
+  /// Records a peer's Olm identity from an authenticated bundle. A changed
+  /// identity means the peer replaced its ratchet account, so every old
+  /// session with it is dropped.
+  Future<void> rememberPeerIdentity(String peerDeviceId, String identityKey) =>
+      _withPeer(peerDeviceId, () async {
+        final state = await _store.readPeer(peerDeviceId);
+        final known = state?.peerIdentityKey;
+        if (known == identityKey) return;
+        await _store.writePeer(
+          peerDeviceId,
+          known == null && state != null
+              ? RatchetPeerState(
+                  peerIdentityKey: identityKey,
+                  sessions: state.sessions,
+                  confirmedAtMs: state.confirmedAtMs,
+                  bulkKeys: state.bulkKeys,
+                )
+              : RatchetPeerState(peerIdentityKey: identityKey),
+        );
+      });
+
   /// Opens an outbound session from [bundle]; it becomes the send session.
   Future<void> startSession(String peerDeviceId, RatchetBundle bundle) =>
       _withPeer(peerDeviceId, () async {
@@ -418,6 +507,7 @@ class RatchetSessions {
         _withSession(
           state,
           session.used(result['session'] as String, _nowMs()),
+          confirmed: true,
         ),
       );
       return base64Decode(result['plaintext'] as String);
@@ -452,6 +542,7 @@ class RatchetSessions {
             lastUsedAtMs: nowMs,
           ),
           peerIdentityKey: identity,
+          confirmed: true,
         ),
       );
       return (
@@ -460,6 +551,147 @@ class RatchetSessions {
       );
     });
   });
+
+  /// How long this device uses one bulk key before creating the next.
+  static const Duration bulkKeyRotation = Duration(days: 1);
+
+  /// How long received bulk keys are kept for late or resumed frames.
+  static const Duration receivedBulkKeyRetention = Duration(days: 3);
+
+  /// This device's current bulk key toward a peer, creating a new one when
+  /// none is fresh. `created` tells the caller to deliver it first.
+  Future<(RatchetBulkKey, bool created)> sendBulkKey(String peerDeviceId) =>
+      _withPeer(peerDeviceId, () async {
+        final state = await _store.readPeer(peerDeviceId);
+        final ring = await _readBulkRing(peerDeviceId, state);
+        final nowMs = _nowMs();
+        final current = ring.sent.lastOrNull;
+        if (current != null &&
+            nowMs - current.createdAtMs < bulkKeyRotation.inMilliseconds) {
+          return (current, false);
+        }
+        final random = Random.secure();
+        final created = RatchetBulkKey(
+          id: List<int>.generate(
+            16,
+            (_) => random.nextInt(256),
+          ).map((value) => value.toRadixString(16).padLeft(2, '0')).join(),
+          key: List<int>.generate(32, (_) => random.nextInt(256)),
+          createdAtMs: nowMs,
+        );
+        // Keep the previous key one rotation longer for frames in flight.
+        final sent = [
+          ...ring.sent.where(
+            (key) =>
+                nowMs - key.createdAtMs < 2 * bulkKeyRotation.inMilliseconds,
+          ),
+          created,
+        ];
+        await _writeBulkRing(peerDeviceId, state, (
+          sent: sent.length > 2 ? sent.sublist(sent.length - 2) : sent,
+          received: ring.received,
+        ));
+        return (created, true);
+      });
+
+  /// Stores a peer's bulk key delivered in a ratcheted message.
+  Future<void> rememberReceivedBulkKey(
+    String peerDeviceId,
+    RatchetBulkKey key,
+  ) => _withPeer(peerDeviceId, () async {
+    final state = await _store.readPeer(peerDeviceId);
+    final ring = await _readBulkRing(peerDeviceId, state);
+    final nowMs = _nowMs();
+    final received = [
+      ...ring.received.where(
+        (existing) =>
+            existing.id != key.id &&
+            nowMs - existing.createdAtMs <
+                receivedBulkKeyRetention.inMilliseconds,
+      ),
+      key,
+    ];
+    await _writeBulkRing(peerDeviceId, state, (
+      sent: ring.sent,
+      received: received.length > 8
+          ? received.sublist(received.length - 8)
+          : received,
+    ));
+  });
+
+  /// A received bulk key by id, if it is still retained.
+  Future<List<int>?> receivedBulkKey(String peerDeviceId, String id) async {
+    final ring = await _readBulkRing(
+      peerDeviceId,
+      await _store.readPeer(peerDeviceId),
+    );
+    final nowMs = _nowMs();
+    for (final key in ring.received) {
+      if (key.id == id &&
+          nowMs - key.createdAtMs < receivedBulkKeyRetention.inMilliseconds) {
+        return key.key;
+      }
+    }
+    return null;
+  }
+
+  Future<({List<RatchetBulkKey> sent, List<RatchetBulkKey> received})>
+  _readBulkRing(String peerDeviceId, RatchetPeerState? state) async {
+    final sealed = state?.bulkKeys;
+    if (sealed == null) {
+      return (sent: <RatchetBulkKey>[], received: <RatchetBulkKey>[]);
+    }
+    final bytes = base64Decode(sealed);
+    final clear = await Chacha20.poly1305Aead().decrypt(
+      SecretBox(
+        bytes.sublist(12, bytes.length - 16),
+        nonce: bytes.sublist(0, 12),
+        mac: Mac(bytes.sublist(bytes.length - 16)),
+      ),
+      secretKey: SecretKey(_store.pickleKey),
+      aad: utf8.encode('conest.ratchet.bulk.v1|$peerDeviceId'),
+    );
+    final json = jsonDecode(utf8.decode(clear)) as Map<String, dynamic>;
+    return (
+      sent: [
+        for (final key in json['sent'] as List) RatchetBulkKey.fromJson(key),
+      ],
+      received: [
+        for (final key in json['received'] as List)
+          RatchetBulkKey.fromJson(key),
+      ],
+    );
+  }
+
+  Future<void> _writeBulkRing(
+    String peerDeviceId,
+    RatchetPeerState? state,
+    ({List<RatchetBulkKey> sent, List<RatchetBulkKey> received}) ring,
+  ) async {
+    final box = await Chacha20.poly1305Aead().encrypt(
+      utf8.encode(
+        jsonEncode({
+          'sent': [for (final key in ring.sent) key.toJson()],
+          'received': [for (final key in ring.received) key.toJson()],
+        }),
+      ),
+      secretKey: SecretKey(_store.pickleKey),
+      aad: utf8.encode('conest.ratchet.bulk.v1|$peerDeviceId'),
+    );
+    await _store.writePeer(
+      peerDeviceId,
+      RatchetPeerState(
+        peerIdentityKey: state?.peerIdentityKey,
+        sessions: state?.sessions ?? const [],
+        confirmedAtMs: state?.confirmedAtMs,
+        bulkKeys: base64Encode([
+          ...box.nonce,
+          ...box.cipherText,
+          ...box.mac.bytes,
+        ]),
+      ),
+    );
+  }
 
   /// Drops every session with a peer (reset or contact removal).
   Future<void> forget(String peerDeviceId) =>
@@ -474,13 +706,18 @@ class RatchetSessions {
     RatchetPeerState? state,
     RatchetSessionState session, {
     String? peerIdentityKey,
+    bool confirmed = false,
   }) {
+    final confirmedAtMs =
+        state?.confirmedAtMs ?? (confirmed ? session.lastUsedAtMs : null);
     final others = [
       for (final existing in state?.sessions ?? const <RatchetSessionState>[])
         if (existing.sessionId != session.sessionId) existing,
     ];
     return RatchetPeerState(
       peerIdentityKey: peerIdentityKey ?? state?.peerIdentityKey,
+      confirmedAtMs: confirmedAtMs,
+      bulkKeys: state?.bulkKeys,
       sessions: [
         session,
         ...others,
