@@ -36,6 +36,12 @@ const Set<String> ratchetedEnvelopeKinds = <String>{
   'voice_call_signal',
 };
 
+/// Ratchet state is keyed by device id and static key together, so a device
+/// id claimed by a different static key (for example a forged group member
+/// profile) can never reach another identity's sessions.
+String ratchetPeerId(ContactRecord peer) =>
+    '${peer.deviceId}|${peer.publicKeyBase64}';
+
 /// A static-key envelope of a ratcheted kind from a peer already known to
 /// use the ratchet.
 class RatchetDowngradeException implements Exception {
@@ -65,13 +71,13 @@ class CryptoService {
   /// Called when a ratcheted envelope cannot be decrypted, or a ratchet peer
   /// sent static-key traffic ([downgrade]). The controller answers with a
   /// fresh bundle so the peer can start a new session.
-  void Function(String peerDeviceId, {required bool downgrade})?
+  void Function(ContactRecord peer, {required bool downgrade})?
   onRatchetFailure;
 
   /// Recent ratchet plaintexts by sender and message id. Olm consumes each
   /// message key, so an identical copy arriving again (a second route) must
   /// be answered from here rather than failing as a desync.
-  final _ratchetPlaintexts = <String, (String, String)>{};
+  final _ratchetPlaintexts = <String, (String, String, String)>{};
 
   /// This device's bulk key toward a peer for group-file frames, already
   /// delivered over the ratchet; null keeps the static pairwise key.
@@ -115,10 +121,10 @@ class CryptoService {
     } else {
       // The sender delivers a new key just before its first frame, but the
       // two travel separately; give the key a moment to be processed.
-      var bulk = await ratchet?.receivedBulkKey(peer.deviceId, epoch);
+      var bulk = await ratchet?.receivedBulkKey(ratchetPeerId(peer), epoch);
       for (var attempt = 0; bulk == null && attempt < 40; attempt++) {
         await Future<void>.delayed(const Duration(milliseconds: 50));
-        bulk = await ratchet?.receivedBulkKey(peer.deviceId, epoch);
+        bulk = await ratchet?.receivedBulkKey(ratchetPeerId(peer), epoch);
       }
       if (bulk == null) {
         throw const FormatException('Unknown or expired group file key.');
@@ -369,7 +375,7 @@ class CryptoService {
     final sessions = ratchet;
     if (sessions != null &&
         ratchetedEnvelopeKinds.contains(kind) &&
-        await sessions.hasSession(recipientDeviceId)) {
+        await sessions.hasSession(ratchetPeerId(contact))) {
       final header = RelayEnvelope(
         protocolVersion: 3,
         kind: kind,
@@ -383,7 +389,7 @@ class CryptoService {
       );
       // Olm has no associated data: bind the header inside the plaintext.
       final message = await sessions.encrypt(
-        recipientDeviceId,
+        ratchetPeerId(contact),
         utf8.encode(
           jsonEncode({
             'h': utf8.decode(header.authenticatedHeaderBytes()),
@@ -455,10 +461,10 @@ class CryptoService {
     if (sessions != null && ratchetedEnvelopeKinds.contains(envelope.kind)) {
       // Static-key traffic sent before the peer switched is still accepted;
       // anything created after the peer's first ratcheted message is not.
-      final confirmedAt = await sessions.confirmedAt(contact.deviceId);
+      final confirmedAt = await sessions.confirmedAt(ratchetPeerId(contact));
       if (confirmedAt != null &&
           envelope.createdAt.toUtc().isAfter(confirmedAt)) {
-        onRatchetFailure?.call(contact.deviceId, downgrade: true);
+        onRatchetFailure?.call(contact, downgrade: true);
         throw const RatchetDowngradeException();
       }
     }
@@ -489,28 +495,35 @@ class CryptoService {
         (type != 0 && type != 1)) {
       throw const FormatException('Unsupported ratchet envelope.');
     }
-    final cacheKey = '${contact.deviceId}|${envelope.messageId}';
+    final header = utf8.decode(envelope.authenticatedHeaderBytes());
+    final cacheKey = '${ratchetPeerId(contact)}|${envelope.messageId}';
     final cached = _ratchetPlaintexts[cacheKey];
-    if (cached != null && cached.$1 == ciphertext) return cached.$2;
+    if (cached != null && cached.$1 == ciphertext) {
+      // The same ciphertext under a rewritten outer header is still forged.
+      if (cached.$3 != header) {
+        throw const FormatException('Ratchet envelope header mismatch.');
+      }
+      return cached.$2;
+    }
     final List<int> clear;
     try {
       clear = await sessions.decrypt(
-        contact.deviceId,
+        ratchetPeerId(contact),
         RatchetMessage(type: type!, ciphertext: base64Decode(ciphertext)),
       );
     } on RatchetDecryptException {
-      onRatchetFailure?.call(contact.deviceId, downgrade: false);
+      onRatchetFailure?.call(contact, downgrade: false);
       rethrow;
     }
     final inner = jsonDecode(utf8.decode(clear));
     if (inner is! Map<String, dynamic> ||
-        inner['h'] != utf8.decode(envelope.authenticatedHeaderBytes()) ||
+        inner['h'] != header ||
         inner['p'] is! String) {
       throw const FormatException('Ratchet envelope header mismatch.');
     }
     final plaintext = inner['p'] as String;
     _ratchetPlaintexts.remove(cacheKey);
-    _ratchetPlaintexts[cacheKey] = (ciphertext, plaintext);
+    _ratchetPlaintexts[cacheKey] = (ciphertext, plaintext, header);
     if (_ratchetPlaintexts.length > _ratchetPlaintextCacheSize) {
       _ratchetPlaintexts.remove(_ratchetPlaintexts.keys.first);
     }

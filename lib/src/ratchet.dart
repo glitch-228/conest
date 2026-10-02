@@ -396,11 +396,11 @@ class RatchetSessions {
   });
 
   Future<bool> hasSession(String peerDeviceId) async =>
-      (await _store.readPeer(peerDeviceId))?.sessions.isNotEmpty ?? false;
+      (await _readPeer(peerDeviceId))?.sessions.isNotEmpty ?? false;
 
   /// When a ratcheted message from this peer first decrypted, if ever.
   Future<DateTime?> confirmedAt(String peerDeviceId) async {
-    final ms = (await _store.readPeer(peerDeviceId))?.confirmedAtMs;
+    final ms = (await _readPeer(peerDeviceId))?.confirmedAtMs;
     return ms == null
         ? null
         : DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true);
@@ -411,10 +411,10 @@ class RatchetSessions {
   /// session with it is dropped.
   Future<void> rememberPeerIdentity(String peerDeviceId, String identityKey) =>
       _withPeer(peerDeviceId, () async {
-        final state = await _store.readPeer(peerDeviceId);
+        final state = await _readPeer(peerDeviceId);
         final known = state?.peerIdentityKey;
         if (known == identityKey) return;
-        await _store.writePeer(
+        await _writePeer(
           peerDeviceId,
           known == null && state != null
               ? RatchetPeerState(
@@ -439,9 +439,9 @@ class RatchetSessions {
           'peerIdentityKey': bundle.identityKey,
           'peerOneTimeKey': bundle.sessionKey,
         });
-        final state = await _store.readPeer(peerDeviceId);
+        final state = await _readPeer(peerDeviceId);
         final nowMs = _nowMs();
-        await _store.writePeer(
+        await _writePeer(
           peerDeviceId,
           _withSession(
             state,
@@ -460,7 +460,7 @@ class RatchetSessions {
   /// when no session exists yet.
   Future<RatchetMessage> encrypt(String peerDeviceId, List<int> plaintext) =>
       _withPeer(peerDeviceId, () async {
-        final state = await _store.readPeer(peerDeviceId);
+        final state = await _readPeer(peerDeviceId);
         final session = state?.sessions.firstOrNull;
         if (state == null || session == null) {
           throw StateError('No ratchet session with $peerDeviceId.');
@@ -470,7 +470,7 @@ class RatchetSessions {
           'session': session.pickle,
           'plaintext': base64Encode(plaintext),
         });
-        await _store.writePeer(
+        await _writePeer(
           peerDeviceId,
           _withSession(
             state,
@@ -490,7 +490,7 @@ class RatchetSessions {
     RatchetMessage message, {
     String? peerIdentityKey,
   }) => _withPeer(peerDeviceId, () async {
-    final state = await _store.readPeer(peerDeviceId);
+    final state = await _readPeer(peerDeviceId);
     final request = {
       'messageType': message.type,
       'ciphertext': base64Encode(message.ciphertext),
@@ -502,7 +502,7 @@ class RatchetSessions {
       } on RatchetEngineException {
         continue;
       }
-      await _store.writePeer(
+      await _writePeer(
         peerDeviceId,
         _withSession(
           state,
@@ -518,7 +518,10 @@ class RatchetSessions {
         'No ratchet session can decrypt this message.',
       );
     }
-    return _withAccount((account) async {
+    // The account (which drops the consumed one-time key) is stored before
+    // the session: a crash in between loses this message to a reset rather
+    // than letting a replay open a second copy of the session.
+    final (plaintext, session) = await _withAccount((account) async {
       final Map<String, dynamic> result;
       try {
         result = _run({
@@ -530,26 +533,30 @@ class RatchetSessions {
       } on RatchetEngineException catch (error) {
         throw RatchetDecryptException(error.message);
       }
+      final sessionId = result['sessionId'] as String;
+      if (state?.sessions.any((known) => known.sessionId == sessionId) ??
+          false) {
+        throw const RatchetDecryptException('Replayed session opening.');
+      }
       final nowMs = _nowMs();
-      await _store.writePeer(
-        peerDeviceId,
-        _withSession(
-          state,
+      return (
+        result['account'] as String,
+        (
+          base64Decode(result['plaintext'] as String),
           RatchetSessionState(
-            sessionId: result['sessionId'] as String,
+            sessionId: sessionId,
             pickle: result['session'] as String,
             createdAtMs: nowMs,
             lastUsedAtMs: nowMs,
           ),
-          peerIdentityKey: identity,
-          confirmed: true,
         ),
       );
-      return (
-        result['account'] as String,
-        base64Decode(result['plaintext'] as String),
-      );
     });
+    await _writePeer(
+      peerDeviceId,
+      _withSession(state, session, peerIdentityKey: identity, confirmed: true),
+    );
+    return plaintext;
   });
 
   /// How long this device uses one bulk key before creating the next.
@@ -562,7 +569,7 @@ class RatchetSessions {
   /// none is fresh. `created` tells the caller to deliver it first.
   Future<(RatchetBulkKey, bool created)> sendBulkKey(String peerDeviceId) =>
       _withPeer(peerDeviceId, () async {
-        final state = await _store.readPeer(peerDeviceId);
+        final state = await _readPeer(peerDeviceId);
         final ring = await _readBulkRing(peerDeviceId, state);
         final nowMs = _nowMs();
         final current = ring.sent.lastOrNull;
@@ -599,7 +606,7 @@ class RatchetSessions {
     String peerDeviceId,
     RatchetBulkKey key,
   ) => _withPeer(peerDeviceId, () async {
-    final state = await _store.readPeer(peerDeviceId);
+    final state = await _readPeer(peerDeviceId);
     final ring = await _readBulkRing(peerDeviceId, state);
     final nowMs = _nowMs();
     final received = [
@@ -623,7 +630,7 @@ class RatchetSessions {
   Future<List<int>?> receivedBulkKey(String peerDeviceId, String id) async {
     final ring = await _readBulkRing(
       peerDeviceId,
-      await _store.readPeer(peerDeviceId),
+      await _readPeer(peerDeviceId),
     );
     final nowMs = _nowMs();
     for (final key in ring.received) {
@@ -678,7 +685,7 @@ class RatchetSessions {
       secretKey: SecretKey(_store.pickleKey),
       aad: utf8.encode('conest.ratchet.bulk.v1|$peerDeviceId'),
     );
-    await _store.writePeer(
+    await _writePeer(
       peerDeviceId,
       RatchetPeerState(
         peerIdentityKey: state?.peerIdentityKey,
@@ -695,7 +702,28 @@ class RatchetSessions {
 
   /// Drops every session with a peer (reset or contact removal).
   Future<void> forget(String peerDeviceId) =>
-      _withPeer(peerDeviceId, () => _store.deletePeer(peerDeviceId));
+      _withPeer(peerDeviceId, () => _deletePeer(peerDeviceId));
+
+  // Write-through cache: every store access goes through these, so periodic
+  // checks over many peers do not reread files.
+  final Map<String, RatchetPeerState?> _peerCache = {};
+
+  Future<RatchetPeerState?> _readPeer(String peerId) async {
+    if (_peerCache.containsKey(peerId)) return _peerCache[peerId];
+    return _peerCache[peerId] = await _store.readPeer(peerId);
+  }
+
+  Future<void> _writePeer(String peerId, RatchetPeerState state) async {
+    _peerCache.remove(peerId);
+    await _store.writePeer(peerId, state);
+    _peerCache[peerId] = state;
+  }
+
+  Future<void> _deletePeer(String peerId) async {
+    _peerCache.remove(peerId);
+    await _store.deletePeer(peerId);
+    _peerCache[peerId] = null;
+  }
 
   Map<String, dynamic> _run(Map<String, Object?> request) =>
       _engine.call({...request, 'pickleKey': _pickleKey});

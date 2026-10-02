@@ -14,8 +14,9 @@ use vodozemac::{
     olm::{Account, AccountPickle, OlmMessage, Session, SessionConfig, SessionPickle},
 };
 
-/// Upper bound on one plaintext. Larger content uses per-transfer keys.
-const MAX_PLAINTEXT_BYTES: usize = 1024 * 1024;
+/// Upper bound on one plaintext: the app's 2 MiB envelope ciphertext cap
+/// minus room for Olm framing. Larger content uses per-transfer keys.
+const MAX_PLAINTEXT_BYTES: usize = 2 * 1024 * 1024 - 64 * 1024;
 
 pub fn call(request: &Value) -> Result<Value> {
     let op = string(request, "op")?;

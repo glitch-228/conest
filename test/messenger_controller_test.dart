@@ -220,7 +220,16 @@ class _MemoryVaultStore extends VaultStore {
       ) {
     addTearDown(() async {
       await closeGroupHistory();
-      if (await directory.exists()) await directory.delete(recursive: true);
+      // Background ratchet writes (for example a reset bundle) can still be
+      // landing after the controllers are disposed; let them drain.
+      for (var attempt = 0; await directory.exists(); attempt++) {
+        try {
+          await directory.delete(recursive: true);
+        } on FileSystemException {
+          if (attempt >= 20) rethrow;
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+      }
     });
   }
   VaultSnapshot _snapshot = VaultSnapshot.empty();
@@ -11062,6 +11071,14 @@ void main() {
         bob.messagesFor(me.deviceId).map((m) => m.body),
         isNot(contains('downgraded')),
       );
+      // The rejection triggers a reset; afterwards the pair still talks.
+      await settle([alice, bob]);
+      await alice.sendMessage(contact: bobOnAlice, body: 'still secret');
+      await settle([alice, bob]);
+      expect(
+        bob.messagesFor(me.deviceId).map((m) => m.body),
+        contains('still secret'),
+      );
     });
 
     test('sessions survive a restart', () async {
@@ -11298,6 +11315,188 @@ void main() {
             .map((envelope) => envelope.protocolVersion)
             .toSet(),
         {3},
+      );
+    });
+
+    test('a cached plaintext never serves a rewritten header', () async {
+      final relay = _FakeRelayClient();
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobOnAlice = alice.contacts.single;
+      final aliceOnBob = bob.contacts.single;
+      final aliceSessions = RatchetSessions(
+        engine: FakeRatchetEngine(),
+        store: MemoryRatchetStore(),
+      );
+      final bobSessions = RatchetSessions(
+        engine: FakeRatchetEngine(),
+        store: MemoryRatchetStore(),
+      );
+      final aliceCrypto = CryptoService(identityProvider: () => alice.identity!)
+        ..ratchet = aliceSessions;
+      final bobCrypto = CryptoService(identityProvider: () => bob.identity!)
+        ..ratchet = bobSessions;
+      await aliceSessions.startSession(
+        ratchetPeerId(bobOnAlice),
+        await bobSessions.createBundle(),
+      );
+      await bobSessions.rememberPeerIdentity(
+        ratchetPeerId(aliceOnBob),
+        await aliceSessions.identityKey(),
+      );
+      final me = alice.identity!;
+      final reaction = await aliceCrypto.encryptPayloadEnvelope(
+        kind: 'message_reaction',
+        messageId: 'reaction-1',
+        conversationId: aliceCrypto.conversationIdFor(bobOnAlice.deviceId),
+        senderAccountId: me.accountId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: bobOnAlice.deviceId,
+        contact: bobOnAlice,
+        plaintext: '{"target":"m1"}',
+      );
+      expect(reaction.protocolVersion, 3);
+      expect(
+        await bobCrypto.decryptMessage(contact: aliceOnBob, envelope: reaction),
+        '{"target":"m1"}',
+      );
+      // Same ciphertext again (a second route) is served from the cache...
+      expect(
+        await bobCrypto.decryptMessage(contact: aliceOnBob, envelope: reaction),
+        '{"target":"m1"}',
+      );
+      // ...but not under a rewritten kind.
+      final rewritten = RelayEnvelope.fromJson({
+        ...reaction.toJson(),
+        'kind': 'message_delete',
+      });
+      await expectLater(
+        bobCrypto.decryptMessage(contact: aliceOnBob, envelope: rewritten),
+        throwsFormatException,
+      );
+    });
+
+    test('a contact removal notice still reaches a ratchet peer', () async {
+      final relay = _FakeRelayClient();
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await establish(alice, bob);
+      await alice.removeContact(bob.identity!.deviceId);
+      await settle([alice, bob]);
+      expect(bob.contacts.single.isArchived, isTrue);
+    });
+
+    test('a delayed old capability list cannot withdraw the ratchet', () async {
+      final relay = _FakeRelayClient();
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final beforeConfirmation = DateTime.now().toUtc();
+      await settle([alice, bob]);
+      await alice.sendMessage(contact: alice.contacts.single, body: 'a1');
+      await bob.sendMessage(contact: bob.contacts.single, body: 'b1');
+      await settle([alice, bob]);
+      final me = alice.identity!;
+      final bobOnAlice = alice.contacts.single;
+      final staticOnly = CryptoService(identityProvider: () => me);
+      Future<RelayEnvelope> exchangeWithout(DateTime createdAt) async =>
+          staticOnly.encryptPayloadEnvelope(
+            kind: 'contact_exchange',
+            messageId: 'xchg-${createdAt.microsecondsSinceEpoch}',
+            conversationId: 'contact-exchange-${bobOnAlice.deviceId}',
+            senderAccountId: me.accountId,
+            senderDeviceId: me.deviceId,
+            recipientDeviceId: bobOnAlice.deviceId,
+            contact: bobOnAlice,
+            plaintext: jsonEncode({
+              'exchangeVersion': 2,
+              'invitePayload': (await alice.buildInvite()).encodePayload(),
+              'featureCapabilityVersion': 1,
+              'featureCapabilities': ['groupPollsV1'],
+              'requestPeerCapabilities': false,
+            }),
+            createdAt: createdAt,
+          );
+      await bob.processEnvelopesForTesting([
+        await exchangeWithout(beforeConfirmation),
+      ]);
+      await settle([bob], rounds: 2);
+      expect(await bob.hasRatchetSessionForTesting(me.deviceId), isTrue);
+      await bob.processEnvelopesForTesting([
+        await exchangeWithout(DateTime.now().toUtc()),
+      ]);
+      await settle([bob], rounds: 2);
+      expect(await bob.hasRatchetSessionForTesting(me.deviceId), isFalse);
+    });
+
+    test(
+      'moving one device to a build without the ratchet keeps chats working',
+      () async {
+        final relay = _FakeRelayClient();
+        final bobVault = _MemoryVaultStore();
+        final alice = await ratchetController(relay, 'Alice');
+        final bob = await ratchetController(relay, 'Bob', vaultStore: bobVault);
+        addTearDown(alice.dispose);
+        await establish(alice, bob);
+        bob.dispose();
+        final stable = await ratchetController(
+          relay,
+          'Bob',
+          vaultStore: bobVault,
+          createIdentity: false,
+          ratchet: false,
+        );
+        addTearDown(stable.dispose);
+        await settle([alice, stable]);
+        await stable.sendMessage(
+          contact: stable.contacts.single,
+          body: 'from stable',
+        );
+        await alice.sendMessage(
+          contact: alice.contacts.single,
+          body: 'to stable',
+        );
+        await settle([alice, stable], rounds: 12);
+        final aliceId = alice.identity!.deviceId;
+        expect(
+          alice.messagesFor(stable.identity!.deviceId).map((m) => m.body),
+          contains('from stable'),
+        );
+        expect(
+          stable.messagesFor(aliceId).map((m) => m.body),
+          contains('to stable'),
+        );
+      },
+    );
+
+    test('controls sent on a session the peer lost are sent again', () async {
+      final relay = _FakeRelayClient();
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await establish(alice, bob);
+      final aliceId = alice.identity!.deviceId;
+      final original = alice
+          .messagesFor(bob.identity!.deviceId)
+          .singleWhere((m) => m.body == 'a1');
+      await bob.forgetRatchetSessionsForTesting(aliceId);
+      await alice.editMessage(
+        contact: alice.contacts.single,
+        messageId: original.id,
+        body: 'a1 edited',
+      );
+      await settle([alice, bob], rounds: 12);
+      expect(
+        bob.messagesFor(aliceId).map((m) => m.body),
+        contains('a1 edited'),
       );
     });
 

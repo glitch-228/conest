@@ -980,12 +980,17 @@ class MessengerController extends ChangeNotifier {
   }
 
   @visibleForTesting
-  Future<bool> hasRatchetSessionForTesting(String deviceId) async =>
-      await _ratchet?.hasSession(deviceId) ?? false;
+  Future<bool> hasRatchetSessionForTesting(String deviceId) async {
+    final peer = _ratchetPeer(deviceId);
+    return peer != null &&
+        (await _ratchet?.hasSession(ratchetPeerId(peer)) ?? false);
+  }
 
   @visibleForTesting
-  Future<void> forgetRatchetSessionsForTesting(String deviceId) async =>
-      _ratchet?.forget(deviceId);
+  Future<void> forgetRatchetSessionsForTesting(String deviceId) async {
+    final peer = _ratchetPeer(deviceId);
+    if (peer != null) await _ratchet?.forget(ratchetPeerId(peer));
+  }
 
   @visibleForTesting
   Future<String> voiceCallSignalPlaintextForTesting(VoiceCallSignal signal) =>
@@ -1328,7 +1333,7 @@ class MessengerController extends ChangeNotifier {
     final sessions = _ratchet;
     if (signal.action == 'invite' &&
         sessions != null &&
-        await sessions.hasSession(contact.deviceId)) {
+        await sessions.hasSession(ratchetPeerId(contact))) {
       final random = Random.secure();
       final secret = List<int>.generate(32, (_) => random.nextInt(256));
       _rememberVoiceCallMediaSecret(signal.callId, secret);
@@ -3043,6 +3048,7 @@ class MessengerController extends ChangeNotifier {
         await _saveSnapshotSilently(notify: false);
       }
       _rebuildSeenEnvelopeIdSet();
+      unawaited(_advertiseCapabilitiesIfChanged());
       final normalized = _normalizeStoredContactRoutes();
       if (normalized) {
         await _saveSnapshotSilently(notify: false);
@@ -5806,7 +5812,6 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> removeContact(String deviceId, {bool notifyPeer = true}) async {
-    unawaited(_ratchet?.forget(deviceId));
     ContactRecord? removed;
     for (final contact in _snapshot.contacts) {
       if (contact.deviceId == deviceId) {
@@ -5857,12 +5862,21 @@ class MessengerController extends ChangeNotifier {
     });
     await _persist(removed == null ? 'Contact removed.' : 'Contact removed locally. Sending a removal notice in the background.');
     if (notifyPeer && removed != null) {
+      final notified = removed;
       unawaited(
-        _sendContactRemoval(removed).catchError((Object error) {
-          appendDebugLog('Contact removal notice remains best-effort: $error');
-          return false;
-        }),
+        _sendContactRemoval(notified)
+            .catchError((Object error) {
+              appendDebugLog(
+                'Contact removal notice remains best-effort: $error',
+              );
+              return false;
+            })
+            // The notice travels on the forward-secret session, so drop it
+            // only afterwards; the peer rejects static-key controls.
+            .whenComplete(() => _ratchet?.forget(ratchetPeerId(notified))),
       );
+    } else if (removed != null) {
+      unawaited(_ratchet?.forget(ratchetPeerId(removed)));
     }
   }
 
@@ -6027,6 +6041,16 @@ class MessengerController extends ChangeNotifier {
       ),
     );
     _snapshot = _snapshot.copyWith(identity: created);
+    // A new device has told nobody anything yet; every later exchange
+    // carries the current list.
+    _snapshot = _snapshot.copyWith(
+      identity: created.copyWith(
+        advertisedFeatureCapabilities: [
+          for (final capability in _localApplicationCapabilities())
+            capability.name,
+        ],
+      ),
+    );
     _ensureVoiceCallService();
     await _startTransportRegistry();
     await _ingestSignedDefaultRelaysIfNeeded();
@@ -6499,7 +6523,7 @@ class MessengerController extends ChangeNotifier {
     );
     // Sessions with the replaced identity cannot continue; drop them before
     // the held traffic (including any new bundle) is replayed.
-    await _ratchet?.forget(contact.deviceId);
+    await _ratchet?.forget(ratchetPeerId(contact));
     await _persist('Confirmed identity replacement for ${contact.alias}.');
     if (toReplay.isNotEmpty) {
       final envelopes = <RelayEnvelope>[];
@@ -13290,8 +13314,13 @@ class MessengerController extends ChangeNotifier {
 
   int _processingPriority(String kind) {
     switch (kind) {
+      // Capabilities first, then ratchet bundles and keys, so a bundle or
+      // hello in the same batch finds the state it depends on.
       case 'contact_exchange':
-        return 0;
+        return -2;
+      case _ratchetBundleKind:
+      case 'ratchet_bulk_key':
+        return -1;
       case 'route_update':
         return 0;
       case 'lan_lobby_message':
@@ -15649,6 +15678,11 @@ class MessengerController extends ChangeNotifier {
               capabilitySet == null ||
               existing.featureCapabilities.length != capabilitySet.length ||
               !existing.featureCapabilities.toSet().containsAll(capabilitySet));
+      featureCapabilities = await _withoutStaleRatchetWithdrawal(
+        existing,
+        featureCapabilities,
+        envelope.createdAt,
+      );
       var updated = await _updateExistingContactFromInvite(
         invite,
         featureCapabilities: featureCapabilities,
@@ -17307,23 +17341,23 @@ class MessengerController extends ChangeNotifier {
     );
     // Encrypt before queueing so an unusable contact still fails the caller.
     final envelope = await _encryptQueuedPayload(contact, payload);
-    _enqueuePendingAckDelivery(
-      PendingAckDelivery(
-        targetDeviceId: contact.deviceId,
-        acknowledgedMessageId: envelope.messageId,
-        conversationId: envelope.conversationId,
-        kind: kind,
-        lastAttemptedAt: _now(),
-        attempts: 1,
-        payload: payload,
-      ),
+    final entry = PendingAckDelivery(
+      targetDeviceId: contact.deviceId,
+      acknowledgedMessageId: envelope.messageId,
+      conversationId: envelope.conversationId,
+      kind: kind,
+      lastAttemptedAt: _now(),
+      attempts: 1,
+      payload: payload,
     );
+    _enqueuePendingAckDelivery(entry);
     try {
       await _deliverToContact(
         contact: contact,
         recipientDeviceId: contact.deviceId,
         envelope: envelope,
       );
+      _rememberAcceptedControl(entry);
       _clearPendingAckDelivery(
         targetDeviceId: contact.deviceId,
         acknowledgedMessageId: envelope.messageId,
@@ -17422,6 +17456,11 @@ class MessengerController extends ChangeNotifier {
         try {
           envelope = await _encryptQueuedPayload(contact, payload);
         } catch (_) {
+          // Counts as an attempt so an entry that can never be encrypted
+          // (for example too large for a session) eventually stops.
+          _enqueuePendingAckDelivery(
+            entry.copyWith(lastAttemptedAt: now, attempts: entry.attempts + 1),
+          );
           continue;
         }
       } else if (entry.kind.carriesEnvelope && entry.envelopeJson == null) {
@@ -17471,6 +17510,7 @@ class MessengerController extends ChangeNotifier {
           recipientDeviceId: contact.deviceId,
           envelope: envelope,
         );
+        _rememberAcceptedControl(entry);
         _clearPendingAckDelivery(
           targetDeviceId: entry.targetDeviceId,
           acknowledgedMessageId: entry.acknowledgedMessageId,
@@ -21196,23 +21236,98 @@ class MessengerController extends ChangeNotifier {
       _crypto
         ..ratchet = sessions
         ..groupFileSendKey = _groupFileSendKey
-        ..onRatchetFailure = (peerDeviceId, {required bool downgrade}) {
-          final peer = _ratchetPeer(peerDeviceId);
-          if (peer == null) return;
+        ..onRatchetFailure = (peer, {required bool downgrade}) {
           appendDebugLog(
             downgrade
                 ? 'Rejected static-key traffic from ratchet peer ${peer.alias}; offering a new session.'
                 : 'Ratchet decrypt failed for ${peer.alias}; offering a new session.',
           );
           unawaited(_sendRatchetBundle(peer, reason: 'reset'));
+          if (downgrade) unawaited(_requestPeerCapabilities(peer));
         };
     } catch (error) {
       appendDebugLog('Forward-secret sessions unavailable: $error');
     }
   }
 
+  /// Tells contacts when this build's capabilities differ from the ones last
+  /// advertised, for example after an update that adds the ratchet.
+  Future<void> _advertiseCapabilitiesIfChanged() async {
+    final me = _snapshot.identity;
+    if (me == null) return;
+    final current = [
+      for (final capability in _localApplicationCapabilities()) capability.name,
+    ];
+    final previous = me.advertisedFeatureCapabilities;
+    if (previous != null && listEquals(previous, current)) return;
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(advertisedFeatureCapabilities: current),
+    );
+    await _saveSnapshotSilently(notify: false);
+    for (final contact in _snapshot.contacts.where(
+      (contact) => contact.canSendOutbound,
+    )) {
+      unawaited(
+        _sendReciprocalContactExchange(contact, recipientKnowsIdentity: true)
+            .then<void>((_) {})
+            .catchError((Object _) {}),
+      );
+    }
+  }
+
+  /// A peer that used the ratchet and now sends static-key traffic may run a
+  /// build without it; builds never announce a removed capability, so ask.
+  /// A fresh answer without ratchetV1 drops the sessions.
+  Future<void> _requestPeerCapabilities(ContactRecord peer) async {
+    final contact = _contactByDeviceId(peer.deviceId);
+    if (contact == null ||
+        !contact.canSendOutbound ||
+        contact.publicKeyBase64 != peer.publicKeyBase64) {
+      return;
+    }
+    final limitKey = '${ratchetPeerId(peer)}|capabilities';
+    final now = _now();
+    final last = _ratchetBundleSentAt[limitKey];
+    if (last != null && now.difference(last) < _ratchetBundleInterval) return;
+    _ratchetBundleSentAt[limitKey] = now;
+    try {
+      await _sendReciprocalContactExchange(
+        contact,
+        recipientKnowsIdentity: true,
+        requestPeerCapabilities: true,
+      );
+    } catch (error) {
+      appendDebugLog('Capability request to ${peer.alias} failed: $error');
+    }
+  }
+
+  /// An exchange created before this device last heard the peer on the
+  /// ratchet cannot withdraw the capability: keep ratchetV1 in that case,
+  /// so a delayed old exchange cannot force static-key traffic.
+  Future<List<ApplicationCapability>?> _withoutStaleRatchetWithdrawal(
+    ContactRecord existing,
+    List<ApplicationCapability>? advertised,
+    DateTime advertisedAt,
+  ) async {
+    final sessions = _ratchet;
+    if (sessions == null ||
+        advertised == null ||
+        advertised.contains(ApplicationCapability.ratchetV1)) {
+      return advertised;
+    }
+    final confirmedAt = await sessions.confirmedAt(ratchetPeerId(existing));
+    if (confirmedAt == null || advertisedAt.toUtc().isAfter(confirmedAt)) {
+      return advertised;
+    }
+    appendDebugLog(
+      'Kept forward-secret sessions with ${existing.alias}: an older '
+      'capability list arrived late.',
+    );
+    return [...advertised, ApplicationCapability.ratchetV1];
+  }
+
   /// A contact's own advertisement, or for a group-only peer the member
-  /// profile the group carries for it.
+  /// profile the group carries for that exact identity.
   bool _ratchetCapable(ContactRecord peer) {
     bool advertises(List<ApplicationCapability> capabilities, int version) =>
         version >= 1 && capabilities.contains(ApplicationCapability.ratchetV1);
@@ -21223,6 +21338,7 @@ class MessengerController extends ChangeNotifier {
     for (final group in _snapshot.groups) {
       final profile = group.memberProfileFor(peer.deviceId);
       if (profile != null &&
+          profile.publicKeyBase64 == peer.publicKeyBase64 &&
           advertises(
             profile.featureCapabilities,
             profile.featureCapabilityVersion,
@@ -21250,15 +21366,16 @@ class MessengerController extends ChangeNotifier {
     return null;
   }
 
-  /// Drops sessions with a peer that stopped advertising the ratchet (for
-  /// example after moving to a build without it), or offers one if needed.
+  /// Drops sessions with a peer that no longer advertises the ratchet, or
+  /// offers one if needed.
   Future<void> _syncRatchetWithCapabilities(ContactRecord peer) async {
     final sessions = _ratchet;
     if (sessions == null) return;
     if (!_ratchetCapable(peer)) {
-      if (await sessions.hasSession(peer.deviceId) ||
-          await sessions.confirmedAt(peer.deviceId) != null) {
-        await sessions.forget(peer.deviceId);
+      final id = ratchetPeerId(peer);
+      if (await sessions.hasSession(id) ||
+          await sessions.confirmedAt(id) != null) {
+        await sessions.forget(id);
         appendDebugLog(
           '${peer.alias} no longer supports forward-secret sessions.',
         );
@@ -21268,24 +21385,33 @@ class MessengerController extends ChangeNotifier {
     await _maybeOfferRatchetBundle(peer);
   }
 
+  /// Runs on every retry pass: offers to capable peers that lack a session,
+  /// and drops sessions with group-only peers whose profile withdrew the
+  /// ratchet (contacts are handled when their capability exchange arrives).
   void _offerRatchetBundles() {
     final sessions = _ratchet;
     final me = _snapshot.identity;
     if (sessions == null || me == null) return;
-    final peers = <String, ContactRecord>{
-      for (final contact in _snapshot.contacts)
-        if (contact.canSendOutbound) contact.deviceId: contact,
-    };
+    for (final contact in _snapshot.contacts) {
+      if (contact.canSendOutbound) {
+        unawaited(_maybeOfferRatchetBundle(contact));
+      }
+    }
+    final groupPeers = <String, ContactRecord>{};
     for (final group in _snapshot.groups) {
       if (!group.hasActiveMember(me.deviceId)) continue;
       for (final deviceId in group.activeMemberDeviceIds) {
-        if (deviceId == me.deviceId || peers.containsKey(deviceId)) continue;
+        if (deviceId == me.deviceId ||
+            _contactByDeviceId(deviceId) != null ||
+            groupPeers.containsKey(deviceId)) {
+          continue;
+        }
         final peer = _groupMemberContact(group, deviceId);
-        if (peer != null) peers[deviceId] = peer;
+        if (peer != null) groupPeers[deviceId] = peer;
       }
     }
-    for (final peer in peers.values) {
-      unawaited(_maybeOfferRatchetBundle(peer));
+    for (final peer in groupPeers.values) {
+      unawaited(_syncRatchetWithCapabilities(peer));
     }
   }
 
@@ -21298,7 +21424,7 @@ class MessengerController extends ChangeNotifier {
         me == null ||
         !_ratchetCapable(peer) ||
         me.deviceId.compareTo(peer.deviceId) >= 0 ||
-        await sessions.hasSession(peer.deviceId)) {
+        await sessions.hasSession(ratchetPeerId(peer))) {
       return;
     }
     await _sendRatchetBundle(peer, reason: 'offer');
@@ -21314,7 +21440,7 @@ class MessengerController extends ChangeNotifier {
     final now = _now();
     // Offers and resets are limited separately: a recent offer must not
     // suppress the reset that recovers a lost session.
-    final limitKey = '${peer.deviceId}|$reason';
+    final limitKey = '${ratchetPeerId(peer)}|$reason';
     if (reason != 'answer') {
       final last = _ratchetBundleSentAt[limitKey];
       if (last != null && now.difference(last) < _ratchetBundleInterval) {
@@ -21323,7 +21449,11 @@ class MessengerController extends ChangeNotifier {
       _ratchetBundleSentAt[limitKey] = now;
     }
     try {
-      final bundle = await sessions.createBundle();
+      // An answer only announces this device's identity: the sender of the
+      // offer already holds a session, so no one-time key is reserved.
+      final bundle = await sessions.createBundle(
+        oneTimeKey: reason != 'answer',
+      );
       final envelope = await _crypto.encryptPayloadEnvelope(
         kind: _ratchetBundleKind,
         messageId: _randomId('rbundle'),
@@ -21365,9 +21495,10 @@ class MessengerController extends ChangeNotifier {
     final reason = decoded['reason'];
     if (reason != 'offer' && reason != 'answer' && reason != 'reset') return;
     final bundle = RatchetBundle.fromJson(decoded['bundle']);
-    await sessions.rememberPeerIdentity(peer.deviceId, bundle.identityKey);
+    final id = ratchetPeerId(peer);
+    await sessions.rememberPeerIdentity(id, bundle.identityKey);
     if (reason == 'answer') return;
-    await sessions.startSession(peer.deviceId, bundle);
+    await sessions.startSession(id, bundle);
     await _sendRatchetBundle(peer, reason: 'answer');
     final me = _requireIdentity();
     try {
@@ -21391,6 +21522,50 @@ class MessengerController extends ChangeNotifier {
       // Real traffic on the new session also opens it at the peer.
       appendDebugLog('Ratchet hello to ${peer.alias} not sent: $error');
     }
+    // The peer had no usable session: anything recently sent on the old one
+    // may be undecryptable there, so send it again on the new session.
+    _bulkKeyAnnouncedAt.removeWhere((key, _) => key.startsWith('$id|'));
+    _resendRecentControls(peer);
+  }
+
+  /// Controls (edits, deletes, reactions, cancels, call signals) leave the
+  /// outbox once a transport accepts them. Keep the recent ones briefly so a
+  /// peer reset can have them sent again on the new session.
+  final Map<String, List<(PendingAckDelivery, DateTime)>> _recentControls =
+      {};
+
+  void _rememberAcceptedControl(PendingAckDelivery entry) {
+    if (entry.payload == null || _ratchet == null) return;
+    final recent = _recentControls.putIfAbsent(
+      entry.targetDeviceId,
+      () => <(PendingAckDelivery, DateTime)>[],
+    );
+    recent
+      ..removeWhere(
+        (item) =>
+            item.$1.acknowledgedMessageId == entry.acknowledgedMessageId &&
+            item.$1.kind == entry.kind,
+      )
+      ..add((entry, _now()));
+    if (recent.length > 32) recent.removeRange(0, recent.length - 32);
+  }
+
+  void _resendRecentControls(ContactRecord peer) {
+    final recent = _recentControls.remove(peer.deviceId);
+    if (recent == null) return;
+    final cutoff = _now().subtract(const Duration(minutes: 30));
+    var queued = false;
+    for (final (entry, acceptedAt) in recent) {
+      if (acceptedAt.isBefore(cutoff)) continue;
+      _enqueuePendingAckDelivery(
+        entry.copyWith(
+          attempts: 1,
+          lastAttemptedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+        ),
+      );
+      queued = true;
+    }
+    if (queued) unawaited(_retryPendingAckDeliveries(force: true));
   }
 
   /// Group-file frames to a confirmed ratchet peer use this device's daily
@@ -21399,13 +21574,14 @@ class MessengerController extends ChangeNotifier {
   /// delivered, so a frame is never sealed with a key the peer lacks.
   Future<RatchetBulkKey?> _groupFileSendKey(ContactRecord peer) async {
     final sessions = _ratchet;
+    final id = ratchetPeerId(peer);
     if (sessions == null ||
-        await sessions.confirmedAt(peer.deviceId) == null ||
-        !await sessions.hasSession(peer.deviceId)) {
+        await sessions.confirmedAt(id) == null ||
+        !await sessions.hasSession(id)) {
       return null;
     }
-    final (key, _) = await sessions.sendBulkKey(peer.deviceId);
-    final announceKey = '${peer.deviceId}|${key.id}';
+    final (key, _) = await sessions.sendBulkKey(id);
+    final announceKey = '$id|${key.id}';
     final now = _now();
     final last = _bulkKeyAnnouncedAt[announceKey];
     if (last != null && now.difference(last) < const Duration(minutes: 10)) {
@@ -21460,7 +21636,7 @@ class MessengerController extends ChangeNotifier {
     final key = RatchetBulkKey.fromJson(decoded['key']);
     // Retention runs on this device's clock, not the sender's.
     await sessions.rememberReceivedBulkKey(
-      peer.deviceId,
+      ratchetPeerId(peer),
       RatchetBulkKey(
         id: key.id,
         key: key.key,
