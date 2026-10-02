@@ -128,6 +128,10 @@ impl NativeTransport {
                 RelayMap::try_from_iter(normalized).context("parse custom Iroh relay URL list")?;
             builder = builder.relay_mode(RelayMode::Custom(relay_map));
         }
+        #[cfg(feature = "test-relay-only")]
+        if relay_enabled && std::env::var_os("CONEST_IROH_TEST_RELAY_ONLY").is_some() {
+            builder = builder.clear_ip_transports();
+        }
         let endpoint = builder.bind().await.context("bind Iroh endpoint")?;
         Ok(Self::from_endpoint(endpoint, relay_enabled))
     }

@@ -10,6 +10,12 @@ publish = false
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
 
+[features]
+# Qualification-only: lets CONEST_IROH_TEST_RELAY_ONLY strip IP transports so
+# app-level tests must reach peers through Iroh relays. Never enabled in
+# shipped builds.
+test-relay-only = []
+
 [dependencies]
 anyhow = "1"
 base64 = "0.22"

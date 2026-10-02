@@ -2556,6 +2556,117 @@ void main() {
     },
   );
 
+  // Live network qualification: build conest_native with
+  // `--features test-relay-only` and set CONEST_IROH_TEST_RELAY_ONLY=1 so
+  // endpoints have no IP transports and must use the public Iroh relays.
+  test(
+    'native Iroh contact adding works through the public Iroh relays only',
+    () async {
+      final adapters = <IrohTransportAdapter>[];
+      Future<TransportRegistry?> relayOnlyRegistry(
+        IdentityRecord identity,
+      ) async {
+        final bridge = FfiNativeIrohBridge.tryCreate();
+        if (bridge == null) {
+          throw StateError('The native Iroh bridge is unavailable.');
+        }
+        final adapter = IrohTransportAdapter(
+          bridge: bridge,
+          secretKeySeed: Uint8List.fromList(
+            base64Decode(identity.signingPrivateKeyBase64!),
+          ),
+          relayEnabled: true,
+          expectedEndpointId: identity.irohEndpointId,
+        );
+        adapters.add(adapter);
+        return TransportRegistry(<TransportAdapter>[adapter]);
+      }
+
+      Future<void> waitForRelay(
+        bool Function() ready,
+        String reason,
+      ) async {
+        final deadline = DateTime.now().add(const Duration(seconds: 60));
+        while (!ready() && DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        expect(ready(), isTrue, reason: reason);
+      }
+
+      final relay = _FakeRelayClient()
+        ..shouldFailStore = (_, _, _, _, _) => true;
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        internetRelayHost: null,
+        transportRegistryFactory: relayOnlyRegistry,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        internetRelayHost: null,
+        transportRegistryFactory: relayOnlyRegistry,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      for (final peer in [alice, bob]) {
+        await peer.updateGlobalConnectivity(_irohOnlyConnectivity);
+        expect(peer.identity!.connectivity.irohRelayEnabled, isTrue);
+      }
+
+      final result = await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      expect(result.exchangeStatus, ContactExchangeStatus.automatic);
+      await waitForRelay(
+        () => bob.pendingContactRequests.isNotEmpty,
+        'contact request did not arrive over the Iroh relay',
+      );
+      await bob.approvePendingContactRequest(
+        bob.pendingContactRequests.single.id,
+      );
+      expect(bob.contacts.single.hasPinnedIrohIdentity, isTrue);
+      await waitForRelay(
+        () => alice.contacts.single.featureCapabilityVersion == 1,
+        'capability exchange did not return over the Iroh relay',
+      );
+      await alice.sendMessage(
+        contact: alice.contacts.single,
+        body: 'Relayed hello',
+      );
+      await waitForRelay(
+        () => bob
+            .messagesFor(alice.identity!.deviceId)
+            .any((m) => m.body == 'Relayed hello'),
+        'message did not arrive over the Iroh relay',
+      );
+      await bob.sendMessage(
+        contact: bob.contacts.single,
+        body: 'Relayed reply',
+      );
+      await waitForRelay(
+        () => alice
+            .messagesFor(bob.identity!.deviceId)
+            .any((m) => m.body == 'Relayed reply'),
+        'reply did not arrive over the Iroh relay',
+      );
+      expect(relay.storedEnvelopes, isEmpty);
+      // Prove no direct path existed: relay-only endpoints bind no IP
+      // transports, so they have no direct address to advertise.
+      expect(adapters, hasLength(2));
+      for (final adapter in adapters) {
+        expect(adapter.status, isNotNull);
+        expect(adapter.status!.directAddresses, isEmpty);
+      }
+    },
+    skip: Platform.environment['CONEST_IROH_TEST_RELAY_ONLY'] == null
+        ? 'Requires the live Iroh relays and a test-relay-only native build'
+        : false,
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
   test(
     'Iroh group history signed polls and scheduled file captions converge',
     () async {
