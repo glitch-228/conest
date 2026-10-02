@@ -781,6 +781,7 @@ void main() {
         notificationsEnabled: true,
         androidBackgroundRuntimeEnabled: false,
         androidBackgroundCallsEnabled: true,
+        experimentalVoiceCallsEnabled: false,
         suppressReadReceipts: false,
         lanAddresses: const [],
         safetyNumber: 'safety',
@@ -792,11 +793,23 @@ void main() {
         ).androidBackgroundCallsEnabled,
         isTrue,
       );
+      // An explicit opt-out survives a round trip.
+      expect(
+        IdentityRecord.fromJson(identity.toJson()).experimentalVoiceCallsEnabled,
+        isFalse,
+      );
       final legacy = Map<String, dynamic>.from(identity.toJson())
-        ..remove('androidBackgroundCallsEnabled');
+        ..remove('androidBackgroundCallsEnabled')
+        ..remove('experimentalVoiceCallsEnabled');
       expect(
         IdentityRecord.fromJson(legacy).androidBackgroundCallsEnabled,
         isFalse,
+      );
+      // Identities from before the preference existed keep calls on; the
+      // build flag still decides whether calls exist at all.
+      expect(
+        IdentityRecord.fromJson(legacy).experimentalVoiceCallsEnabled,
+        isTrue,
       );
       expect(
         identity

@@ -10,7 +10,22 @@ import 'package:record/record.dart';
 import 'feature_models.dart';
 import 'platform_bridge.dart';
 
-enum VoiceRecordingState { idle, recording, preview }
+enum VoiceRecordingState { idle, starting, recording, stopping, preview, error }
+
+class VoiceRecordingSnapshot {
+  const VoiceRecordingSnapshot({
+    required this.state,
+    required this.destinationKey,
+    required this.elapsed,
+    required this.waveform,
+    this.error,
+  });
+  final VoiceRecordingState state;
+  final String? destinationKey;
+  final Duration elapsed;
+  final List<int> waveform;
+  final String? error;
+}
 
 /// Keeps recording private and separate from the transfer pipeline. Capture
 /// and Opus encoding are provided by native recorder implementations; the
@@ -34,16 +49,22 @@ class VoiceMessageService {
   String? _previewDestinationKey;
   final StreamController<VoiceRecordingState> _stateChanges =
       StreamController<VoiceRecordingState>.broadcast();
+  final StreamController<VoiceRecordingSnapshot> _recordingSnapshots =
+      StreamController<VoiceRecordingSnapshot>.broadcast();
   final StreamController<Duration> _playbackPositions =
       StreamController<Duration>.broadcast();
+  final StreamController<String> _playbackErrors =
+      StreamController<String>.broadcast();
   VoiceRecordingResult? _preview;
   StreamSubscription<Amplitude>? _amplitudeSubscription;
   StreamSubscription<RecordState>? _recorderStateSubscription;
   Timer? _durationTimer;
+  Timer? _durationTickTimer;
   mk.Player? _desktopPlayer;
   ja.AudioPlayer? _mobilePlayer;
   StreamSubscription<Duration>? _mobilePositionSubscription;
   StreamSubscription<Duration>? _desktopPositionSubscription;
+  StreamSubscription<String>? _desktopErrorSubscription;
   String? _playingPath;
   String? _playingItemId;
   double _playbackRate = 1;
@@ -57,6 +78,8 @@ class VoiceMessageService {
   bool _interruptCaptureStartup = false;
   bool _cancelCaptureStartup = false;
   bool _ignoreRecorderStateEvents = false;
+  String? _recordingError;
+  String? _playbackError;
   Future<VoiceRecordingResult>? _stopInFlight;
   Future<void>? _cancelInFlight;
   final List<int> _waveform = <int>[];
@@ -100,6 +123,15 @@ class VoiceMessageService {
 
   VoiceRecordingState get state => _state;
   Stream<VoiceRecordingState> get states => _stateChanges.stream;
+  Stream<VoiceRecordingSnapshot> get recordingSnapshots =>
+      _recordingSnapshots.stream;
+  VoiceRecordingSnapshot get recordingSnapshot => VoiceRecordingSnapshot(
+    state: _state,
+    destinationKey: _previewDestinationKey,
+    elapsed: _currentRecordingDuration(),
+    waveform: List<int>.unmodifiable(_waveform),
+    error: _recordingError,
+  );
   VoiceRecordingResult? get preview => _preview;
   String? get previewDestinationKey => _previewDestinationKey;
   bool get isRecording => _state == VoiceRecordingState.recording;
@@ -109,6 +141,8 @@ class VoiceMessageService {
   /// preview playback.
   double get playbackVolume => _playbackVolume;
   String? get playingItemId => _playingItemId;
+  String? get playbackError => _playbackError;
+  Stream<String> get playbackErrors => _playbackErrors.stream;
   bool get isPlaying => Platform.isAndroid
       ? (_mobilePlayer?.playing ?? false)
       : (_desktopPlayer?.state.playing ?? false);
@@ -117,6 +151,28 @@ class VoiceMessageService {
     if (_state == value) return;
     _state = value;
     if (!_stateChanges.isClosed) _stateChanges.add(value);
+    _emitRecordingSnapshot();
+  }
+
+  Duration _currentRecordingDuration() {
+    final startedAt = _startedAt;
+    if (startedAt == null || _state != VoiceRecordingState.recording) {
+      return Duration.zero;
+    }
+    final elapsed = _now().toUtc().difference(startedAt);
+    if (elapsed.isNegative) return Duration.zero;
+    return elapsed > maximumDuration ? maximumDuration : elapsed;
+  }
+
+  void _emitRecordingSnapshot() {
+    if (!_recordingSnapshots.isClosed) {
+      _recordingSnapshots.add(recordingSnapshot);
+    }
+  }
+
+  void reportRecordingError(Object error) {
+    _recordingError = error.toString();
+    _emitRecordingSnapshot();
   }
 
   List<int> _nativeWaveform(Map<String, dynamic>? result) {
@@ -133,7 +189,9 @@ class VoiceMessageService {
 
   Future<void> start({required String destinationKey}) async {
     if (_disposed) throw StateError('Voice recorder is disposed.');
-    if (_state != VoiceRecordingState.idle || _captureStarting) {
+    if ((_state != VoiceRecordingState.idle &&
+            _state != VoiceRecordingState.error) ||
+        _captureStarting) {
       throw StateError('A voice recording is already active.');
     }
     if (destinationKey.isEmpty || destinationKey.length > 256) {
@@ -147,6 +205,9 @@ class VoiceMessageService {
     _captureStartupDone = startupDone;
     _interruptCaptureStartup = false;
     _cancelCaptureStartup = false;
+    _recordingError = null;
+    _previewDestinationKey = destinationKey;
+    _setState(VoiceRecordingState.starting);
     try {
       // Capture and playback share the device audio session. Stop any message
       // playback before opening the microphone, including while permission is
@@ -177,7 +238,6 @@ class VoiceMessageService {
         'voice-${_now().toUtc().microsecondsSinceEpoch}.ogg',
       );
       _waveform.clear();
-      _previewDestinationKey = destinationKey;
       _startedAt = _now().toUtc();
       if (useNativeRecorder) {
         _nativeRecordingPath = path;
@@ -215,6 +275,11 @@ class VoiceMessageService {
       _durationTimer = Timer(maximumDuration, () {
         unawaited(stopForInterruption());
       });
+      _durationTickTimer?.cancel();
+      _durationTickTimer = Timer.periodic(
+        const Duration(milliseconds: 200),
+        (_) => _emitRecordingSnapshot(),
+      );
       final interrupted = _interruptCaptureStartup;
       final canceled = _cancelCaptureStartup;
       _captureStarting = false;
@@ -223,7 +288,7 @@ class VoiceMessageService {
         throw StateError('Voice recording was canceled during startup.');
       }
       if (interrupted) await stopForInterruption();
-    } catch (_) {
+    } catch (error) {
       if (useNativeRecorder) {
         if (_nativeRecordingPath != null) {
           try {
@@ -238,13 +303,22 @@ class VoiceMessageService {
       }
       _durationTimer?.cancel();
       _durationTimer = null;
+      _durationTickTimer?.cancel();
+      _durationTickTimer = null;
       await _amplitudeSubscription?.cancel();
       _amplitudeSubscription = null;
       await _recorderStateSubscription?.cancel();
       _recorderStateSubscription = null;
       _startedAt = null;
-      _previewDestinationKey = null;
-      _setState(VoiceRecordingState.idle);
+      final canceled =
+          _cancelCaptureStartup ||
+          error.toString().contains('was canceled during startup') ||
+          error.toString().contains('was interrupted before it started');
+      _recordingError = canceled ? null : error.toString();
+      if (canceled) _previewDestinationKey = null;
+      _setState(
+        canceled ? VoiceRecordingState.idle : VoiceRecordingState.error,
+      );
       rethrow;
     } finally {
       _captureStarting = false;
@@ -267,6 +341,10 @@ class VoiceMessageService {
     _stopInFlight = operation;
     try {
       return await operation;
+    } catch (error) {
+      _recordingError = error.toString();
+      _setState(VoiceRecordingState.error);
+      rethrow;
     } finally {
       if (identical(_stopInFlight, operation)) _stopInFlight = null;
     }
@@ -289,8 +367,11 @@ class VoiceMessageService {
 
   Future<VoiceRecordingResult> _stopAndStore() async {
     final startedAt = _startedAt;
+    _setState(VoiceRecordingState.stopping);
     _durationTimer?.cancel();
     _durationTimer = null;
+    _durationTickTimer?.cancel();
+    _durationTickTimer = null;
     await _amplitudeSubscription?.cancel();
     _amplitudeSubscription = null;
     String? path;
@@ -300,10 +381,11 @@ class VoiceMessageService {
       try {
         nativeResult = await _platformBridge!.stopVoiceMessageRecording();
       } catch (_) {
+        try {
+          await _platformBridge!.cancelVoiceMessageRecording();
+        } catch (_) {}
         _nativeRecordingPath = null;
         _startedAt = null;
-        _previewDestinationKey = null;
-        _setState(VoiceRecordingState.idle);
         rethrow;
       }
       _nativeRecordingPath = null;
@@ -319,14 +401,10 @@ class VoiceMessageService {
     }
     _startedAt = null;
     if (path == null) {
-      _setState(VoiceRecordingState.idle);
-      _previewDestinationKey = null;
       throw StateError('Voice recording stopped without an audio file.');
     }
     final file = File(path);
     if (!await file.exists() || await file.length() <= 0) {
-      _setState(VoiceRecordingState.idle);
-      _previewDestinationKey = null;
       throw StateError('Voice recording output is empty.');
     }
     final handle = await file.open();
@@ -338,8 +416,6 @@ class VoiceMessageService {
         signature[2] != 0x67 ||
         signature[3] != 0x53) {
       await file.delete();
-      _setState(VoiceRecordingState.idle);
-      _previewDestinationKey = null;
       throw StateError('The recorder did not produce an Ogg/Opus file.');
     }
     final stoppedAt = _now().toUtc();
@@ -350,8 +426,6 @@ class VoiceMessageService {
     );
     if (durationMs < 1000) {
       await file.delete();
-      _setState(VoiceRecordingState.idle);
-      _previewDestinationKey = null;
       throw StateError('Voice messages must be at least one second long.');
     }
     final result = VoiceRecordingResult(
@@ -363,6 +437,7 @@ class VoiceMessageService {
       ),
     );
     _preview = result;
+    _recordingError = null;
     _setState(VoiceRecordingState.preview);
     return result;
   }
@@ -403,7 +478,13 @@ class VoiceMessageService {
     if (_state == VoiceRecordingState.recording) {
       await stopForInterruption();
     }
-    await _ensurePlayer();
+    _playbackError = null;
+    try {
+      await _ensurePlayer();
+    } catch (error) {
+      _reportPlaybackError(error);
+      rethrow;
+    }
     if (Platform.isAndroid) {
       final player = _mobilePlayer!;
       if (_playingPath == path) {
@@ -505,12 +586,22 @@ class VoiceMessageService {
       _desktopPositionSubscription = player.stream.position.listen(
         _emitPlaybackPosition,
       );
+      _desktopErrorSubscription = player.stream.error.listen(
+        _reportPlaybackError,
+      );
       await player.setVolume(_playbackVolume * 100);
     }
   }
 
   void _emitPlaybackPosition(Duration position) {
     if (!_playbackPositions.isClosed) _playbackPositions.add(position);
+  }
+
+  void _reportPlaybackError(Object error) {
+    final message = error.toString();
+    _playbackError = message;
+    if (!_playbackErrors.isClosed) _playbackErrors.add(message);
+    _emitPlaybackPosition(Duration.zero);
   }
 
   void _handleRecorderState(RecordState state) {
@@ -550,6 +641,8 @@ class VoiceMessageService {
     }
     _durationTimer?.cancel();
     _durationTimer = null;
+    _durationTickTimer?.cancel();
+    _durationTickTimer = null;
     await _amplitudeSubscription?.cancel();
     _amplitudeSubscription = null;
     if (_nativeRecordingPath != null) {
@@ -568,6 +661,7 @@ class VoiceMessageService {
     _recorderStateSubscription = null;
     _startedAt = null;
     _waveform.clear();
+    _recordingError = null;
     await completePreview();
   }
 
@@ -584,9 +678,12 @@ class VoiceMessageService {
     await _recorder?.dispose();
     await _mobilePositionSubscription?.cancel();
     await _desktopPositionSubscription?.cancel();
+    await _desktopErrorSubscription?.cancel();
     await _mobilePlayer?.dispose();
     await _desktopPlayer?.dispose();
     await _stateChanges.close();
+    await _recordingSnapshots.close();
     await _playbackPositions.close();
+    await _playbackErrors.close();
   }
 }

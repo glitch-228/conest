@@ -1400,6 +1400,11 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _selectedGroupId;
   bool _lanLobbySelected = false;
   bool _detailsPaneOpen = false;
+  bool _callScreenMinimized = false;
+  String? _callScreenSessionId;
+  String? _dismissedCallId;
+  String? _terminalCallTimerId;
+  Timer? _terminalCallTimer;
   double _sidebarWidth = 380;
   final _courierKey = GlobalKey<_CourierHomeState>();
   final _composers = <(ConversationKind, String), TextEditingController>{};
@@ -1498,9 +1503,64 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _minimizeOrDismissCall(VoiceCallSession call) {
+    setState(() {
+      if (call.state == VoiceCallState.ended) {
+        _dismissedCallId = call.callId;
+        _callScreenMinimized = false;
+      } else {
+        _callScreenMinimized = true;
+      }
+    });
+  }
+
+  Future<void> _chooseCallOutput() async {
+    final service = widget.controller.voiceCallService;
+    if (service == null) return;
+    try {
+      final devices = await service.availableOutputDevices();
+      if (!mounted) return;
+      if (devices.isEmpty) {
+        widget.controller.setStatus('No audio output devices were found.');
+        return;
+      }
+      final selected = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Call audio output'),
+          content: SizedBox(
+            width: 440,
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                for (final device in devices)
+                  ListTile(
+                    title: Text(device),
+                    onTap: () => Navigator.of(context).pop(device),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+          ],
+        ),
+      );
+      if (selected == null || !mounted) return;
+      await service.selectOutputDevice(selected);
+      widget.controller.setStatus('Call audio routed to $selected.');
+    } catch (error) {
+      widget.controller.setStatus('Could not change call audio output: $error');
+    }
+  }
+
   @override
   void dispose() {
     unawaited(_userNoticeSubscription?.cancel());
+    _terminalCallTimer?.cancel();
     widget.controller.removeListener(_handleControllerChanged);
     widget.controller.conversationRevision.removeListener(
       _handleConversationRevision,
@@ -1623,7 +1683,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _showAddContact() async {
-    await showDialog<void>(
+    final added = await showDialog<ContactRecord>(
       context: context,
       builder: (context) => AddContactDialog(
         fullscreenOnMobile: widget.themeController.shell == ConestShell.courier,
@@ -1631,6 +1691,13 @@ class _HomeScreenState extends State<HomeScreen> {
         palette: widget.palette,
       ),
     );
+    if (added == null || !mounted) return;
+    setState(() {
+      _selectedContactId = added.deviceId;
+      _selectedGroupId = null;
+      _lanLobbySelected = false;
+      _replyTarget = null;
+    });
   }
 
   Future<void> _showCreateGroup() async {
@@ -2444,6 +2511,47 @@ class _HomeScreenState extends State<HomeScreen> {
     final selectedGroup = _selectedGroup;
     final lanLobbySelected =
         _lanLobbySelected && selectedContact == null && selectedGroup == null;
+    final activeCall = widget.controller.voiceCallService?.active;
+    if (activeCall == null) {
+      _callScreenSessionId = null;
+      _callScreenMinimized = false;
+      _dismissedCallId = null;
+      _terminalCallTimerId = null;
+      _terminalCallTimer?.cancel();
+      _terminalCallTimer = null;
+    } else if (_callScreenSessionId != activeCall.callId &&
+        _dismissedCallId != activeCall.callId) {
+      _callScreenSessionId = activeCall.callId;
+      _callScreenMinimized = false;
+    }
+    final endedCall = activeCall;
+    if (endedCall != null && endedCall.state == VoiceCallState.ended) {
+      _callScreenMinimized = false;
+      if (_terminalCallTimerId != endedCall.callId) {
+        _terminalCallTimerId = endedCall.callId;
+        _terminalCallTimer?.cancel();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _terminalCallTimer = Timer(const Duration(seconds: 4), () {
+            if (!mounted) return;
+            setState(() => _dismissedCallId = endedCall.callId);
+          });
+        });
+      }
+    } else if (activeCall != null) {
+      _terminalCallTimer?.cancel();
+      _terminalCallTimer = null;
+      _terminalCallTimerId = null;
+    }
+    final visibleCall = activeCall != null &&
+            _dismissedCallId != activeCall.callId
+        ? activeCall
+        : null;
+    final callContact = visibleCall == null
+        ? null
+        : widget.controller.contacts
+              .where((contact) => contact.deviceId == visibleCall.peerDeviceId)
+              .firstOrNull;
     return CallbackShortcuts(
       bindings: widget.themeController.shell != ConestShell.courier
           ? const {}
@@ -2507,15 +2615,19 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               PopScope(
-                canPop:
+                canPop: visibleCall == null &&
                     selectedContact == null &&
                     selectedGroup == null &&
                     !lanLobbySelected,
                 onPopInvokedWithResult: (didPop, result) {
-                  if (!didPop &&
-                      (_selectedContactId != null ||
-                          _selectedGroupId != null ||
-                          _lanLobbySelected)) {
+                  if (didPop) return;
+                  if (visibleCall != null) {
+                    _minimizeOrDismissCall(visibleCall);
+                    return;
+                  }
+                  if (_selectedContactId != null ||
+                      _selectedGroupId != null ||
+                      _lanLobbySelected) {
                     setState(() {
                       _selectedContactId = null;
                       _selectedGroupId = null;
@@ -2798,12 +2910,308 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
+              if (visibleCall != null && !_callScreenMinimized)
+                Positioned.fill(
+                  child: _VoiceCallOverlay(
+                    controller: widget.controller,
+                    palette: palette,
+                    call: visibleCall,
+                    contact: callContact,
+                    onMinimize: () => _minimizeOrDismissCall(visibleCall),
+                    onChooseOutput: _chooseCallOutput,
+                  ),
+                )
+              else if (visibleCall != null)
+                Positioned(
+                  top: 4,
+                  left: 12,
+                  right: 12,
+                  child: SafeArea(
+                    child: _CallReturnBar(
+                      call: visibleCall,
+                      contact: callContact,
+                      palette: palette,
+                      onReturn: () => setState(() {
+                        _callScreenMinimized = false;
+                      }),
+                      onHangUp: () => unawaited(
+                        widget.controller.voiceCallService!.end().catchError(
+                          (Object error) =>
+                              widget.controller.setStatus('$error'),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+class _VoiceCallOverlay extends StatefulWidget {
+  const _VoiceCallOverlay({
+    required this.controller,
+    required this.palette,
+    required this.call,
+    required this.contact,
+    required this.onMinimize,
+    required this.onChooseOutput,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+  final VoiceCallSession call;
+  final ContactRecord? contact;
+  final VoidCallback onMinimize;
+  final VoidCallback onChooseOutput;
+
+  @override
+  State<_VoiceCallOverlay> createState() => _VoiceCallOverlayState();
+}
+
+class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
+  Timer? _clock;
+
+  @override
+  void initState() {
+    super.initState();
+    _clock = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _clock?.cancel();
+    super.dispose();
+  }
+
+  String get _stateLabel => switch (widget.call.state) {
+    VoiceCallState.idle => 'Preparing call…',
+    VoiceCallState.ringing => widget.call.outgoing
+        ? 'Calling…'
+        : 'Incoming voice call',
+    VoiceCallState.connecting => 'Connecting…',
+    VoiceCallState.connected => _connectedTime(),
+    VoiceCallState.reconnecting => 'Reconnecting…',
+    VoiceCallState.ended => widget.call.failureReason ?? 'Call ended',
+  };
+
+  String _connectedTime() {
+    final elapsed = DateTime.now().difference(widget.call.startedAt);
+    final seconds = elapsed.inSeconds.clamp(0, 24 * 60 * 60);
+    return 'Connected · ${(seconds ~/ 60).toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}';
+  }
+
+  void _run(Future<void> Function() operation) {
+    unawaited(operation().catchError((Object error) {
+      widget.controller.setStatus('Voice call: $error');
+    }));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final call = widget.call;
+    final incoming = !call.outgoing && call.state == VoiceCallState.ringing;
+    final ended = call.state == VoiceCallState.ended;
+    final connected = call.state == VoiceCallState.connected ||
+        call.state == VoiceCallState.reconnecting;
+    return PopScope<void>(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) widget.onMinimize();
+      },
+      child: Material(
+        color: widget.palette.panel.withValues(alpha: 0.98),
+        child: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Align(
+                      alignment: Alignment.topRight,
+                      child: IconButton(
+                        tooltip: 'Minimize call',
+                        onPressed: widget.onMinimize,
+                        icon: const Icon(Icons.keyboard_arrow_down),
+                      ),
+                    ),
+                    const Spacer(),
+                    SealAvatar(
+                      seed: call.peerDeviceId,
+                      palette: widget.palette,
+                      size: 112,
+                      animate: true,
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      widget.contact?.alias ?? 'Unknown contact',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.headlineMedium
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      _stateLabel,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: widget.palette.inkSoft,
+                      ),
+                    ),
+                    if (call.failureReason != null) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        call.failureReason!,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: widget.palette.danger),
+                      ),
+                    ],
+                    const Spacer(),
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        if (incoming)
+                          FilledButton.icon(
+                            onPressed: () => _run(
+                              widget.controller.acceptVoiceCall,
+                            ),
+                            icon: const Icon(Icons.call),
+                            label: const Text('Accept'),
+                          ),
+                        if (incoming)
+                          OutlinedButton.icon(
+                            onPressed: () => _run(
+                              widget.controller.rejectVoiceCall,
+                            ),
+                            icon: const Icon(Icons.call_end),
+                            label: const Text('Reject'),
+                          ),
+                        if (connected)
+                          OutlinedButton.icon(
+                            onPressed: () => _run(
+                              widget.controller.voiceCallService!.toggleMute,
+                            ),
+                            icon: Icon(
+                              call.muted ? Icons.mic_off : Icons.mic,
+                            ),
+                            label: Text(call.muted ? 'Unmute' : 'Mute'),
+                          ),
+                        if (connected && !kIsWeb && Platform.isAndroid)
+                          OutlinedButton.icon(
+                            onPressed: () => _run(
+                              widget.controller.voiceCallService!
+                                  .toggleSpeakerphone,
+                            ),
+                            icon: Icon(
+                              call.speakerphoneEnabled
+                                  ? Icons.volume_up
+                                  : Icons.hearing,
+                            ),
+                            label: Text(
+                              call.speakerphoneEnabled
+                                  ? 'Speaker on'
+                                  : 'Speaker off',
+                            ),
+                          ),
+                        if (connected &&
+                            (Platform.isLinux || Platform.isWindows))
+                          OutlinedButton.icon(
+                            onPressed: widget.onChooseOutput,
+                            icon: const Icon(Icons.speaker_outlined),
+                            label: const Text('Audio output'),
+                          ),
+                        if (ended)
+                          FilledButton.icon(
+                            onPressed: widget.onMinimize,
+                            icon: const Icon(Icons.check),
+                            label: const Text('Done'),
+                          )
+                        else if (!incoming)
+                          FilledButton.icon(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: widget.palette.danger,
+                              foregroundColor: widget.palette.onPrimary,
+                            ),
+                            onPressed: () => _run(
+                              widget.controller.voiceCallService!.end,
+                            ),
+                            icon: const Icon(Icons.call_end),
+                            label: Text(
+                              call.outgoing &&
+                                      call.state == VoiceCallState.ringing
+                                  ? 'Cancel call'
+                                  : 'Hang up',
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 36),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CallReturnBar extends StatelessWidget {
+  const _CallReturnBar({
+    required this.call,
+    required this.contact,
+    required this.palette,
+    required this.onReturn,
+    required this.onHangUp,
+  });
+
+  final VoiceCallSession call;
+  final ContactRecord? contact;
+  final ConestPalette palette;
+  final VoidCallback onReturn;
+  final VoidCallback onHangUp;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: palette.panel2,
+    elevation: 6,
+    borderRadius: BorderRadius.circular(16),
+    child: InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: onReturn,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: Row(
+          children: [
+            Icon(Icons.call, color: palette.primary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                '${call.state == VoiceCallState.reconnecting ? 'Reconnecting' : call.state == VoiceCallState.connected ? 'Call active' : 'Call'}${contact == null ? '' : ' · ${contact!.alias}'} · Return to call',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            IconButton(
+              tooltip: 'Hang up',
+              onPressed: onHangUp,
+              icon: Icon(Icons.call_end, color: palette.danger),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 class _ContactDetailsPane extends StatelessWidget {
@@ -3284,49 +3692,6 @@ class _CourierHomeState extends State<_CourierHome> {
     }
   }
 
-  Future<void> _chooseCallOutput() async {
-    final service = widget.controller.voiceCallService;
-    if (service == null) return;
-    try {
-      final devices = await service.availableOutputDevices();
-      if (!mounted) return;
-      if (devices.isEmpty) {
-        widget.controller.setStatus('No audio output devices were found.');
-        return;
-      }
-      final selected = await showDialog<String>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Call audio output'),
-          content: SizedBox(
-            width: 440,
-            child: ListView(
-              shrinkWrap: true,
-              children: [
-                for (final device in devices)
-                  ListTile(
-                    title: Text(device),
-                    onTap: () => Navigator.of(context).pop(device),
-                  ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-          ],
-        ),
-      );
-      if (selected == null || !mounted) return;
-      await service.selectOutputDevice(selected);
-      widget.controller.setStatus('Call audio routed to $selected.');
-    } catch (error) {
-      widget.controller.setStatus('Could not change call audio output: $error');
-    }
-  }
-
   Future<void> _chatActions(
     ConversationKind kind,
     String id, {
@@ -3700,32 +4065,6 @@ class _CourierHomeState extends State<_CourierHome> {
         (id: entry.seed, selected: entry.selected, open: entry.onTap),
     ];
 
-    final activeCall = widget.controller.voiceCallService?.active;
-    final visibleCall =
-        activeCall != null && activeCall.state != VoiceCallState.ended
-        ? activeCall
-        : null;
-    final incomingCall =
-        visibleCall != null &&
-        !visibleCall.outgoing &&
-        visibleCall.state == VoiceCallState.ringing;
-    final callContact = visibleCall == null
-        ? null
-        : widget.controller.contacts
-              .where((contact) => contact.deviceId == visibleCall.peerDeviceId)
-              .firstOrNull;
-    final callStatus = visibleCall == null
-        ? null
-        : switch (visibleCall.state) {
-            VoiceCallState.ringing =>
-              visibleCall.outgoing ? 'Calling' : 'Incoming voice call',
-            VoiceCallState.connecting => 'Connecting voice call',
-            VoiceCallState.connected => 'Voice call connected',
-            VoiceCallState.reconnecting => 'Reconnecting voice call',
-            VoiceCallState.ended => null,
-            VoiceCallState.idle => 'Voice call',
-          };
-
     return Scaffold(
       key: _scaffold,
       backgroundColor: widget.palette.panel,
@@ -3740,89 +4079,6 @@ class _CourierHomeState extends State<_CourierHome> {
       ),
       body: Column(
         children: [
-          if (visibleCall != null)
-            MaterialBanner(
-              leading: Icon(
-                visibleCall.outgoing
-                    ? Icons.call_made_outlined
-                    : Icons.call_received_outlined,
-              ),
-              content: Text(
-                '$callStatus${callContact == null ? '' : ' ${visibleCall.outgoing ? 'to' : 'from'} ${callContact.alias}'}',
-              ),
-              actions: [
-                if (incomingCall) ...[
-                  TextButton(
-                    onPressed: () => unawaited(
-                      widget.controller.rejectVoiceCall().catchError(
-                        (Object error) => widget.controller.setStatus('$error'),
-                      ),
-                    ),
-                    child: const Text('Reject'),
-                  ),
-                  FilledButton(
-                    onPressed: () => unawaited(
-                      widget.controller.acceptVoiceCall().catchError(
-                        (Object error) => widget.controller.setStatus('$error'),
-                      ),
-                    ),
-                    child: const Text('Accept'),
-                  ),
-                ] else ...[
-                  if (visibleCall.state == VoiceCallState.connected ||
-                      visibleCall.state == VoiceCallState.reconnecting)
-                    if (!kIsWeb && Platform.isAndroid)
-                      TextButton(
-                        onPressed: () => unawaited(
-                          widget.controller.voiceCallService!
-                              .toggleSpeakerphone()
-                              .catchError(
-                                (Object error) =>
-                                    widget.controller.setStatus('$error'),
-                              ),
-                        ),
-                        child: Text(
-                          visibleCall.speakerphoneEnabled
-                              ? 'Use earpiece'
-                              : 'Speaker',
-                        ),
-                      ),
-                  if ((Platform.isLinux || Platform.isWindows) &&
-                      (visibleCall.state == VoiceCallState.connected ||
-                          visibleCall.state == VoiceCallState.reconnecting))
-                    TextButton(
-                      onPressed: _chooseCallOutput,
-                      child: const Text('Audio output'),
-                    ),
-                  if (visibleCall.state == VoiceCallState.connected ||
-                      visibleCall.state == VoiceCallState.reconnecting)
-                    TextButton(
-                      onPressed: () => unawaited(
-                        widget.controller.voiceCallService!
-                            .toggleMute()
-                            .catchError(
-                              (Object error) =>
-                                  widget.controller.setStatus('$error'),
-                            ),
-                      ),
-                      child: Text(visibleCall.muted ? 'Unmute' : 'Mute'),
-                    ),
-                  TextButton(
-                    onPressed: () => unawaited(
-                      widget.controller.voiceCallService!.end().catchError(
-                        (Object error) => widget.controller.setStatus('$error'),
-                      ),
-                    ),
-                    child: Text(
-                      visibleCall.outgoing &&
-                              visibleCall.state == VoiceCallState.ringing
-                          ? 'Cancel'
-                          : 'Hang up',
-                    ),
-                  ),
-                ],
-              ],
-            ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 12, 8),
             child: Row(
@@ -6617,7 +6873,6 @@ class _GroupChatPanel extends StatefulWidget {
 /// position control as sent voice messages, plus playback volume.
 class _VoicePreviewPlayer extends StatefulWidget {
   const _VoicePreviewPlayer({
-    required this.prompt,
     required this.service,
     required this.recording,
     required this.onError,
@@ -6625,7 +6880,6 @@ class _VoicePreviewPlayer extends StatefulWidget {
 
   static const itemId = 'voice-preview';
 
-  final String prompt;
   final VoiceMessageService service;
   final VoiceRecordingResult recording;
   final void Function(Object error) onError;
@@ -6692,14 +6946,10 @@ class _VoicePreviewPlayerState extends State<_VoicePreviewPlayer> {
         : (position.inMilliseconds / total.inMilliseconds).clamp(0.0, 1.0);
     final playing = _isCurrent && _service.isPlaying;
     final volume = _service.playbackVolume;
-    return SizedBox(
-      width: 360,
-      child: Column(
+    return Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(widget.prompt),
-          const SizedBox(height: 12),
           Row(
             children: [
               IconButton(
@@ -6747,7 +6997,6 @@ class _VoicePreviewPlayerState extends State<_VoicePreviewPlayer> {
             ],
           ),
         ],
-      ),
     );
   }
 }
@@ -6779,8 +7028,11 @@ class _GroupVoiceControls extends StatelessWidget {
         final label =
             '${total.inMinutes}:${(total.inSeconds % 60).toString().padLeft(2, '0')}';
         final path = controller.groupFilePathFor(messageId);
-        return Row(
+        return Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
+            Row(
+              children: [
             IconButton(
               tooltip: isCurrent && service.isPlaying
                   ? 'Pause voice message'
@@ -6829,11 +7081,182 @@ class _GroupVoiceControls extends StatelessWidget {
                 PopupMenuItem(value: 2, child: Text('2×')),
               ],
             ),
+              ],
+            ),
+            if (isCurrent && service.playbackError != null)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Text(
+                    'Playback failed: ${service.playbackError}',
+                    style: TextStyle(color: palette.danger, fontSize: 12),
+                  ),
+                ),
+              ),
           ],
         );
       },
     );
   }
+}
+
+class _VoiceComposerPanel extends StatelessWidget {
+  const _VoiceComposerPanel({
+    required this.service,
+    required this.destinationKey,
+    required this.palette,
+    required this.locked,
+    required this.sending,
+    required this.onStop,
+    required this.onCancel,
+    required this.onSend,
+  });
+
+  final VoiceMessageService service;
+  final String destinationKey;
+  final ConestPalette palette;
+  final bool locked;
+  final bool sending;
+  final VoidCallback onStop;
+  final VoidCallback onCancel;
+  final VoidCallback onSend;
+
+  String _duration(Duration value) =>
+      '${value.inMinutes}:${(value.inSeconds % 60).toString().padLeft(2, '0')}';
+
+  @override
+  Widget build(BuildContext context) => StreamBuilder<VoiceRecordingSnapshot>(
+    stream: service.recordingSnapshots,
+    initialData: service.recordingSnapshot,
+    builder: (context, snapshot) {
+      final voice = snapshot.data ?? service.recordingSnapshot;
+      if (voice.destinationKey != destinationKey ||
+          voice.state == VoiceRecordingState.idle) {
+        return const SizedBox.shrink();
+      }
+      final recording = voice.state == VoiceRecordingState.recording;
+      final preview = voice.state == VoiceRecordingState.preview;
+      final duration = service.preview?.metadata.durationMs != null
+          ? Duration(milliseconds: service.preview!.metadata.durationMs)
+          : voice.elapsed;
+      return Container(
+        margin: const EdgeInsets.only(top: 10),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: palette.panel2,
+          border: Border.all(color: palette.stroke),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  voice.error == null
+                      ? recording
+                            ? Icons.fiber_manual_record
+                            : Icons.graphic_eq
+                      : Icons.error_outline,
+                  color: voice.error == null ? palette.primary : palette.danger,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    voice.error ??
+                        (voice.state == VoiceRecordingState.starting
+                            ? 'Preparing microphone…'
+                            : voice.state == VoiceRecordingState.stopping
+                            ? 'Preparing preview…'
+                            : preview
+                            ? 'Voice message preview · ${_duration(duration)}'
+                            : 'Recording${locked ? ' · locked' : ''} · ${_duration(voice.elapsed)}'),
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                if (voice.state == VoiceRecordingState.starting ||
+                    voice.state == VoiceRecordingState.stopping)
+                  const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                if (recording)
+                  IconButton(
+                    tooltip: 'Stop recording',
+                    onPressed: onStop,
+                    icon: const Icon(Icons.stop_circle_outlined),
+                  ),
+                IconButton(
+                  tooltip: 'Delete recording',
+                  onPressed: onCancel,
+                  icon: const Icon(Icons.delete_outline),
+                ),
+                if (preview)
+                  FilledButton(
+                    onPressed: sending ? null : onSend,
+                    child: Text(sending ? 'Sending…' : 'Send'),
+                  ),
+              ],
+            ),
+            if (voice.waveform.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 30,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    for (final sample in voice.waveform.take(64))
+                      Expanded(
+                        child: Container(
+                          height: 4 + sample / 255 * 24,
+                          margin: const EdgeInsets.symmetric(horizontal: 1),
+                          decoration: BoxDecoration(
+                            color: palette.primary.withValues(alpha: 0.8),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+            if (preview && service.preview != null) ...[
+              _VoicePreviewPlayer(
+                service: service,
+                recording: service.preview!,
+                onError: service.reportRecordingError,
+              ),
+              if (service.playingItemId == _VoicePreviewPlayer.itemId &&
+                  service.playbackError != null)
+                Text(
+                  'Playback failed: ${service.playbackError}',
+                  style: TextStyle(color: palette.danger),
+                ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: PopupMenuButton<double>(
+                  initialValue: service.playbackRate,
+                  tooltip: 'Playback speed',
+                  onSelected: (rate) => unawaited(
+                    service.setPlaybackRate(rate).catchError((Object error) {
+                      service.reportRecordingError(error);
+                    }),
+                  ),
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 1, child: Text('1×')),
+                    PopupMenuItem(value: 1.5, child: Text('1.5×')),
+                    PopupMenuItem(value: 2, child: Text('2×')),
+                  ],
+                  child: Text('${service.playbackRate}×'),
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+    },
+  );
 }
 
 class _GroupChatPanelState extends State<_GroupChatPanel> {
@@ -6915,6 +7338,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _messageListKey = GlobalKey();
   final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
+  final Map<String, GlobalKey<PopupMenuButtonState<String>>> _messageActionKeys = {};
   bool _didInitialPosition = false;
   bool _initialPositionScheduled = false;
   bool _droppingFiles = false;
@@ -6968,6 +7392,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   bool _voiceRecordingStarting = false;
   bool _voiceRecordingLocked = false;
   bool _voiceRecordingCancelGesture = false;
+  bool _voiceSending = false;
 
   bool get _voiceRecording => controller.voiceMessageService.isRecording;
 
@@ -7039,7 +7464,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       await voiceService.stopForInterruption();
       return;
     }
-    if (!_voiceRecording && voiceService.preview == null) return;
+    if (!_voiceRecording) return;
     if (mounted) {
       setState(() {
         _voiceRecordingLocked = false;
@@ -7047,40 +7472,22 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       });
     }
     try {
-      if (voiceService.preview == null) await voiceService.stop();
-      if (!mounted) return;
-      final send = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Group voice message ready'),
-          content: _VoicePreviewPlayer(
-            prompt: 'Send this recording to the group or discard it?',
-            service: voiceService,
-            recording: voiceService.preview!,
-            onError: (error) => controller.setStatus('$error'),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Delete'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Send'),
-            ),
-          ],
-        ),
-      );
-      if (send == true) {
-        await controller.sendRecordedVoiceMessageToGroup(
-          groupId: group.groupId,
-        );
-      } else {
-        await voiceService.cancel();
-      }
+      await voiceService.stop();
     } catch (error) {
       if (voiceService.isRecording) await voiceService.stopForInterruption();
-      controller.setStatus('$error');
+      voiceService.reportRecordingError(error);
+    }
+  }
+
+  Future<void> _sendGroupVoicePreview() async {
+    if (_voiceSending) return;
+    setState(() => _voiceSending = true);
+    try {
+      await controller.sendRecordedVoiceMessageToGroup(groupId: group.groupId);
+    } catch (error) {
+      controller.voiceMessageService.reportRecordingError(error);
+    } finally {
+      if (mounted) setState(() => _voiceSending = false);
     }
   }
 
@@ -7437,9 +7844,16 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     );
   }
 
+  GlobalKey<PopupMenuButtonState<String>> _messageActionKey(String messageId) =>
+      _messageActionKeys.putIfAbsent(
+        messageId,
+        () => GlobalKey<PopupMenuButtonState<String>>(),
+      );
+
   void _pruneMessageKeys(List<ChatMessage> messages) {
     final activeIds = messages.map((message) => message.id).toSet();
     _messageKeys.removeWhere((messageId, _) => !activeIds.contains(messageId));
+    _messageActionKeys.removeWhere((messageId, _) => !activeIds.contains(messageId));
   }
 
   void _scheduleInitialPosition() {
@@ -7642,12 +8056,42 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     final baseColor = selected
         ? palette.primary.withValues(alpha: 0.18)
         : (outbound ? palette.outboundBubble : palette.inboundBubble);
+    final attachmentDescriptor = message.attachment;
+    final attachmentRow = attachmentDescriptor == null
+        ? null
+        : _AttachmentRow(
+            descriptor: attachmentDescriptor,
+            outbound: outbound,
+            palette: palette,
+            controller: controller,
+            messageState: message.state,
+            onForward: () => _forwardAttachment(
+              context,
+              controller,
+              palette,
+              attachmentDescriptor,
+            ),
+            onDelete: () => _changeGroupMessage(message, delete: true),
+          );
+    final attachmentInFlight = attachmentDescriptor != null &&
+        (controller.attachmentTransferProgress(attachmentDescriptor.id) != null ||
+            controller.outboundAttachmentProgress(attachmentDescriptor.id) != null);
+    final attachmentAvailable = attachmentDescriptor != null &&
+        controller.attachmentAvailableLocally(attachmentDescriptor.id);
     return GestureDetector(
       key: _messageKeyFor(message.id),
       // nightly.10: opaque so long-press registers on the empty row space
       // next to the bubble too, not just on the bubble itself.
       behavior: HitTestBehavior.opaque,
-      onTap: _selectionMode ? () => _toggleMessageSelection(message) : null,
+      onTap: () {
+        if (_selectionMode) {
+          _toggleMessageSelection(message);
+        } else {
+          _messageActionKey(message.id).currentState?.showButtonMenu();
+        }
+      },
+      onSecondaryTapDown: (_) =>
+          _messageActionKey(message.id).currentState?.showButtonMenu(),
       onLongPress: () => _toggleMessageSelection(message),
       onDoubleTap: _selectionMode
           ? null
@@ -7809,19 +8253,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         ),
                       ),
                     if (message.hasAttachment) ...[
-                      _AttachmentRow(
-                        descriptor: message.attachment!,
-                        outbound: outbound,
-                        palette: palette,
-                        controller: controller,
-                        messageState: message.state,
-                        onForward: () => _forwardAttachment(
-                          context,
-                          controller,
-                          palette,
-                          message.attachment!,
-                        ),
-                      ),
+                      attachmentRow!,
                       if (message.body.isNotEmpty) const SizedBox(height: 8),
                     ],
                     if (message.poll case final poll?) ...[
@@ -7921,14 +8353,10 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     ),
                   ],
                   PopupMenuButton<String>(
+                    key: _messageActionKey(message.id),
                     tooltip: 'Message actions',
-                    icon: Icon(
-                      Icons.more_horiz,
-                      size: 18,
-                      color: outbound
-                          ? palette.outboundMeta
-                          : palette.inboundMeta,
-                    ),
+                    padding: EdgeInsets.zero,
+                    child: const SizedBox.shrink(),
                     onSelected: (value) async {
                       if (value == 'copy') {
                         await _copyMessage(message);
@@ -7951,6 +8379,58 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                             .catchError(
                               (Object error) => controller.setStatus('$error'),
                             );
+                      } else if (value == 'attachment_download' &&
+                          attachmentDescriptor != null) {
+                        await controller.acceptIncomingAttachment(
+                          attachmentDescriptor.id,
+                        );
+                      } else if (value == 'attachment_save' &&
+                          attachmentRow != null) {
+                        if (attachmentAvailable) {
+                          await attachmentRow._saveLocalFileToDisk();
+                        } else {
+                          controller.setStatus(
+                            'The attachment is still downloading.',
+                          );
+                        }
+                      } else if (value == 'attachment_copy_image' &&
+                          attachmentDescriptor != null) {
+                        final bytes = controller.attachmentBytesFor(
+                          attachmentDescriptor.id,
+                        );
+                        if (bytes != null) {
+                          await attachmentRow!._copyImageBytesFor(
+                            bytes,
+                            attachmentDescriptor.fileName,
+                          );
+                        }
+                      } else if (value == 'attachment_copy_path' &&
+                          attachmentRow != null) {
+                        await attachmentRow._copyCachePath();
+                      } else if (value == 'attachment_keep_offline' &&
+                          attachmentDescriptor != null) {
+                        await controller.setAttachmentKeepOffline(
+                          attachmentDescriptor.id,
+                          !controller.attachmentKeptOffline(
+                            attachmentDescriptor.id,
+                          ),
+                        );
+                      } else if (value == 'attachment_evict' &&
+                          attachmentDescriptor != null) {
+                        await controller.evictAttachment(
+                          attachmentDescriptor.id,
+                        );
+                      } else if (value == 'attachment_cancel' &&
+                          attachmentDescriptor != null) {
+                        await controller.cancelAttachmentById(
+                          attachmentDescriptor.id,
+                        );
+                      } else if (value == 'attachment_retry' &&
+                          attachmentDescriptor != null) {
+                        controller.retryAttachment(attachmentDescriptor.id);
+                      } else if (value == 'forward_attachment' &&
+                          attachmentRow != null) {
+                        await attachmentRow.onForward?.call();
                       } else if (value == 'edit' || value == 'delete') {
                         await _changeGroupMessage(
                           message,
@@ -7983,6 +8463,59 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         value: 'copy',
                         child: Text('Copy message'),
                       ),
+                      if (attachmentDescriptor != null && !outbound &&
+                          !attachmentAvailable)
+                        const PopupMenuItem(
+                          value: 'attachment_download',
+                          child: Text('Download attachment'),
+                        ),
+                      if (attachmentAvailable)
+                        const PopupMenuItem(
+                          value: 'attachment_save',
+                          child: Text('Save attachment'),
+                        ),
+                      if (attachmentDescriptor?.mimeType.startsWith('image/') == true &&
+                          controller.attachmentBytesFor(attachmentDescriptor!.id) != null)
+                        const PopupMenuItem(
+                          value: 'attachment_copy_image',
+                          child: Text('Copy image'),
+                        ),
+                      if (attachmentAvailable) ...[
+                        const PopupMenuItem(
+                          value: 'attachment_copy_path',
+                          child: Text('Copy cache path'),
+                        ),
+                        PopupMenuItem(
+                          value: 'attachment_keep_offline',
+                          child: Text(
+                            controller.attachmentKeptOffline(attachmentDescriptor.id)
+                                ? 'Stop keeping offline'
+                                : 'Keep offline',
+                          ),
+                        ),
+                        if (!controller.attachmentKeptOffline(attachmentDescriptor.id) &&
+                            !attachmentInFlight)
+                          const PopupMenuItem(
+                            value: 'attachment_evict',
+                            child: Text('Free up local space'),
+                          ),
+                      ],
+                      if (attachmentInFlight)
+                        const PopupMenuItem(
+                          value: 'attachment_cancel',
+                          child: Text('Cancel transfer'),
+                        ),
+                      if (attachmentDescriptor != null && outbound &&
+                          message.state == DeliveryState.failed)
+                        const PopupMenuItem(
+                          value: 'attachment_retry',
+                          child: Text('Retry transfer'),
+                        ),
+                      if (attachmentDescriptor != null)
+                        const PopupMenuItem(
+                          value: 'forward_attachment',
+                          child: Text('Forward attachment'),
+                        ),
                       if (!message.hasAttachment &&
                           message.groupFile == null &&
                           message.body.trim().isNotEmpty)
@@ -8207,6 +8740,16 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     ),
                     const SizedBox(height: 12),
                   ],
+                  _VoiceComposerPanel(
+                    service: controller.voiceMessageService,
+                    destinationKey: 'group:${group.groupId}',
+                    palette: palette,
+                    locked: _voiceRecordingLocked,
+                    sending: _voiceSending,
+                    onStop: () => unawaited(_finishGroupVoiceRecording()),
+                    onCancel: () => unawaited(_cancelGroupVoiceRecording()),
+                    onSend: () => unawaited(_sendGroupVoicePreview()),
+                  ),
                   Row(
                     children: [
                       if (widget.onAttach != null) ...[
@@ -8719,6 +9262,7 @@ class _ChatPanelState extends State<_ChatPanel> {
   final GlobalKey _messageListKey = GlobalKey();
   bool _droppingFiles = false;
   final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
+  final Map<String, GlobalKey<PopupMenuButtonState<String>>> _messageActionKeys = {};
   bool _didInitialPosition = false;
   bool _initialPositionScheduled = false;
   Timer? _readSweepDebounce;
@@ -8730,6 +9274,7 @@ class _ChatPanelState extends State<_ChatPanel> {
   bool _voiceRecordingStarting = false;
   bool _voiceRecordingLocked = false;
   bool _voiceRecordingCancelGesture = false;
+  bool _voiceSending = false;
 
   bool get _voiceRecording => controller.voiceMessageService.isRecording;
 
@@ -8860,7 +9405,7 @@ class _ChatPanelState extends State<_ChatPanel> {
       await voiceService.stopForInterruption();
       return;
     }
-    if (!_voiceRecording && voiceService.preview == null) return;
+    if (!_voiceRecording) return;
     if (mounted) {
       setState(() {
         _voiceRecordingLocked = false;
@@ -8868,40 +9413,24 @@ class _ChatPanelState extends State<_ChatPanel> {
       });
     }
     try {
-      if (voiceService.preview == null) await voiceService.stop();
-      if (!mounted) return;
-      final send = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Voice message ready'),
-          content: _VoicePreviewPlayer(
-            prompt: 'Send this recording or discard it?',
-            service: voiceService,
-            recording: voiceService.preview!,
-            onError: (error) => controller.setStatus('$error'),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Delete'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Send'),
-            ),
-          ],
-        ),
-      );
-      if (send == true) {
-        await controller.sendRecordedVoiceMessage(contact: contact);
-      } else {
-        await controller.voiceMessageService.cancel();
-      }
+      await voiceService.stop();
     } catch (error) {
       if (voiceService.isRecording) {
         await voiceService.stopForInterruption();
       }
-      controller.setStatus('$error');
+      voiceService.reportRecordingError(error);
+    }
+  }
+
+  Future<void> _sendVoicePreview() async {
+    if (_voiceSending) return;
+    setState(() => _voiceSending = true);
+    try {
+      await controller.sendRecordedVoiceMessage(contact: contact);
+    } catch (error) {
+      controller.voiceMessageService.reportRecordingError(error);
+    } finally {
+      if (mounted) setState(() => _voiceSending = false);
     }
   }
 
@@ -9144,9 +9673,16 @@ class _ChatPanelState extends State<_ChatPanel> {
     );
   }
 
+  GlobalKey<PopupMenuButtonState<String>> _messageActionKey(String messageId) =>
+      _messageActionKeys.putIfAbsent(
+        messageId,
+        () => GlobalKey<PopupMenuButtonState<String>>(),
+      );
+
   void _pruneMessageKeys(List<ChatMessage> messages) {
     final activeIds = messages.map((message) => message.id).toSet();
     _messageKeys.removeWhere((messageId, _) => !activeIds.contains(messageId));
+    _messageActionKeys.removeWhere((messageId, _) => !activeIds.contains(messageId));
   }
 
   void _scheduleInitialPosition() {
@@ -9354,12 +9890,43 @@ class _ChatPanelState extends State<_ChatPanel> {
     // faint bloom when the theme wants glow; inbound stays a flat panel with a
     // hairline border. Selection/flash states fall back to a flat fill.
     final useSelfGradient = outbound && !selected && !flashing;
+    final attachmentDescriptor = message.attachment;
+    final attachmentRow = attachmentDescriptor == null
+        ? null
+        : _AttachmentRow(
+            descriptor: attachmentDescriptor,
+            outbound: outbound,
+            palette: palette,
+            controller: controller,
+            messageState: message.state,
+            conversationPeerDeviceId: contact.deviceId,
+            onForward: () => _forwardAttachment(
+              context,
+              controller,
+              palette,
+              attachmentDescriptor,
+            ),
+            onDelete: () => _deleteMessage(context, message),
+          );
+    final attachmentInFlight = attachmentDescriptor != null &&
+        (controller.attachmentTransferProgress(attachmentDescriptor.id) != null ||
+            controller.outboundAttachmentProgress(attachmentDescriptor.id) != null);
+    final attachmentAvailable = attachmentDescriptor != null &&
+        controller.attachmentAvailableLocally(attachmentDescriptor.id);
     return GestureDetector(
       key: _messageKeyFor(message.id),
       // nightly.10: opaque so long-press registers in the empty row space
       // next to the bubble, not just on the bubble itself.
       behavior: HitTestBehavior.opaque,
-      onTap: _selectionMode ? () => _toggleMessageSelection(message) : null,
+      onTap: () {
+        if (_selectionMode) {
+          _toggleMessageSelection(message);
+        } else {
+          _messageActionKey(message.id).currentState?.showButtonMenu();
+        }
+      },
+      onSecondaryTapDown: (_) =>
+          _messageActionKey(message.id).currentState?.showButtonMenu(),
       onLongPress: () => _toggleMessageSelection(message),
       onDoubleTap: _selectionMode
           ? null
@@ -9427,21 +9994,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                       const SizedBox(height: 10),
                     ],
                     if (message.hasAttachment) ...[
-                      _AttachmentRow(
-                        descriptor: message.attachment!,
-                        outbound: outbound,
-                        palette: palette,
-                        controller: controller,
-                        messageState: message.state,
-                        conversationPeerDeviceId: contact.deviceId,
-                        onForward: () => _forwardAttachment(
-                          context,
-                          controller,
-                          palette,
-                          message.attachment!,
-                        ),
-                        onDelete: () => _deleteMessage(context, message),
-                      ),
+                      attachmentRow!,
                       if (message.body.isNotEmpty) const SizedBox(height: 8),
                     ],
                     if (message.body.isNotEmpty || !message.hasAttachment)
@@ -9537,14 +10090,10 @@ class _ChatPanelState extends State<_ChatPanel> {
                     ),
                   ],
                   PopupMenuButton<String>(
+                    key: _messageActionKey(message.id),
                     tooltip: 'Message actions',
-                    icon: Icon(
-                      Icons.more_horiz,
-                      size: 18,
-                      color: outbound
-                          ? palette.outboundMeta
-                          : palette.inboundMeta,
-                    ),
+                    padding: EdgeInsets.zero,
+                    child: const SizedBox.shrink(),
                     onSelected: (value) async {
                       try {
                         if (value == 'copy') {
@@ -9602,6 +10151,58 @@ class _ChatPanelState extends State<_ChatPanel> {
                             contact: contact,
                             messageId: message.id,
                           );
+                        } else if (value == 'attachment_download' &&
+                            attachmentDescriptor != null) {
+                          await controller.acceptIncomingAttachment(
+                            attachmentDescriptor.id,
+                          );
+                        } else if (value == 'attachment_save' &&
+                            attachmentRow != null) {
+                          if (attachmentAvailable) {
+                            await attachmentRow._saveLocalFileToDisk();
+                          } else {
+                            controller.setStatus(
+                              'The attachment is still downloading.',
+                            );
+                          }
+                        } else if (value == 'attachment_copy_image' &&
+                            attachmentDescriptor != null) {
+                          final bytes = controller.attachmentBytesFor(
+                            attachmentDescriptor.id,
+                          );
+                          if (bytes != null) {
+                            await attachmentRow!._copyImageBytesFor(
+                              bytes,
+                              attachmentDescriptor.fileName,
+                            );
+                          }
+                        } else if (value == 'attachment_copy_path' &&
+                            attachmentRow != null) {
+                          await attachmentRow._copyCachePath();
+                        } else if (value == 'attachment_keep_offline' &&
+                            attachmentDescriptor != null) {
+                          await controller.setAttachmentKeepOffline(
+                            attachmentDescriptor.id,
+                            !controller.attachmentKeptOffline(
+                              attachmentDescriptor.id,
+                            ),
+                          );
+                        } else if (value == 'attachment_evict' &&
+                            attachmentDescriptor != null) {
+                          await controller.evictAttachment(
+                            attachmentDescriptor.id,
+                          );
+                        } else if (value == 'attachment_cancel' &&
+                            attachmentDescriptor != null) {
+                          await controller.cancelAttachmentById(
+                            attachmentDescriptor.id,
+                          );
+                        } else if (value == 'attachment_retry' &&
+                            attachmentDescriptor != null) {
+                          controller.retryAttachment(attachmentDescriptor.id);
+                        } else if (value == 'forward_attachment' &&
+                            attachmentRow != null) {
+                          await attachmentRow.onForward?.call();
                         } else if (value == 'delete') {
                           await _deleteMessage(context, message);
                         }
@@ -9630,6 +10231,59 @@ class _ChatPanelState extends State<_ChatPanel> {
                         value: 'copy',
                         child: Text('Copy message'),
                       ),
+                      if (attachmentDescriptor != null && !outbound &&
+                          !attachmentAvailable)
+                        const PopupMenuItem(
+                          value: 'attachment_download',
+                          child: Text('Download attachment'),
+                        ),
+                      if (attachmentAvailable)
+                        const PopupMenuItem(
+                          value: 'attachment_save',
+                          child: Text('Save attachment'),
+                        ),
+                      if (attachmentDescriptor?.mimeType.startsWith('image/') == true &&
+                          controller.attachmentBytesFor(attachmentDescriptor!.id) != null)
+                        const PopupMenuItem(
+                          value: 'attachment_copy_image',
+                          child: Text('Copy image'),
+                        ),
+                      if (attachmentAvailable) ...[
+                        const PopupMenuItem(
+                          value: 'attachment_copy_path',
+                          child: Text('Copy cache path'),
+                        ),
+                        PopupMenuItem(
+                          value: 'attachment_keep_offline',
+                          child: Text(
+                            controller.attachmentKeptOffline(attachmentDescriptor.id)
+                                ? 'Stop keeping offline'
+                                : 'Keep offline',
+                          ),
+                        ),
+                        if (!controller.attachmentKeptOffline(attachmentDescriptor.id) &&
+                            !attachmentInFlight)
+                          const PopupMenuItem(
+                            value: 'attachment_evict',
+                            child: Text('Free up local space'),
+                          ),
+                      ],
+                      if (attachmentInFlight)
+                        const PopupMenuItem(
+                          value: 'attachment_cancel',
+                          child: Text('Cancel transfer'),
+                        ),
+                      if (attachmentDescriptor != null && outbound &&
+                          message.state == DeliveryState.failed)
+                        const PopupMenuItem(
+                          value: 'attachment_retry',
+                          child: Text('Retry transfer'),
+                        ),
+                      if (attachmentDescriptor != null)
+                        const PopupMenuItem(
+                          value: 'forward_attachment',
+                          child: Text('Forward attachment'),
+                        ),
                       if (outbound && message.state == DeliveryState.pending)
                         const PopupMenuItem(
                           value: 'cancel',
@@ -9706,18 +10360,30 @@ class _ChatPanelState extends State<_ChatPanel> {
                 // than offering a button that can only fail.
                 onCall: controller.voiceCallService?.media.available != true
                     ? null
-                    : () => unawaited(
-                        controller.voiceCallService
-                            ?.startOutgoing(contact.deviceId)
-                            .then(
-                              (_) => controller.setStatus(
-                                'Calling ${contact.alias}…',
-                              ),
-                            )
-                            .catchError(
-                              (Object error) => controller.setStatus('$error'),
-                            ),
-                      ),
+                    : () {
+                  if (controller.identity?.experimentalVoiceCallsEnabled !=
+                      true) {
+                    controller.setStatus(
+                      'Voice calls are turned off. Enable them in Settings to call.',
+                    );
+                    return;
+                  }
+                  final service = controller.voiceCallService;
+                  if (service == null) {
+                    controller.setStatus(
+                      'Voice-call audio is unavailable in this build.',
+                    );
+                    return;
+                  }
+                  unawaited(
+                    service
+                        .startOutgoing(contact.deviceId)
+                        .then<void>((_) {})
+                        .catchError(
+                          (Object error) => controller.setStatus('$error'),
+                        ),
+                  );
+                },
               )
             else
               Padding(
@@ -9935,6 +10601,12 @@ class _ChatPanelState extends State<_ChatPanel> {
                 },
               ),
             ),
+            if (contact.pairingState != ContactPairingState.accepted)
+              _ContactPairingStatusBanner(
+                controller: controller,
+                palette: palette,
+                contact: contact,
+              ),
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -9959,10 +10631,20 @@ class _ChatPanelState extends State<_ChatPanel> {
                     contact: contact,
                     palette: palette,
                   ),
+                  _VoiceComposerPanel(
+                    service: controller.voiceMessageService,
+                    destinationKey: 'direct:${contact.deviceId}',
+                    palette: palette,
+                    locked: _voiceRecordingLocked,
+                    sending: _voiceSending,
+                    onStop: () => unawaited(_finishVoiceRecording()),
+                    onCancel: () => unawaited(_cancelVoiceRecording()),
+                    onSend: () => unawaited(_sendVoicePreview()),
+                  ),
                   Row(
                     children: [
                       IconButton(
-                        onPressed: contact.canSendOutbound
+                        onPressed: contact.canComposeOutbound
                             ? widget.onAttach
                             : null,
                         icon: const Icon(Icons.attach_file_outlined),
@@ -9994,10 +10676,12 @@ class _ChatPanelState extends State<_ChatPanel> {
                               controller: widget.composerController,
                               minLines: 1,
                               maxLines: 5,
-                              enabled: contact.canSendOutbound,
+                              enabled: contact.canComposeOutbound,
                               decoration: InputDecoration(
-                                hintText: !contact.canSendOutbound
-                                    ? 'Verify the contact\'s identity to send.'
+                                hintText: !contact.canComposeOutbound
+                                    ? 'This contact request is blocked.'
+                                    : !contact.canSendOutbound
+                                    ? 'Message saved here until the contact accepts.'
                                     : activeReplyTarget == null
                                     ? (widget.telegramLayout
                                           ? 'Message'
@@ -10121,15 +10805,15 @@ class _ChatPanelState extends State<_ChatPanel> {
                       if (widget.telegramLayout)
                         IconButton.filled(
                           tooltip: 'Send',
-                          onPressed: contact.canSendOutbound
+                          onPressed: contact.canComposeOutbound
                               ? widget.onSend
                               : null,
                           icon: const Icon(Icons.send_rounded),
                         )
                       else
                         FilledButton.icon(
-                          onPressed: contact.canSendOutbound
-                              ? widget.onSend
+                        onPressed: contact.canComposeOutbound
+                            ? widget.onSend
                               : null,
                           icon: const Icon(Icons.north_east),
                           label: const Text('Send'),
@@ -10876,11 +11560,12 @@ class _AddContactDialogState extends State<AddContactDialog> {
         payload: _payloadController.text.trim(),
         codephrase: _codephraseController.text.trim(),
       );
+      var keepContact = true;
       if (!mounted) {
         return;
       }
       if (result.exchangeStatus == ContactExchangeStatus.manualActionRequired) {
-        final keepContact = await showDialog<bool>(
+        keepContact = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
             title: const Text('Automatic exchange failed'),
@@ -10899,16 +11584,17 @@ class _AddContactDialogState extends State<AddContactDialog> {
               ),
             ],
           ),
-        );
+        ) ?? false;
         if (keepContact != true) {
           await widget.controller.removeContact(
             result.contact.deviceId,
             notifyPeer: false,
           );
+          keepContact = false;
         }
       }
       if (mounted) {
-        Navigator.of(context).pop();
+        Navigator.of(context).pop(keepContact ? result.contact : null);
       }
     } catch (error) {
       setState(() {
@@ -12524,6 +13210,41 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 'Show a system notification when a direct message arrives.',
                               ),
                             ),
+                            if (widget
+                                    .controller
+                                    .voiceCallService
+                                    ?.media
+                                    .available ==
+                                true)
+                            SwitchListTile.adaptive(
+                              value: identity.experimentalVoiceCallsEnabled,
+                              contentPadding: EdgeInsets.zero,
+                              onChanged: _busy ||
+                                      widget
+                                              .controller
+                                              .voiceCallService
+                                              ?.media
+                                              .available !=
+                                          true
+                                  ? null
+                                  : (value) => _run(
+                                      () => widget.controller
+                                          .updateExperimentalVoiceCallsEnabled(
+                                            value,
+                                          ),
+                                    ),
+                              title: const Text('Experimental voice calls'),
+                              subtitle: Text(
+                                widget
+                                            .controller
+                                            .voiceCallService
+                                            ?.media
+                                            .available ==
+                                        true
+                                    ? 'Allows one-to-one Iroh voice calls on this device. Turn off to stop placing and receiving calls.'
+                                    : 'Voice-call audio is unavailable in this build.',
+                              ),
+                            ),
                             if (!kIsWeb && Platform.isAndroid)
                               SwitchListTile.adaptive(
                                 value:
@@ -12547,15 +13268,24 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   'Disabled in release builds: the foreground service does not yet host a headless Flutter receiver.',
                                 ),
                               ),
-                            if (!kIsWeb && Platform.isAndroid)
+                            if (!kIsWeb &&
+                                Platform.isAndroid &&
+                                widget
+                                        .controller
+                                        .voiceCallService
+                                        ?.media
+                                        .available ==
+                                    true)
                               SwitchListTile.adaptive(
                                 value:
                                     experimentalAndroidBackgroundRuntimeAvailable &&
+                                    identity.experimentalVoiceCallsEnabled &&
                                     identity.androidBackgroundCallsEnabled,
                                 contentPadding: EdgeInsets.zero,
                                 onChanged:
                                     _busy ||
                                         !experimentalAndroidBackgroundRuntimeAvailable ||
+                                        !identity.experimentalVoiceCallsEnabled ||
                                         widget
                                                 .controller
                                                 .voiceCallService
@@ -12573,7 +13303,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   'Allow voice calls in background',
                                 ),
                                 subtitle: const Text(
-                                  'Keeps call signaling active and shows an ongoing call notification while the Conest service runs. Android battery policy or force-stop can still end availability.',
+                                  'Keeps call signaling active and shows an ongoing call notification while the Conest service runs. Requires Experimental voice calls; Android battery policy or force-stop can still end availability.',
                                 ),
                               ),
                             if (kDebugMode)
@@ -13524,6 +14254,89 @@ class _PendingContactRequestCard extends StatelessWidget {
               ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ContactPairingStatusBanner extends StatelessWidget {
+  const _ContactPairingStatusBanner({
+    required this.controller,
+    required this.palette,
+    required this.contact,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+  final ContactRecord contact;
+
+  Future<void> _run(
+    BuildContext context,
+    Future<void> Function() operation,
+  ) async {
+    try {
+      await operation();
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Contact request failed: $error')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final blocked = contact.pairingState == ContactPairingState.declined ||
+        contact.pairingState == ContactPairingState.cancelled;
+    final message = switch (contact.pairingState) {
+      ContactPairingState.queued => 'Contact request queued. Messages and files stay here until approved.',
+      ContactPairingState.sending => 'Sending contact request. Messages and files stay here until approved.',
+      ContactPairingState.awaitingAcceptance => 'Waiting for approval. Messages and files stay here until approved.',
+      ContactPairingState.declined => 'Request declined. Queued messages and files are blocked.',
+      ContactPairingState.cancelled => 'Request cancelled. Queued messages and files are blocked.',
+      ContactPairingState.accepted => '',
+    };
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: blocked ? Theme.of(context).colorScheme.errorContainer : palette.panel2,
+        border: Border.all(color: palette.stroke),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(blocked ? Icons.block_outlined : Icons.schedule_outlined),
+          const SizedBox(width: 8),
+          Expanded(child: Text(message)),
+          TextButton(
+            onPressed: () => _run(
+              context,
+              () => controller.retryContactPairingNow(contact.deviceId),
+            ),
+            child: Text(blocked ? 'Request again' : 'Retry'),
+          ),
+          if (!blocked)
+            TextButton(
+              onPressed: () => _run(
+                context,
+                () => controller.cancelContactPairing(contact.deviceId),
+              ),
+              child: const Text('Cancel'),
+            ),
+          if (blocked)
+            TextButton(
+              onPressed: () => _run(
+                context,
+                () => controller.removeContact(
+                  contact.deviceId,
+                  notifyPeer: false,
+                ),
+              ),
+              child: const Text('Discard chat'),
+            ),
         ],
       ),
     );
@@ -17125,122 +17938,13 @@ class _AttachmentRow extends StatelessWidget {
   /// nightly.11: long-press / right-click context menu. Replaces the
   /// inline Copy / Save / Copy path / Delete buttons on every bubble
   /// (cluttered the UI; user requested a single menu affordance).
-  Future<void> _showContextMenu(BuildContext context, Offset globalPos) async {
-    final bytes = controller.attachmentBytesFor(descriptor.id);
-    final hasBytes = bytes != null;
-    final hasLocalFile = controller.attachmentAvailableLocally(descriptor.id);
-    final keptOffline = controller.attachmentKeptOffline(descriptor.id);
-    final inFlight =
-        controller.attachmentTransferProgress(descriptor.id) != null ||
-        controller.outboundAttachmentProgress(descriptor.id) != null;
-    final isFailed = messageState == DeliveryState.failed;
-    final overlay =
-        Overlay.of(context).context.findRenderObject() as RenderBox?;
-    if (overlay == null) return;
-    final selected = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromRect(
-        Rect.fromPoints(globalPos, globalPos),
-        Offset.zero & overlay.size,
-      ),
-      items: [
-        if (hasBytes && _isImage)
-          const PopupMenuItem(value: 'copy_image', child: Text('Copy')),
-        if (hasLocalFile)
-          const PopupMenuItem(value: 'save', child: Text('Save')),
-        if (hasLocalFile)
-          const PopupMenuItem(
-            value: 'copy_path',
-            child: Text('Copy cache path'),
-          ),
-        if (hasLocalFile && onForward != null)
-          const PopupMenuItem(value: 'forward', child: Text('Forward')),
-        if (hasLocalFile)
-          PopupMenuItem(
-            value: 'keep_offline',
-            child: Text(keptOffline ? 'Stop keeping offline' : 'Keep offline'),
-          ),
-        if (hasLocalFile && !keptOffline && !inFlight)
-          const PopupMenuItem(
-            value: 'evict',
-            child: Text('Free up local space'),
-          ),
-        if (inFlight)
-          const PopupMenuItem(value: 'cancel', child: Text('Cancel')),
-        if (isFailed && outbound)
-          const PopupMenuItem(value: 'retry', child: Text('Retry')),
-        const PopupMenuItem(value: 'delete', child: Text('Delete')),
-      ],
-    );
-    if (selected == null || !context.mounted) return;
-    switch (selected) {
-      case 'copy_image':
-        if (bytes != null) {
-          await _copyImageBytesFor(bytes, descriptor.fileName);
-        }
-        break;
-      case 'save':
-        if (bytes != null) {
-          await _saveToDisk(context, bytes);
-        } else {
-          await _saveLocalFileToDisk();
-        }
-        break;
-      case 'copy_path':
-        await _copyCachePath();
-        break;
-      case 'forward':
-        await onForward?.call();
-        break;
-      case 'keep_offline':
-        await controller.setAttachmentKeepOffline(descriptor.id, !keptOffline);
-        break;
-      case 'evict':
-        try {
-          await controller.evictAttachment(descriptor.id);
-          controller.setStatus(
-            'Local copy removed. Conest has no permanent cloud copy; '
-            're-download depends on the sender still having it.',
-          );
-        } catch (error) {
-          controller.setStatus('Could not remove the local copy: $error');
-        }
-        break;
-      case 'cancel':
-        await controller.cancelAttachmentById(descriptor.id);
-        break;
-      case 'delete':
-        if (onDelete != null) {
-          await onDelete!();
-        } else {
-          await controller.cancelAttachmentById(descriptor.id);
-        }
-        break;
-      case 'retry':
-        controller.retryAttachment(descriptor.id);
-        break;
-    }
-  }
-
   Widget _wrapContextMenu({
     required BuildContext context,
     required Widget child,
   }) {
-    return GestureDetector(
-      behavior: HitTestBehavior.deferToChild,
-      onLongPressStart: (details) =>
-          _showContextMenu(context, details.globalPosition),
-      child: Listener(
-        behavior: HitTestBehavior.deferToChild,
-        onPointerDown: (event) {
-          // Secondary mouse button (right-click) on desktop.
-          if (event.buttons & kSecondaryMouseButton != 0) {
-            _showContextMenu(context, event.position);
-          }
-        },
-        child: child,
-      ),
-    );
+    // Message bubbles own the shared action menu and long-press selection.
+    // A nested attachment recognizer would steal long presses from selection.
+    return child;
   }
 
   Future<void> _openVideoPlayer(BuildContext context) async {
@@ -17865,6 +18569,17 @@ class _AttachmentRow extends StatelessWidget {
                             Duration(
                               milliseconds: (value * voice.durationMs).round(),
                             ),
+                          ),
+                        ),
+                      ),
+                    if (isCurrent && service.playbackError != null)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'Playback failed: ${service.playbackError}',
+                          style: TextStyle(
+                            color: palette.danger,
+                            fontSize: 12,
                           ),
                         ),
                       ),

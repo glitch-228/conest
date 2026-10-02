@@ -1015,15 +1015,45 @@ Future<void> _pairControllers(
     payload: (await second.buildInvite()).encodePayload(),
     codephrase: '',
   );
-  await second.pollNow();
   if (!second.contacts.any(
     (contact) => contact.deviceId == first.identity!.deviceId,
   )) {
-    final request = second.pendingContactRequests.singleWhere(
-      (entry) => entry.senderDeviceId == first.identity!.deviceId,
+    final senderDeviceId = first.identity!.deviceId;
+    var request = second.pendingContactRequests
+        .where((entry) => entry.senderDeviceId == senderDeviceId)
+        .firstOrNull;
+    for (var attempt = 0; attempt < 50 && request == null; attempt++) {
+      await second.pollNow();
+      request = second.pendingContactRequests
+          .where((entry) => entry.senderDeviceId == senderDeviceId)
+          .firstOrNull;
+      if (request == null) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    }
+    expect(
+      request,
+      isNotNull,
+      reason: 'Pairing request should arrive before the helper approves it.',
     );
-    await second.approvePendingContactRequest(request.id);
+    await second.approvePendingContactRequest(request!.id);
   }
+  for (var attempt = 0; attempt < 50; attempt++) {
+    await first.pollNow();
+    final contact = first.contacts
+        .where((contact) => contact.deviceId == second.identity!.deviceId)
+        .firstOrNull;
+    if (contact?.canSendOutbound == true) break;
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+  expect(
+    first.contacts
+        .where((contact) => contact.deviceId == second.identity!.deviceId)
+        .firstOrNull
+        ?.canSendOutbound,
+    isTrue,
+    reason: 'contact approval response did not reach the requester',
+  );
   expect(
     second.contacts.any(
       (contact) => contact.deviceId == first.identity!.deviceId,
@@ -1599,6 +1629,14 @@ void main() {
       await bob.approvePendingContactRequest(
         bob.pendingContactRequests.single.id,
       );
+      await _waitForIroh(
+        () => alice.contacts
+                .where((contact) => contact.deviceId == bob.identity!.deviceId)
+                .firstOrNull
+                ?.canSendOutbound ==
+            true,
+        reason: 'Iroh approval response did not unlock the contact',
+      );
       network.envelopes.clear();
       expect(await alice.runHeartbeatPassNow(), 1);
       await _waitForIroh(
@@ -1642,6 +1680,104 @@ void main() {
       alice.messagesFor(bob.identity!.deviceId).single.state.awaitsRecipientAck,
       isTrue,
     );
+  });
+
+  test('Contact approval releases locally queued messages', () async {
+    final relay = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(relayClient: relay, displayName: 'Bob');
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: (await bob.buildInvite()).encodePayload(),
+      codephrase: '',
+    );
+    await alice.sendMessage(contact: alice.contacts.single, body: 'queued');
+    expect(alice.messagesFor(bob.identity!.deviceId).single.state, DeliveryState.pending);
+    expect(alice.statusMessage, contains('accepts'));
+
+    await bob.pollNow();
+    await bob.approvePendingContactRequest(bob.pendingContactRequests.single.id);
+    for (var attempt = 0; attempt < 50; attempt++) {
+      await alice.pollNow();
+      if (alice.contacts
+              .where((contact) => contact.deviceId == bob.identity!.deviceId)
+              .firstOrNull
+              ?.canSendOutbound ==
+          true) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(
+      alice.contacts
+          .where((contact) => contact.deviceId == bob.identity!.deviceId)
+          .firstOrNull
+          ?.canSendOutbound,
+      isTrue,
+      reason: 'approval response did not arrive',
+    );
+    await bob.pollNow();
+    await alice.pollNow();
+
+    expect(bob.messagesFor(alice.identity!.deviceId).single.body, 'queued');
+    expect(
+      alice.messagesFor(bob.identity!.deviceId).single.state,
+      DeliveryState.delivered,
+    );
+  });
+
+  test('cancelled pairing ignores a late acceptance response', () async {
+    final relay = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(relayClient: relay, displayName: 'Bob');
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: (await bob.buildInvite()).encodePayload(),
+      codephrase: '',
+    );
+    await bob.pollNow();
+    final request = bob.pendingContactRequests.single;
+    await bob.approvePendingContactRequest(request.id);
+    for (var attempt = 0; attempt < 50; attempt++) {
+      if (relay.storedEnvelopes.any(
+        (envelope) =>
+            envelope.kind == 'contact_exchange' &&
+            envelope.senderDeviceId == bob.identity!.deviceId &&
+            envelope.recipientDeviceId == alice.identity!.deviceId &&
+            envelope.protocolVersion == 2,
+      )) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(
+      relay.storedEnvelopes.any(
+        (envelope) =>
+            envelope.kind == 'contact_exchange' &&
+            envelope.senderDeviceId == bob.identity!.deviceId &&
+            envelope.recipientDeviceId == alice.identity!.deviceId &&
+            envelope.protocolVersion == 2,
+      ),
+      isTrue,
+      reason: 'the acceptance response was not queued on the relay',
+    );
+    await alice.cancelContactPairing(bob.identity!.deviceId);
+    await alice.pollNow();
+    expect(
+      alice.contacts.single.pairingState,
+      ContactPairingState.cancelled,
+    );
+    expect(alice.contacts.single.canSendOutbound, isFalse);
   });
 
   test(
@@ -2421,7 +2557,7 @@ void main() {
           payload: (await bob.buildInvite()).encodePayload(),
           codephrase: '',
         );
-        expect(result.exchangeStatus, ContactExchangeStatus.automatic);
+        expect(result.exchangeStatus, ContactExchangeStatus.pendingApproval);
         await _waitForIroh(() => bob.pendingContactRequests.isNotEmpty);
         expect(
           bob.contacts,
@@ -2527,14 +2663,17 @@ void main() {
         payload: (await bob.buildInvite()).encodePayload(),
         codephrase: '',
       );
-      expect(result.exchangeStatus, ContactExchangeStatus.automatic);
+      // The request is sent in the background; Bob must approve it.
+      expect(result.exchangeStatus, ContactExchangeStatus.pendingApproval);
       await _waitForIroh(() => bob.pendingContactRequests.isNotEmpty);
       await bob.approvePendingContactRequest(
         bob.pendingContactRequests.single.id,
       );
       expect(bob.contacts.single.hasPinnedIrohIdentity, isTrue);
       await _waitForIroh(
-        () => alice.contacts.single.featureCapabilityVersion == 1,
+        () =>
+            alice.contacts.single.featureCapabilityVersion == 1 &&
+            alice.contacts.single.canSendOutbound,
       );
 
       await alice.sendMessage(
@@ -2619,7 +2758,8 @@ void main() {
         payload: (await bob.buildInvite()).encodePayload(),
         codephrase: '',
       );
-      expect(result.exchangeStatus, ContactExchangeStatus.automatic);
+      // The request is sent in the background; Bob must approve it.
+      expect(result.exchangeStatus, ContactExchangeStatus.pendingApproval);
       await waitForRelay(
         () => bob.pendingContactRequests.isNotEmpty,
         'contact request did not arrive over the Iroh relay',
@@ -2629,8 +2769,10 @@ void main() {
       );
       expect(bob.contacts.single.hasPinnedIrohIdentity, isTrue);
       await waitForRelay(
-        () => alice.contacts.single.featureCapabilityVersion == 1,
-        'capability exchange did not return over the Iroh relay',
+        () =>
+            alice.contacts.single.featureCapabilityVersion == 1 &&
+            alice.contacts.single.canSendOutbound,
+        'acceptance did not return over the Iroh relay',
       );
       await alice.sendMessage(
         contact: alice.contacts.single,
@@ -4021,7 +4163,7 @@ void main() {
 
     expect(controller.contacts.single.alias, 'Bob');
     expect(controller.contacts.single.deviceId, invite.deviceId);
-    expect(result.exchangeStatus, ContactExchangeStatus.automatic);
+    expect(result.exchangeStatus, ContactExchangeStatus.pendingApproval);
   });
 
   test(
@@ -4053,7 +4195,7 @@ void main() {
 
       expect(receiver.contacts.single.deviceId, sender.identity!.deviceId);
       expect(receiver.contacts.single.alias, 'Alice');
-      expect(result.exchangeStatus, ContactExchangeStatus.automatic);
+      expect(result.exchangeStatus, ContactExchangeStatus.pendingApproval);
     },
   );
 
@@ -4085,7 +4227,7 @@ void main() {
       );
 
       expect(receiver.contacts.single.deviceId, sender.identity!.deviceId);
-      expect(result.exchangeStatus, ContactExchangeStatus.automatic);
+      expect(result.exchangeStatus, ContactExchangeStatus.pendingApproval);
     },
   );
 
@@ -4297,7 +4439,7 @@ void main() {
         payload: (await bob.buildInvite()).encodePayload(),
         codephrase: '',
       );
-      expect(result.exchangeStatus, ContactExchangeStatus.automatic);
+      expect(result.exchangeStatus, ContactExchangeStatus.pendingApproval);
       await bob.pollNow();
       expect(bob.contacts, isEmpty);
       expect(bob.pendingContactRequests, hasLength(1));
@@ -5612,6 +5754,9 @@ void main() {
         payload: staleInvite.encodePayload(),
         codephrase: '',
       );
+      await controller.acceptContactPairingForTesting(
+        controller.contacts.single.deviceId,
+      );
 
       var contact = controller.contacts.single;
       final checks = await controller.checkContactRoutes(
@@ -5763,6 +5908,8 @@ void main() {
         bob.pendingContactRequests.single.id,
       );
       expect(bob.contacts, hasLength(1));
+      await alice.pollNow();
+      expect(alice.contacts.single.canSendOutbound, isTrue);
 
       await alice.sendMessage(contact: alice.contacts.single, body: 'keep me');
       await bob.pollNow();
@@ -5819,7 +5966,7 @@ void main() {
   );
 
   test(
-    'manual suggestion is returned when reciprocal exchange cannot be sent',
+    'contact request stays queued when the pairing exchange cannot be sent',
     () async {
       final relayClient = _FakeRelayClient(
         allowedHosts: <String>{'192.168.1.25:7667', 'relay.example:7667'},
@@ -5837,7 +5984,14 @@ void main() {
         codephrase: '',
       );
 
-      expect(result.exchangeStatus, ContactExchangeStatus.manualActionRequired);
+      expect(result.exchangeStatus, ContactExchangeStatus.pendingApproval);
+      await _waitForIroh(
+        () =>
+            controller.contacts.single.pairingState ==
+            ContactPairingState.queued,
+        reason: 'an unsent request stays queued for automatic retry',
+      );
+      expect(controller.contacts.single.canSendOutbound, isFalse);
     },
   );
 
@@ -5857,6 +6011,9 @@ void main() {
       alias: 'Bob',
       payload: payload,
       codephrase: currentPairingCodeSnapshotForPayload(payload).codephrase,
+    );
+    await controller.acceptContactPairingForTesting(
+      controller.contacts.single.deviceId,
     );
 
     final contact = controller.contacts.single;
@@ -5887,6 +6044,9 @@ void main() {
       alias: 'Bob',
       payload: payload,
       codephrase: currentPairingCodeSnapshotForPayload(payload).codephrase,
+    );
+    await controller.acceptContactPairingForTesting(
+      controller.contacts.single.deviceId,
     );
 
     final contact = controller.contacts.single;
@@ -5919,6 +6079,9 @@ void main() {
         alias: 'Bob',
         payload: payload,
         codephrase: currentPairingCodeSnapshotForPayload(payload).codephrase,
+      );
+      await controller.acceptContactPairingForTesting(
+        controller.contacts.single.deviceId,
       );
 
       final contact = controller.contacts.single;
@@ -5974,6 +6137,9 @@ void main() {
         alias: 'Bob',
         payload: invite.encodePayload(),
         codephrase: '',
+      );
+      await controller.acceptContactPairingForTesting(
+        controller.contacts.single.deviceId,
       );
 
       final contact = controller.contacts.single;
@@ -6046,6 +6212,9 @@ void main() {
         alias: 'Bob',
         payload: payload,
         codephrase: currentPairingCodeSnapshotForPayload(payload).codephrase,
+      );
+      await controller.acceptContactPairingForTesting(
+        controller.contacts.single.deviceId,
       );
 
       final contact = controller.contacts.single;
@@ -6500,12 +6669,12 @@ void main() {
             ?.lastHeartbeatAttemptAt,
         isNotNull,
       );
-      expect(
-        alice
-            .reachabilityRecordFor(aliceContactForBob.deviceId)
-            ?.lastHeartbeatReplyAt,
-        isNull,
-      );
+      // Pairing may already have recorded a probe reply; the failed
+      // heartbeat must not add a newer one.
+      final lastReply = alice
+          .reachabilityRecordFor(aliceContactForBob.deviceId)
+          ?.lastHeartbeatReplyAt;
+      expect(lastReply == null || lastReply.isBefore(now), isTrue);
     },
   );
 
@@ -8712,7 +8881,9 @@ void main() {
       await alice.confirmContactReplacement('dev-bob-2');
       final refreshed = alice.contactByDeviceId('dev-bob-2');
       expect(refreshed!.pendingVerification, isFalse);
-      expect(refreshed.canSendOutbound, isTrue);
+      // The block is lifted; delivery still waits for the new device to
+      // accept the pairing request.
+      expect(refreshed.canComposeOutbound, isTrue);
       expect(
         refreshed.publicKeyBase64,
         'ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=',
@@ -10219,6 +10390,7 @@ void main() {
         final bob = await _createController(
           relayClient: relayClient,
           displayName: 'Bob',
+          nowProvider: () => now,
         );
         addTearDown(alice.dispose);
         addTearDown(bob.dispose);
@@ -11728,7 +11900,7 @@ void main() {
           payload: (await bob.buildInvite()).encodePayload(),
           codephrase: '',
         );
-        expect(pairing.exchangeStatus, ContactExchangeStatus.automatic);
+        expect(pairing.exchangeStatus, ContactExchangeStatus.pendingApproval);
         await _waitForIroh(() => bob.pendingContactRequests.isNotEmpty);
         await bob.approvePendingContactRequest(
           bob.pendingContactRequests.single.id,
