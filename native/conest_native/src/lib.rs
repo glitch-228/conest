@@ -9,6 +9,7 @@ pub mod beam;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod desktop_camera;
 mod ffi;
+pub mod ratchet;
 pub mod transfer;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod voice_recording;

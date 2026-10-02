@@ -1021,6 +1021,27 @@ pub extern "C" fn conest_beam_camera_stop(handle: u64) {
     }
 }
 
+/// Runs one stateless ratchet operation (see `ratchet.rs`). The request is a
+/// NUL-terminated UTF-8 JSON object; the JSON result must be released with
+/// `conest_string_free`. Returns null and records the error on failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_ratchet_call(request: *const c_char) -> *mut c_char {
+    let result = (|| -> anyhow::Result<serde_json::Value> {
+        anyhow::ensure!(!request.is_null(), "Missing ratchet request");
+        // SAFETY: The Dart caller supplies a NUL-terminated UTF-8 string for
+        // the duration of this call.
+        let request = unsafe { CStr::from_ptr(request) }.to_str()?;
+        crate::ratchet::call(&serde_json::from_str(request)?)
+    })();
+    match result {
+        Ok(value) => json_string(&value),
+        Err(error) => {
+            record_error(error);
+            std::ptr::null_mut()
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn conest_last_error() -> *mut c_char {
     let message = LAST_ERROR

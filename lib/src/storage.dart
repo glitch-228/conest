@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'app_storage.dart';
 import 'models.dart';
 import 'group_history_journal.dart';
+import 'ratchet.dart';
 
 List<int> _secureRandomBytes(int length) {
   final random = Random.secure();
@@ -360,6 +361,24 @@ class VaultStore {
     }();
   }
 
+  /// Forward-secrecy session state beside the vault. vodozemac encrypts the
+  /// pickles with a key derived from the vault key; every write is flushed
+  /// and atomically replaced before its future completes.
+  Future<RatchetStore> openRatchetStore() async {
+    final vault = await _vaultFile();
+    final pickleKey = await Hkdf(hmac: Hmac.sha256(), outputLength: 32)
+        .deriveKey(
+          secretKey: SecretKey(await _readOrCreateVaultKey()),
+          nonce: const <int>[],
+          info: utf8.encode('conest.ratchet.pickle.v1'),
+        );
+    return _FileRatchetStore(
+      this,
+      Directory('${vault.path}.ratchet'),
+      await pickleKey.extractBytes(),
+    );
+  }
+
   Future<VaultSnapshot> load() async {
     final file = await _vaultFile();
     final backup = File('${file.path}.bak');
@@ -460,6 +479,8 @@ class VaultStore {
     final file = await _vaultFile();
     final history = Directory('${file.path}.groups');
     if (await history.exists()) await history.delete(recursive: true);
+    final ratchet = Directory('${file.path}.ratchet');
+    if (await ratchet.exists()) await ratchet.delete(recursive: true);
     for (final candidate in <File>[
       file,
       File('${file.path}.tmp'),
@@ -535,5 +556,52 @@ class VaultStore {
     }
     final directory = await getApplicationSupportDirectory();
     return File('${directory.path}/$_vaultFileName');
+  }
+}
+
+class _FileRatchetStore implements RatchetStore {
+  _FileRatchetStore(this._vault, this._directory, this.pickleKey);
+
+  final VaultStore _vault;
+  final Directory _directory;
+  @override
+  final List<int> pickleKey;
+
+  File get _accountFile => File('${_directory.path}/account');
+
+  File _peerFile(String deviceId) => File(
+    '${_directory.path}/${hashes.sha256.convert(utf8.encode(deviceId))}.peer',
+  );
+
+  @override
+  Future<String?> readAccount() async =>
+      await _accountFile.exists() ? _accountFile.readAsString() : null;
+
+  @override
+  Future<void> writeAccount(String pickle) => _write(_accountFile, pickle);
+
+  @override
+  Future<RatchetPeerState?> readPeer(String deviceId) async {
+    final file = _peerFile(deviceId);
+    if (!await file.exists()) return null;
+    return RatchetPeerState.fromJson(
+      jsonDecode(await file.readAsString()) as Map<String, dynamic>,
+    );
+  }
+
+  @override
+  Future<void> writePeer(String deviceId, RatchetPeerState state) =>
+      _write(_peerFile(deviceId), jsonEncode(state.toJson()));
+
+  @override
+  Future<void> deletePeer(String deviceId) async {
+    final file = _peerFile(deviceId);
+    if (await file.exists()) await file.delete();
+  }
+
+  Future<void> _write(File file, String contents) async {
+    final temporary = File('${file.path}.tmp');
+    await _vault._writeFlushed(temporary, contents);
+    await _vault._atomicReplace(temporary, file);
   }
 }
