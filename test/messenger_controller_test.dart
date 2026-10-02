@@ -20,6 +20,8 @@ import 'package:conest/src/iroh_ffi_bridge.dart';
 import 'package:conest/src/iroh_transport.dart';
 import 'package:conest/src/lan_direct.dart';
 import 'package:conest/src/local_relay_node.dart';
+import 'package:conest/src/matrix_carrier.dart';
+import 'package:conest/src/matrix_client.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/native_attachment_crypto.dart';
@@ -38,6 +40,7 @@ import 'package:conest/src/transport.dart';
 import 'package:conest/src/update_service.dart';
 import 'package:conest/src/voice_call_service.dart';
 
+import 'support/fake_homeserver.dart';
 import 'support/fake_ratchet_engine.dart';
 
 const _fakeRelayIdentityKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
@@ -932,6 +935,13 @@ class _HostScopedFakeRelayClient extends RelayClient {
   }
 }
 
+/// The widget-test binding replaces HttpClient with a mock that answers
+/// 400; the Matrix tests need real loopback HTTP to their fake homeserver.
+class _RealHttpOverrides extends HttpOverrides {}
+
+MatrixHttp _realMatrixHttp() =>
+    HttpOverrides.runWithHttpOverrides(IoMatrixHttp.new, _RealHttpOverrides());
+
 Future<MessengerController> _createController({
   required RelayClient relayClient,
   required String displayName,
@@ -951,6 +961,7 @@ Future<MessengerController> _createController({
   transportRegistryFactory,
   String? debugBuildId,
   RatchetEngine? ratchetEngine,
+  bool? matrixCarrierEnabled,
 }) async {
   final controller = MessengerController(
     vaultStore: vaultStore ?? _MemoryVaultStore(),
@@ -966,6 +977,8 @@ Future<MessengerController> _createController({
     transportRegistryFactory: transportRegistryFactory,
     debugBuildId: debugBuildId,
     ratchetEngine: ratchetEngine,
+    matrixCarrierEnabled: matrixCarrierEnabled,
+    matrixHttpFactory: _realMatrixHttp,
     storageCapacityProvider:
         storageCapacityProvider ??
         (_) async => const StorageCapacity(
@@ -10946,6 +10959,131 @@ void main() {
       // Third + subsequent chunks succeed — interruption consumed.
       await sendChunk();
       await sendChunk();
+    });
+  });
+
+  group('Matrix carrier', () {
+    Future<void> settle(List<MessengerController> controllers) async {
+      for (var round = 0; round < 6; round++) {
+        for (final controller in controllers) {
+          await controller.retryUnacknowledgedMessagesNow();
+          await controller.pollNow();
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    }
+
+    Future<(MessengerController, MessengerController, FakeHomeserver,
+        _FakeRelayClient)>
+    linkedPair() async {
+      final server = await FakeHomeserver.start();
+      addTearDown(server.close);
+      server
+        ..register('alice', 'a-pass')
+        ..register('bob', 'b-pass');
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        matrixCarrierEnabled: true,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        matrixCarrierEnabled: true,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      await alice.signInToMatrix(
+        homeserver: server.url.toString(),
+        user: 'alice',
+        password: 'a-pass',
+      );
+      await bob.signInToMatrix(
+        homeserver: server.url.toString(),
+        user: 'bob',
+        password: 'b-pass',
+      );
+      await settle([alice, bob]);
+      return (alice, bob, server, relay);
+    }
+
+    test('contacts learn each other\'s Matrix device', () async {
+      final (alice, bob, _, _) = await linkedPair();
+      expect(alice.matrixStatus?.signedIn, isTrue);
+      expect(
+        alice.contacts.single.matrixAddress,
+        startsWith('@bob:fake.test|CONEST_'),
+      );
+      expect(
+        bob.contacts.single.matrixAddress,
+        startsWith('@alice:fake.test|CONEST_'),
+      );
+    });
+
+    test('messages arrive through Matrix when relays fail', () async {
+      final (alice, bob, server, relay) = await linkedPair();
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      final before = server.sent.length;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'via matrix');
+      final aliceId = alice.identity!.deviceId;
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (DateTime.now().isBefore(deadline) &&
+          !bob.messagesFor(aliceId).any((m) => m.body == 'via matrix')) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(
+        bob.messagesFor(aliceId).map((m) => m.body),
+        contains('via matrix'),
+      );
+      final frames = server.sent.skip(before).toList();
+      expect(frames, isNotEmpty);
+      expect(frames.first.type, 'dev.conest.carrier.v1');
+      expect(frames.first.to, startsWith('@bob:fake.test|CONEST_'));
+      // Sealed: neither the text nor the envelope kind is visible.
+      for (final frame in frames) {
+        final raw = utf8.decode(
+          base64Decode(frame.content['d'] as String),
+          allowMalformed: true,
+        );
+        expect(raw, isNot(contains('via matrix')));
+        expect(raw, isNot(contains('direct_message')));
+      }
+    });
+
+    test('signing out clears the address at the contact', () async {
+      final (alice, bob, _, _) = await linkedPair();
+      await bob.signOutOfMatrix();
+      await settle([alice, bob]);
+      expect(bob.matrixStatus?.signedIn, isFalse);
+      expect(alice.contacts.single.matrixAddress, isNull);
+    });
+
+    test('a frame from an unknown Matrix user is ignored', () async {
+      final (alice, bob, server, _) = await linkedPair();
+      server.register('mallory', 'm-pass');
+      final mallory = MatrixClient(
+        await MatrixClient.login(
+          homeserver: server.url,
+          user: 'mallory',
+          password: 'm-pass',
+          http: _realMatrixHttp(),
+        ),
+        http: _realMatrixHttp(),
+      );
+      addTearDown(mallory.close);
+      final target = MatrixAddress.decode(alice.contacts.single.matrixAddress)!;
+      await mallory.sendToDevice('dev.conest.carrier.v1', {
+        target.userId: {
+          target.deviceId: matrixCarrierFrames(
+            'x',
+            Uint8List.fromList(List<int>.filled(64, 1)),
+          ).single,
+        },
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(bob.messagesFor(alice.identity!.deviceId), isEmpty);
     });
   });
 

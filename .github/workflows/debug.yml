@@ -88,14 +88,62 @@ jobs:
       - name: Verify channel identity and automatic transfer handshake
         run: |
           flutter test test/build_info_test.dart test/transport_test.dart test/feature_models_test.dart test/voice_call_sound_cues_test.dart
-          flutter test test/group_history_test.dart test/group_history_sync_test.dart test/group_history_wire_test.dart test/group_membership_history_test.dart test/storage_test.dart test/group_file_crypto_test.dart test/ratchet_test.dart
+          flutter test test/group_history_test.dart test/group_history_sync_test.dart test/group_history_wire_test.dart test/group_membership_history_test.dart test/storage_test.dart test/group_file_crypto_test.dart test/ratchet_test.dart test/matrix_carrier_test.dart
           flutter test test/storage_capacity_test.dart test/lan_direct_test.dart test/attachment_file_io_test.dart test/attachment_block_worker_test.dart
           flutter test test/messenger_controller_test.dart \
-            --name "Iroh group admission|Iroh group history|Iroh group-only|real socket group-only|legacy group updates|retired default|Iroh pairing|Iroh bootstrap|storage reserve|Download anyway|manual Download storage|spool reserve|Beam pairing receives|rejected contact messages|discarded message duplicates|Contact approval releases locally queued messages|cancelled pairing ignores a late acceptance response|Iroh limit blocks|automatic online file|different-network|verification progress|repeated LAN hints|chat folders|scheduled messages recover|scheduled messages recheck|scheduled sends stay blocked after revocation|group poll converges after reordered|contact request stays queued|unknown exchange requires approval|double tap|sendMessage prefers LAN routes|heartbeat|queued controls keep plaintext|malformed queued payload|forward-secret sessions|Courier search keeps archived chats in the archive view"
+            --name "Iroh group admission|Iroh group history|Iroh group-only|real socket group-only|legacy group updates|retired default|Iroh pairing|Iroh bootstrap|storage reserve|Download anyway|manual Download storage|spool reserve|Beam pairing receives|rejected contact messages|discarded message duplicates|Contact approval releases locally queued messages|cancelled pairing ignores a late acceptance response|Iroh limit blocks|automatic online file|different-network|verification progress|repeated LAN hints|chat folders|scheduled messages recover|scheduled messages recheck|scheduled sends stay blocked after revocation|group poll converges after reordered|contact request stays queued|unknown exchange requires approval|double tap|sendMessage prefers LAN routes|heartbeat|queued controls keep plaintext|malformed queued payload|forward-secret sessions|Matrix carrier|Courier search keeps archived chats in the archive view"
           flutter test test/messenger_controller_test.dart \
             --plain-name "matching debug builds auto-accept, verify, report, and clean a real LAN test"
           flutter test test/messenger_controller_test.dart \
             --plain-name "automatic file test stops before sending when debug builds differ"
+
+  matrix:
+    if: ${{ !inputs.quick_build }}
+    needs: cadence
+    name: Matrix carrier against a real Synapse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - run: flutter pub get
+      - name: Start Synapse with open registration
+        run: |
+          mkdir -p synapse-data
+          docker run --rm -v "$PWD/synapse-data:/data" \
+            -e SYNAPSE_SERVER_NAME=localhost -e SYNAPSE_REPORT_STATS=no \
+            matrixdotorg/synapse:latest generate
+          sudo tee -a synapse-data/homeserver.yaml > /dev/null <<'EOF'
+          enable_registration: true
+          enable_registration_without_verification: true
+          rc_registration:
+            per_second: 100
+            burst_count: 100
+          rc_login:
+            address:
+              per_second: 100
+              burst_count: 100
+            account:
+              per_second: 100
+              burst_count: 100
+          EOF
+          docker run -d --name synapse -p 8008:8008 \
+            -v "$PWD/synapse-data:/data" matrixdotorg/synapse:latest
+          for attempt in $(seq 1 60); do
+            curl -sf http://localhost:8008/_matrix/client/versions && exit 0
+            sleep 2
+          done
+          docker logs synapse
+          exit 1
+      - name: Run the carrier against Synapse
+        env:
+          CONEST_MATRIX_HOMESERVER: http://localhost:8008
+        run: flutter test test/matrix_homeserver_test.dart
+      - name: Synapse logs on failure
+        if: failure()
+        run: docker logs synapse | tail -200
 
   android:
     name: Android debug battle-test APK
@@ -130,6 +178,7 @@ jobs:
             --dart-define=CONEST_BUILD_COMMIT=${GITHUB_SHA} \
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
+            --dart-define=CONEST_MATRIX=true \
             --dart-define=CONEST_EXPERIMENTAL_ANDROID_BACKGROUND_RUNTIME=true
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-debug.apk \
@@ -192,7 +241,8 @@ jobs:
             --dart-define=CONEST_BUILD_CHANNEL=debug \
             --dart-define=CONEST_BUILD_COMMIT=${GITHUB_SHA} \
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
-            --dart-define=CONEST_FORWARD_SECRECY=true
+            --dart-define=CONEST_FORWARD_SECRECY=true \
+            --dart-define=CONEST_MATRIX=true
           mkdir -p dist-stage/conest-debug-linux-x64 dist
           cp -a build/linux/x64/debug/bundle/. dist-stage/conest-debug-linux-x64/
           (cd dist-stage && zip -r ../dist/conest-debug-linux-x64-${GITHUB_RUN_NUMBER}.zip conest-debug-linux-x64)
@@ -250,7 +300,8 @@ jobs:
             --dart-define=CONEST_BUILD_CHANNEL=debug \
             --dart-define=CONEST_BUILD_COMMIT=${GITHUB_SHA} \
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
-            --dart-define=CONEST_FORWARD_SECRECY=true
+            --dart-define=CONEST_FORWARD_SECRECY=true \
+            --dart-define=CONEST_MATRIX=true
           mkdir -p dist-stage/conest-debug-windows-x64 dist
           cp -a build/windows/x64/runner/Debug/. dist-stage/conest-debug-windows-x64/
           powershell -Command "Compress-Archive -Path dist-stage/conest-debug-windows-x64 -DestinationPath dist/conest-debug-windows-x64-${GITHUB_RUN_NUMBER}.zip"

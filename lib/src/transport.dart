@@ -186,6 +186,10 @@ class TransportRegistry {
   Iterable<TransportAdapter> get adapters => _adapters.values;
   TransportAdapter? adapterFor(TransportKind kind) => _adapters[kind];
 
+  /// Adds an adapter that becomes available after startup (for example
+  /// Matrix after sign-in). The caller starts it.
+  void register(TransportAdapter adapter) => _adapters[adapter.kind] = adapter;
+
   Future<void> start() => Future.wait(_adapters.values.map((a) => a.start()));
   Future<void> stop() => Future.wait(_adapters.values.map((a) => a.stop()));
 

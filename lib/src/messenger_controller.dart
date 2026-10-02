@@ -26,6 +26,8 @@ import 'attachment_block_worker.dart';
 import 'iroh_transport.dart';
 import 'lan_direct.dart';
 import 'local_relay_node.dart';
+import 'matrix_carrier.dart';
+import 'matrix_client.dart';
 import 'models.dart';
 import 'native_attachment_crypto.dart';
 import 'platform_bridge.dart';
@@ -196,6 +198,10 @@ const Duration _pendingContactRequestTtl = Duration(days: 7);
 const bool _forwardSecrecyBuild = bool.fromEnvironment(
   'CONEST_FORWARD_SECRECY',
 );
+
+/// The Matrix carrier is built in only where CI passes this define (nightly
+/// and debug builds) until it is qualified for stable.
+const bool _matrixCarrierBuild = bool.fromEnvironment('CONEST_MATRIX');
 
 /// Static-key bootstrap that carries ratchet bundles (offer, answer, reset).
 const String _ratchetBundleKind = 'ratchet_bundle';
@@ -413,7 +419,11 @@ class MessengerController extends ChangeNotifier {
     transportRegistryFactory,
     VoiceCallCuePlayer? voiceCallCuePlayer,
     RatchetEngine? ratchetEngine,
+    bool? matrixCarrierEnabled,
+    MatrixHttp Function()? matrixHttpFactory,
   }) : _vaultStore = vaultStore,
+       _matrixHttpFactory = matrixHttpFactory,
+       _matrixCarrierEnabled = matrixCarrierEnabled ?? _matrixCarrierBuild,
        _ratchetEngine =
            ratchetEngine ??
            (_forwardSecrecyBuild ? NativeRatchetEngine.tryCreate() : null),
@@ -481,6 +491,9 @@ class MessengerController extends ChangeNotifier {
   late final RelayClient _relayClient;
   late final CryptoService _crypto;
   final RatchetEngine? _ratchetEngine;
+  final bool _matrixCarrierEnabled;
+  final MatrixHttp Function()? _matrixHttpFactory;
+  MatrixTransportAdapter? _matrixTransport;
   RatchetSessions? _ratchet;
   final Map<String, DateTime> _ratchetBundleSentAt = {};
   final Map<String, DateTime> _bulkKeyAnnouncedAt = {};
@@ -3013,6 +3026,7 @@ class MessengerController extends ChangeNotifier {
     try {
       _snapshot = await _vaultStore.load();
       await _openRatchetSessions();
+      _createMatrixTransport();
       await VoiceMessageService.cleanupAbandonedRecordings();
       await _recoverScheduledMessageTransitions();
       await _retireBundledRelayRoutes();
@@ -3163,8 +3177,17 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _startTransportRegistry() async {
+    await _startNativeTransportRegistry();
+    await _attachMatrixTransport();
+  }
+
+  Future<void> _startNativeTransportRegistry() async {
     final factory = _transportRegistryFactory;
-    if (_transportRegistry != null || factory == null) {
+    if (factory == null ||
+        (_transportRegistry?.adapters.any(
+              (adapter) => adapter.kind != TransportKind.matrix,
+            ) ??
+            false)) {
       return;
     }
     final me = _snapshot.identity;
@@ -3173,8 +3196,16 @@ class MessengerController extends ChangeNotifier {
       final registry = await factory(me);
       if (registry == null) return;
       await registry.start();
+      // A Matrix-only registry from before keeps its running adapter and
+      // inbound subscription.
+      final matrixOnly = _transportRegistry;
+      for (final adapter in matrixOnly?.adapters ?? const <TransportAdapter>[]) {
+        registry.register(adapter);
+      }
       _transportRegistry = registry;
-      for (final adapter in registry.adapters) {
+      for (final adapter in registry.adapters.where(
+        (adapter) => adapter.kind != TransportKind.matrix,
+      )) {
         _transportInboundSubscriptions.add(
           adapter.inboundEnvelopes.listen(
             _handleTransportInbound,
@@ -3226,7 +3257,66 @@ class MessengerController extends ChangeNotifier {
     if (registry != null) await registry.stop();
   }
 
+  /// Joins the Matrix carrier to the transport registry when a session is
+  /// stored, creating a Matrix-only registry if native Iroh is unavailable.
+  Future<void> _attachMatrixTransport() async {
+    final matrix = _matrixTransport;
+    final session = MatrixSession.tryFromJson(_snapshot.matrixSession);
+    if (matrix == null || session == null || _snapshot.identity == null) {
+      return;
+    }
+    if (matrix.session == null) {
+      matrix.attach(session, since: _snapshot.matrixSyncToken);
+    }
+    final registry = _transportRegistry ??= TransportRegistry(
+      const <TransportAdapter>[],
+    );
+    if (registry.adapterFor(TransportKind.matrix) == null) {
+      registry.register(matrix);
+      _transportInboundSubscriptions.add(
+        matrix.inboundEnvelopes.listen(
+          _handleTransportInbound,
+          onError: (Object error, StackTrace stackTrace) {
+            appendDebugLog('Matrix inbound transport failed: $error');
+          },
+        ),
+      );
+    }
+    await matrix.start();
+  }
+
+  Future<void> _handleMatrixInbound(TransportInboundEnvelope inbound) async {
+    final contact = _contactByDeviceId(inbound.senderTransportIdentity);
+    final global = _snapshot.identity?.connectivity;
+    if (contact == null ||
+        global == null ||
+        contact.routing.effectivePolicy(TransportKind.matrix, global) ==
+            TransportPolicy.disabled) {
+      appendDebugLog('Dropped Matrix ingress disabled by connectivity policy.');
+      return;
+    }
+    try {
+      final decoded = jsonDecode(utf8.decode(inbound.bytes));
+      if (decoded is! Map<String, dynamic>) return;
+      final envelope = RelayEnvelope.fromJson(decoded);
+      if (envelope.senderDeviceId != contact.deviceId ||
+          envelope.recipientDeviceId != _snapshot.identity?.deviceId) {
+        appendDebugLog('Matrix envelope identity mismatch.');
+        return;
+      }
+      final processed = await _processEnvelopes([
+        envelope,
+      ], ingressKind: PeerRouteKind.relay);
+      if (processed > 0) _reachability.noteAvailablePath(contact.deviceId);
+    } catch (error) {
+      appendDebugLog('Rejected Matrix envelope: $error');
+    }
+  }
+
   Future<void> _handleTransportInbound(TransportInboundEnvelope inbound) async {
+    if (inbound.transport == TransportKind.matrix) {
+      return _handleMatrixInbound(inbound);
+    }
     if (inbound.transport != TransportKind.iroh) return;
     final contact = _snapshot.contacts
         .where(
@@ -10873,6 +10963,9 @@ class MessengerController extends ChangeNotifier {
           .toList(),
       'requestPeerCapabilities': requestPeerCapabilities,
       if (pairingResponse != null) 'pairingResponse': pairingResponse,
+      // Only peers that already know this identity read it (authenticated).
+      if (recipientKnowsIdentity && _ownMatrixAddress != null)
+        'matrixAddress': _ownMatrixAddress!.toJson(),
     });
     final payloads = pairingResponse == null
         ? <String>[structuredPayload, invitePayload]
@@ -15549,6 +15642,10 @@ class MessengerController extends ChangeNotifier {
     List<ApplicationCapability>? featureCapabilities;
     var featureCapabilityVersion = 0;
     var requestPeerCapabilities = false;
+    // Only an authenticated structured exchange can set or clear the
+    // contact's Matrix carrier address.
+    var matrixAddressAdvertised = false;
+    String? peerMatrixAddress;
     if (envelope.protocolVersion == 1) {
       if (existing != null) return;
       final rawPayload = envelope.payloadBase64;
@@ -15618,6 +15715,10 @@ class MessengerController extends ChangeNotifier {
             featureCapabilityVersion = 1;
           }
           requestPeerCapabilities = request == true;
+          matrixAddressAdvertised = true;
+          peerMatrixAddress = MatrixAddress.fromJson(
+            decodedExchange['matrixAddress'],
+          )?.encode();
         }
       } on FormatException {
         // Existing peers send the signed invite payload without the wrapper.
@@ -15692,6 +15793,16 @@ class MessengerController extends ChangeNotifier {
       );
       if (updated != null && featureCapabilityVersion >= 1) {
         unawaited(_syncRatchetWithCapabilities(updated));
+      }
+      if (updated != null &&
+          matrixAddressAdvertised &&
+          updated.matrixAddress != peerMatrixAddress) {
+        updated = updated.copyWith(
+          matrixAddress: peerMatrixAddress,
+          clearMatrixAddress: peerMatrixAddress == null,
+        );
+        _replaceContactRecord(updated);
+        await _saveSnapshotSilently(notify: true);
       }
       final matchesPendingRequest = pairingRequestId == null ||
           pairingRequestId == existing.pairingRequestId;
@@ -19037,6 +19148,10 @@ class MessengerController extends ChangeNotifier {
           allowRelay &&
           (global?.irohRelayEnabled ?? false) &&
           contact.routing.irohRelayEnabled,
+      transportAddresses: {
+        if (contact.matrixAddress != null)
+          TransportKind.matrix: contact.matrixAddress!,
+      },
     );
   }
 
@@ -21645,6 +21760,195 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  /// Whether this build includes the Matrix carrier.
+  bool get matrixCarrierAvailable => _matrixTransport != null;
+
+  MatrixCarrierStatus? get matrixStatus => _matrixTransport?.status;
+
+  Stream<MatrixCarrierStatus> get matrixStatusChanges =>
+      _matrixTransport?.statusChanges ?? const Stream.empty();
+
+  final Map<String, Future<SecretKey>> _matrixCarrierKeys = {};
+
+  void _createMatrixTransport() {
+    if (!_matrixCarrierEnabled || _matrixTransport != null) return;
+    _matrixTransport = MatrixTransportAdapter(
+      sealer: _ControllerMatrixSealer(this),
+      clientFactory: (session) =>
+          MatrixClient(session, http: _matrixHttpFactory?.call()),
+      now: _now,
+      onSyncToken: (token) {
+        if (_snapshot.matrixSession == null) return;
+        _snapshot = _snapshot.copyWith(matrixSyncToken: token);
+        unawaited(_saveSnapshotSilently(debounce: true));
+      },
+      onSessionRevoked: () {
+        _snapshot = _snapshot.copyWith(clearMatrixSession: true);
+        unawaited(
+          _persist('The Matrix sign-in expired. Sign in again to use Matrix.'),
+        );
+        _advertiseProfileToContacts();
+      },
+    );
+  }
+
+  /// Conest asks the homeserver for a stable device of its own, so signing
+  /// in again resumes the same to-device queue and never reaches the user's
+  /// other Matrix clients.
+  String _matrixDeviceIdFor(IdentityRecord me) {
+    final compact = me.deviceId
+        .replaceAll(RegExp('[^A-Za-z0-9]'), '')
+        .toUpperCase();
+    return 'CONEST_${compact.length > 24 ? compact.substring(0, 24) : compact}';
+  }
+
+  /// Signs this device in to a Matrix account for the carrier route.
+  /// [homeserver] may be empty when [user] is a full `@user:server` id.
+  Future<void> signInToMatrix({
+    String homeserver = '',
+    required String user,
+    required String password,
+  }) async {
+    final matrix = _matrixTransport;
+    if (matrix == null) {
+      throw StateError('Matrix is not available in this build.');
+    }
+    final me = _requireIdentity();
+    final login = user.trim();
+    final http = _matrixHttpFactory?.call();
+    final MatrixSession session;
+    try {
+      final base = await MatrixClient.resolveHomeserver(
+        homeserver,
+        userId: isMatrixUserId(login) ? login : null,
+        http: http,
+      );
+      session = await MatrixClient.login(
+        homeserver: base,
+        user: login,
+        password: password,
+        deviceId: _matrixDeviceIdFor(me),
+        http: http,
+      );
+    } finally {
+      http?.close();
+    }
+    _snapshot = _snapshot
+        .copyWith(clearMatrixSession: true)
+        .copyWith(matrixSession: session.toJson());
+    matrix.attach(session);
+    await _persist('Signed in to Matrix as ${session.userId}.');
+    await _attachMatrixTransport();
+    _advertiseProfileToContacts();
+  }
+
+  /// Signs the Conest Matrix device out and stops using the route.
+  Future<void> signOutOfMatrix() async {
+    final matrix = _matrixTransport;
+    if (matrix != null) {
+      try {
+        await matrix.signOut();
+      } catch (error) {
+        appendDebugLog('Matrix sign-out was not confirmed: $error');
+      }
+    }
+    _snapshot = _snapshot.copyWith(clearMatrixSession: true);
+    await _persist('Signed out of Matrix.');
+    _advertiseProfileToContacts();
+  }
+
+  MatrixAddress? get _ownMatrixAddress {
+    final session = MatrixSession.tryFromJson(_snapshot.matrixSession);
+    return session == null
+        ? null
+        : MatrixAddress.tryCreate(session.userId, session.deviceId);
+  }
+
+  void _advertiseProfileToContacts() {
+    for (final contact in _snapshot.contacts.where(
+      (contact) => contact.canSendOutbound,
+    )) {
+      unawaited(
+        _sendReciprocalContactExchange(contact, recipientKnowsIdentity: true)
+            .then<void>((_) {})
+            .catchError((Object _) {}),
+      );
+    }
+  }
+
+  Future<SecretKey> _matrixCarrierKey(ContactRecord contact) =>
+      _matrixCarrierKeys.putIfAbsent(
+        '${contact.deviceId}|${contact.publicKeyBase64}',
+        () async => Hkdf(hmac: Hmac.sha256(), outputLength: 32).deriveKey(
+          secretKey: await _crypto.sessionKeyFor(contact),
+          nonce: const <int>[],
+          info: utf8.encode('conest.matrix.carrier.v1'),
+        ),
+      );
+
+  List<int> _matrixCarrierAad(String senderDeviceId, String recipientDeviceId) =>
+      utf8.encode(
+        'conest.matrix.carrier.v1|$senderDeviceId|$recipientDeviceId',
+      );
+
+  Future<Uint8List> _sealForMatrix(
+    String peerDeviceId,
+    Uint8List envelope,
+  ) async {
+    final contact = _contactByDeviceId(peerDeviceId);
+    final me = _requireIdentity();
+    if (contact == null || !contact.canSendOutbound) {
+      throw StateError('Matrix carries traffic only for approved contacts.');
+    }
+    final cipher = Chacha20.poly1305Aead();
+    final box = await cipher.encrypt(
+      envelope,
+      secretKey: await _matrixCarrierKey(contact),
+      nonce: cipher.newNonce(),
+      aad: _matrixCarrierAad(me.deviceId, contact.deviceId),
+    );
+    return Uint8List.fromList([
+      ...box.nonce,
+      ...box.cipherText,
+      ...box.mac.bytes,
+    ]);
+  }
+
+  /// Opens a frame from [senderUserId] with each approved contact pinned to
+  /// that Matrix user; the seal authenticates which one sent it.
+  Future<({String peerDeviceId, Uint8List envelope})?> _openFromMatrix(
+    String senderUserId,
+    Uint8List sealed,
+  ) async {
+    final me = _snapshot.identity;
+    if (me == null || sealed.length < 12 + 16) return null;
+    final cipher = Chacha20.poly1305Aead();
+    for (final contact in _snapshot.contacts) {
+      if (!contact.canSendOutbound ||
+          MatrixAddress.decode(contact.matrixAddress)?.userId != senderUserId) {
+        continue;
+      }
+      try {
+        final clear = await cipher.decrypt(
+          SecretBox(
+            Uint8List.sublistView(sealed, 12, sealed.length - 16),
+            nonce: Uint8List.sublistView(sealed, 0, 12),
+            mac: Mac(Uint8List.sublistView(sealed, sealed.length - 16)),
+          ),
+          secretKey: await _matrixCarrierKey(contact),
+          aad: _matrixCarrierAad(contact.deviceId, me.deviceId),
+        );
+        return (
+          peerDeviceId: contact.deviceId,
+          envelope: Uint8List.fromList(clear),
+        );
+      } on SecretBoxAuthenticationError {
+        continue;
+      }
+    }
+    return null;
+  }
+
   List<ApplicationCapability> _localApplicationCapabilities() {
     final me = identity;
     final enabled = <ApplicationCapability>{
@@ -23676,4 +23980,20 @@ class _VoiceMediaReplayWindow {
     }
     return true;
   }
+}
+
+class _ControllerMatrixSealer implements MatrixCarrierSealer {
+  _ControllerMatrixSealer(this._controller);
+
+  final MessengerController _controller;
+
+  @override
+  Future<Uint8List> seal(String peerDeviceId, Uint8List envelope) =>
+      _controller._sealForMatrix(peerDeviceId, envelope);
+
+  @override
+  Future<({String peerDeviceId, Uint8List envelope})?> open(
+    String senderUserId,
+    Uint8List sealed,
+  ) => _controller._openFromMatrix(senderUserId, sealed);
 }

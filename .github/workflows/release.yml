@@ -155,6 +155,7 @@ jobs:
             --dart-define=CONEST_BUILD_COMMIT=${{ github.sha }} \
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=${{ needs.prepare.outputs.channel == 'nightly' }} \
             --dart-define=CONEST_FORWARD_SECRECY=${{ needs.prepare.outputs.channel == 'nightly' }} \
+            --dart-define=CONEST_MATRIX=${{ needs.prepare.outputs.channel == 'nightly' }} \
             --dart-define=CONEST_RELEASE_MANIFEST_PUBLIC_KEY=${CONEST_RELEASE_MANIFEST_PUBLIC_KEY}
       - name: Stage Linux bundle
         shell: bash
@@ -213,6 +214,7 @@ jobs:
             --dart-define=CONEST_BUILD_COMMIT=${{ github.sha }} \
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=${{ needs.prepare.outputs.channel == 'nightly' }} \
             --dart-define=CONEST_FORWARD_SECRECY=${{ needs.prepare.outputs.channel == 'nightly' }} \
+            --dart-define=CONEST_MATRIX=${{ needs.prepare.outputs.channel == 'nightly' }} \
             --dart-define=CONEST_RELEASE_MANIFEST_PUBLIC_KEY=${CONEST_RELEASE_MANIFEST_PUBLIC_KEY}
       - name: Stage Windows bundle
         shell: bash
@@ -298,6 +300,7 @@ jobs:
             --dart-define=CONEST_BUILD_COMMIT=${{ github.sha }} \
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=${{ needs.prepare.outputs.channel == 'nightly' }} \
             --dart-define=CONEST_FORWARD_SECRECY=${{ needs.prepare.outputs.channel == 'nightly' }} \
+            --dart-define=CONEST_MATRIX=${{ needs.prepare.outputs.channel == 'nightly' }} \
             --dart-define=CONEST_RELEASE_MANIFEST_PUBLIC_KEY=${CONEST_RELEASE_MANIFEST_PUBLIC_KEY}
       - name: Stage APK
         shell: bash

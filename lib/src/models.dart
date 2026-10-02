@@ -1596,6 +1596,7 @@ class ContactRecord {
     this.routing = const ContactRoutingPreferences(),
     this.signingPublicKeyBase64,
     this.irohEndpointId,
+    this.matrixAddress,
     this.capabilities = const <TransportKind>[],
     this.featureCapabilities = const <ApplicationCapability>[],
     this.featureCapabilityVersion = 0,
@@ -1619,6 +1620,10 @@ class ContactRecord {
   final ContactRoutingPreferences routing;
   final String? signingPublicKeyBase64;
   final String? irohEndpointId;
+
+  /// The contact's Conest Matrix device as `userId|deviceId`, learned from
+  /// its authenticated contact exchange. Null when it has not linked Matrix.
+  final String? matrixAddress;
   final List<TransportKind> capabilities;
   final List<ApplicationCapability> featureCapabilities;
   final int featureCapabilityVersion;
@@ -1696,6 +1701,8 @@ class ContactRecord {
     ContactRoutingPreferences? routing,
     String? signingPublicKeyBase64,
     String? irohEndpointId,
+    String? matrixAddress,
+    bool clearMatrixAddress = false,
     List<TransportKind>? capabilities,
     List<ApplicationCapability>? featureCapabilities,
     int? featureCapabilityVersion,
@@ -1735,6 +1742,9 @@ class ContactRecord {
       signingPublicKeyBase64:
           signingPublicKeyBase64 ?? this.signingPublicKeyBase64,
       irohEndpointId: irohEndpointId ?? this.irohEndpointId,
+      matrixAddress: clearMatrixAddress
+          ? null
+          : matrixAddress ?? this.matrixAddress,
       capabilities: capabilities ?? this.capabilities,
       featureCapabilities: featureCapabilities ?? this.featureCapabilities,
       featureCapabilityVersion:
@@ -1833,6 +1843,7 @@ class ContactRecord {
       if (signingPublicKeyBase64 != null)
         'signingPublicKeyBase64': signingPublicKeyBase64,
       if (irohEndpointId != null) 'irohEndpointId': irohEndpointId,
+      if (matrixAddress != null) 'matrixAddress': matrixAddress,
       if (capabilities.isNotEmpty)
         'capabilities': capabilities.map((entry) => entry.name).toList(),
       if (featureCapabilityVersion > 0) ...{
@@ -1916,6 +1927,7 @@ class ContactRecord {
           : const ContactRoutingPreferences(),
       signingPublicKeyBase64: json['signingPublicKeyBase64'] as String?,
       irohEndpointId: json['irohEndpointId'] as String?,
+      matrixAddress: json['matrixAddress'] as String?,
       capabilities: (json['capabilities'] as List<dynamic>? ?? const [])
           .whereType<String>()
           .map(
@@ -3956,6 +3968,8 @@ class VaultSnapshot {
     this.chatFolders = const <ChatFolder>[],
     this.scheduledMessages = const <ScheduledMessage>[],
     this.voiceCallSummaries = const <VoiceCallSummary>[],
+    this.matrixSession,
+    this.matrixSyncToken,
   });
 
   final IdentityRecord? identity;
@@ -4034,6 +4048,12 @@ class VaultSnapshot {
   final List<ScheduledMessage> scheduledMessages;
   final List<VoiceCallSummary> voiceCallSummaries;
 
+  /// The signed-in Conest Matrix device (`MatrixSession.toJson`), if any.
+  final Map<String, dynamic>? matrixSession;
+
+  /// The last acknowledged `/sync` position for [matrixSession].
+  final String? matrixSyncToken;
+
   factory VaultSnapshot.empty() {
     return VaultSnapshot(
       identity: null,
@@ -4088,6 +4108,9 @@ class VaultSnapshot {
     List<ChatFolder>? chatFolders,
     List<ScheduledMessage>? scheduledMessages,
     List<VoiceCallSummary>? voiceCallSummaries,
+    Map<String, dynamic>? matrixSession,
+    String? matrixSyncToken,
+    bool clearMatrixSession = false,
     bool clearIdentity = false,
   }) {
     return VaultSnapshot(
@@ -4126,6 +4149,12 @@ class VaultSnapshot {
       chatFolders: chatFolders ?? this.chatFolders,
       scheduledMessages: scheduledMessages ?? this.scheduledMessages,
       voiceCallSummaries: voiceCallSummaries ?? this.voiceCallSummaries,
+      matrixSession: clearMatrixSession
+          ? null
+          : matrixSession ?? this.matrixSession,
+      matrixSyncToken: clearMatrixSession
+          ? null
+          : matrixSyncToken ?? this.matrixSyncToken,
     );
   }
 
@@ -4185,6 +4214,8 @@ class VaultSnapshot {
       'voiceCallSummaries': voiceCallSummaries
           .map((entry) => entry.toJson())
           .toList(),
+      if (matrixSession != null) 'matrixSession': matrixSession,
+      if (matrixSyncToken != null) 'matrixSyncToken': matrixSyncToken,
     };
   }
 
@@ -4220,6 +4251,8 @@ class VaultSnapshot {
               .whereType<Map<String, dynamic>>()
               .map(VoiceCallSummary.fromJson)
               .toList(),
+      matrixSession: json['matrixSession'] as Map<String, dynamic>?,
+      matrixSyncToken: json['matrixSyncToken'] as String?,
       contacts: (json['contacts'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>()
           .map(ContactRecord.fromJson)
