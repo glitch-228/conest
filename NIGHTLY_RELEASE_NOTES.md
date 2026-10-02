@@ -35,11 +35,20 @@ calls.
 
 - Record, preview, discard, send, and play Ogg/Opus voice messages in direct and
   group chats, including seeking and playback speed controls.
-- Adds opt-in one-to-one voice calls over encrypted Iroh datagrams with Opus
-  audio, ringing, mute, reconnect handling, and call summaries. Calls remain
-  experimental and are disabled by default. Enable only for testing on trusted
-  devices; audio quality, route changes, background lifecycle, and battery use
-  have not been physically qualified.
+- Fixes voice recording on Linux and Windows: pressing or holding the
+  microphone did nothing because the recorder failed to start in the
+  background.
+- Fixes a Linux crash when playing a voice message on systems whose number
+  format is not English (for example a Russian locale).
+- The voice message preview now has a position slider with elapsed time and a
+  volume slider. The volume also applies to played voice messages.
+- One-to-one voice calls over encrypted Iroh datagrams, with Opus audio,
+  ringing, mute, output selection, reconnect handling, and call summaries, are
+  now enabled in nightly builds on Linux, Windows, and Android. Previously the
+  call button did nothing because nightly builds shipped with calls switched
+  off. Calls are still experimental: audio quality, route changes, background
+  lifecycle, and battery use have not been physically qualified. Stable builds
+  keep calls off and hide the call button.
 - Desktop calls now use WebRTC's AEC3 echo canceller, which finds the
   speaker-to-microphone delay itself and keeps your voice during double-talk.
   Android keeps using the phone's built-in echo canceller.
@@ -55,6 +64,10 @@ calls.
 
 ### Reliability and qualification
 
+- In the Courier and Garrison layouts, errors from actions you take, such as
+  recording or calling, now appear as a notice at the bottom of the window.
+  Previously they were only shown in the Signature sidebar, so failures looked
+  like nothing happened.
 - A slow voice frame no longer interrupts file transfers or messages sent
   during a call.
 - Contacts on newer builds that advertise features this build does not know
@@ -67,11 +80,14 @@ calls.
   verification, native Opus/AEC3 and voice-recording tests, native group
   transport qualification, and the Linux, Android, and Windows debug builds.
   A native Iroh test confirms adding a contact works over a direct connection
-  with LAN and every relay disabled.
+  with LAN and every relay disabled, and an opt-in live test confirms it works
+  through the public Iroh relays alone.
+- On Linux, a release build of this source was checked end to end against a
+  second device: recording and sending, playing a received voice message,
+  outgoing and incoming calls, output selection, mute, and hang-up.
 - Physical Android/Linux/Windows testing remains necessary for group-history
   partitions, folder interactions, scheduled wake behavior, file-transfer
-  recovery, voice recording/playback, and call routes/audio. Calls remain
-  disabled by default pending those checks.
+  recovery, Android calls, and call quality across real networks.
 
 Update both peers to matching builds for group history, poll, and attachment
 compatibility. This nightly is prerelease software; keep important data backed
