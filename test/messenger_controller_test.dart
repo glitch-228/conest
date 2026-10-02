@@ -11016,6 +11016,101 @@ void main() {
       timeout: const Timeout(Duration(seconds: 30)),
     );
 
+    test(
+      'queued controls keep plaintext and are encrypted afresh per attempt',
+      () async {
+        final relayClient = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final bobOnAlice = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+        final aliceOnBob = bob.contacts.firstWhere((c) => c.alias == 'Alice');
+        await alice.sendMessage(contact: bobOnAlice, body: 'to delete');
+        for (var step = 0; step < 6; step++) {
+          await bob.pollNow();
+          await alice.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        final landedId = bob
+            .messagesFor(aliceOnBob.deviceId)
+            .singleWhere((m) => m.body == 'to delete')
+            .id;
+
+        final attempts = <RelayEnvelope>[];
+        relayClient.shouldFailStore = (_, _, _, recipient, envelope) {
+          if (recipient != bobOnAlice.deviceId) return false;
+          if (envelope.kind == 'message_delete') attempts.add(envelope);
+          return true;
+        };
+        await alice.deleteMessage(contact: bobOnAlice, messageId: landedId);
+        final queued = alice.pendingAckDeliveriesForTesting.singleWhere(
+          (entry) => entry.kind == PendingAckKind.messageDelete,
+        );
+        expect(queued.envelopeJson, isNull);
+        expect(queued.payload?.kind, 'message_delete');
+        expect(queued.payload?.plaintext, contains(landedId));
+        final reloaded = PendingAckDelivery.fromJson(
+          jsonDecode(jsonEncode(queued.toJson())) as Map<String, dynamic>,
+        );
+        expect(reloaded.payload?.toJson(), queued.payload?.toJson());
+
+        // Clear route backoff so the forced retry reaches the relay again.
+        alice.onConnectivityChanged(interfaceLabel: 'test-retry');
+        await alice.retryPendingAckDeliveriesForTesting(force: true);
+        expect(attempts.map((e) => e.messageId).toSet(), {
+          queued.payload!.messageId,
+        });
+        // One attempt may try several routes with the same envelope; the
+        // retry must be a new encryption rather than a stored replay.
+        expect(
+          attempts.map((e) => e.nonceBase64).toSet().length,
+          greaterThanOrEqualTo(2),
+        );
+
+        relayClient.shouldFailStore = null;
+        alice.onConnectivityChanged(interfaceLabel: 'test-online');
+        for (var step = 0; step < 8; step++) {
+          await alice.retryPendingAckDeliveriesForTesting(force: true);
+          await bob.pollNow();
+          await alice.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 30));
+        }
+        expect(
+          bob.messagesFor(aliceOnBob.deviceId).any((m) => m.id == landedId),
+          isFalse,
+        );
+        expect(
+          alice.pendingAckDeliveriesForTesting.where(
+            (entry) => entry.kind == PendingAckKind.messageDelete,
+          ),
+          isEmpty,
+        );
+      },
+      timeout: const Timeout(Duration(seconds: 30)),
+    );
+
+    test('a malformed queued payload reads as absent', () {
+      final entry = PendingAckDelivery.fromJson({
+        'targetDeviceId': 'dev-bob',
+        'acknowledgedMessageId': 'msg-1',
+        'conversationId': 'conv-1',
+        'kind': 'messageDelete',
+        'lastAttemptedAt': '2026-05-31T12:00:00.000Z',
+        'attempts': 1,
+        'payload': {'kind': 'message_delete'},
+      });
+      expect(entry.payload, isNull);
+      expect(entry.envelopeJson, isNull);
+    });
+
     test('PendingAckDelivery JSON round-trip preserves envelopeJson for '
         'carries-envelope kinds', () {
       final entry = PendingAckDelivery(

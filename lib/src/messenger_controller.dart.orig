@@ -1098,8 +1098,7 @@ class MessengerController extends ChangeNotifier {
     if (contact == null || !contact.canSendOutbound) {
       throw StateError('Voice calls require an approved contact.');
     }
-    if (signal.action == 'invite' &&
-        me.experimentalVoiceCallsEnabled != true) {
+    if (signal.action == 'invite' && me.experimentalVoiceCallsEnabled != true) {
       throw StateError(
         'Experimental voice calls are off. Enable them in Settings to call.',
       );
@@ -5757,7 +5756,11 @@ class MessengerController extends ChangeNotifier {
       }
       return contact.routeHints.any((route) => route.routeKey == key);
     });
-    await _persist(removed == null ? 'Contact removed.' : 'Contact removed locally. Sending a removal notice in the background.');
+    await _persist(
+      removed == null
+          ? 'Contact removed.'
+          : 'Contact removed locally. Sending a removal notice in the background.',
+    );
     if (notifyPeer && removed != null) {
       unawaited(
         _sendContactRemoval(removed).catchError((Object error) {
@@ -6261,9 +6264,7 @@ class MessengerController extends ChangeNotifier {
       pairingState: approvalGranted
           ? ContactPairingState.accepted
           : ContactPairingState.queued,
-      pairingRequestId: approvalGranted
-          ? pairingRequestId
-          : _randomId('pair'),
+      pairingRequestId: approvalGranted ? pairingRequestId : _randomId('pair'),
     );
     final conversations = List<ConversationRecord>.from(_snapshot.conversations)
       ..add(
@@ -6302,7 +6303,9 @@ class MessengerController extends ChangeNotifier {
             pairingRequestId: pairingRequestId,
             pairingResponse: 'accepted',
           ).catchError((Object error) {
-            appendDebugLog('Contact approval response remains retryable: $error');
+            appendDebugLog(
+              'Contact approval response remains retryable: $error',
+            );
             return false;
           }),
         );
@@ -6539,7 +6542,8 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> cancelContactPairing(String deviceId) async {
     final contact = _contactByDeviceId(deviceId);
-    if (contact == null || contact.pairingState == ContactPairingState.accepted) {
+    if (contact == null ||
+        contact.pairingState == ContactPairingState.accepted) {
       return;
     }
     _replaceContactRecord(
@@ -6693,7 +6697,9 @@ class MessengerController extends ChangeNotifier {
 
   void _replaceContactRecord(ContactRecord contact) {
     final contacts = List<ContactRecord>.of(_snapshot.contacts);
-    final index = contacts.indexWhere((entry) => entry.deviceId == contact.deviceId);
+    final index = contacts.indexWhere(
+      (entry) => entry.deviceId == contact.deviceId,
+    );
     if (index < 0) return;
     contacts[index] = contact;
     _snapshot = _snapshot.copyWith(contacts: contacts);
@@ -7114,11 +7120,7 @@ class MessengerController extends ChangeNotifier {
         } catch (_) {}
       }
       _setTransferSessionState(attachmentId, TransferState.canceled);
-      _updateMessageState(
-        contact.deviceId,
-        message.id,
-        DeliveryState.canceled,
-      );
+      _updateMessageState(contact.deviceId, message.id, DeliveryState.canceled);
       await _saveSnapshotSilently(notify: true);
       return;
     }
@@ -8310,7 +8312,9 @@ class MessengerController extends ChangeNotifier {
       try {
         await cancelTransfer(id);
       } catch (error) {
-        appendDebugLog('Could not cancel transfer $id while clearing all: $error');
+        appendDebugLog(
+          'Could not cancel transfer $id while clearing all: $error',
+        );
       }
     }
     _dismissedTransferIds.addAll(snapshots.map((entry) => entry.id));
@@ -10532,6 +10536,7 @@ class MessengerController extends ChangeNotifier {
     if (message.state == DeliveryState.pending) {
       return;
     }
+    final me = _requireIdentity();
     final payload = jsonEncode({
       'targetMessageId': messageId,
       'body': trimmed,
@@ -10621,6 +10626,7 @@ class MessengerController extends ChangeNotifier {
     required ContactRecord contact,
     required String targetMessageId,
   }) async {
+    final me = _requireIdentity();
     final payload = jsonEncode({
       'targetMessageId': targetMessageId,
       'deletedAt': DateTime.now().toUtc().toIso8601String(),
@@ -14882,6 +14888,7 @@ class MessengerController extends ChangeNotifier {
     String attachmentId,
   ) async {
     if (!hasIdentity) return;
+    final me = _requireIdentity();
     // nightly.12: route through the unified outbox so a receiver-side
     // delete during transfer is GUARANTEED to reach the sender (it
     // retries until success or 30 attempts). Pre-nightly.12 was
@@ -15381,7 +15388,9 @@ class MessengerController extends ChangeNotifier {
           final requestId = wrapper['pairingRequestId'];
           if (invitePayload is! String ||
               (requestId != null &&
-                  (requestId is! String || requestId.isEmpty || requestId.length > 128))) {
+                  (requestId is! String ||
+                      requestId.isEmpty ||
+                      requestId.length > 128))) {
             return;
           }
           payload = invitePayload;
@@ -15504,13 +15513,15 @@ class MessengerController extends ChangeNotifier {
         statusBuilder: (contact) =>
             'Updated ${contact.alias} profile and route hints.',
       );
-      final matchesPendingRequest = pairingRequestId == null ||
+      final matchesPendingRequest =
+          pairingRequestId == null ||
           pairingRequestId == existing.pairingRequestId;
       if (updated != null &&
           pairingResponse == 'declined' &&
           (existing.pairingState == ContactPairingState.queued ||
               existing.pairingState == ContactPairingState.sending ||
-              existing.pairingState == ContactPairingState.awaitingAcceptance) &&
+              existing.pairingState ==
+                  ContactPairingState.awaitingAcceptance) &&
           matchesPendingRequest) {
         updated = updated.copyWith(
           pairingState: ContactPairingState.declined,
@@ -15526,7 +15537,8 @@ class MessengerController extends ChangeNotifier {
           pairingResponse == 'accepted' &&
           (existing.pairingState == ContactPairingState.queued ||
               existing.pairingState == ContactPairingState.sending ||
-              existing.pairingState == ContactPairingState.awaitingAcceptance) &&
+              existing.pairingState ==
+                  ContactPairingState.awaitingAcceptance) &&
           matchesPendingRequest) {
         updated = updated.copyWith(
           pairingState: ContactPairingState.accepted,
@@ -15577,23 +15589,25 @@ class MessengerController extends ChangeNotifier {
     final existingRequest = _snapshot.pendingContactRequests
         .where((entry) => entry.senderDeviceId == invite.deviceId)
         .firstOrNull;
-    final requestId = pairingRequestId ?? existingRequest?.id ?? envelope.messageId;
-    final pending = _snapshot.pendingContactRequests
-        .where(
-          (entry) =>
-              entry.receivedAt.isAfter(cutoff) &&
-              entry.senderDeviceId != invite.deviceId,
-        )
-        .toList(growable: true)
-      ..add(
-        PendingContactRequest(
-          id: requestId,
-          senderAccountId: invite.accountId,
-          senderDeviceId: invite.deviceId,
-          invitePayload: payload,
-          receivedAt: _now().toUtc(),
-        ),
-      );
+    final requestId =
+        pairingRequestId ?? existingRequest?.id ?? envelope.messageId;
+    final pending =
+        _snapshot.pendingContactRequests
+            .where(
+              (entry) =>
+                  entry.receivedAt.isAfter(cutoff) &&
+                  entry.senderDeviceId != invite.deviceId,
+            )
+            .toList(growable: true)
+          ..add(
+            PendingContactRequest(
+              id: requestId,
+              senderAccountId: invite.accountId,
+              senderDeviceId: invite.deviceId,
+              invitePayload: payload,
+              receivedAt: _now().toUtc(),
+            ),
+          );
     if (pending.length > _maxPendingContactRequests) {
       pending.removeRange(0, pending.length - _maxPendingContactRequests);
     }
@@ -16411,6 +16425,7 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     await _crypto.decryptMessage(contact: contact, envelope: envelope);
+    final me = _requireIdentity();
     // nightly.12: route the probe ack through the unified outbox so it
     // doesn't get lost in the 3-device simultaneous test.
     await _enqueueAndDeliverEnvelope(

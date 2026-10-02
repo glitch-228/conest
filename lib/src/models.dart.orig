@@ -13,7 +13,14 @@ export 'transport_models.dart';
 
 enum ConversationKind { direct, group, lanLobby }
 
-enum ContactPairingState { queued, sending, awaitingAcceptance, accepted, declined, cancelled }
+enum ContactPairingState {
+  queued,
+  sending,
+  awaitingAcceptance,
+  accepted,
+  declined,
+  cancelled,
+}
 
 enum GroupMemberRole {
   owner('Owner'),
@@ -1907,9 +1914,11 @@ class ContactRecord {
       transportIdentityVerifiedAt: DateTime.tryParse(
         json['transportIdentityVerifiedAt'] as String? ?? '',
       )?.toUtc(),
-      pairingState: ContactPairingState.values
-          .where((entry) => entry.name == json['pairingState'])
-          .firstOrNull ?? ContactPairingState.accepted,
+      pairingState:
+          ContactPairingState.values
+              .where((entry) => entry.name == json['pairingState'])
+              .firstOrNull ??
+          ContactPairingState.accepted,
       pairingRequestId: json['pairingRequestId'] as String?,
       pairingLastAttemptAt: DateTime.tryParse(
         json['pairingLastAttemptAt'] as String? ?? '',
@@ -3692,7 +3701,8 @@ class ContactRemovalTombstone {
   factory ContactRemovalTombstone.fromJson(Map<String, dynamic> json) =>
       ContactRemovalTombstone(
         deviceId: json['deviceId'] as String,
-        removedAt: DateTime.tryParse(json['removedAt'] as String? ?? '')?.toUtc() ??
+        removedAt:
+            DateTime.tryParse(json['removedAt'] as String? ?? '')?.toUtc() ??
             DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
         pairingRequestId: json['pairingRequestId'] as String?,
       );
@@ -4258,13 +4268,20 @@ class VaultSnapshot {
               .map(PendingContactRequest.fromJson)
               .toList(),
       contactRemovalTombstones: <String, ContactRemovalTombstone>{
-        for (final entry in (json['contactRemovalTombstones'] as Map<String, dynamic>? ?? const <String, dynamic>{}).entries)
+        for (final entry
+            in (json['contactRemovalTombstones'] as Map<String, dynamic>? ??
+                    const <String, dynamic>{})
+                .entries)
           if (entry.key.isNotEmpty && entry.value is Map<String, dynamic>)
-            entry.key: ContactRemovalTombstone.fromJson(entry.value as Map<String, dynamic>)
+            entry.key: ContactRemovalTombstone.fromJson(
+              entry.value as Map<String, dynamic>,
+            )
           else if (entry.key.isNotEmpty && entry.value is String)
             entry.key: ContactRemovalTombstone(
               deviceId: entry.key,
-              removedAt: DateTime.tryParse(entry.value as String)?.toUtc() ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+              removedAt:
+                  DateTime.tryParse(entry.value as String)?.toUtc() ??
+                  DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
             ),
       },
       transferSessions: (json['transferSessions'] as List<dynamic>? ?? const [])
