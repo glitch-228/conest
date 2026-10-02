@@ -266,6 +266,10 @@ class ConestBackgroundService : Service() {
                 )
             )
         }
+        // The app plays its own ringtone and call tones, so the channel stays
+        // silent. Channel sounds are fixed once created, which is why the
+        // sounding channel is replaced rather than updated.
+        manager.deleteNotificationChannel(LEGACY_CALL_CHANNEL_ID)
         if (manager.getNotificationChannel(CALL_CHANNEL_ID) == null) {
             manager.createNotificationChannel(
                 NotificationChannel(
@@ -275,6 +279,8 @@ class ConestBackgroundService : Service() {
                 ).apply {
                     description = "Incoming and active Conest voice calls"
                     lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+                    setSound(null, null)
+                    enableVibration(true)
                 }
             )
         }
@@ -311,7 +317,8 @@ class ConestBackgroundService : Service() {
         const val CONTROL_PAUSE_ALL = "pause_all"
         const val CONTROL_RESUME_ALL = "resume_all"
         const val CONTROL_CANCEL_ALL = "cancel_all"
-        private const val CALL_CHANNEL_ID = "conest_calls"
+        private const val CALL_CHANNEL_ID = "conest_calls_v2"
+        private const val LEGACY_CALL_CHANNEL_ID = "conest_calls"
 
         @Volatile
         private var currentInstance: ConestBackgroundService? = null

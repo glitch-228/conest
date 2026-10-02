@@ -87,7 +87,7 @@ jobs:
       - run: flutter pub get
       - name: Verify channel identity and automatic transfer handshake
         run: |
-          flutter test test/build_info_test.dart test/transport_test.dart test/feature_models_test.dart
+          flutter test test/build_info_test.dart test/transport_test.dart test/feature_models_test.dart test/voice_call_sound_cues_test.dart
           flutter test test/group_history_test.dart test/group_history_sync_test.dart test/group_history_wire_test.dart test/group_membership_history_test.dart test/storage_test.dart
           flutter test test/storage_capacity_test.dart test/lan_direct_test.dart test/attachment_file_io_test.dart test/attachment_block_worker_test.dart
           flutter test test/messenger_controller_test.dart \

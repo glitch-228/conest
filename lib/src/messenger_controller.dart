@@ -32,6 +32,7 @@ import 'platform_bridge.dart';
 import 'reachability_tracker.dart';
 import 'staged_attachment.dart';
 import 'voice_call_service.dart';
+import 'voice_call_sound_cues.dart';
 import 'voice_message_service.dart';
 
 export 'staged_attachment.dart' show StagedAttachment;
@@ -399,6 +400,7 @@ class MessengerController extends ChangeNotifier {
     String? debugBuildId,
     Future<TransportRegistry?> Function(IdentityRecord identity)?
     transportRegistryFactory,
+    VoiceCallCuePlayer? voiceCallCuePlayer,
   }) : _vaultStore = vaultStore,
        _localRelayNode = localRelayNode ?? LocalRelayNode(),
        _platformBridge = platformBridge ?? PlatformBridge(),
@@ -424,6 +426,13 @@ class MessengerController extends ChangeNotifier {
       nowProvider: () => (nowProvider ?? DateTime.now)(),
     );
     voiceMessageService = VoiceMessageService(platformBridge: _platformBridge);
+    _voiceCallSoundCues = VoiceCallSoundCues(
+      voiceCallCuePlayer ??
+          (!kIsWeb && PlatformVoiceCallCuePlayer.supported
+              ? PlatformVoiceCallCuePlayer()
+              : const SilentVoiceCallCuePlayer()),
+      onError: (error) => appendDebugLog('Call sound cue failed: $error'),
+    );
     _transferControlSubscription = _platformBridge.transferControlEvents.listen(
       _handleNativeTransferControl,
     );
@@ -548,6 +557,7 @@ class MessengerController extends ChangeNotifier {
   VaultSnapshot _snapshot = VaultSnapshot.empty();
   VoiceCallService? _voiceCallService;
   late final VoiceMessageService voiceMessageService;
+  late final VoiceCallSoundCues _voiceCallSoundCues;
   StreamSubscription<VoiceCallSession?>? _voiceCallChanges;
   StreamSubscription<Uint8List>? _voiceCallAudioSubscription;
   StreamSubscription<IrohMediaDatagram>? _voiceCallDatagramSubscription;
@@ -984,12 +994,14 @@ class MessengerController extends ChangeNotifier {
     if (me == null) {
       unawaited(_voiceCallChanges?.cancel());
       _voiceCallChanges = null;
+      if (_voiceCallService != null) _voiceCallSoundCues.reset();
       unawaited(_voiceCallService?.dispose());
       _voiceCallService = null;
       return;
     }
     if (_voiceCallService?.localDeviceId == me.deviceId) return;
     unawaited(_voiceCallChanges?.cancel());
+    if (_voiceCallService != null) _voiceCallSoundCues.reset();
     unawaited(_voiceCallService?.dispose());
     _voiceCallService = VoiceCallService(
       localDeviceId: me.deviceId,
@@ -1018,6 +1030,7 @@ class MessengerController extends ChangeNotifier {
           incoming: session != null && !session.outgoing,
         ),
       );
+      _voiceCallSoundCues.handle(session);
       if (session?.state == VoiceCallState.connected) {
         unawaited(voiceMessageService.stopPlayback());
         unawaited(voiceMessageService.stopForInterruption());
@@ -5710,6 +5723,7 @@ class MessengerController extends ChangeNotifier {
     _snapshot = VaultSnapshot.empty();
     unawaited(_voiceCallChanges?.cancel());
     _voiceCallChanges = null;
+    _voiceCallSoundCues.reset();
     unawaited(_voiceCallService?.dispose());
     _voiceCallService = null;
     _rebuildSeenEnvelopeIdSet();
@@ -21825,6 +21839,7 @@ class MessengerController extends ChangeNotifier {
     _scheduledMessageTimer = null;
     unawaited(_voiceCallChanges?.cancel());
     _voiceCallChanges = null;
+    unawaited(_voiceCallSoundCues.dispose());
     unawaited(_voiceCallService?.dispose());
     _voiceCallService = null;
     unawaited(_voiceCallAudioSubscription?.cancel());

@@ -37,6 +37,9 @@ dependencies:
   # 3.41.9 / Dart 3.11.5. Keep the same Opus capture API on the supported SDK.
   record: ^6.2.1
   just_audio: ^0.10.6
+  # Call sound cues set Android audio usages directly; the version is held by
+  # the override below.
+  audio_session: 0.2.3
   # Pinned because transfer admission relies on platform-specific free-space
   # reporting and should not change underneath a security release.
   disk_space_2: 1.0.12
