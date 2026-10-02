@@ -8,6 +8,7 @@ enum TransportKind {
   deltaChat,
   reticulum,
   localSend,
+  matrix,
 }
 
 enum TransportPolicy { automatic, preferred, disabled, askBeforeUse }
@@ -37,6 +38,7 @@ extension TransportKindLabel on TransportKind {
     TransportKind.deltaChat => 'Delta Chat',
     TransportKind.reticulum => 'Reticulum',
     TransportKind.localSend => 'LocalSend',
+    TransportKind.matrix => 'Matrix',
   };
 }
 

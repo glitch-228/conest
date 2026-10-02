@@ -681,6 +681,7 @@ class GlobalConnectivityPreferences {
       TransportKind.deltaChat: TransportPolicy.disabled,
       TransportKind.reticulum: TransportPolicy.disabled,
       TransportKind.localSend: TransportPolicy.disabled,
+      TransportKind.matrix: TransportPolicy.automatic,
     },
   });
 
@@ -709,7 +710,8 @@ class GlobalConnectivityPreferences {
     if ((kind == TransportKind.iroh ||
             kind == TransportKind.conestRelay ||
             kind == TransportKind.deltaChat ||
-            kind == TransportKind.reticulum) &&
+            kind == TransportKind.reticulum ||
+            kind == TransportKind.matrix) &&
         !onlineEnabled) {
       return TransportPolicy.disabled;
     }
@@ -772,6 +774,9 @@ class GlobalConnectivityPreferences {
       TransportKind.deltaChat: TransportPolicy.disabled,
       TransportKind.reticulum: TransportPolicy.disabled,
       TransportKind.localSend: TransportPolicy.disabled,
+      TransportKind.matrix: onlineEnabled
+          ? TransportPolicy.automatic
+          : TransportPolicy.disabled,
     };
     return GlobalConnectivityPreferences(
       lanEnabled: lanEnabled,
@@ -814,6 +819,7 @@ class ContactRoutingPreferences {
       TransportKind.deltaChat: TransportPolicy.disabled,
       TransportKind.reticulum: TransportPolicy.disabled,
       TransportKind.localSend: TransportPolicy.disabled,
+      TransportKind.matrix: TransportPolicy.automatic,
     },
   });
 
@@ -830,7 +836,8 @@ class ContactRoutingPreferences {
     if ((kind == TransportKind.iroh ||
             kind == TransportKind.conestRelay ||
             kind == TransportKind.deltaChat ||
-            kind == TransportKind.reticulum) &&
+            kind == TransportKind.reticulum ||
+            kind == TransportKind.matrix) &&
         !onlineEnabled) {
       return TransportPolicy.disabled;
     }
@@ -915,6 +922,9 @@ class ContactRoutingPreferences {
       TransportKind.deltaChat: TransportPolicy.disabled,
       TransportKind.reticulum: TransportPolicy.disabled,
       TransportKind.localSend: TransportPolicy.disabled,
+      TransportKind.matrix: onlineEnabled
+          ? TransportPolicy.automatic
+          : TransportPolicy.disabled,
     };
     return ContactRoutingPreferences(
       lanEnabled: lanEnabled,

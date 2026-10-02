@@ -30,9 +30,14 @@ class TransportPeer {
     this.identityPinned = false,
     this.allowRelay = true,
     this.directAddresses = const <String>[],
+    this.transportAddresses = const <TransportKind, String>{},
   });
 
   final String deviceId;
+
+  /// Per-transport peer addresses, for example the Matrix device a carrier
+  /// route sends to.
+  final Map<TransportKind, String> transportAddresses;
   final String? transportIdentity;
   final bool identityPinned;
   final bool allowRelay;
