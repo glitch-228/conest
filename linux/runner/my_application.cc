@@ -1,5 +1,7 @@
 #include "my_application.h"
 
+#include <clocale>
+
 #include <flutter_linux/flutter_linux.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
@@ -106,6 +108,11 @@ static void my_application_startup(GApplication* application) {
   // Perform any actions required at application startup.
 
   G_APPLICATION_CLASS(my_application_parent_class)->startup(application);
+
+  // GTK startup applies the user's locale. libmpv (voice and video playback
+  // through media_kit) refuses to start unless numbers use the C locale, and
+  // media_kit then crashes on the missing handle, e.g. with LC_NUMERIC=ru_RU.
+  setlocale(LC_NUMERIC, "C");
 }
 
 // Implements GApplication::shutdown.

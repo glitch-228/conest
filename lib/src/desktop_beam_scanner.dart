@@ -85,8 +85,10 @@ class FfiDesktopBeamScanner {
 
   Future<void> start({int cameraIndex = 0}) async {
     if (_handle != null) return;
+    // Capture only sendable locals; `this` holds the frames stream and timer.
+    final libraryPath = _libraryPath;
     final handle = await Isolate.run(
-      () => _startNative(_libraryPath, cameraIndex),
+      () => _startNative(libraryPath, cameraIndex),
     );
     _handle = handle;
     _poller = Timer.periodic(
@@ -123,7 +125,8 @@ class FfiDesktopBeamScanner {
     final handle = _handle;
     _handle = null;
     if (handle != null) {
-      await Isolate.run(() => _stopNative(_libraryPath, handle));
+      final libraryPath = _libraryPath;
+      await Isolate.run(() => _stopNative(libraryPath, handle));
     }
   }
 

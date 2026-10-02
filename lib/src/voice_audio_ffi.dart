@@ -184,7 +184,8 @@ class NativeVoiceCallAudio {
 
   Future<List<String>> availableOutputDevices() async {
     if (!Platform.isLinux && !Platform.isWindows) return const [];
-    return Isolate.run(() => _voiceAudioOutputDevicesNative(_libraryPath));
+    final libraryPath = _libraryPath;
+    return Isolate.run(() => _voiceAudioOutputDevicesNative(libraryPath));
   }
 
   Future<void> selectOutputDevice(String name) async {
@@ -195,8 +196,9 @@ class NativeVoiceCallAudio {
     }
     final handle = _handle;
     if (handle == null) throw StateError('Voice audio is not active.');
+    final libraryPath = _libraryPath;
     final result = await Isolate.run(
-      () => _voiceAudioSelectOutputNative(_libraryPath, handle, name),
+      () => _voiceAudioSelectOutputNative(libraryPath, handle, name),
     );
     if (!result) throw StateError('Could not select audio output device.');
   }
@@ -208,19 +210,25 @@ class NativeVoiceCallAudio {
     if (_messageRecordingHandle != null) {
       throw StateError('A native voice-message recording is already active.');
     }
+    // Isolate closures must not capture `this`: listeners on [frames] can
+    // reach unsendable objects (Futures, zones), and Isolate.run copies
+    // everything the closure captures.
+    final libraryPath = _libraryPath;
     final handle = await Isolate.run(
-      () => _startVoiceMessageRecordingNative(_libraryPath, path),
+      () => _startVoiceMessageRecordingNative(libraryPath, path),
     );
     _messageRecordingHandle = handle;
   }
 
   Future<Map<String, dynamic>> stopVoiceMessageRecording() async {
     final handle = _messageRecordingHandle;
-    if (handle == null)
+    if (handle == null) {
       throw StateError('No native voice recording is active.');
+    }
     _messageRecordingHandle = null;
+    final libraryPath = _libraryPath;
     return Isolate.run(
-      () => _stopVoiceMessageRecordingNative(_libraryPath, handle),
+      () => _stopVoiceMessageRecordingNative(libraryPath, handle),
     );
   }
 
@@ -228,8 +236,9 @@ class NativeVoiceCallAudio {
     final handle = _messageRecordingHandle;
     _messageRecordingHandle = null;
     if (handle == null) return;
+    final libraryPath = _libraryPath;
     await Isolate.run(
-      () => _cancelVoiceMessageRecordingNative(_libraryPath, handle),
+      () => _cancelVoiceMessageRecordingNative(libraryPath, handle),
     );
   }
 
@@ -264,7 +273,8 @@ class NativeVoiceCallAudio {
     _handle = null;
     await _stopPollingIsolate();
     if (handle != null) {
-      await Isolate.run(() => _closeVoiceAudioNative(_libraryPath, handle));
+      final libraryPath = _libraryPath;
+      await Isolate.run(() => _closeVoiceAudioNative(libraryPath, handle));
     }
   }
 
