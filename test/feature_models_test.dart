@@ -529,6 +529,134 @@ void main() {
   );
 
   test(
+    'media that finishes opening after a remote hangup is closed again',
+    () async {
+      final media = _RecordingGatedMedia()..holdOpen();
+      final service = VoiceCallService(
+        localDeviceId: 'me',
+        transport: _TestCallTransport(<VoiceCallSignal>[]),
+        media: media,
+        now: () => DateTime.utc(2026, 1, 1),
+      );
+      final session = await service.startOutgoing('peer');
+      final accepted = service.onAccepted(callId: session.callId);
+      await media.openEntered.future;
+      await service.endRemote(reason: 'Peer hung up');
+      expect(service.active!.state, VoiceCallState.ended);
+      media.releaseOpen();
+      await accepted;
+      await pumpEventQueue();
+      expect(media.events.last, 'close');
+      expect(media.isOpen, isFalse, reason: 'a late open must not hold audio');
+      await service.dispose();
+    },
+  );
+
+  test(
+    'media that finishes opening after a local hangup on accept is closed',
+    () async {
+      final media = _RecordingGatedMedia()..holdOpen();
+      final service = VoiceCallService(
+        localDeviceId: 'me',
+        transport: _TestCallTransport(<VoiceCallSignal>[]),
+        media: media,
+        now: () => DateTime.utc(2026, 1, 1),
+      );
+      await service.receiveInvite(
+        VoiceCallSignal(
+          callId: 'peer:1',
+          action: 'invite',
+          senderDeviceId: 'peer',
+          recipientDeviceId: 'me',
+          issuedAt: DateTime.utc(2026, 1, 1),
+        ),
+      );
+      final accepting = service.accept();
+      await media.openEntered.future;
+      await service.end();
+      media.releaseOpen();
+      await accepting;
+      await pumpEventQueue();
+      expect(media.isOpen, isFalse);
+      await service.dispose();
+    },
+  );
+
+  test('a late open from an ended call never closes the next call', () async {
+    final media = _RecordingGatedMedia()..holdOpen();
+    final service = VoiceCallService(
+      localDeviceId: 'me',
+      transport: _TestCallTransport(<VoiceCallSignal>[]),
+      media: media,
+      now: () => DateTime.utc(2026, 1, 1),
+    );
+    final first = await service.startOutgoing('peer');
+    final staleAccept = service.onAccepted(callId: first.callId);
+    await media.openEntered.future;
+    await service.endRemote(reason: 'Peer hung up');
+    final second = await service.startOutgoing('other');
+    final closesBefore = media.events.where((e) => e == 'close').length;
+    media.releaseOpen();
+    await staleAccept;
+    await pumpEventQueue();
+    expect(service.active!.callId, second.callId);
+    expect(service.active!.state, VoiceCallState.ringing);
+    expect(
+      media.events.where((e) => e == 'close').length,
+      closesBefore,
+      reason: 'the newer call now owns the media session',
+    );
+    await service.dispose();
+  });
+
+  test('an invite during teardown waits for cleanup and then rings', () async {
+    final signals = <VoiceCallSignal>[];
+    final media = _RecordingGatedMedia();
+    final service = VoiceCallService(
+      localDeviceId: 'me',
+      transport: _TestCallTransport(signals),
+      media: media,
+      now: () => DateTime.utc(2026, 1, 1),
+    );
+    final outgoing = await service.startOutgoing('peer');
+    await service.onAccepted(callId: outgoing.callId);
+    expect(service.active!.state, VoiceCallState.connected);
+
+    media.holdClose();
+    final ending = service.end();
+    await media.closeEntered.future;
+    VoiceCallSignal invite(String callId, String sender) => VoiceCallSignal(
+      callId: callId,
+      action: 'invite',
+      senderDeviceId: sender,
+      recipientDeviceId: 'me',
+      issuedAt: DateTime.utc(2026, 1, 1),
+    );
+    final first = service.receiveInvite(invite('other:1', 'other'));
+    final second = service.receiveInvite(invite('third:1', 'third'));
+    await pumpEventQueue();
+    expect(service.active!.callId, outgoing.callId);
+    expect(service.active!.state, VoiceCallState.ended);
+    expect(signals.where((s) => s.action == 'busy'), isEmpty);
+
+    media.releaseClose();
+    await ending;
+    expect(await first, isTrue);
+    expect(await second, isFalse);
+    expect(service.active!.callId, 'other:1');
+    expect(service.active!.state, VoiceCallState.ringing);
+    expect(
+      signals.where((s) => s.action == 'busy').single.recipientDeviceId,
+      'third',
+    );
+    expect(
+      signals.where((s) => s.callId == outgoing.callId).last.action,
+      'hangup',
+    );
+    await service.dispose();
+  });
+
+  test(
     'ringing cancellation and rejection use terminal call signals',
     () async {
       final outgoingSignals = <VoiceCallSignal>[];
@@ -900,5 +1028,49 @@ class _GatedMuteMedia extends _WorkingMedia {
   Future<void> setMuted(bool muted) async {
     entered.complete();
     await gate.future;
+  }
+}
+
+/// Records media calls and can hold open/close until released, to simulate
+/// platform audio that completes after the call state has moved on.
+class _RecordingGatedMedia extends _WorkingMedia {
+  final events = <String>[];
+  final openEntered = Completer<void>();
+  final closeEntered = Completer<void>();
+  Completer<void>? _openGate;
+  Completer<void>? _closeGate;
+  bool isOpen = false;
+
+  void holdOpen() => _openGate = Completer<void>();
+  void releaseOpen() => _openGate?.complete();
+  void holdClose() => _closeGate = Completer<void>();
+  void releaseClose() => _closeGate?.complete();
+
+  @override
+  Future<void> open({
+    required String peerDeviceId,
+    required bool outgoing,
+  }) async {
+    events.add('open');
+    if (!openEntered.isCompleted) openEntered.complete();
+    final gate = _openGate;
+    if (gate != null) {
+      await gate.future;
+      _openGate = null;
+    }
+    isOpen = true;
+    events.add('opened');
+  }
+
+  @override
+  Future<void> close() async {
+    events.add('close');
+    if (!closeEntered.isCompleted) closeEntered.complete();
+    final gate = _closeGate;
+    if (gate != null) {
+      await gate.future;
+      _closeGate = null;
+    }
+    isOpen = false;
   }
 }

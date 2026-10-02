@@ -1419,6 +1419,307 @@ void main() {
   });
 
   test(
+    'scheduled sends stay blocked after revocation and cancel removes staged copies',
+    () async {
+      final relay = _FakeRelayClient();
+      final bobRoot = Directory.systemTemp.createTempSync(
+        'conest_scheduled_revocation_',
+      );
+      addTearDown(() => bobRoot.deleteSync(recursive: true));
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        attachmentRootProvider: () async => bobRoot,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Revocation',
+        members: alice.contacts,
+      );
+      await bob.pollNow();
+      expect(
+        bob.visibleGroups.single.hasActiveMember(bob.identity!.deviceId),
+        isTrue,
+      );
+
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      final source = File(p.join(bobRoot.path, 'source.txt'))
+        ..writeAsBytesSync(<int>[1, 2, 3]);
+      StagedAttachment sourceAttachment(String id) => StagedAttachment(
+        id: id,
+        fileName: 'source.txt',
+        mimeType: 'text/plain',
+        sizeBytes: 3,
+        filePath: source.path,
+      );
+      final due = DateTime.now().toUtc().add(const Duration(hours: 1));
+      final scheduled = [
+        await bob.scheduleTextMessage(
+          kind: ConversationKind.direct,
+          conversationId: aliceId,
+          body: 'direct text after revocation',
+          scheduledAt: due,
+        ),
+        await bob.scheduleAttachment(
+          contact: bob.contacts.single,
+          source: sourceAttachment('direct-source'),
+          scheduledAt: due,
+          caption: 'direct file after revocation',
+        ),
+        await bob.scheduleTextMessage(
+          kind: ConversationKind.group,
+          conversationId: group.groupId,
+          body: 'group text after removal',
+          scheduledAt: due,
+        ),
+        await bob.scheduleGroupAttachment(
+          groupId: group.groupId,
+          source: sourceAttachment('group-source'),
+          scheduledAt: due,
+        ),
+      ];
+      final stagedCopies = [
+        for (final entry in scheduled)
+          if (entry.attachmentPath != null)
+            File(p.join(bobRoot.path, entry.attachmentPath!)),
+      ];
+      expect(stagedCopies, hasLength(2));
+      for (final copy in stagedCopies) {
+        expect(copy.existsSync(), isTrue);
+        expect(copy.path, isNot(source.path));
+      }
+
+      // Alice revokes both authorizations after Bob approved the schedule.
+      await alice.removeGroupMember(groupId: group.groupId, memberDeviceId: bobId);
+      await alice.removeContact(bobId);
+      for (var attempt = 0; attempt < 50; attempt++) {
+        await bob.pollNow();
+        if (bob.contacts.single.isArchived &&
+            !bob.visibleGroups.single.hasActiveMember(bobId)) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(bob.contacts.single.isArchived, isTrue);
+      expect(bob.visibleGroups.single.hasActiveMember(bobId), isFalse);
+
+      relay.storedEnvelopes.clear();
+      for (final entry in scheduled) {
+        await bob.sendScheduledMessageNow(entry.id);
+        final result = bob.scheduledMessages.singleWhere(
+          (value) => value.id == entry.id,
+        );
+        expect(
+          result.state,
+          ScheduledMessageState.blocked,
+          reason: '${entry.body} must not be delivered after revocation',
+        );
+        expect(result.failureReason, isNotEmpty);
+      }
+      const deliveryKinds = <String>{
+        'direct_message',
+        'group_message',
+        'group_history',
+        'attachment_offer',
+        'attachment_chunk',
+      };
+      expect(
+        relay.storedEnvelopes.where(
+          (envelope) =>
+              envelope.senderDeviceId == bobId &&
+              deliveryKinds.contains(envelope.kind),
+        ),
+        isEmpty,
+      );
+      // Blocked items keep their staged copy so the user can still retry.
+      for (final copy in stagedCopies) {
+        expect(copy.existsSync(), isTrue);
+      }
+
+      for (final entry in scheduled) {
+        await bob.cancelScheduledMessage(entry.id);
+      }
+      expect(
+        bob.scheduledMessages
+            .where((value) => scheduled.any((entry) => entry.id == value.id))
+            .map((value) => value.state),
+        everyElement(ScheduledMessageState.canceled),
+      );
+      for (final copy in stagedCopies) {
+        expect(copy.existsSync(), isFalse);
+        expect(File('${copy.path}.tmp').existsSync(), isFalse);
+      }
+      expect(
+        source.readAsBytesSync(),
+        <int>[1, 2, 3],
+        reason: 'cancelling must never touch the original picked file',
+      );
+    },
+  );
+
+  test(
+    'group poll converges after reordered duplicate delivery and restart',
+    () async {
+      final relay = _FakeRelayClient();
+      final carolVault = _MemoryVaultStore();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      var carol = await _createController(
+        relayClient: relay,
+        displayName: 'Carol',
+        vaultStore: carolVault,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      addTearDown(() => carol.dispose());
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      await _pairControllers(bob, carol);
+      final group = await alice.createGroup(
+        title: 'Reordered poll',
+        members: alice.contacts,
+      );
+      final carolId = carol.identity!.deviceId;
+
+      Future<void> pump(
+        bool Function() ready,
+        String reason, {
+        bool includeCarol = true,
+      }) async {
+        for (var attempt = 0; attempt < 100 && !ready(); attempt++) {
+          await alice.pollNow();
+          await bob.pollNow();
+          if (includeCarol) await carol.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        expect(ready(), isTrue, reason: reason);
+      }
+
+      await pump(
+        () => carol.visibleGroups.any(
+          (candidate) => candidate.groupId == group.groupId,
+        ),
+        'Carol joins before the poll',
+      );
+
+      // Carol stops polling while the poll is created, voted on, revoted and
+      // closed, so its whole history reaches her later out of order.
+      final carolInboxStart = relay.storedEnvelopes.length;
+      await alice.createGroupPoll(
+        groupId: group.groupId,
+        question: 'Lunch?',
+        options: const ['Soup', 'Salad', 'Pasta'],
+      );
+      String? pollId;
+      await pump(() {
+        pollId = bob
+            .messagesForGroup(group.groupId)
+            .map((message) => message.poll?.id)
+            .whereType<String>()
+            .firstOrNull;
+        return pollId != null;
+      }, 'Bob sees the poll', includeCarol: false);
+      await bob.voteInGroupPoll(
+        groupId: group.groupId,
+        pollId: pollId!,
+        optionIndexes: const [0],
+      );
+      await bob.voteInGroupPoll(
+        groupId: group.groupId,
+        pollId: pollId!,
+        optionIndexes: const [1],
+      );
+      await alice.voteInGroupPoll(
+        groupId: group.groupId,
+        pollId: pollId!,
+        optionIndexes: const [2],
+      );
+      await pump(
+        () =>
+            alice
+                .groupPollProjection(group.groupId, pollId!)
+                ?.votes[bob.identity!.deviceId]
+                ?.optionIndexes
+                .join(',') ==
+            '1',
+        'Alice sees Bob change his vote',
+        includeCarol: false,
+      );
+      await alice.closeGroupPoll(groupId: group.groupId, pollId: pollId!);
+      final expected = alice.groupPollProjection(group.groupId, pollId!)!;
+      expect(expected.definition.isClosed, isTrue);
+      expect(expected.counts(), <int>[0, 1, 1]);
+
+      final forCarol = relay.storedEnvelopes
+          .skip(carolInboxStart)
+          .where((envelope) => envelope.recipientDeviceId == carolId)
+          .toList();
+      expect(forCarol, isNotEmpty);
+      await carol.processEnvelopesForTesting(forCarol.reversed.toList());
+      await carol.processEnvelopesForTesting(forCarol);
+      await carol.processEnvelopesForTesting(forCarol.reversed.toList());
+
+      bool matchesExpected(MessengerController peer) {
+        final projection = peer.groupPollProjection(group.groupId, pollId!);
+        return projection != null &&
+            projection.definition.isClosed &&
+            projection.closedCheckpointEventId ==
+                expected.closedCheckpointEventId &&
+            projection.counts().join(',') == expected.counts().join(',') &&
+            projection.unconfirmedVotes.isEmpty;
+      }
+
+      await pump(
+        () => matchesExpected(carol),
+        'Carol converges after reordered and duplicated delivery',
+      );
+      final pollMessages = carol
+          .messagesForGroup(group.groupId)
+          .where((message) => message.poll?.id == pollId)
+          .toList();
+      expect(pollMessages, hasLength(1), reason: 'duplicates must collapse');
+
+      await carol.flushPendingChanges();
+      carol.dispose();
+      carol = await _createController(
+        relayClient: relay,
+        displayName: 'Carol',
+        vaultStore: carolVault,
+        createIdentity: false,
+      );
+      // The projection is rebuilt from the local history journal after
+      // startup; wait for it without any network traffic.
+      await _waitForIroh(
+        () => matchesExpected(carol),
+        reason: 'the closed projection must survive a restart',
+      );
+      // Redelivering the full history after restart changes nothing.
+      await carol.processEnvelopesForTesting(forCarol);
+      await carol.pollNow();
+      expect(matchesExpected(carol), isTrue);
+      expect(
+        carol
+            .messagesForGroup(group.groupId)
+            .where((message) => message.poll?.id == pollId),
+        hasLength(1),
+      );
+    },
+  );
+
+  test(
     'draft updates during a delayed vault write schedule a new snapshot',
     () async {
       final vault = _DelayedVaultStore();

@@ -196,6 +196,7 @@ class VoiceCallService {
   Timer? _reconnectTimer;
   Timer? _mediaInactivityTimer;
   Future<void>? _terminalTransition;
+  String? _mediaOwnerCallId;
   int _outboundMediaFailures = 0;
   int _outgoingCallSequence = 0;
   bool _disposed = false;
@@ -226,7 +227,10 @@ class VoiceCallService {
     try {
       // Reserve the call slot before awaiting microphone permission. A second
       // outgoing call or an incoming invitation must see this pending call.
-      await media.prepare().timeout(_connectionTimeout);
+      await _ownMedia(
+        session.callId,
+        media.prepare(),
+      ).timeout(_connectionTimeout);
       if (_disposed ||
           _active?.callId != session.callId ||
           _active?.state == VoiceCallState.ended) {
@@ -341,15 +345,19 @@ class VoiceCallService {
     _set(connecting);
     _startConnectionExpiry(connecting, reason: 'Voice connection timed out.');
     try {
-      await media.prepare().timeout(_connectionTimeout);
+      await _ownMedia(
+        connecting.callId,
+        media.prepare(),
+      ).timeout(_connectionTimeout);
       if (!_isConnecting(connecting.callId)) return;
       await transport
           .send(_signal(connecting, 'accept'))
           .timeout(_connectionTimeout);
       if (!_isConnecting(connecting.callId)) return;
-      await media
-          .open(peerDeviceId: session.peerDeviceId, outgoing: false)
-          .timeout(_connectionTimeout);
+      await _ownMedia(
+        connecting.callId,
+        media.open(peerDeviceId: session.peerDeviceId, outgoing: false),
+      ).timeout(_connectionTimeout);
       if (!_isConnecting(connecting.callId)) return;
       _markConnected(connecting.callId);
     } catch (error) {
@@ -373,9 +381,10 @@ class VoiceCallService {
     _set(connecting);
     _startConnectionExpiry(connecting, reason: 'Voice connection timed out.');
     try {
-      await media
-          .open(peerDeviceId: session.peerDeviceId, outgoing: true)
-          .timeout(_connectionTimeout);
+      await _ownMedia(
+        connecting.callId,
+        media.open(peerDeviceId: session.peerDeviceId, outgoing: true),
+      ).timeout(_connectionTimeout);
       if (!_isConnecting(connecting.callId)) return;
       _markConnected(connecting.callId);
     } catch (error) {
@@ -546,6 +555,25 @@ class VoiceCallService {
     _disposed = true;
     await end(reason: 'Call service disposed');
     await _changes.close();
+  }
+
+  /// Tracks a platform media operation for [callId]. Teardown closes media
+  /// immediately, so an operation that completes afterwards (including one
+  /// whose caller already timed out) would leave the microphone and output
+  /// held. Close again then, unless a newer call has taken over the media.
+  Future<void> _ownMedia(String callId, Future<void> operation) {
+    _mediaOwnerCallId = callId;
+    operation.then((_) {
+      final current = _active;
+      final live =
+          !_disposed &&
+          current?.callId == callId &&
+          current?.state != VoiceCallState.ended;
+      if (!live && _mediaOwnerCallId == callId) {
+        unawaited(media.close().catchError((Object _) {}));
+      }
+    }, onError: (Object _) {});
+    return operation;
   }
 
   VoiceCallSignal _signal(VoiceCallSession session, String action) =>
