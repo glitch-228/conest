@@ -309,6 +309,17 @@ void main() {
     expect(await unrelated.readAsString(), 'user data');
   });
 
+  test('voice playback volume is bounded and remembered', () async {
+    final service = VoiceMessageService();
+    addTearDown(service.dispose);
+    expect(service.playbackVolume, 1);
+    await service.setPlaybackVolume(0.35);
+    expect(service.playbackVolume, 0.35);
+    expect(() => service.setPlaybackVolume(1.2), throwsArgumentError);
+    expect(() => service.setPlaybackVolume(double.nan), throwsArgumentError);
+    expect(service.playbackVolume, 0.35);
+  });
+
   test('capability lists from newer builds keep known names', () {
     final advertised = <Object?>[
       'futureFeatureV1',

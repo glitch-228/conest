@@ -3682,8 +3682,16 @@ class MessengerController extends ChangeNotifier {
 
   void setStatus(String? value) {
     _statusMessage = value;
+    if (value != null && !_userNotices.isClosed) _userNotices.add(value);
     notifyListeners();
   }
+
+  /// Feedback for actions the user just took, such as a failed voice
+  /// recording or call. Background progress only updates [statusMessage].
+  /// Shells without a status line show these as transient notices.
+  Stream<String> get userNotices => _userNotices.stream;
+  final StreamController<String> _userNotices =
+      StreamController<String>.broadcast();
 
   /// In-memory ring buffer of recent diagnostic lines (clipboard, save,
   /// rotation). Bounded to the last [_debugLogCapacity] entries so a long
@@ -21812,6 +21820,7 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    unawaited(_userNotices.close());
     _scheduledMessageTimer?.cancel();
     _scheduledMessageTimer = null;
     unawaited(_voiceCallChanges?.cancel());

@@ -1443,6 +1443,22 @@ class _HomeScreenState extends State<HomeScreen> {
     widget.controller.conversationRevision.addListener(
       _handleConversationRevision,
     );
+    _userNoticeSubscription = widget.controller.userNotices.listen(
+      _showUserNotice,
+    );
+  }
+
+  StreamSubscription<String>? _userNoticeSubscription;
+
+  /// Only the Signature sidebar renders [MessengerController.statusMessage];
+  /// other shells would otherwise swallow errors from the action just taken.
+  void _showUserNotice(String message) {
+    if (!mounted || widget.themeController.shell == ConestShell.signature) {
+      return;
+    }
+    ScaffoldMessenger.maybeOf(context)
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -1456,6 +1472,10 @@ class _HomeScreenState extends State<HomeScreen> {
       widget.controller.addListener(_handleControllerChanged);
       widget.controller.conversationRevision.addListener(
         _handleConversationRevision,
+      );
+      unawaited(_userNoticeSubscription?.cancel());
+      _userNoticeSubscription = widget.controller.userNotices.listen(
+        _showUserNotice,
       );
     }
   }
@@ -1480,6 +1500,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    unawaited(_userNoticeSubscription?.cancel());
     widget.controller.removeListener(_handleControllerChanged);
     widget.controller.conversationRevision.removeListener(
       _handleConversationRevision,
@@ -6592,6 +6613,145 @@ class _GroupChatPanel extends StatefulWidget {
   State<_GroupChatPanel> createState() => _GroupChatPanelState();
 }
 
+/// Plays an unsent recording inside the send/discard dialog with the same
+/// position control as sent voice messages, plus playback volume.
+class _VoicePreviewPlayer extends StatefulWidget {
+  const _VoicePreviewPlayer({
+    required this.prompt,
+    required this.service,
+    required this.recording,
+    required this.onError,
+  });
+
+  static const itemId = 'voice-preview';
+
+  final String prompt;
+  final VoiceMessageService service;
+  final VoiceRecordingResult recording;
+  final void Function(Object error) onError;
+
+  @override
+  State<_VoicePreviewPlayer> createState() => _VoicePreviewPlayerState();
+}
+
+class _VoicePreviewPlayerState extends State<_VoicePreviewPlayer> {
+  StreamSubscription<Duration>? _positions;
+  Timer? _refresh;
+  Duration _position = Duration.zero;
+
+  VoiceMessageService get _service => widget.service;
+  bool get _isCurrent => _service.playingItemId == _VoicePreviewPlayer.itemId;
+
+  @override
+  void initState() {
+    super.initState();
+    _positions = _service.playbackPositionStream.listen((position) {
+      if (mounted && _isCurrent) setState(() => _position = position);
+    });
+    // Play/pause and completion do not always emit a position event.
+    _refresh = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    unawaited(_positions?.cancel());
+    _refresh?.cancel();
+    if (_isCurrent) unawaited(_service.stopPlayback());
+    super.dispose();
+  }
+
+  Future<void> _run(Future<void> Function() action) async {
+    try {
+      await action();
+    } catch (error) {
+      widget.onError(error);
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _seek(double fraction) => _run(() async {
+    if (!_isCurrent) await _service.playPreview();
+    final target = Duration(
+      milliseconds: (fraction * widget.recording.metadata.durationMs).round(),
+    );
+    setState(() => _position = target);
+    await _service.seekPlayback(target);
+  });
+
+  static String _clock(Duration value) =>
+      '${value.inMinutes}:${(value.inSeconds % 60).toString().padLeft(2, '0')}';
+
+  @override
+  Widget build(BuildContext context) {
+    final total = Duration(milliseconds: widget.recording.metadata.durationMs);
+    final position = _isCurrent ? _position : Duration.zero;
+    final fraction = total.inMilliseconds == 0
+        ? 0.0
+        : (position.inMilliseconds / total.inMilliseconds).clamp(0.0, 1.0);
+    final playing = _isCurrent && _service.isPlaying;
+    final volume = _service.playbackVolume;
+    return SizedBox(
+      width: 360,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(widget.prompt),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              IconButton(
+                tooltip: playing ? 'Pause preview' : 'Play preview',
+                onPressed: () => unawaited(_run(_service.playPreview)),
+                icon: Icon(
+                  playing
+                      ? Icons.pause_circle_outline
+                      : Icons.play_circle_outline,
+                ),
+              ),
+              Expanded(
+                child: Slider(
+                  value: fraction,
+                  onChanged: (value) => unawaited(_seek(value)),
+                ),
+              ),
+              Text('${_clock(position)} / ${_clock(total)}'),
+            ],
+          ),
+          Row(
+            children: [
+              IconButton(
+                tooltip: volume == 0 ? 'Unmute preview' : 'Mute preview',
+                onPressed: () => unawaited(
+                  _run(() => _service.setPlaybackVolume(volume == 0 ? 1 : 0)),
+                ),
+                icon: Icon(
+                  volume == 0
+                      ? Icons.volume_off_outlined
+                      : volume < 0.5
+                      ? Icons.volume_down_outlined
+                      : Icons.volume_up_outlined,
+                ),
+              ),
+              Expanded(
+                child: Slider(
+                  value: volume,
+                  label: '${(volume * 100).round()}%',
+                  divisions: 20,
+                  onChanged: (value) =>
+                      unawaited(_run(() => _service.setPlaybackVolume(value))),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _GroupVoiceControls extends StatelessWidget {
   const _GroupVoiceControls({
     required this.controller,
@@ -6893,19 +7053,13 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Group voice message ready'),
-          content: const Text(
-            'Send this recording to the group or discard it?',
+          content: _VoicePreviewPlayer(
+            prompt: 'Send this recording to the group or discard it?',
+            service: voiceService,
+            recording: voiceService.preview!,
+            onError: (error) => controller.setStatus('$error'),
           ),
           actions: [
-            TextButton.icon(
-              onPressed: () => unawaited(
-                voiceService.playPreview().catchError(
-                  (Object error) => controller.setStatus('$error'),
-                ),
-              ),
-              icon: const Icon(Icons.play_arrow),
-              label: const Text('Preview'),
-            ),
             TextButton(
               onPressed: () => Navigator.pop(context, false),
               child: const Text('Delete'),
@@ -8720,17 +8874,13 @@ class _ChatPanelState extends State<_ChatPanel> {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Voice message ready'),
-          content: const Text('Send this recording or discard it?'),
+          content: _VoicePreviewPlayer(
+            prompt: 'Send this recording or discard it?',
+            service: voiceService,
+            recording: voiceService.preview!,
+            onError: (error) => controller.setStatus('$error'),
+          ),
           actions: [
-            TextButton.icon(
-              onPressed: () => unawaited(
-                voiceService.playPreview().catchError(
-                  (Object error) => controller.setStatus('$error'),
-                ),
-              ),
-              icon: const Icon(Icons.play_arrow),
-              label: const Text('Preview'),
-            ),
             TextButton(
               onPressed: () => Navigator.pop(context, false),
               child: const Text('Delete'),
@@ -9552,17 +9702,22 @@ class _ChatPanelState extends State<_ChatPanel> {
                 onDetails: widget.onShowProfile,
                 onConnectionDetails: () =>
                     setState(() => _routeInspectorOpen = !_routeInspectorOpen),
-                onCall: () => unawaited(
-                  controller.voiceCallService
-                      ?.startOutgoing(contact.deviceId)
-                      .then(
-                        (_) =>
-                            controller.setStatus('Calling ${contact.alias}…'),
-                      )
-                      .catchError(
-                        (Object error) => controller.setStatus('$error'),
+                // Builds without native call media hide the action rather
+                // than offering a button that can only fail.
+                onCall: controller.voiceCallService?.media.available != true
+                    ? null
+                    : () => unawaited(
+                        controller.voiceCallService
+                            ?.startOutgoing(contact.deviceId)
+                            .then(
+                              (_) => controller.setStatus(
+                                'Calling ${contact.alias}…',
+                              ),
+                            )
+                            .catchError(
+                              (Object error) => controller.setStatus('$error'),
+                            ),
                       ),
-                ),
               )
             else
               Padding(

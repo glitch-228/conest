@@ -47,6 +47,7 @@ class VoiceMessageService {
   String? _playingPath;
   String? _playingItemId;
   double _playbackRate = 1;
+  double _playbackVolume = 1;
   DateTime? _startedAt;
   String? _nativeRecordingPath;
   bool _captureStarting = false;
@@ -103,6 +104,10 @@ class VoiceMessageService {
   String? get previewDestinationKey => _previewDestinationKey;
   bool get isRecording => _state == VoiceRecordingState.recording;
   double get playbackRate => _playbackRate;
+
+  /// Playback volume from 0 (muted) to 1 (full), shared by message and
+  /// preview playback.
+  double get playbackVolume => _playbackVolume;
   String? get playingItemId => _playingItemId;
   bool get isPlaying => Platform.isAndroid
       ? (_mobilePlayer?.playing ?? false)
@@ -459,6 +464,16 @@ class VoiceMessageService {
     _playbackRate = rate;
   }
 
+  Future<void> setPlaybackVolume(double volume) async {
+    if (!(volume >= 0 && volume <= 1)) {
+      throw ArgumentError.value(volume, 'volume', 'Must be between 0 and 1.');
+    }
+    _playbackVolume = volume;
+    await _mobilePlayer?.setVolume(volume);
+    // media_kit uses mpv's 0–100 software volume scale.
+    await _desktopPlayer?.setVolume(volume * 100);
+  }
+
   Future<void> stopPlayback() async {
     _playingPath = null;
     _playingItemId = null;
@@ -474,6 +489,7 @@ class VoiceMessageService {
         _mobilePositionSubscription = player.positionStream.listen(
           _emitPlaybackPosition,
         );
+        await player.setVolume(_playbackVolume);
       }
       return;
     }
@@ -489,6 +505,7 @@ class VoiceMessageService {
       _desktopPositionSubscription = player.stream.position.listen(
         _emitPlaybackPosition,
       );
+      await player.setVolume(_playbackVolume * 100);
     }
   }
 
