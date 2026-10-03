@@ -1,58 +1,46 @@
-## Conest 0.3.11 nightly
+## Conest 0.3.11 nightly (October 3)
 
-This nightly adds forward secrecy between updated devices and brings in the
-contact-request, call-screen and voice-composer work from stable v0.3.10.
+This nightly adds Matrix as a fallback route: when LAN and Iroh cannot reach
+a contact, messages can travel through a Matrix account instead.
 
-### Forward secrecy (experimental)
+### Matrix fallback (experimental)
 
-- Between two devices running this nightly or newer, messages, edits,
-  reactions, receipts, group updates and call signaling now travel in
-  forward-secret sessions. They use the Double Ratchet from vodozemac, the
-  audited library Matrix uses. If a device's keys are stolen later, traffic
-  recorded earlier cannot be decrypted, and new messages become private again
-  after the next exchange.
-- Sessions start on their own once both devices have updated. Nothing to set
-  up.
-- Contacts on older builds, including stable v0.3.10, keep the previous
-  encryption and keep working. A device that moves back to a stable build
-  switches the feature off for its contacts.
-- Group files between updated devices use keys that change daily and are
-  deleted after three days. Each call gets its own key.
-- Limits:
-  - Messages already stored on your device are protected by its encrypted
-    vault, as before; forward secrecy covers traffic in transit.
-  - Contact-encrypted Beam transfers still use the long-term key.
+- Sign in under **Settings → Connectivity → Matrix fallback** with any Matrix
+  account, for example `@name:matrix.org` and its password. You can leave the
+  homeserver blank; it is found from the user id.
+- Conest uses its own Matrix device, so its traffic never appears in Element
+  or your other Matrix apps.
+- When both you and a contact have signed in, messages that LAN and Iroh
+  cannot deliver go through Matrix instead of waiting. They stay end-to-end
+  encrypted by Conest. The homeserver sees which accounts talk and when, but
+  never the content or the type of message.
+- Messages wait on the homeserver while your device is offline and arrive
+  when it comes back.
+- Files still travel over LAN or Iroh only.
+- Signing out, turning Online off, or setting Matrix to Off under Transport
+  policy stops the route. Your contacts are told.
+- Not yet supported:
+  - sign-in for accounts without a password (single sign-on);
+  - reaching people who do not use Conest. Both are planned next.
 
-### Contacts and chats
+### Forward secrecy
 
-- Adding a contact now sends a request that the other person accepts or
-  declines. Messages you write before that wait and are sent once it is
-  accepted. You can retry or cancel a pending request.
-- Tap a message for its actions, long-press to select, and double-tap to
-  reply (or to edit your own message).
-
-### Voice
-
-- Calls open in a full-window call screen that you can minimize to a bar
-  and return to.
-- Settings has a switch to turn experimental calls off on this device.
-- The voice recorder sits inline in the composer, with the preview's
-  position and volume sliders.
-- Ending a call while its audio was still starting no longer leaves the
-  microphone in use.
+- Group members who are not each other's contacts now set up their secure
+  session more reliably. Previously a session could take up to ten minutes to
+  start, or not start at all, when the group and the members' details arrived
+  in an unlucky order.
 
 ### Qualification
 
-- The remote debug workflow for this source passed: focused Flutter
-  verification, native ratchet tests against the real library, native
-  Opus/AEC3 and recording tests, and the Linux, Android and Windows debug
-  builds. The full local test suite passed.
-- An independent review of the forward-secrecy code was done before release
-  and its findings were fixed.
-- Not yet tested on real devices: forward secrecy between two phones or
-  computers, a nightly paired with a stable device, calls and group files
-  after updating, and Android and Windows in general.
+- The remote debug workflow passed: focused Flutter verification, the Matrix
+  route against a real Synapse homeserver, native ratchet tests, and the
+  Linux, Android and Windows debug builds. The full local test suite passed.
+- An independent review of the Matrix code was done and its findings fixed.
+- Not yet tested on real devices: Matrix sign-in, delivery between two
+  devices over Matrix, background syncing on Android, and everything still
+  pending from the October 2 nightly (forward secrecy, contact requests,
+  calls).
 
-Update both devices to get forward secrecy and the new contact requests. This
-nightly is prerelease software; keep important data backed up and report
-failures with the build identifier and a debug snapshot.
+Update both devices to use the Matrix fallback. This nightly is prerelease
+software; keep important data backed up and report failures with the build
+identifier and a debug snapshot.
