@@ -175,6 +175,23 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                 }
+                "openUrl" -> {
+                    val url = call.argument<String>("url")
+                    if (url.isNullOrEmpty()) {
+                        result.error("bad_url", "No URL to open.", null)
+                    } else {
+                        try {
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            result.success(null)
+                        } catch (error: Exception) {
+                            result.error(
+                                "open_failed",
+                                error.message ?: "No browser could open the link.",
+                                null
+                            )
+                        }
+                    }
+                }
                 "showToast" -> {
                     val text = call.argument<String>("text") ?: ""
                     val long = call.argument<Boolean>("long") ?: false

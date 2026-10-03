@@ -469,6 +469,22 @@ class PlatformBridge {
 
   /// Show a native toast on Android. Other platforms / missing-plugin
   /// gracefully no-op so the call site doesn't need a platform guard.
+  /// Opens [url] in the system browser.
+  Future<void> openExternalUrl(Uri url) async {
+    if (kIsWeb) return;
+    final link = url.toString();
+    if (Platform.isAndroid) {
+      await _channel.invokeMethod<void>('openUrl', {'url': link});
+    } else if (Platform.isWindows) {
+      // `start` would split the link at each `&` of its query.
+      await Process.start('rundll32', ['url.dll,FileProtocolHandler', link]);
+    } else if (Platform.isMacOS) {
+      await Process.start('open', [link]);
+    } else {
+      await Process.start('xdg-open', [link]);
+    }
+  }
+
   Future<void> showToast(String text, {bool long = false}) async {
     if (!_supportsAndroidSystemCalls) return;
     if (text.isEmpty) return;

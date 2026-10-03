@@ -19,9 +19,17 @@ use matrix_sdk::encryption::verification::{
 };
 use matrix_sdk::ruma::events::key::verification::request::ToDeviceKeyVerificationRequestEvent;
 use matrix_sdk::{
-    Client, SessionMeta, SessionTokens,
+    Client, SessionChange, SessionMeta, SessionTokens,
     attachment::AttachmentConfig,
-    authentication::matrix::MatrixSession,
+    authentication::{
+        AuthSession,
+        matrix::MatrixSession,
+        oauth::{
+            ClientId, ClientRegistrationData, CsrfToken, OAuthSession, UserSession,
+            registration::{ApplicationType, ClientMetadata, Localized, OAuthGrantType},
+        },
+    },
+    reqwest::Url,
     config::SyncSettings,
     media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
     room::MessagesOptions,
@@ -43,12 +51,16 @@ use matrix_sdk::{
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use tokio::{runtime::Runtime, task::JoinHandle};
+use tokio::{runtime::Runtime, sync::broadcast::error::RecvError, task::JoinHandle};
 
 static RUNTIME: LazyLock<Runtime> =
     LazyLock::new(|| Runtime::new().expect("create Conest Matrix Tokio runtime"));
 static CLIENT: LazyLock<Mutex<Option<Client>>> = LazyLock::new(|| Mutex::new(None));
 static SYNC_TASK: LazyLock<Mutex<Option<JoinHandle<()>>>> = LazyLock::new(|| Mutex::new(None));
+static SESSION_TASK: LazyLock<Mutex<Option<JoinHandle<()>>>> = LazyLock::new(|| Mutex::new(None));
+/// A browser sign-in between `oauth_start` and `oauth_finish`.
+static PENDING_OAUTH: LazyLock<Mutex<Option<(Client, CsrfToken)>>> =
+    LazyLock::new(|| Mutex::new(None));
 static EVENTS: LazyLock<(Mutex<VecDeque<String>>, Condvar)> =
     LazyLock::new(|| (Mutex::new(VecDeque::new()), Condvar::new()));
 
@@ -117,22 +129,40 @@ async fn build_client(request: &Value, homeserver: &str) -> Result<Client> {
             text(request, "storePath")?,
             Some(text(request, "passphrase")?),
         )
+        .handle_refresh_tokens()
         .build()
         .await?)
 }
 
 fn session_json(client: &Client) -> Result<Value> {
-    let session = client
-        .matrix_auth()
-        .session()
-        .context("no Matrix session")?;
-    Ok(json!({
+    let meta = client.session_meta().context("no Matrix session")?;
+    let tokens = client.session_tokens().context("no Matrix session")?;
+    let mut session = json!({
         "homeserver": client.homeserver().to_string(),
-        "userId": session.meta.user_id.to_string(),
-        "deviceId": session.meta.device_id.to_string(),
-        "accessToken": session.tokens.access_token,
-        "refreshToken": session.tokens.refresh_token,
-    }))
+        "userId": meta.user_id.to_string(),
+        "deviceId": meta.device_id.to_string(),
+        "accessToken": tokens.access_token,
+        "refreshToken": tokens.refresh_token,
+    });
+    // Browser sign-ins also need the registered client to refresh tokens.
+    if let Some(client_id) = client.oauth().client_id().map(|id| id.as_str().to_owned()) {
+        session["oauthClientId"] = json!(client_id);
+    }
+    Ok(session)
+}
+
+/// What the account server shows on its consent screen. A native client
+/// receives the code on a loopback redirect (RFC 8252), on every platform.
+fn oauth_registration(redirect_uri: &Url) -> Result<ClientRegistrationData> {
+    let mut metadata = ClientMetadata::new(
+        ApplicationType::Native,
+        vec![OAuthGrantType::AuthorizationCode {
+            redirect_uris: vec![redirect_uri.clone()],
+        }],
+        Localized::new(Url::parse("https://github.com/glitch-228/conest")?, []),
+    );
+    metadata.client_name = Some(Localized::new("Conest".to_owned(), []));
+    Ok(Raw::new(&metadata)?.into())
 }
 
 fn install(client: Client) -> Result<()> {
@@ -146,15 +176,30 @@ fn install(client: Client) -> Result<()> {
             "fromDevice": event.content.from_device.to_string(),
         }));
     });
-    // Another of the user's sessions asks to verify this one.
-    client.add_event_handler(|event: ToDeviceKeyVerificationRequestEvent| async move {
-        push_event(json!({
-            "type": "verification_request",
-            "userId": event.sender.to_string(),
-            "flowId": event.content.transaction_id.to_string(),
-            "fromDevice": event.content.from_device.to_string(),
-        }));
+    // Refreshed tokens must reach the vault copy, or a restart would restore
+    // a dead token; a refused refresh means the session is gone.
+    let mut changes = client.subscribe_to_session_changes();
+    let watcher = client.clone();
+    let task = RUNTIME.spawn(async move {
+        loop {
+            let change = match changes.recv().await {
+                Ok(change) => change,
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
+            };
+            match change {
+                SessionChange::TokensRefreshed => {
+                    if let Ok(session) = session_json(&watcher) {
+                        push_event(json!({"type": "session", "session": session}));
+                    }
+                }
+                SessionChange::UnknownToken(_) => {
+                    push_event(json!({"type": "session_revoked"}));
+                }
+            }
+        }
     });
+    replace_task(&SESSION_TASK, Some(task));
     *CLIENT
         .lock()
         .map_err(|_| anyhow!("Matrix client lock poisoned"))? = Some(client);
@@ -162,11 +207,19 @@ fn install(client: Client) -> Result<()> {
 }
 
 fn stop_sync() {
-    if let Ok(mut task) = SYNC_TASK.lock() {
-        if let Some(handle) = task.take() {
+    replace_task(&SYNC_TASK, None);
+}
+
+fn replace_task(slot: &Mutex<Option<JoinHandle<()>>>, next: Option<JoinHandle<()>>) {
+    if let Ok(mut task) = slot.lock() {
+        if let Some(handle) = std::mem::replace(&mut *task, next) {
             handle.abort();
         }
     }
+}
+
+fn take_pending_oauth() -> Option<(Client, CsrfToken)> {
+    PENDING_OAUTH.lock().ok()?.take()
 }
 
 fn room(client: &Client, request: &Value) -> Result<matrix_sdk::Room> {
@@ -203,23 +256,59 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
             install(client)?;
             Ok(session)
         }
+        "oauth_start" => {
+            if let Some((pending, state)) = take_pending_oauth() {
+                pending.oauth().abort_login(&state).await;
+            }
+            let client = build_client(request, text(request, "homeserver")?).await?;
+            let redirect_uri = Url::parse(text(request, "redirectUri")?)?;
+            let device_id = request["deviceId"].as_str().map(OwnedDeviceId::from);
+            let registration = oauth_registration(&redirect_uri)?;
+            let authorization = client
+                .oauth()
+                .login(redirect_uri, device_id, Some(registration), None)
+                .build()
+                .await?;
+            *PENDING_OAUTH
+                .lock()
+                .map_err(|_| anyhow!("Matrix sign-in lock poisoned"))? =
+                Some((client, authorization.state));
+            Ok(json!({"url": authorization.url.to_string()}))
+        }
+        "oauth_finish" => {
+            let (client, _) = take_pending_oauth().context("no browser sign-in in progress")?;
+            let callback = Url::parse(text(request, "callbackUrl")?)?;
+            client.oauth().finish_login(callback.into()).await?;
+            let session = session_json(&client)?;
+            install(client)?;
+            Ok(session)
+        }
+        "oauth_abort" => {
+            if let Some((pending, state)) = take_pending_oauth() {
+                pending.oauth().abort_login(&state).await;
+            }
+            Ok(json!({}))
+        }
         "restore" => {
             let session = &request["session"];
             let client = build_client(request, text(session, "homeserver")?).await?;
             let user_id: OwnedUserId = text(session, "userId")?.parse()?;
             let device_id: OwnedDeviceId = text(session, "deviceId")?.into();
+            let meta = SessionMeta { user_id, device_id };
+            let tokens = SessionTokens {
+                access_token: text(session, "accessToken")?.to_owned(),
+                refresh_token: session["refreshToken"].as_str().map(str::to_owned),
+            };
+            let auth: AuthSession = match session["oauthClientId"].as_str() {
+                Some(client_id) => OAuthSession {
+                    client_id: ClientId::new(client_id.to_owned()),
+                    user: UserSession { meta, tokens },
+                }
+                .into(),
+                None => MatrixSession { meta, tokens }.into(),
+            };
             client
-                .matrix_auth()
-                .restore_session(
-                    MatrixSession {
-                        meta: SessionMeta { user_id, device_id },
-                        tokens: SessionTokens {
-                            access_token: text(session, "accessToken")?.to_owned(),
-                            refresh_token: session["refreshToken"].as_str().map(str::to_owned),
-                        },
-                    },
-                    RoomLoadSettings::default(),
-                )
+                .restore_session_with(auth, RoomLoadSettings::default())
                 .await?;
             let restored = session_json(&client)?;
             install(client)?;
@@ -447,6 +536,7 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
         }
         "logout" => {
             stop_sync();
+            replace_task(&SESSION_TASK, None);
             let client = client()?;
             *CLIENT
                 .lock()

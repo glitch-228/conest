@@ -30,10 +30,7 @@ void main() {
   }) async {
     final client = HttpClient();
     try {
-      final request = await client.openUrl(
-        method,
-        homeserver.replace(path: path),
-      );
+      final request = await client.openUrl(method, homeserver.resolve(path));
       request.headers.contentType = ContentType.json;
       if (token != null) {
         request.headers.set('authorization', 'Bearer $token');
@@ -81,6 +78,21 @@ void main() {
         'storePath': store.path,
         'passphrase': 'test-store-passphrase',
       };
+
+      // A homeserver without OAuth 2.0 refuses the browser sign-in cleanly
+      // before any page opens.
+      final oauthStore = await Directory.systemTemp.createTemp('conest-oauth-');
+      addTearDown(() => oauthStore.delete(recursive: true));
+      await expectLater(
+        native.request('oauth_start', {
+          'storePath': oauthStore.path,
+          'passphrase': 'test-store-passphrase',
+          'homeserver': homeserverUrl,
+          'redirectUri': 'http://127.0.0.1:9/callback',
+        }),
+        throwsA(isA<MatrixClientException>()),
+      );
+      await native.request('oauth_abort');
 
       final session = await native.request('login_password', {
         ...storeParameters,

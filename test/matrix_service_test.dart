@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:conest/src/matrix_service.dart';
 import 'package:conest/src/matrix_timeline.dart';
@@ -196,6 +197,70 @@ void main() {
     expect(service.state, MatrixClientState.signedOut);
     expect(sessions.last, isNull);
     expect(api.ops, contains('stop_sync'));
+  });
+
+  test('browser sign-in waits for the redirect, then finishes', () async {
+    api
+      ..respond('oauth_start', {'url': 'https://account.x/authorize?s=1'})
+      ..respond('oauth_finish', {
+        'userId': '@a:x',
+        'deviceId': 'D',
+        'accessToken': 't',
+        'refreshToken': 'r',
+        'oauthClientId': 'client-1',
+        'homeserver': 'https://x',
+      });
+    Uri? opened;
+    await service.signInWithBrowser(
+      homeserver: 'https://x',
+      deviceId: 'D',
+      openUrl: (url) async {
+        opened = url;
+        // The browser follows the account server's redirect.
+        final redirect = Uri.parse(
+          api.last('oauth_start')['redirectUri'] as String,
+        ).replace(queryParameters: {'code': 'c', 'state': 's'});
+        final http = HttpClient();
+        await (await http.getUrl(redirect)).close();
+        http.close();
+      },
+    );
+    expect(opened.toString(), 'https://account.x/authorize?s=1');
+    expect(api.last('oauth_start'), containsPair('deviceId', 'D'));
+    expect(
+      Uri.parse(
+        api.last('oauth_finish')['callbackUrl'] as String,
+      ).queryParameters,
+      {'code': 'c', 'state': 's'},
+    );
+    expect(sessions.single?['oauthClientId'], 'client-1');
+    expect(service.signedIn, isTrue);
+
+    // Refreshed tokens are stored; a refused refresh signs out.
+    api.emit({
+      'type': 'session',
+      'session': {...service.session!, 'accessToken': 't2'},
+    });
+    await Future<void>.delayed(Duration.zero);
+    expect(sessions.last?['accessToken'], 't2');
+    expect(service.session!['accessToken'], 't2');
+    api.emit({'type': 'session_revoked'});
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(service.state, MatrixClientState.signedOut);
+    expect(sessions.last, isNull);
+  });
+
+  test('a cancelled browser sign-in aborts the native flow', () async {
+    api.respond('oauth_start', {'url': 'https://account.x/authorize'});
+    final signIn = service.signInWithBrowser(
+      homeserver: 'https://x',
+      openUrl: (_) async => service.cancelBrowserSignIn(),
+    );
+    await expectLater(signIn, throwsStateError);
+    expect(api.ops, contains('oauth_abort'));
+    expect(api.ops, isNot(contains('oauth_finish')));
+    expect(service.state, MatrixClientState.signedOut);
+    expect(service.browserSignInPending, isFalse);
   });
 
   test('carrier to-device events are handed on; sign-out clears', () async {

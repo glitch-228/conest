@@ -13175,6 +13175,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
   final TextEditingController _matrixHomeserverController =
       TextEditingController();
   final TextEditingController _matrixUserController = TextEditingController();
+  /// The account page a browser sign-in is waiting on.
+  Uri? _matrixBrowserUrl;
   final TextEditingController _matrixPasswordController =
       TextEditingController();
   bool _busy = false;
@@ -13432,11 +13434,65 @@ class _SettingsDialogState extends State<SettingsDialog> {
                       }),
                 child: const Text('Sign in to Matrix'),
               ),
+              if (widget.controller.matrixClient != null)
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : _signInToMatrixWithBrowser,
+                  icon: const Icon(Icons.open_in_browser),
+                  label: const Text('Sign in with browser'),
+                ),
             ],
           ),
+          const SizedBox(height: 4),
+          if (widget.controller.matrixClient != null)
+            Text(
+              'Accounts that sign in through Google, GitHub or another '
+              'provider, or through matrix.org, use the browser.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          if (_matrixBrowserUrl case final url?)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Wrap(
+                spacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  const Text('Finish signing in in your browser.'),
+                  TextButton(
+                    onPressed: () =>
+                        Clipboard.setData(ClipboardData(text: url.toString())),
+                    child: const Text('Copy link'),
+                  ),
+                  TextButton(
+                    onPressed: widget.controller.cancelMatrixBrowserSignIn,
+                    child: const Text('Cancel'),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );
+  }
+
+  Future<void> _signInToMatrixWithBrowser() async {
+    try {
+      await _run(
+        () => widget.controller.signInToMatrixWithBrowser(
+          homeserver: _matrixHomeserverController.text,
+          user: _matrixUserController.text,
+          openUrl: (url) async {
+            if (mounted) setState(() => _matrixBrowserUrl = url);
+            try {
+              await widget.controller.openExternalUrl(url);
+            } catch (_) {
+              // The link stays available to copy.
+            }
+          },
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _matrixBrowserUrl = null);
+    }
   }
 
   @override

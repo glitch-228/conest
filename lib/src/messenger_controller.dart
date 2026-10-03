@@ -22007,6 +22007,7 @@ class MessengerController extends ChangeNotifier {
     final login = user.trim();
     final http = _matrixHttpFactory?.call();
     MatrixSession session;
+    Map<String, dynamic>? fullSession;
     try {
       final base = await MatrixClient.resolveHomeserver(
         homeserver,
@@ -22021,7 +22022,8 @@ class MessengerController extends ChangeNotifier {
           password: password,
           deviceId: me == null ? null : _matrixDeviceIdFor(me),
         );
-        session = MatrixSession.tryFromJson(client.session)!;
+        fullSession = client.session;
+        session = MatrixSession.tryFromJson(fullSession)!;
       } else {
         session = await MatrixClient.login(
           homeserver: base,
@@ -22034,10 +22036,57 @@ class MessengerController extends ChangeNotifier {
     } finally {
       http?.close();
     }
+    await _matrixSignedIn(session, fullSession ?? session.toJson());
+  }
+
+  /// Signs this device in through the account server's page in the browser
+  /// (single sign-on, the Matrix Authentication Service). Needs the full
+  /// client. [user] may stand in for [homeserver] as a full `@user:server`.
+  Future<void> signInToMatrixWithBrowser({
+    String homeserver = '',
+    String user = '',
+    required Future<void> Function(Uri url) openUrl,
+  }) async {
+    final matrix = _matrixTransport;
+    final client = _matrixClient;
+    if (matrix == null || client == null) {
+      throw StateError('Browser sign-in needs the full Matrix client.');
+    }
+    final me = _snapshot.identity;
+    final login = user.trim();
+    final http = _matrixHttpFactory?.call();
+    try {
+      final base = await MatrixClient.resolveHomeserver(
+        homeserver,
+        userId: isMatrixUserId(login) ? login : null,
+        http: http,
+      );
+      await client.signInWithBrowser(
+        homeserver: base.toString(),
+        openUrl: openUrl,
+        deviceId: me == null ? null : _matrixDeviceIdFor(me),
+      );
+    } finally {
+      http?.close();
+    }
+    final full = client.session!;
+    await _matrixSignedIn(MatrixSession.tryFromJson(full)!, full);
+  }
+
+  void cancelMatrixBrowserSignIn() => _matrixClient?.cancelBrowserSignIn();
+
+  Future<void> openExternalUrl(Uri url) => _platformBridge.openExternalUrl(url);
+
+  /// [stored] keeps what the client needs to resume (refresh token, the
+  /// registered browser client) beyond the carrier's [session].
+  Future<void> _matrixSignedIn(
+    MatrixSession session,
+    Map<String, dynamic> stored,
+  ) async {
     _snapshot = _snapshot
         .copyWith(clearMatrixSession: true)
-        .copyWith(matrixSession: session.toJson());
-    matrix.attach(session);
+        .copyWith(matrixSession: stored);
+    _matrixTransport!.attach(session);
     await _persist('Signed in to Matrix as ${session.userId}.');
     await _attachMatrixTransport();
     _advertiseProfileToContacts();

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'matrix_oauth.dart';
 import 'matrix_timeline.dart';
 
 /// What [MatrixClientService] needs from the native client; tests supply a
@@ -79,6 +80,7 @@ class MatrixClientService extends ChangeNotifier {
   final Map<String, String?> _olderFrom = {};
   final Set<String> _exhausted = {};
   Timer? _roomRefresh;
+  MatrixOAuthLoopback? _browserSignIn;
   final _verification = StreamController<Map<String, dynamic>>.broadcast();
 
   /// Interactive verification: `verification_request` (another session asks
@@ -135,6 +137,58 @@ class MatrixClientService extends ChangeNotifier {
       rethrow;
     }
   }
+
+  /// Signs in through the account server's own page in the browser: the
+  /// only way into accounts that use single sign-on or the Matrix
+  /// Authentication Service. [openUrl] shows the page; the browser comes
+  /// back to a loopback listener.
+  Future<void> signInWithBrowser({
+    required String homeserver,
+    required Future<void> Function(Uri url) openUrl,
+    String? deviceId,
+    Duration timeout = const Duration(minutes: 10),
+  }) async {
+    _browserSignIn?.cancel();
+    _setState(MatrixClientState.signingIn);
+    final loopback = await MatrixOAuthLoopback.bind();
+    _browserSignIn = loopback;
+    try {
+      final store = await _store();
+      final started = await _api.request('oauth_start', {
+        'storePath': store.path,
+        'passphrase': store.passphrase,
+        'homeserver': homeserver,
+        'redirectUri': loopback.redirectUri.toString(),
+        'deviceId': ?deviceId,
+      });
+      await openUrl(Uri.parse(started['url'] as String));
+      final callback = await loopback.callback.timeout(
+        timeout,
+        onTimeout: () =>
+            throw TimeoutException('The browser sign-in timed out.'),
+      );
+      final session = await _api.request('oauth_finish', {
+        'callbackUrl': callback.toString(),
+      });
+      await _started(session);
+    } catch (error) {
+      unawaited(
+        _api
+            .request('oauth_abort')
+            .catchError((Object _) => <String, dynamic>{}),
+      );
+      _fail(error);
+      rethrow;
+    } finally {
+      if (identical(_browserSignIn, loopback)) _browserSignIn = null;
+      unawaited(loopback.close());
+    }
+  }
+
+  /// Stops waiting for the browser.
+  void cancelBrowserSignIn() => _browserSignIn?.cancel();
+
+  bool get browserSignInPending => _browserSignIn != null;
 
   /// Resumes a stored session (startup, or migrating the carrier's device).
   Future<void> restore(Map<String, dynamic> session) async {
@@ -412,6 +466,15 @@ class MatrixClientService extends ChangeNotifier {
           return;
         }
         _notify();
+      case 'session':
+        // The SDK refreshed the access token; keep the stored copy current.
+        final session = event['session'];
+        if (signedIn && session is Map<String, dynamic>) {
+          _session = session;
+          unawaited(_onSession(session).catchError((Object _) {}));
+        }
+      case 'session_revoked':
+        if (signedIn) unawaited(_sessionRevoked());
       case 'verification_request' || 'verification':
         _verification.add(event);
       case 'to_device':
@@ -452,6 +515,7 @@ class MatrixClientService extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _roomRefresh?.cancel();
+    _browserSignIn?.cancel();
     unawaited(_events.cancel());
     unawaited(_verification.close());
     super.dispose();
