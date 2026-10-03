@@ -317,9 +317,9 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
                 login = login.device_id(device_id);
             }
             login.send().await?;
-            install(client, store.clone())?;
+            install(client.clone(), store.clone())?;
             prune_stores(request, &store);
-            session_json(&client()?)
+            session_json(&client)
         }
         "oauth_start" => {
             if let Some((pending, state, _)) = take_pending_oauth() {
@@ -346,9 +346,9 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
                 take_pending_oauth().context("no browser sign-in in progress")?;
             let callback = Url::parse(text(request, "callbackUrl")?)?;
             client.oauth().finish_login(callback.into()).await?;
-            install(client, store.clone())?;
+            install(client.clone(), store.clone())?;
             prune_stores(request, &store);
-            session_json(&client()?)
+            session_json(&client)
         }
         "oauth_abort" => {
             if let Some((pending, state, _)) = take_pending_oauth() {
@@ -378,8 +378,8 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
             client
                 .restore_session_with(auth, RoomLoadSettings::default())
                 .await?;
-            install(client, store)?;
-            session_json(&client()?)
+            install(client.clone(), store)?;
+            session_json(&client)
         }
         "start_sync" => {
             // Replacing aborts the previous loop: two overlapping starts must
