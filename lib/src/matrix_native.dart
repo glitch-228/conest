@@ -7,6 +7,8 @@ import 'dart:math';
 
 import 'package:ffi/ffi.dart';
 
+import 'matrix_service.dart';
+
 /// Locations to try for `conest_native`, honouring CONEST_NATIVE_LIBRARY.
 Iterable<String> conestNativeLibraryCandidates() sync* {
   final override = Platform.environment['CONEST_NATIVE_LIBRARY'];
@@ -43,7 +45,7 @@ class MatrixClientException implements Exception {
 /// The native Matrix client (`native/conest_native/src/matrix.rs`): commands
 /// go out as JSON and answers come back through an event queue that a
 /// background isolate drains, so nothing here blocks the UI isolate.
-class NativeMatrixClient {
+class NativeMatrixClient implements MatrixNativeApi {
   NativeMatrixClient._(this._libraryPath, DynamicLibrary library)
     : _call = library.lookupFunction<_CallNative, _CallDart>(
         'conest_matrix_call',
@@ -82,6 +84,7 @@ class NativeMatrixClient {
 
   /// Live events that are not command results: `sync` (with changed room
   /// ids) and `sync_error`.
+  @override
   Stream<Map<String, dynamic>> get events => _events.stream;
 
   Future<void> _ensureReader() async {
@@ -110,6 +113,7 @@ class NativeMatrixClient {
   }
 
   /// Runs one command and returns its `value`, or throws with its error.
+  @override
   Future<Map<String, dynamic>> request(
     String op, [
     Map<String, Object?> parameters = const {},

@@ -796,6 +796,7 @@ dependencies = [
  "jni 0.22.4",
  "matrix-sdk",
  "matrix-sdk-ui",
+ "mime",
  "nokhwa",
  "opus",
  "rxing",

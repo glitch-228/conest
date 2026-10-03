@@ -15,16 +15,29 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use matrix_sdk::{
     Client, SessionMeta, SessionTokens,
+    attachment::AttachmentConfig,
     authentication::matrix::MatrixSession,
     config::SyncSettings,
+    media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
     room::MessagesOptions,
     ruma::{
-        OwnedDeviceId, OwnedRoomId, OwnedUserId, UInt,
-        events::room::message::RoomMessageEventContent,
+        OwnedDeviceId, OwnedEventId, OwnedRoomId, OwnedUserId, TransactionId, UInt,
+        api::client::{
+            receipt::create_receipt::v3::ReceiptType,
+            to_device::send_event_to_device::v3::Request as ToDeviceRequest,
+        },
+        events::{
+            ToDeviceEventType,
+            receipt::ReceiptThread,
+            room::{MediaSource, message::RoomMessageEventContent},
+        },
+        serde::Raw,
+        to_device::DeviceIdOrAllDevices,
     },
     store::RoomLoadSettings,
 };
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use tokio::{runtime::Runtime, task::JoinHandle};
 
 static RUNTIME: LazyLock<Runtime> =
@@ -233,6 +246,92 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
                 .await?;
             Ok(json!({"eventId": sent.response.event_id.to_string()}))
         }
+        "send_raw" => {
+            // Any message-like event (replies, edits, reactions); the SDK
+            // encrypts it in encrypted rooms.
+            let room = room(&client()?, request)?;
+            let sent = room
+                .send_raw(text(request, "type")?, request["content"].clone())
+                .await?;
+            Ok(json!({"eventId": sent.response.event_id.to_string()}))
+        }
+        "redact" => {
+            let room = room(&client()?, request)?;
+            let event_id: OwnedEventId = text(request, "eventId")?.parse()?;
+            room.redact(&event_id, request["reason"].as_str(), None)
+                .await?;
+            Ok(json!({}))
+        }
+        "read_receipt" => {
+            let room = room(&client()?, request)?;
+            let event_id: OwnedEventId = text(request, "eventId")?.parse()?;
+            room.send_single_receipt(ReceiptType::Read, ReceiptThread::Unthreaded, event_id)
+                .await?;
+            Ok(json!({}))
+        }
+        "member" => {
+            let room = room(&client()?, request)?;
+            let user_id: OwnedUserId = text(request, "userId")?.parse()?;
+            let member = room.get_member(&user_id).await?;
+            Ok(json!({
+                "displayName": member.as_ref().and_then(|member| member.display_name().map(str::to_owned)),
+                "avatarUrl": member.as_ref().and_then(|member| member.avatar_url().map(ToString::to_string)),
+            }))
+        }
+        "send_file" => {
+            let room = room(&client()?, request)?;
+            let data = tokio::fs::read(text(request, "path")?).await?;
+            let mime: mime::Mime = request["mimeType"]
+                .as_str()
+                .unwrap_or("application/octet-stream")
+                .parse()
+                .unwrap_or(mime::APPLICATION_OCTET_STREAM);
+            let response = room
+                .send_attachment(text(request, "name")?, &mime, data, AttachmentConfig::new())
+                .await?;
+            Ok(json!({"eventId": response.event_id.to_string()}))
+        }
+        "download" => {
+            // `source` is the event content's `url`/`file` pair; encrypted
+            // files are decrypted by the SDK.
+            let source: MediaSource = serde_json::from_value(request["source"].clone())?;
+            let format = match (request["width"].as_u64(), request["height"].as_u64()) {
+                (Some(width), Some(height)) => MediaFormat::Thumbnail(MediaThumbnailSettings::new(
+                    UInt::from(width.min(2048) as u32),
+                    UInt::from(height.min(2048) as u32),
+                )),
+                _ => MediaFormat::File,
+            };
+            let data = client()?
+                .media()
+                .get_media_content(&MediaRequestParameters { source, format }, true)
+                .await?;
+            tokio::fs::write(text(request, "path")?, &data).await?;
+            Ok(json!({"bytes": data.len()}))
+        }
+        "send_to_device" => {
+            // Plain to-device messages for the Conest carrier, which seals
+            // its own payloads.
+            let user_id: OwnedUserId = text(request, "userId")?.parse()?;
+            let device_id: OwnedDeviceId = text(request, "deviceId")?.into();
+            let content = Raw::from_json(serde_json::value::to_raw_value(&request["content"])?);
+            let messages = BTreeMap::from([(
+                user_id,
+                BTreeMap::from([(DeviceIdOrAllDevices::DeviceId(device_id), content)]),
+            )]);
+            let transaction = request["transactionId"]
+                .as_str()
+                .map(Into::into)
+                .unwrap_or_else(TransactionId::new);
+            client()?
+                .send(ToDeviceRequest::new_raw(
+                    ToDeviceEventType::from(text(request, "type")?),
+                    transaction,
+                    messages,
+                ))
+                .await?;
+            Ok(json!({}))
+        }
         "join" => {
             room(&client()?, request)?.join().await?;
             Ok(json!({}))
@@ -268,6 +367,36 @@ async fn sync_loop(client: Client) {
         match client.sync_once(settings).await {
             Ok(response) => {
                 backoff = Duration::from_secs(2);
+                // New timeline events, already decrypted where keys exist.
+                for (room_id, update) in &response.rooms.joined {
+                    let events: Vec<Value> = update
+                        .timeline
+                        .events
+                        .iter()
+                        .filter_map(|event| serde_json::from_str(event.raw().json().get()).ok())
+                        .collect();
+                    if !events.is_empty() || update.timeline.limited {
+                        push_event(json!({
+                            "type": "timeline",
+                            "roomId": room_id.to_string(),
+                            "events": events,
+                            "limited": update.timeline.limited,
+                            "prevBatch": update.timeline.prev_batch,
+                        }));
+                    }
+                }
+                // Custom to-device messages (the Conest carrier); the SDK
+                // consumes its own key-sharing traffic.
+                for event in &response.to_device {
+                    if let Ok(value) = serde_json::from_str::<Value>(event.as_raw().json().get()) {
+                        if value["type"]
+                            .as_str()
+                            .is_some_and(|kind| kind.starts_with("dev.conest."))
+                        {
+                            push_event(json!({"type": "to_device", "event": value}));
+                        }
+                    }
+                }
                 let changed: Vec<String> = response
                     .rooms
                     .joined

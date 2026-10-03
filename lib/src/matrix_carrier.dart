@@ -186,6 +186,17 @@ class _PendingEnvelope {
   final Map<int, Uint8List> chunks = {};
 }
 
+/// Sends carrier frames through a Matrix client that owns the device's only
+/// `/sync` (the full Matrix client); its to-device frames come back through
+/// [MatrixTransportAdapter.receiveExternal].
+abstract interface class MatrixCarrierChannel {
+  Future<void> sendFrame(
+    MatrixAddress to,
+    Map<String, Object?> frame,
+    String transactionId,
+  );
+}
+
 /// Observable state for settings and diagnostics.
 class MatrixCarrierStatus {
   const MatrixCarrierStatus({
@@ -212,7 +223,9 @@ class MatrixTransportAdapter implements TransportAdapter {
     void Function()? onSessionRevoked,
     Duration syncTimeout = const Duration(seconds: 30),
     DateTime Function()? now,
+    MatrixCarrierChannel? channel,
   }) : _sealer = sealer,
+       _channel = channel,
        _clientFactory = clientFactory ?? MatrixClient.new,
        _onSyncToken = onSyncToken,
        _onSessionRevoked = onSessionRevoked,
@@ -221,6 +234,13 @@ class MatrixTransportAdapter implements TransportAdapter {
        _reassembler = MatrixCarrierReassembler(now: now);
 
   final MatrixCarrierSealer _sealer;
+  final MatrixCarrierChannel? _channel;
+  MatrixSession? _externalSession;
+
+  /// Frames forwarded while stopped: the owning client has already
+  /// acknowledged them, so they wait here instead of being dropped.
+  final List<MatrixToDeviceEvent> _held = [];
+  static const int _maxHeld = 256;
   final MatrixClient Function(MatrixSession session) _clientFactory;
   final void Function(String nextBatch, bool hadEvents)? _onSyncToken;
   final void Function()? _onSessionRevoked;
@@ -253,12 +273,12 @@ class MatrixTransportAdapter implements TransportAdapter {
     maximumPayloadBytes: matrixCarrierMaxSealedBytes - 64,
   );
 
-  MatrixSession? get session => _client?.session;
+  MatrixSession? get session => _client?.session ?? _externalSession;
 
   MatrixCarrierStatus get status => MatrixCarrierStatus(
-    signedIn: _client != null,
-    syncing: _syncing,
-    userId: _client?.session.userId,
+    signedIn: session != null,
+    syncing: _channel != null ? session != null : _syncing,
+    userId: session?.userId,
     lastError: _lastError,
   );
 
@@ -266,6 +286,14 @@ class MatrixTransportAdapter implements TransportAdapter {
 
   /// Uses [session] from now on, resuming `/sync` after [since].
   void attach(MatrixSession session, {String? since}) {
+    if (_channel != null) {
+      // The owning client syncs; this adapter only seals and reassembles.
+      _externalSession = session;
+      _lastError = null;
+      _generation++;
+      _emitStatus();
+      return;
+    }
     _client?.close();
     _client = _clientFactory(session);
     _since = since;
@@ -278,6 +306,8 @@ class MatrixTransportAdapter implements TransportAdapter {
   /// Stops using the current session without signing it out.
   void detach() {
     _generation++;
+    _externalSession = null;
+    _held.clear();
     _client?.close();
     _client = null;
     _since = null;
@@ -289,6 +319,7 @@ class MatrixTransportAdapter implements TransportAdapter {
   Future<void> signOut() async {
     final client = _client;
     detach();
+    // With a channel, the owning client signs the device out.
     if (client == null) return;
     final temporary = _clientFactory(client.session);
     try {
@@ -303,6 +334,26 @@ class MatrixTransportAdapter implements TransportAdapter {
     if (_started) return;
     _started = true;
     if (_client != null) unawaited(_syncLoop(_generation));
+    final held = List.of(_held);
+    _held.clear();
+    for (final event in held) {
+      receiveExternal(event);
+    }
+  }
+
+  /// A carrier frame from the owning client's sync.
+  void receiveExternal(MatrixToDeviceEvent event) {
+    if (event.type != matrixCarrierEventType) return;
+    if (!_started || session == null) {
+      if (_held.length >= _maxHeld) _held.removeAt(0);
+      _held.add(event);
+      return;
+    }
+    unawaited(
+      _receive(event, _generation).catchError((Object _) {
+        // An unreadable frame is dropped, as in the own sync loop.
+      }),
+    );
   }
 
   @override
@@ -322,17 +373,17 @@ class MatrixTransportAdapter implements TransportAdapter {
 
   @override
   Future<List<RouteCandidate>> discoverRoutes(TransportPeer peer) async {
-    final client = _client;
+    final current = session;
     final address = MatrixAddress.decode(
       peer.transportAddresses[TransportKind.matrix],
     );
-    if (client == null || address == null) return const <RouteCandidate>[];
+    if (current == null || address == null) return const <RouteCandidate>[];
     return [
       RouteCandidate(
         transport: TransportKind.matrix,
         path: TransportPathKind.storeForward,
         routeId: 'matrix:${address.encode()}',
-        label: 'Matrix (${client.session.homeserver.host})',
+        label: 'Matrix (${current.homeserver.host})',
         trust: TransportTrustState.pinnedTransport,
         maximumPayloadBytes: capabilities.maximumPayloadBytes,
       ),
@@ -346,17 +397,23 @@ class MatrixTransportAdapter implements TransportAdapter {
     required TransportEnvelope envelope,
   }) async {
     final client = _client;
+    final channel = _channel;
     final address = MatrixAddress.decode(
       peer.transportAddresses[TransportKind.matrix],
     );
-    if (client == null || address == null) {
+    if ((client == null && (channel == null || session == null)) ||
+        address == null) {
       throw StateError('Matrix is not available for this contact.');
     }
     final sealed = await _sealer.seal(peer.deviceId, envelope.bytes);
     final frames = matrixCarrierFrames(MatrixClient.newTransactionId(), sealed);
     for (final frame in frames) {
       final transactionId = MatrixClient.newTransactionId();
-      Future<void> send() => client.sendToDevice(matrixCarrierEventType, {
+      if (channel != null) {
+        await channel.sendFrame(address, frame, transactionId);
+        continue;
+      }
+      Future<void> send() => client!.sendToDevice(matrixCarrierEventType, {
         address.userId: {address.deviceId: frame},
       }, transactionId: transactionId);
       try {

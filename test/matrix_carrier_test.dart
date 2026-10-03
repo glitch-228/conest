@@ -245,6 +245,59 @@ void main() {
       }
     });
 
+    test(
+      'channel mode sends through the owner and holds early frames',
+      () async {
+        final sent = <(MatrixAddress, Map<String, Object?>)>[];
+        final channel = _RecordingChannel(sent);
+        final session = MatrixSession(
+          homeserver: Uri.parse('https://hs.example'),
+          userId: '@alice:fake.test',
+          deviceId: 'CONEST_alice',
+          accessToken: 'unused',
+        );
+        final adapter = MatrixTransportAdapter(
+          sealer: _PrefixSealer('alice'),
+          channel: channel,
+        )..attach(session);
+        expect(adapter.status.signedIn, isTrue);
+        final route = (await adapter.discoverRoutes(
+          peer('dev-bob', 'bob'),
+        )).single;
+        expect(route.label, 'Matrix (hs.example)');
+        await adapter.sendEnvelope(
+          peer: peer('dev-bob', 'bob'),
+          route: route,
+          envelope: TransportEnvelope(
+            id: 'c1',
+            recipientDeviceId: 'dev-bob',
+            bytes: Uint8List.fromList([5, 6]),
+            createdAt: DateTime.now().toUtc(),
+          ),
+        );
+        expect(sent.single.$1.userId, '@bob:fake.test');
+
+        // A frame forwarded before start waits, then arrives.
+        final frame = matrixCarrierFrames(
+          'x1',
+          Uint8List.fromList([...utf8.encode('sealed:'), 42]),
+        ).single;
+        adapter.receiveExternal(
+          MatrixToDeviceEvent(
+            type: matrixCarrierEventType,
+            sender: '@bob:fake.test',
+            content: jsonDecode(jsonEncode(frame)) as Map<String, dynamic>,
+          ),
+        );
+        final received = adapter.inboundEnvelopes.first;
+        await adapter.start();
+        addTearDown(adapter.stop);
+        final inbound = await received.timeout(const Duration(seconds: 2));
+        expect(inbound.bytes, [42]);
+        expect(inbound.senderTransportIdentity, 'dev-bob');
+      },
+    );
+
     test('a peer without a Matrix address gets no route', () async {
       final alice = await adapter('alice', 'alice-pass');
       expect(
@@ -343,4 +396,16 @@ class _PrefixSealer implements MatrixCarrierSealer {
       envelope: Uint8List.sublistView(sealed, marker.length),
     );
   }
+}
+
+class _RecordingChannel implements MatrixCarrierChannel {
+  _RecordingChannel(this.sent);
+  final List<(MatrixAddress, Map<String, Object?>)> sent;
+
+  @override
+  Future<void> sendFrame(
+    MatrixAddress to,
+    Map<String, Object?> frame,
+    String transactionId,
+  ) async => sent.add((to, frame));
 }
