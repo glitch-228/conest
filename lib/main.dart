@@ -13200,32 +13200,77 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
   /// Creates the recovery key that unlocks encrypted Matrix history on a
   /// new device, and shows it once.
+  Future<String?> _askMatrixPassword() async {
+    final input = TextEditingController();
+    final password = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Matrix password'),
+        content: TextField(
+          controller: input,
+          autofocus: true,
+          obscureText: true,
+          decoration: const InputDecoration(
+            labelText: 'Password',
+            helperText: 'Your server asks for it to create signing keys.',
+          ),
+          onSubmitted: (value) => Navigator.pop(context, value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, input.text),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+    input.dispose();
+    return password == null || password.isEmpty ? null : password;
+  }
+
   Future<void> _setUpMatrixRecovery(MatrixClientService client) async {
     final state = await client.recoveryState().catchError(
       (Object _) => (recovery: 'Unknown', crossSigning: false),
     );
     if (!mounted) return;
-    if (state.recovery == 'Enabled') {
-      final reset = await showDialog<bool>(
+    if (state.recovery == 'Enabled' || state.recovery == 'Incomplete') {
+      // A new key would replace the one the user already has.
+      await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Recovery is already set up'),
-          content: const Text(
-            'Your encrypted Matrix history is already backed up. Use '
-            '"Enter recovery key" on a new device.',
+          content: Text(
+            state.recovery == 'Enabled'
+                ? 'Your encrypted Matrix history is already backed up. Use '
+                      '"Enter recovery key" on a new device.'
+                : 'This account already has a recovery key. Use "Enter '
+                      'recovery key" or "Verify with another session" to '
+                      'unlock your encrypted history on this device.',
           ),
           actions: [
             FilledButton(
-              onPressed: () => Navigator.pop(context, false),
+              onPressed: () => Navigator.pop(context),
               child: const Text('OK'),
             ),
           ],
         ),
       );
-      if (reset != true) return;
+      return;
     }
     String? key;
-    await _run(() async => key = await client.enableRecovery());
+    await _run(() async {
+      try {
+        key = await client.enableRecovery();
+      } on MatrixPasswordRequired {
+        final password = await _askMatrixPassword();
+        if (password == null) return;
+        key = await client.enableRecovery(password: password);
+      }
+    });
     final recoveryKey = key;
     if (!mounted || recoveryKey == null) return;
     await showDialog<void>(

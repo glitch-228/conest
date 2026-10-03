@@ -14,4 +14,4 @@ serde_json = "1.0"
 ed25519-dalek = { version = "2", default-features = false, features = ["std", "rand_core"] }
 rand = "0.8"
 base64 = "0.22"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }

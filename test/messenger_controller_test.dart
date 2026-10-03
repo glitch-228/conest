@@ -11465,7 +11465,8 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 20));
       }
 
-      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      // A dropped first offer is retried after 10 s, then 20 s.
+      final deadline = DateTime.now().add(const Duration(seconds: 40));
       while (DateTime.now().isBefore(deadline) &&
           !(await alice.hasRatchetSessionForTesting(bobId) &&
               await bob.hasRatchetSessionForTesting(aliceId))) {
@@ -11526,7 +11527,7 @@ void main() {
         ),
         isEmpty,
       );
-    });
+    }, timeout: const Timeout(Duration(seconds: 90)));
 
     test(
       'groups mix ratchet and static members, including non-contacts',

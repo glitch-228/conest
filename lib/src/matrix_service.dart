@@ -51,6 +51,14 @@ class MatrixRoom {
 
 enum MatrixClientState { signedOut, signingIn, ready, error }
 
+/// The server asks for the account password to continue.
+class MatrixPasswordRequired implements Exception {
+  const MatrixPasswordRequired();
+
+  @override
+  String toString() => 'The Matrix server asks for your account password.';
+}
+
 /// The full Matrix client for the app: session, rooms, timelines and
 /// sending. The native client owns the only `/sync` for the Matrix device.
 class MatrixClientService extends ChangeNotifier {
@@ -372,9 +380,20 @@ class MatrixClientService extends ChangeNotifier {
 
   /// Sets up cross-signing, secret storage and key backup; returns the
   /// recovery key the user must keep.
-  Future<String> enableRecovery() async {
-    final result = await _api.request('enable_recovery');
-    return result['recoveryKey'] as String;
+  /// Throws a [MatrixPasswordRequired] when the server wants the account
+  /// password before accepting the first cross-signing keys.
+  Future<String> enableRecovery({String? password}) async {
+    try {
+      final result = await _api.request('enable_recovery', {
+        'password': ?password,
+      });
+      return result['recoveryKey'] as String;
+    } catch (error) {
+      if ('$error'.contains('M_CONEST_NEEDS_PASSWORD')) {
+        throw const MatrixPasswordRequired();
+      }
+      rethrow;
+    }
   }
 
   /// Unlocks secret storage with a recovery key, restoring encrypted

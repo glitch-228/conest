@@ -274,7 +274,9 @@ void main() {
       }, 'The to-device message never arrived');
 
       // Recovery: secret storage, backup and cross-signing.
-      final recovery = await native.request('enable_recovery');
+      final recovery = await native.request('enable_recovery', {
+        'password': 'pw-alice',
+      });
       expect(recovery['recoveryKey'], isNotEmpty);
       final state = await native.request('recovery_state');
       expect(state['recovery'], 'Enabled');

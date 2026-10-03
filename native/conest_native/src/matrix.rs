@@ -37,6 +37,7 @@ use matrix_sdk::{
         OwnedDeviceId, OwnedEventId, OwnedRoomId, OwnedUserId, TransactionId, UInt,
         api::client::{
             receipt::create_receipt::v3::ReceiptType,
+            uiaa,
             to_device::send_event_to_device::v3::Request as ToDeviceRequest,
         },
         events::{
@@ -454,10 +455,50 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
             }))
         }
         "enable_recovery" => {
-            // Creates cross-signing keys if needed, secret storage and key
-            // backup; the returned key is the only way to read history on a
-            // new device without another signed-in one.
-            let key = client()?.encryption().recovery().enable().await?;
+            // Creates cross-signing keys if the account has none, then secret
+            // storage and key backup; the returned key is the only way to
+            // read history on a new device without another signed-in one.
+            let client = client()?;
+            let encryption = client.encryption();
+            if encryption.secret_storage().is_enabled().await? {
+                // A new store would replace the key the user already has.
+                return Err(anyhow!(
+                    "this account already has recovery set up; enter its recovery key \
+                     or verify with another session"
+                ));
+            }
+            if let Err(error) = encryption.bootstrap_cross_signing_if_needed(None).await {
+                // Servers without MSC3967 ask for the password even for the
+                // first cross-signing keys.
+                let (Some(info), Some(password)) =
+                    (error.as_uiaa_response(), request["password"].as_str())
+                else {
+                    return Err(match error.as_uiaa_response() {
+                        Some(_) => anyhow!("M_CONEST_NEEDS_PASSWORD: the server asks for your password"),
+                        None => error.into(),
+                    });
+                };
+                let user = client.user_id().context("no Matrix session")?.to_string();
+                let mut auth = uiaa::Password::new(
+                    uiaa::UserIdentifier::Matrix(uiaa::MatrixUserIdentifier::new(user)),
+                    password.to_owned(),
+                );
+                auth.session = info.session.clone();
+                encryption
+                    .bootstrap_cross_signing(Some(uiaa::AuthData::Password(auth)))
+                    .await?;
+            }
+            let complete = encryption
+                .cross_signing_status()
+                .await
+                .is_some_and(|status| status.is_complete());
+            if !complete {
+                return Err(anyhow!(
+                    "this session does not hold the account's signing keys; \
+                     verify it with another session first"
+                ));
+            }
+            let key = encryption.recovery().enable().await?;
             Ok(json!({"recoveryKey": key}))
         }
         "recover" => {
