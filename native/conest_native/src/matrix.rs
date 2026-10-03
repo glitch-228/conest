@@ -305,17 +305,16 @@ mod tests {
         panic!("no result for {request_id}");
     }
 
+    /// One test: the event queue is process-wide, so parallel tests would
+    /// consume each other's results.
     #[test]
-    fn commands_without_a_session_fail_through_the_event_queue() {
+    fn commands_fail_through_the_event_queue_without_a_session() {
         call(json!({"op": "rooms", "requestId": "r1"})).unwrap();
         let result = result_for("r1");
         assert_eq!(result["type"], "result");
         assert_eq!(result["ok"], false);
         assert!(result["error"].as_str().unwrap().contains("not signed in"));
-    }
 
-    #[test]
-    fn unknown_operations_and_missing_ops_are_rejected() {
         call(json!({"op": "nope", "requestId": "r2"})).unwrap();
         assert_eq!(result_for("r2")["ok"], false);
         assert!(call(json!({"requestId": "r3"})).is_err());

@@ -100,15 +100,26 @@ jobs:
   matrix:
     if: ${{ !inputs.quick_build }}
     needs: cadence
-    name: Matrix carrier against a real Synapse
+    name: Matrix carrier and client against a real Synapse
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang pkg-config libasound2-dev libudev-dev
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: matrix-native
       - run: flutter pub get
+      - name: Build the native library with the Matrix client
+        run: |
+          cargo build --locked --release \
+            --manifest-path native/conest_native/Cargo.toml
       - name: Start Synapse with open registration
         run: |
           mkdir -p synapse-data
@@ -140,10 +151,13 @@ jobs:
           done
           docker logs synapse
           exit 1
-      - name: Run the carrier against Synapse
+      - name: Run the carrier and the native client against Synapse
         env:
           CONEST_MATRIX_HOMESERVER: http://localhost:8008
-        run: flutter test test/matrix_homeserver_test.dart
+          CONEST_NATIVE_LIBRARY: ${{ github.workspace }}/target/release/libconest_native.so
+        run: |
+          flutter test test/matrix_homeserver_test.dart
+          flutter test test/matrix_client_native_test.dart
       - name: Synapse logs on failure
         if: failure()
         run: docker logs synapse | tail -200
