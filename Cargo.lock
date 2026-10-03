@@ -791,6 +791,7 @@ dependencies = [
  "cpal",
  "crossbeam-queue",
  "flutter_rust_bridge",
+ "futures-util",
  "hmac 0.12.1",
  "iroh",
  "jni 0.22.4",

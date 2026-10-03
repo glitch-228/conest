@@ -79,6 +79,12 @@ class MatrixClientService extends ChangeNotifier {
   final Map<String, String?> _olderFrom = {};
   final Set<String> _exhausted = {};
   Timer? _roomRefresh;
+  final _verification = StreamController<Map<String, dynamic>>.broadcast();
+
+  /// Interactive verification: `verification_request` (another session asks
+  /// to verify this one) and `verification` with a `state` of `ready`,
+  /// `emojis` (with the seven emojis to compare), `done` or `cancelled`.
+  Stream<Map<String, dynamic>> get verificationEvents => _verification.stream;
   bool _disposed = false;
 
   MatrixClientState get state => _state;
@@ -322,6 +328,31 @@ class MatrixClientService extends ChangeNotifier {
   Future<void> recover(String recoveryKey) =>
       _api.request('recover', {'recoveryKey': recoveryKey.trim()});
 
+  /// Asks another signed-in session of this account to verify this one;
+  /// returns the flow id to follow on [verificationEvents].
+  Future<String> verifyOwnSession() async {
+    final result = await _api.request('verify_own_session');
+    return result['flowId'] as String;
+  }
+
+  Future<void> acceptVerification(String userId, String flowId) =>
+      _api.request('verification_accept', {'userId': userId, 'flowId': flowId});
+
+  Future<void> startEmojiVerification(String userId, String flowId) => _api
+      .request('verification_start_sas', {'userId': userId, 'flowId': flowId});
+
+  Future<void> confirmVerification(
+    String userId,
+    String flowId, {
+    required bool match,
+  }) => _api.request(match ? 'verification_confirm' : 'verification_mismatch', {
+    'userId': userId,
+    'flowId': flowId,
+  });
+
+  Future<void> cancelVerification(String userId, String flowId) =>
+      _api.request('verification_cancel', {'userId': userId, 'flowId': flowId});
+
   /// Plain to-device message (used by the Conest carrier).
   Future<void> sendToDevice({
     required String type,
@@ -381,6 +412,8 @@ class MatrixClientService extends ChangeNotifier {
           return;
         }
         _notify();
+      case 'verification_request' || 'verification':
+        _verification.add(event);
       case 'to_device':
         final payload = event['event'];
         if (payload is Map<String, dynamic>) _onToDevice?.call(payload);
@@ -420,6 +453,7 @@ class MatrixClientService extends ChangeNotifier {
     _disposed = true;
     _roomRefresh?.cancel();
     unawaited(_events.cancel());
+    unawaited(_verification.close());
     super.dispose();
   }
 }

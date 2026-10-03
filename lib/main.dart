@@ -42,6 +42,7 @@ import 'src/models.dart';
 import 'src/platform_bridge.dart';
 import 'src/qr_scan_screen.dart';
 import 'src/ui/matrix_room_screen.dart';
+import 'src/ui/matrix_verification_dialog.dart';
 import 'src/relay_client.dart';
 import 'src/storage.dart';
 import 'src/voice_message_service.dart';
@@ -1398,6 +1399,66 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  StreamSubscription<Map<String, dynamic>>? _matrixVerificationRequests;
+
+  /// Another of the user's Matrix sessions asks to verify this one.
+  Future<void> _handleMatrixVerificationRequest(
+    Map<String, dynamic> event,
+  ) async {
+    final client = widget.controller.matrixClient;
+    final userId = event['userId'];
+    final flowId = event['flowId'];
+    if (event['type'] != 'verification_request' ||
+        client == null ||
+        userId is! String ||
+        flowId is! String ||
+        !mounted) {
+      return;
+    }
+    final accept = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Verification request'),
+        content: Text(
+          'Your Matrix session ${event['fromDevice'] ?? ''} wants to verify '
+          'this one. Accept only if you started it.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Ignore'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Verify'),
+          ),
+        ],
+      ),
+    );
+    if (accept != true || !mounted) return;
+    try {
+      await client.acceptVerification(userId, flowId);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Could not verify: $error')));
+      }
+      return;
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => MatrixVerificationDialog(
+        client: client,
+        userId: userId,
+        flowId: flowId,
+        weStarted: false,
+      ),
+    );
+  }
+
   String? _selectedContactId;
   String? _selectedGroupId;
   bool _lanLobbySelected = false;
@@ -1446,6 +1507,11 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _sidebarWidth = widget.themeController.sidebarWidth;
+    _matrixVerificationRequests = widget
+        .controller
+        .matrixClient
+        ?.verificationEvents
+        .listen(_handleMatrixVerificationRequest);
     widget.controller.addListener(_handleControllerChanged);
     widget.controller.conversationRevision.addListener(
       _handleConversationRevision,
@@ -1562,6 +1628,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     unawaited(_userNoticeSubscription?.cancel());
+    unawaited(_matrixVerificationRequests?.cancel());
     _terminalCallTimer?.cancel();
     widget.controller.removeListener(_handleControllerChanged);
     widget.controller.conversationRevision.removeListener(
@@ -13194,6 +13261,24 @@ class _SettingsDialogState extends State<SettingsDialog> {
     );
   }
 
+  Future<void> _verifyMatrixSession(MatrixClientService client) async {
+    String? flowId;
+    await _run(() async => flowId = await client.verifyOwnSession());
+    final flow = flowId;
+    final userId = client.userId;
+    if (flow == null || userId == null || !mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => MatrixVerificationDialog(
+        client: client,
+        userId: userId,
+        flowId: flow,
+        weStarted: true,
+      ),
+    );
+  }
+
   Future<void> _enterMatrixRecoveryKey(MatrixClientService client) async {
     final input = TextEditingController();
     final key = await showDialog<String>(
@@ -13264,9 +13349,16 @@ class _SettingsDialogState extends State<SettingsDialog> {
                   label: const Text('Set up recovery'),
                 ),
                 OutlinedButton.icon(
-                  onPressed: _busy ? null : () => _enterMatrixRecoveryKey(client),
+                  onPressed: _busy
+                      ? null
+                      : () => _enterMatrixRecoveryKey(client),
                   icon: const Icon(Icons.lock_open_outlined),
                   label: const Text('Enter recovery key'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : () => _verifyMatrixSession(client),
+                  icon: const Icon(Icons.verified_user_outlined),
+                  label: const Text('Verify with another session'),
                 ),
               ],
             ),

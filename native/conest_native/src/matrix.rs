@@ -13,6 +13,11 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
+use futures_util::StreamExt;
+use matrix_sdk::encryption::verification::{
+    SasState, SasVerification, Verification, VerificationRequest, VerificationRequestState,
+};
+use matrix_sdk::ruma::events::key::verification::request::ToDeviceKeyVerificationRequestEvent;
 use matrix_sdk::{
     Client, SessionMeta, SessionTokens,
     attachment::AttachmentConfig,
@@ -132,6 +137,24 @@ fn session_json(client: &Client) -> Result<Value> {
 
 fn install(client: Client) -> Result<()> {
     stop_sync();
+    // Another of the user's sessions asks to verify this one.
+    client.add_event_handler(|event: ToDeviceKeyVerificationRequestEvent| async move {
+        push_event(json!({
+            "type": "verification_request",
+            "userId": event.sender.to_string(),
+            "flowId": event.content.transaction_id.to_string(),
+            "fromDevice": event.content.from_device.to_string(),
+        }));
+    });
+    // Another of the user's sessions asks to verify this one.
+    client.add_event_handler(|event: ToDeviceKeyVerificationRequestEvent| async move {
+        push_event(json!({
+            "type": "verification_request",
+            "userId": event.sender.to_string(),
+            "flowId": event.content.transaction_id.to_string(),
+            "fromDevice": event.content.from_device.to_string(),
+        }));
+    });
     *CLIENT
         .lock()
         .map_err(|_| anyhow!("Matrix client lock poisoned"))? = Some(client);
@@ -356,6 +379,59 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
                 .await?;
             Ok(json!({}))
         }
+        "verify_own_session" => {
+            // Ask another signed-in session of this account to verify us.
+            let client = client()?;
+            let user_id = client.user_id().context("not signed in")?.to_owned();
+            let identity = client
+                .encryption()
+                .get_user_identity(&user_id)
+                .await?
+                .context("set up recovery or cross-signing first")?;
+            let request = identity.request_verification().await?;
+            let flow_id = request.flow_id().to_owned();
+            RUNTIME.spawn(watch_request(request));
+            Ok(json!({"flowId": flow_id}))
+        }
+        "verification_accept" => {
+            let request = verification_request(request).await?;
+            request.accept().await?;
+            RUNTIME.spawn(watch_request(request));
+            Ok(json!({}))
+        }
+        "verification_start_sas" => {
+            let request = verification_request(request).await?;
+            let flow_id = request.flow_id().to_owned();
+            let sas = request
+                .start_sas()
+                .await?
+                .context("the other session does not support emoji verification")?;
+            RUNTIME.spawn(watch_sas(flow_id, sas));
+            Ok(json!({}))
+        }
+        "verification_confirm" | "verification_mismatch" => {
+            let client = client()?;
+            let user_id: OwnedUserId = text(request, "userId")?.parse()?;
+            let verification = client
+                .encryption()
+                .get_verification(&user_id, text(request, "flowId")?)
+                .await
+                .context("unknown verification")?;
+            #[allow(irrefutable_let_patterns)]
+            let Verification::SasV1(sas) = verification else {
+                return Err(anyhow!("not an emoji verification"));
+            };
+            if op == "verification_confirm" {
+                sas.confirm().await?;
+            } else {
+                sas.mismatch().await?;
+            }
+            Ok(json!({}))
+        }
+        "verification_cancel" => {
+            verification_request(request).await?.cancel().await?;
+            Ok(json!({}))
+        }
         "join" => {
             room(&client()?, request)?.join().await?;
             Ok(json!({}))
@@ -379,6 +455,98 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
             Ok(json!({}))
         }
         other => Err(anyhow!("unknown Matrix operation {other}")),
+    }
+}
+
+async fn verification_request(request: &Value) -> Result<VerificationRequest> {
+    let user_id: OwnedUserId = text(request, "userId")?.parse()?;
+    client()?
+        .encryption()
+        .get_verification_request(&user_id, text(request, "flowId")?)
+        .await
+        .context("unknown verification request")
+}
+
+/// Reports a request's progress; when it becomes emoji verification, hands
+/// over to [`watch_sas`].
+async fn watch_request(request: VerificationRequest) {
+    let flow_id = request.flow_id().to_owned();
+    let mut changes = request.changes();
+    while let Some(state) = changes.next().await {
+        match state {
+            VerificationRequestState::Ready { .. } => {
+                push_event(json!({"type": "verification", "flowId": flow_id, "state": "ready"}));
+            }
+            VerificationRequestState::Transitioned { verification } => {
+                match verification {
+                    Verification::SasV1(sas) => {
+                        RUNTIME.spawn(watch_sas(flow_id.clone(), sas));
+                    }
+                    #[allow(unreachable_patterns)]
+                    _ => {}
+                }
+                return;
+            }
+            VerificationRequestState::Done => {
+                push_event(json!({"type": "verification", "flowId": flow_id, "state": "done"}));
+                return;
+            }
+            VerificationRequestState::Cancelled(info) => {
+                push_event(json!({
+                    "type": "verification", "flowId": flow_id, "state": "cancelled",
+                    "reason": info.reason(),
+                }));
+                return;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Emoji verification: accepts one the other side started, then reports
+/// the emojis to compare and the outcome.
+async fn watch_sas(flow_id: String, sas: SasVerification) {
+    if !sas.we_started() {
+        if let Err(error) = sas.accept().await {
+            push_event(json!({
+                "type": "verification", "flowId": flow_id, "state": "cancelled",
+                "reason": format!("{error:#}"),
+            }));
+            return;
+        }
+    }
+    let mut changes = sas.changes();
+    while let Some(state) = changes.next().await {
+        match state {
+            SasState::KeysExchanged { emojis, .. } => {
+                let emojis: Vec<Value> = emojis
+                    .map(|short| {
+                        short
+                            .emojis
+                            .iter()
+                            .map(|emoji| json!({"symbol": emoji.symbol, "description": emoji.description}))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                push_event(json!({
+                    "type": "verification", "flowId": flow_id, "state": "emojis",
+                    "userId": sas.other_user_id().to_string(),
+                    "emojis": emojis,
+                }));
+            }
+            SasState::Done { .. } => {
+                push_event(json!({"type": "verification", "flowId": flow_id, "state": "done"}));
+                return;
+            }
+            SasState::Cancelled(info) => {
+                push_event(json!({
+                    "type": "verification", "flowId": flow_id, "state": "cancelled",
+                    "reason": info.reason(),
+                }));
+                return;
+            }
+            _ => {}
+        }
     }
 }
 
