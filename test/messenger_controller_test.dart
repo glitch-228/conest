@@ -11079,6 +11079,22 @@ void main() {
       // Nothing went through the HTTP carrier's own client.
       expect(server.sent, isEmpty);
 
+      // Revoked on the server (signed out from another Matrix app): the
+      // route goes, and contacts stop offering it (told over the relay).
+      relay.shouldFailStore = (_, _, _, _, _) => false;
+      bobNative.emit({
+        'type': 'sync_error',
+        'error': 'M_UNKNOWN_TOKEN: Invalid access token passed.',
+      });
+      final revoked = DateTime.now().add(const Duration(seconds: 10));
+      while (DateTime.now().isBefore(revoked) &&
+          alice.contacts.single.matrixAddress != null) {
+        await settle([alice, bob]);
+      }
+      expect(bobNative.ops, contains('forget'));
+      expect(bob.matrixStatus?.signedIn, isNot(isTrue));
+      expect(alice.contacts.single.matrixAddress, isNull);
+
       await alice.signOutOfMatrix();
       expect(aliceNative.ops.last, 'logout');
       expect(alice.matrixClient?.signedIn, isFalse);

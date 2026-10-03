@@ -8,6 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 class _FakeApi implements MatrixNativeApi {
   final requests = <(String, Map<String, Object?>)>[];
   final responses = <String, List<Map<String, dynamic>>>{};
+  final failures = <String, List<Object>>{};
+  final gates = <String, Completer<void>>{};
   final _events = StreamController<Map<String, dynamic>>.broadcast();
 
   void respond(String op, Map<String, dynamic> value) =>
@@ -25,6 +27,9 @@ class _FakeApi implements MatrixNativeApi {
     Duration timeout = const Duration(minutes: 2),
   ]) async {
     requests.add((op, parameters));
+    await gates[op]?.future;
+    final failure = failures[op];
+    if (failure != null && failure.isNotEmpty) throw failure.removeAt(0);
     final queued = responses[op];
     if (queued != null && queued.isNotEmpty) {
       return queued.length == 1 ? queued.first : queued.removeAt(0);
@@ -196,12 +201,138 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 10));
     expect(service.state, MatrixClientState.signedOut);
     expect(sessions.last, isNull);
-    expect(api.ops, contains('stop_sync'));
+    expect(api.last('forget'), {'storePath': '/store'});
+  });
+
+  Future<void> signIn() async {
+    api.respond('login_password', {
+      'userId': '@a:x',
+      'deviceId': 'D',
+      'accessToken': 't',
+      'homeserver': 'https://x',
+      'store': 's1',
+    });
+    await service.signInWithPassword(
+      homeserver: 'https://x',
+      user: 'a',
+      password: 'p',
+    );
+  }
+
+  test('an unreachable server keeps the session until forced', () async {
+    await signIn();
+    api.failures['logout'] = [Exception('connection refused')];
+    await expectLater(service.signOut(), throwsException);
+    expect(service.signedIn, isTrue);
+    expect(sessions.last, isNotNull);
+    expect(api.ops, isNot(contains('forget')));
+
+    await service.signOut(force: true);
+    expect(api.last('forget'), {'storePath': '/store'});
+    expect(service.state, MatrixClientState.signedOut);
+    expect(sessions.last, isNull);
+  });
+
+  test('an already revoked token signs out locally', () async {
+    await signIn();
+    api.failures['logout'] = [Exception('M_UNKNOWN_TOKEN: gone')];
+    await service.signOut();
+    expect(api.ops, contains('forget'));
+    expect(service.state, MatrixClientState.signedOut);
+  });
+
+  test('a native side that never resumed is resumed to revoke', () async {
+    await signIn();
+    api.failures['logout'] = [Exception('not signed in to Matrix')];
+    await service.signOut();
+    expect(api.last('restore')['session'], containsPair('userId', '@a:x'));
+    expect(api.ops.where((op) => op == 'logout'), hasLength(2));
+    expect(service.state, MatrixClientState.signedOut);
+  });
+
+  test('media is cached inside the login store', () async {
+    expect(await service.mediaCacheDirectory(), isNull);
+    final root = await Directory.systemTemp.createTemp('conest-media-');
+    addTearDown(() => root.delete(recursive: true));
+    final local = MatrixClientService(
+      api: api,
+      store: () async => (path: root.path, passphrase: 'secret'),
+      onSession: (_) async {},
+    );
+    addTearDown(local.dispose);
+    api.respond('login_password', {
+      'userId': '@a:x',
+      'deviceId': 'D',
+      'accessToken': 't',
+      'homeserver': 'https://x',
+      'store': 's1',
+    });
+    await local.signInWithPassword(
+      homeserver: 'https://x',
+      user: 'a',
+      password: 'p',
+    );
+    final cache = await local.mediaCacheDirectory();
+    expect(cache!.path, '${root.path}/s1/media-cache');
+    expect(await cache.exists(), isTrue);
+  });
+
+  test('tapping your own reaction takes it back', () async {
+    await signIn();
+    api.emit({
+      'type': 'timeline',
+      'roomId': '!r:x',
+      'events': [
+        _message('\$m', 'hi', 1),
+        {
+          'event_id': '\$like',
+          'type': 'm.reaction',
+          'sender': '@a:x',
+          'origin_server_ts': 2,
+          'content': {
+            'm.relates_to': {
+              'rel_type': 'm.annotation',
+              'event_id': '\$m',
+              'key': '👍',
+            },
+          },
+        },
+      ],
+    });
+    await Future<void>.delayed(Duration.zero);
+    await service.toggleReaction('!r:x', '\$m', '👍');
+    expect(api.last('redact'), containsPair('eventId', '\$like'));
+    api.respond('send_raw', {'eventId': '\$love'});
+    await service.toggleReaction('!r:x', '\$m', '❤️');
+    expect(api.last('send_raw')['type'], 'm.reaction');
+  });
+
+  test('a history page that races a sync gap is dropped', () async {
+    api.respond('messages', {
+      'events': [_message('\$1', 'old', 1)],
+      'end': 'stale',
+    });
+    final gate = api.gates['messages'] = Completer<void>();
+    final paging = service.loadOlder('!r:x');
+    api.emit({
+      'type': 'timeline',
+      'roomId': '!r:x',
+      'events': [_message('\$9', 'new', 9)],
+      'limited': true,
+      'prevBatch': 'p8',
+    });
+    await Future<void>.delayed(Duration.zero);
+    gate.complete();
+    await paging;
+    expect(service.timeline('!r:x').items.map((item) => item.body), ['new']);
+    api.gates.remove('messages');
+    await service.loadOlder('!r:x');
+    expect(api.last('messages')['from'], 'p8');
   });
 
   test('browser sign-in waits for the redirect, then finishes', () async {
     api
-      ..respond('oauth_start', {'url': 'https://account.x/authorize?s=1'})
+      ..respond('oauth_start', {'url': 'https://account.x/authorize?state=s'})
       ..respond('oauth_finish', {
         'userId': '@a:x',
         'deviceId': 'D',
@@ -225,7 +356,7 @@ void main() {
         http.close();
       },
     );
-    expect(opened.toString(), 'https://account.x/authorize?s=1');
+    expect(opened.toString(), 'https://account.x/authorize?state=s');
     expect(api.last('oauth_start'), containsPair('deviceId', 'D'));
     expect(
       Uri.parse(

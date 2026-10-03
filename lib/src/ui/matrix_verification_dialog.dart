@@ -35,6 +35,7 @@ class _MatrixVerificationDialogState extends State<MatrixVerificationDialog> {
   String _status = 'Waiting for your other session…';
   bool _finished = false;
   bool _busy = false;
+  bool _confirmed = false;
 
   @override
   void initState() {
@@ -102,7 +103,11 @@ class _MatrixVerificationDialogState extends State<MatrixVerificationDialog> {
       );
       if (!match) _fail('the emojis did not match.');
       if (match && mounted) {
-        setState(() => _status = 'Waiting for your other session to confirm…');
+        // The other side may never confirm: Cancel stays available.
+        setState(() {
+          _confirmed = true;
+          _status = 'Waiting for your other session to confirm…';
+        });
       }
     } catch (error) {
       _fail('$error');
@@ -159,14 +164,14 @@ class _MatrixVerificationDialogState extends State<MatrixVerificationDialog> {
               ],
             ),
           ],
-          if (!_finished && _emojis.isEmpty) ...[
+          if (!_finished && (_emojis.isEmpty || _confirmed)) ...[
             const SizedBox(height: 16),
             const CircularProgressIndicator(),
           ],
         ],
       ),
       actions: [
-        if (_emojis.isNotEmpty && !_finished) ...[
+        if (_emojis.isNotEmpty && !_finished && !_confirmed) ...[
           TextButton(
             onPressed: _busy ? null : () => _answer(match: false),
             child: const Text("They don't match"),

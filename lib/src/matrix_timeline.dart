@@ -59,6 +59,14 @@ class MatrixTimeline {
   final List<MatrixTimelineItem> _items = [];
   final Map<String, MatrixTimelineItem> _byId = {};
 
+  /// The event id of [sender]'s [key] reaction on [eventId], if any.
+  String? reactionEventId(String eventId, String key, String sender) {
+    for (final entry in _reactions.entries) {
+      if (entry.value == (eventId, key, sender)) return entry.key;
+    }
+    return null;
+  }
+
   /// Reaction event id → (target id, key, sender), so a redacted reaction can
   /// be removed again.
   final Map<String, (String, String, String)> _reactions = {};

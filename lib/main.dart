@@ -1415,6 +1415,9 @@ class _HomeScreenState extends State<HomeScreen> {
         !mounted) {
       return;
     }
+    // Only this account's own sessions verify each other here; requests
+    // from other users are left to time out.
+    if (userId != client.userId) return;
     final accept = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1435,7 +1438,13 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
-    if (accept != true || !mounted) return;
+    if (accept != true) {
+      unawaited(
+        client.cancelVerification(userId, flowId).catchError((Object _) {}),
+      );
+      return;
+    }
+    if (!mounted) return;
     try {
       await client.acceptVerification(userId, flowId);
     } catch (error) {
@@ -13200,6 +13209,43 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
   /// Creates the recovery key that unlocks encrypted Matrix history on a
   /// new device, and shows it once.
+  Future<void> _signOutOfMatrix() async {
+    Object? failure;
+    await _run(() async {
+      try {
+        await widget.controller.signOutOfMatrix();
+      } catch (error) {
+        if (widget.controller.matrixClient == null) rethrow;
+        failure = error;
+      }
+    });
+    if (failure == null || !mounted) return;
+    final force = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Server not reached'),
+        content: Text(
+          'Conest could not sign this device out on the server ($failure).\n\n'
+          'Sign out on this device anyway? The session stays valid on the '
+          'server until you remove it from another Matrix app.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep signed in'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Sign out here'),
+          ),
+        ],
+      ),
+    );
+    if (force == true) {
+      await _run(() => widget.controller.signOutOfMatrix(force: true));
+    }
+  }
+
   Future<String?> _askMatrixPassword() async {
     final input = TextEditingController();
     final password = await showDialog<String>(
@@ -13379,9 +13425,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
               '${error == null ? '' : '\nLast error: $error'}',
             ),
             trailing: TextButton(
-              onPressed: _busy
-                  ? null
-                  : () => _run(() => widget.controller.signOutOfMatrix()),
+              onPressed: _busy ? null : _signOutOfMatrix,
               child: const Text('Sign out'),
             ),
           ),

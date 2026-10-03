@@ -60,6 +60,12 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
   void _changed() {
     if (!mounted) return;
     setState(() {});
+    // Timelines are dropped after recovery or verification to decrypt again.
+    if (_client.timeline(widget.roomId).items.isEmpty &&
+        _client.hasOlder(widget.roomId) &&
+        !_loadingOlder) {
+      unawaited(_loadOlder());
+    }
     _markRead();
   }
 
@@ -97,10 +103,12 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
         await _client.sendText(widget.roomId, body, replyTo: _replyTo?.eventId);
       }
       _composer.clear();
-      setState(() {
-        _replyTo = null;
-        _editing = null;
-      });
+      if (mounted) {
+        setState(() {
+          _replyTo = null;
+          _editing = null;
+        });
+      }
     } catch (error) {
       _show('Not sent: $error');
     } finally {
@@ -202,7 +210,7 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
           await _client.redact(widget.roomId, item.eventId);
         default:
           if (choice.startsWith('react:')) {
-            await _client.react(
+            await _client.toggleReaction(
               widget.roomId,
               item.eventId,
               choice.substring(6),
@@ -304,12 +312,9 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
                   palette: palette,
                   onLongPress: () => unawaited(_actions(item)),
                   onReact: (key) => unawaited(
-                    _client.react(widget.roomId, item.eventId, key).catchError((
-                      Object error,
-                    ) {
-                      _show('$error');
-                      return '';
-                    }),
+                    _client
+                        .toggleReaction(widget.roomId, item.eventId, key)
+                        .catchError((Object error) => _show('$error')),
                   ),
                 );
               },
@@ -636,7 +641,8 @@ class _MatrixBubble extends StatelessWidget {
   }
 }
 
-/// Media cache under the temporary directory, keyed by the media reference.
+/// Decrypted media, cached inside the login's own store (private to the
+/// user, removed with the store at sign-out) and keyed by the reference.
 Future<File> _cachedMedia(
   MatrixClientService client,
   Map<String, dynamic> media, {
@@ -648,10 +654,11 @@ Future<File> _cachedMedia(
       .convert('$media|$width|$height'.codeUnits)
       .toString()
       .substring(0, 32);
-  final directory = Directory(
-    '${(await getTemporaryDirectory()).path}/conest-matrix-media',
-  );
-  await directory.create(recursive: true);
+  final directory = await client.mediaCacheDirectory();
+  if (directory == null) throw StateError('Not signed in to Matrix.');
+  if (!Platform.isWindows && !Platform.isAndroid) {
+    await Process.run('chmod', ['700', directory.path]);
+  }
   final file = File('${directory.path}/$key$suffix');
   if (!await file.exists()) {
     await client.download(media, file.path, width: width, height: height);

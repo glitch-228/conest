@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
@@ -169,7 +170,9 @@ class MatrixClientService extends ChangeNotifier {
         'redirectUri': loopback.redirectUri.toString(),
         'deviceId': ?deviceId,
       });
-      await openUrl(Uri.parse(started['url'] as String));
+      final url = Uri.parse(started['url'] as String);
+      loopback.expectStateOf(url);
+      await openUrl(url);
       final callback = await loopback.callback.timeout(
         timeout,
         onTimeout: () =>
@@ -224,20 +227,68 @@ class MatrixClientService extends ChangeNotifier {
     await refreshRooms();
   }
 
-  Future<void> signOut() async {
-    try {
-      await _api.request('logout');
-    } catch (error) {
-      // The local session is dropped either way.
-      _lastError = '$error';
+  /// Revokes this device on the server, then drops it locally. When the
+  /// server cannot be reached the session is kept (it is still valid there)
+  /// and the error is thrown; [force] drops it locally regardless.
+  Future<void> signOut({bool force = false}) async {
+    final store = await _store();
+    final root = {'storePath': store.path};
+    if (force) {
+      await _api.request('forget', root).catchError((Object _) => _none);
+    } else {
+      try {
+        await _api.request('logout', root);
+      } catch (error) {
+        final text = '$error';
+        if (text.contains('M_UNKNOWN_TOKEN')) {
+          // Already revoked: nothing left to do on the server.
+          await _api.request('forget', root).catchError((Object _) => _none);
+        } else if (text.contains('not signed in to Matrix') &&
+            _session != null) {
+          // The native side never resumed (for example the restore at
+          // startup failed); resume it to revoke the token.
+          await _api.request('restore', {
+            ...root,
+            'passphrase': store.passphrase,
+            'session': _session,
+          });
+          await _api.request('logout', root);
+        } else {
+          _lastError = text;
+          _notify();
+          rethrow;
+        }
+      }
     }
+    _clearLocal();
+    await _onSession(null);
+    _setState(MatrixClientState.signedOut);
+  }
+
+  static const Map<String, dynamic> _none = {};
+
+  void _clearLocal() {
     _session = null;
     _rooms.clear();
     _timelines.clear();
     _olderFrom.clear();
     _exhausted.clear();
-    await _onSession(null);
-    _setState(MatrixClientState.signedOut);
+  }
+
+  /// Where decrypted media is cached: inside this login's store, so it goes
+  /// with the store at sign-out and never sits in a shared temp directory.
+  Future<Directory?> mediaCacheDirectory() async {
+    final session = _session;
+    if (session == null) return null;
+    final store = await _store();
+    final name = session['store'] as String? ?? '';
+    final directory = Directory(
+      name.isEmpty
+          ? '${store.path}/media-cache'
+          : '${store.path}/$name/media-cache',
+    );
+    await directory.create(recursive: true);
+    return directory;
   }
 
   Future<void> refreshRooms() async {
@@ -257,6 +308,7 @@ class MatrixClientService extends ChangeNotifier {
   /// the room's history.
   Future<bool> loadOlder(String roomId, {int limit = 30}) async {
     if (_exhausted.contains(roomId)) return false;
+    final before = timeline(roomId);
     final page = await _api.request('messages', {
       'roomId': roomId,
       'limit': limit,
@@ -265,7 +317,10 @@ class MatrixClientService extends ChangeNotifier {
     final events = (page['events'] as List? ?? const [])
         .whereType<Map<String, dynamic>>()
         .toList();
-    timeline(roomId).prependPage(events);
+    // A gap in sync restarted the room meanwhile: this page belongs to the
+    // old timeline, and its token would skip history.
+    if (!identical(before, _timelines[roomId])) return true;
+    before.prependPage(events);
     final end = page['end'] as String?;
     _olderFrom[roomId] = end;
     if (end == null || events.isEmpty) _exhausted.add(roomId);
@@ -290,6 +345,19 @@ class MatrixClientService extends ChangeNotifier {
         'm.new_content': {'msgtype': 'm.text', 'body': body},
         'm.relates_to': {'rel_type': 'm.replace', 'event_id': eventId},
       });
+
+  /// Adds [key] to [eventId], or takes this user's reaction back when it is
+  /// already there.
+  Future<void> toggleReaction(String roomId, String eventId, String key) async {
+    final own = userId == null
+        ? null
+        : timeline(roomId).reactionEventId(eventId, key, userId!);
+    if (own != null) {
+      await redact(roomId, own);
+    } else {
+      await react(roomId, eventId, key);
+    }
+  }
 
   Future<String> react(String roomId, String eventId, String key) async {
     final sent = await _api.request('send_raw', {
@@ -398,8 +466,19 @@ class MatrixClientService extends ChangeNotifier {
 
   /// Unlocks secret storage with a recovery key, restoring encrypted
   /// history keys on this device.
-  Future<void> recover(String recoveryKey) =>
-      _api.request('recover', {'recoveryKey': recoveryKey.trim()});
+  Future<void> recover(String recoveryKey) async {
+    await _api.request('recover', {'recoveryKey': recoveryKey.trim()});
+    resetTimelines();
+  }
+
+  /// Drops loaded timelines so they reload: messages that could not be
+  /// decrypted before recovery or verification can be now.
+  void resetTimelines() {
+    _timelines.clear();
+    _olderFrom.clear();
+    _exhausted.clear();
+    _notify();
+  }
 
   /// Asks another signed-in session of this account to verify this one;
   /// returns the flow id to follow on [verificationEvents].
@@ -496,6 +575,7 @@ class MatrixClientService extends ChangeNotifier {
         if (signedIn) unawaited(_sessionRevoked());
       case 'verification_request' || 'verification':
         _verification.add(event);
+        if (event['state'] == 'done') resetTimelines();
       case 'to_device':
         final payload = event['event'];
         if (payload is Map<String, dynamic>) _onToDevice?.call(payload);
@@ -504,11 +584,10 @@ class MatrixClientService extends ChangeNotifier {
 
   Future<void> _sessionRevoked() async {
     try {
-      await _api.request('stop_sync');
+      final store = await _store();
+      await _api.request('forget', {'storePath': store.path});
     } catch (_) {}
-    _session = null;
-    _rooms.clear();
-    _timelines.clear();
+    _clearLocal();
     await _onSession(null);
     _lastError = 'The Matrix sign-in expired. Sign in again.';
     _setState(MatrixClientState.signedOut);

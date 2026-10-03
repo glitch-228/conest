@@ -8,6 +8,7 @@
 
 use std::{
     collections::VecDeque,
+    path::Path,
     sync::{Condvar, LazyLock, Mutex},
     time::Duration,
 };
@@ -59,9 +60,13 @@ static RUNTIME: LazyLock<Runtime> =
 static CLIENT: LazyLock<Mutex<Option<Client>>> = LazyLock::new(|| Mutex::new(None));
 static SYNC_TASK: LazyLock<Mutex<Option<JoinHandle<()>>>> = LazyLock::new(|| Mutex::new(None));
 static SESSION_TASK: LazyLock<Mutex<Option<JoinHandle<()>>>> = LazyLock::new(|| Mutex::new(None));
-/// A browser sign-in between `oauth_start` and `oauth_finish`.
-static PENDING_OAUTH: LazyLock<Mutex<Option<(Client, CsrfToken)>>> =
+/// A browser sign-in between `oauth_start` and `oauth_finish`, with the
+/// name of the store it opened.
+static PENDING_OAUTH: LazyLock<Mutex<Option<(Client, CsrfToken, String)>>> =
     LazyLock::new(|| Mutex::new(None));
+/// The store of the installed client, relative to the caller's store root.
+/// Empty for a session from before per-login stores (the root itself).
+static STORE_NAME: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
 static EVENTS: LazyLock<(Mutex<VecDeque<String>>, Condvar)> =
     LazyLock::new(|| (Mutex::new(VecDeque::new()), Condvar::new()));
 
@@ -123,13 +128,43 @@ fn text<'a>(request: &'a Value, field: &str) -> Result<&'a str> {
         .with_context(|| format!("missing Matrix field {field}"))
 }
 
-async fn build_client(request: &Value, homeserver: &str) -> Result<Client> {
+/// Each fresh login gets its own store under the root: the crypto store is
+/// bound to one account and device, and a store left by an earlier session
+/// would refuse the new one.
+fn fresh_store(request: &Value) -> Result<String> {
+    let root = Path::new(text(request, "storePath")?);
+    let name = format!("s{}", TransactionId::new());
+    std::fs::create_dir_all(root.join(&name))?;
+    Ok(name)
+}
+
+/// Removes every store under the root except `keep`. Best effort: a store
+/// still open on some platforms is retried at the next login.
+fn prune_stores(request: &Value, keep: &str) {
+    let Ok(root) = text(request, "storePath") else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name().to_str() == Some(keep) {
+            continue;
+        }
+        let path = entry.path();
+        let _ = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+    }
+}
+
+async fn build_client(request: &Value, homeserver: &str, store: &str) -> Result<Client> {
+    let path = Path::new(text(request, "storePath")?).join(store);
     Ok(Client::builder()
         .homeserver_url(homeserver)
-        .sqlite_store(
-            text(request, "storePath")?,
-            Some(text(request, "passphrase")?),
-        )
+        .sqlite_store(path, Some(text(request, "passphrase")?))
         .handle_refresh_tokens()
         .build()
         .await?)
@@ -145,6 +180,9 @@ fn session_json(client: &Client) -> Result<Value> {
         "accessToken": tokens.access_token,
         "refreshToken": tokens.refresh_token,
     });
+    if let Ok(store) = STORE_NAME.lock() {
+        session["store"] = json!(*store);
+    }
     // Browser sign-ins also need the registered client to refresh tokens.
     if let Some(client_id) = client.oauth().client_id().map(|id| id.as_str().to_owned()) {
         session["oauthClientId"] = json!(client_id);
@@ -166,8 +204,11 @@ fn oauth_registration(redirect_uri: &Url) -> Result<ClientRegistrationData> {
     Ok(Raw::new(&metadata)?.into())
 }
 
-fn install(client: Client) -> Result<()> {
+fn install(client: Client, store: String) -> Result<()> {
     stop_sync();
+    *STORE_NAME
+        .lock()
+        .map_err(|_| anyhow!("Matrix store lock poisoned"))? = store;
     // Another of the user's sessions asks to verify this one.
     client.add_event_handler(|event: ToDeviceKeyVerificationRequestEvent| async move {
         push_event(json!({
@@ -219,8 +260,30 @@ fn replace_task(slot: &Mutex<Option<JoinHandle<()>>>, next: Option<JoinHandle<()
     }
 }
 
-fn take_pending_oauth() -> Option<(Client, CsrfToken)> {
+fn take_pending_oauth() -> Option<(Client, CsrfToken, String)> {
     PENDING_OAUTH.lock().ok()?.take()
+}
+
+/// Drops the installed client and deletes its store: after a sign-out, a
+/// revoked session, or when the user gives up on an unreachable server.
+async fn forget(request: &Value) {
+    stop_sync();
+    replace_task(&SESSION_TASK, None);
+    if let Some((pending, state, _)) = take_pending_oauth() {
+        pending.oauth().abort_login(&state).await;
+    }
+    if let Ok(mut client) = CLIENT.lock() {
+        *client = None;
+    }
+    let store = STORE_NAME
+        .lock()
+        .map(|mut name| std::mem::take(&mut *name))
+        .unwrap_or_default();
+    if !store.is_empty() {
+        if let Ok(root) = text(request, "storePath") {
+            let _ = std::fs::remove_dir_all(Path::new(root).join(store));
+        }
+    }
 }
 
 fn room(client: &Client, request: &Value) -> Result<matrix_sdk::Room> {
@@ -244,7 +307,8 @@ async fn room_summary(room: &matrix_sdk::Room, invited: bool) -> Value {
 async fn run(op: &str, request: &Value) -> Result<Value> {
     match op {
         "login_password" => {
-            let client = build_client(request, text(request, "homeserver")?).await?;
+            let store = fresh_store(request)?;
+            let client = build_client(request, text(request, "homeserver")?, &store).await?;
             let mut login = client
                 .matrix_auth()
                 .login_username(text(request, "user")?, text(request, "password")?)
@@ -253,15 +317,16 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
                 login = login.device_id(device_id);
             }
             login.send().await?;
-            let session = session_json(&client)?;
-            install(client)?;
-            Ok(session)
+            install(client, store.clone())?;
+            prune_stores(request, &store);
+            session_json(&client()?)
         }
         "oauth_start" => {
-            if let Some((pending, state)) = take_pending_oauth() {
+            if let Some((pending, state, _)) = take_pending_oauth() {
                 pending.oauth().abort_login(&state).await;
             }
-            let client = build_client(request, text(request, "homeserver")?).await?;
+            let store = fresh_store(request)?;
+            let client = build_client(request, text(request, "homeserver")?, &store).await?;
             let redirect_uri = Url::parse(text(request, "redirectUri")?)?;
             let device_id = request["deviceId"].as_str().map(OwnedDeviceId::from);
             let registration = oauth_registration(&redirect_uri)?;
@@ -273,26 +338,28 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
             *PENDING_OAUTH
                 .lock()
                 .map_err(|_| anyhow!("Matrix sign-in lock poisoned"))? =
-                Some((client, authorization.state));
+                Some((client, authorization.state, store));
             Ok(json!({"url": authorization.url.to_string()}))
         }
         "oauth_finish" => {
-            let (client, _) = take_pending_oauth().context("no browser sign-in in progress")?;
+            let (client, _, store) =
+                take_pending_oauth().context("no browser sign-in in progress")?;
             let callback = Url::parse(text(request, "callbackUrl")?)?;
             client.oauth().finish_login(callback.into()).await?;
-            let session = session_json(&client)?;
-            install(client)?;
-            Ok(session)
+            install(client, store.clone())?;
+            prune_stores(request, &store);
+            session_json(&client()?)
         }
         "oauth_abort" => {
-            if let Some((pending, state)) = take_pending_oauth() {
+            if let Some((pending, state, _)) = take_pending_oauth() {
                 pending.oauth().abort_login(&state).await;
             }
             Ok(json!({}))
         }
         "restore" => {
             let session = &request["session"];
-            let client = build_client(request, text(session, "homeserver")?).await?;
+            let store = session["store"].as_str().unwrap_or_default().to_owned();
+            let client = build_client(request, text(session, "homeserver")?, &store).await?;
             let user_id: OwnedUserId = text(session, "userId")?.parse()?;
             let device_id: OwnedDeviceId = text(session, "deviceId")?.into();
             let meta = SessionMeta { user_id, device_id };
@@ -311,17 +378,14 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
             client
                 .restore_session_with(auth, RoomLoadSettings::default())
                 .await?;
-            let restored = session_json(&client)?;
-            install(client)?;
-            Ok(restored)
+            install(client, store)?;
+            session_json(&client()?)
         }
         "start_sync" => {
-            let client = client()?;
-            stop_sync();
-            let handle = RUNTIME.spawn(sync_loop(client));
-            *SYNC_TASK
-                .lock()
-                .map_err(|_| anyhow!("Matrix sync lock poisoned"))? = Some(handle);
+            // Replacing aborts the previous loop: two overlapping starts must
+            // not leave a detached loop delivering every event twice.
+            let handle = RUNTIME.spawn(sync_loop(client()?));
+            replace_task(&SYNC_TASK, Some(handle));
             Ok(json!({}))
         }
         "stop_sync" => {
@@ -419,7 +483,11 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
                 .media()
                 .get_media_content(&MediaRequestParameters { source, format }, true)
                 .await?;
-            tokio::fs::write(text(request, "path")?, &data).await?;
+            // Written aside and renamed, so a partial file never looks done.
+            let path = text(request, "path")?;
+            let partial = format!("{path}.part");
+            tokio::fs::write(&partial, &data).await?;
+            tokio::fs::rename(&partial, path).await?;
             Ok(json!({"bytes": data.len()}))
         }
         "send_to_device" => {
@@ -576,13 +644,14 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
             Ok(json!({"roomId": room.room_id().to_string()}))
         }
         "logout" => {
-            stop_sync();
-            replace_task(&SESSION_TASK, None);
-            let client = client()?;
-            *CLIENT
-                .lock()
-                .map_err(|_| anyhow!("Matrix client lock poisoned"))? = None;
-            client.logout().await?;
+            // The local session goes only once the server has revoked it;
+            // otherwise the caller still holds a token it can retry with.
+            client()?.logout().await?;
+            forget(request).await;
+            Ok(json!({}))
+        }
+        "forget" => {
+            forget(request).await;
             Ok(json!({}))
         }
         other => Err(anyhow!("unknown Matrix operation {other}")),

@@ -20,6 +20,13 @@ class MatrixOAuthLoopback {
 
   final HttpServer _server;
   final _callback = Completer<Uri>();
+  String? _state;
+
+  /// Only a redirect carrying the `state` of [authorizationUrl] counts, so
+  /// another local process or a web page probing ports cannot end the
+  /// sign-in with a forged error.
+  void expectStateOf(Uri authorizationUrl) =>
+      _state = authorizationUrl.queryParameters['state'];
 
   Uri get redirectUri => Uri.parse('http://127.0.0.1:${_server.port}$_path');
 
@@ -42,6 +49,8 @@ class MatrixOAuthLoopback {
     final isCallback =
         request.method == 'GET' &&
         request.uri.path == _path &&
+        _state != null &&
+        query['state'] == _state &&
         (query.containsKey('code') || query.containsKey('error'));
     if (!isCallback || _callback.isCompleted) {
       response.statusCode = HttpStatus.notFound;

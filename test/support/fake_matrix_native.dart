@@ -21,6 +21,9 @@ class FakeMatrixNative implements MatrixNativeApi {
   @override
   Stream<Map<String, dynamic>> get events => _events.stream;
 
+  /// Delivers a native event, as the sync loop would.
+  void emit(Map<String, dynamic> event) => _events.add(event);
+
   @override
   Future<Map<String, dynamic>> request(
     String op, [

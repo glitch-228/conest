@@ -18,6 +18,7 @@ void main() {
   test('the browser redirect completes the callback once', () async {
     final loopback = await MatrixOAuthLoopback.bind();
     addTearDown(loopback.close);
+    loopback.expectStateOf(Uri.parse('https://account.x/authorize?state=s1'));
     expect(loopback.redirectUri.host, '127.0.0.1');
     expect(loopback.redirectUri.path, '/callback');
 
@@ -27,6 +28,13 @@ void main() {
     expect(stray.$1, 404);
     final empty = await _get(loopback.redirectUri);
     expect(empty.$1, 404);
+    // A forged redirect without the sign-in's state is ignored.
+    final forged = await _get(
+      loopback.redirectUri.replace(
+        queryParameters: {'error': 'access_denied', 'state': 'other'},
+      ),
+    );
+    expect(forged.$1, 404);
 
     final redirect = loopback.redirectUri.replace(
       queryParameters: {'code': 'abc', 'state': 's1'},
@@ -49,6 +57,7 @@ void main() {
   test('an error redirect is handed on for the SDK to report', () async {
     final loopback = await MatrixOAuthLoopback.bind();
     addTearDown(loopback.close);
+    loopback.expectStateOf(Uri.parse('https://account.x/authorize?state=s'));
     final page = await _get(
       loopback.redirectUri.replace(
         queryParameters: {'error': 'access_denied', 'state': 's'},

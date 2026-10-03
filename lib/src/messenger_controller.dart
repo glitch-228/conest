@@ -21970,12 +21970,20 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _storeMatrixClientSession(Map<String, dynamic>? session) async {
+    final hadSession = _snapshot.matrixSession != null;
     _snapshot = session == null
         ? _snapshot.copyWith(clearMatrixSession: true)
         : _snapshot
               .copyWith(clearMatrixSession: true)
               .copyWith(matrixSession: session);
     await _saveSnapshotSilently(notify: true);
+    if (session == null && hadSession) {
+      // Signed out or revoked on the server: the carrier route goes too,
+      // and contacts stop offering it.
+      _matrixTransport?.detach();
+      await _detachMatrixTransport();
+      _advertiseProfileToContacts();
+    }
   }
 
   /// Resumes the stored Matrix device in the full client at startup (also
@@ -22092,13 +22100,15 @@ class MessengerController extends ChangeNotifier {
     _advertiseProfileToContacts();
   }
 
-  /// Signs the Conest Matrix device out and stops using the route.
-  Future<void> signOutOfMatrix() async {
+  /// Signs the Conest Matrix device out and stops using the route. With the
+  /// full client an unreachable server keeps the session (it is still valid
+  /// there) unless [force] drops it on this device anyway.
+  Future<void> signOutOfMatrix({bool force = false}) async {
     final matrix = _matrixTransport;
     final client = _matrixClient;
     if (client != null) {
+      await client.signOut(force: force);
       matrix?.detach();
-      await client.signOut();
     } else if (matrix != null) {
       try {
         await matrix.signOut();
