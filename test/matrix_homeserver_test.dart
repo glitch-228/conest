@@ -133,6 +133,9 @@ class _PlainSealer implements MatrixCarrierSealer {
   final String sender;
 
   @override
+  bool acceptsSender(String senderUserId) => true;
+
+  @override
   Future<Uint8List> seal(String peerDeviceId, Uint8List envelope) async =>
       envelope;
 

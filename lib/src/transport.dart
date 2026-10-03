@@ -190,6 +190,8 @@ class TransportRegistry {
   /// Matrix after sign-in). The caller starts it.
   void register(TransportAdapter adapter) => _adapters[adapter.kind] = adapter;
 
+  TransportAdapter? unregister(TransportKind kind) => _adapters.remove(kind);
+
   Future<void> start() => Future.wait(_adapters.values.map((a) => a.start()));
   Future<void> stop() => Future.wait(_adapters.values.map((a) => a.stop()));
 
@@ -259,7 +261,11 @@ class TransportRegistry {
             .sendEnvelope(peer: peer, route: route, envelope: envelope)
             .timeout(
               attemptTimeout ??
-                  (route.transport == TransportKind.iroh
+                  // Matrix sends several frames in sequence and may wait out
+                  // a short rate limit; a cut-off attempt would keep sending
+                  // in the background while the caller falls back.
+                  (route.transport == TransportKind.iroh ||
+                          route.transport == TransportKind.matrix
                       ? const Duration(seconds: 60)
                       : const Duration(seconds: 4)),
             );

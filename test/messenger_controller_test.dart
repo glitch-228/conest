@@ -10973,8 +10973,14 @@ void main() {
       }
     }
 
-    Future<(MessengerController, MessengerController, FakeHomeserver,
-        _FakeRelayClient)>
+    Future<
+      (
+        MessengerController,
+        MessengerController,
+        FakeHomeserver,
+        _FakeRelayClient,
+      )
+    >
     linkedPair() async {
       final server = await FakeHomeserver.start();
       addTearDown(server.close);
@@ -11026,7 +11032,10 @@ void main() {
       final (alice, bob, server, relay) = await linkedPair();
       relay.shouldFailStore = (_, _, _, _, _) => true;
       final before = server.sent.length;
-      await alice.sendMessage(contact: alice.contacts.single, body: 'via matrix');
+      await alice.sendMessage(
+        contact: alice.contacts.single,
+        body: 'via matrix',
+      );
       final aliceId = alice.identity!.deviceId;
       final deadline = DateTime.now().add(const Duration(seconds: 10));
       while (DateTime.now().isBefore(deadline) &&
@@ -11050,6 +11059,67 @@ void main() {
         expect(raw, isNot(contains('via matrix')));
         expect(raw, isNot(contains('direct_message')));
       }
+    });
+
+    test('nothing is fetched or acknowledged while Online is off', () async {
+      final (alice, bob, server, relay) = await linkedPair();
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      final aliceAddress = MatrixAddress.decode(
+        bob.contacts.single.matrixAddress,
+      )!;
+      await alice.updateGlobalConnectivity(
+        alice.identity!.connectivity.copyWith(onlineEnabled: false),
+      );
+      expect(alice.matrixStatus?.signedIn, isTrue);
+      await bob.sendMessage(contact: bob.contacts.single, body: 'held');
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      expect(
+        server.pendingFor(aliceAddress.userId, aliceAddress.deviceId),
+        greaterThan(0),
+        reason: 'the homeserver keeps it until Alice syncs again',
+      );
+      final bobId = bob.identity!.deviceId;
+      expect(
+        alice.messagesFor(bobId).map((m) => m.body),
+        isNot(contains('held')),
+      );
+      await alice.updateGlobalConnectivity(
+        alice.identity!.connectivity.copyWith(onlineEnabled: true),
+      );
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (DateTime.now().isBefore(deadline) &&
+          !alice.messagesFor(bobId).any((m) => m.body == 'held')) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(alice.messagesFor(bobId).map((m) => m.body), contains('held'));
+    });
+
+    test('a late older exchange cannot roll back the Matrix address', () async {
+      final (alice, bob, _, _) = await linkedPair();
+      final address = alice.contacts.single.matrixAddress;
+      expect(address, isNotNull);
+      final me = bob.identity!;
+      final aliceOnBob = bob.contacts.single;
+      final staticOnly = CryptoService(identityProvider: () => me);
+      final stale = await staticOnly.encryptPayloadEnvelope(
+        kind: 'contact_exchange',
+        messageId: 'stale-xchg',
+        conversationId: 'contact-exchange-${aliceOnBob.deviceId}',
+        senderAccountId: me.accountId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: aliceOnBob.deviceId,
+        contact: aliceOnBob,
+        plaintext: jsonEncode({
+          'exchangeVersion': 2,
+          'invitePayload': (await bob.buildInvite()).encodePayload(),
+          'featureCapabilityVersion': 1,
+          'featureCapabilities': ['groupPollsV1'],
+          'requestPeerCapabilities': false,
+        }),
+        createdAt: DateTime.now().toUtc().subtract(const Duration(hours: 1)),
+      );
+      await alice.processEnvelopesForTesting([stale]);
+      expect(alice.contacts.single.matrixAddress, address);
     });
 
     test('signing out clears the address at the contact', () async {
@@ -11389,72 +11459,77 @@ void main() {
       );
     });
 
-    test('groups mix ratchet and static members, including non-contacts',
-        () async {
-      final relay = _FakeRelayClient();
-      final alice = await ratchetController(relay, 'Alice');
-      final bob = await ratchetController(relay, 'Bob');
-      final carol = await ratchetController(relay, 'Carol', ratchet: false);
-      final dave = await ratchetController(relay, 'Dave');
-      for (final controller in [alice, bob, carol, dave]) {
-        addTearDown(controller.dispose);
-      }
-      await _pairControllers(alice, bob);
-      await _pairControllers(alice, carol);
-      await _pairControllers(alice, dave);
-      final group = await alice.createGroup(
-        title: 'Mixed',
-        members: alice.contacts,
-      );
-      final everyone = [alice, bob, carol, dave];
-      await settle(everyone);
-      final bobId = bob.identity!.deviceId;
-      final daveId = dave.identity!.deviceId;
-      expect(bob.contacts.where((c) => c.deviceId == daveId), isEmpty);
-      // Bob and Dave share only the group, yet still open a session.
-      final deadline = DateTime.now().add(const Duration(seconds: 20));
-      while (DateTime.now().isBefore(deadline) &&
-          !(await bob.hasRatchetSessionForTesting(daveId) &&
-              await dave.hasRatchetSessionForTesting(bobId))) {
-        await settle(everyone, rounds: 1);
-      }
-      expect(await bob.hasRatchetSessionForTesting(daveId), isTrue);
-      expect(await dave.hasRatchetSessionForTesting(bobId), isTrue);
-
-      final before = relay.storedEnvelopes.length;
-      await bob.sendGroupMessage(groupId: group.groupId, body: 'from bob');
-      await settle(everyone);
-      for (final member in [alice, carol, dave]) {
-        expect(
-          member.messagesForGroup(group.groupId).map((m) => m.body),
-          contains('from bob'),
-          reason: '${member.identity!.displayName} receives the message',
+    test(
+      'groups mix ratchet and static members, including non-contacts',
+      () async {
+        final relay = _FakeRelayClient();
+        final alice = await ratchetController(relay, 'Alice');
+        final bob = await ratchetController(relay, 'Bob');
+        final carol = await ratchetController(relay, 'Carol', ratchet: false);
+        final dave = await ratchetController(relay, 'Dave');
+        for (final controller in [alice, bob, carol, dave]) {
+          addTearDown(controller.dispose);
+        }
+        await _pairControllers(alice, bob);
+        await _pairControllers(alice, carol);
+        await _pairControllers(alice, dave);
+        final group = await alice.createGroup(
+          title: 'Mixed',
+          members: alice.contacts,
         );
-      }
-      final carolId = carol.identity!.deviceId;
-      final fromBob = relay.storedEnvelopes
-          .skip(before)
-          .where(
-            (envelope) =>
-                envelope.kind == 'group_message' &&
-                envelope.senderDeviceId == bobId,
-          )
-          .toList();
-      expect(
-        fromBob
-            .where((envelope) => envelope.recipientDeviceId == carolId)
-            .map((envelope) => envelope.protocolVersion)
-            .toSet(),
-        {2},
-      );
-      expect(
-        fromBob
-            .where((envelope) => envelope.recipientDeviceId == daveId)
-            .map((envelope) => envelope.protocolVersion)
-            .toSet(),
-        {3},
-      );
-    });
+        final everyone = [alice, bob, carol, dave];
+        await settle(everyone);
+        final bobId = bob.identity!.deviceId;
+        final daveId = dave.identity!.deviceId;
+        expect(bob.contacts.where((c) => c.deviceId == daveId), isEmpty);
+        // Bob and Dave share only the group, yet still open a session. A
+        // first offer can arrive before the group does; re-offers start at
+        // ten seconds.
+        final deadline = DateTime.now().add(const Duration(seconds: 40));
+        while (DateTime.now().isBefore(deadline) &&
+            !(await bob.hasRatchetSessionForTesting(daveId) &&
+                await dave.hasRatchetSessionForTesting(bobId))) {
+          await settle(everyone, rounds: 1);
+        }
+        expect(await bob.hasRatchetSessionForTesting(daveId), isTrue);
+        expect(await dave.hasRatchetSessionForTesting(bobId), isTrue);
+
+        final before = relay.storedEnvelopes.length;
+        await bob.sendGroupMessage(groupId: group.groupId, body: 'from bob');
+        await settle(everyone);
+        for (final member in [alice, carol, dave]) {
+          expect(
+            member.messagesForGroup(group.groupId).map((m) => m.body),
+            contains('from bob'),
+            reason: '${member.identity!.displayName} receives the message',
+          );
+        }
+        final carolId = carol.identity!.deviceId;
+        final fromBob = relay.storedEnvelopes
+            .skip(before)
+            .where(
+              (envelope) =>
+                  envelope.kind == 'group_message' &&
+                  envelope.senderDeviceId == bobId,
+            )
+            .toList();
+        expect(
+          fromBob
+              .where((envelope) => envelope.recipientDeviceId == carolId)
+              .map((envelope) => envelope.protocolVersion)
+              .toSet(),
+          {2},
+        );
+        expect(
+          fromBob
+              .where((envelope) => envelope.recipientDeviceId == daveId)
+              .map((envelope) => envelope.protocolVersion)
+              .toSet(),
+          {3},
+        );
+      },
+      timeout: const Timeout(Duration(seconds: 90)),
+    );
 
     test('a cached plaintext never serves a rewritten header', () async {
       final relay = _FakeRelayClient();

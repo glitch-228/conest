@@ -1597,6 +1597,7 @@ class ContactRecord {
     this.signingPublicKeyBase64,
     this.irohEndpointId,
     this.matrixAddress,
+    this.matrixAddressAt,
     this.capabilities = const <TransportKind>[],
     this.featureCapabilities = const <ApplicationCapability>[],
     this.featureCapabilityVersion = 0,
@@ -1624,6 +1625,10 @@ class ContactRecord {
   /// The contact's Conest Matrix device as `userId|deviceId`, learned from
   /// its authenticated contact exchange. Null when it has not linked Matrix.
   final String? matrixAddress;
+
+  /// Creation time of the exchange that last set or cleared
+  /// [matrixAddress]; older exchanges arriving late are ignored.
+  final DateTime? matrixAddressAt;
   final List<TransportKind> capabilities;
   final List<ApplicationCapability> featureCapabilities;
   final int featureCapabilityVersion;
@@ -1703,6 +1708,7 @@ class ContactRecord {
     String? irohEndpointId,
     String? matrixAddress,
     bool clearMatrixAddress = false,
+    DateTime? matrixAddressAt,
     List<TransportKind>? capabilities,
     List<ApplicationCapability>? featureCapabilities,
     int? featureCapabilityVersion,
@@ -1745,6 +1751,7 @@ class ContactRecord {
       matrixAddress: clearMatrixAddress
           ? null
           : matrixAddress ?? this.matrixAddress,
+      matrixAddressAt: matrixAddressAt ?? this.matrixAddressAt,
       capabilities: capabilities ?? this.capabilities,
       featureCapabilities: featureCapabilities ?? this.featureCapabilities,
       featureCapabilityVersion:
@@ -1844,6 +1851,8 @@ class ContactRecord {
         'signingPublicKeyBase64': signingPublicKeyBase64,
       if (irohEndpointId != null) 'irohEndpointId': irohEndpointId,
       if (matrixAddress != null) 'matrixAddress': matrixAddress,
+      if (matrixAddressAt != null)
+        'matrixAddressAt': matrixAddressAt!.toUtc().toIso8601String(),
       if (capabilities.isNotEmpty)
         'capabilities': capabilities.map((entry) => entry.name).toList(),
       if (featureCapabilityVersion > 0) ...{
@@ -1928,6 +1937,9 @@ class ContactRecord {
       signingPublicKeyBase64: json['signingPublicKeyBase64'] as String?,
       irohEndpointId: json['irohEndpointId'] as String?,
       matrixAddress: json['matrixAddress'] as String?,
+      matrixAddressAt: DateTime.tryParse(
+        json['matrixAddressAt'] as String? ?? '',
+      )?.toUtc(),
       capabilities: (json['capabilities'] as List<dynamic>? ?? const [])
           .whereType<String>()
           .map(

@@ -492,10 +492,12 @@ class MessengerController extends ChangeNotifier {
   late final CryptoService _crypto;
   final RatchetEngine? _ratchetEngine;
   final bool _matrixCarrierEnabled;
+  StreamSubscription<TransportInboundEnvelope>? _matrixInboundSubscription;
   final MatrixHttp Function()? _matrixHttpFactory;
   MatrixTransportAdapter? _matrixTransport;
   RatchetSessions? _ratchet;
   final Map<String, DateTime> _ratchetBundleSentAt = {};
+  final Map<String, int> _ratchetBundleAttempts = {};
   final Map<String, DateTime> _bulkKeyAnnouncedAt = {};
   static const Duration _ratchetBundleInterval = Duration(minutes: 10);
   late final ReachabilityTracker _reachability;
@@ -3247,6 +3249,9 @@ class MessengerController extends ChangeNotifier {
     _groupFileSessions.clear();
     _groupFileLastStates.clear();
     _groupFileReservations.clear();
+    // Stop Matrix before dropping listeners: a batch it hands on must have a
+    // listener, or it would be acknowledged and lost.
+    await _matrixTransport?.stop();
     for (final subscription in _transportInboundSubscriptions) {
       await subscription.cancel();
     }
@@ -3260,10 +3265,32 @@ class MessengerController extends ChangeNotifier {
 
   /// Joins the Matrix carrier to the transport registry when a session is
   /// stored, creating a Matrix-only registry if native Iroh is unavailable.
+  bool get _matrixAllowed {
+    final global = _snapshot.identity?.connectivity;
+    return global != null &&
+        global.onlineEnabled &&
+        global.policyFor(TransportKind.matrix) != TransportPolicy.disabled;
+  }
+
+  /// Takes Matrix out of the registry and stops syncing, so nothing is
+  /// fetched (and acknowledged) while Matrix is off or signed out.
+  Future<void> _detachMatrixTransport() async {
+    final matrix = _matrixTransport;
+    if (matrix == null) return;
+    await matrix.stop();
+    final registry = _transportRegistry;
+    if (registry?.adapterFor(TransportKind.matrix) != null) {
+      registry!.unregister(TransportKind.matrix);
+      if (registry.adapters.isEmpty) _transportRegistry = null;
+    }
+  }
+
   Future<void> _attachMatrixTransport() async {
     final matrix = _matrixTransport;
     final session = MatrixSession.tryFromJson(_snapshot.matrixSession);
-    if (matrix == null || session == null || _snapshot.identity == null) {
+    if (matrix == null) return;
+    if (session == null || _snapshot.identity == null || !_matrixAllowed) {
+      await _detachMatrixTransport();
       return;
     }
     if (matrix.session == null) {
@@ -3274,15 +3301,13 @@ class MessengerController extends ChangeNotifier {
     );
     if (registry.adapterFor(TransportKind.matrix) == null) {
       registry.register(matrix);
-      _transportInboundSubscriptions.add(
-        matrix.inboundEnvelopes.listen(
-          _handleTransportInbound,
-          onError: (Object error, StackTrace stackTrace) {
-            appendDebugLog('Matrix inbound transport failed: $error');
-          },
-        ),
-      );
     }
+    _matrixInboundSubscription ??= matrix.inboundEnvelopes.listen(
+      _handleTransportInbound,
+      onError: (Object error, StackTrace stackTrace) {
+        appendDebugLog('Matrix inbound transport failed: $error');
+      },
+    );
     await matrix.start();
   }
 
@@ -5508,11 +5533,18 @@ class MessengerController extends ChangeNotifier {
         !listEquals(me.connectivity.irohRelayUrls, prefs.irohRelayUrls) ||
         me.connectivity.policyFor(TransportKind.iroh) !=
             prefs.policyFor(TransportKind.iroh);
+    final matrixPolicyChanged =
+        me.connectivity.policyFor(TransportKind.matrix) !=
+        prefs.policyFor(TransportKind.matrix);
     _snapshot = _snapshot.copyWith(identity: me.copyWith(connectivity: prefs));
     if (restartNative) {
       await _stopTransportRegistry();
     }
     await _applyGlobalConnectivityState();
+    if (matrixPolicyChanged && _snapshot.matrixSession != null) {
+      // Contacts learn whether to address this device over Matrix.
+      _advertiseProfileToContacts();
+    }
     _markRuntimeActivity();
     final label = switch ((prefs.lanEnabled, prefs.onlineEnabled)) {
       (true, true) => 'Connectivity: LAN and Online enabled.',
@@ -5603,9 +5635,25 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final contacts = List<ContactRecord>.from(_snapshot.contacts);
+    final global = _snapshot.identity?.connectivity;
+    final matrixBefore = global == null
+        ? null
+        : contacts[index].routing.effectivePolicy(TransportKind.matrix, global);
     contacts[index] = contacts[index].copyWith(routing: prefs);
     _snapshot = _snapshot.copyWith(contacts: contacts);
     await _persist('Routing preferences updated for ${contacts[index].alias}.');
+    if (global != null &&
+        _snapshot.matrixSession != null &&
+        prefs.effectivePolicy(TransportKind.matrix, global) != matrixBefore &&
+        contacts[index].canSendOutbound) {
+      // The contact learns whether to address this device over Matrix.
+      unawaited(
+        _sendReciprocalContactExchange(
+          contacts[index],
+          recipientKnowsIdentity: true,
+        ).then<void>((_) {}).catchError((Object _) {}),
+      );
+    }
   }
 
   /// Reconciles runtime listeners + loops with the current global connectivity
@@ -10965,7 +11013,14 @@ class MessengerController extends ChangeNotifier {
       'requestPeerCapabilities': requestPeerCapabilities,
       if (pairingResponse != null) 'pairingResponse': pairingResponse,
       // Only peers that already know this identity read it (authenticated).
-      if (recipientKnowsIdentity && _ownMatrixAddress != null)
+      if (recipientKnowsIdentity &&
+          _ownMatrixAddress != null &&
+          _matrixAllowed &&
+          contact.routing.effectivePolicy(
+                TransportKind.matrix,
+                me.connectivity,
+              ) !=
+              TransportPolicy.disabled)
         'matrixAddress': _ownMatrixAddress!.toJson(),
     });
     final payloads = pairingResponse == null
@@ -15795,12 +15850,18 @@ class MessengerController extends ChangeNotifier {
       if (updated != null && featureCapabilityVersion >= 1) {
         unawaited(_syncRatchetWithCapabilities(updated));
       }
+      final addressAt = envelope.createdAt.toUtc();
+      final knownAt = updated?.matrixAddressAt;
       if (updated != null &&
           matrixAddressAdvertised &&
+          (knownAt == null || addressAt.isAfter(knownAt)) &&
           updated.matrixAddress != peerMatrixAddress) {
+        // Only a newer exchange may move or clear the address, so one
+        // arriving late over another route cannot roll it back.
         updated = updated.copyWith(
           matrixAddress: peerMatrixAddress,
           clearMatrixAddress: peerMatrixAddress == null,
+          matrixAddressAt: addressAt,
         );
         _replaceContactRecord(updated);
         await _saveSnapshotSilently(notify: true);
@@ -19119,13 +19180,16 @@ class MessengerController extends ChangeNotifier {
     }
     final result = await registry.deliverEnvelope(
       peer: _transportPeerForContact(contact, allowRelay: allowRelay),
+      // File chunks stay on LAN/Iroh: Matrix carries messages only.
+      policies: _isHighFrequencyTransferEnvelope(envelope)
+          ? {...policies, TransportKind.matrix: TransportPolicy.disabled}
+          : policies,
       envelope: TransportEnvelope(
         id: envelope.messageId,
         recipientDeviceId: envelope.recipientDeviceId,
         bytes: Uint8List.fromList(utf8.encode(jsonEncode(envelope.toJson()))),
         createdAt: envelope.createdAt,
       ),
-      policies: policies,
     );
     return _DeliveryRoute.transport(result.receipt);
   }
@@ -21465,6 +21529,21 @@ class MessengerController extends ChangeNotifier {
     return false;
   }
 
+  /// No capability list has been seen for this identity yet.
+  bool _ratchetCapabilityUnknown(ContactRecord peer) {
+    final contact = _contactByDeviceId(peer.deviceId);
+    if (contact != null) return contact.featureCapabilityVersion < 1;
+    for (final group in _snapshot.groups) {
+      final profile = group.memberProfileFor(peer.deviceId);
+      if (profile != null &&
+          profile.publicKeyBase64 == peer.publicKeyBase64 &&
+          profile.featureCapabilityVersion >= 1) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   /// The pairwise identity for [deviceId]: an approved contact, or an active
   /// member of a group this device belongs to.
   ContactRecord? _ratchetPeer(String deviceId) {
@@ -21536,9 +21615,12 @@ class MessengerController extends ChangeNotifier {
   Future<void> _maybeOfferRatchetBundle(ContactRecord peer) async {
     final sessions = _ratchet;
     final me = _snapshot.identity;
+    // Unknown capabilities (for example a group profile made before the
+    // member's capability list arrived) still get an offer: a build without
+    // the ratchet drops the unknown kind, and offers back off.
     if (sessions == null ||
         me == null ||
-        !_ratchetCapable(peer) ||
+        !(_ratchetCapable(peer) || _ratchetCapabilityUnknown(peer)) ||
         me.deviceId.compareTo(peer.deviceId) >= 0 ||
         await sessions.hasSession(ratchetPeerId(peer))) {
       return;
@@ -21556,7 +21638,9 @@ class MessengerController extends ChangeNotifier {
     // ratchet even if its advertised capabilities have not arrived yet.
     if (sessions == null ||
         me == null ||
-        (reason != 'answer' && !_ratchetCapable(peer))) {
+        !(_ratchetCapable(peer) ||
+            ((reason == 'answer' || reason == 'offer') &&
+                _ratchetCapabilityUnknown(peer)))) {
       return;
     }
     final now = _now();
@@ -21564,11 +21648,24 @@ class MessengerController extends ChangeNotifier {
     // suppress the reset that recovers a lost session.
     final limitKey = '${ratchetPeerId(peer)}|$reason';
     if (reason != 'answer') {
+      // Offers start at 10 s and back off to the full interval: a delivered
+      // offer can still be dropped by a receiver that does not know this
+      // device yet (for example group membership still in flight).
+      final attempts = _ratchetBundleAttempts[limitKey] ?? 0;
+      final wait = reason == 'offer'
+          ? Duration(
+              seconds: min(
+                _ratchetBundleInterval.inSeconds,
+                10 << min(attempts, 6),
+              ),
+            )
+          : _ratchetBundleInterval;
       final last = _ratchetBundleSentAt[limitKey];
-      if (last != null && now.difference(last) < _ratchetBundleInterval) {
+      if (last != null && now.difference(last) < wait) {
         return;
       }
       _ratchetBundleSentAt[limitKey] = now;
+      _ratchetBundleAttempts[limitKey] = attempts + 1;
     }
     try {
       // An answer only announces this device's identity: the sender of the
@@ -21609,10 +21706,15 @@ class MessengerController extends ChangeNotifier {
   Future<void> _handleRatchetBundle(RelayEnvelope envelope) async {
     final sessions = _ratchet;
     final peer = _ratchetPeer(envelope.senderDeviceId);
-    // An authenticated bundle proves the sender runs the ratchet. Requiring
-    // its capability advertisement too would drop an offer that overtakes
-    // the profile update, and the sender would not offer again for minutes.
-    if (sessions == null || peer == null) return;
+    // An authenticated bundle proves the sender runs the ratchet, so one
+    // that overtakes the sender's capability advertisement is accepted. A
+    // peer that explicitly advertised capabilities without the ratchet is
+    // not: a late bundle from before its downgrade must not reopen v3.
+    if (sessions == null ||
+        peer == null ||
+        !(_ratchetCapable(peer) || _ratchetCapabilityUnknown(peer))) {
+      return;
+    }
     final decoded = jsonDecode(
       await _crypto.decryptMessage(contact: peer, envelope: envelope),
     );
@@ -21773,7 +21875,20 @@ class MessengerController extends ChangeNotifier {
   /// Whether this build includes the Matrix carrier.
   bool get matrixCarrierAvailable => _matrixTransport != null;
 
-  MatrixCarrierStatus? get matrixStatus => _matrixTransport?.status;
+  /// Signed-in state comes from the vault (the adapter is stopped while
+  /// Online or Matrix is off); syncing and errors from the adapter.
+  MatrixCarrierStatus? get matrixStatus {
+    final matrix = _matrixTransport;
+    if (matrix == null) return null;
+    final session = MatrixSession.tryFromJson(_snapshot.matrixSession);
+    final live = matrix.status;
+    return MatrixCarrierStatus(
+      signedIn: session != null,
+      syncing: live.syncing,
+      userId: session?.userId,
+      lastError: live.lastError,
+    );
+  }
 
   Stream<MatrixCarrierStatus> get matrixStatusChanges =>
       _matrixTransport?.statusChanges ?? const Stream.empty();
@@ -21787,13 +21902,18 @@ class MessengerController extends ChangeNotifier {
       clientFactory: (session) =>
           MatrixClient(session, http: _matrixHttpFactory?.call()),
       now: _now,
-      onSyncToken: (token) {
+      onSyncToken: (token, hadEvents) {
         if (_snapshot.matrixSession == null) return;
         _snapshot = _snapshot.copyWith(matrixSyncToken: token);
-        unawaited(_saveSnapshotSilently(debounce: true));
+        // An empty batch needs no write: a lost position only redelivers
+        // unacknowledged messages, which deduplication absorbs.
+        if (hadEvents) {
+          unawaited(_saveSnapshotSilently(notify: false, debounce: true));
+        }
       },
       onSessionRevoked: () {
         _snapshot = _snapshot.copyWith(clearMatrixSession: true);
+        unawaited(_detachMatrixTransport());
         unawaited(
           _persist('The Matrix sign-in expired. Sign in again to use Matrix.'),
         );
@@ -21863,6 +21983,7 @@ class MessengerController extends ChangeNotifier {
       }
     }
     _snapshot = _snapshot.copyWith(clearMatrixSession: true);
+    await _detachMatrixTransport();
     await _persist('Signed out of Matrix.');
     _advertiseProfileToContacts();
   }
@@ -21925,6 +22046,18 @@ class MessengerController extends ChangeNotifier {
       ...box.cipherText,
       ...box.mac.bytes,
     ]);
+  }
+
+  bool _matrixSenderPinned(String senderUserId) {
+    final global = _snapshot.identity?.connectivity;
+    if (global == null) return false;
+    return _snapshot.contacts.any(
+      (contact) =>
+          contact.canSendOutbound &&
+          contact.routing.effectivePolicy(TransportKind.matrix, global) !=
+              TransportPolicy.disabled &&
+          MatrixAddress.decode(contact.matrixAddress)?.userId == senderUserId,
+    );
   }
 
   /// Opens a frame from [senderUserId] with each approved contact pinned to
@@ -23999,6 +24132,10 @@ class _ControllerMatrixSealer implements MatrixCarrierSealer {
   _ControllerMatrixSealer(this._controller);
 
   final MessengerController _controller;
+
+  @override
+  bool acceptsSender(String senderUserId) =>
+      _controller._matrixSenderPinned(senderUserId);
 
   @override
   Future<Uint8List> seal(String peerDeviceId, Uint8List envelope) =>

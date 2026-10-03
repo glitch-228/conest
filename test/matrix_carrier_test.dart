@@ -48,6 +48,16 @@ void main() {
       );
     });
 
+    test('credentials only go to HTTPS or this machine', () {
+      expect(
+        () => requireSecureHomeserver(Uri.parse('http://matrix.example')),
+        throwsA(isA<MatrixException>()),
+      );
+      requireSecureHomeserver(Uri.parse('https://matrix.example'));
+      requireSecureHomeserver(Uri.parse('http://127.0.0.1:8008'));
+      requireSecureHomeserver(Uri.parse('http://localhost:8008'));
+    });
+
     test('a wrong password is a typed error', () async {
       await expectLater(
         login('alice', 'nope'),
@@ -309,6 +319,9 @@ class _PrefixSealer implements MatrixCarrierSealer {
 
   final String owner;
   bool failNextOpen = false;
+
+  @override
+  bool acceptsSender(String senderUserId) => true;
 
   @override
   Future<Uint8List> seal(String peerDeviceId, Uint8List envelope) async =>

@@ -57,6 +57,10 @@ class MatrixAddress {
 abstract interface class MatrixCarrierSealer {
   Future<Uint8List> seal(String peerDeviceId, Uint8List envelope);
 
+  /// Whether frames from this Matrix user may be buffered at all: only users
+  /// pinned by a contact, so strangers cannot fill the reassembly buffer.
+  bool acceptsSender(String senderUserId);
+
   /// Opens a sealed envelope from a Matrix user, returning the authenticated
   /// Conest device it came from, or null when no known contact sealed it.
   Future<({String peerDeviceId, Uint8List envelope})?> open(
@@ -106,11 +110,13 @@ class MatrixCarrierReassembler {
     DateTime Function()? now,
     this.expiry = const Duration(minutes: 10),
     this.maxPending = 64,
+    this.maxPendingPerSender = 8,
   }) : _now = now ?? DateTime.now;
 
   final DateTime Function() _now;
   final Duration expiry;
   final int maxPending;
+  final int maxPendingPerSender;
   final Map<String, _PendingEnvelope> _pending = {};
 
   /// Returns the complete sealed envelope once its last frame arrives.
@@ -147,7 +153,13 @@ class MatrixCarrierReassembler {
     );
     final key = '$senderUserId|$id';
     final entry = _pending.putIfAbsent(key, () {
-      if (_pending.length >= maxPending) {
+      // One sender can only displace its own oldest partial envelope.
+      final own = _pending.keys
+          .where((existing) => existing.startsWith('$senderUserId|'))
+          .toList(growable: false);
+      if (own.length >= maxPendingPerSender) {
+        _pending.remove(own.first);
+      } else if (_pending.length >= maxPending) {
         _pending.remove(_pending.keys.first);
       }
       return _PendingEnvelope(count, now);
@@ -196,7 +208,7 @@ class MatrixTransportAdapter implements TransportAdapter {
   MatrixTransportAdapter({
     required MatrixCarrierSealer sealer,
     MatrixClient Function(MatrixSession session)? clientFactory,
-    void Function(String nextBatch)? onSyncToken,
+    void Function(String nextBatch, bool hadEvents)? onSyncToken,
     void Function()? onSessionRevoked,
     Duration syncTimeout = const Duration(seconds: 30),
     DateTime Function()? now,
@@ -210,7 +222,7 @@ class MatrixTransportAdapter implements TransportAdapter {
 
   final MatrixCarrierSealer _sealer;
   final MatrixClient Function(MatrixSession session) _clientFactory;
-  final void Function(String nextBatch)? _onSyncToken;
+  final void Function(String nextBatch, bool hadEvents)? _onSyncToken;
   final void Function()? _onSessionRevoked;
   final Duration _syncTimeout;
   final DateTime Function() _now;
@@ -395,16 +407,19 @@ class MatrixTransportAdapter implements TransportAdapter {
         for (final event in result.toDevice) {
           if (event.type != matrixCarrierEventType) continue;
           try {
-            await _receive(event);
+            await _receive(event, generation);
           } catch (_) {
             // One bad frame must not hold back the acknowledgement of the
             // batch, or the homeserver would redeliver it forever.
           }
         }
+        // Stopped or re-attached meanwhile: do not commit a token whose
+        // batch may not have been handed on (or belongs to another account).
+        if (generation != _generation) return;
         // The next request carries this token, acknowledging the batch;
         // everything in it was handed on above.
         _since = result.nextBatch;
-        _onSyncToken?.call(result.nextBatch);
+        _onSyncToken?.call(result.nextBatch, result.toDevice.isNotEmpty);
         _lastError = null;
         backoff = const Duration(seconds: 2);
       } on MatrixException catch (error) {
@@ -428,11 +443,15 @@ class MatrixTransportAdapter implements TransportAdapter {
     }
   }
 
-  Future<void> _receive(MatrixToDeviceEvent event) async {
+  Future<void> _receive(MatrixToDeviceEvent event, int generation) async {
+    if (!_sealer.acceptsSender(event.sender)) return;
     final sealed = _reassembler.add(event.sender, event.content);
     if (sealed == null) return;
     final opened = await _sealer.open(event.sender, sealed);
     if (opened == null) return;
+    if (generation != _generation) {
+      throw StateError('Matrix carrier stopped while receiving.');
+    }
     _inbound.add(
       TransportInboundEnvelope(
         transport: TransportKind.matrix,

@@ -43,6 +43,10 @@ class FakeHomeserver {
     return userId;
   }
 
+  /// Messages still waiting for (not yet acknowledged by) a device.
+  int pendingFor(String userId, String deviceId) =>
+      _queues['$userId|$deviceId']?.length ?? 0;
+
   /// Invalidates every access token of [userId].
   void revoke(String userId) =>
       _tokens.removeWhere((_, owner) => owner.userId == userId);

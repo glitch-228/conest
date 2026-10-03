@@ -143,6 +143,19 @@ class MatrixSession {
 bool isMatrixUserId(String value) =>
     value.length <= 255 && RegExp(r'^@[^:\s]+:[^\s]+$').hasMatch(value);
 
+/// Passwords and access tokens only travel over HTTPS; plain HTTP is
+/// accepted for a homeserver on this machine (tests and local servers).
+void requireSecureHomeserver(Uri homeserver) {
+  const loopback = {'localhost', '127.0.0.1', '::1', '[::1]'};
+  if (homeserver.scheme == 'https' ||
+      (homeserver.scheme == 'http' && loopback.contains(homeserver.host))) {
+    return;
+  }
+  throw MatrixException(
+    'Homeserver $homeserver must use HTTPS to protect your password.',
+  );
+}
+
 String? matrixServerName(String userId) =>
     isMatrixUserId(userId) ? userId.substring(userId.indexOf(':') + 1) : null;
 
@@ -226,9 +239,10 @@ class MatrixClient {
       } on Object {
         // No discovery document: use the address as given.
       }
+      requireSecureHomeserver(base!);
       final versions = await client.send(
         'GET',
-        base!.replace(path: '${base.path}/_matrix/client/versions'),
+        base.replace(path: '${base.path}/_matrix/client/versions'),
         timeout: const Duration(seconds: 10),
       );
       final decoded = versions.status == 200
@@ -253,6 +267,7 @@ class MatrixClient {
     String? deviceId,
     MatrixHttp? http,
   }) async {
+    requireSecureHomeserver(homeserver);
     final client = http ?? IoMatrixHttp();
     try {
       final response = await _call(
