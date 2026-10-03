@@ -300,6 +300,28 @@ class MatrixClientService extends ChangeNotifier {
     return member['displayName'] as String?;
   }
 
+  /// Secret storage and key backup state, e.g. `Enabled`, `Disabled`,
+  /// `Incomplete`, plus whether cross-signing is fully set up.
+  Future<({String recovery, bool crossSigning})> recoveryState() async {
+    final state = await _api.request('recovery_state');
+    return (
+      recovery: state['recovery'] as String? ?? 'Unknown',
+      crossSigning: state['crossSigning'] == true,
+    );
+  }
+
+  /// Sets up cross-signing, secret storage and key backup; returns the
+  /// recovery key the user must keep.
+  Future<String> enableRecovery() async {
+    final result = await _api.request('enable_recovery');
+    return result['recoveryKey'] as String;
+  }
+
+  /// Unlocks secret storage with a recovery key, restoring encrypted
+  /// history keys on this device.
+  Future<void> recover(String recoveryKey) =>
+      _api.request('recover', {'recoveryKey': recoveryKey.trim()});
+
   /// Plain to-device message (used by the Conest carrier).
   Future<void> sendToDevice({
     required String type,
@@ -351,12 +373,30 @@ class MatrixClientService extends ChangeNotifier {
         timeline(roomId).appendAll(events);
         _notify();
       case 'sync_error':
-        _lastError = event['error'] as String?;
+        final error = event['error'] as String? ?? '';
+        _lastError = error;
+        if (signedIn && error.contains('M_UNKNOWN_TOKEN')) {
+          // Signed out elsewhere: stop syncing and drop the session.
+          unawaited(_sessionRevoked());
+          return;
+        }
         _notify();
       case 'to_device':
         final payload = event['event'];
         if (payload is Map<String, dynamic>) _onToDevice?.call(payload);
     }
+  }
+
+  Future<void> _sessionRevoked() async {
+    try {
+      await _api.request('stop_sync');
+    } catch (_) {}
+    _session = null;
+    _rooms.clear();
+    _timelines.clear();
+    await _onSession(null);
+    _lastError = 'The Matrix sign-in expired. Sign in again.';
+    _setState(MatrixClientState.signedOut);
   }
 
   void _fail(Object error) {

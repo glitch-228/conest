@@ -36,6 +36,7 @@ import 'src/lan_direct.dart';
 import 'src/iroh_ffi_bridge.dart';
 import 'src/iroh_transport.dart';
 import 'src/media_picker_sheet.dart';
+import 'src/matrix_service.dart';
 import 'src/messenger_controller.dart';
 import 'src/models.dart';
 import 'src/platform_bridge.dart';
@@ -13128,6 +13129,103 @@ class _SettingsDialogState extends State<SettingsDialog> {
     );
   }
 
+  /// Creates the recovery key that unlocks encrypted Matrix history on a
+  /// new device, and shows it once.
+  Future<void> _setUpMatrixRecovery(MatrixClientService client) async {
+    final state = await client.recoveryState().catchError(
+      (Object _) => (recovery: 'Unknown', crossSigning: false),
+    );
+    if (!mounted) return;
+    if (state.recovery == 'Enabled') {
+      final reset = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Recovery is already set up'),
+          content: const Text(
+            'Your encrypted Matrix history is already backed up. Use '
+            '"Enter recovery key" on a new device.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      if (reset != true) return;
+    }
+    String? key;
+    await _run(() async => key = await client.enableRecovery());
+    final recoveryKey = key;
+    if (!mounted || recoveryKey == null) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Save your recovery key'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Keep this key somewhere safe. You need it to read encrypted '
+              'Matrix history on a new device. It is shown only once.',
+            ),
+            const SizedBox(height: 12),
+            SelectableText(
+              recoveryKey,
+              style: const TextStyle(fontFamily: 'monospace'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () =>
+                Clipboard.setData(ClipboardData(text: recoveryKey)),
+            child: const Text('Copy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('I saved it'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _enterMatrixRecoveryKey(MatrixClientService client) async {
+    final input = TextEditingController();
+    final key = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Enter recovery key'),
+        content: TextField(
+          controller: input,
+          autofocus: true,
+          minLines: 1,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            hintText: 'EsT… (from another Matrix app or this one)',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, input.text),
+            child: const Text('Unlock'),
+          ),
+        ],
+      ),
+    );
+    input.dispose();
+    if (key == null || key.trim().isEmpty) return;
+    await _run(() => client.recover(key));
+  }
+
   Widget _buildMatrixCarrierSettings(BuildContext context) {
     final status = widget.controller.matrixStatus;
     final signedIn = status?.signedIn == true;
@@ -13135,21 +13233,44 @@ class _SettingsDialogState extends State<SettingsDialog> {
         'Used when LAN and Iroh cannot reach a contact who also linked Matrix. '
         'Messages stay end-to-end encrypted; the homeserver sees which '
         'accounts talk and when, never content.';
+    final client = widget.controller.matrixClient;
     if (signedIn) {
-      return ListTile(
-        contentPadding: EdgeInsets.zero,
-        title: Text('Matrix: ${status!.userId}'),
-        subtitle: Text(
-          status.lastError == null
-              ? privacy
-              : 'Last error: ${status.lastError}\n$privacy',
-        ),
-        trailing: TextButton(
-          onPressed: _busy
-              ? null
-              : () => _run(() => widget.controller.signOutOfMatrix()),
-          child: const Text('Sign out'),
-        ),
+      final error = client?.lastError ?? status!.lastError;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('Matrix: ${status!.userId}'),
+            subtitle: Text(
+              '${client == null ? privacy : 'Your Matrix chats appear in the chat list. $privacy'}'
+              '${error == null ? '' : '\nLast error: $error'}',
+            ),
+            trailing: TextButton(
+              onPressed: _busy
+                  ? null
+                  : () => _run(() => widget.controller.signOutOfMatrix()),
+              child: const Text('Sign out'),
+            ),
+          ),
+          if (client != null && client.signedIn)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : () => _setUpMatrixRecovery(client),
+                  icon: const Icon(Icons.key_outlined),
+                  label: const Text('Set up recovery'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : () => _enterMatrixRecoveryKey(client),
+                  icon: const Icon(Icons.lock_open_outlined),
+                  label: const Text('Enter recovery key'),
+                ),
+              ],
+            ),
+        ],
       );
     }
     return Padding(

@@ -176,6 +176,28 @@ void main() {
     });
   });
 
+  test('a revoked token signs the client out', () async {
+    api.respond('login_password', {
+      'userId': '@a:x',
+      'deviceId': 'D',
+      'accessToken': 't',
+      'homeserver': 'https://x',
+    });
+    await service.signInWithPassword(
+      homeserver: 'https://x',
+      user: 'a',
+      password: 'p',
+    );
+    api.emit({
+      'type': 'sync_error',
+      'error': 'M_UNKNOWN_TOKEN: Invalid access token passed.',
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(service.state, MatrixClientState.signedOut);
+    expect(sessions.last, isNull);
+    expect(api.ops, contains('stop_sync'));
+  });
+
   test('carrier to-device events are handed on; sign-out clears', () async {
     api.emit({
       'type': 'to_device',

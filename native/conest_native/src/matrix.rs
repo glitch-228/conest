@@ -332,6 +332,30 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
                 .await?;
             Ok(json!({}))
         }
+        "recovery_state" => {
+            let client = client()?;
+            let encryption = client.encryption();
+            let cross_signing = encryption.cross_signing_status().await;
+            Ok(json!({
+                "recovery": format!("{:?}", encryption.recovery().state()),
+                "crossSigning": cross_signing.map(|status| status.is_complete()).unwrap_or(false),
+            }))
+        }
+        "enable_recovery" => {
+            // Creates cross-signing keys if needed, secret storage and key
+            // backup; the returned key is the only way to read history on a
+            // new device without another signed-in one.
+            let key = client()?.encryption().recovery().enable().await?;
+            Ok(json!({"recoveryKey": key}))
+        }
+        "recover" => {
+            client()?
+                .encryption()
+                .recovery()
+                .recover(text(request, "recoveryKey")?)
+                .await?;
+            Ok(json!({}))
+        }
         "join" => {
             room(&client()?, request)?.join().await?;
             Ok(json!({}))

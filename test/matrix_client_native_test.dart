@@ -133,6 +133,141 @@ void main() {
       });
       expect(sent['eventId'], startsWith('\$'));
 
+      // Live timeline events arrive from the sync loop.
+      final timelineEvents = syncs
+          .where(
+            (event) => event['type'] == 'timeline' && event['roomId'] == roomId,
+          )
+          .expand((event) => event['events'] as List)
+          .cast<Map>();
+      expect(
+        timelineEvents.any(
+          (event) => event['content']?['body'] == 'hello alice',
+        ),
+        isTrue,
+      );
+
+      // Reply, edit, reaction and redaction through the generic send.
+      final reply = await native.request('send_raw', {
+        'roomId': roomId,
+        'type': 'm.room.message',
+        'content': {
+          'msgtype': 'm.text',
+          'body': 'a reply',
+          'm.relates_to': {
+            'm.in_reply_to': {'event_id': sent['eventId']},
+          },
+        },
+      });
+      await native.request('send_raw', {
+        'roomId': roomId,
+        'type': 'm.room.message',
+        'content': {
+          'msgtype': 'm.text',
+          'body': '* edited',
+          'm.new_content': {'msgtype': 'm.text', 'body': 'edited'},
+          'm.relates_to': {
+            'rel_type': 'm.replace',
+            'event_id': reply['eventId'],
+          },
+        },
+      });
+      final reaction = await native.request('send_raw', {
+        'roomId': roomId,
+        'type': 'm.reaction',
+        'content': {
+          'm.relates_to': {
+            'rel_type': 'm.annotation',
+            'event_id': sent['eventId'],
+            'key': '👍',
+          },
+        },
+      });
+      await native.request('redact', {
+        'roomId': roomId,
+        'eventId': reaction['eventId'],
+      });
+      await native.request('read_receipt', {
+        'roomId': roomId,
+        'eventId': sent['eventId'],
+      });
+      final member = await native.request('member', {
+        'roomId': roomId,
+        'userId': bobId,
+      });
+      expect(member['displayName'], 'bob$suffix');
+
+      // A file round-trips through (encrypted) upload and download.
+      final source = File('${store.path}/upload.txt')
+        ..writeAsStringSync('conest file $suffix');
+      final file = await native.request('send_file', {
+        'roomId': roomId,
+        'path': source.path,
+        'name': 'upload.txt',
+        'mimeType': 'text/plain',
+      });
+      expect(file['eventId'], startsWith('\$'));
+      Map? fileEvent;
+      await waitFor(() async {
+        final page = await native.request('messages', {
+          'roomId': roomId,
+          'limit': 30,
+        });
+        fileEvent = (page['events'] as List)
+            .cast<Map>()
+            .where((event) => event['event_id'] == file['eventId'])
+            .firstOrNull;
+        return fileEvent != null;
+      }, 'The file event never appeared');
+      final content = fileEvent!['content'] as Map;
+      final downloaded = File('${store.path}/download.txt');
+      await native.request('download', {
+        'source': {
+          if (content['file'] != null) 'file': content['file'],
+          if (content['url'] != null) 'url': content['url'],
+        },
+        'path': downloaded.path,
+      });
+      expect(downloaded.readAsStringSync(), 'conest file $suffix');
+
+      // A plain to-device message reaches the other account.
+      final bobSync = await http(
+        'GET',
+        '/_matrix/client/v3/sync?timeout=0',
+        token: bobToken,
+      );
+      final bobDevice =
+          (await http(
+                'GET',
+                '/_matrix/client/v3/account/whoami',
+                token: bobToken,
+              ))['device_id']
+              as String;
+      await native.request('send_to_device', {
+        'type': 'dev.conest.carrier.v1',
+        'userId': bobId,
+        'deviceId': bobDevice,
+        'content': {'v': 1, 'probe': suffix},
+      });
+      await waitFor(() async {
+        final next = await http(
+          'GET',
+          '/_matrix/client/v3/sync?timeout=1000&since=${bobSync['next_batch']}',
+          token: bobToken,
+        );
+        final events = (next['to_device']?['events'] as List?) ?? const [];
+        return events.cast<Map>().any(
+          (event) => event['content']?['probe'] == suffix,
+        );
+      }, 'The to-device message never arrived');
+
+      // Recovery: secret storage, backup and cross-signing.
+      final recovery = await native.request('enable_recovery');
+      expect(recovery['recoveryKey'], isNotEmpty);
+      final state = await native.request('recovery_state');
+      expect(state['recovery'], 'Enabled');
+      expect(state['crossSigning'], isTrue);
+
       final rooms = (await native.request('rooms'))['rooms'] as List;
       final room = rooms.cast<Map<String, dynamic>>().singleWhere(
         (room) => room['roomId'] == roomId,
