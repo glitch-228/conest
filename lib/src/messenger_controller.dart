@@ -28,6 +28,8 @@ import 'lan_direct.dart';
 import 'local_relay_node.dart';
 import 'matrix_carrier.dart';
 import 'matrix_client.dart';
+import 'matrix_native.dart';
+import 'matrix_service.dart';
 import 'models.dart';
 import 'native_attachment_crypto.dart';
 import 'platform_bridge.dart';
@@ -421,7 +423,11 @@ class MessengerController extends ChangeNotifier {
     RatchetEngine? ratchetEngine,
     bool? matrixCarrierEnabled,
     MatrixHttp Function()? matrixHttpFactory,
+    MatrixNativeApi? matrixNativeApi,
+    bool loadNativeMatrixClient = true,
   }) : _vaultStore = vaultStore,
+       _matrixNativeApi = matrixNativeApi,
+       _loadNativeMatrixClient = loadNativeMatrixClient,
        _matrixHttpFactory = matrixHttpFactory,
        _matrixCarrierEnabled = matrixCarrierEnabled ?? _matrixCarrierBuild,
        _ratchetEngine =
@@ -494,6 +500,12 @@ class MessengerController extends ChangeNotifier {
   final bool _matrixCarrierEnabled;
   StreamSubscription<TransportInboundEnvelope>? _matrixInboundSubscription;
   final MatrixHttp Function()? _matrixHttpFactory;
+  MatrixNativeApi? _matrixNativeApi;
+  final bool _loadNativeMatrixClient;
+  MatrixClientService? _matrixClient;
+
+  /// The full Matrix client, when this build has the native client.
+  MatrixClientService? get matrixClient => _matrixClient;
   MatrixTransportAdapter? _matrixTransport;
   RatchetSessions? _ratchet;
   final Map<String, DateTime> _ratchetBundleSentAt = {};
@@ -3029,6 +3041,7 @@ class MessengerController extends ChangeNotifier {
       _snapshot = await _vaultStore.load();
       await _openRatchetSessions();
       _createMatrixTransport();
+      unawaited(_restoreMatrixClient());
       await VoiceMessageService.cleanupAbandonedRecordings();
       await _recoverScheduledMessageTransitions();
       await _retireBundledRelayRoutes();
@@ -21897,8 +21910,32 @@ class MessengerController extends ChangeNotifier {
 
   void _createMatrixTransport() {
     if (!_matrixCarrierEnabled || _matrixTransport != null) return;
+    final api = _matrixNativeApi ??= _loadNativeMatrixClient
+        ? NativeMatrixClient.tryCreate()
+        : null;
+    if (api != null) {
+      _matrixClient = MatrixClientService(
+        api: api,
+        store: _vaultStore.matrixClientStore,
+        onSession: _storeMatrixClientSession,
+        onToDevice: (event) {
+          final type = event['type'];
+          final sender = event['sender'];
+          final content = event['content'];
+          if (type is String &&
+              sender is String &&
+              content is Map<String, dynamic>) {
+            _matrixTransport?.receiveExternal(
+              MatrixToDeviceEvent(type: type, sender: sender, content: content),
+            );
+          }
+        },
+      )..addListener(notifyListeners);
+    }
+    final client = _matrixClient;
     _matrixTransport = MatrixTransportAdapter(
       sealer: _ControllerMatrixSealer(this),
+      channel: client == null ? null : _MatrixClientCarrierChannel(client),
       clientFactory: (session) =>
           MatrixClient(session, http: _matrixHttpFactory?.call()),
       now: _now,
@@ -21932,8 +21969,31 @@ class MessengerController extends ChangeNotifier {
     return 'CONEST_${compact.length > 24 ? compact.substring(0, 24) : compact}';
   }
 
-  /// Signs this device in to a Matrix account for the carrier route.
-  /// [homeserver] may be empty when [user] is a full `@user:server` id.
+  Future<void> _storeMatrixClientSession(Map<String, dynamic>? session) async {
+    _snapshot = session == null
+        ? _snapshot.copyWith(clearMatrixSession: true)
+        : _snapshot
+              .copyWith(clearMatrixSession: true)
+              .copyWith(matrixSession: session);
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  /// Resumes the stored Matrix device in the full client at startup (also
+  /// moving a carrier-only device onto the client's single sync).
+  Future<void> _restoreMatrixClient() async {
+    final client = _matrixClient;
+    final stored = _snapshot.matrixSession;
+    if (client == null || stored == null) return;
+    try {
+      await client.restore(stored);
+    } catch (error) {
+      appendDebugLog('Matrix client could not resume: $error');
+    }
+  }
+
+  /// Signs this device in to a Matrix account: the full client when this
+  /// build has it, otherwise the carrier alone. [homeserver] may be empty
+  /// when [user] is a full `@user:server` id.
   Future<void> signInToMatrix({
     String homeserver = '',
     required String user,
@@ -21943,23 +22003,34 @@ class MessengerController extends ChangeNotifier {
     if (matrix == null) {
       throw StateError('Matrix is not available in this build.');
     }
-    final me = _requireIdentity();
+    final me = _snapshot.identity;
     final login = user.trim();
     final http = _matrixHttpFactory?.call();
-    final MatrixSession session;
+    MatrixSession session;
     try {
       final base = await MatrixClient.resolveHomeserver(
         homeserver,
         userId: isMatrixUserId(login) ? login : null,
         http: http,
       );
-      session = await MatrixClient.login(
-        homeserver: base,
-        user: login,
-        password: password,
-        deviceId: _matrixDeviceIdFor(me),
-        http: http,
-      );
+      final client = _matrixClient;
+      if (client != null) {
+        await client.signInWithPassword(
+          homeserver: base.toString(),
+          user: login,
+          password: password,
+          deviceId: me == null ? null : _matrixDeviceIdFor(me),
+        );
+        session = MatrixSession.tryFromJson(client.session)!;
+      } else {
+        session = await MatrixClient.login(
+          homeserver: base,
+          user: login,
+          password: password,
+          deviceId: me == null ? null : _matrixDeviceIdFor(me),
+          http: http,
+        );
+      }
     } finally {
       http?.close();
     }
@@ -21975,7 +22046,11 @@ class MessengerController extends ChangeNotifier {
   /// Signs the Conest Matrix device out and stops using the route.
   Future<void> signOutOfMatrix() async {
     final matrix = _matrixTransport;
-    if (matrix != null) {
+    final client = _matrixClient;
+    if (client != null) {
+      matrix?.detach();
+      await client.signOut();
+    } else if (matrix != null) {
       try {
         await matrix.signOut();
       } catch (error) {
@@ -23341,6 +23416,7 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _matrixClient?.dispose();
     unawaited(_userNotices.close());
     _scheduledMessageTimer?.cancel();
     _scheduledMessageTimer = null;
@@ -24146,4 +24222,23 @@ class _ControllerMatrixSealer implements MatrixCarrierSealer {
     String senderUserId,
     Uint8List sealed,
   ) => _controller._openFromMatrix(senderUserId, sealed);
+}
+
+class _MatrixClientCarrierChannel implements MatrixCarrierChannel {
+  _MatrixClientCarrierChannel(this._client);
+
+  final MatrixClientService _client;
+
+  @override
+  Future<void> sendFrame(
+    MatrixAddress to,
+    Map<String, Object?> frame,
+    String transactionId,
+  ) => _client.sendToDevice(
+    type: matrixCarrierEventType,
+    userId: to.userId,
+    deviceId: to.deviceId,
+    content: frame,
+    transactionId: transactionId,
+  );
 }

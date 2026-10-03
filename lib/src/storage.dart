@@ -379,6 +379,23 @@ class VaultStore {
     );
   }
 
+  /// Where the native Matrix client keeps its SQLite store (sync state and
+  /// encryption keys), and the store passphrase derived from the vault key.
+  Future<({String path, String passphrase})> matrixClientStore() async {
+    final vault = await _vaultFile();
+    final directory = Directory('${vault.path}.matrix');
+    await directory.create(recursive: true);
+    final key = await Hkdf(hmac: Hmac.sha256(), outputLength: 32).deriveKey(
+      secretKey: SecretKey(await _readOrCreateVaultKey()),
+      nonce: const <int>[],
+      info: utf8.encode('conest.matrix.store.v1'),
+    );
+    return (
+      path: directory.path,
+      passphrase: base64UrlEncode(await key.extractBytes()),
+    );
+  }
+
   Future<VaultSnapshot> load() async {
     final file = await _vaultFile();
     final backup = File('${file.path}.bak');
@@ -481,6 +498,8 @@ class VaultStore {
     if (await history.exists()) await history.delete(recursive: true);
     final ratchet = Directory('${file.path}.ratchet');
     if (await ratchet.exists()) await ratchet.delete(recursive: true);
+    final matrix = Directory('${file.path}.matrix');
+    if (await matrix.exists()) await matrix.delete(recursive: true);
     for (final candidate in <File>[
       file,
       File('${file.path}.tmp'),

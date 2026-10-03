@@ -40,6 +40,7 @@ import 'src/messenger_controller.dart';
 import 'src/models.dart';
 import 'src/platform_bridge.dart';
 import 'src/qr_scan_screen.dart';
+import 'src/ui/matrix_room_screen.dart';
 import 'src/relay_client.dart';
 import 'src/storage.dart';
 import 'src/voice_message_service.dart';
@@ -3836,6 +3837,60 @@ class _CourierHomeState extends State<_CourierHome> {
     }
   }
 
+  /// Starts (or reopens) a Matrix DM with a user id.
+  Future<void> _newMatrixChat() async {
+    final matrix = widget.controller.matrixClient;
+    if (matrix == null) return;
+    final input = TextEditingController();
+    final userId = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('New Matrix chat'),
+        content: TextField(
+          controller: input,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Matrix user',
+            hintText: '@name:matrix.org',
+          ),
+          onSubmitted: (value) => Navigator.pop(context, value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, input.text),
+            child: const Text('Start chat'),
+          ),
+        ],
+      ),
+    );
+    input.dispose();
+    final target = userId?.trim() ?? '';
+    if (target.isEmpty || !mounted) return;
+    try {
+      final roomId = await matrix.createDirectMessage(target);
+      if (!mounted) return;
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => MatrixRoomScreen(
+            client: matrix,
+            roomId: roomId,
+            palette: widget.palette,
+          ),
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not start the chat: $error')),
+        );
+      }
+    }
+  }
+
   Widget _drawer() {
     final me = widget.controller.identity;
     Widget action(IconData icon, String title, VoidCallback callback) =>
@@ -3886,6 +3941,12 @@ class _CourierHomeState extends State<_CourierHome> {
               'LAN lobby',
               widget.onLanLobbySelected,
             ),
+            if (widget.controller.matrixClient?.signedIn == true)
+              action(
+                Icons.alternate_email,
+                'New Matrix chat',
+                () => unawaited(_newMatrixChat()),
+              ),
             action(
               Icons.archive_outlined,
               'Archived chats',
@@ -3964,6 +4025,7 @@ class _CourierHomeState extends State<_CourierHome> {
             int unread,
             bool selected,
             bool isGroup,
+            bool isMatrix,
             bool pinned,
             bool archived,
             bool muted,
@@ -4001,6 +4063,7 @@ class _CourierHomeState extends State<_CourierHome> {
         unread: widget.controller.unreadCountFor(contact.deviceId),
         selected: widget.selectedContactId == contact.deviceId,
         isGroup: false,
+        isMatrix: false,
         memberCount: 0,
         reachability: widget.controller.reachabilityStateFor(contact.deviceId),
         onTap: () => widget.onContactSelected(contact),
@@ -4037,10 +4100,55 @@ class _CourierHomeState extends State<_CourierHome> {
         unread: widget.controller.unreadGroupCountFor(group.groupId),
         selected: widget.selectedGroupId == group.groupId,
         isGroup: true,
+        isMatrix: false,
         memberCount: group.activeMemberDeviceIds.length,
         reachability: null,
         onTap: () => widget.onGroupSelected(group),
       ));
+    }
+    // Matrix rooms and DMs from the full Matrix client.
+    final matrix = widget.controller.matrixClient;
+    if (matrix != null && matrix.signedIn && _activeFolderId == 'all') {
+      for (final room in matrix.rooms) {
+        final items = matrix.timeline(room.roomId).items;
+        final last = items.isEmpty ? null : items.last;
+        if (query.isNotEmpty &&
+            !room.name.toLowerCase().contains(query) &&
+            !items.any((item) => item.body.toLowerCase().contains(query))) {
+          continue;
+        }
+        entries.add((
+          seed: 'matrix:${room.roomId}',
+          pinned: false,
+          archived: false,
+          muted: false,
+          draft: '',
+          title: room.invited ? 'Invitation: ${room.name}' : room.name,
+          preview: room.invited
+              ? 'Matrix invitation'
+              : last == null
+              ? (room.encrypted ? 'Encrypted Matrix chat' : 'Matrix chat')
+              : matrixPreview(last),
+          at: last?.timestamp.toLocal(),
+          unread: room.unread,
+          selected: false,
+          isGroup: !room.direct,
+          isMatrix: true,
+          memberCount: 0,
+          reachability: null,
+          onTap: () => unawaited(
+            Navigator.of(context).push<void>(
+              MaterialPageRoute(
+                builder: (_) => MatrixRoomScreen(
+                  client: matrix,
+                  roomId: room.roomId,
+                  palette: widget.palette,
+                ),
+              ),
+            ),
+          ),
+        ));
+      }
     }
     final archivedCount = entries.where((entry) => entry.archived).length;
     entries.removeWhere((entry) => entry.archived != _showArchived);
@@ -4248,7 +4356,10 @@ class _CourierHomeState extends State<_CourierHome> {
                         : entry.preview,
                     pinned: entry.pinned,
                     muted: entry.muted,
-                    onLongPress: () => unawaited(
+                    badge: entry.isMatrix ? 'Matrix' : null,
+                    onLongPress: entry.isMatrix
+                        ? null
+                        : () => unawaited(
                       _chatActions(
                         entry.isGroup
                             ? ConversationKind.group
@@ -4256,7 +4367,9 @@ class _CourierHomeState extends State<_CourierHome> {
                         entry.seed,
                       ),
                     ),
-                    onSecondaryTapDown: (event) => unawaited(
+                    onSecondaryTapDown: entry.isMatrix
+                        ? null
+                        : (event) => unawaited(
                       _chatActions(
                         entry.isGroup
                             ? ConversationKind.group
@@ -4269,7 +4382,7 @@ class _CourierHomeState extends State<_CourierHome> {
                     unread: entry.unread,
                     selected: entry.selected,
                     isGroup: entry.isGroup,
-                    memberCount: entry.memberCount,
+                    memberCount: entry.isMatrix ? 0 : entry.memberCount,
                     reachability: entry.reachability,
                     onTap: entry.onTap,
                   ),
@@ -4428,8 +4541,11 @@ class _CourierRow extends StatelessWidget {
     this.muted = false,
     this.onLongPress,
     this.onSecondaryTapDown,
+    this.badge,
   });
 
+  /// A short source marker after the title, for example "Matrix".
+  final String? badge;
   final bool pinned;
   final bool muted;
   final VoidCallback? onLongPress;
@@ -4525,6 +4641,26 @@ class _CourierRow extends StatelessWidget {
                               ?.copyWith(fontWeight: FontWeight.w700),
                         ),
                       ),
+                      if (badge != null)
+                        Container(
+                          margin: const EdgeInsets.only(right: 6),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: palette.secondary.withValues(alpha: 0.18),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            badge!,
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: palette.secondary,
+                            ),
+                          ),
+                        ),
                       if (muted)
                         Padding(
                           padding: const EdgeInsets.only(right: 6),

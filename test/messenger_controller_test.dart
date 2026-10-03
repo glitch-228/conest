@@ -22,6 +22,7 @@ import 'package:conest/src/lan_direct.dart';
 import 'package:conest/src/local_relay_node.dart';
 import 'package:conest/src/matrix_carrier.dart';
 import 'package:conest/src/matrix_client.dart';
+import 'package:conest/src/matrix_service.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/native_attachment_crypto.dart';
@@ -41,6 +42,7 @@ import 'package:conest/src/update_service.dart';
 import 'package:conest/src/voice_call_service.dart';
 
 import 'support/fake_homeserver.dart';
+import 'support/fake_matrix_native.dart';
 import 'support/fake_ratchet_engine.dart';
 
 const _fakeRelayIdentityKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
@@ -962,6 +964,7 @@ Future<MessengerController> _createController({
   String? debugBuildId,
   RatchetEngine? ratchetEngine,
   bool? matrixCarrierEnabled,
+  MatrixNativeApi? matrixNativeApi,
 }) async {
   final controller = MessengerController(
     vaultStore: vaultStore ?? _MemoryVaultStore(),
@@ -979,6 +982,10 @@ Future<MessengerController> _createController({
     ratchetEngine: ratchetEngine,
     matrixCarrierEnabled: matrixCarrierEnabled,
     matrixHttpFactory: _realMatrixHttp,
+    // Only an explicit fake: a native library on the test machine must not
+    // turn the HTTP carrier tests into native-client tests.
+    matrixNativeApi: matrixNativeApi,
+    loadNativeMatrixClient: false,
     storageCapacityProvider:
         storageCapacityProvider ??
         (_) async => const StorageCapacity(
@@ -11014,6 +11021,68 @@ void main() {
       await settle([alice, bob]);
       return (alice, bob, server, relay);
     }
+
+    test('with the native client the carrier rides on its single sync',
+        () async {
+      final server = await FakeHomeserver.start();
+      addTearDown(server.close);
+      final hub = FakeMatrixHub();
+      final relay = _FakeRelayClient();
+      final aliceNative = FakeMatrixNative(hub);
+      final bobNative = FakeMatrixNative(hub);
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        matrixCarrierEnabled: true,
+        matrixNativeApi: aliceNative,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        matrixCarrierEnabled: true,
+        matrixNativeApi: bobNative,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      await alice.signInToMatrix(
+        homeserver: server.url.toString(),
+        user: 'alice',
+        password: 'unused',
+      );
+      await bob.signInToMatrix(
+        homeserver: server.url.toString(),
+        user: 'bob',
+        password: 'unused',
+      );
+      expect(aliceNative.ops, containsAllInOrder(['login_password', 'start_sync']));
+      expect(alice.matrixClient?.signedIn, isTrue);
+      await settle([alice, bob]);
+      expect(
+        alice.contacts.single.matrixAddress,
+        startsWith('@bob:fake.test|CONEST_'),
+      );
+
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'native');
+      final aliceId = alice.identity!.deviceId;
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (DateTime.now().isBefore(deadline) &&
+          !bob.messagesFor(aliceId).any((m) => m.body == 'native')) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(bob.messagesFor(aliceId).map((m) => m.body), contains('native'));
+      expect(
+        hub.sent.where((frame) => frame.from == '@alice:fake.test'),
+        isNotEmpty,
+      );
+      // Nothing went through the HTTP carrier's own client.
+      expect(server.sent, isEmpty);
+
+      await alice.signOutOfMatrix();
+      expect(aliceNative.ops.last, 'logout');
+      expect(alice.matrixClient?.signedIn, isFalse);
+    });
 
     test('contacts learn each other\'s Matrix device', () async {
       final (alice, bob, _, _) = await linkedPair();
