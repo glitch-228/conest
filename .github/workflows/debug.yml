@@ -115,6 +115,8 @@ jobs:
           docker run --rm -v "$PWD/synapse-data:/data" \
             -e SYNAPSE_SERVER_NAME=localhost -e SYNAPSE_REPORT_STATS=no \
             matrixdotorg/synapse:latest generate
+          # The generated file may not end with a newline.
+          echo | sudo tee -a synapse-data/homeserver.yaml > /dev/null
           sudo tee -a synapse-data/homeserver.yaml > /dev/null <<'EOF'
           enable_registration: true
           enable_registration_without_verification: true
@@ -129,6 +131,7 @@ jobs:
               per_second: 100
               burst_count: 100
           EOF
+          sudo tail -n 20 synapse-data/homeserver.yaml
           docker run -d --name synapse -p 8008:8008 \
             -v "$PWD/synapse-data:/data" matrixdotorg/synapse:latest
           for attempt in $(seq 1 60); do

@@ -12968,6 +12968,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
   );
   late final TextEditingController _localRelayPortController;
   late final TextEditingController _irohRelayUrlsController;
+  final TextEditingController _matrixHomeserverController =
+      TextEditingController();
+  final TextEditingController _matrixUserController = TextEditingController();
+  final TextEditingController _matrixPasswordController =
+      TextEditingController();
   bool _busy = false;
   String? _error;
 
@@ -12987,6 +12992,104 @@ class _SettingsDialogState extends State<SettingsDialog> {
     );
   }
 
+  Widget _buildMatrixCarrierSettings(BuildContext context) {
+    final status = widget.controller.matrixStatus;
+    final signedIn = status?.signedIn == true;
+    const privacy =
+        'Used when LAN and Iroh cannot reach a contact who also linked Matrix. '
+        'Messages stay end-to-end encrypted; the homeserver sees which '
+        'accounts talk and when, never content.';
+    if (signedIn) {
+      return ListTile(
+        contentPadding: EdgeInsets.zero,
+        title: Text('Matrix: ${status!.userId}'),
+        subtitle: Text(
+          status.lastError == null
+              ? privacy
+              : 'Last error: ${status.lastError}\n$privacy',
+        ),
+        trailing: TextButton(
+          onPressed: _busy
+              ? null
+              : () => _run(() => widget.controller.signOutOfMatrix()),
+          child: const Text('Sign out'),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Matrix fallback',
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 4),
+          const Text(privacy),
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.end,
+            children: [
+              SizedBox(
+                width: 260,
+                child: TextField(
+                  controller: _matrixUserController,
+                  enabled: !_busy,
+                  autocorrect: false,
+                  decoration: const InputDecoration(
+                    labelText: 'Matrix user',
+                    helperText: 'For example @name:matrix.org',
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 220,
+                child: TextField(
+                  controller: _matrixPasswordController,
+                  enabled: !_busy,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: 'Password'),
+                ),
+              ),
+              SizedBox(
+                width: 260,
+                child: TextField(
+                  controller: _matrixHomeserverController,
+                  enabled: !_busy,
+                  autocorrect: false,
+                  decoration: const InputDecoration(
+                    labelText: 'Homeserver (optional)',
+                    helperText: 'Found from the user id when blank',
+                  ),
+                ),
+              ),
+              FilledButton.tonal(
+                onPressed: _busy
+                    ? null
+                    : () => _run(() async {
+                        try {
+                          await widget.controller.signInToMatrix(
+                            homeserver: _matrixHomeserverController.text,
+                            user: _matrixUserController.text,
+                            password: _matrixPasswordController.text,
+                          );
+                        } finally {
+                          _matrixPasswordController.clear();
+                        }
+                      }),
+                child: const Text('Sign in to Matrix'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _displayNameController.dispose();
@@ -12995,6 +13098,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _relayPortController.dispose();
     _localRelayPortController.dispose();
     _irohRelayUrlsController.dispose();
+    _matrixHomeserverController.dispose();
+    _matrixUserController.dispose();
+    _matrixPasswordController.dispose();
     super.dispose();
   }
 
@@ -13536,6 +13642,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 ),
                               ],
                             ),
+                            if (widget.controller.matrixCarrierAvailable)
+                              _buildMatrixCarrierSettings(context),
                             const SizedBox(height: 12),
                             Text(
                               'Transport policy',
@@ -13543,7 +13651,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   ?.copyWith(fontWeight: FontWeight.w700),
                             ),
                             const SizedBox(height: 6),
-                            for (final kind in const [
+                            for (final kind in [
                               TransportKind.lan,
                               TransportKind.iroh,
                               TransportKind.conestRelay,
@@ -13551,6 +13659,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               TransportKind.deltaChat,
                               TransportKind.reticulum,
                               TransportKind.localSend,
+                              if (widget.controller.matrixCarrierAvailable)
+                                TransportKind.matrix,
                             ])
                               _TransportPolicySelector(
                                 kind: kind,

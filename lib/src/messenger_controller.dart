@@ -3199,7 +3199,8 @@ class MessengerController extends ChangeNotifier {
       // A Matrix-only registry from before keeps its running adapter and
       // inbound subscription.
       final matrixOnly = _transportRegistry;
-      for (final adapter in matrixOnly?.adapters ?? const <TransportAdapter>[]) {
+      for (final adapter
+          in matrixOnly?.adapters ?? const <TransportAdapter>[]) {
         registry.register(adapter);
       }
       _transportRegistry = registry;
@@ -21551,7 +21552,13 @@ class MessengerController extends ChangeNotifier {
   }) async {
     final sessions = _ratchet;
     final me = _snapshot.identity;
-    if (sessions == null || me == null || !_ratchetCapable(peer)) return;
+    // An answer replies to a bundle, which already proves the peer runs the
+    // ratchet even if its advertised capabilities have not arrived yet.
+    if (sessions == null ||
+        me == null ||
+        (reason != 'answer' && !_ratchetCapable(peer))) {
+      return;
+    }
     final now = _now();
     // Offers and resets are limited separately: a recent offer must not
     // suppress the reset that recovers a lost session.
@@ -21602,7 +21609,10 @@ class MessengerController extends ChangeNotifier {
   Future<void> _handleRatchetBundle(RelayEnvelope envelope) async {
     final sessions = _ratchet;
     final peer = _ratchetPeer(envelope.senderDeviceId);
-    if (sessions == null || peer == null || !_ratchetCapable(peer)) return;
+    // An authenticated bundle proves the sender runs the ratchet. Requiring
+    // its capability advertisement too would drop an offer that overtakes
+    // the profile update, and the sender would not offer again for minutes.
+    if (sessions == null || peer == null) return;
     final decoded = jsonDecode(
       await _crypto.decryptMessage(contact: peer, envelope: envelope),
     );
@@ -21869,9 +21879,10 @@ class MessengerController extends ChangeNotifier {
       (contact) => contact.canSendOutbound,
     )) {
       unawaited(
-        _sendReciprocalContactExchange(contact, recipientKnowsIdentity: true)
-            .then<void>((_) {})
-            .catchError((Object _) {}),
+        _sendReciprocalContactExchange(
+          contact,
+          recipientKnowsIdentity: true,
+        ).then<void>((_) {}).catchError((Object _) {}),
       );
     }
   }
@@ -21886,10 +21897,12 @@ class MessengerController extends ChangeNotifier {
         ),
       );
 
-  List<int> _matrixCarrierAad(String senderDeviceId, String recipientDeviceId) =>
-      utf8.encode(
-        'conest.matrix.carrier.v1|$senderDeviceId|$recipientDeviceId',
-      );
+  List<int> _matrixCarrierAad(
+    String senderDeviceId,
+    String recipientDeviceId,
+  ) => utf8.encode(
+    'conest.matrix.carrier.v1|$senderDeviceId|$recipientDeviceId',
+  );
 
   Future<Uint8List> _sealForMatrix(
     String peerDeviceId,

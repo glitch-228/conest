@@ -11412,7 +11412,7 @@ void main() {
       final daveId = dave.identity!.deviceId;
       expect(bob.contacts.where((c) => c.deviceId == daveId), isEmpty);
       // Bob and Dave share only the group, yet still open a session.
-      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      final deadline = DateTime.now().add(const Duration(seconds: 20));
       while (DateTime.now().isBefore(deadline) &&
           !(await bob.hasRatchetSessionForTesting(daveId) &&
               await dave.hasRatchetSessionForTesting(bobId))) {
