@@ -36,11 +36,13 @@ import 'src/lan_direct.dart';
 import 'src/iroh_ffi_bridge.dart';
 import 'src/iroh_transport.dart';
 import 'src/media_picker_sheet.dart';
-import 'src/matrix_service.dart';
 import 'src/messenger_controller.dart';
 import 'src/models.dart';
 import 'src/platform_bridge.dart';
 import 'src/qr_scan_screen.dart';
+import 'src/ui/app_mode_selector.dart';
+import 'src/ui/matrix_account_panel.dart';
+import 'src/ui/matrix_home_screen.dart';
 import 'src/ui/matrix_room_screen.dart';
 import 'src/ui/matrix_verification_dialog.dart';
 import 'src/relay_client.dart';
@@ -823,6 +825,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
   String? _activeUpdatePromptTag;
   late bool _controllerReady;
   late bool _controllerHasIdentity;
+  late bool _controllerMatrixOnly;
 
   @override
   void initState() {
@@ -831,6 +834,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addTimingsCallback(_recordFrameTimings);
     _controllerReady = widget.controller.isReady;
     _controllerHasIdentity = widget.controller.hasIdentity;
+    _controllerMatrixOnly = widget.controller.appMode == AppMode.matrixOnly;
     widget.controller.addListener(_handleControllerChanged);
     widget.controller.setAppForegroundState(true);
     widget.updateService.addListener(_handleUpdateServiceChanged);
@@ -855,11 +859,15 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
   void _handleControllerChanged() {
     final ready = widget.controller.isReady;
     final hasIdentity = widget.controller.hasIdentity;
-    if (ready == _controllerReady && hasIdentity == _controllerHasIdentity) {
+    final matrixOnly = widget.controller.appMode == AppMode.matrixOnly;
+    if (ready == _controllerReady &&
+        hasIdentity == _controllerHasIdentity &&
+        matrixOnly == _controllerMatrixOnly) {
       return;
     }
     _controllerReady = ready;
     _controllerHasIdentity = hasIdentity;
+    _controllerMatrixOnly = matrixOnly;
     if (mounted) setState(() {});
   }
 
@@ -953,7 +961,12 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
                 courier: widget.themeController.shell == ConestShell.courier,
               ),
               home: _controllerReady
-                  ? _controllerHasIdentity
+                  ? _controllerMatrixOnly
+                        ? MatrixHomeScreen(
+                            controller: widget.controller,
+                            palette: palette,
+                          )
+                        : _controllerHasIdentity
                         ? HomeScreen(
                             controller: widget.controller,
                             updateService: widget.updateService,
@@ -1347,6 +1360,20 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                       'Create encrypted device',
                                     ),
                                   ),
+                                  if (widget.controller.matrixAvailable) ...[
+                                    const SizedBox(height: 8),
+                                    OutlinedButton.icon(
+                                      onPressed: _submitting
+                                          ? null
+                                          : () => widget.controller.setAppMode(
+                                              AppMode.matrixOnly,
+                                            ),
+                                      icon: const Icon(Icons.alternate_email),
+                                      label: const Text(
+                                        'Use as a Matrix client instead',
+                                      ),
+                                    ),
+                                  ],
                                   if (widget.controller.statusMessage !=
                                       null) ...[
                                     const SizedBox(height: 14),
@@ -3591,6 +3618,9 @@ class _CourierHome extends StatefulWidget {
 class _CourierHomeState extends State<_CourierHome> {
   bool _showArchived = false;
   String _activeFolderId = 'all';
+
+  /// In Both mode: which chats the list shows.
+  _ChatSource _source = _ChatSource.all;
   List<({String id, bool selected, VoidCallback open})> _navigation = const [];
 
   void navigateChat(int direction) {
@@ -3918,54 +3948,7 @@ class _CourierHomeState extends State<_CourierHome> {
   Future<void> _newMatrixChat() async {
     final matrix = widget.controller.matrixClient;
     if (matrix == null) return;
-    final input = TextEditingController();
-    final userId = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('New Matrix chat'),
-        content: TextField(
-          controller: input,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Matrix user',
-            hintText: '@name:matrix.org',
-          ),
-          onSubmitted: (value) => Navigator.pop(context, value),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, input.text),
-            child: const Text('Start chat'),
-          ),
-        ],
-      ),
-    );
-    input.dispose();
-    final target = userId?.trim() ?? '';
-    if (target.isEmpty || !mounted) return;
-    try {
-      final roomId = await matrix.createDirectMessage(target);
-      if (!mounted) return;
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute(
-          builder: (_) => MatrixRoomScreen(
-            client: matrix,
-            roomId: roomId,
-            palette: widget.palette,
-          ),
-        ),
-      );
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not start the chat: $error')),
-        );
-      }
-    }
+    await startMatrixChat(context, matrix, widget.palette);
   }
 
   Widget _drawer() {
@@ -4018,7 +4001,8 @@ class _CourierHomeState extends State<_CourierHome> {
               'LAN lobby',
               widget.onLanLobbySelected,
             ),
-            if (widget.controller.matrixClient?.signedIn == true)
+            if (widget.controller.matrixClient?.signedIn == true &&
+                widget.controller.appMode != AppMode.conest)
               action(
                 Icons.alternate_email,
                 'New Matrix chat',
@@ -4112,7 +4096,9 @@ class _CourierHomeState extends State<_CourierHome> {
             VoidCallback onTap,
           })
         >[];
-    for (final contact in widget.controller.contacts) {
+    final showConest = _source != _ChatSource.matrix;
+    for (final contact
+        in showConest ? widget.controller.contacts : const <ContactRecord>[]) {
       if (_activeFolderId != 'all' && !folderIds.contains(contact.deviceId))
         continue;
       final last = widget.controller.lastMessageFor(contact.deviceId);
@@ -4146,7 +4132,10 @@ class _CourierHomeState extends State<_CourierHome> {
         onTap: () => widget.onContactSelected(contact),
       ));
     }
-    for (final group in widget.controller.visibleGroups) {
+    for (final group
+        in showConest
+            ? widget.controller.visibleGroups
+            : const <GroupRecord>[]) {
       if (_activeFolderId != 'all' && !folderIds.contains(group.groupId))
         continue;
       final last = widget.controller.lastGroupMessageFor(group.groupId);
@@ -4185,7 +4174,11 @@ class _CourierHomeState extends State<_CourierHome> {
     }
     // Matrix rooms and DMs from the full Matrix client.
     final matrix = widget.controller.matrixClient;
-    if (matrix != null && matrix.signedIn && _activeFolderId == 'all') {
+    if (matrix != null &&
+        matrix.signedIn &&
+        _activeFolderId == 'all' &&
+        widget.controller.appMode != AppMode.conest &&
+        _source != _ChatSource.conest) {
       for (final room in matrix.rooms) {
         final items = matrix.timeline(room.roomId).items;
         final last = items.isEmpty ? null : items.last;
@@ -4240,7 +4233,7 @@ class _CourierHomeState extends State<_CourierHome> {
     });
 
     _navigation = [
-      if (!_showArchived && 'lan lobby'.contains(query))
+      if (!_showArchived && showConest && 'lan lobby'.contains(query))
         (
           id: 'lobby',
           selected: widget.lanLobbySelected,
@@ -4306,11 +4299,32 @@ class _CourierHomeState extends State<_CourierHome> {
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 scrollDirection: Axis.horizontal,
                 children: [
-                  ChoiceChip(
-                    label: const Text('All chats'),
-                    selected: _activeFolderId == 'all',
-                    onSelected: (_) => setState(() => _activeFolderId = 'all'),
-                  ),
+                  if (widget.controller.appMode == AppMode.both &&
+                      widget.controller.matrixClient?.signedIn == true)
+                    for (final (source, label) in const [
+                      (_ChatSource.all, 'All chats'),
+                      (_ChatSource.conest, 'Conest'),
+                      (_ChatSource.matrix, 'Matrix'),
+                    ]) ...[
+                      if (source != _ChatSource.all) const SizedBox(width: 8),
+                      ChoiceChip(
+                        label: Text(label),
+                        selected: _activeFolderId == 'all' && _source == source,
+                        onSelected: (_) => setState(() {
+                          _activeFolderId = 'all';
+                          _source = source;
+                        }),
+                      ),
+                    ]
+                  else
+                    ChoiceChip(
+                      label: const Text('All chats'),
+                      selected: _activeFolderId == 'all',
+                      onSelected: (_) => setState(() {
+                        _activeFolderId = 'all';
+                        _source = _ChatSource.all;
+                      }),
+                    ),
                   for (final folder in widget.controller.chatFolders) ...[
                     const SizedBox(width: 8),
                     GestureDetector(
@@ -4318,8 +4332,11 @@ class _CourierHomeState extends State<_CourierHome> {
                       child: InputChip(
                         label: Text(folder.name),
                         selected: _activeFolderId == folder.id,
-                        onSelected: (_) =>
-                            setState(() => _activeFolderId = folder.id),
+                        // Folders hold Conest chats.
+                        onSelected: (_) => setState(() {
+                          _activeFolderId = folder.id;
+                          _source = _ChatSource.all;
+                        }),
                         onDeleted: () async {
                           await widget.controller.deleteChatFolder(folder.id);
                           if (mounted && _activeFolderId == folder.id) {
@@ -4402,7 +4419,7 @@ class _CourierHomeState extends State<_CourierHome> {
                     trailing: Text('$archivedCount'),
                     onTap: () => setState(() => _showArchived = true),
                   ),
-                if (!_showArchived && 'lan lobby'.contains(query))
+                if (!_showArchived && showConest && 'lan lobby'.contains(query))
                   _CourierRow(
                     palette: widget.palette,
                     icon: Icons.forum_outlined,
@@ -4420,6 +4437,8 @@ class _CourierHomeState extends State<_CourierHome> {
                         ? const Text('No chats found')
                         : _showArchived
                         ? const Text('No archived chats')
+                        : !showConest
+                        ? const Text('No Matrix chats yet')
                         : _EmptyContactsState(palette: widget.palette),
                   ),
                 for (final entry in entries)
@@ -4599,6 +4618,8 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
 }
 
 /// One Telegram-style row in the [_CourierHome] list.
+enum _ChatSource { all, conest, matrix }
+
 class _CourierRow extends StatelessWidget {
   const _CourierRow({
     super.key,
@@ -8554,6 +8575,13 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       ),
                     ),
                   ],
+                  if (!outbound && message.effectiveRoute != null) ...[
+                    const SizedBox(width: 8),
+                    _MessageRouteChip(
+                      message: message,
+                      compact: widget.telegramLayout,
+                    ),
+                  ],
                   if (outbound) ...[
                     const SizedBox(width: 8),
                     Tooltip(
@@ -10285,16 +10313,35 @@ class _ChatPanelState extends State<_ChatPanel> {
                       ),
                     ),
                   ],
-                  if (!widget.telegramLayout &&
-                      outbound &&
-                      message.transportKind != null) ...[
+                  if (message.effectiveRoute != null) ...[
                     const SizedBox(width: 8),
-                    _MessageRouteChip(message: message),
+                    _MessageRouteChip(
+                      message: message,
+                      compact: widget.telegramLayout,
+                    ),
                   ],
+                  if (controller.canSendViaPlainMatrix(
+                    contact.deviceId,
+                    message,
+                  ))
+                    IconButton(
+                      tooltip: 'Not delivered yet. Send via Matrix…',
+                      visualDensity: VisualDensity.compact,
+                      iconSize: 16,
+                      onPressed: () => _sendViaPlainMatrix(
+                        context,
+                        controller,
+                        contact,
+                        message,
+                      ),
+                      icon: const Icon(Icons.alternate_email),
+                    ),
                   if (outbound) ...[
                     const SizedBox(width: 8),
                     Tooltip(
-                      message: message.state.label,
+                      message: message.route == MessageRoute.plainMatrix
+                          ? 'Sent as a plain Matrix message'
+                          : message.state.label,
                       child: Icon(
                         message.state.icon,
                         size: 16,
@@ -10323,9 +10370,12 @@ class _ChatPanelState extends State<_ChatPanel> {
                                   Text(formatTimestamp(message.createdAt)),
                                   const SizedBox(height: 8),
                                   Text(message.state.label),
-                                  if (message.transportKind != null) ...[
+                                  if (message.effectiveRoute
+                                      case final route?) ...[
                                     const SizedBox(height: 12),
                                     _MessageRouteChip(message: message),
+                                    const SizedBox(height: 6),
+                                    Text(route.description),
                                   ],
                                 ],
                               ),
@@ -10363,6 +10413,13 @@ class _ChatPanelState extends State<_ChatPanel> {
                           await controller.cancelPendingMessage(
                             contact: contact,
                             messageId: message.id,
+                          );
+                        } else if (value == 'plain_matrix') {
+                          await _sendViaPlainMatrix(
+                            context,
+                            controller,
+                            contact,
+                            message,
                           );
                         } else if (value == 'attachment_download' &&
                             attachmentDescriptor != null) {
@@ -10501,6 +10558,14 @@ class _ChatPanelState extends State<_ChatPanel> {
                         const PopupMenuItem(
                           value: 'cancel',
                           child: Text('Cancel sending'),
+                        ),
+                      if (controller.canSendViaPlainMatrix(
+                        contact.deviceId,
+                        message,
+                      ))
+                        const PopupMenuItem(
+                          value: 'plain_matrix',
+                          child: Text('Send via Matrix…'),
                         ),
                       if (outbound)
                         const PopupMenuItem(
@@ -13181,13 +13246,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
   );
   late final TextEditingController _localRelayPortController;
   late final TextEditingController _irohRelayUrlsController;
-  final TextEditingController _matrixHomeserverController =
-      TextEditingController();
-  final TextEditingController _matrixUserController = TextEditingController();
-  /// The account page a browser sign-in is waiting on.
-  Uri? _matrixBrowserUrl;
-  final TextEditingController _matrixPasswordController =
-      TextEditingController();
   bool _busy = false;
   String? _error;
 
@@ -13207,383 +13265,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
     );
   }
 
-  /// Creates the recovery key that unlocks encrypted Matrix history on a
-  /// new device, and shows it once.
-  Future<void> _signOutOfMatrix() async {
-    Object? failure;
-    await _run(() async {
-      try {
-        await widget.controller.signOutOfMatrix();
-      } catch (error) {
-        if (widget.controller.matrixClient == null) rethrow;
-        failure = error;
-      }
-    });
-    if (failure == null || !mounted) return;
-    final force = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Server not reached'),
-        content: Text(
-          'Conest could not sign this device out on the server ($failure).\n\n'
-          'Sign out on this device anyway? The session stays valid on the '
-          'server until you remove it from another Matrix app.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Keep signed in'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Sign out here'),
-          ),
-        ],
-      ),
-    );
-    if (force == true) {
-      await _run(() => widget.controller.signOutOfMatrix(force: true));
-    }
-  }
-
-  Future<String?> _askMatrixPassword() async {
-    final input = TextEditingController();
-    final password = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Matrix password'),
-        content: TextField(
-          controller: input,
-          autofocus: true,
-          obscureText: true,
-          decoration: const InputDecoration(
-            labelText: 'Password',
-            helperText: 'Your server asks for it to create signing keys.',
-          ),
-          onSubmitted: (value) => Navigator.pop(context, value),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, input.text),
-            child: const Text('Continue'),
-          ),
-        ],
-      ),
-    );
-    input.dispose();
-    return password == null || password.isEmpty ? null : password;
-  }
-
-  Future<void> _setUpMatrixRecovery(MatrixClientService client) async {
-    final state = await client.recoveryState().catchError(
-      (Object _) => (recovery: 'Unknown', crossSigning: false),
-    );
-    if (!mounted) return;
-    if (state.recovery == 'Enabled' || state.recovery == 'Incomplete') {
-      // A new key would replace the one the user already has.
-      await showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Recovery is already set up'),
-          content: Text(
-            state.recovery == 'Enabled'
-                ? 'Your encrypted Matrix history is already backed up. Use '
-                      '"Enter recovery key" on a new device.'
-                : 'This account already has a recovery key. Use "Enter '
-                      'recovery key" or "Verify with another session" to '
-                      'unlock your encrypted history on this device.',
-          ),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
-    String? key;
-    await _run(() async {
-      try {
-        key = await client.enableRecovery();
-      } on MatrixPasswordRequired {
-        final password = await _askMatrixPassword();
-        if (password == null) return;
-        key = await client.enableRecovery(password: password);
-      }
-    });
-    final recoveryKey = key;
-    if (!mounted || recoveryKey == null) return;
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Text('Save your recovery key'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Keep this key somewhere safe. You need it to read encrypted '
-              'Matrix history on a new device. It is shown only once.',
-            ),
-            const SizedBox(height: 12),
-            SelectableText(
-              recoveryKey,
-              style: const TextStyle(fontFamily: 'monospace'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () =>
-                Clipboard.setData(ClipboardData(text: recoveryKey)),
-            child: const Text('Copy'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('I saved it'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _verifyMatrixSession(MatrixClientService client) async {
-    String? flowId;
-    await _run(() async => flowId = await client.verifyOwnSession());
-    final flow = flowId;
-    final userId = client.userId;
-    if (flow == null || userId == null || !mounted) return;
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => MatrixVerificationDialog(
-        client: client,
-        userId: userId,
-        flowId: flow,
-        weStarted: true,
-      ),
-    );
-  }
-
-  Future<void> _enterMatrixRecoveryKey(MatrixClientService client) async {
-    final input = TextEditingController();
-    final key = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Enter recovery key'),
-        content: TextField(
-          controller: input,
-          autofocus: true,
-          minLines: 1,
-          maxLines: 3,
-          decoration: const InputDecoration(
-            hintText: 'EsT… (from another Matrix app or this one)',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, input.text),
-            child: const Text('Unlock'),
-          ),
-        ],
-      ),
-    );
-    input.dispose();
-    if (key == null || key.trim().isEmpty) return;
-    await _run(() => client.recover(key));
-  }
-
-  Widget _buildMatrixCarrierSettings(BuildContext context) {
-    final status = widget.controller.matrixStatus;
-    final signedIn = status?.signedIn == true;
-    const privacy =
-        'Used when LAN and Iroh cannot reach a contact who also linked Matrix. '
-        'Messages stay end-to-end encrypted; the homeserver sees which '
-        'accounts talk and when, never content.';
-    final client = widget.controller.matrixClient;
-    if (signedIn) {
-      final error = client?.lastError ?? status!.lastError;
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            title: Text('Matrix: ${status!.userId}'),
-            subtitle: Text(
-              '${client == null ? privacy : 'Your Matrix chats appear in the chat list. $privacy'}'
-              '${error == null ? '' : '\nLast error: $error'}',
-            ),
-            trailing: TextButton(
-              onPressed: _busy ? null : _signOutOfMatrix,
-              child: const Text('Sign out'),
-            ),
-          ),
-          if (client != null && client.signedIn)
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: _busy ? null : () => _setUpMatrixRecovery(client),
-                  icon: const Icon(Icons.key_outlined),
-                  label: const Text('Set up recovery'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _busy
-                      ? null
-                      : () => _enterMatrixRecoveryKey(client),
-                  icon: const Icon(Icons.lock_open_outlined),
-                  label: const Text('Enter recovery key'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _busy ? null : () => _verifyMatrixSession(client),
-                  icon: const Icon(Icons.verified_user_outlined),
-                  label: const Text('Verify with another session'),
-                ),
-              ],
-            ),
-        ],
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.only(top: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Matrix fallback',
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 4),
-          const Text(privacy),
-          Wrap(
-            spacing: 12,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.end,
-            children: [
-              SizedBox(
-                width: 260,
-                child: TextField(
-                  controller: _matrixUserController,
-                  enabled: !_busy,
-                  autocorrect: false,
-                  decoration: const InputDecoration(
-                    labelText: 'Matrix user',
-                    helperText: 'For example @name:matrix.org',
-                  ),
-                ),
-              ),
-              SizedBox(
-                width: 220,
-                child: TextField(
-                  controller: _matrixPasswordController,
-                  enabled: !_busy,
-                  obscureText: true,
-                  decoration: const InputDecoration(labelText: 'Password'),
-                ),
-              ),
-              SizedBox(
-                width: 260,
-                child: TextField(
-                  controller: _matrixHomeserverController,
-                  enabled: !_busy,
-                  autocorrect: false,
-                  decoration: const InputDecoration(
-                    labelText: 'Homeserver (optional)',
-                    helperText: 'Found from the user id when blank',
-                  ),
-                ),
-              ),
-              FilledButton.tonal(
-                onPressed: _busy
-                    ? null
-                    : () => _run(() async {
-                        try {
-                          await widget.controller.signInToMatrix(
-                            homeserver: _matrixHomeserverController.text,
-                            user: _matrixUserController.text,
-                            password: _matrixPasswordController.text,
-                          );
-                        } finally {
-                          _matrixPasswordController.clear();
-                        }
-                      }),
-                child: const Text('Sign in to Matrix'),
-              ),
-              if (widget.controller.matrixClient != null)
-                OutlinedButton.icon(
-                  onPressed: _busy ? null : _signInToMatrixWithBrowser,
-                  icon: const Icon(Icons.open_in_browser),
-                  label: const Text('Sign in with browser'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          if (widget.controller.matrixClient != null)
-            Text(
-              'Accounts that sign in through Google, GitHub or another '
-              'provider, or through matrix.org, use the browser.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          if (_matrixBrowserUrl case final url?)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Wrap(
-                spacing: 8,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  const Text('Finish signing in in your browser.'),
-                  TextButton(
-                    onPressed: () =>
-                        Clipboard.setData(ClipboardData(text: url.toString())),
-                    child: const Text('Copy link'),
-                  ),
-                  TextButton(
-                    onPressed: widget.controller.cancelMatrixBrowserSignIn,
-                    child: const Text('Cancel'),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _signInToMatrixWithBrowser() async {
-    try {
-      await _run(
-        () => widget.controller.signInToMatrixWithBrowser(
-          homeserver: _matrixHomeserverController.text,
-          user: _matrixUserController.text,
-          openUrl: (url) async {
-            if (mounted) setState(() => _matrixBrowserUrl = url);
-            try {
-              await widget.controller.openExternalUrl(url);
-            } catch (_) {
-              // The link stays available to copy.
-            }
-          },
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _matrixBrowserUrl = null);
-    }
-  }
-
   @override
   void dispose() {
     _displayNameController.dispose();
@@ -13592,9 +13273,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _relayPortController.dispose();
     _localRelayPortController.dispose();
     _irohRelayUrlsController.dispose();
-    _matrixHomeserverController.dispose();
-    _matrixUserController.dispose();
-    _matrixPasswordController.dispose();
     super.dispose();
   }
 
@@ -14136,8 +13814,13 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 ),
                               ],
                             ),
+                            if (widget.controller.matrixAvailable) ...[
+                              const SizedBox(height: 16),
+                              AppModeSelector(controller: widget.controller),
+                            ],
+                            const _MessageRouteLegend(),
                             if (widget.controller.matrixCarrierAvailable)
-                              _buildMatrixCarrierSettings(context),
+                              MatrixAccountPanel(controller: widget.controller),
                             const SizedBox(height: 12),
                             Text(
                               'Transport policy',
@@ -19979,41 +19662,158 @@ class _RouteChip extends StatelessWidget {
   }
 }
 
-class _MessageRouteChip extends StatelessWidget {
-  const _MessageRouteChip({required this.message});
+/// Colour and short name for each [MessageRoute], shared by the message
+/// chips and the legend in Settings.
+extension MessageRouteStyle on MessageRoute {
+  Color get color => switch (this) {
+    MessageRoute.lanDirect => const Color(0xFF2E7D32),
+    MessageRoute.lanRelay => const Color(0xFF00897B),
+    MessageRoute.lanLobby => const Color(0xFF8D6E63),
+    MessageRoute.internetDirect => const Color(0xFF3949AB),
+    MessageRoute.irohDirect => const Color(0xFF1E88E5),
+    MessageRoute.irohRelay => const Color(0xFF8E24AA),
+    MessageRoute.conestRelay => const Color(0xFFF57C00),
+    MessageRoute.matrixCarrier => const Color(0xFF0DBD8B),
+    MessageRoute.plainMatrix => const Color(0xFFE53935),
+  };
 
-  final ChatMessage message;
+  String get shortLabel => switch (this) {
+    MessageRoute.lanDirect => 'LAN',
+    MessageRoute.lanRelay => 'LAN relay',
+    MessageRoute.lanLobby => 'Lobby',
+    MessageRoute.internetDirect => 'Direct',
+    MessageRoute.irohDirect => 'Iroh',
+    MessageRoute.irohRelay => 'Iroh relay',
+    MessageRoute.conestRelay => 'Relay',
+    MessageRoute.matrixCarrier => 'Matrix',
+    MessageRoute.plainMatrix => 'Plain Matrix',
+  };
+}
+
+/// Asks, every time, before sending a pending message as a plain Matrix
+/// message to the contact's linked Matrix account.
+Future<void> _sendViaPlainMatrix(
+  BuildContext context,
+  MessengerController controller,
+  ContactRecord contact,
+  ChatMessage message,
+) async {
+  final userId = controller.matrixUserIdFor(contact.deviceId);
+  if (userId == null) return;
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Send via Matrix?'),
+      content: Text(
+        '${contact.alias} cannot be reached over Conest right now. Send this '
+        'message to $userId as an ordinary Matrix message instead?\n\n'
+        'It goes to your Matrix direct chat with them, not through Conest '
+        'encryption: the homeserver can read it unless that chat is '
+        'encrypted. Conest stops trying to deliver it.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Keep waiting'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Send via Matrix'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true) return;
+  try {
+    await controller.sendViaPlainMatrix(
+      contact: contact,
+      messageId: message.id,
+    );
+  } catch (error) {
+    controller.setStatus('Not sent via Matrix: $error');
+  }
+}
+
+/// Explains the route marks on messages.
+class _MessageRouteLegend extends StatelessWidget {
+  const _MessageRouteLegend();
 
   @override
   Widget build(BuildContext context) {
-    final kind = message.transportKind;
-    final path = message.transportPath;
-    if (kind == null || path == null) return const SizedBox.shrink();
-    final label = switch ((kind, path)) {
-      (TransportKind.lan, _) => 'LAN',
-      (TransportKind.iroh, TransportPathKind.direct) => 'direct',
-      (TransportKind.iroh, TransportPathKind.relayed) => 'Iroh relay',
-      (TransportKind.conestRelay, TransportPathKind.storeForward) =>
-        'Conest relay',
-      (TransportKind.optical, _) => 'optical',
-      (TransportKind.deltaChat, _) => 'Delta',
-      (TransportKind.reticulum, _) => 'Reticulum',
-      (TransportKind.localSend, _) => 'LocalSend',
-      _ => kind.label,
-    };
+    return ExpansionTile(
+      tilePadding: EdgeInsets.zero,
+      title: const Text('Message routes'),
+      subtitle: const Text('What the coloured marks on messages mean'),
+      children: [
+        for (final route in MessageRoute.values)
+          ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: CircleAvatar(radius: 6, backgroundColor: route.color),
+            title: Text(route.label),
+            subtitle: Text(route.description),
+          ),
+      ],
+    );
+  }
+}
+
+/// The route a message took, sent or received: a coloured chip, or a dot
+/// and short name in compact layouts.
+class _MessageRouteChip extends StatelessWidget {
+  const _MessageRouteChip({required this.message, this.compact = false});
+
+  final ChatMessage message;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final route = message.effectiveRoute;
+    if (route == null) return const SizedBox.shrink();
+    final detail = message.transportDetail;
     return Tooltip(
-      message: message.transportDetail ?? label,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.white.withValues(alpha: 0.42)),
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Text(
-          label,
-          style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600),
-        ),
-      ),
+      message:
+          '${route.label}: ${route.description}'
+          '${detail == null || detail.isEmpty ? '' : '\n$detail'}',
+      child: compact
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    color: route.color,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 3),
+                Text(
+                  route.shortLabel,
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w600,
+                    color: route.color,
+                  ),
+                ),
+              ],
+            )
+          : Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: route.color.withValues(alpha: 0.16),
+                border: Border.all(color: route.color.withValues(alpha: 0.7)),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                route.label,
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w600,
+                  color: route.color,
+                ),
+              ),
+            ),
     );
   }
 }

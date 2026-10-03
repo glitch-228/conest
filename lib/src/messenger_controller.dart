@@ -506,6 +506,85 @@ class MessengerController extends ChangeNotifier {
 
   /// The full Matrix client, when this build has the native client.
   MatrixClientService? get matrixClient => _matrixClient;
+
+  /// Whether this build has the full Matrix client (and so app modes).
+  bool get matrixAvailable => _matrixClient != null;
+
+  /// What the app is used as. Builds without the Matrix client are Conest
+  /// only; an identity from before app modes reads as both. A stored
+  /// Matrix-only choice holds even if the Matrix client failed to load, so
+  /// Conest stays dormant instead of silently starting.
+  AppMode get appMode {
+    final stored = _snapshot.appMode;
+    if (stored == AppMode.matrixOnly) return AppMode.matrixOnly;
+    if (_matrixClient == null) return AppMode.conest;
+    return stored ?? AppMode.both;
+  }
+
+  /// Whether Conest itself runs: in Matrix-only mode an existing identity
+  /// stays dormant (no LAN, relay node, Iroh or polling).
+  bool get conestActive => appMode != AppMode.matrixOnly;
+
+  /// Stores the mode and starts or stops Conest's own networking to match:
+  /// entering Matrix-only mode stops it (an identity stays, dormant), and
+  /// leaving it starts it again. Refused during a call.
+  Future<void> setAppMode(AppMode mode) async {
+    if (mode == AppMode.matrixOnly && _voiceCallService?.active != null) {
+      throw StateError('End the call before switching to Matrix only.');
+    }
+    final wasActive = conestActive;
+    _snapshot = _snapshot.copyWith(appMode: mode);
+    await _persist('App mode: ${mode.name}.');
+    if (_snapshot.identity == null || wasActive == conestActive) return;
+    if (conestActive) {
+      await _startConestRuntime();
+    } else {
+      await _stopConestRuntime();
+    }
+    notifyListeners();
+  }
+
+  /// Starts Conest's networking for the identity: at launch, after creating
+  /// the identity, and when leaving Matrix-only mode.
+  Future<void> _startConestRuntime() async {
+    if (_snapshot.identity == null || !conestActive) return;
+    await _startLanDirectChannel();
+    _ensureVoiceCallService();
+    await _startTransportRegistry();
+    await _refreshLanAddresses(persist: false);
+    await _ensureLocalRelayRunning();
+    await _ensurePairingBeaconRunning();
+    _applyAndroidBackgroundPreference();
+    for (final contact in _snapshot.contacts) {
+      _pumpOutboundQueue(contact);
+    }
+    _reschedulePolling();
+    unawaited(_pollLocalInboxOnly());
+    unawaited(pollNow());
+    unawaited(_startLongPollIfEnabled());
+    _requestVisibleGroupCatchUp();
+    _scheduleScheduledMessagePump();
+  }
+
+  /// Stops Conest's networking for Matrix-only mode. Every entry point also
+  /// checks [conestActive], so nothing restarts it behind the user's back.
+  Future<void> _stopConestRuntime() async {
+    _stopLongPoll();
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _nextScheduledPollAt = null;
+    _scheduledMessageTimer?.cancel();
+    _scheduledMessageTimer = null;
+    unawaited(_platformBridge.scheduleAndroidScheduledMessageWakeup(null));
+    await _stopPairingBeacon();
+    await _detachMatrixTransport();
+    await _stopTransportRegistry();
+    await _lanDirectChannel?.stop();
+    await _localRelayNode.stop();
+    unawaited(_platformBridge.setAndroidBackgroundRuntimeEnabled(false));
+    unawaited(_platformBridge.stopTransferForeground());
+  }
+
   MatrixTransportAdapter? _matrixTransport;
   RatchetSessions? _ratchet;
   final Map<String, DateTime> _ratchetBundleSentAt = {};
@@ -956,7 +1035,10 @@ class MessengerController extends ChangeNotifier {
         count +
         conversation.messages
             .where(
-              (message) => message.outbound && message.state.awaitsRecipientAck,
+              (message) =>
+                  message.outbound &&
+                  message.state.awaitsRecipientAck &&
+                  message.route != MessageRoute.plainMatrix,
             )
             .length,
   );
@@ -1488,7 +1570,7 @@ class MessengerController extends ChangeNotifier {
         _now().difference(backgroundedAt) >= const Duration(seconds: 3);
     _appInForeground = value;
     _appBackgroundedAtUtc = value ? null : _now();
-    if (value && hasIdentity) {
+    if (value && hasIdentity && conestActive) {
       _markRuntimeActivity();
       _resumePendingTransfersAfterForeground(
         reconnectOutbound: resumedAfterTransferSuspension,
@@ -1748,6 +1830,7 @@ class MessengerController extends ChangeNotifier {
     _pollTimer?.cancel();
     _pollTimer = null;
     _nextScheduledPollAt = null;
+    if (!conestActive) return;
     if (!hasIdentity) {
       notifyListeners();
       return;
@@ -3091,7 +3174,6 @@ class MessengerController extends ChangeNotifier {
       if (scrubbed) {
         await _saveSnapshotSilently(notify: false);
       }
-      await _startLanDirectChannel();
       appendDebugLog(
         _nativeAttachmentCrypto == null
             ? 'Attachment crypto: compatible Dart fallback'
@@ -3100,22 +3182,8 @@ class MessengerController extends ChangeNotifier {
       await _discardInterruptedDebugFileTests();
       await _restoreTransferSessionsAndCleanAttachments();
       await _ingestSignedDefaultRelaysIfNeeded();
-      if (_snapshot.identity != null) {
-        _ensureVoiceCallService();
-        await _startTransportRegistry();
-        await _refreshLanAddresses(persist: false);
-        await _ensureLocalRelayRunning();
-        await _ensurePairingBeaconRunning();
-        _applyAndroidBackgroundPreference();
-        for (final contact in _snapshot.contacts) {
-          _pumpOutboundQueue(contact);
-        }
-        _reschedulePolling();
-        unawaited(_pollLocalInboxOnly());
-        unawaited(pollNow());
-        unawaited(_startLongPollIfEnabled());
-        _requestVisibleGroupCatchUp();
-        _scheduleScheduledMessagePump();
+      if (_snapshot.identity != null && conestActive) {
+        await _startConestRuntime();
       }
     } catch (error) {
       _statusMessage = 'Vault unlock failed: $error';
@@ -3192,6 +3260,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _startTransportRegistry() async {
+    if (!conestActive) return;
     await _startNativeTransportRegistry();
     await _attachMatrixTransport();
   }
@@ -3281,6 +3350,7 @@ class MessengerController extends ChangeNotifier {
   bool get _matrixAllowed {
     final global = _snapshot.identity?.connectivity;
     return global != null &&
+        conestActive &&
         global.onlineEnabled &&
         global.policyFor(TransportKind.matrix) != TransportPolicy.disabled;
   }
@@ -3343,9 +3413,11 @@ class MessengerController extends ChangeNotifier {
         appendDebugLog('Matrix envelope identity mismatch.');
         return;
       }
-      final processed = await _processEnvelopes([
-        envelope,
-      ], ingressKind: PeerRouteKind.relay);
+      final processed = await _processEnvelopes(
+        [envelope],
+        ingressKind: PeerRouteKind.relay,
+        route: MessageRoute.matrixCarrier,
+      );
       if (processed > 0) _reachability.noteAvailablePath(contact.deviceId);
     } catch (error) {
       appendDebugLog('Rejected Matrix envelope: $error');
@@ -3426,6 +3498,7 @@ class MessengerController extends ChangeNotifier {
           ingressKind: inbound.path == TransportPathKind.relayed
               ? PeerRouteKind.relay
               : PeerRouteKind.directInternet,
+          route: _irohRoute(inbound.path),
         );
         return;
       }
@@ -3489,6 +3562,7 @@ class MessengerController extends ChangeNotifier {
         ingressKind: inbound.path == TransportPathKind.relayed
             ? PeerRouteKind.relay
             : PeerRouteKind.directInternet,
+        route: _irohRoute(inbound.path),
       );
       if (processed > 0) {
         _reachability.noteAvailablePath(contact.deviceId);
@@ -3563,6 +3637,7 @@ class MessengerController extends ChangeNotifier {
       ingressKind: inbound.path == TransportPathKind.relayed
           ? PeerRouteKind.relay
           : PeerRouteKind.directInternet,
+      route: _irohRoute(inbound.path),
     );
     await _saveSnapshotSilently(debounce: true);
     return true;
@@ -6203,17 +6278,11 @@ class MessengerController extends ChangeNotifier {
         ],
       ),
     );
-    _ensureVoiceCallService();
-    await _startTransportRegistry();
     await _ingestSignedDefaultRelaysIfNeeded();
-    await _ensureLocalRelayRunning();
-    await _ensurePairingBeaconRunning();
-    _applyAndroidBackgroundPreference();
     await _persist(
       'Device created. Share a QR invite or the current codephrase to add this contact.',
     );
-    _reschedulePolling();
-    _scheduleScheduledMessagePump();
+    await _startConestRuntime();
     await _pollLocalInboxOnly();
     await pollNow();
   }
@@ -10208,6 +10277,81 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  /// The Matrix user a Conest contact linked, if any.
+  String? matrixUserIdFor(String peerDeviceId) => MatrixAddress.decode(
+    _contactByDeviceId(peerDeviceId)?.matrixAddress,
+  )?.userId;
+
+  /// Whether a pending text message may be offered as a plain Matrix
+  /// message to the contact's linked Matrix account (asked each time).
+  bool canSendViaPlainMatrix(String peerDeviceId, ChatMessage message) =>
+      _matrixClient?.signedIn == true &&
+      conestActive &&
+      message.outbound &&
+      message.state == DeliveryState.pending &&
+      message.route != MessageRoute.plainMatrix &&
+      !_plainMatrixInFlight.contains(message.id) &&
+      message.attachment == null &&
+      message.body.trim().isNotEmpty &&
+      matrixUserIdFor(peerDeviceId) != null;
+
+  /// Sends a pending message as an ordinary Matrix message in the direct
+  /// chat with the contact's linked Matrix account, and stops trying it over
+  /// Conest. The homeserver can read it unless that room is encrypted.
+  Future<void> sendViaPlainMatrix({
+    required ContactRecord contact,
+    required String messageId,
+  }) async {
+    final client = _matrixClient;
+    final message = _messageById(contact.deviceId, messageId);
+    if (client == null ||
+        message == null ||
+        !canSendViaPlainMatrix(contact.deviceId, message)) {
+      throw StateError('This message cannot be sent through Matrix.');
+    }
+    final userId = matrixUserIdFor(contact.deviceId)!;
+    _plainMatrixInFlight.add(messageId);
+    // Taken out of Conest's retries before anything is sent, so the message
+    // cannot also go out over Conest while this send runs.
+    _clearOutboundAttempt(contact.deviceId, messageId);
+    _upsertMessage(
+      contact.deviceId,
+      message.copyWith(route: MessageRoute.plainMatrix),
+    );
+    notifyListeners();
+    try {
+      final roomId = await client.createDirectMessage(userId);
+      await client.sendText(roomId, message.body);
+    } catch (_) {
+      // Not sent: back into Conest's queue.
+      final current = _messageById(contact.deviceId, messageId);
+      if (current != null) {
+        _upsertMessage(contact.deviceId, current.copyWith(clearRoute: true));
+      }
+      notifyListeners();
+      rethrow;
+    } finally {
+      _plainMatrixInFlight.remove(messageId);
+    }
+    final current = _messageById(contact.deviceId, messageId) ?? message;
+    _upsertMessage(
+      contact.deviceId,
+      current.copyWith(
+        // Never downgrades a receipt that arrived meanwhile.
+        state: current.state == DeliveryState.pending
+            ? DeliveryState.relayed
+            : null,
+        route: MessageRoute.plainMatrix,
+        transportKind: TransportKind.matrix,
+        transportPath: TransportPathKind.relayed,
+        transportDetail: 'Matrix direct chat with $userId',
+      ),
+    );
+    await _persist('Sent to ${contact.alias} as a plain Matrix message.');
+  }
+
+  final Set<String> _plainMatrixInFlight = {};
+
   Future<void> cancelPendingMessage({
     required ContactRecord contact,
     required String messageId,
@@ -10535,6 +10679,8 @@ class MessengerController extends ChangeNotifier {
   /// future doesn't hold the queue hostage waiting for the 60 s stall
   /// timer (the symptom the user reported when toggling VPN mid-transfer).
   void onConnectivityChanged({String? interfaceLabel}) {
+    // A dormant Conest (Matrix-only mode) reacts to nothing.
+    if (!conestActive) return;
     _groupHistoryService?.onConnectivityChanged();
     _groupHistoryLastSync.clear();
     for (final timer in _groupHistoryTimers.values) {
@@ -11592,7 +11738,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> pollNow() async {
-    if (!hasIdentity) {
+    if (!hasIdentity || !conestActive) {
       return;
     }
     final activePoll = _pollCompleter;
@@ -11652,6 +11798,7 @@ class MessengerController extends ChangeNotifier {
           final routeProcessed = await _processEnvelopes(
             envelopes,
             failOnProcessingError: true,
+            route: _routeForPolled(route),
           );
           processed += routeProcessed;
           // The lease is the relay's durability boundary. Persist message,
@@ -11749,7 +11896,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _startLongPollIfEnabled() async {
-    if (!_longPollEnabled || _longPollRunning) {
+    if (!_longPollEnabled || _longPollRunning || !conestActive) {
       return;
     }
     if (_snapshot.identity?.connectivity.onlineEnabled == false) {
@@ -11809,7 +11956,11 @@ class MessengerController extends ChangeNotifier {
       final envelopes = batch.envelopes;
       if (envelopes.isNotEmpty) {
         try {
-          await _processEnvelopes(envelopes, failOnProcessingError: true);
+          await _processEnvelopes(
+            envelopes,
+            failOnProcessingError: true,
+            route: _routeForPolled(route),
+          );
           final needsDurability = _needsEnvelopeDurability(envelopes);
           if (needsDurability) {
             await _saveSnapshotSilently(notify: false);
@@ -12214,6 +12365,7 @@ class MessengerController extends ChangeNotifier {
 
   void _scheduleScheduledMessagePump() {
     _scheduledMessageTimer?.cancel();
+    if (!conestActive) return;
     final next = _snapshot.scheduledMessages
         .where((entry) => entry.state == ScheduledMessageState.waiting)
         .fold<DateTime?>(null, (current, entry) {
@@ -12243,6 +12395,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _pumpScheduledMessages() async {
+    if (!conestActive) return;
     final due = _snapshot.scheduledMessages
         .where(
           (entry) =>
@@ -12716,7 +12869,7 @@ class MessengerController extends ChangeNotifier {
         recipientDeviceId: _lanLobbyMailboxId,
         timeout: const Duration(milliseconds: 900),
       );
-      return await _processEnvelopes(envelopes);
+      return await _processEnvelopes(envelopes, route: MessageRoute.lanLobby);
     } catch (_) {
       return 0;
     }
@@ -12724,7 +12877,7 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> _ensureLocalRelayRunning() async {
     final me = _snapshot.identity;
-    if (me == null) {
+    if (me == null || !conestActive) {
       return;
     }
     if (!me.connectivity.lanEnabled) {
@@ -12738,7 +12891,10 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _ensurePairingBeaconRunning() async {
-    if (!_pairingBeaconEnabled || kIsWeb || _pairingBeaconSocket != null) {
+    if (!_pairingBeaconEnabled ||
+        kIsWeb ||
+        _pairingBeaconSocket != null ||
+        !conestActive) {
       return;
     }
     if (_snapshot.identity?.connectivity.lanEnabled == false) {
@@ -13129,11 +13285,17 @@ class MessengerController extends ChangeNotifier {
     List<RelayEnvelope> envelopes, {
     PeerRouteKind ingressKind = PeerRouteKind.relay,
     bool failOnProcessingError = false,
+    MessageRoute? route,
   }) async {
     _notificationsDeferredDepth++;
     var outcome = const _EnvelopeProcessingOutcome();
     try {
-      outcome = await _processEnvelopesInternal(envelopes, ingressKind);
+      // The route rides in the zone: batches overlap, and the messages it
+      // marks are created deep inside processing.
+      outcome = await runZoned(
+        () => _processEnvelopesInternal(envelopes, ingressKind),
+        zoneValues: {_ingressRouteKey: route},
+      );
     } finally {
       // Conversation upserts and state changes mark this batch dirty. Flush
       // them once here; transfer progress alone does not rebuild the shell.
@@ -13450,6 +13612,7 @@ class MessengerController extends ChangeNotifier {
             replySnippet: decodedMessage.replySnippet,
             replySenderDeviceId: decodedMessage.replySenderDeviceId,
             replySenderDisplayName: decodedMessage.replySenderDisplayName,
+            route: _ingressRoute,
           );
           _upsertMessage(contact.deviceId, inbound);
           await _applyDeferredDirectReactions(contact.deviceId, inbound.id);
@@ -13958,6 +14121,7 @@ class MessengerController extends ChangeNotifier {
       senderDisplayName: sender.alias,
       attachment: descriptor,
       albumId: rawAlbumId as String?,
+      route: _ingressRoute,
     );
     _upsertMessage(sender.deviceId, message);
     // Decode + cache the video poster (if any) so the bubble can render
@@ -16134,6 +16298,7 @@ class MessengerController extends ChangeNotifier {
           createdAt: createdAt,
           senderDisplayName: senderDisplayName,
           untrusted: true,
+          route: MessageRoute.lanLobby,
         ),
       );
     } catch (_) {
@@ -16377,6 +16542,7 @@ class MessengerController extends ChangeNotifier {
           state: DeliveryState.delivered,
           createdAt: envelope.createdAt,
           senderDisplayName: payload.senderDisplayName ?? sender.alias,
+          route: _ingressRoute,
           replyToMessageId: payload.replyToMessageId,
           replySnippet: payload.replySnippet,
           replySenderDeviceId: payload.replySenderDeviceId,
@@ -18778,7 +18944,12 @@ class MessengerController extends ChangeNotifier {
       }
       final retryable = messagesFor(contact.deviceId)
           .where(
-            (message) => message.outbound && message.state.awaitsRecipientAck,
+            (message) =>
+                message.outbound &&
+                message.state.awaitsRecipientAck &&
+                // Sent as plain Matrix instead: resending over Conest would
+                // deliver it twice.
+                message.route != MessageRoute.plainMatrix,
           )
           .toList();
       for (final message in retryable) {
@@ -18921,6 +19092,9 @@ class MessengerController extends ChangeNotifier {
       throw StateError(
         'Refusing to send to ${contact.alias}: this contact has been replaced.',
       );
+    }
+    if (!conestActive) {
+      throw StateError('Conest is off on this device (Matrix-only mode).');
     }
     final effective = _effectiveTransports(contact);
     final policies = _effectiveTransportPolicies(contact);
@@ -20406,7 +20580,7 @@ class MessengerController extends ChangeNotifier {
   /// chunk_request payload hint.
   Future<void> _startLanDirectChannel() async {
     final channel = _lanDirectChannel;
-    if (channel == null) return;
+    if (channel == null || !conestActive) return;
     channel.onEnvelope = _handleLanDirectEnvelope;
     final binaryChannel = channel is BinaryLanDirectChannel
         ? channel as BinaryLanDirectChannel
@@ -20448,9 +20622,11 @@ class MessengerController extends ChangeNotifier {
   /// concurrent LAN + relay arrivals still coalesce into one notify.
   Future<void> _handleLanDirectEnvelope(RelayEnvelope envelope) async {
     if (_disposed) return;
-    await _processEnvelopes(<RelayEnvelope>[
-      envelope,
-    ], ingressKind: PeerRouteKind.lan);
+    await _processEnvelopes(
+      <RelayEnvelope>[envelope],
+      ingressKind: PeerRouteKind.lan,
+      route: MessageRoute.lanDirect,
+    );
   }
 
   Future<void> _handleLanDirectAttachmentBlock(LanAttachmentBlock block) async {
@@ -21447,7 +21623,7 @@ class MessengerController extends ChangeNotifier {
   /// advertised, for example after an update that adds the ratchet.
   Future<void> _advertiseCapabilitiesIfChanged() async {
     final me = _snapshot.identity;
-    if (me == null) return;
+    if (me == null || !conestActive) return;
     final current = [
       for (final capability in _localApplicationCapabilities()) capability.name,
     ];
@@ -22094,7 +22270,13 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot
         .copyWith(clearMatrixSession: true)
         .copyWith(matrixSession: stored);
-    _matrixTransport!.attach(session);
+    // A dormant Conest (Matrix-only mode, or no identity yet) runs no
+    // carrier; the account belongs to the Matrix client alone.
+    if (conestActive && _snapshot.identity != null) {
+      _matrixTransport!.attach(session);
+    } else {
+      _matrixTransport!.detach();
+    }
     await _persist('Signed in to Matrix as ${session.userId}.');
     await _attachMatrixTransport();
     _advertiseProfileToContacts();
@@ -22130,6 +22312,8 @@ class MessengerController extends ChangeNotifier {
   }
 
   void _advertiseProfileToContacts() {
+    // A dormant Conest (Matrix-only mode) sends nothing.
+    if (!conestActive) return;
     for (final contact in _snapshot.contacts.where(
       (contact) => contact.canSendOutbound,
     )) {
@@ -22876,6 +23060,10 @@ class MessengerController extends ChangeNotifier {
         transportKind: route?.transportKind,
         transportPath: route?.path,
         transportDetail: route?.label,
+        // A message the user sent as plain Matrix keeps that mark.
+        route: message.route == MessageRoute.plainMatrix
+            ? null
+            : route?.messageRoute,
       );
     }).toList();
     conversations[conversationIndex] = conversations[conversationIndex]
@@ -22886,6 +23074,27 @@ class MessengerController extends ChangeNotifier {
       _clearOutboundAttempt(peerDeviceId, messageId);
     }
   }
+
+  static const Symbol _ingressRouteKey = #conestIngressRoute;
+
+  /// The route of the envelope batch being processed, if known.
+  MessageRoute? get _ingressRoute =>
+      Zone.current[_ingressRouteKey] as MessageRoute?;
+
+  /// What polling [route] means for the messages it returns.
+  MessageRoute _routeForPolled(PeerEndpoint route) => switch (route.kind) {
+    _ when route.host == '127.0.0.1' || route.host == 'localhost' =>
+      // This device's own node: the sender stored here over the LAN.
+      MessageRoute.lanDirect,
+    PeerRouteKind.lan => MessageRoute.lanRelay,
+    PeerRouteKind.directInternet => MessageRoute.internetDirect,
+    PeerRouteKind.relay => MessageRoute.conestRelay,
+  };
+
+  static MessageRoute _irohRoute(TransportPathKind path) =>
+      path == TransportPathKind.relayed
+      ? MessageRoute.irohRelay
+      : MessageRoute.irohDirect;
 
   void _updateGroupRecipientState(
     String groupId,
@@ -23367,9 +23576,11 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final highFrequencyTransfer = _isHighFrequencyTransferEnvelope(envelope);
-    final processed = await _processEnvelopes([
-      envelope,
-    ], ingressKind: PeerRouteKind.lan);
+    final processed = await _processEnvelopes(
+      [envelope],
+      ingressKind: PeerRouteKind.lan,
+      route: MessageRoute.lanDirect,
+    );
     if (processed > 0) {
       if (!highFrequencyTransfer) {
         _markRuntimeActivity();
@@ -23384,7 +23595,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _pollLocalInboxOnly() async {
-    if (!hasIdentity || !_localRelayNode.isRunning) {
+    if (!hasIdentity || !_localRelayNode.isRunning || !conestActive) {
       return;
     }
     try {
@@ -23414,7 +23625,10 @@ class MessengerController extends ChangeNotifier {
             fetch: true,
             latency: stopwatch.elapsed,
           );
-          final routeProcessed = await _processEnvelopes(envelopes);
+          final routeProcessed = await _processEnvelopes(
+            envelopes,
+            route: _routeForPolled(route),
+          );
           if (_needsEnvelopeDurability(envelopes)) {
             displayableProcessed += routeProcessed;
           }
@@ -23437,7 +23651,7 @@ class MessengerController extends ChangeNotifier {
 
   void _applyAndroidBackgroundPreference() {
     final me = identity;
-    if (me == null) {
+    if (me == null || !conestActive) {
       return;
     }
     unawaited(
@@ -23600,6 +23814,9 @@ class _DeliveryRoute {
     routeKey: endpoint.routeKey,
     endpoint: endpoint,
   );
+
+  MessageRoute? get messageRoute =>
+      MessageRoute.fromTransport(transportKind, path);
 
   factory _DeliveryRoute.transport(DeliveryReceipt receipt) => _DeliveryRoute(
     transportKind: receipt.route.transport,

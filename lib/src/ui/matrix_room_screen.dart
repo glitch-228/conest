@@ -11,6 +11,60 @@ import '../conest_theme.dart';
 import '../matrix_service.dart';
 import '../matrix_timeline.dart';
 
+/// Asks for a Matrix ID, opens (or creates) the direct chat with it and
+/// shows the room.
+Future<void> startMatrixChat(
+  BuildContext context,
+  MatrixClientService client,
+  ConestPalette palette,
+) async {
+  final input = TextEditingController();
+  final userId = await showDialog<String>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('New Matrix chat'),
+      content: TextField(
+        controller: input,
+        autofocus: true,
+        decoration: const InputDecoration(
+          labelText: 'Matrix user',
+          hintText: '@name:matrix.org',
+        ),
+        onSubmitted: (value) => Navigator.pop(context, value),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, input.text),
+          child: const Text('Start chat'),
+        ),
+      ],
+    ),
+  );
+  input.dispose();
+  final target = userId?.trim() ?? '';
+  if (target.isEmpty || !context.mounted) return;
+  try {
+    final roomId = await client.createDirectMessage(target);
+    if (!context.mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) =>
+            MatrixRoomScreen(client: client, roomId: roomId, palette: palette),
+      ),
+    );
+  } catch (error) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not start the chat: $error')),
+      );
+    }
+  }
+}
+
 /// One Matrix room or DM: timeline with history paging, media, replies,
 /// edits, reactions and deletes, and a composer with attachments.
 class MatrixRoomScreen extends StatefulWidget {

@@ -20,7 +20,7 @@ use matrix_sdk::encryption::verification::{
 };
 use matrix_sdk::ruma::events::key::verification::request::ToDeviceKeyVerificationRequestEvent;
 use matrix_sdk::{
-    Client, SessionChange, SessionMeta, SessionTokens,
+    Client, RoomState, SessionChange, SessionMeta, SessionTokens,
     attachment::AttachmentConfig,
     authentication::{
         AuthSession,
@@ -44,7 +44,7 @@ use matrix_sdk::{
         events::{
             ToDeviceEventType,
             receipt::ReceiptThread,
-            room::{MediaSource, message::RoomMessageEventContent},
+            room::{MediaSource, member::MembershipState, message::RoomMessageEventContent},
         },
         serde::Raw,
         to_device::DeviceIdOrAllDevices,
@@ -639,8 +639,29 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
             Ok(json!({}))
         }
         "create_dm" => {
+            // Reuses the direct chat with this user when there is one, as
+            // other Matrix apps do, instead of opening another room.
             let user_id: OwnedUserId = text(request, "userId")?.parse()?;
-            let room = client()?.create_dm(&user_id).await?;
+            let client = client()?;
+            let mut existing = None;
+            if let Some(room) = client.get_dm_room(&user_id) {
+                // Only a chat both sides are still in: a message to a DM the
+                // other person left would never reach them.
+                let theirs = room.get_member_no_sync(&user_id).await?;
+                let they_are_in = theirs.is_some_and(|member| {
+                    matches!(
+                        member.membership(),
+                        MembershipState::Join | MembershipState::Invite
+                    )
+                });
+                if room.state() == RoomState::Joined && they_are_in {
+                    existing = Some(room);
+                }
+            }
+            let room = match existing {
+                Some(room) => room,
+                None => client.create_dm(&user_id).await?,
+            };
             Ok(json!({"roomId": room.room_id().to_string()}))
         }
         "logout" => {

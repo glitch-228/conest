@@ -16,6 +16,12 @@ class FakeMatrixNative implements MatrixNativeApi {
   final FakeMatrixHub hub;
   final _events = StreamController<Map<String, dynamic>>.broadcast();
   final List<String> ops = [];
+
+  /// What the `rooms` op lists.
+  List<Map<String, dynamic>> rooms = [];
+
+  /// Room messages sent through `send_raw`.
+  final List<({String roomId, Map<String, Object?> content})> sentMessages = [];
   Map<String, dynamic>? _session;
 
   @override
@@ -44,7 +50,15 @@ class FakeMatrixNative implements MatrixNativeApi {
       case 'restore':
         return _signIn(Map<String, dynamic>.from(parameters['session'] as Map));
       case 'rooms':
-        return {'rooms': const []};
+        return {'rooms': rooms};
+      case 'create_dm':
+        return {'roomId': '!dm-${parameters['userId']}'};
+      case 'send_raw':
+        sentMessages.add((
+          roomId: parameters['roomId'] as String,
+          content: Map<String, Object?>.from(parameters['content'] as Map),
+        ));
+        return {'eventId': '\$sent${sentMessages.length}'};
       case 'logout':
         final session = _session;
         if (session != null) {

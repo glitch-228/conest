@@ -38,6 +38,8 @@ import 'package:conest/src/relay_defaults.dart';
 import 'package:conest/src/storage.dart';
 import 'package:conest/src/storage_capacity.dart';
 import 'package:conest/src/transport.dart';
+import 'package:conest/src/ui/app_mode_selector.dart';
+import 'package:conest/src/ui/matrix_home_screen.dart';
 import 'package:conest/src/update_service.dart';
 import 'package:conest/src/voice_call_service.dart';
 
@@ -6367,6 +6369,10 @@ void main() {
       controller.messagesFor(contact.deviceId).single.state,
       DeliveryState.local,
     );
+    expect(
+      controller.messagesFor(contact.deviceId).single.route,
+      MessageRoute.lanDirect,
+    );
   });
 
   test('sendMessage skips unavailable LAN and uses relay', () async {
@@ -6399,6 +6405,10 @@ void main() {
     expect(
       controller.messagesFor(contact.deviceId).single.state,
       DeliveryState.relayed,
+    );
+    expect(
+      controller.messagesFor(contact.deviceId).single.route,
+      MessageRoute.conestRelay,
     );
   });
 
@@ -7428,6 +7438,144 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     alice.dispose();
     bob.dispose();
+    await tester.pump(const Duration(milliseconds: 100));
+  });
+
+  testWidgets('Courier filters Conest and Matrix chats in Both mode', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    late MessengerController alice;
+    late MessengerController bob;
+    final native = FakeMatrixNative(FakeMatrixHub())
+      ..rooms = [
+        {'roomId': '!club:x', 'name': 'Book club', 'unread': 2},
+      ];
+    await tester.runAsync(() async {
+      final relay = _FakeRelayClient();
+      alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        matrixCarrierEnabled: true,
+        matrixNativeApi: native,
+      );
+      bob = await _createController(relayClient: relay, displayName: 'Bob');
+      await _pairControllers(alice, bob);
+      await alice.matrixClient!.signInWithPassword(
+        homeserver: 'https://x',
+        user: 'alice',
+        password: 'p',
+      );
+    });
+    final theme = app.ConestThemeController.memory();
+    final updates = _createUpdateService();
+    addTearDown(theme.dispose);
+    addTearDown(updates.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: app.HomeScreen(
+          controller: alice,
+          updateService: updates,
+          buildInfo: _createBuildInfo(),
+          themeController: theme,
+          palette: app.ConestPalette(),
+        ),
+      ),
+    );
+    await tester.pump();
+    Finder chip(String label) => find.widgetWithText(ChoiceChip, label);
+    Future<void> tapChip(String label) async {
+      // The chip row scrolls sideways in the narrow chat list.
+      await tester.scrollUntilVisible(
+        chip(label),
+        label == 'All chats' ? -80 : 80,
+        scrollable: find
+            .ancestor(
+              of: find.byType(ChoiceChip).first,
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      await tester.pump();
+      await tester.tap(chip(label));
+      await tester.pump();
+    }
+
+    final bobRow = find.byKey(
+      ValueKey('courier-chat-${bob.identity!.deviceId}'),
+    );
+    final clubRow = find.byKey(const ValueKey('courier-chat-matrix:!club:x'));
+    expect(chip('Conest'), findsOneWidget);
+    expect(bobRow, findsOneWidget);
+    expect(clubRow, findsOneWidget);
+
+    await tapChip('Matrix');
+    expect(clubRow, findsOneWidget);
+    expect(bobRow, findsNothing);
+
+    await tapChip('Conest');
+    expect(clubRow, findsNothing);
+    expect(bobRow, findsOneWidget);
+
+    // Conest-only mode shows no Matrix chats and no filters.
+    await tapChip('All chats');
+    await tester.runAsync(() => alice.setAppMode(AppMode.conest));
+    await tester.pump();
+    expect(chip('Conest'), findsNothing);
+    expect(clubRow, findsNothing);
+    expect(bobRow, findsOneWidget);
+
+    await tester.runAsync(alice.flushPendingChanges);
+    await tester.pumpWidget(const SizedBox.shrink());
+    alice.dispose();
+    bob.dispose();
+    await tester.pump(const Duration(milliseconds: 100));
+  });
+
+  testWidgets('Matrix-only home signs in, then lists rooms', (tester) async {
+    late MessengerController controller;
+    final native = FakeMatrixNative(FakeMatrixHub())
+      ..rooms = [
+        {'roomId': '!dm:x', 'name': 'Carol', 'direct': true, 'unread': 1},
+      ];
+    await tester.runAsync(() async {
+      controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        createIdentity: false,
+        matrixCarrierEnabled: true,
+        matrixNativeApi: native,
+      );
+      await controller.setAppMode(AppMode.matrixOnly);
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MatrixHomeScreen(
+          controller: controller,
+          palette: app.ConestPalette(),
+        ),
+      ),
+    );
+    expect(find.text('Sign in to your Matrix account'), findsOneWidget);
+    expect(find.text('Sign in with browser'), findsOneWidget);
+    expect(find.byType(AppModeSelector), findsOneWidget);
+
+    await tester.runAsync(
+      () => controller.matrixClient!.signInWithPassword(
+        homeserver: 'https://x',
+        user: 'alice',
+        password: 'p',
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Carol'), findsOneWidget);
+    expect(find.byTooltip('New Matrix chat'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    controller.dispose();
     await tester.pump(const Duration(milliseconds: 100));
   });
 
@@ -10969,6 +11117,139 @@ void main() {
     });
   });
 
+  group('app modes', () {
+    test('builds without the Matrix client are Conest only', () async {
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        createIdentity: false,
+      );
+      addTearDown(controller.dispose);
+      expect(controller.matrixAvailable, isFalse);
+      expect(controller.appMode, AppMode.conest);
+    });
+
+    test('a fresh install can be a Matrix client without an identity', () async {
+      final server = await FakeHomeserver.start();
+      addTearDown(server.close);
+      final native = FakeMatrixNative(FakeMatrixHub());
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        createIdentity: false,
+        matrixCarrierEnabled: true,
+        matrixNativeApi: native,
+      );
+      addTearDown(controller.dispose);
+      await controller.setAppMode(AppMode.matrixOnly);
+      expect(controller.conestActive, isFalse);
+
+      await controller.signInToMatrix(
+        homeserver: server.url.toString(),
+        user: 'alice',
+        password: 'unused',
+      );
+      expect(controller.matrixClient?.signedIn, isTrue);
+      expect(controller.hasIdentity, isFalse);
+      // The account is the client's; no Conest carrier runs.
+      expect(controller.matrixStatus?.signedIn, isTrue);
+      expect(controller.matrixStatus?.syncing, isFalse);
+    });
+
+    test('Matrix-only mode keeps an existing identity dormant', () async {
+      final vault = _MemoryVaultStore();
+      final hub = FakeMatrixHub();
+      final relay = _FakeRelayClient();
+      final relayNode = _FakeLocalRelayNode();
+      final controller = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: vault,
+        localRelayNode: relayNode,
+        matrixCarrierEnabled: true,
+        matrixNativeApi: FakeMatrixNative(hub),
+      );
+      expect(controller.appMode, AppMode.both);
+      expect(relayNode.isRunning, isTrue);
+
+      // Switching stops Conest at once, without a restart.
+      await controller.setAppMode(AppMode.matrixOnly);
+      expect(controller.conestActive, isFalse);
+      expect(relayNode.isRunning, isFalse);
+
+      // Nothing wakes it: polls, app lifecycle and network changes.
+      relay.fetchAttempts.clear();
+      relay.storeAttempts.clear();
+      controller.setAppForegroundState(false);
+      controller.setAppForegroundState(true);
+      controller.onConnectivityChanged(interfaceLabel: 'wifi');
+      await controller.pollNow();
+      await controller.retryUnacknowledgedMessagesNow();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(relayNode.isRunning, isFalse);
+      expect(relay.fetchAttempts, isEmpty);
+      expect(relay.storeAttempts, isEmpty);
+      await controller.flushPendingChanges();
+      controller.dispose();
+
+      // A later launch in Matrix-only mode starts nothing either.
+      final laterNode = _FakeLocalRelayNode();
+      final later = MessengerController(
+        vaultStore: vault,
+        relayClient: relay,
+        localRelayNode: laterNode,
+        lanAddressProvider: () async => const ['192.168.1.20'],
+        enableLongPoll: false,
+        enablePairingBeacon: false,
+        matrixCarrierEnabled: true,
+        matrixNativeApi: FakeMatrixNative(hub),
+        loadNativeMatrixClient: false,
+        attachmentRootProvider: () async =>
+            Directory.systemTemp.createTempSync('conest_test_attachments_'),
+      );
+      addTearDown(later.dispose);
+      await later.initialize();
+      expect(later.hasIdentity, isTrue);
+      expect(later.appMode, AppMode.matrixOnly);
+      expect(laterNode.isRunning, isFalse);
+      expect(relay.fetchAttempts, isEmpty);
+
+      // Leaving Matrix-only starts Conest again in place.
+      await later.setAppMode(AppMode.both);
+      expect(laterNode.isRunning, isTrue);
+      expect(relay.fetchAttempts, isNotEmpty);
+    });
+
+    test('a Matrix-only choice holds when the Matrix client is missing', () async {
+      final vault = _MemoryVaultStore();
+      final first = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        vaultStore: vault,
+        matrixCarrierEnabled: true,
+        matrixNativeApi: FakeMatrixNative(FakeMatrixHub()),
+      );
+      await first.setAppMode(AppMode.matrixOnly);
+      await first.flushPendingChanges();
+      first.dispose();
+
+      final relayNode = _FakeLocalRelayNode();
+      final withoutMatrix = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        vaultStore: vault,
+        createIdentity: false,
+        localRelayNode: relayNode,
+      );
+      addTearDown(withoutMatrix.dispose);
+      expect(withoutMatrix.matrixAvailable, isFalse);
+      expect(withoutMatrix.appMode, AppMode.matrixOnly);
+      expect(relayNode.isRunning, isFalse);
+      await withoutMatrix.setAppMode(AppMode.conest);
+      expect(relayNode.isRunning, isTrue);
+    });
+  });
+
   group('Matrix carrier', () {
     Future<void> settle(List<MessengerController> controllers) async {
       for (var round = 0; round < 6; round++) {
@@ -11073,11 +11354,72 @@ void main() {
       }
       expect(bob.messagesFor(aliceId).map((m) => m.body), contains('native'));
       expect(
+        bob.messagesFor(aliceId).firstWhere((m) => m.body == 'native').route,
+        MessageRoute.matrixCarrier,
+      );
+      expect(
         hub.sent.where((frame) => frame.from == '@alice:fake.test'),
         isNotEmpty,
       );
       // Nothing went through the HTTP carrier's own client.
       expect(server.sent, isEmpty);
+
+      // Conest cannot reach Bob at all (Matrix carrier off too): a pending
+      // message may go to his Matrix account as plain Matrix, asked each time.
+      final bobMatrixUser = alice.matrixUserIdFor(bob.identity!.deviceId);
+      expect(bobMatrixUser, '@bob:fake.test');
+      final connectivity = alice.identity!.connectivity;
+      await alice.updateGlobalConnectivity(
+        connectivity.copyWith(
+          transportPolicies: {
+            ...connectivity.transportPolicies,
+            TransportKind.matrix: TransportPolicy.disabled,
+          },
+        ),
+      );
+      await alice.sendMessage(contact: alice.contacts.single, body: 'plain');
+      final pending = alice
+          .messagesFor(bob.identity!.deviceId)
+          .firstWhere((m) => m.body == 'plain');
+      expect(pending.state, DeliveryState.pending);
+      expect(
+        alice.canSendViaPlainMatrix(bob.identity!.deviceId, pending),
+        isTrue,
+      );
+      final sentBefore = aliceNative.sentMessages.length;
+      final sending = alice.sendViaPlainMatrix(
+        contact: alice.contacts.single,
+        messageId: pending.id,
+      );
+      // A second confirm while the first send runs is refused.
+      await expectLater(
+        alice.sendViaPlainMatrix(
+          contact: alice.contacts.single,
+          messageId: pending.id,
+        ),
+        throwsStateError,
+      );
+      await sending;
+      expect(aliceNative.sentMessages.length, sentBefore + 1);
+      expect(aliceNative.sentMessages.last.roomId, '!dm-@bob:fake.test');
+      expect(aliceNative.sentMessages.last.content['body'], 'plain');
+      final sent = alice
+          .messagesFor(bob.identity!.deviceId)
+          .firstWhere((m) => m.id == pending.id);
+      expect(sent.route, MessageRoute.plainMatrix);
+      expect(
+        alice.canSendViaPlainMatrix(bob.identity!.deviceId, sent),
+        isFalse,
+      );
+      // Conest no longer tries it, so it can never arrive twice.
+      final attempts = relay.storeAttempts.length;
+      await alice.retryUnacknowledgedMessagesNow();
+      expect(
+        bob.messagesFor(alice.identity!.deviceId).map((m) => m.body),
+        isNot(contains('plain')),
+      );
+      expect(relay.storeAttempts.length, attempts);
+      await alice.updateGlobalConnectivity(connectivity);
 
       // Revoked on the server (signed out from another Matrix app): the
       // route goes, and contacts stop offering it (told over the relay).
@@ -11498,6 +11840,15 @@ void main() {
             bob.messagesFor(aliceId).any((m) => m.body == 'hi') &&
             alice.messagesFor(bobId).any((m) => m.body == 'hey'),
         reason: 'ratcheted messages',
+      );
+      // Both directions record the route they took.
+      expect(
+        bob.messagesFor(aliceId).firstWhere((m) => m.body == 'hi').route,
+        MessageRoute.irohDirect,
+      );
+      expect(
+        alice.messagesFor(bobId).firstWhere((m) => m.body == 'hey').route,
+        MessageRoute.irohDirect,
       );
 
       final group = await alice.createGroup(

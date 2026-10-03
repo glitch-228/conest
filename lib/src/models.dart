@@ -2040,6 +2040,86 @@ class ContactReachabilityRecord {
   }
 }
 
+/// The way a message travelled. Persisted by name; names never change.
+enum MessageRoute {
+  /// Over the LAN straight to the other device (its own relay node).
+  lanDirect,
+
+  /// Over the LAN through another device's relay node.
+  lanRelay,
+
+  /// The LAN lobby's shared mailbox.
+  lanLobby,
+
+  /// The other device's relay node reached over the internet.
+  internetDirect,
+
+  /// Iroh, peer to peer.
+  irohDirect,
+
+  /// Iroh through an Iroh relay server.
+  irohRelay,
+
+  /// A Conest relay server (store and forward).
+  conestRelay,
+
+  /// Sealed Conest envelope carried by Matrix to-device messages.
+  matrixCarrier,
+
+  /// A plain Matrix message, readable by the homeserver.
+  plainMatrix;
+
+  String get label => switch (this) {
+    lanDirect => 'LAN direct',
+    lanRelay => 'LAN relay',
+    lanLobby => 'LAN lobby',
+    internetDirect => 'Internet direct',
+    irohDirect => 'Iroh direct',
+    irohRelay => 'Iroh relay',
+    conestRelay => 'Conest relay',
+    matrixCarrier => 'Matrix',
+    plainMatrix => 'Plain Matrix',
+  };
+
+  String get description => switch (this) {
+    lanDirect => 'Straight to the other device on your local network.',
+    lanRelay => "Through another device's relay node on your local network.",
+    lanLobby =>
+      "The LAN lobby's shared mailbox; anyone on the network can "
+          'read it.',
+    internetDirect =>
+      "Straight to the other device's relay node over the "
+          'internet.',
+    irohDirect => 'Peer to peer over Iroh, end-to-end encrypted.',
+    irohRelay =>
+      'Through an Iroh relay server, which sees only encrypted '
+          'traffic.',
+    conestRelay =>
+      'Stored and forwarded by a Conest relay server, which '
+          'sees only encrypted envelopes.',
+    matrixCarrier =>
+      'Carried by Matrix, still end-to-end encrypted by '
+          'Conest; the homeserver sees who talks and when.',
+    plainMatrix =>
+      'Sent as an ordinary Matrix message; the homeserver can '
+          'read it unless the room is encrypted.',
+  };
+
+  /// Routes recorded before [MessageRoute] existed.
+  static MessageRoute? fromTransport(
+    TransportKind? kind,
+    TransportPathKind? path,
+  ) => switch ((kind, path)) {
+    (TransportKind.lan, _) => lanDirect,
+    (TransportKind.iroh, TransportPathKind.direct) => irohDirect,
+    (TransportKind.iroh, TransportPathKind.relayed) => irohRelay,
+    (TransportKind.conestRelay, TransportPathKind.direct) => internetDirect,
+    (TransportKind.conestRelay, _) => conestRelay,
+    (TransportKind.matrix, _) => matrixCarrier,
+    _ => null,
+  };
+}
+
 class ChatMessage {
   ChatMessage({
     required this.id,
@@ -2072,6 +2152,7 @@ class ChatMessage {
     this.transportKind,
     this.transportPath,
     this.transportDetail,
+    this.route,
     Map<String, DeliveryState>? recipientStates,
     Map<String, Set<String>>? reactions,
     Map<String, DateTime>? reactionClocks,
@@ -2142,6 +2223,15 @@ class ChatMessage {
   final TransportPathKind? transportPath;
   final String? transportDetail;
 
+  /// The route this message took to (outbound) or from (inbound) the peer,
+  /// when known.
+  final MessageRoute? route;
+
+  /// [route], or for messages from before routes were recorded, what their
+  /// transport fields tell.
+  MessageRoute? get effectiveRoute =>
+      route ?? MessageRoute.fromTransport(transportKind, transportPath);
+
   final Map<String, DeliveryState> recipientStates;
   final Map<String, Set<String>> reactions;
 
@@ -2183,6 +2273,8 @@ class ChatMessage {
     TransportKind? transportKind,
     TransportPathKind? transportPath,
     String? transportDetail,
+    MessageRoute? route,
+    bool clearRoute = false,
     Map<String, DeliveryState>? recipientStates,
     Map<String, Set<String>>? reactions,
     Map<String, DateTime>? reactionClocks,
@@ -2220,6 +2312,7 @@ class ChatMessage {
       transportKind: transportKind ?? this.transportKind,
       transportPath: transportPath ?? this.transportPath,
       transportDetail: transportDetail ?? this.transportDetail,
+      route: clearRoute ? null : route ?? this.route,
       recipientStates: recipientStates ?? this.recipientStates,
       reactions: reactions ?? this.reactions,
       reactionClocks: reactionClocks ?? this.reactionClocks,
@@ -2263,6 +2356,7 @@ class ChatMessage {
       if (transportKind != null) 'transportKind': transportKind!.name,
       if (transportPath != null) 'transportPath': transportPath!.name,
       if (transportDetail != null) 'transportDetail': transportDetail,
+      if (route != null) 'route': route!.name,
       'recipientStates': recipientStates.map(
         (deviceId, state) => MapEntry(deviceId, state.name),
       ),
@@ -2343,6 +2437,7 @@ class ChatMessage {
           .where((entry) => entry.name == json['transportPath'])
           .firstOrNull,
       transportDetail: json['transportDetail'] as String?,
+      route: MessageRoute.values.asNameMap()[json['route']],
       recipientStates: rawRecipientStates.map(
         (deviceId, value) =>
             MapEntry(deviceId, DeliveryState.values.byName(value as String)),
@@ -3953,6 +4048,19 @@ class VoiceCallSummary {
   }
 }
 
+/// What the app is used as. Persisted by name; names never change.
+enum AppMode {
+  /// Conest only: today's app, no Matrix chats.
+  conest,
+
+  /// Conest and Matrix chats side by side.
+  both,
+
+  /// A standalone Matrix client: Conest stays dormant and needs no
+  /// identity.
+  matrixOnly,
+}
+
 class VaultSnapshot {
   VaultSnapshot({
     required this.identity,
@@ -3982,6 +4090,7 @@ class VaultSnapshot {
     this.voiceCallSummaries = const <VoiceCallSummary>[],
     this.matrixSession,
     this.matrixSyncToken,
+    this.appMode,
   });
 
   final IdentityRecord? identity;
@@ -4066,6 +4175,10 @@ class VaultSnapshot {
   /// The last acknowledged `/sync` position for [matrixSession].
   final String? matrixSyncToken;
 
+  /// What the app is used as; null until chosen (an identity from before
+  /// app modes reads as [AppMode.both] where Matrix exists).
+  final AppMode? appMode;
+
   factory VaultSnapshot.empty() {
     return VaultSnapshot(
       identity: null,
@@ -4122,6 +4235,7 @@ class VaultSnapshot {
     List<VoiceCallSummary>? voiceCallSummaries,
     Map<String, dynamic>? matrixSession,
     String? matrixSyncToken,
+    AppMode? appMode,
     bool clearMatrixSession = false,
     bool clearIdentity = false,
   }) {
@@ -4167,6 +4281,7 @@ class VaultSnapshot {
       matrixSyncToken: clearMatrixSession
           ? null
           : matrixSyncToken ?? this.matrixSyncToken,
+      appMode: appMode ?? this.appMode,
     );
   }
 
@@ -4228,6 +4343,7 @@ class VaultSnapshot {
           .toList(),
       if (matrixSession != null) 'matrixSession': matrixSession,
       if (matrixSyncToken != null) 'matrixSyncToken': matrixSyncToken,
+      if (appMode != null) 'appMode': appMode!.name,
     };
   }
 
@@ -4265,6 +4381,7 @@ class VaultSnapshot {
               .toList(),
       matrixSession: json['matrixSession'] as Map<String, dynamic>?,
       matrixSyncToken: json['matrixSyncToken'] as String?,
+      appMode: AppMode.values.asNameMap()[json['appMode']],
       contacts: (json['contacts'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>()
           .map(ContactRecord.fromJson)

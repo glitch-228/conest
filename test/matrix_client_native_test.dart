@@ -288,6 +288,9 @@ void main() {
       );
       expect(room['direct'], isTrue);
       expect(room['invited'], isFalse);
+      // Starting a chat with the same person again reuses the DM.
+      final again = await native.request('create_dm', {'userId': bobId});
+      expect(again['roomId'], roomId);
 
       await native.request('restore', {...storeParameters, 'session': session});
       final restoredRooms = (await native.request('rooms'))['rooms'] as List;
