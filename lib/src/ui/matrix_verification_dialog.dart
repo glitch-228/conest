@@ -14,6 +14,7 @@ class MatrixVerificationDialog extends StatefulWidget {
     required this.userId,
     required this.flowId,
     required this.weStarted,
+    this.startDelay = const Duration(seconds: 2),
   });
 
   final MatrixClientService client;
@@ -23,6 +24,10 @@ class MatrixVerificationDialog extends StatefulWidget {
   /// The side that requested verification starts the emoji comparison once
   /// the other side is ready.
   final bool weStarted;
+
+  /// How long the requesting side waits for the other to start the emoji
+  /// comparison before starting it.
+  final Duration startDelay;
 
   @override
   State<MatrixVerificationDialog> createState() =>
@@ -36,6 +41,7 @@ class _MatrixVerificationDialogState extends State<MatrixVerificationDialog> {
   bool _finished = false;
   bool _busy = false;
   bool _confirmed = false;
+  bool _comparisonStarted = false;
 
   @override
   void initState() {
@@ -51,12 +57,19 @@ class _MatrixVerificationDialogState extends State<MatrixVerificationDialog> {
       case 'ready':
         if (widget.weStarted) {
           setState(() => _status = 'Starting emoji comparison…');
-          unawaited(
-            widget.client
-                .startEmojiVerification(widget.userId, widget.flowId)
-                .catchError((Object error) => _fail('$error')),
-          );
+          // Element may start the comparison itself; starting at the same
+          // moment makes one side give way, so leave it a moment first.
+          Timer(widget.startDelay, () {
+            if (!mounted || _comparisonStarted || _finished) return;
+            unawaited(
+              widget.client
+                  .startEmojiVerification(widget.userId, widget.flowId)
+                  .catchError((Object error) => _fail('$error')),
+            );
+          });
         }
+      case 'started':
+        _comparisonStarted = true;
       case 'emojis':
         setState(() {
           _emojis = [

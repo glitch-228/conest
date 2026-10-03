@@ -15,6 +15,10 @@ enum MatrixItemKind {
   undecryptable,
   redacted,
   unsupported,
+
+  /// Someone joined, left, was invited, kicked or banned, or changed their
+  /// name or picture. Shown only when the user turns it on.
+  membership,
 }
 
 /// A message-like event as the UI shows it.
@@ -215,6 +219,14 @@ class MatrixTimeline {
       item.kind = MatrixItemKind.undecryptable;
       return item;
     }
+    if (type == 'm.room.member') {
+      final text = _membershipText(event);
+      if (text == null) return null;
+      item
+        ..kind = MatrixItemKind.membership
+        ..body = text;
+      return item;
+    }
     if (type != 'm.room.message' && type != 'm.sticker') return null;
     if (content is! Map<String, dynamic> || content.isEmpty) {
       // A redacted message keeps its id but loses its content.
@@ -233,7 +245,14 @@ class MatrixTimeline {
     bool sticker = false,
   }) {
     final body = content['body'];
-    item.body = body is String ? _stripReplyFallback(body) : '';
+    // Only a reply carries the quoted fallback; a message that merely
+    // starts with a quote keeps it.
+    final isReply = content['m.relates_to']?['m.in_reply_to'] != null;
+    item.body = body is! String
+        ? ''
+        : isReply
+        ? _stripReplyFallback(body)
+        : body;
     final msgtype = sticker ? 'm.image' : content['msgtype'];
     item.kind = switch (msgtype) {
       'm.text' => MatrixItemKind.text,
@@ -266,10 +285,10 @@ class MatrixTimeline {
         : null;
   }
 
-  /// Replies quote the original as `> ...` lines followed by a blank line;
-  /// the reply itself is shown separately.
+  /// Replies quote the original as `> <@sender> ...` lines followed by a
+  /// blank line; the reply itself is shown separately.
   static String _stripReplyFallback(String body) {
-    if (!body.startsWith('> ')) return body;
+    if (!body.startsWith('> <') && !body.startsWith('> * <')) return body;
     final lines = body.split('\n');
     var index = 0;
     while (index < lines.length && lines[index].startsWith('>')) {
@@ -277,5 +296,56 @@ class MatrixTimeline {
     }
     if (index < lines.length && lines[index].isEmpty) index++;
     return lines.sublist(index).join('\n');
+  }
+
+  /// What a membership event changed, as Element words it; null when
+  /// nothing visible changed.
+  static String? _membershipText(Map<String, dynamic> event) {
+    final content = event['content'];
+    if (content is! Map<String, dynamic>) return null;
+    final target = event['state_key'];
+    final sender = event['sender'];
+    if (target is! String) return null;
+    final unsigned = event['unsigned'];
+    final previous = unsigned is Map<String, dynamic>
+        ? unsigned['prev_content']
+        : null;
+    final before = previous is Map<String, dynamic> ? previous : const {};
+    String nameOf(Map<dynamic, dynamic> data, String fallback) {
+      final name = data['displayname'];
+      return name is String && name.trim().isNotEmpty ? name : fallback;
+    }
+
+    final name = nameOf(content, nameOf(before, target));
+    final now = content['membership'];
+    final was = before['membership'];
+    final byOther = sender is String && sender != target;
+    switch (now) {
+      case 'join' when was == 'join':
+        final oldName = nameOf(before, target);
+        if (oldName != name) return '$oldName changed their name to $name';
+        if (before['avatar_url'] != content['avatar_url']) {
+          return '$name changed their profile picture';
+        }
+        return null;
+      case 'join':
+        return '$name joined';
+      case 'invite':
+        return '$name was invited';
+      case 'leave' when was == 'invite' && !byOther:
+        return '$name declined the invitation';
+      case 'leave' when byOther && was == 'ban':
+        return '$name was unbanned';
+      case 'leave' when byOther:
+        return '$name was removed';
+      case 'leave':
+        return '$name left';
+      case 'ban':
+        return '$name was banned';
+      case 'knock':
+        return '$name asked to join';
+      default:
+        return null;
+    }
   }
 }

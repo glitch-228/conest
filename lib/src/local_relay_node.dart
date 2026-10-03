@@ -65,19 +65,45 @@ class LocalRelayNode {
   bool get isRunning => _server != null || _udpSocket != null;
   int? get port => _port;
 
-  Future<void> start(int port) async {
+  /// Start and stop run one at a time: two overlapping starts (a poll and
+  /// Check Paths, say) would otherwise both bind the port, and the second
+  /// bind fails.
+  Future<void> _lifecycle = Future<void>.value();
+
+  Future<T> _serialized<T>(Future<T> Function() action) {
+    final next = _lifecycle.then((_) => action());
+    _lifecycle = next.then<void>((_) {}, onError: (Object _) {});
+    return next;
+  }
+
+  Future<void> start(int port) => _serialized(() async {
     if (_server != null && _port == port) {
       return;
     }
-    await stop();
-    _server = await ServerSocket.bind(InternetAddress.anyIPv4, port);
-    _udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, port);
+    await _stopNow();
+    ServerSocket? server;
+    try {
+      server = await ServerSocket.bind(InternetAddress.anyIPv4, port);
+      final udpSocket = await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        port,
+      );
+      _server = server;
+      _udpSocket = udpSocket;
+    } catch (_) {
+      // Never left half bound: a TCP socket without its UDP twin would
+      // block every later start on this port.
+      await server?.close();
+      rethrow;
+    }
     _port = port;
     unawaited(_acceptLoop(_server!));
     _udpSubscription = _udpSocket!.listen(_handleUdpEvent);
-  }
+  });
 
-  Future<void> stop() async {
+  Future<void> stop() => _serialized(_stopNow);
+
+  Future<void> _stopNow() async {
     final server = _server;
     _server = null;
     final udpSocket = _udpSocket;

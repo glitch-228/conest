@@ -507,6 +507,19 @@ class MessengerController extends ChangeNotifier {
   /// The full Matrix client, when this build has the native client.
   MatrixClientService? get matrixClient => _matrixClient;
 
+  /// Whether Matrix rooms show joins, leaves and profile changes.
+  bool get matrixShowMembership => _snapshot.matrixShowMembership;
+
+  Future<void> setMatrixShowMembership(bool value) async {
+    _snapshot = _snapshot.copyWith(matrixShowMembership: value);
+    _matrixClient?.showMembershipEvents = value;
+    await _persist(
+      value
+          ? 'Matrix rooms show joins and leaves.'
+          : 'Matrix rooms hide joins and leaves.',
+    );
+  }
+
   /// Whether this build has the full Matrix client (and so app modes).
   bool get matrixAvailable => _matrixClient != null;
 
@@ -10727,6 +10740,20 @@ class MessengerController extends ChangeNotifier {
       }
     }
     unawaited(_refreshAndAdvertiseLanDirectRoutes());
+    // Addresses often arrive after the change event (DHCP on Android):
+    // look again shortly; a change found then is advertised too.
+    for (final timer in _lanRecheckTimers) {
+      timer.cancel();
+    }
+    _lanRecheckTimers
+      ..clear()
+      ..addAll([
+        for (final delay in const [Duration(seconds: 3), Duration(seconds: 10)])
+          Timer(delay, () {
+            if (_disposed || !conestActive) return;
+            unawaited(_refreshLanAddresses(persist: false));
+          }),
+      ]);
     // Cancel inbound retry timers so the next re-request fires immediately
     // through the (possibly different) route instead of waiting out the
     // original interval against a stale interface.
@@ -10750,6 +10777,10 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _refreshAndAdvertiseLanDirectRoutes() async {
+    // Fresh addresses first: the update carries this device's LAN routes,
+    // and right after a network change they still name the old network.
+    await _refreshLanAddresses(persist: false, advertise: false);
+    await _ensureLocalRelayRunning();
     await _refreshLocalLanDirectAddressCache();
     for (final contact in _snapshot.contacts.where(
       (entry) => entry.canSendOutbound,
@@ -12887,7 +12918,20 @@ class MessengerController extends ChangeNotifier {
         _localRelayNode.port == me.localRelayPort) {
       return;
     }
-    await _localRelayNode.start(me.localRelayPort);
+    try {
+      await _localRelayNode.start(me.localRelayPort);
+    } catch (error) {
+      // Another app holding the port must not stop path checks, polls and
+      // sends over Iroh and relays; LAN delivery to this device waits.
+      appendDebugLog(
+        'Local relay node could not start on port ${me.localRelayPort}: '
+        '$error',
+      );
+      _setTransientStatus(
+        'LAN receiving is off: port ${me.localRelayPort} is in use. '
+        'Pick another local relay port in Settings.',
+      );
+    }
   }
 
   Future<void> _ensurePairingBeaconRunning() async {
@@ -13158,7 +13202,13 @@ class MessengerController extends ChangeNotifier {
     return true;
   }
 
-  Future<void> _refreshLanAddresses({bool persist = true}) async {
+  /// Re-reads this device's LAN addresses. A change is advertised to
+  /// contacts (debounced) unless the caller advertises itself, so moving
+  /// onto a shared network is picked up without Check Paths.
+  Future<void> _refreshLanAddresses({
+    bool persist = true,
+    bool advertise = true,
+  }) async {
     final me = _snapshot.identity;
     if (me == null) {
       return;
@@ -13179,11 +13229,21 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(
       identity: me.copyWith(lanAddresses: lanAddresses),
     );
+    if (advertise && conestActive && lanAddresses.isNotEmpty) {
+      _lanAdvertiseTimer?.cancel();
+      _lanAdvertiseTimer = Timer(const Duration(seconds: 2), () {
+        if (_disposed || !conestActive) return;
+        unawaited(_refreshAndAdvertiseLanDirectRoutes());
+      });
+    }
     if (persist) {
       _setTransientStatus('Updated nearby LAN routes.');
       await _saveSnapshotSilently(debounce: true);
     }
   }
+
+  Timer? _lanAdvertiseTimer;
+  final List<Timer> _lanRecheckTimers = [];
 
   void _notifyTransferProgress() {
     if (_disposed || _transferProgressUiTimer != null) return;
@@ -16226,6 +16286,8 @@ class MessengerController extends ChangeNotifier {
       }
     }
     if (requestReply) {
+      // The reply carries this device's LAN routes: make them current.
+      await _refreshLanAddresses(persist: false, advertise: false);
       await _sendRouteUpdate(
         replyContact,
         requestReply: false,
@@ -22107,6 +22169,7 @@ class MessengerController extends ChangeNotifier {
           }
         },
       )..addListener(notifyListeners);
+      _matrixClient!.showMembershipEvents = _snapshot.matrixShowMembership;
     }
     final client = _matrixClient;
     _matrixTransport = MatrixTransportAdapter(
@@ -23693,6 +23756,10 @@ class MessengerController extends ChangeNotifier {
     unawaited(_userNotices.close());
     _scheduledMessageTimer?.cancel();
     _scheduledMessageTimer = null;
+    _lanAdvertiseTimer?.cancel();
+    for (final timer in _lanRecheckTimers) {
+      timer.cancel();
+    }
     unawaited(_voiceCallChanges?.cancel());
     _voiceCallChanges = null;
     unawaited(_voiceCallSoundCues.dispose());

@@ -301,6 +301,7 @@ async fn room_summary(room: &matrix_sdk::Room, invited: bool) -> Value {
         "invited": invited,
         "unread": counts.notification_count,
         "highlight": counts.highlight_count,
+        "members": room.joined_members_count(),
     })
 }
 
@@ -599,12 +600,11 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
         }
         "verification_start_sas" => {
             let request = verification_request(request).await?;
-            let flow_id = request.flow_id().to_owned();
-            let sas = request
+            // The request's watcher follows the comparison from here.
+            request
                 .start_sas()
                 .await?
                 .context("the other session does not support emoji verification")?;
-            RUNTIME.spawn(watch_sas(flow_id, sas));
             Ok(json!({}))
         }
         "verification_confirm" | "verification_mismatch" => {
@@ -692,6 +692,7 @@ async fn verification_request(request: &Value) -> Result<VerificationRequest> {
 /// over to [`watch_sas`].
 async fn watch_request(request: VerificationRequest) {
     let flow_id = request.flow_id().to_owned();
+    let mut watched_starter: Option<bool> = None;
     let mut changes = request.changes();
     while let Some(state) = changes.next().await {
         match state {
@@ -699,14 +700,21 @@ async fn watch_request(request: VerificationRequest) {
                 push_event(json!({"type": "verification", "flowId": flow_id, "state": "ready"}));
             }
             VerificationRequestState::Transitioned { verification } => {
+                // Either side may start the comparison; when both do, the
+                // SDK settles on one and can transition again, so keep
+                // watching rather than stopping at the first start.
                 match verification {
                     Verification::SasV1(sas) => {
-                        RUNTIME.spawn(watch_sas(flow_id.clone(), sas));
+                        if watched_starter.replace(sas.we_started()) != Some(sas.we_started()) {
+                            push_event(json!({
+                                "type": "verification", "flowId": flow_id, "state": "started",
+                            }));
+                            RUNTIME.spawn(watch_sas(flow_id.clone(), sas));
+                        }
                     }
                     #[allow(unreachable_patterns)]
                     _ => {}
                 }
-                return;
             }
             VerificationRequestState::Done => {
                 push_event(json!({"type": "verification", "flowId": flow_id, "state": "done"}));
@@ -760,6 +768,11 @@ async fn watch_sas(flow_id: String, sas: SasVerification) {
                 return;
             }
             SasState::Cancelled(info) => {
+                // Superseded by the other side's comparison (both started
+                // at once): its own watcher carries on.
+                if superseded(&sas, &flow_id).await {
+                    return;
+                }
                 push_event(json!({
                     "type": "verification", "flowId": flow_id, "state": "cancelled",
                     "reason": info.reason(),
@@ -768,6 +781,22 @@ async fn watch_sas(flow_id: String, sas: SasVerification) {
             }
             _ => {}
         }
+    }
+}
+
+async fn superseded(sas: &SasVerification, flow_id: &str) -> bool {
+    let Ok(client) = client() else {
+        return false;
+    };
+    match client
+        .encryption()
+        .get_verification(sas.other_user_id(), flow_id)
+        .await
+    {
+        Some(Verification::SasV1(current)) => {
+            current.we_started() != sas.we_started() && !current.is_cancelled()
+        }
+        _ => false,
     }
 }
 

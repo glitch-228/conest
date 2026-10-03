@@ -4091,6 +4091,7 @@ class VaultSnapshot {
     this.matrixSession,
     this.matrixSyncToken,
     this.appMode,
+    this.matrixShowMembership = false,
   });
 
   final IdentityRecord? identity;
@@ -4179,6 +4180,9 @@ class VaultSnapshot {
   /// app modes reads as [AppMode.both] where Matrix exists).
   final AppMode? appMode;
 
+  /// Whether Matrix rooms show joins, leaves and profile changes.
+  final bool matrixShowMembership;
+
   factory VaultSnapshot.empty() {
     return VaultSnapshot(
       identity: null,
@@ -4236,6 +4240,7 @@ class VaultSnapshot {
     Map<String, dynamic>? matrixSession,
     String? matrixSyncToken,
     AppMode? appMode,
+    bool? matrixShowMembership,
     bool clearMatrixSession = false,
     bool clearIdentity = false,
   }) {
@@ -4282,6 +4287,7 @@ class VaultSnapshot {
           ? null
           : matrixSyncToken ?? this.matrixSyncToken,
       appMode: appMode ?? this.appMode,
+      matrixShowMembership: matrixShowMembership ?? this.matrixShowMembership,
     );
   }
 
@@ -4344,6 +4350,7 @@ class VaultSnapshot {
       if (matrixSession != null) 'matrixSession': matrixSession,
       if (matrixSyncToken != null) 'matrixSyncToken': matrixSyncToken,
       if (appMode != null) 'appMode': appMode!.name,
+      if (matrixShowMembership) 'matrixShowMembership': true,
     };
   }
 
@@ -4382,6 +4389,7 @@ class VaultSnapshot {
       matrixSession: json['matrixSession'] as Map<String, dynamic>?,
       matrixSyncToken: json['matrixSyncToken'] as String?,
       appMode: AppMode.values.asNameMap()[json['appMode']],
+      matrixShowMembership: json['matrixShowMembership'] == true,
       contacts: (json['contacts'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>()
           .map(ContactRecord.fromJson)

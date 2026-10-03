@@ -287,7 +287,10 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
   Widget build(BuildContext context) {
     final palette = widget.palette;
     final room = _client.room(widget.roomId);
-    final items = _client.timeline(widget.roomId).items;
+    final items = _displayRows(
+      _client.timeline(widget.roomId).items,
+      showMembership: _client.showMembershipEvents,
+    );
     return Scaffold(
       backgroundColor: palette.appBackground,
       appBar: AppBar(
@@ -355,7 +358,12 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
                     ),
                   );
                 }
-                final item = items[items.length - 1 - index];
+                final row = items[items.length - 1 - index];
+                if (row.length > 1 ||
+                    row.single.kind == MatrixItemKind.membership) {
+                  return _MembershipSummary(items: row);
+                }
+                final item = row.single;
                 return _MatrixBubble(
                   item: item,
                   mine: item.sender == _client.userId,
@@ -455,6 +463,66 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
   }
 }
 
+/// Timeline rows: one message each, or a run of membership changes shown
+/// as one line (skipped unless the user turned them on).
+List<List<MatrixTimelineItem>> _displayRows(
+  List<MatrixTimelineItem> items, {
+  required bool showMembership,
+}) {
+  final rows = <List<MatrixTimelineItem>>[];
+  for (final item in items) {
+    if (item.kind != MatrixItemKind.membership) {
+      rows.add([item]);
+    } else if (showMembership) {
+      final last = rows.isEmpty ? null : rows.last;
+      if (last != null && last.first.kind == MatrixItemKind.membership) {
+        last.add(item);
+      } else {
+        rows.add([item]);
+      }
+    }
+  }
+  return rows;
+}
+
+/// Joins, leaves and profile changes, collapsed like other Matrix apps.
+class _MembershipSummary extends StatefulWidget {
+  const _MembershipSummary({required this.items});
+
+  final List<MatrixTimelineItem> items;
+
+  @override
+  State<_MembershipSummary> createState() => _MembershipSummaryState();
+}
+
+class _MembershipSummaryState extends State<_MembershipSummary> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final texts = widget.items.map((item) => item.body).toList();
+    final style = Theme.of(context).textTheme.bodySmall?.copyWith(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    );
+    final collapsed = texts.length <= 2
+        ? texts.join(', ')
+        : '${texts.take(2).join(', ')} and ${texts.length - 2} more';
+    return InkWell(
+      onTap: texts.length > 2
+          ? () => setState(() => _expanded = !_expanded)
+          : null,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
+        child: Text(
+          _expanded ? texts.join('\n') : collapsed,
+          textAlign: TextAlign.center,
+          style: style,
+        ),
+      ),
+    );
+  }
+}
+
 String _shortName(String userId) {
   final colon = userId.indexOf(':');
   return userId.startsWith('@') && colon > 1
@@ -474,7 +542,9 @@ String _preview(MatrixTimelineItem item) => switch (item.kind) {
 
 /// Last message preview for chat lists.
 String matrixPreview(MatrixTimelineItem item) =>
-    '${_shortName(item.sender)}: ${_preview(item)}';
+    item.kind == MatrixItemKind.membership
+    ? item.body
+    : '${_shortName(item.sender)}: ${_preview(item)}';
 
 String? _mimeFor(String name) {
   final dot = name.lastIndexOf('.');

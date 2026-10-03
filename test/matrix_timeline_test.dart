@@ -169,4 +169,99 @@ void main() {
       ..appendAll([message('\$2', 'b', ts: 2), message('\$3', 'c', ts: 3)]);
     expect(timeline.items.map((item) => item.body), ['a', 'b', 'c']);
   });
+
+  test('a message that starts with a quote keeps it; replies drop theirs', () {
+    final timeline = MatrixTimeline()
+      ..appendAll([
+        message('\$q', '> Turkish authorities ordered access blocked'),
+        edit(
+          '\$e',
+          '\$q',
+          '> Turkish authorities ordered access blocked\n\nsee',
+        ),
+        message(
+          '\$r',
+          '> <@b:x> original text\n\nmy answer',
+          ts: 6,
+          extra: {
+            'm.relates_to': {
+              'm.in_reply_to': {'event_id': '\$q'},
+            },
+          },
+        ),
+      ]);
+    expect(timeline['\$q']!.body, startsWith('> Turkish'));
+    expect(timeline['\$q']!.body, endsWith('see'));
+    expect(timeline['\$q']!.edited, isTrue);
+    expect(timeline['\$r']!.body, 'my answer');
+    expect(timeline.items, hasLength(2));
+  });
+
+  test('membership changes read like other Matrix apps', () {
+    Map<String, dynamic> member(
+      String id,
+      String target,
+      Map<String, dynamic> content, {
+      Map<String, dynamic>? before,
+      String? sender,
+    }) => {
+      'event_id': id,
+      'type': 'm.room.member',
+      'sender': sender ?? target,
+      'state_key': target,
+      'origin_server_ts': 1,
+      'content': content,
+      if (before != null) 'unsigned': {'prev_content': before},
+    };
+    final timeline = MatrixTimeline()
+      ..appendAll([
+        member('\$1', '@n:x', {'membership': 'join', 'displayname': 'Nate'}),
+        member(
+          '\$2',
+          '@n:x',
+          {'membership': 'join', 'displayname': 'Nathan'},
+          before: {'membership': 'join', 'displayname': 'Nate'},
+        ),
+        member(
+          '\$3',
+          '@n:x',
+          {
+            'membership': 'join',
+            'displayname': 'Nathan',
+            'avatar_url': 'mxc://x/2',
+          },
+          before: {'membership': 'join', 'displayname': 'Nathan'},
+        ),
+        member(
+          '\$4',
+          '@n:x',
+          {'membership': 'leave'},
+          before: {'membership': 'join', 'displayname': 'Nathan'},
+        ),
+        member(
+          '\$5',
+          '@z:x',
+          {'membership': 'leave'},
+          before: {'membership': 'join', 'displayname': 'Az'},
+          sender: '@mod:x',
+        ),
+        // Nothing visible changed: no line.
+        member(
+          '\$6',
+          '@q:x',
+          {'membership': 'join', 'displayname': 'Q'},
+          before: {'membership': 'join', 'displayname': 'Q'},
+        ),
+      ]);
+    expect(timeline.items.map((item) => item.kind).toSet(), {
+      MatrixItemKind.membership,
+    });
+    expect(timeline.items.map((item) => item.body), [
+      'Nate joined',
+      'Nate changed their name to Nathan',
+      'Nathan changed their profile picture',
+      'Nathan left',
+      'Az was removed',
+    ]);
+  });
 }

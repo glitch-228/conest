@@ -27,6 +27,7 @@ class MatrixRoom {
     required this.invited,
     required this.unread,
     required this.highlight,
+    this.members = 0,
   });
 
   factory MatrixRoom.fromJson(Map<String, dynamic> json) => MatrixRoom(
@@ -39,6 +40,7 @@ class MatrixRoom {
     invited: json['invited'] == true,
     unread: (json['unread'] as num?)?.toInt() ?? 0,
     highlight: (json['highlight'] as num?)?.toInt() ?? 0,
+    members: (json['members'] as num?)?.toInt() ?? 0,
   );
 
   final String roomId;
@@ -48,6 +50,9 @@ class MatrixRoom {
   final bool invited;
   final int unread;
   final int highlight;
+
+  /// Joined members, as the homeserver last reported.
+  final int members;
 }
 
 enum MatrixClientState { signedOut, signingIn, ready, error }
@@ -268,6 +273,7 @@ class MatrixClientService extends ChangeNotifier {
   static const Map<String, dynamic> _none = {};
 
   void _clearLocal() {
+    _previewed.clear();
     _session = null;
     _rooms.clear();
     _timelines.clear();
@@ -302,6 +308,58 @@ class MatrixClientService extends ChangeNotifier {
             .map((room) => MapEntry(room.roomId, room)),
       );
     _notify();
+    unawaited(_prefetchPreviews());
+  }
+
+  final Set<String> _previewed = {};
+  bool _prefetching = false;
+
+  /// Loads a short first page for rooms nothing has been seen in yet, a few
+  /// at a time, so the chat list shows each room's latest message instead
+  /// of a placeholder.
+  Future<void> _prefetchPreviews() async {
+    if (_prefetching) return;
+    _prefetching = true;
+    try {
+      final pending = [
+        for (final room in _rooms.values)
+          if (!room.invited &&
+              timeline(room.roomId).items.isEmpty &&
+              _previewed.add(room.roomId))
+            room.roomId,
+      ];
+      const parallel = 4;
+      for (var start = 0; start < pending.length; start += parallel) {
+        if (_disposed || !signedIn) return;
+        await Future.wait([
+          for (final roomId in pending.skip(start).take(parallel))
+            loadOlder(roomId, limit: 10).catchError((Object _) => false),
+        ]);
+      }
+    } finally {
+      _prefetching = false;
+    }
+  }
+
+  /// Whether join, leave and profile-change events show in rooms.
+  bool get showMembershipEvents => _showMembershipEvents;
+  bool _showMembershipEvents = false;
+  set showMembershipEvents(bool value) {
+    if (value == _showMembershipEvents) return;
+    _showMembershipEvents = value;
+    _notify();
+  }
+
+  /// The newest item the room screen would show, for previews.
+  MatrixTimelineItem? lastVisible(String roomId) {
+    final items = timeline(roomId).items;
+    for (var index = items.length - 1; index >= 0; index--) {
+      final item = items[index];
+      if (_showMembershipEvents || item.kind != MatrixItemKind.membership) {
+        return item;
+      }
+    }
+    return null;
   }
 
   /// Loads the next page of older events; returns false at the start of
@@ -474,6 +532,7 @@ class MatrixClientService extends ChangeNotifier {
   /// Drops loaded timelines so they reload: messages that could not be
   /// decrypted before recovery or verification can be now.
   void resetTimelines() {
+    _previewed.clear();
     _timelines.clear();
     _olderFrom.clear();
     _exhausted.clear();

@@ -183,8 +183,7 @@ class _MatrixHomeScreenState extends State<MatrixHomeScreen> {
                   itemCount: rooms.length,
                   itemBuilder: (context, index) {
                     final room = rooms[index];
-                    final items = client.timeline(room.roomId).items;
-                    final last = items.isEmpty ? null : items.last;
+                    final last = client.lastVisible(room.roomId);
                     return ListTile(
                       key: ValueKey('matrix-room-${room.roomId}'),
                       leading: CircleAvatar(

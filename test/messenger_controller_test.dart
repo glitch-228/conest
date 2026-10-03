@@ -967,12 +967,13 @@ Future<MessengerController> _createController({
   RatchetEngine? ratchetEngine,
   bool? matrixCarrierEnabled,
   MatrixNativeApi? matrixNativeApi,
+  Future<List<String>> Function()? lanAddressProvider,
 }) async {
   final controller = MessengerController(
     vaultStore: vaultStore ?? _MemoryVaultStore(),
     relayClient: relayClient,
     localRelayNode: localRelayNode ?? _FakeLocalRelayNode(),
-    lanAddressProvider: () async => lanAddresses,
+    lanAddressProvider: lanAddressProvider ?? () async => lanAddresses,
     nowProvider: nowProvider,
     signedRelayDefaultsLoader: signedRelayDefaultsLoader,
     enableLongPoll: enableLongPoll,
@@ -11116,6 +11117,57 @@ void main() {
       await sendChunk();
     });
   });
+
+  test(
+    'moving onto a shared LAN is advertised without Check Paths',
+    () async {
+      final relay = _FakeRelayClient();
+      var aliceLan = const <String>['10.9.0.5'];
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        lanAddressProvider: () async => List.of(aliceLan),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        lanAddresses: const ['192.168.7.20'],
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      bool bobKnowsNewLan() => bob.contacts.single.lanRouteHints.any(
+        (route) => route.host == '192.168.7.21',
+      );
+      expect(bobKnowsNewLan(), isFalse);
+
+      // A received message records the route it came in on.
+      await alice.sendMessage(contact: alice.contacts.single, body: 'routed');
+      final aliceId = alice.identity!.deviceId;
+      for (var i = 0; i < 20; i++) {
+        if (bob.messagesFor(aliceId).any((m) => m.body == 'routed')) break;
+        await bob.pollNow();
+      }
+      final received = bob
+          .messagesFor(aliceId)
+          .firstWhere((m) => m.body == 'routed');
+      expect(received.outbound, isFalse);
+      expect(received.route, isNotNull, reason: 'inbound route mark');
+
+      // Alice's Wi-Fi joins Bob's network; the event comes before the address
+      // is known, as on Android.
+      alice.onConnectivityChanged(interfaceLabel: 'wifi');
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      aliceLan = const ['192.168.7.21'];
+      final deadline = DateTime.now().add(const Duration(seconds: 20));
+      while (DateTime.now().isBefore(deadline) && !bobKnowsNewLan()) {
+        await bob.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      expect(bobKnowsNewLan(), isTrue);
+    },
+    timeout: const Timeout(Duration(seconds: 40)),
+  );
 
   group('app modes', () {
     test('builds without the Matrix client are Conest only', () async {

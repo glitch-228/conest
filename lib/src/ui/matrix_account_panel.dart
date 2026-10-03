@@ -72,14 +72,27 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
       }
     });
     if (failure == null || !mounted) return;
+    final text = '$failure';
+    // A server that answered but has no sign-out here (sessions handled by a
+    // separate account service) is not a network problem.
+    final refused =
+        text.contains('M_UNRECOGNIZED') ||
+        text.contains('404') ||
+        text.contains('M_FORBIDDEN');
     final force = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Server not reached'),
+        title: Text(refused ? 'Server refused sign-out' : 'Server not reached'),
         content: Text(
-          'Conest could not sign this device out on the server ($failure).\n\n'
-          'Sign out on this device anyway? The session stays valid on the '
-          'server until you remove it from another Matrix app.',
+          refused
+              ? 'This server does not let Conest end its session ($text). '
+                    'It may manage sessions on its own account page.\n\n'
+                    'Sign out on this device anyway? Then remove the Conest '
+                    'session from your account page or another Matrix app.'
+              : 'Conest could not sign this device out on the server '
+                    '($text).\n\nSign out on this device anyway? The session '
+                    'stays valid on the server until you remove it from '
+                    'another Matrix app.',
         ),
         actions: [
           TextButton(
@@ -330,6 +343,15 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
                   label: const Text('Verify with another session'),
                 ),
               ],
+            ),
+          if (client != null && client.signedIn)
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Show joins, leaves and profile changes'),
+              subtitle: const Text('In Matrix rooms, collapsed into one line'),
+              value: widget.controller.matrixShowMembership,
+              onChanged: (value) =>
+                  _run(() => widget.controller.setMatrixShowMembership(value)),
             ),
         ],
       );

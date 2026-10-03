@@ -90,7 +90,16 @@ void main() {
       password: 'p',
       deviceId: 'CONEST_A',
     );
-    expect(api.ops, ['login_password', 'start_sync', 'rooms']);
+    expect(api.ops.take(3), ['login_password', 'start_sync', 'rooms']);
+    // Each joined room loads a short first page for its chat-list preview;
+    // invites do not.
+    await Future<void>.delayed(Duration.zero);
+    expect(
+      api.requests
+          .where((request) => request.$1 == 'messages')
+          .map((request) => (request.$2['roomId'], request.$2['limit'])),
+      unorderedEquals([('!dm:x', 10), ('!quiet:x', 10)]),
+    );
     expect(api.last('login_password'), containsPair('storePath', '/store'));
     expect(api.last('login_password'), containsPair('passphrase', 'secret'));
     expect(sessions.single?['userId'], '@a:x');

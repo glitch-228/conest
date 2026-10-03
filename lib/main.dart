@@ -4181,7 +4181,7 @@ class _CourierHomeState extends State<_CourierHome> {
         _source != _ChatSource.conest) {
       for (final room in matrix.rooms) {
         final items = matrix.timeline(room.roomId).items;
-        final last = items.isEmpty ? null : items.last;
+        final last = matrix.lastVisible(room.roomId);
         if (query.isNotEmpty &&
             !room.name.toLowerCase().contains(query) &&
             !items.any((item) => item.body.toLowerCase().contains(query))) {
@@ -4204,7 +4204,7 @@ class _CourierHomeState extends State<_CourierHome> {
           selected: false,
           isGroup: !room.direct,
           isMatrix: true,
-          memberCount: 0,
+          memberCount: room.direct ? 0 : room.members,
           reachability: null,
           onTap: () => unawaited(
             Navigator.of(context).push<void>(
@@ -4478,7 +4478,7 @@ class _CourierHomeState extends State<_CourierHome> {
                     unread: entry.unread,
                     selected: entry.selected,
                     isGroup: entry.isGroup,
-                    memberCount: entry.isMatrix ? 0 : entry.memberCount,
+                    memberCount: entry.memberCount,
                     reachability: entry.reachability,
                     onTap: entry.onTap,
                   ),
@@ -4684,7 +4684,7 @@ class _CourierRow extends StatelessWidget {
                       size: 44,
                       label: title,
                     ),
-                    if (isGroup)
+                    if (isGroup && memberCount > 0)
                       Positioned(
                         right: 0,
                         bottom: 0,
@@ -7036,7 +7036,7 @@ class _TelegramChatHeader extends StatelessWidget {
           ),
           if (onCall != null)
             IconButton(
-              tooltip: 'Start voice call',
+              tooltip: 'Start voice call (experimental)',
               onPressed: onCall,
               icon: const Icon(Icons.call_outlined),
             ),
