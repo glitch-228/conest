@@ -1,69 +1,76 @@
-## Conest 0.3.11 nightly (October 3, second build)
+## Conest 0.3.11 nightly (October 3, third build)
 
-This nightly turns Conest into a Matrix client as well: your Matrix rooms
-and direct chats appear next to your Conest chats, and you can talk to
-anyone on Matrix, including people who do not use Conest.
+This nightly lets you choose what Conest is: a Conest messenger, a Matrix
+client, or both. It also shows how every message travelled.
 
-### Matrix client (experimental)
+### App modes (experimental)
 
-- **Sign in** under **Settings → Connectivity → Matrix**:
-  - with a Matrix user and password; or
-  - with **Sign in with browser**, for accounts that use Google, GitHub or
-    another provider, and for matrix.org accounts. The browser opens your
-    server's own sign-in page and returns to Conest when you are done.
-- **Your rooms in the chat list.**
-  - Matrix rooms and direct chats appear with a **Matrix** badge, unread
-    counts and the latest message.
-  - Invites show at the end of the list; you can join or decline them.
-  - Start a direct chat from the menu with **New Matrix chat** and a Matrix
-    ID.
-- **In a room:**
-  - send, reply, edit and delete messages, and react;
-  - tap your own reaction again to take it back;
-  - scroll back through older history;
-  - send files and images, view images, and download files.
-- **End-to-end encryption:**
-  - Encrypted rooms work like in other Matrix apps.
-  - **Set up recovery** creates a recovery key. It is shown once; keep it
-    safe. With it, **Enter recovery key** on a new device unlocks your
-    earlier encrypted messages.
-  - **Verify with another session** compares emojis with Element or another
-    Matrix app. Requests from your other sessions show up in Conest too.
-- **Signing out:**
-  - Signing out removes this device from your account.
-  - If the server cannot be reached, Conest asks before signing out on
-    this device only.
-  - If you remove the device from another Matrix app, Conest notices and
-    signs out.
-- **The Matrix fallback for Conest contacts** now uses the same sign-in:
-  - Conest messages to contacts who also signed in travel through
-    Matrix when LAN and Iroh cannot reach them.
-  - These messages stay end-to-end encrypted by Conest.
-- **Not yet available:**
-  - choosing a Matrix-only or Conest-only app mode;
-  - chat-list filters;
-  - showing the route each message took;
-  - offering to send to an unreachable Conest contact as a plain Matrix
-    message.
+- Under **Settings → Connectivity → App mode**, pick:
+  - **Conest**: Conest chats only. Matrix can still carry Conest
+    messages as a fallback.
+  - **Both**: Conest and Matrix chats side by side.
+  - **Matrix**: Conest as a plain Matrix client.
+- **Matrix only** needs no Conest identity. On first launch, choose **Use
+  as a Matrix client instead** to skip creating one.
+- If you already have a Conest identity, Matrix only switches Conest off on
+  this device:
+  - Nothing is deleted.
+  - Conest stops connecting over LAN, relays and Iroh until you switch
+    back.
+  - Your contacts' apps keep retrying, and their messages arrive when you
+    switch back.
+  - Switching is not possible during a call.
+- In **Both** mode the chat list has **All chats**, **Conest** and
+  **Matrix** filters.
 
-  These come next, together with spaces, room search, Matrix calls and
-  notifications later on.
+### How each message travelled
+
+- Sent and received messages now carry a coloured mark for the route they
+  took:
+  - **LAN direct** or **LAN relay** (through another device);
+  - **LAN lobby**;
+  - **Internet direct**;
+  - **Iroh direct** or **Iroh relay**;
+  - **Conest relay**;
+  - **Matrix** (still encrypted by Conest);
+  - **Plain Matrix**.
+- The marks show in every layout; the Telegram-style layout uses a dot and a
+  short name.
+- Older messages show the route they were sent on, where it was recorded.
+- **Settings → Connectivity → Message routes** explains each mark.
+
+### Reaching a contact through Matrix
+
+- When a contact cannot be reached over Conest but has linked their Matrix
+  account, a message waiting to be sent shows an **@** button and **Send via
+  Matrix…** in its menu.
+- Conest asks every time before sending. The message goes to your Matrix
+  direct chat with them as an ordinary Matrix message. The homeserver can
+  read it unless that chat is encrypted.
+- Once sent this way, it is marked **Plain Matrix** and is never also sent
+  over Conest, so it cannot arrive twice.
+- **New Matrix chat** now opens your existing direct chat with that person
+  instead of creating another one.
 
 ### Qualification
 
 - The remote debug workflow passed:
   - focused Flutter verification;
-  - the Matrix client and the Matrix fallback against a real Synapse
-    homeserver: sign-in, sync, direct chats both ways, replies, edits,
-    reactions, deletes, files, recovery, restore and sign-out;
+  - the Matrix client against a real Synapse homeserver;
   - native tests;
   - the Linux, Android and Windows debug builds.
-- The full local test suite passed.
-- An independent review of the Matrix client was done and its findings
-  fixed.
+- The full local test suite passed, including new tests:
+  - Matrix-only mode keeps Conest off through app lifecycle, network
+    changes and relaunches;
+  - routes are recorded for messages sent over LAN, relays and Iroh, and
+    received over Iroh and Matrix;
+  - a plain Matrix send happens once and never repeats over Conest.
+- An independent review was done and its findings fixed.
 - Not yet tested on real devices:
-  - Matrix sign-in, including through the browser on Android;
-  - rooms, media, recovery and verification with Element;
+  - switching modes;
+  - the chat filters;
+  - the route marks;
+  - the Matrix fallback;
   - everything still pending from earlier nightlies.
 
 This nightly is prerelease software; keep important data backed up and
