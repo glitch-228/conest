@@ -4216,6 +4216,7 @@ class VaultSnapshot {
     this.matrixSyncToken,
     this.appMode,
     this.matrixShowMembership = false,
+    this.carrierAccounts = const <String, Map<String, dynamic>>{},
   });
 
   final IdentityRecord? identity;
@@ -4300,6 +4301,10 @@ class VaultSnapshot {
   /// The last acknowledged `/sync` position for [matrixSession].
   final String? matrixSyncToken;
 
+  /// Saved carrier accounts by transport kind name (for example the Nostr
+  /// carrier's key and relays); each carrier reads its own entry.
+  final Map<String, Map<String, dynamic>> carrierAccounts;
+
   /// What the app is used as; null until chosen (an identity from before
   /// app modes reads as [AppMode.both] where Matrix exists).
   final AppMode? appMode;
@@ -4365,6 +4370,7 @@ class VaultSnapshot {
     String? matrixSyncToken,
     AppMode? appMode,
     bool? matrixShowMembership,
+    Map<String, Map<String, dynamic>>? carrierAccounts,
     bool clearMatrixSession = false,
     bool clearIdentity = false,
   }) {
@@ -4412,6 +4418,7 @@ class VaultSnapshot {
           : matrixSyncToken ?? this.matrixSyncToken,
       appMode: appMode ?? this.appMode,
       matrixShowMembership: matrixShowMembership ?? this.matrixShowMembership,
+      carrierAccounts: carrierAccounts ?? this.carrierAccounts,
     );
   }
 
@@ -4475,6 +4482,7 @@ class VaultSnapshot {
       if (matrixSyncToken != null) 'matrixSyncToken': matrixSyncToken,
       if (appMode != null) 'appMode': appMode!.name,
       if (matrixShowMembership) 'matrixShowMembership': true,
+      if (carrierAccounts.isNotEmpty) 'carrierAccounts': carrierAccounts,
     };
   }
 
@@ -4514,6 +4522,13 @@ class VaultSnapshot {
       matrixSyncToken: json['matrixSyncToken'] as String?,
       appMode: AppMode.values.asNameMap()[json['appMode']],
       matrixShowMembership: json['matrixShowMembership'] == true,
+      carrierAccounts: {
+        for (final entry
+            in (json['carrierAccounts'] as Map<String, dynamic>? ?? const {})
+                .entries)
+          if (entry.value case final Map<String, dynamic> account)
+            entry.key: account,
+      },
       contacts: (json['contacts'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>()
           .map(ContactRecord.fromJson)

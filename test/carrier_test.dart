@@ -181,7 +181,7 @@ void main() {
           ),
           isEmpty,
         );
-        adapter.detach();
+        await adapter.detach();
         expect(await adapter.discoverRoutes(peer), isEmpty);
       },
     );
@@ -250,6 +250,31 @@ void main() {
       await subscription.cancel();
       expect(received, isFalse);
       expect(sealer.opened, 0);
+    });
+
+    test('stopping mid-envelope sends no further frames', () async {
+      final slow = CarrierTransportAdapter(
+        kind: TransportKind.nostr,
+        sealer: sealer,
+        framing: CarrierFraming.nostr,
+        frameSpacing: const Duration(milliseconds: 100),
+      )..attach(channel);
+      await slow.start();
+      final route = (await slow.discoverRoutes(peer)).single;
+      final sending = slow.sendEnvelope(
+        peer: peer,
+        route: route,
+        envelope: TransportEnvelope(
+          id: 'm',
+          recipientDeviceId: 'dev-bob',
+          bytes: pattern(100 * 1024),
+          createdAt: DateTime.utc(2026),
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await slow.stop();
+      await expectLater(sending, throwsStateError);
+      expect(channel.sent.length, lessThan(5));
     });
 
     test('file streams are refused', () async {

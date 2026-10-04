@@ -27,6 +27,8 @@ import 'package:conest/src/matrix_service.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/native_attachment_crypto.dart';
+import 'package:conest/src/nostr/relay.dart';
+import 'package:conest/src/nostr_carrier.dart';
 import 'package:conest/src/platform_bridge.dart';
 import 'package:conest/src/ratchet.dart';
 import 'package:conest/src/relay_client.dart'
@@ -46,6 +48,7 @@ import 'package:conest/src/voice_call_service.dart';
 
 import 'support/fake_homeserver.dart';
 import 'support/fake_matrix_native.dart';
+import 'support/fake_nostr_relay.dart';
 import 'support/fake_ratchet_engine.dart';
 
 const _fakeRelayIdentityKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
@@ -969,8 +972,10 @@ Future<MessengerController> _createController({
   bool? matrixCarrierEnabled,
   MatrixNativeApi? matrixNativeApi,
   Future<List<String>> Function()? lanAddressProvider,
+  NostrSocketConnector? nostrConnector,
 }) async {
   final controller = MessengerController(
+    nostrConnector: nostrConnector,
     vaultStore: vaultStore ?? _MemoryVaultStore(),
     relayClient: relayClient,
     localRelayNode: localRelayNode ?? _FakeLocalRelayNode(),
@@ -11865,6 +11870,149 @@ void main() {
     });
   });
 
+  group('Nostr carrier', () {
+    Future<void> settle(List<MessengerController> controllers) async {
+      for (var round = 0; round < 6; round++) {
+        for (final controller in controllers) {
+          await controller.retryUnacknowledgedMessagesNow();
+          await controller.pollNow();
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    }
+
+    Future<void> until(bool Function() condition) async {
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (!condition() && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+    }
+
+    test(
+      'two devices talk over Nostr relays when Conest relays fail',
+      () async {
+        final relays = FakeNostrRelays();
+        final inbox = relays.relay('wss://inbox.test', requireAuth: true);
+        relays.relay('wss://public.test');
+        final relay = _FakeRelayClient();
+        final aliceVault = _MemoryVaultStore();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          vaultStore: aliceVault,
+          nostrConnector: relays.connect,
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          nostrConnector: relays.connect,
+        );
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        await alice.enableNostrCarrier(relays: ['wss://inbox.test']);
+        await bob.enableNostrCarrier(relays: ['wss://public.test']);
+        await settle([alice, bob]);
+        final aliceAddress = alice.nostrChannel!.localAddress!;
+        expect(
+          bob.contacts.single.carrierAddress(TransportKind.nostr),
+          aliceAddress,
+        );
+        expect(
+          alice.contacts.single.carrierAddress(TransportKind.nostr),
+          bob.nostrChannel!.localAddress,
+        );
+
+        relay.shouldFailStore = (_, _, _, _, _) => true;
+        await bob.sendMessage(contact: bob.contacts.single, body: 'over nostr');
+        final bobId = bob.identity!.deviceId;
+        await until(
+          () => alice.messagesFor(bobId).any((m) => m.body == 'over nostr'),
+        );
+        final received = alice
+            .messagesFor(bobId)
+            .singleWhere((m) => m.body == 'over nostr');
+        expect(received.route, MessageRoute.nostrCarrier);
+        expect(inbox.stored, isNotEmpty);
+        for (final event in inbox.stored) {
+          expect(event.content, isNot(contains('over nostr')));
+        }
+
+        // After a restart the same key and relays come back.
+        alice.dispose();
+        final restarted = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          vaultStore: aliceVault,
+          createIdentity: false,
+          nostrConnector: relays.connect,
+        );
+        addTearDown(restarted.dispose);
+        expect(restarted.nostrChannel?.localAddress, aliceAddress);
+        await bob.sendMessage(contact: bob.contacts.single, body: 'again');
+        await until(
+          () => restarted.messagesFor(bobId).any((m) => m.body == 'again'),
+        );
+        expect(
+          restarted.messagesFor(bobId).map((m) => m.body),
+          contains('again'),
+        );
+      },
+    );
+
+    test(
+      'turning Nostr off withdraws the address and forgets the key',
+      () async {
+        final relays = FakeNostrRelays()..relay('wss://r.test');
+        final relay = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          nostrConnector: relays.connect,
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          nostrConnector: relays.connect,
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        await alice.enableNostrCarrier(relays: ['wss://r.test']);
+        await settle([alice, bob]);
+        expect(
+          bob.contacts.single.carrierAddress(TransportKind.nostr),
+          isNotNull,
+        );
+        await alice.disableNostrCarrier();
+        await settle([alice, bob]);
+        expect(bob.contacts.single.carrierAddress(TransportKind.nostr), isNull);
+        expect(alice.nostrCarrierConfig, isNull);
+        expect(alice.carrierTransport(TransportKind.nostr), isNull);
+      },
+    );
+
+    test('relay lists are checked', () async {
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        nostrConnector: FakeNostrRelays().connect,
+      );
+      addTearDown(alice.dispose);
+      for (final relays in [
+        <String>[],
+        ['http://relay.example'],
+        ['wss://a.x', 'wss://b.x', 'wss://c.x', 'wss://d.x', 'wss://e.x'],
+      ]) {
+        await expectLater(
+          alice.enableNostrCarrier(relays: relays),
+          throwsArgumentError,
+        );
+      }
+      expect(alice.nostrCarrierConfig, isNull);
+      expect(defaultNostrRelays, hasLength(lessThanOrEqualTo(4)));
+    });
+  });
+
   group('forward-secret sessions', () {
     Future<void> settle(
       List<MessengerController> controllers, {
@@ -12328,8 +12476,10 @@ void main() {
       final bob = await ratchetController(relay, 'Bob');
       addTearDown(alice.dispose);
       addTearDown(bob.dispose);
-      await _pairControllers(alice, bob);
+      // Taken before pairing: on a slow machine the session can be
+      // confirmed while pairing finishes.
       final beforeConfirmation = DateTime.now().toUtc();
+      await _pairControllers(alice, bob);
       await settle([alice, bob]);
       await alice.sendMessage(contact: alice.contacts.single, body: 'a1');
       await bob.sendMessage(contact: bob.contacts.single, body: 'b1');

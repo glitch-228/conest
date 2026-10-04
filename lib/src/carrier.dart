@@ -270,6 +270,13 @@ abstract interface class CarrierChannel {
   Future<void> sendFrame(String address, Uint8List frame);
 }
 
+/// A channel with its own connections, opened while its carrier runs, so
+/// nothing is fetched while the carrier is off.
+abstract interface class ManagedCarrierChannel implements CarrierChannel {
+  void start();
+  Future<void> stop();
+}
+
 /// Observable state of a carrier for settings and diagnostics.
 class CarrierStatus {
   const CarrierStatus({
@@ -358,18 +365,23 @@ class CarrierTransportAdapter implements TransportAdapter {
 
   Stream<CarrierStatus> get statusChanges => _status.stream;
 
-  /// Uses [channel] from now on.
+  /// Uses [channel] from now on; a running carrier opens it.
   void attach(CarrierChannel channel) {
     _channel = channel;
     _lastError = null;
     _generation++;
+    if (_started && channel is ManagedCarrierChannel) channel.start();
     _emitStatus();
   }
 
   /// Stops using the current channel; held frames are dropped.
-  void detach() {
+  Future<void> detach() async {
     _generation++;
+    final previous = _channel;
     _channel = null;
+    if (previous case final ManagedCarrierChannel managed) {
+      await managed.stop();
+    }
     _held.clear();
     _emitStatus();
   }
@@ -384,6 +396,7 @@ class CarrierTransportAdapter implements TransportAdapter {
   Future<void> start() async {
     if (_started) return;
     _started = true;
+    if (_channel case final ManagedCarrierChannel managed) managed.start();
     final held = List.of(_held);
     _held.clear();
     for (final (sender, frame) in held) {
@@ -395,6 +408,9 @@ class CarrierTransportAdapter implements TransportAdapter {
   Future<void> stop() async {
     _started = false;
     _generation++;
+    if (_channel case final ManagedCarrierChannel managed) {
+      await managed.stop();
+    }
   }
 
   /// A frame the channel received from [sender] (as the network names it).
@@ -450,11 +466,16 @@ class CarrierTransportAdapter implements TransportAdapter {
     if (channel == null || address == null || !_isValidAddress(address)) {
       throw StateError('${kind.label} is not available for this contact.');
     }
+    final generation = _generation;
     final sealed = await _sealer.seal(kind, peer.deviceId, envelope.bytes);
     final frames = carrierBinaryFrames(framing, sealed, random: _random);
     for (var index = 0; index < frames.length; index++) {
       if (index > 0 && frameSpacing > Duration.zero) {
         await Future<void>.delayed(frameSpacing);
+      }
+      // Turned off or switched to another channel meanwhile: send no more.
+      if (!_started || generation != _generation) {
+        throw StateError('${kind.label} stopped while sending.');
       }
       await channel.sendFrame(address, frames[index]);
     }

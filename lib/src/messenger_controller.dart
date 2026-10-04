@@ -32,6 +32,9 @@ import 'matrix_client.dart';
 import 'matrix_native.dart';
 import 'matrix_service.dart';
 import 'models.dart';
+import 'nostr/relay.dart';
+import 'nostr/secp256k1.dart';
+import 'nostr_carrier.dart';
 import 'native_attachment_crypto.dart';
 import 'platform_bridge.dart';
 import 'ratchet.dart';
@@ -426,7 +429,9 @@ class MessengerController extends ChangeNotifier {
     MatrixHttp Function()? matrixHttpFactory,
     MatrixNativeApi? matrixNativeApi,
     bool loadNativeMatrixClient = true,
+    NostrSocketConnector? nostrConnector,
   }) : _vaultStore = vaultStore,
+       _nostrConnector = nostrConnector,
        _matrixNativeApi = matrixNativeApi,
        _loadNativeMatrixClient = loadNativeMatrixClient,
        _matrixHttpFactory = matrixHttpFactory,
@@ -501,6 +506,7 @@ class MessengerController extends ChangeNotifier {
   final bool _matrixCarrierEnabled;
   StreamSubscription<TransportInboundEnvelope>? _matrixInboundSubscription;
   final MatrixHttp Function()? _matrixHttpFactory;
+  final NostrSocketConnector? _nostrConnector;
   MatrixNativeApi? _matrixNativeApi;
   final bool _loadNativeMatrixClient;
   MatrixClientService? _matrixClient;
@@ -564,6 +570,7 @@ class MessengerController extends ChangeNotifier {
     if (_snapshot.identity == null || !conestActive) return;
     await _startLanDirectChannel();
     _ensureVoiceCallService();
+    await _restoreCarrierAccounts();
     await _startTransportRegistry();
     await _refreshLanAddresses(persist: false);
     await _ensureLocalRelayRunning();
@@ -3387,6 +3394,106 @@ class MessengerController extends ChangeNotifier {
         kind.name: address,
   };
 
+  /// The Nostr carrier's saved account, if set up.
+  NostrCarrierConfig? get nostrCarrierConfig =>
+      NostrCarrierConfig.fromJson(_snapshot.carrierAccounts['nostr']);
+
+  /// The running Nostr connection, for relay status in settings.
+  NostrCarrierChannel? get nostrChannel => _nostrChannel;
+  NostrCarrierChannel? _nostrChannel;
+
+  /// Sets up the Nostr carrier with a fresh key of its own (not linked to
+  /// the Conest identity), or changes its relays. Contacts learn the new
+  /// address in the contact exchange.
+  Future<void> enableNostrCarrier({List<String>? relays}) async {
+    _requireIdentity();
+    final chosen = relays ?? nostrCarrierConfig?.relays ?? defaultNostrRelays;
+    final parsed = [
+      for (final relay in chosen.map((relay) => relay.trim()))
+        if (relay.isNotEmpty) relay,
+    ];
+    if (parsed.isEmpty ||
+        parsed.length > maxNostrAddressRelays ||
+        parsed.any((relay) => parseNostrRelayUrl(relay) == null)) {
+      throw ArgumentError(
+        'Use one to $maxNostrAddressRelays relay addresses starting with '
+        'wss://.',
+      );
+    }
+    final config =
+        nostrCarrierConfig?.copyWith(relays: parsed) ??
+        NostrCarrierConfig(
+          secretKeyHex: hexEncode(Secp256k1.generateSecretKey()),
+          relays: parsed,
+          since: _now().millisecondsSinceEpoch ~/ 1000,
+        );
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts, 'nostr': config.toJson()},
+    );
+    await _persist('Nostr carrier set up.');
+    await _startNostrCarrier();
+  }
+
+  /// Stops the Nostr carrier and forgets its key; contacts are told to stop
+  /// using it.
+  Future<void> disableNostrCarrier() async {
+    await unregisterCarrierTransport(TransportKind.nostr);
+    _nostrChannel = null;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts}..remove('nostr'),
+    );
+    await _persist('Nostr carrier removed.');
+  }
+
+  /// Recreates carriers from saved accounts once Conest runs.
+  Future<void> _restoreCarrierAccounts() async {
+    if (nostrCarrierConfig != null &&
+        !_carrierTransports.containsKey(TransportKind.nostr)) {
+      // Contacts already have the saved address.
+      await _startNostrCarrier(advertise: false);
+    }
+  }
+
+  Future<void> _startNostrCarrier({bool advertise = true}) async {
+    final config = nostrCarrierConfig;
+    final secretKey = config == null ? null : hexDecode(config.secretKeyHex);
+    if (config == null ||
+        secretKey == null ||
+        _snapshot.identity == null ||
+        !conestActive) {
+      return;
+    }
+    final adapter =
+        _carrierTransports[TransportKind.nostr] ??
+        createNostrCarrierAdapter(sealer: carrierSealer, now: _now);
+    final channel = NostrCarrierChannel(
+      secretKey: secretKey,
+      relays: config.relays.map(parseNostrRelayUrl).nonNulls.toList(),
+      since: config.since,
+      connector: _nostrConnector,
+      now: _now,
+      onFrame: adapter.receiveFrame,
+      onCursor: _saveNostrCursor,
+      onStatusChanged: notifyListeners,
+    );
+    await adapter.detach();
+    adapter.attach(channel);
+    _nostrChannel = channel;
+    await registerCarrierTransport(adapter, advertise: advertise);
+  }
+
+  void _saveNostrCursor(int since) {
+    final config = nostrCarrierConfig;
+    if (config == null) return;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        'nostr': config.copyWith(since: since).toJson(),
+      },
+    );
+    unawaited(_saveSnapshotSilently(notify: false, debounce: true));
+  }
+
   /// Carriers other than Matrix, by kind, once their account is set up.
   final Map<TransportKind, CarrierTransportAdapter> _carrierTransports = {};
   final Map<TransportKind, StreamSubscription<TransportInboundEnvelope>>
@@ -3403,7 +3510,10 @@ class MessengerController extends ChangeNotifier {
   /// Adds a carrier whose network client is ready; it joins the transport
   /// registry while its policy allows.
   @visibleForTesting
-  Future<void> registerCarrierTransport(CarrierTransportAdapter carrier) async {
+  Future<void> registerCarrierTransport(
+    CarrierTransportAdapter carrier, {
+    bool advertise = true,
+  }) async {
     if (!carrier.kind.isCarrier || carrier.kind == TransportKind.matrix) {
       throw ArgumentError('${carrier.kind.label} is not a sealed carrier.');
     }
@@ -3415,14 +3525,16 @@ class MessengerController extends ChangeNotifier {
     _carrierTransports[carrier.kind] = carrier;
     await _attachCarrier(carrier.kind);
     // Contacts learn the address to reach this device on the carrier.
-    _advertiseProfileToContacts();
+    if (advertise) _advertiseProfileToContacts();
   }
 
   /// Removes the carrier of [kind]; contacts are told to stop using it.
   Future<void> unregisterCarrierTransport(TransportKind kind) async {
     await _detachCarrier(kind);
     await _carrierInboundSubscriptions.remove(kind)?.cancel();
-    if (_carrierTransports.remove(kind) != null) {
+    final carrier = _carrierTransports.remove(kind);
+    if (carrier != null) {
+      await carrier.detach();
       _advertiseProfileToContacts();
     }
   }
@@ -16268,7 +16380,11 @@ class MessengerController extends ChangeNotifier {
       if (updated != null && featureCapabilityVersion >= 1) {
         unawaited(_syncRatchetWithCapabilities(updated));
       }
-      final addressAt = envelope.createdAt.toUtc();
+      // The time is authenticated but set by the peer: one exchange from a
+      // clock running ahead must not freeze later updates.
+      final latestAllowed = _now().toUtc().add(const Duration(minutes: 5));
+      final sentAt = envelope.createdAt.toUtc();
+      final addressAt = sentAt.isAfter(latestAllowed) ? latestAllowed : sentAt;
       final knownAt = updated?.matrixAddressAt;
       if (updated != null &&
           matrixAddressAdvertised &&
@@ -24215,6 +24331,9 @@ class MessengerController extends ChangeNotifier {
   @override
   void dispose() {
     _matrixClient?.dispose();
+    for (final carrier in _carrierTransports.values) {
+      unawaited(carrier.detach());
+    }
     unawaited(_userNotices.close());
     _scheduledMessageTimer?.cancel();
     _scheduledMessageTimer = null;

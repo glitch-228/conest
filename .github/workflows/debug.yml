@@ -162,6 +162,52 @@ jobs:
         if: failure()
         run: docker logs synapse | tail -200
 
+  nostr:
+    if: ${{ !inputs.quick_build }}
+    needs: cadence
+    name: Nostr carrier against real relays
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - run: flutter pub get
+      - name: Start nostr-rs-relay and strfry
+        run: |
+          # Pinned: nostr-rs-relay 0.10.0 and strfry 1.1.3.
+          docker run -d --name nostr-rs-relay -p 7000:8080 \
+            scsibug/nostr-rs-relay@sha256:48d54c2d2781577cf3ed2951112f0953dc2c5e7c9d2ea20c64e8c0fa37d16e4d
+          docker run -d --name strfry -p 7777:7777 \
+            dockurr/strfry@sha256:599ab3500dbfbe6cb78c668e1892cd9802c192d066df4660e8e3175034a8344d
+          for port in 7000 7777; do
+            ready=
+            for attempt in $(seq 1 60); do
+              if curl -sf -H 'Accept: application/nostr+json' \
+                "http://localhost:$port"; then ready=1; break; fi
+              sleep 2
+            done
+            if [ -z "$ready" ]; then
+              echo "Relay on port $port did not start"
+              docker logs nostr-rs-relay | tail -50
+              docker logs strfry | tail -50
+              exit 1
+            fi
+          done
+      - name: Run the carrier against each relay
+        run: |
+          for relay in ws://localhost:7000 ws://localhost:7777; do
+            echo "::group::$relay"
+            CONEST_NOSTR_RELAY=$relay flutter test test/nostr_relay_live_test.dart
+            echo "::endgroup::"
+          done
+      - name: Relay logs on failure
+        if: failure()
+        run: |
+          docker logs nostr-rs-relay | tail -100
+          docker logs strfry | tail -100
+
   android:
     name: Android debug battle-test APK
     needs: [cadence, verify]

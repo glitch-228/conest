@@ -100,7 +100,8 @@ extension TransportKindTraits on TransportKind {
     TransportKind.iroh ||
     TransportKind.conestRelay ||
     TransportKind.optical ||
-    TransportKind.matrix => true,
+    TransportKind.matrix ||
+    TransportKind.nostr => true,
     _ => false,
   };
 
