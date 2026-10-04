@@ -75,7 +75,7 @@ Future<Directory> _defaultAttachmentRootProvider() async {
 }
 
 const int _maxInviteRouteHints = 8;
-const int _maxInviteLanHosts = 1;
+const int _maxInviteLanHosts = 3;
 
 List<int> _attachmentChunkAssociatedData(
   AttachmentDescriptor descriptor,
@@ -9777,13 +9777,36 @@ class MessengerController extends ChangeNotifier {
     } catch (error) {
       appendDebugLog('Group history archive pending: $error');
     }
-    for (final contact in recipientContacts) {
-      await _tryDeliverExistingGroupMessage(
+    // Members in parallel: one offline member must not hold the message
+    // back from everyone listed after them.
+    await _forEachBounded(
+      recipientContacts,
+      (contact) => _tryDeliverExistingGroupMessage(
         group: profiledGroup,
         contact: contact,
         message: message,
-      );
+      ),
+    );
+  }
+
+  /// Runs [action] for each item, at most [parallel] at a time.
+  static Future<void> _forEachBounded<T>(
+    Iterable<T> items,
+    Future<void> Function(T item) action, {
+    int parallel = 4,
+  }) async {
+    final queue = items.toList();
+    var next = 0;
+    Future<void> worker() async {
+      while (next < queue.length) {
+        final item = queue[next++];
+        await action(item);
+      }
     }
+
+    await Future.wait([
+      for (var i = 0; i < min(parallel, queue.length); i++) worker(),
+    ]);
   }
 
   Future<void> createGroupPoll({
@@ -10711,6 +10734,19 @@ class MessengerController extends ChangeNotifier {
       'Connectivity changed ($label) — kicking active transfers + polling.',
     );
     _routeHealthTracker.clearBackoffWindows();
+    _irohSkipUntil.clear();
+    if (_transportRegistry?.adapterFor(TransportKind.iroh)
+        case final IrohTransportAdapter iroh) {
+      unawaited(
+        iroh.networkChanged().catchError((Object error) {
+          appendDebugLog('Iroh network change not applied: $error');
+        }),
+      );
+    }
+    // LAN health from the old network says nothing about the new one: a
+    // stale "available" sends the first messages to dead addresses, and a
+    // stale failure keeps a working LAN untried while Iroh works.
+    _routeHealthTracker.forgetLanRoutes();
     if (_networkCostClass != NetworkCostClass.offline) {
       _requestVisibleGroupCatchUp();
     }
@@ -10752,6 +10788,9 @@ class MessengerController extends ChangeNotifier {
           Timer(delay, () {
             if (_disposed || !conestActive) return;
             unawaited(_refreshLanAddresses(persist: false));
+            for (final contact in _snapshot.contacts) {
+              unawaited(_probeLanRoutesFor(contact, force: true));
+            }
           }),
       ]);
     // Cancel inbound retry timers so the next re-request fires immediately
@@ -10782,15 +10821,17 @@ class MessengerController extends ChangeNotifier {
     await _refreshLanAddresses(persist: false, advertise: false);
     await _ensureLocalRelayRunning();
     await _refreshLocalLanDirectAddressCache();
-    for (final contact in _snapshot.contacts.where(
-      (entry) => entry.canSendOutbound,
-    )) {
-      await _sendRouteUpdate(
-        contact,
-        requestReply: true,
-        reason: 'connectivity_change',
-      );
-    }
+    // In parallel: one unreachable contact must not delay the rest.
+    await Future.wait([
+      for (final contact in _snapshot.contacts.where(
+        (entry) => entry.canSendOutbound,
+      ))
+        _sendRouteUpdate(
+          contact,
+          requestReply: true,
+          reason: 'connectivity_change',
+        ).catchError((Object _) => false),
+    ]);
   }
 
   /// nightly.11: cancel an outbound transfer by attachmentId. Walks the
@@ -13675,6 +13716,8 @@ class MessengerController extends ChangeNotifier {
             route: _ingressRoute,
           );
           _upsertMessage(contact.deviceId, inbound);
+          // They just reached us, so our waiting messages can reach them.
+          _flushContactSoon(contact.deviceId);
           await _applyDeferredDirectReactions(contact.deviceId, inbound.id);
           _showInboundMessageNotification(
             contact: contact,
@@ -13870,7 +13913,14 @@ class MessengerController extends ChangeNotifier {
         _clearOutboundAttempt(contact.deviceId, target);
       }
     }
-    _reachability.noteTwoWaySuccess(contact.deviceId);
+    // When the ack was sent, not when it was fetched: one waiting on a relay
+    // for hours does not make the contact look online now.
+    final now = _now().toUtc();
+    final sentAt = envelope.createdAt.toUtc();
+    _reachability.noteTwoWaySuccess(
+      contact.deviceId,
+      at: sentAt.isAfter(now) ? now : sentAt,
+    );
   }
 
   Future<void> _handleVoiceCallSignal(RelayEnvelope envelope) async {
@@ -16261,6 +16311,9 @@ class MessengerController extends ChangeNotifier {
       sender.deviceId,
       at: sentAt ?? envelope.createdAt,
     );
+    final lanBefore = sender.lanRouteHints
+        .map((route) => route.routeKey)
+        .toSet();
     final updated = await _updateExistingContactFromInvite(
       invite,
       statusBuilder: (contact) =>
@@ -16268,6 +16321,15 @@ class MessengerController extends ChangeNotifier {
       persistStatus: false,
     );
     final replyContact = updated ?? sender;
+    final lanAfter = replyContact.lanRouteHints
+        .map((route) => route.routeKey)
+        .toSet();
+    if (lanAfter.isNotEmpty &&
+        (lanAfter.length != lanBefore.length ||
+            !lanAfter.containsAll(lanBefore))) {
+      unawaited(_probeLanRoutesFor(replyContact, force: true));
+    }
+    _flushContactSoon(sender.deviceId);
     if (!requestReply && probeId != null) {
       final pendingKey = _pendingRouteUpdateProbeKey(sender.deviceId, probeId);
       final pending = _pendingRouteUpdateProbes.remove(pendingKey);
@@ -16286,14 +16348,23 @@ class MessengerController extends ChangeNotifier {
       }
     }
     if (requestReply) {
-      // The reply carries this device's LAN routes: make them current.
-      await _refreshLanAddresses(persist: false, advertise: false);
-      await _sendRouteUpdate(
-        replyContact,
-        requestReply: false,
-        reason: reason,
-        probeId: probeId,
-        sentAt: sentAt ?? envelope.createdAt,
+      // The reply carries this device's LAN routes: make them current. Not
+      // awaited: a slow route to the sender must not hold up the rest of
+      // the envelope batch.
+      final replySentAt = sentAt ?? envelope.createdAt;
+      unawaited(
+        () async {
+          await _refreshLanAddresses(persist: false, advertise: false);
+          await _sendRouteUpdate(
+            replyContact,
+            requestReply: false,
+            reason: reason,
+            probeId: probeId,
+            sentAt: replySentAt,
+          );
+        }().catchError((Object error) {
+          appendDebugLog('Route update reply not sent: $error');
+        }),
       );
     }
   }
@@ -18888,6 +18959,7 @@ class MessengerController extends ChangeNotifier {
   Future<bool> _tryDeliverExistingMessage({
     required ContactRecord contact,
     required ChatMessage message,
+    bool background = false,
   }) async {
     if (_locallyDeletedMessageIds.contains(message.id) ||
         _messageById(contact.deviceId, message.id) == null) {
@@ -18907,6 +18979,7 @@ class MessengerController extends ChangeNotifier {
         contact: contact,
         recipientDeviceId: contact.deviceId,
         envelope: envelope,
+        background: background,
       );
       _reachability.noteAvailablePath(contact.deviceId);
       if (_locallyDeletedMessageIds.contains(message.id) ||
@@ -18940,6 +19013,7 @@ class MessengerController extends ChangeNotifier {
     required GroupRecord group,
     required ContactRecord contact,
     required ChatMessage message,
+    bool background = false,
   }) async {
     if (message.deleted ||
         _groupMessageById(group.groupId, message.id)?.deleted == true ||
@@ -18959,6 +19033,7 @@ class MessengerController extends ChangeNotifier {
         contact: contact,
         recipientDeviceId: contact.deviceId,
         envelope: envelope,
+        background: background,
       );
       _reachability.noteAvailablePath(contact.deviceId);
       if (route.endpoint?.kind == PeerRouteKind.lan) {
@@ -19022,6 +19097,7 @@ class MessengerController extends ChangeNotifier {
         final delivered = await _tryDeliverExistingMessage(
           contact: contact,
           message: message,
+          background: !force,
         );
         if (!delivered) {
           break;
@@ -19043,6 +19119,7 @@ class MessengerController extends ChangeNotifier {
           )
           .toList();
       for (final message in retryable) {
+        final due = <ContactRecord>[];
         for (final entry in message.recipientStates.entries) {
           if (!entry.value.awaitsRecipientAck) {
             continue;
@@ -19059,12 +19136,17 @@ class MessengerController extends ChangeNotifier {
               !_shouldRetryUnacknowledgedMessage(contact.deviceId, message)) {
             continue;
           }
-          await _tryDeliverExistingGroupMessage(
+          due.add(contact);
+        }
+        await _forEachBounded(
+          due,
+          (contact) => _tryDeliverExistingGroupMessage(
             group: group,
             contact: contact,
             message: message,
-          );
-        }
+            background: !force,
+          ),
+        );
       }
     }
   }
@@ -19109,26 +19191,41 @@ class MessengerController extends ChangeNotifier {
     if (!message.state.awaitsRecipientAck) {
       return false;
     }
-    final lastAttemptAt =
-        _outboundAttemptedAt[_outboundAttemptKey(peerDeviceId, message.id)] ??
-        message.createdAt;
-    final delay = message.state == DeliveryState.pending
+    final key = _outboundAttemptKey(peerDeviceId, message.id);
+    final lastAttemptAt = _outboundAttemptedAt[key] ?? message.createdAt;
+    // Backs off with each attempt: a message already stored on a relay, or
+    // to a contact with no path, otherwise costs a full dial every pass.
+    // A route update, a message from them or a working new path flushes the
+    // contact at once regardless (see _flushContactSoon).
+    final attempts = _outboundAttemptCount[key] ?? 0;
+    final pending = message.state == DeliveryState.pending;
+    final base = pending
         ? _pendingMessageRetryDelay
         : _acceptedMessageRetryDelay;
+    final cap = pending
+        ? const Duration(minutes: 1)
+        : const Duration(minutes: 5);
+    final scaled = base * (1 << min(max(attempts - 1, 0), 6));
+    final delay = scaled > cap ? cap : scaled;
     return DateTime.now().toUtc().difference(lastAttemptAt) >= delay;
   }
+
+  final Map<String, int> _outboundAttemptCount = {};
 
   String _outboundAttemptKey(String peerDeviceId, String messageId) {
     return '$peerDeviceId|$messageId';
   }
 
   void _noteOutboundAttempt(String peerDeviceId, String messageId) {
-    _outboundAttemptedAt[_outboundAttemptKey(peerDeviceId, messageId)] =
-        DateTime.now().toUtc();
+    final key = _outboundAttemptKey(peerDeviceId, messageId);
+    _outboundAttemptedAt[key] = DateTime.now().toUtc();
+    _outboundAttemptCount[key] = (_outboundAttemptCount[key] ?? 0) + 1;
   }
 
   void _clearOutboundAttempt(String peerDeviceId, String messageId) {
-    _outboundAttemptedAt.remove(_outboundAttemptKey(peerDeviceId, messageId));
+    final key = _outboundAttemptKey(peerDeviceId, messageId);
+    _outboundAttemptedAt.remove(key);
+    _outboundAttemptCount.remove(key);
   }
 
   Future<_DeliveryRoute> _deliverToContact({
@@ -19139,6 +19236,7 @@ class MessengerController extends ChangeNotifier {
     bool allowLegacyRoutes = true,
     Set<TransportKind>? allowedUnifiedKinds,
     bool irohFirst = false,
+    bool background = false,
   }) async {
     // Defense in depth: the crypto layer already can't derive a shared
     // secret for a pending or archived contact (publicKeyBase64 is empty
@@ -19210,23 +19308,37 @@ class MessengerController extends ChangeNotifier {
 
     Future<void> tryUnifiedTransports() async {
       if (deliveredVia != null || !canTryRegistry) return;
+      // A background retry skips an Iroh dial that just failed for this
+      // contact: each would cost the full connect timeout again.
+      final skipUntil = _irohSkipUntil[contact.deviceId];
+      final skipIroh =
+          background && skipUntil != null && _now().isBefore(skipUntil);
       try {
-        final registryPolicies = allowedUnifiedKinds == null
-            ? policies
-            : <TransportKind, TransportPolicy>{
-                for (final entry in policies.entries)
-                  entry.key: allowedUnifiedKinds.contains(entry.key)
-                      ? entry.value
-                      : TransportPolicy.disabled,
-              };
+        final registryPolicies = <TransportKind, TransportPolicy>{
+          for (final entry in policies.entries)
+            entry.key:
+                (allowedUnifiedKinds != null &&
+                        !allowedUnifiedKinds.contains(entry.key)) ||
+                    (skipIroh && entry.key == TransportKind.iroh)
+                ? TransportPolicy.disabled
+                : entry.value,
+        };
         deliveredVia = await _deliverViaTransportRegistry(
           contact: contact,
           envelope: envelope,
           policies: registryPolicies,
           allowRelay: allowRelayedPaths,
         );
+        if (deliveredVia?.transportKind == TransportKind.iroh) {
+          _irohSkipUntil.remove(contact.deviceId);
+        }
       } catch (error) {
         lastError = error;
+        if (!skipIroh && _canUseIrohForContact(contact)) {
+          _irohSkipUntil[contact.deviceId] = _now().add(
+            const Duration(seconds: 20),
+          );
+        }
       }
     }
 
@@ -19348,7 +19460,127 @@ class MessengerController extends ChangeNotifier {
         routes: [deliveredEndpoint!],
       );
     }
+    // Iroh works, so LAN is only tried once proven: prove it in the
+    // background when the contact has LAN hints nothing has checked.
+    if (result.transportKind == TransportKind.iroh &&
+        contact.lanRouteHints.any(
+          (route) => _routeHealthTracker.healthFor(route) == null,
+        )) {
+      unawaited(_probeLanRoutesFor(contact));
+    }
     return result;
+  }
+
+  final Map<String, DateTime> _lanProbedAt = {};
+
+  /// Contacts an Iroh dial just failed for; background retries skip Iroh
+  /// until then. Cleared by anything heard from them or a network change.
+  final Map<String, DateTime> _irohSkipUntil = {};
+  final Map<String, Timer> _contactFlushTimers = {};
+  final Set<String> _contactFlushInFlight = {};
+
+  /// Checks [contact]'s advertised LAN routes in parallel (800 ms each).
+  /// Delivery prefers LAN over a working Iroh path only once a check has
+  /// proven it, so this is what moves a chat onto a newly shared network.
+  /// At most every 30 s per contact unless [force].
+  Future<void> _probeLanRoutesFor(
+    ContactRecord contact, {
+    bool force = false,
+  }) async {
+    if (!conestActive || _disposed) return;
+    final now = _now();
+    final last = _lanProbedAt[contact.deviceId];
+    if (!force &&
+        last != null &&
+        now.difference(last) < const Duration(seconds: 30)) {
+      return;
+    }
+    _lanProbedAt[contact.deviceId] = now;
+    final current = _contactByDeviceId(contact.deviceId) ?? contact;
+    if (!current.canSendOutbound) return;
+    final routes = dedupePeerEndpoints(
+      current.lanRouteHints,
+    ).take(8).toList(growable: false);
+    if (routes.isEmpty) return;
+    final checks = await Future.wait(
+      routes.map(
+        (route) => _checkRouteHealth(route).catchError(
+          (Object error) => PeerRouteHealth(
+            route: route,
+            available: false,
+            latency: null,
+            checkedAt: _now().toUtc(),
+            error: '$error',
+          ),
+        ),
+      ),
+    );
+    final working = checks.where((check) => check.available).toList();
+    if (working.isEmpty || _disposed) return;
+    await _rememberLanRoutesForContact(
+      deviceId: current.deviceId,
+      routes: working.map((check) => check.route),
+    );
+    appendDebugLog(
+      'LAN path to ${current.alias} works: '
+      '${working.map((check) => check.route.label).join(', ')}',
+    );
+    _flushContactSoon(current.deviceId);
+  }
+
+  /// Sends a contact's waiting messages again soon (debounced): a route
+  /// update, a message from them or a newly working path means they can be
+  /// reached now, so nothing waits for the retry timer.
+  void _flushContactSoon(String deviceId) {
+    _irohSkipUntil.remove(deviceId);
+    if (!conestActive || _disposed) return;
+    final hasWaiting =
+        messagesFor(deviceId).any(
+          (message) =>
+              message.outbound &&
+              message.state.awaitsRecipientAck &&
+              message.route != MessageRoute.plainMatrix,
+        ) ||
+        (_outboundQueueByContact[deviceId]?.isNotEmpty ?? false);
+    if (!hasWaiting) return;
+    _contactFlushTimers[deviceId]?.cancel();
+    _contactFlushTimers[deviceId] = Timer(
+      const Duration(milliseconds: 500),
+      () {
+        _contactFlushTimers.remove(deviceId);
+        unawaited(_flushContact(deviceId));
+      },
+    );
+  }
+
+  Future<void> _flushContact(String deviceId) async {
+    if (!conestActive || _disposed || !_contactFlushInFlight.add(deviceId)) {
+      return;
+    }
+    try {
+      final contact = _contactByDeviceId(deviceId);
+      if (contact == null || !contact.canSendOutbound) return;
+      if (_outboundQueueByContact[deviceId]?.isNotEmpty ?? false) {
+        _pumpOutboundQueue(contact);
+      }
+      final waiting = messagesFor(deviceId)
+          .where(
+            (message) =>
+                message.outbound &&
+                message.state.awaitsRecipientAck &&
+                message.route != MessageRoute.plainMatrix,
+          )
+          .toList();
+      for (final message in waiting) {
+        final delivered = await _tryDeliverExistingMessage(
+          contact: contact,
+          message: message,
+        );
+        if (!delivered) break;
+      }
+    } finally {
+      _contactFlushInFlight.remove(deviceId);
+    }
   }
 
   List<PeerEndpoint> _knownHealthyRelayAliasesFor(
@@ -21151,16 +21383,27 @@ class MessengerController extends ChangeNotifier {
 
   List<PeerEndpoint> _inviteRouteHintsForIdentity(IdentityRecord identity) {
     final irohDirectRoutes = _irohDirectInviteRoutes(identity).take(2);
-    final lanRoutes = _rankLanInviteAddresses(identity.lanAddresses)
-        .take(_maxInviteLanHosts)
-        .expand(
-          (address) => _protocolRoutes(
+    // Several hosts: the best-ranked address can belong to an interface the
+    // peer cannot reach (a second NIC, a bridge the filter missed). Extras
+    // are TCP only to stay within the hint budget.
+    final lanHosts = _rankLanInviteAddresses(
+      identity.lanAddresses,
+    ).take(_maxInviteLanHosts).toList(growable: false);
+    final lanRoutes = [
+      for (final (index, address) in lanHosts.indexed)
+        if (index == 0)
+          ..._protocolRoutes(
+            kind: PeerRouteKind.lan,
+            host: address,
+            port: identity.localRelayPort,
+          )
+        else
+          PeerEndpoint(
             kind: PeerRouteKind.lan,
             host: address,
             port: identity.localRelayPort,
           ),
-        )
-        .toList(growable: false);
+    ];
     final configuredRelayRoutes = _rankInviteRoutes(
       identity.configuredRelays.where(
         (route) => route.kind == PeerRouteKind.relay,
@@ -23758,6 +24001,9 @@ class MessengerController extends ChangeNotifier {
     _scheduledMessageTimer = null;
     _lanAdvertiseTimer?.cancel();
     for (final timer in _lanRecheckTimers) {
+      timer.cancel();
+    }
+    for (final timer in _contactFlushTimers.values) {
       timer.cancel();
     }
     unawaited(_voiceCallChanges?.cancel());

@@ -130,7 +130,8 @@ class _NativeIrohBindings {
 /// Loads the platform `conest_native` library and presents the narrow bridge
 /// expected by [IrohTransportAdapter]. Network calls run off the Flutter UI
 /// isolate; inbound delivery is a bounded non-blocking native queue.
-class FfiNativeIrohBridge implements NativeIrohDatagramBridge {
+class FfiNativeIrohBridge
+    implements NativeIrohDatagramBridge, NativeIrohNetworkAware {
   FfiNativeIrohBridge._(this._libraryPath);
 
   // Matches the direct attachment range window: enough parallel QUIC streams
@@ -417,6 +418,14 @@ class FfiNativeIrohBridge implements NativeIrohDatagramBridge {
   }
 
   @override
+  Future<void> networkChanged() async {
+    final handle = _handle;
+    if (handle == null) return;
+    final libraryPath = _libraryPath;
+    await Isolate.run(() => _networkChangeNative(libraryPath, handle));
+  }
+
+  @override
   Future<void> close() async {
     _poller?.cancel();
     _poller = null;
@@ -637,6 +646,24 @@ Map<String, dynamic> _sendDatagramWithBindings(
     calloc.free(endpointPointer);
     calloc.free(bytesPointer);
   }
+}
+
+typedef _NetworkChangeNative = Bool Function(Uint64);
+typedef _NetworkChangeDart = bool Function(int);
+
+/// A no-op with a native library from before network-change support.
+void _networkChangeNative(String libraryPath, int handle) {
+  final library = DynamicLibrary.open(libraryPath);
+  final _NetworkChangeDart networkChange;
+  try {
+    networkChange = library
+        .lookupFunction<_NetworkChangeNative, _NetworkChangeDart>(
+          'conest_iroh_network_change',
+        );
+  } catch (_) {
+    return;
+  }
+  networkChange(handle);
 }
 
 void _closeNative(String libraryPath, int handle) {

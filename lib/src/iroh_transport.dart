@@ -184,6 +184,12 @@ abstract interface class NativeIrohBridge {
 /// Optional media extension. Existing bridges remain valid for messaging and
 /// attachments; native builds that expose Iroh datagrams can opt in without
 /// changing the reliable envelope contract.
+/// A bridge that can tell Iroh the network changed. Older native builds
+/// lack it; the adapter then only forgets its own dial failures.
+abstract interface class NativeIrohNetworkAware {
+  Future<void> networkChanged();
+}
+
 abstract interface class NativeIrohDatagramBridge implements NativeIrohBridge {
   Future<IrohBridgeReceipt> sendDatagram({
     required String remoteEndpointId,
@@ -227,6 +233,14 @@ class IrohTransportAdapter implements IrohCallMediaAdapter {
   StreamSubscription<IrohBridgeDatagram>? _datagramSubscription;
   IrohBridgeStatus? _status;
   final Map<String, TransportPathKind> _lastPathByEndpoint = {};
+
+  /// After a network change: Iroh re-probes its paths instead of reusing
+  /// connections bound to the old interface.
+  Future<void> networkChanged() async {
+    if (_bridge case final NativeIrohNetworkAware aware) {
+      await aware.networkChanged();
+    }
+  }
 
   IrohBridgeStatus? get status => _status;
 

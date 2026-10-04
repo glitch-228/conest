@@ -731,6 +731,20 @@ bool isIgnoredLanInterfaceName(String name) {
     'veth',
     'wsl',
     'zerotier',
+    // Virtual machine and container bridges (libvirt, LXC/LXD/Incus,
+    // Podman, Kubernetes CNI, Waydroid) and WireGuard tunnels.
+    'virbr',
+    'lxcbr',
+    'lxdbr',
+    'incusbr',
+    'podman',
+    'cni',
+    'waydroid',
+    'wg',
+    // Android mobile data (Qualcomm, MediaTek) and its IPv4 translation.
+    'rmnet',
+    'ccmni',
+    'clat',
   ];
   return ignoredFragments.any(normalized.contains);
 }

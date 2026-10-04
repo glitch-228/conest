@@ -443,6 +443,15 @@ impl NativeTransport {
         self.datagram_inbox.lock().await.try_recv().ok()
     }
 
+    /// Tells Iroh the network changed (on Android it cannot notice by itself)
+    /// so it re-probes its paths, and drops pooled envelope connections that
+    /// may still be bound to the old interface. Call datagram dials stay: a
+    /// call in progress migrates with QUIC instead of being cut.
+    pub async fn network_change(&self) {
+        self.endpoint.network_change().await;
+        self.connections.lock().await.clear();
+    }
+
     #[frb]
     pub async fn close(&self) {
         self.datagram_dials.lock().await.clear();

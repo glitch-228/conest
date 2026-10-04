@@ -731,6 +731,16 @@ unsafe fn start_transport(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn conest_iroh_network_change(handle: u64) -> bool {
+    let Some(transport) = transport(handle) else {
+        record_error("unknown native transport handle");
+        return false;
+    };
+    RUNTIME.block_on(transport.network_change());
+    true
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn conest_iroh_status(handle: u64) -> *mut c_char {
     let Some(transport) = transport(handle) else {
         record_error("unknown native transport handle");

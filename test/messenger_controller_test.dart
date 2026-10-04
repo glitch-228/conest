@@ -4628,18 +4628,20 @@ void main() {
     final invite = await controller.buildInvite();
     final payload = invite.encodePayload();
 
-    expect(invite.routeHints.length, lessThanOrEqualTo(4));
-    expect(
-      invite.routeHints.where((route) => route.kind == PeerRouteKind.lan),
-      hasLength(2),
-    );
-    expect(
-      invite.routeHints
-          .where((route) => route.kind == PeerRouteKind.lan)
-          .map((route) => route.host)
-          .toSet(),
-      {'192.168.1.20'},
-    );
+    expect(invite.routeHints.length, lessThanOrEqualTo(8));
+    // Every LAN address goes out, best first (TCP and UDP); the others are
+    // TCP only: the best-ranked one can be an interface the peer cannot
+    // reach.
+    final lan = invite.routeHints
+        .where((route) => route.kind == PeerRouteKind.lan)
+        .toList();
+    expect(lan, hasLength(4));
+    expect(lan.first.host, '192.168.1.20');
+    expect(lan.map((route) => route.host).toSet(), {
+      '192.168.1.20',
+      '10.0.0.20',
+      '172.16.0.20',
+    });
     expect(
       invite.routeHints.where((route) => route.kind == PeerRouteKind.relay),
       hasLength(lessThanOrEqualTo(2)),
@@ -4655,6 +4657,27 @@ void main() {
     expect(isLanDiscoveryAddress('192.168.43.1'), isTrue);
     expect(isIgnoredLanInterfaceName('wlan0'), isFalse);
     expect(isIgnoredLanInterfaceName('docker0'), isTrue);
+  });
+
+  test('virtual, VPN and mobile-data interfaces are never LAN', () {
+    for (final name in [
+      'virbr0',
+      'lxcbr0',
+      'incusbr0',
+      'podman0',
+      'cni0',
+      'waydroid0',
+      'wg0',
+      'throne-tun',
+      'rmnet_data0',
+      'ccmni1',
+      'v4-rmnet_data0',
+    ]) {
+      expect(isIgnoredLanInterfaceName(name), isTrue, reason: name);
+    }
+    for (final name in ['wlan0', 'wlp3s0', 'enp0s31f6', 'eth0', 'ap0']) {
+      expect(isIgnoredLanInterfaceName(name), isFalse, reason: name);
+    }
   });
 
   test(
@@ -11117,6 +11140,58 @@ void main() {
       await sendChunk();
     });
   });
+
+  test(
+    'a LAN path found while Iroh works carries the next message',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      var bobLan = const <String>['10.50.0.7'];
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        lanAddresses: const ['192.168.40.2'],
+        transportRegistryFactory: network.registry,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        lanAddressProvider: () async => List.of(bobLan),
+        transportRegistryFactory: network.registry,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobId = bob.identity!.deviceId;
+      ChatMessage sent(String body) =>
+          alice.messagesFor(bobId).firstWhere((m) => m.body == body);
+
+      // Different networks: Iroh carries the chat.
+      await alice.sendMessage(contact: alice.contacts.single, body: 'one');
+      expect(
+        sent('one').route,
+        isIn([MessageRoute.irohDirect, MessageRoute.irohRelay]),
+      );
+
+      // Bob joins Alice's network. Iroh still works, which used to keep the
+      // chat on Iroh for good: LAN is only tried once a check proves it.
+      bobLan = const ['192.168.40.3'];
+      bob.onConnectivityChanged(interfaceLabel: 'wifi');
+      bool aliceKnowsLan() => alice.contacts.single.lanRouteHints.any(
+        (route) => route.host == '192.168.40.3',
+      );
+      final deadline = DateTime.now().add(const Duration(seconds: 20));
+      while (DateTime.now().isBefore(deadline) && !aliceKnowsLan()) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      expect(aliceKnowsLan(), isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+
+      await alice.sendMessage(contact: alice.contacts.single, body: 'two');
+      expect(sent('two').route, MessageRoute.lanDirect);
+    },
+    timeout: const Timeout(Duration(seconds: 40)),
+  );
 
   test(
     'moving onto a shared LAN is advertised without Check Paths',

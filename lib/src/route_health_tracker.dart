@@ -67,6 +67,14 @@ class RouteHealthTracker {
     }
   }
 
+  /// Drops everything known about LAN routes, after a network change.
+  void forgetLanRoutes() {
+    _health.removeWhere((_, health) => health.route.kind == PeerRouteKind.lan);
+    _runtime.removeWhere(
+      (key, _) => key.startsWith('${PeerRouteKind.lan.name}:'),
+    );
+  }
+
   void replaceHealth(PeerRouteHealth health) {
     _health[health.route.routeKey] = health;
   }
