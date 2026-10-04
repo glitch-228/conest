@@ -1230,7 +1230,10 @@ Future<void> _waitForIroh(
   bool Function() ready, {
   String reason = 'Iroh delivery did not finish',
 }) async {
-  final deadline = DateTime.now().add(const Duration(seconds: 5));
+  // Real native Iroh on a shared CI runner can take several seconds per
+  // dial (seen twice timing out at 5 s); the in-memory bridge cannot.
+  final native = Platform.environment['CONEST_RUN_IROH_GROUP_CERT'] == '1';
+  final deadline = DateTime.now().add(Duration(seconds: native ? 20 : 5));
   while (!ready() && DateTime.now().isBefore(deadline)) {
     await Future<void>.delayed(const Duration(milliseconds: 10));
   }
