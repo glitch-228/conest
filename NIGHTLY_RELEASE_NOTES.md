@@ -1,68 +1,46 @@
-## Conest 0.3.11 nightly (October 4)
+## Conest 0.3.11 nightly (October 4, second build)
 
-This nightly fixes what testers found in the Matrix client and makes Conest
-move between networks more smoothly.
+This nightly adds the first of five new ways to reach contacts when the usual
+routes are blocked: Nostr relays.
 
-### Moving between networks
+### Nostr relays (new)
 
-- When you and a contact end up on the same Wi-Fi, chats now move onto it
-  by themselves, usually within seconds:
-  - Conest tells your contacts its new local address whenever it changes,
-    and checks again a few seconds after the network switches.
-  - It tests local paths in the background even while Iroh works, and
-    sends waiting messages again as soon as a path works.
-- **Check Paths** no longer fails with "Failed to create server socket
-  … shared flag". Conest could start its local relay twice at the same
-  moment; it now starts once, and a busy port no longer stops sending over
-  Iroh or relays.
-- Conest now tells other devices up to three local addresses. Virtual
-  network bridges (virtual machines, containers, WireGuard) and Android
-  mobile data are never offered as local addresses.
-- After a network change, Iroh is told to look for new paths, and old local
-  path results are forgotten.
-- A contact who is offline no longer slows everything else down:
-  - Automatic retries pause redialing them for a short while after a
-    failed attempt; anything heard from them, or a network change, ends
-    the pause.
-  - Messages already stored on a relay are re-sent less and less often.
-  - Group messages go to members in parallel.
-- A late delivery receipt no longer shows a contact as online.
+- Turn it on in **Settings → Connectivity → Nostr relays**. Conest then
+  carries messages through public Nostr relays whenever LAN, Iroh and Conest
+  relays cannot reach a contact. Both of you need it on.
+- Messages stay end-to-end encrypted by Conest. Relays see that someone
+  writes to your Nostr key and when, but not who writes or what. Each message
+  is signed by a one-time key.
+- Conest makes a separate Nostr key for this; it is not linked to your
+  identity or to any Nostr account. Your contacts learn it automatically.
+- Choose up to four relays to read from (three public relays by default). A
+  coloured dot shows whether each one is connected. Relays that ask for a
+  sign-in (NIP-42) are supported.
+- Messages that came over Nostr carry a purple **Nostr** route mark.
+- Files are not sent over Nostr; only messages, receipts and other small
+  updates are.
 
-### Calls
+### Under the hood
 
-- Voice calls are now included in stable builds, still marked
-  experimental.
-
-### Matrix client
-
-- Group rooms show their real member count instead of 0, and the chat list
-  shows each room's latest message instead of "Matrix chat".
-- A message that starts with a quote ("> …") is shown in full; only real
-  replies hide the quoted original.
-- **Show joins, leaves and profile changes** (in the Matrix settings) shows
-  them collapsed into one line, as other Matrix apps do. Off by default.
-- Emoji verification with Element no longer gets stuck when both sides
-  start the comparison at the same moment.
-- If a server refuses to sign Conest out (for example one that manages
-  sessions on its own account page), Conest says so instead of "Server not
-  reached".
-- **New Matrix chat** reuses an existing direct chat only if the other
-  person is still in it.
+- A shared carrier layer now serves Matrix and every new route: email,
+  LoRa radios, Bluetooth mesh and Tor follow in the next nightlies.
+- Transport settings list only routes this build can use. Saved Email and
+  Reticulum placeholders reset to their new defaults once.
 
 ### Qualification
 
 - The full local test suite passed, including new tests:
-  - a contact who joins your network later is reached over LAN, even while
-    Iroh works;
-  - overlapping local relay starts;
-  - Matrix quotes, membership lines and the emoji verification start.
-- The remote debug workflow passed: focused Flutter verification, the
-  Matrix client against a real Synapse homeserver, native tests, and the
-  Linux, Android and Windows debug builds.
+  - the official BIP-340 and NIP-44 test vectors;
+  - Nostr frames between two devices, an inbox relay that requires sign-in,
+    a relay dropping its connections, stored messages read after a restart;
+  - two devices talking over Nostr while Conest relays fail, with the route
+    mark, and Nostr turned off again;
+  - carrier framing limits, address exchange (newer wins, removal), policy
+    gating and file chunks kept off message-only carriers.
+- The remote debug workflow ran the Nostr carrier against two real relay
+  implementations (nostr-rs-relay and strfry).
 - Not yet tested on real devices:
-  - moving between networks with a contact;
-  - the Matrix fixes, including verification with Element;
-  - calls in a stable build;
+  - Nostr on phones and desktops, public relays from restricted networks;
   - everything still pending from earlier nightlies.
 
 This nightly is prerelease software; keep important data backed up and
