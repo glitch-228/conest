@@ -101,7 +101,8 @@ extension TransportKindTraits on TransportKind {
     TransportKind.conestRelay ||
     TransportKind.optical ||
     TransportKind.matrix ||
-    TransportKind.nostr => true,
+    TransportKind.nostr ||
+    TransportKind.deltaChat => true,
     _ => false,
   };
 

@@ -31,6 +31,9 @@ import 'matrix_carrier.dart';
 import 'matrix_client.dart';
 import 'matrix_native.dart';
 import 'matrix_service.dart';
+import 'email/carrier_mail.dart';
+import 'email/mail_socket.dart';
+import 'email_carrier.dart';
 import 'models.dart';
 import 'nostr/relay.dart';
 import 'nostr/secp256k1.dart';
@@ -430,8 +433,10 @@ class MessengerController extends ChangeNotifier {
     MatrixNativeApi? matrixNativeApi,
     bool loadNativeMatrixClient = true,
     NostrSocketConnector? nostrConnector,
+    MailConnector? mailConnector,
   }) : _vaultStore = vaultStore,
        _nostrConnector = nostrConnector,
+       _mailConnector = mailConnector,
        _matrixNativeApi = matrixNativeApi,
        _loadNativeMatrixClient = loadNativeMatrixClient,
        _matrixHttpFactory = matrixHttpFactory,
@@ -507,6 +512,7 @@ class MessengerController extends ChangeNotifier {
   StreamSubscription<TransportInboundEnvelope>? _matrixInboundSubscription;
   final MatrixHttp Function()? _matrixHttpFactory;
   final NostrSocketConnector? _nostrConnector;
+  final MailConnector? _mailConnector;
   MatrixNativeApi? _matrixNativeApi;
   final bool _loadNativeMatrixClient;
   MatrixClientService? _matrixClient;
@@ -3445,13 +3451,136 @@ class MessengerController extends ChangeNotifier {
     await _persist('Nostr carrier removed.');
   }
 
-  /// Recreates carriers from saved accounts once Conest runs.
+  /// Recreates carriers from saved accounts once Conest runs; contacts
+  /// already have their addresses.
   Future<void> _restoreCarrierAccounts() async {
     if (nostrCarrierConfig != null &&
         !_carrierTransports.containsKey(TransportKind.nostr)) {
-      // Contacts already have the saved address.
       await _startNostrCarrier(advertise: false);
     }
+    if (emailCarrierConfig != null &&
+        !_carrierTransports.containsKey(TransportKind.deltaChat)) {
+      await _startEmailCarrier(advertise: false);
+    }
+  }
+
+  /// The email carrier's saved account, if set up.
+  EmailCarrierConfig? get emailCarrierConfig => EmailCarrierConfig.fromJson(
+    _snapshot.carrierAccounts[TransportKind.deltaChat.name],
+  );
+
+  /// The running email connection, for its state in settings.
+  EmailCarrierChannel? get emailChannel => _emailChannel;
+  EmailCarrierChannel? _emailChannel;
+
+  /// Creates an account on the chatmail server [domain] (a random name and
+  /// password; the first login creates it) and carries messages through it.
+  Future<void> enableChatmailCarrier(String domain) async {
+    final trimmed = domain.trim().toLowerCase();
+    if (!isPlausibleMailAddress('x@$trimmed')) {
+      throw ArgumentError(
+        'Enter a chatmail server name such as '
+        '${defaultChatmailDomains.first}.',
+      );
+    }
+    await _enableEmailCarrier(EmailCarrierConfig.chatmail(trimmed));
+  }
+
+  /// Carries messages through an existing mail account (IMAP and SMTP with
+  /// TLS). Mail other than Conest's is left untouched.
+  Future<void> enableOwnEmailCarrier({
+    required String mail,
+    required String password,
+    required String imapHost,
+    int imapPort = 993,
+    required String smtpHost,
+    int smtpPort = 465,
+  }) async {
+    final address = mail.trim().toLowerCase();
+    if (!isPlausibleMailAddress(address) ||
+        password.isEmpty ||
+        RegExp(r'[\r\n\x00]').hasMatch(password) ||
+        imapHost.trim().isEmpty ||
+        smtpHost.trim().isEmpty) {
+      throw ArgumentError('Enter the address, password and both servers.');
+    }
+    await _enableEmailCarrier(
+      EmailCarrierConfig(
+        mail: address,
+        password: password,
+        imapHost: imapHost.trim(),
+        imapPort: imapPort,
+        smtpHost: smtpHost.trim(),
+        smtpPort: smtpPort,
+        mailboxKey: EmailCarrierConfig.newMailboxKey(),
+      ),
+    );
+  }
+
+  Future<void> _enableEmailCarrier(EmailCarrierConfig config) async {
+    _requireIdentity();
+    if (!_carrierAllowed(TransportKind.deltaChat)) {
+      throw StateError('Turn on Online and Email in Connectivity first.');
+    }
+    await EmailCarrierChannel.checkLogin(config, connector: _mailConnector);
+    if (_carrierTransports.containsKey(TransportKind.deltaChat)) {
+      await unregisterCarrierTransport(TransportKind.deltaChat);
+    }
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.deltaChat.name: config.toJson(),
+      },
+    );
+    await _persist('Email carrier set up as ${config.mail}.');
+    await _startEmailCarrier();
+  }
+
+  /// Stops the email carrier and forgets the account here (a chatmail
+  /// account is left to expire on the server); contacts stop using it.
+  Future<void> disableEmailCarrier() async {
+    await unregisterCarrierTransport(TransportKind.deltaChat);
+    _emailChannel = null;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts}
+        ..remove(TransportKind.deltaChat.name),
+    );
+    await _persist('Email carrier removed.');
+  }
+
+  Future<void> _startEmailCarrier({bool advertise = true}) async {
+    final config = emailCarrierConfig;
+    if (config == null || _snapshot.identity == null || !conestActive) return;
+    final adapter =
+        _carrierTransports[TransportKind.deltaChat] ??
+        createEmailCarrierAdapter(sealer: carrierSealer, now: _now);
+    final channel = EmailCarrierChannel(
+      config: config,
+      connector: _mailConnector,
+      now: _now,
+      onFrame: adapter.receiveFrame,
+      onCursor: (validity, uid) => _saveEmailCursor(config.mail, validity, uid),
+      onStatusChanged: notifyListeners,
+    );
+    await adapter.detach();
+    adapter.attach(channel);
+    _emailChannel = channel;
+    await registerCarrierTransport(adapter, advertise: advertise);
+  }
+
+  void _saveEmailCursor(String mail, int uidValidity, int lastUid) {
+    final config = emailCarrierConfig;
+    // A loop of a replaced account must not move the new one's position.
+    if (config == null || config.mail != mail) return;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.deltaChat.name: config
+            .copyWith(uidValidity: uidValidity, lastUid: lastUid)
+            .toJson(),
+      },
+    );
+    unawaited(_saveSnapshotSilently(notify: false, debounce: true));
   }
 
   Future<void> _startNostrCarrier({bool advertise = true}) async {

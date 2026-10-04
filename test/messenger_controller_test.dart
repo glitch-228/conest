@@ -14,6 +14,7 @@ import 'package:conest/main.dart' show sniffImageMimeType;
 import 'package:conest/src/build_info.dart';
 import 'package:conest/src/carrier.dart';
 import 'package:conest/src/crypto_service.dart';
+import 'package:conest/src/email/mail_socket.dart';
 import 'package:conest/src/group_file_crypto.dart';
 import 'package:conest/src/group_file_download.dart';
 import 'package:conest/src/group_history_event.dart';
@@ -47,6 +48,7 @@ import 'package:conest/src/update_service.dart';
 import 'package:conest/src/voice_call_service.dart';
 
 import 'support/fake_homeserver.dart';
+import 'support/fake_mail_server.dart';
 import 'support/fake_matrix_native.dart';
 import 'support/fake_nostr_relay.dart';
 import 'support/fake_ratchet_engine.dart';
@@ -973,9 +975,11 @@ Future<MessengerController> _createController({
   MatrixNativeApi? matrixNativeApi,
   Future<List<String>> Function()? lanAddressProvider,
   NostrSocketConnector? nostrConnector,
+  MailConnector? mailConnector,
 }) async {
   final controller = MessengerController(
     nostrConnector: nostrConnector,
+    mailConnector: mailConnector,
     vaultStore: vaultStore ?? _MemoryVaultStore(),
     relayClient: relayClient,
     localRelayNode: localRelayNode ?? _FakeLocalRelayNode(),
@@ -12010,6 +12014,143 @@ void main() {
       }
       expect(alice.nostrCarrierConfig, isNull);
       expect(defaultNostrRelays, hasLength(lessThanOrEqualTo(4)));
+    });
+  });
+
+  group('Email carrier', () {
+    Future<void> settle(List<MessengerController> controllers) async {
+      for (var round = 0; round < 6; round++) {
+        for (final controller in controllers) {
+          await controller.retryUnacknowledgedMessagesNow();
+          await controller.pollNow();
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    }
+
+    Future<void> until(bool Function() condition) async {
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (!condition() && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+    }
+
+    test('two devices talk over chatmail when Conest relays fail', () async {
+      final server = await FakeMailServer.start();
+      addTearDown(server.close);
+      final relay = _FakeRelayClient();
+      final aliceVault = _MemoryVaultStore();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: aliceVault,
+        mailConnector: server.connect,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        mailConnector: server.connect,
+      );
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      await alice.enableChatmailCarrier('chat.test');
+      await bob.enableChatmailCarrier('chat.test');
+      await settle([alice, bob]);
+      final aliceMail = alice.emailCarrierConfig!.mail;
+      expect(aliceMail, endsWith('@chat.test'));
+      expect(server.passwords, contains(aliceMail));
+      expect(
+        bob.contacts.single.carrierAddress(TransportKind.deltaChat),
+        alice.emailChannel!.localAddress,
+      );
+
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      await bob.sendMessage(contact: bob.contacts.single, body: 'by mail');
+      final bobId = bob.identity!.deviceId;
+      await until(
+        () => alice.messagesFor(bobId).any((m) => m.body == 'by mail'),
+      );
+      final received = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'by mail');
+      expect(received.route, MessageRoute.emailCarrier);
+
+      alice.dispose();
+      final restarted = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: aliceVault,
+        createIdentity: false,
+        mailConnector: server.connect,
+      );
+      addTearDown(restarted.dispose);
+      expect(restarted.emailCarrierConfig?.mail, aliceMail);
+      await bob.sendMessage(contact: bob.contacts.single, body: 'again');
+      await until(
+        () => restarted.messagesFor(bobId).any((m) => m.body == 'again'),
+      );
+      expect(
+        restarted.messagesFor(bobId).map((m) => m.body),
+        contains('again'),
+      );
+    });
+
+    test('turning email off withdraws the address', () async {
+      final server = await FakeMailServer.start();
+      addTearDown(server.close);
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        mailConnector: server.connect,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        mailConnector: server.connect,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      await alice.enableChatmailCarrier('chat.test');
+      await settle([alice, bob]);
+      expect(
+        bob.contacts.single.carrierAddress(TransportKind.deltaChat),
+        isNotNull,
+      );
+      await alice.disableEmailCarrier();
+      await settle([alice, bob]);
+      expect(
+        bob.contacts.single.carrierAddress(TransportKind.deltaChat),
+        isNull,
+      );
+      expect(alice.emailCarrierConfig, isNull);
+    });
+
+    test('a failed login keeps email off', () async {
+      final server = await FakeMailServer.start();
+      addTearDown(server.close);
+      server.passwords['me@chat.test'] = 'right';
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        mailConnector: server.connect,
+      );
+      addTearDown(alice.dispose);
+      await expectLater(
+        alice.enableOwnEmailCarrier(
+          mail: 'me@chat.test',
+          password: 'wrong',
+          imapHost: 'chat.test',
+          smtpHost: 'chat.test',
+        ),
+        throwsA(anything),
+      );
+      expect(alice.emailCarrierConfig, isNull);
+      await expectLater(
+        alice.enableChatmailCarrier('not a domain'),
+        throwsArgumentError,
+      );
     });
   });
 

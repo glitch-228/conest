@@ -222,6 +222,38 @@ jobs:
           docker logs nostr-rs-relay | tail -100
           docker logs strfry | tail -100
 
+  email:
+    if: ${{ !inputs.quick_build }}
+    needs: cadence
+    name: Email carrier against a real mail server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - run: flutter pub get
+      - name: Start GreenMail (accounts created on first login)
+        run: |
+          # Pinned: GreenMail 2.1.14.
+          docker run -d --name greenmail -p 3025:3025 -p 3143:3143 \
+            -e GREENMAIL_OPTS='-Dgreenmail.setup.test.smtp -Dgreenmail.setup.test.imap -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.auth.disabled -Dgreenmail.verbose' \
+            greenmail/standalone@sha256:1ef95a966418cd09b7ea91d504d8c0826bbe7a2f6e679a75c601a831587c1626
+          for attempt in $(seq 1 60); do
+            if (exec 3<>/dev/tcp/localhost/3143) 2>/dev/null; then exit 0; fi
+            sleep 2
+          done
+          docker logs greenmail | tail -50
+          exit 1
+      - name: Run the carrier against GreenMail
+        env:
+          CONEST_MAIL_HOST: localhost
+        run: flutter test test/email_live_test.dart
+      - name: GreenMail logs on failure
+        if: failure()
+        run: docker logs greenmail | tail -200
+
   android:
     name: Android debug battle-test APK
     needs: [cadence, verify]
