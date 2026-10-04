@@ -11142,6 +11142,42 @@ void main() {
   });
 
   test(
+    'a failed Iroh dial does not hold back a contact Iroh alone reaches',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> create(String name) => _createController(
+        relayClient: relay,
+        displayName: name,
+        internetRelayHost: null,
+        transportRegistryFactory: network.registry,
+      );
+      final alice = await create('Alice');
+      final bob = await create('Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await _pairControllers(alice, bob);
+      final aliceId = alice.identity!.deviceId;
+
+      // Bob is briefly unreachable when Alice sends.
+      final bobBridge = network.bridges.remove(bob.identity!.irohEndpointId)!;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'later');
+      network.bridges[bob.identity!.irohEndpointId!] = bobBridge;
+
+      // The next background retry (not a forced one) must dial Iroh again:
+      // with no other route, pausing Iroh would only delay delivery.
+      await Future<void>.delayed(const Duration(seconds: 6));
+      await alice.pollNow();
+      await _waitForIroh(
+        () => bob.messagesFor(aliceId).any((m) => m.body == 'later'),
+      );
+    },
+    timeout: const Timeout(Duration(seconds: 60)),
+  );
+
+  test(
     'a LAN path found while Iroh works carries the next message',
     () async {
       final network = _InProcessIrohNetwork();

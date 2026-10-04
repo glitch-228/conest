@@ -19309,10 +19309,24 @@ class MessengerController extends ChangeNotifier {
     Future<void> tryUnifiedTransports() async {
       if (deliveredVia != null || !canTryRegistry) return;
       // A background retry skips an Iroh dial that just failed for this
-      // contact: each would cost the full connect timeout again.
+      // contact, when another route can carry it: each dial would cost the
+      // full connect timeout before falling back. With Iroh the only route,
+      // skipping would only delay delivery.
       final skipUntil = _irohSkipUntil[contact.deviceId];
       final skipIroh =
-          background && skipUntil != null && _now().isBefore(skipUntil);
+          background &&
+          skipUntil != null &&
+          _now().isBefore(skipUntil) &&
+          (candidateRoutes.isNotEmpty ||
+              policies.entries.any(
+                (entry) =>
+                    entry.key != TransportKind.iroh &&
+                    entry.key != TransportKind.lan &&
+                    entry.key != TransportKind.conestRelay &&
+                    (entry.value == TransportPolicy.automatic ||
+                        entry.value == TransportPolicy.preferred) &&
+                    _transportRegistry?.adapterFor(entry.key) != null,
+              ));
       try {
         final registryPolicies = <TransportKind, TransportPolicy>{
           for (final entry in policies.entries)
