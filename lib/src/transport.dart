@@ -12,6 +12,7 @@ class TransportCapabilities {
     required this.supportsAttachmentStreaming,
     required this.reportsPath,
     this.maximumPayloadBytes,
+    this.sendAttemptTimeout,
   });
 
   final bool requiresPeerOnline;
@@ -21,6 +22,11 @@ class TransportCapabilities {
   final bool supportsAttachmentStreaming;
   final bool reportsPath;
   final int? maximumPayloadBytes;
+
+  /// How long one send may take before the registry tries the next route.
+  /// Carriers that send several frames in sequence need longer than a
+  /// single socket write.
+  final Duration? sendAttemptTimeout;
 }
 
 class TransportPeer {
@@ -233,7 +239,11 @@ class TransportRegistry {
         leftPolicy,
       ).compareTo(_policyPriority(rightPolicy));
       if (policyOrder != 0) return policyOrder;
-      return _pathPriority(left.path).compareTo(_pathPriority(right.path));
+      final pathOrder = _pathPriority(
+        left.path,
+      ).compareTo(_pathPriority(right.path));
+      if (pathOrder != 0) return pathOrder;
+      return left.transport.routeRank.compareTo(right.transport.routeRank);
     });
     return routes;
   }
@@ -261,11 +271,8 @@ class TransportRegistry {
             .sendEnvelope(peer: peer, route: route, envelope: envelope)
             .timeout(
               attemptTimeout ??
-                  // Matrix sends several frames in sequence and may wait out
-                  // a short rate limit; a cut-off attempt would keep sending
-                  // in the background while the caller falls back.
-                  (route.transport == TransportKind.iroh ||
-                          route.transport == TransportKind.matrix
+                  adapter.capabilities.sendAttemptTimeout ??
+                  (route.transport == TransportKind.iroh
                       ? const Duration(seconds: 60)
                       : const Duration(seconds: 4)),
             );

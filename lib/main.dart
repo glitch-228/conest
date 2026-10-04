@@ -13828,17 +13828,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   ?.copyWith(fontWeight: FontWeight.w700),
                             ),
                             const SizedBox(height: 6),
-                            for (final kind in [
-                              TransportKind.lan,
-                              TransportKind.iroh,
-                              TransportKind.conestRelay,
-                              TransportKind.optical,
-                              TransportKind.deltaChat,
-                              TransportKind.reticulum,
-                              TransportKind.localSend,
-                              if (widget.controller.matrixCarrierAvailable)
-                                TransportKind.matrix,
-                            ])
+                            for (final kind
+                                in widget.controller.configurableTransports)
                               _TransportPolicySelector(
                                 kind: kind,
                                 value: identity.connectivity.policyFor(kind),
@@ -16663,6 +16654,7 @@ class _ConnectivityChip extends StatelessWidget {
         title: 'Routing — ${contact.alias}',
         initial: contact.routing,
         global: global,
+        kinds: controller.configurableTransports,
         onSave: (next) {
           unawaited(
             controller.updateContactRoutingPreferences(contact.deviceId, next),
@@ -16707,12 +16699,16 @@ class _ConnectivityDialog extends StatefulWidget {
     required this.title,
     required this.initial,
     required this.global,
+    required this.kinds,
     required this.onSave,
   });
 
   final String title;
   final ContactRoutingPreferences initial;
   final GlobalConnectivityPreferences global;
+
+  /// Transports with a policy to choose.
+  final List<TransportKind> kinds;
   final void Function(ContactRoutingPreferences) onSave;
 
   @override
@@ -16787,14 +16783,7 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
             contentPadding: EdgeInsets.zero,
           ),
           const SizedBox(height: 8),
-          for (final kind in const [
-            TransportKind.lan,
-            TransportKind.iroh,
-            TransportKind.conestRelay,
-            TransportKind.optical,
-            TransportKind.deltaChat,
-            TransportKind.reticulum,
-          ])
+          for (final kind in widget.kinds)
             _TransportPolicySelector(
               kind: kind,
               value: _policies[kind] ?? TransportPolicy.disabled,
@@ -19675,6 +19664,13 @@ extension MessageRouteStyle on MessageRoute {
     MessageRoute.conestRelay => const Color(0xFFF57C00),
     MessageRoute.matrixCarrier => const Color(0xFF0DBD8B),
     MessageRoute.plainMatrix => const Color(0xFFE53935),
+    MessageRoute.nostrCarrier => const Color(0xFF6A1B9A),
+    MessageRoute.emailCarrier => const Color(0xFF546E7A),
+    MessageRoute.reticulum => const Color(0xFF00ACC1),
+    MessageRoute.meshtastic => const Color(0xFF7CB342),
+    MessageRoute.meshCore => const Color(0xFFC0CA33),
+    MessageRoute.bitchat => const Color(0xFF1565C0),
+    MessageRoute.torOnion => const Color(0xFF7E57C2),
   };
 
   String get shortLabel => switch (this) {
@@ -19687,6 +19683,13 @@ extension MessageRouteStyle on MessageRoute {
     MessageRoute.conestRelay => 'Relay',
     MessageRoute.matrixCarrier => 'Matrix',
     MessageRoute.plainMatrix => 'Plain Matrix',
+    MessageRoute.nostrCarrier => 'Nostr',
+    MessageRoute.emailCarrier => 'Email',
+    MessageRoute.reticulum => 'Reticulum',
+    MessageRoute.meshtastic => 'Meshtastic',
+    MessageRoute.meshCore => 'MeshCore',
+    MessageRoute.bitchat => 'Bluetooth',
+    MessageRoute.torOnion => 'Tor',
   };
 }
 
@@ -19746,13 +19749,14 @@ class _MessageRouteLegend extends StatelessWidget {
       subtitle: const Text('What the coloured marks on messages mean'),
       children: [
         for (final route in MessageRoute.values)
-          ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: CircleAvatar(radius: 6, backgroundColor: route.color),
-            title: Text(route.label),
-            subtitle: Text(route.description),
-          ),
+          if (route.carrierKind?.userVisible ?? true)
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: CircleAvatar(radius: 6, backgroundColor: route.color),
+              title: Text(route.label),
+              subtitle: Text(route.description),
+            ),
       ],
     );
   }

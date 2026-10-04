@@ -678,10 +678,15 @@ class GlobalConnectivityPreferences {
       TransportKind.iroh: TransportPolicy.automatic,
       TransportKind.conestRelay: TransportPolicy.automatic,
       TransportKind.optical: TransportPolicy.askBeforeUse,
-      TransportKind.deltaChat: TransportPolicy.disabled,
-      TransportKind.reticulum: TransportPolicy.disabled,
+      TransportKind.deltaChat: TransportPolicy.automatic,
+      TransportKind.reticulum: TransportPolicy.automatic,
       TransportKind.localSend: TransportPolicy.disabled,
       TransportKind.matrix: TransportPolicy.automatic,
+      TransportKind.nostr: TransportPolicy.automatic,
+      TransportKind.meshtastic: TransportPolicy.automatic,
+      TransportKind.meshCore: TransportPolicy.automatic,
+      TransportKind.bitchat: TransportPolicy.automatic,
+      TransportKind.tor: TransportPolicy.automatic,
     },
   });
 
@@ -707,12 +712,7 @@ class GlobalConnectivityPreferences {
     if (kind == TransportKind.lan && !lanEnabled) {
       return TransportPolicy.disabled;
     }
-    if ((kind == TransportKind.iroh ||
-            kind == TransportKind.conestRelay ||
-            kind == TransportKind.deltaChat ||
-            kind == TransportKind.reticulum ||
-            kind == TransportKind.matrix) &&
-        !onlineEnabled) {
+    if (kind.isOnline && !onlineEnabled) {
       return TransportPolicy.disabled;
     }
     return transportPolicies[kind] ?? TransportPolicy.disabled;
@@ -755,29 +755,16 @@ class GlobalConnectivityPreferences {
     'storageReserveEnabled': storageReserveEnabled,
     'irohTransferLimitEnabled': irohTransferLimitEnabled,
     'transportPolicies': transportPoliciesToJson(transportPolicies),
+    'transportPolicyVersion': currentTransportPolicyVersion,
   };
 
   factory GlobalConnectivityPreferences.fromJson(Map<String, dynamic> json) {
     final lanEnabled = json['lanEnabled'] as bool? ?? true;
     final onlineEnabled = json['onlineEnabled'] as bool? ?? true;
-    final defaults = <TransportKind, TransportPolicy>{
-      TransportKind.lan: lanEnabled
-          ? TransportPolicy.automatic
-          : TransportPolicy.disabled,
-      TransportKind.iroh: onlineEnabled
-          ? TransportPolicy.automatic
-          : TransportPolicy.disabled,
-      TransportKind.conestRelay: onlineEnabled
-          ? TransportPolicy.automatic
-          : TransportPolicy.disabled,
-      TransportKind.optical: TransportPolicy.askBeforeUse,
-      TransportKind.deltaChat: TransportPolicy.disabled,
-      TransportKind.reticulum: TransportPolicy.disabled,
-      TransportKind.localSend: TransportPolicy.disabled,
-      TransportKind.matrix: onlineEnabled
-          ? TransportPolicy.automatic
-          : TransportPolicy.disabled,
-    };
+    final defaults = defaultTransportPolicies(
+      lanEnabled: lanEnabled,
+      onlineEnabled: onlineEnabled,
+    );
     return GlobalConnectivityPreferences(
       lanEnabled: lanEnabled,
       onlineEnabled: onlineEnabled,
@@ -800,6 +787,7 @@ class GlobalConnectivityPreferences {
       transportPolicies: transportPoliciesFromJson(
         json['transportPolicies'],
         defaults: defaults,
+        version: json['transportPolicyVersion'] as int? ?? 1,
       ),
     );
   }
@@ -816,10 +804,15 @@ class ContactRoutingPreferences {
       TransportKind.iroh: TransportPolicy.automatic,
       TransportKind.conestRelay: TransportPolicy.automatic,
       TransportKind.optical: TransportPolicy.askBeforeUse,
-      TransportKind.deltaChat: TransportPolicy.disabled,
-      TransportKind.reticulum: TransportPolicy.disabled,
+      TransportKind.deltaChat: TransportPolicy.automatic,
+      TransportKind.reticulum: TransportPolicy.automatic,
       TransportKind.localSend: TransportPolicy.disabled,
       TransportKind.matrix: TransportPolicy.automatic,
+      TransportKind.nostr: TransportPolicy.automatic,
+      TransportKind.meshtastic: TransportPolicy.automatic,
+      TransportKind.meshCore: TransportPolicy.automatic,
+      TransportKind.bitchat: TransportPolicy.automatic,
+      TransportKind.tor: TransportPolicy.automatic,
     },
   });
 
@@ -833,12 +826,7 @@ class ContactRoutingPreferences {
     if (kind == TransportKind.lan && !lanEnabled) {
       return TransportPolicy.disabled;
     }
-    if ((kind == TransportKind.iroh ||
-            kind == TransportKind.conestRelay ||
-            kind == TransportKind.deltaChat ||
-            kind == TransportKind.reticulum ||
-            kind == TransportKind.matrix) &&
-        !onlineEnabled) {
+    if (kind.isOnline && !onlineEnabled) {
       return TransportPolicy.disabled;
     }
     return transportPolicies[kind] ?? TransportPolicy.disabled;
@@ -899,6 +887,7 @@ class ContactRoutingPreferences {
     'preferred': preferred.name,
     'irohRelayEnabled': irohRelayEnabled,
     'transportPolicies': transportPoliciesToJson(transportPolicies),
+    'transportPolicyVersion': currentTransportPolicyVersion,
   };
 
   factory ContactRoutingPreferences.fromJson(Map<String, dynamic> json) {
@@ -908,24 +897,10 @@ class ContactRoutingPreferences {
         .firstOrNull;
     final lanEnabled = json['lanEnabled'] as bool? ?? true;
     final onlineEnabled = json['onlineEnabled'] as bool? ?? true;
-    final defaults = <TransportKind, TransportPolicy>{
-      TransportKind.lan: lanEnabled
-          ? TransportPolicy.automatic
-          : TransportPolicy.disabled,
-      TransportKind.iroh: onlineEnabled
-          ? TransportPolicy.automatic
-          : TransportPolicy.disabled,
-      TransportKind.conestRelay: onlineEnabled
-          ? TransportPolicy.automatic
-          : TransportPolicy.disabled,
-      TransportKind.optical: TransportPolicy.askBeforeUse,
-      TransportKind.deltaChat: TransportPolicy.disabled,
-      TransportKind.reticulum: TransportPolicy.disabled,
-      TransportKind.localSend: TransportPolicy.disabled,
-      TransportKind.matrix: onlineEnabled
-          ? TransportPolicy.automatic
-          : TransportPolicy.disabled,
-    };
+    final defaults = defaultTransportPolicies(
+      lanEnabled: lanEnabled,
+      onlineEnabled: onlineEnabled,
+    );
     return ContactRoutingPreferences(
       lanEnabled: lanEnabled,
       onlineEnabled: onlineEnabled,
@@ -934,6 +909,7 @@ class ContactRoutingPreferences {
       transportPolicies: transportPoliciesFromJson(
         json['transportPolicies'],
         defaults: defaults,
+        version: json['transportPolicyVersion'] as int? ?? 1,
       ),
     );
   }
@@ -1576,6 +1552,29 @@ PeerEndpoint? _decodeCompactRoute(String value) {
   return PeerEndpoint(kind: kind, host: host, port: port, protocol: protocol);
 }
 
+/// A contact's address on one carrier network, or its removal, with the
+/// creation time of the authenticated exchange that set it.
+class CarrierAddress {
+  const CarrierAddress({required this.value, required this.at});
+
+  /// Null once the contact has stopped using the carrier.
+  final String? value;
+  final DateTime at;
+
+  Map<String, dynamic> toJson() => {
+    if (value != null) 'value': value,
+    'at': at.toUtc().toIso8601String(),
+  };
+
+  static CarrierAddress? fromJson(Object? json) {
+    if (json is! Map<String, dynamic>) return null;
+    final value = json['value'];
+    final at = DateTime.tryParse(json['at'] as String? ?? '');
+    if (at == null || (value != null && value is! String)) return null;
+    return CarrierAddress(value: value as String?, at: at.toUtc());
+  }
+}
+
 class ContactRecord {
   ContactRecord({
     required this.accountId,
@@ -1598,6 +1597,7 @@ class ContactRecord {
     this.irohEndpointId,
     this.matrixAddress,
     this.matrixAddressAt,
+    this.carrierAddresses = const <TransportKind, CarrierAddress>{},
     this.capabilities = const <TransportKind>[],
     this.featureCapabilities = const <ApplicationCapability>[],
     this.featureCapabilityVersion = 0,
@@ -1629,6 +1629,10 @@ class ContactRecord {
   /// Creation time of the exchange that last set or cleared
   /// [matrixAddress]; older exchanges arriving late are ignored.
   final DateTime? matrixAddressAt;
+
+  /// Addresses on carriers other than Matrix (which keeps [matrixAddress]),
+  /// learned from authenticated contact exchanges.
+  final Map<TransportKind, CarrierAddress> carrierAddresses;
   final List<TransportKind> capabilities;
   final List<ApplicationCapability> featureCapabilities;
   final int featureCapabilityVersion;
@@ -1683,6 +1687,12 @@ class ContactRecord {
       pairingState != ContactPairingState.cancelled;
   bool get canSendOutbound =>
       canComposeOutbound && pairingState == ContactPairingState.accepted;
+
+  /// The contact's address on carrier [kind], if it has sent one.
+  String? carrierAddress(TransportKind kind) => kind == TransportKind.matrix
+      ? matrixAddress
+      : carrierAddresses[kind]?.value;
+
   bool get hasPinnedIrohIdentity =>
       irohEndpointId?.isNotEmpty == true &&
       signingPublicKeyBase64?.isNotEmpty == true;
@@ -1709,6 +1719,7 @@ class ContactRecord {
     String? matrixAddress,
     bool clearMatrixAddress = false,
     DateTime? matrixAddressAt,
+    Map<TransportKind, CarrierAddress>? carrierAddresses,
     List<TransportKind>? capabilities,
     List<ApplicationCapability>? featureCapabilities,
     int? featureCapabilityVersion,
@@ -1752,6 +1763,7 @@ class ContactRecord {
           ? null
           : matrixAddress ?? this.matrixAddress,
       matrixAddressAt: matrixAddressAt ?? this.matrixAddressAt,
+      carrierAddresses: carrierAddresses ?? this.carrierAddresses,
       capabilities: capabilities ?? this.capabilities,
       featureCapabilities: featureCapabilities ?? this.featureCapabilities,
       featureCapabilityVersion:
@@ -1853,6 +1865,11 @@ class ContactRecord {
       if (matrixAddress != null) 'matrixAddress': matrixAddress,
       if (matrixAddressAt != null)
         'matrixAddressAt': matrixAddressAt!.toUtc().toIso8601String(),
+      if (carrierAddresses.isNotEmpty)
+        'carrierAddresses': {
+          for (final entry in carrierAddresses.entries)
+            entry.key.name: entry.value.toJson(),
+        },
       if (capabilities.isNotEmpty)
         'capabilities': capabilities.map((entry) => entry.name).toList(),
       if (featureCapabilityVersion > 0) ...{
@@ -1940,6 +1957,7 @@ class ContactRecord {
       matrixAddressAt: DateTime.tryParse(
         json['matrixAddressAt'] as String? ?? '',
       )?.toUtc(),
+      carrierAddresses: _carrierAddressesFromJson(json['carrierAddresses']),
       capabilities: (json['capabilities'] as List<dynamic>? ?? const [])
           .whereType<String>()
           .map(
@@ -1966,6 +1984,45 @@ class ContactRecord {
       pairingAttempts: (json['pairingAttempts'] as num?)?.toInt() ?? 0,
     );
   }
+}
+
+/// Applies the carrier addresses from a contact exchange created at [at]:
+/// each listed kind is set and each kind not listed is cleared, but only
+/// where [at] is newer than what is known, so an exchange arriving late over
+/// another route cannot roll an address back. Returns null when nothing
+/// changes.
+Map<TransportKind, CarrierAddress>? mergeCarrierAddresses(
+  Map<TransportKind, CarrierAddress> known,
+  Map<TransportKind, String> advertised, {
+  required DateTime at,
+}) {
+  final result = Map<TransportKind, CarrierAddress>.of(known);
+  var changed = false;
+  for (final kind in TransportKind.values) {
+    if (!kind.isCarrier || kind == TransportKind.matrix) continue;
+    final current = known[kind];
+    final value = advertised[kind];
+    if (current != null && !at.isAfter(current.at)) continue;
+    // Nothing known and nothing advertised: no record needed.
+    if (current == null && value == null) continue;
+    // An unchanged address still takes the newer time, so a late exchange
+    // older than this one cannot clear it.
+    result[kind] = CarrierAddress(value: value, at: at.toUtc());
+    changed = true;
+  }
+  return changed ? result : null;
+}
+
+Map<TransportKind, CarrierAddress> _carrierAddressesFromJson(Object? json) {
+  if (json is! Map<String, dynamic>) return const {};
+  return {
+    for (final entry in json.entries)
+      if (TransportKind.values
+              .where((kind) => kind.name == entry.key)
+              .firstOrNull
+          case final kind? when kind.isCarrier && kind != TransportKind.matrix)
+        kind: ?CarrierAddress.fromJson(entry.value),
+  };
 }
 
 class ContactReachabilityRecord {
@@ -2067,7 +2124,28 @@ enum MessageRoute {
   matrixCarrier,
 
   /// A plain Matrix message, readable by the homeserver.
-  plainMatrix;
+  plainMatrix,
+
+  /// Sealed and carried by Nostr relays.
+  nostrCarrier,
+
+  /// Sealed and carried by email.
+  emailCarrier,
+
+  /// Over Reticulum (a LoRa radio or a Reticulum network).
+  reticulum,
+
+  /// Over a Meshtastic LoRa mesh.
+  meshtastic,
+
+  /// Over a MeshCore LoRa mesh.
+  meshCore,
+
+  /// Over the bitchat Bluetooth mesh.
+  bitchat,
+
+  /// Over Tor, between onion services.
+  torOnion;
 
   String get label => switch (this) {
     lanDirect => 'LAN direct',
@@ -2079,6 +2157,13 @@ enum MessageRoute {
     conestRelay => 'Conest relay',
     matrixCarrier => 'Matrix',
     plainMatrix => 'Plain Matrix',
+    nostrCarrier => 'Nostr',
+    emailCarrier => 'Email',
+    reticulum => 'Reticulum',
+    meshtastic => 'Meshtastic',
+    meshCore => 'MeshCore',
+    bitchat => 'Bluetooth mesh',
+    torOnion => 'Tor',
   };
 
   String get description => switch (this) {
@@ -2103,6 +2188,45 @@ enum MessageRoute {
     plainMatrix =>
       'Sent as an ordinary Matrix message; the homeserver can '
           'read it unless the room is encrypted.',
+    nostrCarrier =>
+      'Carried by Nostr relays, still end-to-end encrypted by '
+          'Conest; relays see the recipient and when, not the sender.',
+    emailCarrier =>
+      'Carried by email, still end-to-end encrypted by Conest; '
+          'the mail servers see both addresses and when.',
+    reticulum =>
+      'Over Reticulum, by radio or a Reticulum network, '
+          'end-to-end encrypted.',
+    meshtastic => 'Over a Meshtastic radio mesh, end-to-end encrypted.',
+    meshCore => 'Over a MeshCore radio mesh, end-to-end encrypted.',
+    bitchat =>
+      'Over the Bluetooth mesh through nearby phones, '
+          'end-to-end encrypted.',
+    torOnion =>
+      'Between onion services over Tor; no one on the way sees '
+          'who talks to whom.',
+  };
+
+  /// The carrier this route goes over, if it is one.
+  TransportKind? get carrierKind => switch (this) {
+    plainMatrix => TransportKind.matrix,
+    _ =>
+      TransportKind.values
+          .where((kind) => kind.isCarrier && forCarrier(kind) == this)
+          .firstOrNull,
+  };
+
+  /// The route a message took when it arrived over carrier [kind].
+  static MessageRoute? forCarrier(TransportKind kind) => switch (kind) {
+    TransportKind.matrix => matrixCarrier,
+    TransportKind.nostr => nostrCarrier,
+    TransportKind.deltaChat => emailCarrier,
+    TransportKind.reticulum => reticulum,
+    TransportKind.meshtastic => meshtastic,
+    TransportKind.meshCore => meshCore,
+    TransportKind.bitchat => bitchat,
+    TransportKind.tor => torOnion,
+    _ => null,
   };
 
   /// Routes recorded before [MessageRoute] existed.
@@ -2115,7 +2239,7 @@ enum MessageRoute {
     (TransportKind.iroh, TransportPathKind.relayed) => irohRelay,
     (TransportKind.conestRelay, TransportPathKind.direct) => internetDirect,
     (TransportKind.conestRelay, _) => conestRelay,
-    (TransportKind.matrix, _) => matrixCarrier,
+    (final kind?, _) when kind.isCarrier => forCarrier(kind),
     _ => null,
   };
 }

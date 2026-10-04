@@ -20,6 +20,7 @@ import 'group_file_service.dart';
 import 'group_message_projection.dart';
 import 'group_membership_history.dart';
 import 'beam_protocol.dart';
+import 'carrier.dart';
 import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
 import 'attachment_block_worker.dart';
@@ -3276,13 +3277,14 @@ class MessengerController extends ChangeNotifier {
     if (!conestActive) return;
     await _startNativeTransportRegistry();
     await _attachMatrixTransport();
+    await _attachCarrierTransports();
   }
 
   Future<void> _startNativeTransportRegistry() async {
     final factory = _transportRegistryFactory;
     if (factory == null ||
         (_transportRegistry?.adapters.any(
-              (adapter) => adapter.kind != TransportKind.matrix,
+              (adapter) => !adapter.kind.isCarrier,
             ) ??
             false)) {
       return;
@@ -3293,16 +3295,16 @@ class MessengerController extends ChangeNotifier {
       final registry = await factory(me);
       if (registry == null) return;
       await registry.start();
-      // A Matrix-only registry from before keeps its running adapter and
-      // inbound subscription.
-      final matrixOnly = _transportRegistry;
+      // A carrier-only registry from before keeps its running adapters and
+      // inbound subscriptions.
+      final carrierOnly = _transportRegistry;
       for (final adapter
-          in matrixOnly?.adapters ?? const <TransportAdapter>[]) {
+          in carrierOnly?.adapters ?? const <TransportAdapter>[]) {
         registry.register(adapter);
       }
       _transportRegistry = registry;
       for (final adapter in registry.adapters.where(
-        (adapter) => adapter.kind != TransportKind.matrix,
+        (adapter) => !adapter.kind.isCarrier,
       )) {
         _transportInboundSubscriptions.add(
           adapter.inboundEnvelopes.listen(
@@ -3344,9 +3346,12 @@ class MessengerController extends ChangeNotifier {
     _groupFileSessions.clear();
     _groupFileLastStates.clear();
     _groupFileReservations.clear();
-    // Stop Matrix before dropping listeners: a batch it hands on must have a
-    // listener, or it would be acknowledged and lost.
+    // Stop carriers before dropping listeners: a batch one hands on must
+    // have a listener, or it would be acknowledged and lost.
     await _matrixTransport?.stop();
+    for (final carrier in _carrierTransports.values) {
+      await carrier.stop();
+    }
     for (final subscription in _transportInboundSubscriptions) {
       await subscription.cancel();
     }
@@ -3358,14 +3363,109 @@ class MessengerController extends ChangeNotifier {
     if (registry != null) await registry.stop();
   }
 
-  /// Joins the Matrix carrier to the transport registry when a session is
-  /// stored, creating a Matrix-only registry if native Iroh is unavailable.
-  bool get _matrixAllowed {
+  bool get _matrixAllowed => _carrierAllowed(TransportKind.matrix);
+
+  /// Whether carrier [kind] may run at all: Conest is active and neither the
+  /// kind's policy nor (for internet carriers) the Online switch is off.
+  bool _carrierAllowed(TransportKind kind) {
     final global = _snapshot.identity?.connectivity;
     return global != null &&
         conestActive &&
-        global.onlineEnabled &&
-        global.policyFor(TransportKind.matrix) != TransportPolicy.disabled;
+        global.policyFor(kind) != TransportPolicy.disabled;
+  }
+
+  Map<String, String> _ownCarrierAddressesFor(
+    ContactRecord contact,
+    GlobalConnectivityPreferences global,
+  ) => {
+    for (final MapEntry(key: kind, value: carrier)
+        in _carrierTransports.entries)
+      if (carrier.localAddress case final address?
+          when _carrierAllowed(kind) &&
+              contact.routing.effectivePolicy(kind, global) !=
+                  TransportPolicy.disabled)
+        kind.name: address,
+  };
+
+  /// Carriers other than Matrix, by kind, once their account is set up.
+  final Map<TransportKind, CarrierTransportAdapter> _carrierTransports = {};
+  final Map<TransportKind, StreamSubscription<TransportInboundEnvelope>>
+  _carrierInboundSubscriptions = {};
+
+  /// Seals for every carrier with keys derived from each contact's pairwise
+  /// key; new carrier adapters are built with it.
+  late final CarrierSealer carrierSealer = _ControllerCarrierSealer(this);
+
+  /// The carrier adapter of [kind], if one is registered.
+  CarrierTransportAdapter? carrierTransport(TransportKind kind) =>
+      _carrierTransports[kind];
+
+  /// Adds a carrier whose network client is ready; it joins the transport
+  /// registry while its policy allows.
+  @visibleForTesting
+  Future<void> registerCarrierTransport(CarrierTransportAdapter carrier) async {
+    if (!carrier.kind.isCarrier || carrier.kind == TransportKind.matrix) {
+      throw ArgumentError('${carrier.kind.label} is not a sealed carrier.');
+    }
+    final previous = _carrierTransports[carrier.kind];
+    if (previous != null && !identical(previous, carrier)) {
+      await _detachCarrier(carrier.kind);
+      await _carrierInboundSubscriptions.remove(carrier.kind)?.cancel();
+    }
+    _carrierTransports[carrier.kind] = carrier;
+    await _attachCarrier(carrier.kind);
+    // Contacts learn the address to reach this device on the carrier.
+    _advertiseProfileToContacts();
+  }
+
+  /// Removes the carrier of [kind]; contacts are told to stop using it.
+  Future<void> unregisterCarrierTransport(TransportKind kind) async {
+    await _detachCarrier(kind);
+    await _carrierInboundSubscriptions.remove(kind)?.cancel();
+    if (_carrierTransports.remove(kind) != null) {
+      _advertiseProfileToContacts();
+    }
+  }
+
+  Future<void> _attachCarrierTransports() async {
+    for (final kind in _carrierTransports.keys.toList(growable: false)) {
+      await _attachCarrier(kind);
+    }
+  }
+
+  /// Takes a carrier out of the registry and stops it, so nothing is
+  /// received while it is off.
+  Future<void> _detachCarrier(TransportKind kind) async {
+    final carrier = _carrierTransports[kind];
+    if (carrier == null) return;
+    await carrier.stop();
+    final registry = _transportRegistry;
+    if (identical(registry?.adapterFor(kind), carrier)) {
+      registry!.unregister(kind);
+      if (registry.adapters.isEmpty) _transportRegistry = null;
+    }
+  }
+
+  /// Joins a carrier to the transport registry, creating a carrier-only
+  /// registry if native transports are unavailable.
+  Future<void> _attachCarrier(TransportKind kind) async {
+    final carrier = _carrierTransports[kind];
+    if (carrier == null) return;
+    if (_snapshot.identity == null || !_carrierAllowed(kind)) {
+      await _detachCarrier(kind);
+      return;
+    }
+    final registry = _transportRegistry ??= TransportRegistry(
+      const <TransportAdapter>[],
+    );
+    if (registry.adapterFor(kind) == null) registry.register(carrier);
+    _carrierInboundSubscriptions[kind] ??= carrier.inboundEnvelopes.listen(
+      _handleTransportInbound,
+      onError: (Object error, StackTrace stackTrace) {
+        appendDebugLog('${kind.label} inbound transport failed: $error');
+      },
+    );
+    await carrier.start();
   }
 
   /// Takes Matrix out of the registry and stops syncing, so nothing is
@@ -3407,14 +3507,17 @@ class MessengerController extends ChangeNotifier {
     await matrix.start();
   }
 
-  Future<void> _handleMatrixInbound(TransportInboundEnvelope inbound) async {
+  Future<void> _handleCarrierInbound(TransportInboundEnvelope inbound) async {
+    final kind = inbound.transport;
+    final label = kind.label;
     final contact = _contactByDeviceId(inbound.senderTransportIdentity);
     final global = _snapshot.identity?.connectivity;
     if (contact == null ||
         global == null ||
-        contact.routing.effectivePolicy(TransportKind.matrix, global) ==
+        !_carrierAllowed(kind) ||
+        contact.routing.effectivePolicy(kind, global) ==
             TransportPolicy.disabled) {
-      appendDebugLog('Dropped Matrix ingress disabled by connectivity policy.');
+      appendDebugLog('Dropped $label ingress disabled by connectivity policy.');
       return;
     }
     try {
@@ -3423,23 +3526,23 @@ class MessengerController extends ChangeNotifier {
       final envelope = RelayEnvelope.fromJson(decoded);
       if (envelope.senderDeviceId != contact.deviceId ||
           envelope.recipientDeviceId != _snapshot.identity?.deviceId) {
-        appendDebugLog('Matrix envelope identity mismatch.');
+        appendDebugLog('$label envelope identity mismatch.');
         return;
       }
       final processed = await _processEnvelopes(
         [envelope],
         ingressKind: PeerRouteKind.relay,
-        route: MessageRoute.matrixCarrier,
+        route: MessageRoute.forCarrier(kind),
       );
       if (processed > 0) _reachability.noteAvailablePath(contact.deviceId);
     } catch (error) {
-      appendDebugLog('Rejected Matrix envelope: $error');
+      appendDebugLog('Rejected $label envelope: $error');
     }
   }
 
   Future<void> _handleTransportInbound(TransportInboundEnvelope inbound) async {
-    if (inbound.transport == TransportKind.matrix) {
-      return _handleMatrixInbound(inbound);
+    if (inbound.transport.isCarrier) {
+      return _handleCarrierInbound(inbound);
     }
     if (inbound.transport != TransportKind.iroh) return;
     final contact = _snapshot.contacts
@@ -5637,13 +5740,17 @@ class MessengerController extends ChangeNotifier {
     final matrixPolicyChanged =
         me.connectivity.policyFor(TransportKind.matrix) !=
         prefs.policyFor(TransportKind.matrix);
+    final carrierPolicyChanged = _carrierTransports.keys.any(
+      (kind) => me.connectivity.policyFor(kind) != prefs.policyFor(kind),
+    );
     _snapshot = _snapshot.copyWith(identity: me.copyWith(connectivity: prefs));
     if (restartNative) {
       await _stopTransportRegistry();
     }
     await _applyGlobalConnectivityState();
-    if (matrixPolicyChanged && _snapshot.matrixSession != null) {
-      // Contacts learn whether to address this device over Matrix.
+    if ((matrixPolicyChanged && _snapshot.matrixSession != null) ||
+        carrierPolicyChanged) {
+      // Contacts learn whether to address this device over each carrier.
       _advertiseProfileToContacts();
     }
     _markRuntimeActivity();
@@ -5740,14 +5847,26 @@ class MessengerController extends ChangeNotifier {
     final matrixBefore = global == null
         ? null
         : contacts[index].routing.effectivePolicy(TransportKind.matrix, global);
+    final carriersBefore = global == null
+        ? null
+        : [
+            for (final kind in _carrierTransports.keys)
+              contacts[index].routing.effectivePolicy(kind, global),
+          ];
     contacts[index] = contacts[index].copyWith(routing: prefs);
     _snapshot = _snapshot.copyWith(contacts: contacts);
     await _persist('Routing preferences updated for ${contacts[index].alias}.');
     if (global != null &&
-        _snapshot.matrixSession != null &&
-        prefs.effectivePolicy(TransportKind.matrix, global) != matrixBefore &&
-        contacts[index].canSendOutbound) {
-      // The contact learns whether to address this device over Matrix.
+        contacts[index].canSendOutbound &&
+        ((_snapshot.matrixSession != null &&
+                prefs.effectivePolicy(TransportKind.matrix, global) !=
+                    matrixBefore) ||
+            !listEquals(carriersBefore, [
+              for (final kind in _carrierTransports.keys)
+                prefs.effectivePolicy(kind, global),
+            ]))) {
+      // The contact learns whether to address this device over each
+      // carrier.
       unawaited(
         _sendReciprocalContactExchange(
           contacts[index],
@@ -5778,6 +5897,8 @@ class MessengerController extends ChangeNotifier {
     } else {
       await _stopTransportRegistry();
       _stopLongPoll();
+      // Radio and Bluetooth carriers work without the internet.
+      if (conestActive) await _attachCarrierTransports();
     }
   }
 
@@ -11253,6 +11374,10 @@ class MessengerController extends ChangeNotifier {
               ) !=
               TransportPolicy.disabled)
         'matrixAddress': _ownMatrixAddress!.toJson(),
+      // Every carrier this device can be reached on for this contact; a
+      // carrier missing here tells the contact to stop using it.
+      if (recipientKnowsIdentity)
+        'carrierAddresses': _ownCarrierAddressesFor(contact, me.connectivity),
     });
     final payloads = pairingResponse == null
         ? <String>[structuredPayload, invitePayload]
@@ -15989,6 +16114,9 @@ class MessengerController extends ChangeNotifier {
     // contact's Matrix carrier address.
     var matrixAddressAdvertised = false;
     String? peerMatrixAddress;
+    // Null when the peer predates carrier address maps: its other carrier
+    // addresses then stay as they are.
+    Map<TransportKind, String>? peerCarrierAddresses;
     if (envelope.protocolVersion == 1) {
       if (existing != null) return;
       final rawPayload = envelope.payloadBase64;
@@ -16062,6 +16190,9 @@ class MessengerController extends ChangeNotifier {
           peerMatrixAddress = MatrixAddress.fromJson(
             decodedExchange['matrixAddress'],
           )?.encode();
+          peerCarrierAddresses = _carrierAddressesFromExchange(
+            decodedExchange['carrierAddresses'],
+          );
         }
       } on FormatException {
         // Existing peers send the signed invite payload without the wrapper.
@@ -16152,6 +16283,18 @@ class MessengerController extends ChangeNotifier {
         );
         _replaceContactRecord(updated);
         await _saveSnapshotSilently(notify: true);
+      }
+      if (updated != null && peerCarrierAddresses != null) {
+        final merged = mergeCarrierAddresses(
+          updated.carrierAddresses,
+          peerCarrierAddresses,
+          at: addressAt,
+        );
+        if (merged != null) {
+          updated = updated.copyWith(carrierAddresses: merged);
+          _replaceContactRecord(updated);
+          await _saveSnapshotSilently(notify: true);
+        }
       }
       final matchesPendingRequest = pairingRequestId == null ||
           pairingRequestId == existing.pairingRequestId;
@@ -19675,9 +19818,14 @@ class MessengerController extends ChangeNotifier {
     }
     final result = await registry.deliverEnvelope(
       peer: _transportPeerForContact(contact, allowRelay: allowRelay),
-      // File chunks stay on LAN/Iroh: Matrix carries messages only.
+      // File chunks stay on transports built for volume; carriers such as
+      // Matrix carry messages only.
       policies: _isHighFrequencyTransferEnvelope(envelope)
-          ? {...policies, TransportKind.matrix: TransportPolicy.disabled}
+          ? {
+              ...policies,
+              for (final kind in TransportKind.values)
+                if (!kind.carriesBulk) kind: TransportPolicy.disabled,
+            }
           : policies,
       envelope: TransportEnvelope(
         id: envelope.messageId,
@@ -19709,8 +19857,8 @@ class MessengerController extends ChangeNotifier {
           (global?.irohRelayEnabled ?? false) &&
           contact.routing.irohRelayEnabled,
       transportAddresses: {
-        if (contact.matrixAddress != null)
-          TransportKind.matrix: contact.matrixAddress!,
+        for (final kind in TransportKind.values)
+          if (kind.isCarrier) kind: ?contact.carrierAddress(kind),
       },
     );
   }
@@ -22383,6 +22531,14 @@ class MessengerController extends ChangeNotifier {
   /// Whether this build includes the Matrix carrier.
   bool get matrixCarrierAvailable => _matrixTransport != null;
 
+  /// Transports with a policy in settings: those this build can use.
+  List<TransportKind> get configurableTransports => [
+    for (final kind in TransportKind.values)
+      if (kind.userVisible &&
+          (kind != TransportKind.matrix || matrixCarrierAvailable))
+        kind,
+  ];
+
   /// Signed-in state comes from the vault (the adapter is stopped while
   /// Online or Matrix is off); syncing and errors from the adapter.
   MatrixCarrierStatus? get matrixStatus {
@@ -22401,7 +22557,7 @@ class MessengerController extends ChangeNotifier {
   Stream<MatrixCarrierStatus> get matrixStatusChanges =>
       _matrixTransport?.statusChanges ?? const Stream.empty();
 
-  final Map<String, Future<SecretKey>> _matrixCarrierKeys = {};
+  final Map<String, Future<SecretKey>> _carrierKeys = {};
 
   void _createMatrixTransport() {
     if (!_matrixCarrierEnabled || _matrixTransport != null) return;
@@ -22631,6 +22787,27 @@ class MessengerController extends ChangeNotifier {
         : MatrixAddress.tryCreate(session.userId, session.deviceId);
   }
 
+  /// Carrier addresses from an authenticated exchange; null when the field
+  /// is missing or malformed. Matrix keeps its own field; unknown kinds are
+  /// ignored and implausible addresses dropped.
+  static Map<TransportKind, String>? _carrierAddressesFromExchange(
+    Object? json,
+  ) {
+    if (json is! Map<String, dynamic> || json.length > 32) return null;
+    return {
+      for (final entry in json.entries)
+        if (TransportKind.values
+                .where((kind) => kind.name == entry.key)
+                .firstOrNull
+            case final kind?
+            when kind.isCarrier &&
+                kind != TransportKind.matrix &&
+                entry.value is String &&
+                isPlausibleCarrierAddress(entry.value as String))
+          kind: entry.value as String,
+    };
+  }
+
   void _advertiseProfileToContacts() {
     // A dormant Conest (Matrix-only mode) sends nothing.
     if (!conestActive) return;
@@ -22646,38 +22823,50 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  Future<SecretKey> _matrixCarrierKey(ContactRecord contact) =>
-      _matrixCarrierKeys.putIfAbsent(
-        '${contact.deviceId}|${contact.publicKeyBase64}',
+  /// Key and authenticated-data label of carrier [kind]. Matrix keeps the
+  /// label it shipped with.
+  static String _carrierContext(TransportKind kind) =>
+      kind == TransportKind.matrix
+      ? 'conest.matrix.carrier.v1'
+      : 'conest.carrier.v1|${kind.name}';
+
+  /// A per-contact, per-carrier key derived from the static pairwise key.
+  Future<SecretKey> _carrierKey(ContactRecord contact, TransportKind kind) =>
+      _carrierKeys.putIfAbsent(
+        '${kind.name}|${contact.deviceId}|${contact.publicKeyBase64}',
         () async => Hkdf(hmac: Hmac.sha256(), outputLength: 32).deriveKey(
           secretKey: await _crypto.sessionKeyFor(contact),
           nonce: const <int>[],
-          info: utf8.encode('conest.matrix.carrier.v1'),
+          info: utf8.encode(_carrierContext(kind)),
         ),
       );
 
-  List<int> _matrixCarrierAad(
+  List<int> _carrierAad(
+    TransportKind kind,
     String senderDeviceId,
     String recipientDeviceId,
   ) => utf8.encode(
-    'conest.matrix.carrier.v1|$senderDeviceId|$recipientDeviceId',
+    '${_carrierContext(kind)}|$senderDeviceId|$recipientDeviceId',
   );
 
-  Future<Uint8List> _sealForMatrix(
+  Future<Uint8List> _sealForCarrier(
+    TransportKind kind,
     String peerDeviceId,
     Uint8List envelope,
   ) async {
     final contact = _contactByDeviceId(peerDeviceId);
     final me = _requireIdentity();
     if (contact == null || !contact.canSendOutbound) {
-      throw StateError('Matrix carries traffic only for approved contacts.');
+      throw StateError(
+        '${kind.label} carries traffic only for approved contacts.',
+      );
     }
     final cipher = Chacha20.poly1305Aead();
     final box = await cipher.encrypt(
       envelope,
-      secretKey: await _matrixCarrierKey(contact),
+      secretKey: await _carrierKey(contact, kind),
       nonce: cipher.newNonce(),
-      aad: _matrixCarrierAad(me.deviceId, contact.deviceId),
+      aad: _carrierAad(kind, me.deviceId, contact.deviceId),
     );
     return Uint8List.fromList([
       ...box.nonce,
@@ -22686,22 +22875,38 @@ class MessengerController extends ChangeNotifier {
     ]);
   }
 
-  bool _matrixSenderPinned(String senderUserId) {
+  /// Whether [sender], as carrier [kind] names it, is the contact's pinned
+  /// address there: the Matrix user, or the identity part of other
+  /// carriers' addresses (before the first `|`).
+  bool _carrierSenderMatches(
+    TransportKind kind,
+    ContactRecord contact,
+    String sender,
+  ) {
+    if (kind == TransportKind.matrix) {
+      return MatrixAddress.decode(contact.matrixAddress)?.userId == sender;
+    }
+    final address = contact.carrierAddress(kind);
+    return address != null && carrierSenderIdentity(address) == sender;
+  }
+
+  bool _carrierSenderPinned(TransportKind kind, String sender) {
     final global = _snapshot.identity?.connectivity;
     if (global == null) return false;
     return _snapshot.contacts.any(
       (contact) =>
           contact.canSendOutbound &&
-          contact.routing.effectivePolicy(TransportKind.matrix, global) !=
+          contact.routing.effectivePolicy(kind, global) !=
               TransportPolicy.disabled &&
-          MatrixAddress.decode(contact.matrixAddress)?.userId == senderUserId,
+          _carrierSenderMatches(kind, contact, sender),
     );
   }
 
-  /// Opens a frame from [senderUserId] with each approved contact pinned to
-  /// that Matrix user; the seal authenticates which one sent it.
-  Future<({String peerDeviceId, Uint8List envelope})?> _openFromMatrix(
-    String senderUserId,
+  /// Opens a frame from [sender] with each approved contact pinned to that
+  /// carrier address; the seal authenticates which one sent it.
+  Future<({String peerDeviceId, Uint8List envelope})?> _openFromCarrier(
+    TransportKind kind,
+    String sender,
     Uint8List sealed,
   ) async {
     final me = _snapshot.identity;
@@ -22709,7 +22914,7 @@ class MessengerController extends ChangeNotifier {
     final cipher = Chacha20.poly1305Aead();
     for (final contact in _snapshot.contacts) {
       if (!contact.canSendOutbound ||
-          MatrixAddress.decode(contact.matrixAddress)?.userId != senderUserId) {
+          !_carrierSenderMatches(kind, contact, sender)) {
         continue;
       }
       try {
@@ -22719,8 +22924,8 @@ class MessengerController extends ChangeNotifier {
             nonce: Uint8List.sublistView(sealed, 0, 12),
             mac: Mac(Uint8List.sublistView(sealed, sealed.length - 16)),
           ),
-          secretKey: await _matrixCarrierKey(contact),
-          aad: _matrixCarrierAad(contact.deviceId, me.deviceId),
+          secretKey: await _carrierKey(contact, kind),
+          aad: _carrierAad(kind, contact.deviceId, me.deviceId),
         );
         return (
           peerDeviceId: contact.deviceId,
@@ -24814,17 +25019,41 @@ class _ControllerMatrixSealer implements MatrixCarrierSealer {
 
   @override
   bool acceptsSender(String senderUserId) =>
-      _controller._matrixSenderPinned(senderUserId);
+      _controller._carrierSenderPinned(TransportKind.matrix, senderUserId);
 
   @override
   Future<Uint8List> seal(String peerDeviceId, Uint8List envelope) =>
-      _controller._sealForMatrix(peerDeviceId, envelope);
+      _controller._sealForCarrier(TransportKind.matrix, peerDeviceId, envelope);
 
   @override
   Future<({String peerDeviceId, Uint8List envelope})?> open(
     String senderUserId,
     Uint8List sealed,
-  ) => _controller._openFromMatrix(senderUserId, sealed);
+  ) => _controller._openFromCarrier(TransportKind.matrix, senderUserId, sealed);
+}
+
+class _ControllerCarrierSealer implements CarrierSealer {
+  _ControllerCarrierSealer(this._controller);
+
+  final MessengerController _controller;
+
+  @override
+  bool acceptsSender(TransportKind kind, String sender) =>
+      _controller._carrierSenderPinned(kind, sender);
+
+  @override
+  Future<Uint8List> seal(
+    TransportKind kind,
+    String peerDeviceId,
+    Uint8List envelope,
+  ) => _controller._sealForCarrier(kind, peerDeviceId, envelope);
+
+  @override
+  Future<({String peerDeviceId, Uint8List envelope})?> open(
+    TransportKind kind,
+    String sender,
+    Uint8List sealed,
+  ) => _controller._openFromCarrier(kind, sender, sealed);
 }
 
 class _MatrixClientCarrierChannel implements MatrixCarrierChannel {

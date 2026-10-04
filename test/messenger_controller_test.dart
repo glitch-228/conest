@@ -12,6 +12,7 @@ import 'package:path/path.dart' as p;
 import 'package:conest/main.dart' as app;
 import 'package:conest/main.dart' show sniffImageMimeType;
 import 'package:conest/src/build_info.dart';
+import 'package:conest/src/carrier.dart';
 import 'package:conest/src/crypto_service.dart';
 import 'package:conest/src/group_file_crypto.dart';
 import 'package:conest/src/group_file_download.dart';
@@ -11747,6 +11748,123 @@ void main() {
     });
   });
 
+  group('generic carriers', () {
+    Future<void> settle(List<MessengerController> controllers) async {
+      for (var round = 0; round < 6; round++) {
+        for (final controller in controllers) {
+          await controller.retryUnacknowledgedMessagesNow();
+          await controller.pollNow();
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    }
+
+    Future<
+      (
+        MessengerController,
+        MessengerController,
+        _FakeCarrierNetwork,
+        _FakeRelayClient,
+      )
+    >
+    linkedPair() async {
+      final network = _FakeCarrierNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      await network.join(alice, 'npub-alice|wss://relay.one');
+      await network.join(bob, 'npub-bob|wss://relay.two');
+      await settle([alice, bob]);
+      return (alice, bob, network, relay);
+    }
+
+    test('contacts learn each other\'s carrier address', () async {
+      final (alice, bob, _, _) = await linkedPair();
+      expect(
+        alice.contacts.single.carrierAddress(TransportKind.nostr),
+        'npub-bob|wss://relay.two',
+      );
+      expect(
+        bob.contacts.single.carrierAddress(TransportKind.nostr),
+        'npub-alice|wss://relay.one',
+      );
+    });
+
+    test('messages arrive sealed over the carrier with its route mark',
+        () async {
+      final (alice, bob, network, relay) = await linkedPair();
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'via nostr');
+      final aliceId = alice.identity!.deviceId;
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (DateTime.now().isBefore(deadline) &&
+          !bob.messagesFor(aliceId).any((m) => m.body == 'via nostr')) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      final received = bob
+          .messagesFor(aliceId)
+          .singleWhere((m) => m.body == 'via nostr');
+      expect(received.route, MessageRoute.nostrCarrier);
+      expect(network.frames, isNotEmpty);
+      for (final (_, _, frame) in network.frames) {
+        final raw = utf8.decode(frame, allowMalformed: true);
+        expect(raw, isNot(contains('via nostr')));
+        expect(raw, isNot(contains('direct_message')));
+      }
+    });
+
+    test('a frame from an unknown sender is ignored', () async {
+      final (alice, bob, network, _) = await linkedPair();
+      network.deliver(
+        'npub-mallory',
+        'npub-alice|wss://relay.one',
+        carrierBinaryFrames(
+          CarrierFraming.nostr,
+          Uint8List.fromList(List<int>.filled(64, 1)),
+        ).single,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(alice.messagesFor(bob.identity!.deviceId), isEmpty);
+    });
+
+    test('turning a carrier off for a contact withdraws the address',
+        () async {
+      final (alice, bob, _, _) = await linkedPair();
+      final bobOnAlice = alice.contacts.single;
+      await alice.updateContactRoutingPreferences(
+        bobOnAlice.deviceId,
+        bobOnAlice.routing.copyWith(
+          transportPolicies: {
+            ...bobOnAlice.routing.transportPolicies,
+            TransportKind.nostr: TransportPolicy.disabled,
+          },
+        ),
+      );
+      await settle([alice, bob]);
+      expect(bob.contacts.single.carrierAddress(TransportKind.nostr), isNull);
+      expect(
+        alice.contacts.single.carrierAddress(TransportKind.nostr),
+        'npub-bob|wss://relay.two',
+      );
+    });
+
+    test('removing a carrier clears the address at the contact', () async {
+      final (alice, bob, _, _) = await linkedPair();
+      await bob.unregisterCarrierTransport(TransportKind.nostr);
+      await settle([alice, bob]);
+      expect(alice.contacts.single.carrierAddress(TransportKind.nostr), isNull);
+    });
+  });
+
   group('forward-secret sessions', () {
     Future<void> settle(
       List<MessengerController> controllers, {
@@ -14207,4 +14325,42 @@ class _ShowCall {
   final String? senderName;
   final String? selfName;
   final List<({String sender, String body, int timestampMs})> recentMessages;
+}
+
+/// An in-memory carrier network: each joined controller gets a Nostr
+/// carrier whose frames go to whichever controller owns the address.
+class _FakeCarrierNetwork {
+  final Map<String, CarrierTransportAdapter> _byAddress = {};
+  final List<(String, String, Uint8List)> frames = [];
+
+  Future<void> join(MessengerController controller, String address) async {
+    final carrier = CarrierTransportAdapter(
+      kind: TransportKind.nostr,
+      sealer: controller.carrierSealer,
+      framing: CarrierFraming.nostr,
+    )..attach(_FakeCarrierChannel(this, address));
+    _byAddress[address] = carrier;
+    await controller.registerCarrierTransport(carrier);
+  }
+
+  void deliver(String fromIdentity, String to, Uint8List frame) {
+    frames.add((fromIdentity, to, frame));
+    _byAddress[to]?.receiveFrame(fromIdentity, frame);
+  }
+}
+
+class _FakeCarrierChannel implements CarrierChannel {
+  _FakeCarrierChannel(this._network, this.localAddress);
+
+  final _FakeCarrierNetwork _network;
+
+  @override
+  final String localAddress;
+
+  @override
+  String get routeLabel => 'fake relays';
+
+  @override
+  Future<void> sendFrame(String address, Uint8List frame) async =>
+      _network.deliver(carrierSenderIdentity(localAddress), address, frame);
 }

@@ -1,8 +1,7 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:math';
 import 'dart:typed_data';
 
+import 'carrier.dart';
 import 'matrix_client.dart';
 import 'transport.dart';
 import 'transport_models.dart';
@@ -79,112 +78,11 @@ const int matrixCarrierMaxSealedBytes = 256 * 1024;
 const int matrixCarrierChunkBytes = 40 * 1024;
 
 /// Splits a sealed envelope into to-device frame contents.
-List<Map<String, Object?>> matrixCarrierFrames(String id, Uint8List sealed) {
-  if (sealed.isEmpty || sealed.length > matrixCarrierMaxSealedBytes) {
-    throw ArgumentError('Sealed envelope size is outside the carrier limit.');
-  }
-  final count =
-      (sealed.length + matrixCarrierChunkBytes - 1) ~/ matrixCarrierChunkBytes;
-  return [
-    for (var index = 0; index < count; index++)
-      {
-        'v': 1,
-        'id': id,
-        'i': index,
-        'n': count,
-        'd': base64Encode(
-          Uint8List.sublistView(
-            sealed,
-            index * matrixCarrierChunkBytes,
-            min((index + 1) * matrixCarrierChunkBytes, sealed.length),
-          ),
-        ),
-      },
-  ];
-}
+List<Map<String, Object?>> matrixCarrierFrames(String id, Uint8List sealed) =>
+    carrierJsonFrames(CarrierFraming.matrix, id, sealed);
 
-/// Reassembles carrier frames per sender with bounded memory. Frames from
-/// one sender arrive in order, but nothing here depends on that.
-class MatrixCarrierReassembler {
-  MatrixCarrierReassembler({
-    DateTime Function()? now,
-    this.expiry = const Duration(minutes: 10),
-    this.maxPending = 64,
-    this.maxPendingPerSender = 8,
-  }) : _now = now ?? DateTime.now;
-
-  final DateTime Function() _now;
-  final Duration expiry;
-  final int maxPending;
-  final int maxPendingPerSender;
-  final Map<String, _PendingEnvelope> _pending = {};
-
-  /// Returns the complete sealed envelope once its last frame arrives.
-  Uint8List? add(String senderUserId, Map<String, dynamic> content) {
-    final id = content['id'];
-    final index = content['i'];
-    final count = content['n'];
-    final data = content['d'];
-    if (content['v'] != 1 ||
-        id is! String ||
-        id.isEmpty ||
-        id.length > 128 ||
-        index is! int ||
-        count is! int ||
-        count < 1 ||
-        count * matrixCarrierChunkBytes >
-            matrixCarrierMaxSealedBytes + matrixCarrierChunkBytes ||
-        index < 0 ||
-        index >= count ||
-        data is! String) {
-      return null;
-    }
-    final Uint8List chunk;
-    try {
-      chunk = base64Decode(data);
-    } on FormatException {
-      return null;
-    }
-    if (chunk.isEmpty || chunk.length > matrixCarrierChunkBytes) return null;
-    if (count == 1) return chunk;
-    final now = _now();
-    _pending.removeWhere(
-      (_, entry) => now.difference(entry.startedAt) > expiry,
-    );
-    final key = '$senderUserId|$id';
-    final entry = _pending.putIfAbsent(key, () {
-      // One sender can only displace its own oldest partial envelope.
-      final own = _pending.keys
-          .where((existing) => existing.startsWith('$senderUserId|'))
-          .toList(growable: false);
-      if (own.length >= maxPendingPerSender) {
-        _pending.remove(own.first);
-      } else if (_pending.length >= maxPending) {
-        _pending.remove(_pending.keys.first);
-      }
-      return _PendingEnvelope(count, now);
-    });
-    if (entry.count != count) {
-      _pending.remove(key);
-      return null;
-    }
-    entry.chunks[index] = chunk;
-    if (entry.chunks.length < count) return null;
-    _pending.remove(key);
-    final builder = BytesBuilder(copy: false);
-    for (var part = 0; part < count; part++) {
-      builder.add(entry.chunks[part]!);
-    }
-    return builder.takeBytes();
-  }
-}
-
-class _PendingEnvelope {
-  _PendingEnvelope(this.count, this.startedAt);
-  final int count;
-  final DateTime startedAt;
-  final Map<int, Uint8List> chunks = {};
-}
+/// Reassembles Matrix carrier frames per sender with bounded memory.
+typedef MatrixCarrierReassembler = CarrierReassembler;
 
 /// Sends carrier frames through a Matrix client that owns the device's only
 /// `/sync` (the full Matrix client); its to-device frames come back through
@@ -271,6 +169,10 @@ class MatrixTransportAdapter implements TransportAdapter {
     reportsPath: true,
     // Envelope plus the seal's nonce and tag must fit the carrier limit.
     maximumPayloadBytes: matrixCarrierMaxSealedBytes - 64,
+    // Several frames go out in sequence and a short rate limit may be
+    // waited out; a cut-off attempt would keep sending in the background
+    // while the caller falls back.
+    sendAttemptTimeout: Duration(seconds: 60),
   );
 
   MatrixSession? get session => _client?.session ?? _externalSession;
