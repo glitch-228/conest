@@ -182,6 +182,7 @@ jobs:
           # strfry keeps its LMDB database in /app/strfry-db.
           docker run -d --name strfry -p 7777:7777 \
             --tmpfs /app/strfry-db:rw,mode=1777 \
+            --ulimit nofile=524288:524288 \
             dockurr/strfry@sha256:599ab3500dbfbe6cb78c668e1892cd9802c192d066df4660e8e3175034a8344d
           for port in 7000 7777; do
             ready=
