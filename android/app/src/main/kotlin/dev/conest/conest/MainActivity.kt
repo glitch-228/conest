@@ -44,6 +44,7 @@ class MainActivity : FlutterActivity() {
         )
         systemChannel = channel
         activeSystemChannel = channel
+        RadioLinkPlugin(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "setBackgroundRuntimeEnabled" -> {
@@ -71,6 +72,7 @@ class MainActivity : FlutterActivity() {
                 "requestVoiceCallMicrophonePermission" -> {
                     requestVoiceCallMicrophonePermission(result)
                 }
+                "requestBluetoothPermissions" -> requestBluetoothPermissions(result)
                 "openVoiceCallMedia" -> openVoiceCallMedia(call, result)
                 "scheduleScheduledMessageWakeup" -> {
                     val timestampMs = call.argument<Number>("timestampMs")?.toLong()
@@ -362,6 +364,30 @@ class MainActivity : FlutterActivity() {
         )
     }
 
+    private var bluetoothPermissionResult: MethodChannel.Result? = null
+
+    /** Android 12+ asks for nearby-device access before scanning or connecting. */
+    private fun requestBluetoothPermissions(result: MethodChannel.Result) {
+        val needed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT,
+            )
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (needed.isEmpty()) {
+            result.success(true)
+            return
+        }
+        if (bluetoothPermissionResult != null) {
+            result.error("permission_pending", "Bluetooth permission is already being requested.", null)
+            return
+        }
+        bluetoothPermissionResult = result
+        requestPermissions(needed.toTypedArray(), BLUETOOTH_PERMISSION_REQUEST)
+    }
+
     @Deprecated("Deprecated in Android, retained for permission callbacks.")
     override fun onRequestPermissionsResult(
         requestCode: Int,
@@ -369,6 +395,14 @@ class MainActivity : FlutterActivity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == BLUETOOTH_PERMISSION_REQUEST) {
+            val result = bluetoothPermissionResult
+            bluetoothPermissionResult = null
+            result?.success(
+                grantResults.isNotEmpty() &&
+                    grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+            )
+        }
         if (requestCode == VOICE_CALL_PERMISSION_REQUEST) {
             val result = voiceCallPermissionResult
             voiceCallPermissionResult = null
@@ -827,6 +861,7 @@ class MainActivity : FlutterActivity() {
         private const val NOTIFICATION_PERMISSION_REQUEST = 6017
         private const val VOICE_CALL_PERMISSION_REQUEST = 6018
         private const val SCHEDULED_MESSAGE_WAKEUP_REQUEST = 6019
+        private const val BLUETOOTH_PERMISSION_REQUEST = 6020
         private const val GROUP_KEY_MESSAGES = "dev.conest.conest.messages"
         private const val SUMMARY_NOTIFICATION_ID = 0x100b1ade
     }

@@ -12278,6 +12278,14 @@ void main() {
         link: ReticulumLink.rnodeSerial,
         radio: RnodeConfig.eu869,
       );
+      await expectLater(
+        alice.enableReticulumCarrier(
+          host: 'not-a-mac',
+          link: ReticulumLink.rnodeBluetooth,
+          radio: RnodeConfig.eu869,
+        ),
+        throwsArgumentError,
+      );
       final saved = alice.reticulumCarrierConfig!;
       expect(saved.link, ReticulumLink.rnodeSerial);
       expect(saved.radio?.frequency, RnodeConfig.eu869.frequency);

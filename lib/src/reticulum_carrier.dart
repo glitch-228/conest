@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'carrier.dart';
 import 'nostr/secp256k1.dart' show hexDecode, hexEncode;
+import 'radio/android_radio_link.dart';
 import 'radio/byte_link.dart';
 import 'reticulum/endpoint.dart';
 import 'reticulum/identity.dart';
@@ -91,11 +92,15 @@ enum ReticulumLink {
   /// A node running rnsd, over its TCP server interface.
   rnsd,
 
-  /// An RNode radio on a serial port of this computer (Linux, macOS).
+  /// An RNode radio on USB: a serial port on Linux and macOS, a USB
+  /// device on Android.
   rnodeSerial,
 
   /// An RNode radio offering its serial protocol over Wi-Fi (TCP).
   rnodeTcp,
+
+  /// An RNode radio over Bluetooth LE (Android).
+  rnodeBluetooth,
 }
 
 /// The saved Reticulum carrier: its identity, destination name and how it
@@ -132,12 +137,17 @@ class ReticulumCarrierConfig {
 
   bool get isRadio => link != ReticulumLink.rnsd;
 
-  String get label => link == ReticulumLink.rnodeSerial ? host : '$host:$port';
+  String get label =>
+      link == ReticulumLink.rnodeSerial || link == ReticulumLink.rnodeBluetooth
+      ? host
+      : '$host:$port';
 
-  /// Whether reaching [host] needs the internet: anything but this machine
-  /// or a private network. Such links obey the Online switch.
+  /// Whether reaching [host] needs the internet: anything but a radio
+  /// attached here, this machine or a private network. Such links obey the
+  /// Online switch.
   bool get usesInternet =>
-      link != ReticulumLink.rnodeSerial && !isLocalNetworkHost(host);
+      (link == ReticulumLink.rnsd || link == ReticulumLink.rnodeTcp) &&
+      !isLocalNetworkHost(host);
 
   Map<String, Object?> toJson() => {
     'identityKey': identityKeyHex,
@@ -212,8 +222,17 @@ Future<RnsInterface> connectReticulum(ReticulumCarrierConfig config) async {
       return RnsTcpInterface.connect(config.host, config.port);
     case ReticulumLink.rnodeSerial:
       return RnodeInterface.open(
-        await UnixSerialLink.open(config.host),
+        Platform.isAndroid
+            ? await AndroidRadioLinks.openUsb(config.host)
+            : await UnixSerialLink.open(config.host),
         config.radio!,
+      );
+    case ReticulumLink.rnodeBluetooth:
+      return RnodeInterface.open(
+        await AndroidRadioLinks.openBle(config.host),
+        config.radio!,
+        // Bluetooth radios answer slower than serial ones.
+        timeout: const Duration(seconds: 10),
       );
     case ReticulumLink.rnodeTcp:
       return RnodeInterface.open(

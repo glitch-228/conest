@@ -2,6 +2,10 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        // Only usb-serial-for-android comes from JitPack.
+        maven("https://jitpack.io") {
+            content { includeGroup("com.github.mik3y") }
+        }
     }
 }
 

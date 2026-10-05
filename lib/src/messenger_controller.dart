@@ -3508,15 +3508,20 @@ class MessengerController extends ChangeNotifier {
     _requireIdentity();
     final trimmed = host.trim();
     final serial = link == ReticulumLink.rnodeSerial;
+    final bluetooth = link == ReticulumLink.rnodeBluetooth;
     if (trimmed.isEmpty ||
         (serial
             ? !RegExp(r'^/dev/[A-Za-z0-9._/-]+$').hasMatch(trimmed)
+            : bluetooth
+            ? !RegExp(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$').hasMatch(trimmed)
             : trimmed.contains(RegExp(r'[\s/]'))) ||
         port < 1 ||
         port > 65535) {
       throw ArgumentError(
         serial
-            ? 'Choose the serial device of the RNode, such as /dev/ttyACM0.'
+            ? 'Choose the USB device of the RNode, such as /dev/ttyACM0.'
+            : bluetooth
+            ? 'Choose the RNode from the Bluetooth scan.'
             : 'Enter the Reticulum node address and TCP port.',
       );
     }

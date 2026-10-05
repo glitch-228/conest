@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../messenger_controller.dart';
+import '../radio/android_radio_link.dart';
 import '../reticulum/rnode_interface.dart';
 import '../reticulum_carrier.dart';
 
@@ -48,7 +49,30 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
 
   static String _mhz(int hz) => (hz / 1000000).toStringAsFixed(3);
 
-  static bool get _serialAvailable => Platform.isLinux || Platform.isMacOS;
+  static bool get _serialAvailable =>
+      Platform.isLinux || Platform.isMacOS || Platform.isAndroid;
+
+  /// Devices found for the chosen link: serial ports or USB devices, or
+  /// Bluetooth radios after a scan.
+  List<(String, String)> _devices = const [];
+
+  Future<void> _findDevices() async {
+    final found = switch (_link) {
+      ReticulumLink.rnodeSerial when Platform.isAndroid => [
+        for (final device in await AndroidRadioLinks.listUsb())
+          if (device.supported) (device.id, device.name),
+      ],
+      ReticulumLink.rnodeSerial => [
+        for (final path in _serialDevices()) (path, path),
+      ],
+      ReticulumLink.rnodeBluetooth => [
+        for (final device in await AndroidRadioLinks.scanBle())
+          (device.address, device.name.isEmpty ? device.address : device.name),
+      ],
+      _ => const <(String, String)>[],
+    };
+    if (mounted) setState(() => _devices = found);
+  }
 
   /// Serial devices that may be an RNode.
   static List<String> _serialDevices() {
@@ -156,9 +180,9 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
     }
     return widget.controller.enableReticulumCarrier(
       host: _host.text,
-      port: _link == ReticulumLink.rnodeSerial
-          ? defaultReticulumPort
-          : int.tryParse(_port.text.trim()) ?? -1,
+      port: _link == ReticulumLink.rnsd || _link == ReticulumLink.rnodeTcp
+          ? int.tryParse(_port.text.trim()) ?? -1
+          : defaultReticulumPort,
       link: _link,
       radio: radio,
     );
@@ -229,6 +253,11 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
                 value: ReticulumLink.rnodeSerial,
                 label: Text('RNode on USB'),
               ),
+            if (Platform.isAndroid)
+              const ButtonSegment(
+                value: ReticulumLink.rnodeBluetooth,
+                label: Text('RNode on Bluetooth'),
+              ),
             const ButtonSegment(
               value: ReticulumLink.rnodeTcp,
               label: Text('RNode on Wi-Fi'),
@@ -237,17 +266,31 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
           selected: {_link},
           onSelectionChanged: _busy
               ? null
-              : (selected) => setState(() => _link = selected.first),
+              : (selected) => setState(() {
+                  _link = selected.first;
+                  _devices = const [];
+                }),
         ),
         const SizedBox(height: 8),
-        if (_link == ReticulumLink.rnodeSerial)
+        if (_link == ReticulumLink.rnodeSerial ||
+            _link == ReticulumLink.rnodeBluetooth)
           Wrap(
             spacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              for (final device in _serialDevices())
+              OutlinedButton.icon(
+                onPressed: _busy ? null : () => _run(_findDevices),
+                icon: const Icon(Icons.search, size: 18),
+                label: Text(
+                  _link == ReticulumLink.rnodeBluetooth
+                      ? 'Scan for radios'
+                      : 'Find devices',
+                ),
+              ),
+              for (final (id, name) in _devices)
                 ActionChip(
-                  label: Text(device),
-                  onPressed: () => setState(() => _host.text = device),
+                  label: Text(name),
+                  onPressed: () => setState(() => _host.text = id),
                 ),
             ],
           ),
@@ -261,14 +304,16 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
                 decoration: InputDecoration(
                   labelText: switch (_link) {
                     ReticulumLink.rnsd => 'Node address (rnsd)',
-                    ReticulumLink.rnodeSerial => 'Serial device',
+                    ReticulumLink.rnodeSerial => 'USB device',
                     ReticulumLink.rnodeTcp => 'RNode address',
+                    ReticulumLink.rnodeBluetooth => 'Bluetooth address',
                   },
                   isDense: true,
                 ),
               ),
             ),
-            if (_link != ReticulumLink.rnodeSerial) ...[
+            if (_link == ReticulumLink.rnsd ||
+                _link == ReticulumLink.rnodeTcp) ...[
               const SizedBox(width: 8),
               Expanded(
                 child: TextField(

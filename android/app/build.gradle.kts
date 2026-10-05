@@ -170,3 +170,9 @@ gradle.taskGraph.whenReady {
         )
     }
 }
+
+dependencies {
+    // USB serial drivers (CDC-ACM, CP210x, CH34x, FTDI) for radios such as
+    // RNodes on Android. MIT licensed; pinned.
+    implementation("com.github.mik3y:usb-serial-for-android:3.11.0")
+}
