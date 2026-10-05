@@ -81,13 +81,15 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
               Icons.circle,
               size: 12,
               color: switch (channel?.state) {
-                BitchatCarrierState.running => Colors.green,
+                BitchatCarrierState.running when channel?.lastError == null =>
+                  Colors.green,
                 BitchatCarrierState.starting => Colors.amber,
                 _ => theme.colorScheme.error,
               },
             ),
             title: Text(switch (channel?.state) {
-              BitchatCarrierState.running => 'Bluetooth mesh on',
+              BitchatCarrierState.running when channel?.lastError == null =>
+                'Bluetooth mesh on',
               BitchatCarrierState.starting => 'Starting Bluetooth',
               _ => 'Bluetooth unavailable',
             }),

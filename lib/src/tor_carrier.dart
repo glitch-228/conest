@@ -178,7 +178,7 @@ class NativeTorApi implements TorApi {
   Future<void> send(String onion, Uint8List frame) => _queue.request('send', {
     'onion': onion,
     'data': base64Encode(frame),
-  }, const Duration(minutes: 2));
+  }, const Duration(minutes: 3));
 
   @override
   Future<void> stop() => _queue.request('stop');
@@ -348,7 +348,7 @@ CarrierTransportAdapter createTorCarrierAdapter({
   sealer: sealer,
   framing: torFraming,
   path: TransportPathKind.direct,
-  sendAttemptTimeout: const Duration(minutes: 2),
+  sendAttemptTimeout: const Duration(minutes: 3),
   isValidAddress: isValidTorAddress,
   now: now,
 );

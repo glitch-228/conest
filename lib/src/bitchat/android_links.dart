@@ -21,6 +21,10 @@ class AndroidBitchatLinks implements BitchatLinkLayer {
     final links = AndroidBitchatLinks._();
     links._subscription = _events.receiveBroadcastStream().listen((event) {
       if (event is! Map) return;
+      if (event.containsKey('problem')) {
+        links._problems.add(event['problem'] as String?);
+        return;
+      }
       final link = event['link'];
       if (link is! String) return;
       final data = event['data'];
@@ -37,6 +41,7 @@ class AndroidBitchatLinks implements BitchatLinkLayer {
       await links._subscription.cancel();
       await links._received.close();
       await links._changes.close();
+      await links._problems.close();
       rethrow;
     }
     return links;
@@ -45,6 +50,7 @@ class AndroidBitchatLinks implements BitchatLinkLayer {
   late final StreamSubscription<Object?> _subscription;
   final _received = StreamController<(String, Uint8List)>.broadcast();
   final _changes = StreamController<void>.broadcast();
+  final _problems = StreamController<String?>.broadcast();
 
   /// Links to neighbours currently connected.
   final Set<String> neighbours = {};
@@ -55,8 +61,18 @@ class AndroidBitchatLinks implements BitchatLinkLayer {
   Stream<(String, Uint8List)> get received => _received.stream;
 
   @override
-  Future<void> broadcast(Uint8List packet, {String? except}) => _methods
-      .invokeMethod<void>('broadcast', {'bytes': packet, 'except': except});
+  Stream<String?> get problems => _problems.stream;
+
+  @override
+  Future<void> broadcast(Uint8List packet, {String? except}) async {
+    final sent = await _methods.invokeMethod<int>('broadcast', {
+      'bytes': packet,
+      'except': except,
+    });
+    if (except == null && (sent ?? 0) == 0) {
+      throw StateError('No phones nearby.');
+    }
+  }
 
   @override
   Future<void> close() async {
@@ -66,5 +82,6 @@ class AndroidBitchatLinks implements BitchatLinkLayer {
     } catch (_) {}
     await _received.close();
     await _changes.close();
+    await _problems.close();
   }
 }

@@ -12566,7 +12566,10 @@ void main() {
         ..connect('alice', 'relay')
         ..connect('relay', 'bob');
       // A bitchat phone between them that only relays.
-      BitchatNode(links: area.node('relay'), onPrivate: (_, _) => false);
+      BitchatNode(
+        links: area.node('relay'),
+        onPrivate: (_, _) => BitchatPrivate.notMine,
+      );
       final relay = _FakeRelayClient();
       final alice = await _createController(
         relayClient: relay,

@@ -31,8 +31,17 @@ class FakeBleLinks implements BitchatLinkLayer {
   @override
   Stream<(String, Uint8List)> get received => _received.stream;
 
+  /// Problems to report, such as Bluetooth turning off.
+  final problemReports = StreamController<String?>.broadcast();
+
+  @override
+  Stream<String?> get problems => problemReports.stream;
+
   @override
   Future<void> broadcast(Uint8List packet, {String? except}) async {
+    if (except == null && _neighbours.isEmpty) {
+      throw StateError('No phones nearby.');
+    }
     for (final neighbour in _neighbours) {
       if (neighbour == except) continue;
       _area.airtime.add(packet);

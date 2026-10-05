@@ -12,15 +12,34 @@ abstract interface class BitchatLinkLayer {
   /// Packets from neighbours, with the link they came on.
   Stream<(String, Uint8List)> get received;
 
-  /// Sends [packet] to every neighbour except the link [except].
+  /// Sends [packet] to every neighbour except the link [except]. A packet
+  /// of this device's own (no [except]) fails when no neighbour is there.
   Future<void> broadcast(Uint8List packet, {String? except});
+
+  /// Why the mesh cannot work right now (such as Bluetooth being off), or
+  /// null once it can again.
+  Stream<String?> get problems;
 
   Future<void> close();
 }
 
-/// Largest Conest payload per packet: small enough that bitchat never
-/// needs to fragment the packet (512-byte BLE frames with padding).
-const int bitchatPayloadBytes = 443;
+/// What a private packet addressed to someone turned out to be.
+enum BitchatPrivate {
+  /// For another device: relay it.
+  notMine,
+
+  /// For this device, read.
+  accepted,
+
+  /// Addressed to this device but not authentic: dropped, and not
+  /// remembered, so the genuine packet still gets through.
+  rejected,
+}
+
+/// Largest Conest payload per packet: with the header, both ids and a
+/// signature, small enough that bitchat never needs to fragment the packet
+/// (512-byte BLE frames with padding).
+const int bitchatPayloadBytes = 400;
 
 /// Packet types relayed for others: bitchat's own. Anything else is
 /// dropped rather than flooded.
@@ -62,9 +81,9 @@ class BitchatNode {
   /// Relay other peers' packets, as every bitchat device does.
   final bool relay;
 
-  /// A private packet with a recipient, with its payload expanded; returns
-  /// true when it was for this device, which then does not relay it.
-  final bool Function(BitchatPacket packet, Uint8List payload) onPrivate;
+  /// A private packet with a recipient, with its payload expanded.
+  final BitchatPrivate Function(BitchatPacket packet, Uint8List payload)
+  onPrivate;
 
   late final StreamSubscription<(String, Uint8List)> _subscription;
   final LinkedHashSet<String> _seen = LinkedHashSet();
@@ -91,16 +110,24 @@ class BitchatNode {
     if (packet == null) return;
     final skew = _now().millisecondsSinceEpoch - packet.timestamp;
     if (skew.abs() > bitchatClockWindow.inMilliseconds) return;
-    if (!_remember(packet.dedupKey)) return;
+    final key = packet.dedupKey;
+    if (_seen.contains(key)) return;
     if (packet.type == BitchatType.noiseEncrypted &&
         packet.recipientId != null) {
       final payload = packet.compressed
           ? _inflate(packet.payload, packet.version)
           : packet.payload;
-      if (payload != null && onPrivate(packet, payload)) return;
+      final kind = payload == null
+          ? BitchatPrivate.notMine
+          : onPrivate(packet, payload);
+      if (kind == BitchatPrivate.accepted) _remember(key);
+      if (kind != BitchatPrivate.notMine) return;
     }
+    // A copy that goes no further is not remembered: a copy sent with TTL 0
+    // must not stop the original from being relayed.
+    if (packet.ttl == 0) return;
+    _remember(key);
     if (!relay ||
-        packet.ttl == 0 ||
         !_relayedTypes.contains(packet.type) ||
         !_relayAllowed(link)) {
       return;
@@ -137,7 +164,9 @@ class BitchatNode {
     return true;
   }
 
-  /// A compressed payload: the original size, then raw deflate.
+  /// A compressed payload: the original size, then raw deflate. Inflating
+  /// stops as soon as it passes the stated size, so a small packet cannot
+  /// expand into megabytes.
   static Uint8List? _inflate(Uint8List payload, int version) {
     final sizeBytes = version >= 2 ? 4 : 2;
     if (payload.length <= sizeBytes) return null;
@@ -145,15 +174,19 @@ class BitchatNode {
     for (var index = 0; index < sizeBytes; index++) {
       size = (size << 8) | payload[index];
     }
-    if (size == 0 || size > 4096) return null;
+    if (size == 0 || size > 2048) return null;
+    final out = _BoundedSink(size);
     try {
-      final out = ZLibDecoder(
-        raw: true,
-      ).convert(Uint8List.sublistView(payload, sizeBytes));
-      return out.length == size ? Uint8List.fromList(out) : null;
+      ZLibDecoder(raw: true).startChunkedConversion(out)
+        ..add(Uint8List.sublistView(payload, sizeBytes))
+        ..close();
     } catch (_) {
+      bitchatInflatedBytes = out.bytes.length;
       return null;
     }
+    final bytes = out.bytes.takeBytes();
+    bitchatInflatedBytes = bytes.length;
+    return bytes.length == size ? bytes : null;
   }
 }
 
@@ -161,4 +194,27 @@ class BitchatNode {
 Uint8List randomBitchatBytes(int length, [Random? random]) {
   final source = random ?? Random.secure();
   return Uint8List.fromList(List.generate(length, (_) => source.nextInt(256)));
+}
+
+/// Bytes the last compressed payload expanded to before it was kept or
+/// dropped; tests check that a bomb stops early.
+int bitchatInflatedBytes = 0;
+
+class _TooLarge implements Exception {}
+
+/// Collects inflated bytes and throws once there are more than [limit].
+class _BoundedSink implements Sink<List<int>> {
+  _BoundedSink(this.limit);
+
+  final int limit;
+  final bytes = BytesBuilder(copy: true);
+
+  @override
+  void add(List<int> chunk) {
+    if (bytes.length + chunk.length > limit) throw _TooLarge();
+    bytes.add(chunk);
+  }
+
+  @override
+  void close() {}
 }

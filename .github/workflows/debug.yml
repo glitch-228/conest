@@ -192,12 +192,14 @@ jobs:
       - name: Build lyrebird and fetch obfs4 bridges
         run: |
           tool/build_lyrebird.sh linux-x64 "$RUNNER_TEMP/lyrebird"
-          # Tor's default bridges for censored users (Moat API).
-          curl -sf -X POST -H 'Content-Type: application/vnd.api+json' \
+          # Tor's default bridges for censored users (Moat API); when Moat
+          # is down the bridge test is skipped rather than failing the job.
+          (curl -sf --max-time 60 -X POST \
+            -H 'Content-Type: application/vnd.api+json' \
             -d '{"transports":["obfs4"]}' \
             https://bridges.torproject.org/moat/circumvention/defaults \
             | jq -r '.settings[].bridges.bridge_strings // [] | .[]' \
-            > "$RUNNER_TEMP/bridges.txt"
+            > "$RUNNER_TEMP/bridges.txt") || : > "$RUNNER_TEMP/bridges.txt"
           wc -l "$RUNNER_TEMP/bridges.txt"
       - name: Send frames through this device's own onion service, then over obfs4
         env:

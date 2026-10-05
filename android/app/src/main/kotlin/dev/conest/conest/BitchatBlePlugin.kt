@@ -43,9 +43,11 @@ import java.util.UUID
  * for that service, connects, subscribes). Every neighbour is a link that
  * carries whole bitchat packets; the mesh logic runs in Dart.
  *
- * Methods on [METHODS]: start, stop, broadcast {bytes, except}. Events on
- * [EVENTS]: {link, data} for received packets, {link, up} when a
- * neighbour comes or goes and {error} when Bluetooth refuses something.
+ * Methods on [METHODS]: start, stop, broadcast {bytes, except} (answers how
+ * many neighbours got the packet). Events on [EVENTS]: {link, data} for
+ * received packets, {link, up} when a neighbour comes or goes and
+ * {problem} when Bluetooth is off or refuses something (null once it works
+ * again).
  * All state lives on the main thread.
  *
  * Links only carry packets once both sides can take a whole 512-byte
@@ -71,6 +73,10 @@ class BitchatBlePlugin(
         private const val NOTIFY_WATCHDOG_MS = 2_000L
         private const val CLIENT_SETUP_MS = 15_000L
         private const val MAX_INBOUND_PER_SECOND = 40
+        private const val WRITE_WATCHDOG_MS = 5_000L
+
+        /** A link silent this long may make room for a new neighbour. */
+        private const val IDLE_LINK_MS = 120_000L
         private var current: BitchatBlePlugin? = null
     }
 
@@ -90,6 +96,7 @@ class BitchatBlePlugin(
     private val clients = LinkedHashMap<String, ClientLink>()
     private val backoff = HashMap<String, Pair<Long, Long>>()
     private val inbound = HashMap<String, Pair<Long, Int>>()
+    private val lastHeard = HashMap<String, Long>()
     private var stateReceiver: BroadcastReceiver? = null
 
     private class Outgoing(val bytes: ByteArray) {
@@ -98,6 +105,7 @@ class BitchatBlePlugin(
 
     private inner class ServerLink(val device: BluetoothDevice) {
         val queue = ArrayDeque<Outgoing>()
+        val since = SystemClock.elapsedRealtime()
     }
 
     private inner class ClientLink(val address: String) {
@@ -105,7 +113,9 @@ class BitchatBlePlugin(
         var characteristic: BluetoothGattCharacteristic? = null
         val writes = ArrayDeque<Outgoing>()
         var writing = false
+        var writeToken = 0
         var ready = false
+        var since = SystemClock.elapsedRealtime()
     }
 
     init {
@@ -127,17 +137,29 @@ class BitchatBlePlugin(
         main.post { events?.success(event) }
     }
 
+    private fun problem(text: String?) = emit(mapOf("problem" to text))
+
+    /** Whether [link] has been silent long enough to give up its slot. */
+    private fun idle(link: String, since: Long): Boolean =
+        SystemClock.elapsedRealtime() - (lastHeard[link] ?: since) > IDLE_LINK_MS
+
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         try {
             when (call.method) {
                 "start" -> {
+                    val adapter = manager.adapter ?: throw IllegalStateException("Bluetooth is missing.")
                     wanted = true
                     watchAdapter()
-                    try {
-                        startAll()
-                    } catch (error: Throwable) {
-                        shutdown()
-                        throw error
+                    if (adapter.isEnabled) {
+                        try {
+                            startAll()
+                        } catch (error: Throwable) {
+                            shutdown()
+                            throw error
+                        }
+                    } else {
+                        // Starts by itself once Bluetooth is turned on.
+                        problem("Bluetooth is off.")
                     }
                     result.success(null)
                 }
@@ -145,13 +167,12 @@ class BitchatBlePlugin(
                     shutdown()
                     result.success(null)
                 }
-                "broadcast" -> {
+                "broadcast" -> result.success(
                     broadcast(
                         call.argument<ByteArray>("bytes") ?: ByteArray(0),
                         call.argument<String>("except"),
-                    )
-                    result.success(null)
-                }
+                    ),
+                )
                 else -> result.notImplemented()
             }
         } catch (error: Throwable) {
@@ -168,12 +189,16 @@ class BitchatBlePlugin(
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(receiverContext: Context, intent: Intent) {
                 when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
-                    BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> stopAll()
+                    BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> {
+                        stopAll()
+                        if (wanted) problem("Bluetooth is off.")
+                    }
                     BluetoothAdapter.STATE_ON -> if (wanted) {
                         try {
                             startAll()
+                            problem(null)
                         } catch (error: Throwable) {
-                            emit(mapOf("error" to (error.message ?: error.toString())))
+                            problem(error.message ?: error.toString())
                         }
                     }
                 }
@@ -292,6 +317,7 @@ class BitchatBlePlugin(
         serverMtu.clear()
         preparedWrites.clear()
         inbound.clear()
+        lastHeard.clear()
         notifying = null
         notifyToken++
     }
@@ -299,7 +325,7 @@ class BitchatBlePlugin(
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartFailure(errorCode: Int) {
             if (errorCode == AdvertiseCallback.ADVERTISE_FAILED_ALREADY_STARTED) return
-            emit(mapOf("error" to "Bluetooth advertising failed ($errorCode)."))
+            problem("Bluetooth advertising failed ($errorCode).")
             // Try again later: others still find this phone once it works.
             main.postDelayed({
                 if (active) {
@@ -318,7 +344,7 @@ class BitchatBlePlugin(
         }
 
         override fun onScanFailed(errorCode: Int) {
-            emit(mapOf("error" to "Bluetooth scanning failed ($errorCode)."))
+            problem("Bluetooth scanning failed ($errorCode).")
         }
     }
 
@@ -332,13 +358,18 @@ class BitchatBlePlugin(
     @SuppressLint("MissingPermission")
     private fun connectTo(device: BluetoothDevice) {
         val address = device.address
-        if (!active || clients.containsKey(address) ||
-            servers.containsKey(address) || clients.size >= MAX_CLIENT_LINKS
-        ) {
-            return
-        }
+        if (!active || clients.containsKey(address) || servers.containsKey(address)) return
         val until = backoff[address]?.first
         if (until != null && SystemClock.elapsedRealtime() < until) return
+        if (clients.size >= MAX_CLIENT_LINKS) {
+            // Make room only by dropping a neighbour that has gone quiet, so
+            // devices that connect and say nothing cannot hold every slot.
+            val quiet = clients.values
+                .filter { it.ready && idle("c:${it.address}", it.since) }
+                .minByOrNull { lastHeard["c:${it.address}"] ?: it.since }
+                ?: return
+            dropClient(quiet, failed = true)
+        }
         val link = ClientLink(address)
         clients[address] = link
         link.gatt = device.connectGatt(context, false, clientCallback(link), BluetoothDevice.TRANSPORT_LE)
@@ -401,7 +432,9 @@ class BitchatBlePlugin(
         }
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-            main.post { linkUp(link) }
+            main.post {
+                if (status == BluetoothGatt.GATT_SUCCESS) linkUp(link) else dropClient(link, failed = true)
+            }
         }
 
         override fun onCharacteristicWrite(
@@ -439,6 +472,7 @@ class BitchatBlePlugin(
             val (window, count) = inbound[link] ?: (second to 0)
             val next = if (window == second) count + 1 else 1
             inbound[link] = second to next
+            lastHeard[link] = SystemClock.elapsedRealtime()
             if (next <= MAX_INBOUND_PER_SECOND) {
                 events?.success(mapOf("link" to link, "data" to value))
             }
@@ -448,6 +482,7 @@ class BitchatBlePlugin(
     private fun linkUp(link: ClientLink) {
         if (link.ready || clients[link.address] !== link) return
         link.ready = true
+        link.since = SystemClock.elapsedRealtime()
         backoff.remove(link.address)
         emit(mapOf("link" to "c:${link.address}", "up" to true))
         pumpClient(link)
@@ -464,6 +499,7 @@ class BitchatBlePlugin(
         } catch (_: Throwable) {
         }
         inbound.remove("c:${link.address}")
+        lastHeard.remove("c:${link.address}")
         if (link.ready) emit(mapOf("link" to "c:${link.address}", "up" to false))
     }
 
@@ -494,6 +530,14 @@ class BitchatBlePlugin(
         if (started) {
             link.writes.poll()
             link.writing = true
+            val token = ++link.writeToken
+            // onCharacteristicWrite may never come if the link half-dies.
+            main.postDelayed({
+                if (link.writing && link.writeToken == token) {
+                    link.writing = false
+                    pumpClient(link)
+                }
+            }, WRITE_WATCHDOG_MS)
         } else if (++head.attempts >= MAX_ATTEMPTS) {
             link.writes.poll()
             main.postDelayed({ pumpClient(link) }, 50)
@@ -509,6 +553,7 @@ class BitchatBlePlugin(
                     serverMtu.remove(device.address)
                     preparedWrites.remove(device.address)
                     inbound.remove("s:${device.address}")
+                    lastHeard.remove("s:${device.address}")
                     removeServerLink(device.address)
                 }
             }
@@ -587,6 +632,19 @@ class BitchatBlePlugin(
         ) {
             main.post {
                 val enable = value != null && value.isNotEmpty() && value[0].toInt() != 0
+                if (enable && !servers.containsKey(device.address) && servers.size >= MAX_SERVER_LINKS) {
+                    // Make room by dropping a central that has gone quiet.
+                    servers.values
+                        .filter { idle("s:${it.device.address}", it.since) }
+                        .minByOrNull { lastHeard["s:${it.device.address}"] ?: it.since }
+                        ?.let { quiet ->
+                            try {
+                                server?.cancelConnection(quiet.device)
+                            } catch (_: Throwable) {
+                            }
+                            removeServerLink(quiet.device.address)
+                        }
+                }
                 val full = enable && !servers.containsKey(device.address) &&
                     servers.size >= MAX_SERVER_LINKS
                 if (responseNeeded) {
@@ -610,6 +668,9 @@ class BitchatBlePlugin(
 
         override fun onNotificationSent(device: BluetoothDevice, status: Int) {
             main.post {
+                // A late answer for a notification the watchdog gave up on
+                // must not end the one in flight to someone else.
+                if (notifying?.device?.address != device.address) return@post
                 notifying = null
                 notifyToken++
                 pumpNotifications()
@@ -674,20 +735,26 @@ class BitchatBlePlugin(
         }
     }
 
-    private fun broadcast(bytes: ByteArray, except: String?) {
-        if (bytes.isEmpty() || bytes.size > MAX_PACKET) return
-        main.post {
-            if (!active) return@post
-            for (link in clients.values) {
-                if ("c:${link.address}" == except || !link.ready) continue
-                if (link.writes.size < MAX_QUEUED_PER_LINK) link.writes.add(Outgoing(bytes))
-                pumpClient(link)
+    /** Queues [bytes] for every neighbour but [except]; answers how many. Main thread. */
+    private fun broadcast(bytes: ByteArray, except: String?): Int {
+        if (!active || bytes.isEmpty() || bytes.size > MAX_PACKET) return 0
+        var queued = 0
+        for (link in clients.values.toList()) {
+            if ("c:${link.address}" == except || !link.ready) continue
+            if (link.writes.size < MAX_QUEUED_PER_LINK) {
+                link.writes.add(Outgoing(bytes))
+                queued++
             }
-            for ((address, link) in servers) {
-                if ("s:$address" == except) continue
-                if (link.queue.size < MAX_QUEUED_PER_LINK) link.queue.add(Outgoing(bytes))
-            }
-            pumpNotifications()
+            pumpClient(link)
         }
+        for ((address, link) in servers) {
+            if ("s:$address" == except || (serverMtu[address] ?: 23) < MIN_MTU) continue
+            if (link.queue.size < MAX_QUEUED_PER_LINK) {
+                link.queue.add(Outgoing(bytes))
+                queued++
+            }
+        }
+        pumpNotifications()
+        return queued
     }
 }

@@ -3725,7 +3725,7 @@ class MessengerController extends ChangeNotifier {
     final channel = BitchatCarrierChannel(
       config: config,
       connector: _bitchatConnector ?? AndroidBitchatLinks.start,
-      keyFor: _bitchatPairKey,
+      keyFor: _bitchatPairKeys,
       onFrame: adapter.receiveFrame,
       onStatusChanged: notifyListeners,
       now: _now,
@@ -3736,24 +3736,27 @@ class MessengerController extends ChangeNotifier {
     await registerCarrierTransport(adapter, advertise: advertise);
   }
 
-  /// The key a contact pair derives its Bluetooth mesh ids and MACs from,
-  /// for the contact with mesh [address].
-  Future<Uint8List?> _bitchatPairKey(String address) async {
-    final contact = _snapshot.contacts
-        .where(
-          (contact) =>
-              contact.canSendOutbound &&
-              contact.carrierAddress(TransportKind.bitchat) == address,
-        )
-        .firstOrNull;
-    if (contact == null) return null;
-    final key = await Hkdf(hmac: Hmac.sha256(), outputLength: 32).deriveKey(
-      secretKey: await _crypto.sessionKeyFor(contact),
-      nonce: const <int>[],
-      info: utf8.encode('conest.bitchat.ids.v1'),
-    );
-    return Uint8List.fromList(await key.extractBytes());
-  }
+  /// The keys contact pairs derive their Bluetooth mesh ids and MACs from,
+  /// for each contact with mesh [address] (normally one).
+  Future<List<Uint8List>> _bitchatPairKeys(String address) async => [
+    for (final contact in _snapshot.contacts)
+      if (contact.canSendOutbound &&
+          contact.carrierAddress(TransportKind.bitchat) == address)
+        await _bitchatPairKeyCache.putIfAbsent(
+          '${contact.deviceId}|${contact.publicKeyBase64}',
+          () async {
+            final key = await Hkdf(hmac: Hmac.sha256(), outputLength: 32)
+                .deriveKey(
+                  secretKey: await _crypto.sessionKeyFor(contact),
+                  nonce: const <int>[],
+                  info: utf8.encode('conest.bitchat.ids.v1'),
+                );
+            return Uint8List.fromList(await key.extractBytes());
+          },
+        ),
+  ];
+
+  final Map<String, Future<Uint8List>> _bitchatPairKeyCache = {};
 
   /// The MeshCore carrier's saved settings, if set up.
   MeshCoreCarrierConfig? get meshCoreCarrierConfig =>

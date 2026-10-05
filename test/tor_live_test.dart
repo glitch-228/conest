@@ -3,9 +3,9 @@
 // its onion service and sends frames to itself through it.
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:conest/src/tor_carrier.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -57,12 +57,21 @@ void main() {
         }
       }
       await api.send(address, Uint8List.fromList([1, 2, 3]));
-      while (frames.length < 2 && DateTime.now().isBefore(deadline)) {
+      bool arrived(List<int> frame) =>
+          frames.any((got) => listEquals(got, frame));
+      // A retried send may deliver a frame twice; carriers drop duplicates.
+      while (!(arrived(big) && arrived([1, 2, 3])) &&
+          DateTime.now().isBefore(deadline)) {
         await Future<void>.delayed(const Duration(milliseconds: 200));
       }
-      expect(frames, hasLength(2));
-      expect(frames.first, big);
-      expect(frames.last, [1, 2, 3]);
+      expect(arrived(big), isTrue);
+      expect(arrived([1, 2, 3]), isTrue);
+      expect(
+        frames.every(
+          (got) => listEquals(got, big) || listEquals(got, [1, 2, 3]),
+        ),
+        isTrue,
+      );
 
       // Stopping and starting again keeps the address (keys persist).
       await api.stop();

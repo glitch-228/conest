@@ -87,7 +87,7 @@ void main() {
 
     BitchatNode relay(FakeBleNeighbourhood area, String name) => BitchatNode(
       links: area.node(name),
-      onPrivate: (_, _) => false,
+      onPrivate: (_, _) => BitchatPrivate.notMine,
       now: () => clock,
     );
 
@@ -96,12 +96,15 @@ void main() {
       String name,
       String address,
       String peer,
-      List<(String, Uint8List)> got,
-    ) async {
+      List<(String, Uint8List)> got, {
+      List<Uint8List> extraKeys = const [],
+    }) async {
       final result = BitchatCarrierChannel(
         config: BitchatCarrierConfig(address: address),
         connector: () async => area.node(name),
-        keyFor: (candidate) async => candidate == peer ? key : null,
+        keyFor: (candidate) async => [
+          if (candidate == peer) ...[key, ...extraKeys],
+        ],
         onFrame: (sender, frame) => got.add((sender, frame)),
         now: () => clock,
       )..updatePeers({peer});
@@ -150,7 +153,8 @@ void main() {
       expect(area.airtime.every((packet) => packet.length == 512), isTrue);
       final packet = BitchatPacket.decode(area.airtime.first)!;
       expect(packet.type, BitchatType.noiseEncrypted);
-      expect(packet.signature, isNull);
+      // Signed like bitchat's own private packets (with random bytes).
+      expect(packet.signature, hasLength(64));
       final hexIds = [
         packet.senderId,
         packet.recipientId!,
@@ -299,6 +303,106 @@ void main() {
         expect(forwarded, hasLength(200));
       },
     );
+
+    test(
+      'a TTL-0 or re-encoded copy cannot suppress or repeat a frame',
+      () async {
+        final area = FakeBleNeighbourhood()
+          ..connect('a', 'm')
+          ..connect('m', 'r')
+          ..connect('r', 'd');
+        final daveGot = <(String, Uint8List)>[];
+        final alice = await channel(area, 'a', aliceAddress, daveAddress, []);
+        relay(area, 'r');
+        await channel(area, 'd', daveAddress, aliceAddress, daveGot);
+        final captured = <Uint8List>[];
+        final mallory = area.node('m');
+        mallory.received.listen((event) => captured.add(event.$2));
+        await alice.sendFrame(daveAddress, frame(30));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        // Mallory first sends a copy that goes no further, then the original:
+        // the relay must still pass the original on.
+        final dead = Uint8List.fromList(captured.single)..[2] = 0;
+        await mallory.broadcast(dead, except: 'a');
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        await mallory.broadcast(captured.single, except: 'a');
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(daveGot, hasLength(1));
+        // The same packet as version 2 has another dedup key but the same
+        // MAC: read once only.
+        final original = BitchatPacket.decode(captured.single)!;
+        await mallory.broadcast(
+          BitchatPacket(
+            version: 2,
+            type: original.type,
+            senderId: original.senderId,
+            recipientId: original.recipientId,
+            timestamp: original.timestamp,
+            payload: original.payload,
+            signature: original.signature,
+          ).encode(),
+          except: 'a',
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(daveGot, hasLength(1));
+      },
+    );
+
+    test('a compressed packet cannot expand past its stated size', () async {
+      final area = FakeBleNeighbourhood()..connect('m', 'd');
+      final daveGot = <(String, Uint8List)>[];
+      await channel(area, 'd', daveAddress, aliceAddress, daveGot);
+      final bytes = BitchatPacket(
+        type: BitchatType.noiseEncrypted,
+        senderId: Uint8List(8),
+        recipientId: Uint8List(8),
+        timestamp: clock.millisecondsSinceEpoch,
+        payload: Uint8List.fromList([
+          0,
+          100,
+          ...ZLibEncoder(raw: true).convert(Uint8List(4 << 20)),
+        ]),
+      ).encode(pad: false);
+      bytes[11] |= 0x04;
+      await area.node('m').broadcast(bytes);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(daveGot, isEmpty);
+      // Inflating stopped near the stated 100 bytes, not at 4 MiB.
+      expect(bitchatInflatedBytes, lessThanOrEqualTo(100));
+    });
+
+    test('contacts sharing an address both still get through', () async {
+      final area = FakeBleNeighbourhood()..connect('a', 'd');
+      final daveGot = <(String, Uint8List)>[];
+      final other = Uint8List.fromList(List.filled(32, 9));
+      final alice = await channel(
+        area,
+        'a',
+        aliceAddress,
+        daveAddress,
+        [],
+        extraKeys: [other],
+      );
+      await channel(area, 'd', daveAddress, aliceAddress, daveGot);
+      await alice.sendFrame(daveAddress, frame(12));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(daveGot, hasLength(1));
+    });
+
+    test('problems and missing neighbours reach the carrier', () async {
+      final area = FakeBleNeighbourhood();
+      final alone = await channel(area, 'a', aliceAddress, daveAddress, []);
+      await expectLater(
+        alone.sendFrame(daveAddress, frame(5)),
+        throwsStateError,
+      );
+      area.node('a').problemReports.add('Bluetooth is off.');
+      await Future<void>.delayed(Duration.zero);
+      expect(alone.lastError, 'Bluetooth is off.');
+      area.node('a').problemReports.add(null);
+      await Future<void>.delayed(Duration.zero);
+      expect(alone.lastError, isNull);
+    });
 
     test('TTL limits how far a packet travels', () async {
       final area = FakeBleNeighbourhood();
