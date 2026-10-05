@@ -105,7 +105,8 @@ extension TransportKindTraits on TransportKind {
     TransportKind.deltaChat ||
     TransportKind.reticulum ||
     TransportKind.meshtastic ||
-    TransportKind.meshCore => true,
+    TransportKind.meshCore ||
+    TransportKind.bitchat => true,
     _ => false,
   };
 

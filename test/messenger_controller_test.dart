@@ -11,6 +11,8 @@ import 'package:path/path.dart' as p;
 
 import 'package:conest/main.dart' as app;
 import 'package:conest/main.dart' show sniffImageMimeType;
+import 'package:conest/src/bitchat/mesh.dart';
+import 'package:conest/src/bitchat_carrier.dart';
 import 'package:conest/src/build_info.dart';
 import 'package:conest/src/carrier.dart';
 import 'package:conest/src/crypto_service.dart';
@@ -52,6 +54,7 @@ import 'package:conest/src/update_service.dart';
 import 'package:conest/src/voice_call_service.dart';
 
 import 'support/fake_homeserver.dart';
+import 'support/fake_ble_mesh.dart';
 import 'support/fake_mail_server.dart';
 import 'support/fake_matrix_native.dart';
 import 'support/fake_meshcore.dart';
@@ -986,8 +989,10 @@ Future<MessengerController> _createController({
   RnsConnector? reticulumConnector,
   MeshtasticConnector? meshtasticConnector,
   MeshCoreConnector? meshCoreConnector,
+  BitchatConnector? bitchatConnector,
 }) async {
   final controller = MessengerController(
+    bitchatConnector: bitchatConnector,
     meshCoreConnector: meshCoreConnector,
     meshtasticConnector: meshtasticConnector,
     nostrConnector: nostrConnector,
@@ -12548,6 +12553,65 @@ void main() {
           .singleWhere((m) => m.body == 'by meshcore');
       expect(received.route, MessageRoute.meshCore);
       expect(mesh.refused, 0);
+    });
+  });
+
+  group('Bluetooth mesh carrier', () {
+    test('two devices talk through a relaying phone', () async {
+      final area = FakeBleNeighbourhood()
+        ..connect('alice', 'relay')
+        ..connect('relay', 'bob');
+      // A bitchat phone between them that only relays.
+      final (noise, signing) = newBitchatSeeds();
+      BitchatNode(
+        identity: await BitchatIdentity.fromSeeds(noise, signing),
+        nickname: 'stranger',
+        links: area.node('relay'),
+        onFrame: (_, _) {},
+      );
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        bitchatConnector: () async => area.node('alice'),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        bitchatConnector: () async => area.node('bob'),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      await alice.enableBitchatCarrier();
+      await bob.enableBitchatCarrier();
+      for (var round = 0; round < 6; round++) {
+        await alice.pollNow();
+        await bob.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(
+        bob.contacts.single.carrierAddress(TransportKind.bitchat),
+        alice.bitchatChannel!.localAddress,
+      );
+      expect(alice.bitchatCarrierConfig!.nickname, startsWith('anon'));
+
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      await bob.sendMessage(contact: bob.contacts.single, body: 'by bluetooth');
+      final bobId = bob.identity!.deviceId;
+      final deadline = DateTime.now().add(const Duration(seconds: 15));
+      while (!alice.messagesFor(bobId).any((m) => m.body == 'by bluetooth') &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      final received = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'by bluetooth');
+      expect(received.route, MessageRoute.bitchat);
+      expect(
+        isValidBitchatAddress(alice.bitchatChannel!.localAddress!),
+        isTrue,
+      );
     });
   });
 

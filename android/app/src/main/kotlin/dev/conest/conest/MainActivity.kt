@@ -45,6 +45,7 @@ class MainActivity : FlutterActivity() {
         systemChannel = channel
         activeSystemChannel = channel
         RadioLinkPlugin(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
+        BitchatBlePlugin(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "setBackgroundRuntimeEnabled" -> {
@@ -372,6 +373,7 @@ class MainActivity : FlutterActivity() {
             arrayOf(
                 Manifest.permission.BLUETOOTH_SCAN,
                 Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.BLUETOOTH_ADVERTISE,
             )
         } else {
             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)

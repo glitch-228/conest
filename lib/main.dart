@@ -42,6 +42,7 @@ import 'src/platform_bridge.dart';
 import 'src/qr_scan_screen.dart';
 import 'src/ui/app_mode_selector.dart';
 import 'src/ui/matrix_account_panel.dart';
+import 'src/ui/bitchat_carrier_panel.dart';
 import 'src/ui/email_carrier_panel.dart';
 import 'src/ui/meshcore_carrier_panel.dart';
 import 'src/ui/meshtastic_carrier_panel.dart';
@@ -13840,6 +13841,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             ),
                             const SizedBox(height: 12),
                             MeshCoreCarrierPanel(controller: widget.controller),
+                            const SizedBox(height: 12),
+                            BitchatCarrierPanel(controller: widget.controller),
                             const SizedBox(height: 12),
                             Text(
                               'Transport policy',

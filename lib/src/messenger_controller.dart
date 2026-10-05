@@ -20,6 +20,8 @@ import 'group_file_service.dart';
 import 'group_message_projection.dart';
 import 'group_membership_history.dart';
 import 'beam_protocol.dart';
+import 'bitchat/android_links.dart';
+import 'bitchat_carrier.dart';
 import 'carrier.dart';
 import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
@@ -443,7 +445,9 @@ class MessengerController extends ChangeNotifier {
     RnsConnector? reticulumConnector,
     MeshtasticConnector? meshtasticConnector,
     MeshCoreConnector? meshCoreConnector,
+    BitchatConnector? bitchatConnector,
   }) : _vaultStore = vaultStore,
+       _bitchatConnector = bitchatConnector,
        _meshCoreConnector = meshCoreConnector,
        _meshtasticConnector = meshtasticConnector,
        _reticulumConnector = reticulumConnector,
@@ -528,6 +532,7 @@ class MessengerController extends ChangeNotifier {
   final RnsConnector? _reticulumConnector;
   final MeshtasticConnector? _meshtasticConnector;
   final MeshCoreConnector? _meshCoreConnector;
+  final BitchatConnector? _bitchatConnector;
   MatrixNativeApi? _matrixNativeApi;
   final bool _loadNativeMatrixClient;
   MatrixClientService? _matrixClient;
@@ -3501,6 +3506,80 @@ class MessengerController extends ChangeNotifier {
         !_carrierTransports.containsKey(TransportKind.meshCore)) {
       await _startMeshCoreCarrier(advertise: false);
     }
+    if (bitchatCarrierConfig != null &&
+        !_carrierTransports.containsKey(TransportKind.bitchat)) {
+      await _startBitchatCarrier(advertise: false);
+    }
+  }
+
+  /// Whether this device can join the Bluetooth mesh (Android, or a test
+  /// link layer).
+  bool get bitchatAvailable =>
+      _bitchatConnector != null || (!kIsWeb && Platform.isAndroid);
+
+  /// The Bluetooth mesh identity, if set up.
+  BitchatCarrierConfig? get bitchatCarrierConfig =>
+      BitchatCarrierConfig.fromJson(
+        _snapshot.carrierAccounts[TransportKind.bitchat.name],
+      );
+
+  /// The running Bluetooth mesh, for its state in settings.
+  BitchatCarrierChannel? get bitchatChannel => _bitchatChannel;
+  BitchatCarrierChannel? _bitchatChannel;
+
+  /// Joins the bitchat Bluetooth mesh with a separate identity and a
+  /// neutral nickname: messages to nearby contacts hop phone to phone, and
+  /// this phone relays for others.
+  Future<void> enableBitchatCarrier() async {
+    _requireIdentity();
+    if (!bitchatAvailable) {
+      throw StateError('The Bluetooth mesh needs Android for now.');
+    }
+    final config = bitchatCarrierConfig ?? BitchatCarrierConfig.create();
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.bitchat.name: config.toJson(),
+      },
+    );
+    await _persist('Bluetooth mesh on.');
+    if (!_carrierTransports.containsKey(TransportKind.bitchat)) {
+      await _startBitchatCarrier();
+    }
+  }
+
+  /// Leaves the Bluetooth mesh and forgets its identity.
+  Future<void> disableBitchatCarrier() async {
+    await unregisterCarrierTransport(TransportKind.bitchat);
+    _bitchatChannel = null;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts}
+        ..remove(TransportKind.bitchat.name),
+    );
+    await _persist('Bluetooth mesh off.');
+  }
+
+  Future<void> _startBitchatCarrier({bool advertise = true}) async {
+    final config = bitchatCarrierConfig;
+    if (config == null ||
+        _snapshot.identity == null ||
+        !conestActive ||
+        !bitchatAvailable) {
+      return;
+    }
+    final adapter =
+        _carrierTransports[TransportKind.bitchat] ??
+        createBitchatCarrierAdapter(sealer: carrierSealer, now: _now);
+    final channel = await BitchatCarrierChannel.create(
+      config: config,
+      connector: _bitchatConnector ?? AndroidBitchatLinks.start,
+      onFrame: adapter.receiveFrame,
+      onStatusChanged: notifyListeners,
+    );
+    await adapter.detach();
+    adapter.attach(channel);
+    _bitchatChannel = channel;
+    await registerCarrierTransport(adapter, advertise: advertise);
   }
 
   /// The MeshCore carrier's saved settings, if set up.
