@@ -1066,6 +1066,40 @@ pub extern "C" fn conest_matrix_next_event(timeout_ms: u32) -> *mut c_char {
     }
 }
 
+/// Queues one Tor command (see `tor.rs`); the outcome arrives later from
+/// `conest_tor_next_event`. Returns false and records the error when the
+/// request cannot be read.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_tor_call(request: *const c_char) -> bool {
+    let result = (|| -> anyhow::Result<()> {
+        anyhow::ensure!(!request.is_null(), "Missing Tor request");
+        // SAFETY: The Dart caller supplies a NUL-terminated UTF-8 string for
+        // the duration of this call.
+        let request = unsafe { CStr::from_ptr(request) }.to_str()?;
+        crate::tor::call(serde_json::from_str(request)?)
+    })();
+    match result {
+        Ok(()) => true,
+        Err(error) => {
+            record_error(error);
+            false
+        }
+    }
+}
+
+/// Waits up to `timeout_ms` for the next Tor event (JSON); null when none
+/// arrived. Free the result with `conest_string_free`. Blocks, so call it
+/// from a background isolate.
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_tor_next_event(timeout_ms: u32) -> *mut c_char {
+    match crate::tor::next_event(std::time::Duration::from_millis(u64::from(timeout_ms))) {
+        Some(event) => CString::new(event)
+            .map(CString::into_raw)
+            .unwrap_or(std::ptr::null_mut()),
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// Runs one stateless ratchet operation (see `ratchet.rs`). The request is a
 /// NUL-terminated UTF-8 JSON object; the JSON result must be released with
 /// `conest_string_free`. Returns null and records the error on failure.
