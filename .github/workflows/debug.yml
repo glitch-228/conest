@@ -89,9 +89,9 @@ jobs:
         run: |
           flutter test test/build_info_test.dart test/transport_test.dart test/feature_models_test.dart test/voice_call_sound_cues_test.dart
           flutter test test/group_history_test.dart test/group_history_sync_test.dart test/group_history_wire_test.dart test/group_membership_history_test.dart test/storage_test.dart test/group_file_crypto_test.dart test/ratchet_test.dart test/matrix_carrier_test.dart
-          flutter test test/storage_capacity_test.dart test/lan_direct_test.dart test/attachment_file_io_test.dart test/attachment_block_worker_test.dart
+          flutter test test/storage_capacity_test.dart test/lan_direct_test.dart test/attachment_file_io_test.dart test/attachment_block_worker_test.dart test/tor_carrier_test.dart test/bitchat_test.dart
           flutter test test/messenger_controller_test.dart \
-            --name "Iroh group admission|Iroh group history|Iroh group-only|real socket group-only|legacy group updates|retired default|Iroh pairing|Iroh bootstrap|storage reserve|Download anyway|manual Download storage|spool reserve|Beam pairing receives|rejected contact messages|discarded message duplicates|Contact approval releases locally queued messages|cancelled pairing ignores a late acceptance response|Iroh limit blocks|automatic online file|different-network|verification progress|repeated LAN hints|chat folders|scheduled messages recover|scheduled messages recheck|scheduled sends stay blocked after revocation|group poll converges after reordered|contact request stays queued|unknown exchange requires approval|double tap|sendMessage prefers LAN routes|heartbeat|queued controls keep plaintext|malformed queued payload|forward-secret sessions|Matrix carrier|Courier search keeps archived chats in the archive view"
+            --name "Iroh group admission|Iroh group history|Iroh group-only|real socket group-only|legacy group updates|retired default|Iroh pairing|Iroh bootstrap|storage reserve|Download anyway|manual Download storage|spool reserve|Beam pairing receives|rejected contact messages|discarded message duplicates|Contact approval releases locally queued messages|cancelled pairing ignores a late acceptance response|Iroh limit blocks|automatic online file|different-network|verification progress|repeated LAN hints|chat folders|scheduled messages recover|scheduled messages recheck|scheduled sends stay blocked after revocation|group poll converges after reordered|contact request stays queued|unknown exchange requires approval|double tap|sendMessage prefers LAN routes|heartbeat|queued controls keep plaintext|malformed queued payload|forward-secret sessions|Matrix carrier|Tor carrier|Bluetooth mesh carrier|Courier search keeps archived chats in the archive view"
           flutter test test/messenger_controller_test.dart \
             --plain-name "matching debug builds auto-accept, verify, report, and clean a real LAN test"
           flutter test test/messenger_controller_test.dart \
@@ -161,6 +161,35 @@ jobs:
       - name: Synapse logs on failure
         if: failure()
         run: docker logs synapse | tail -200
+
+  tor:
+    if: ${{ !inputs.quick_build }}
+    needs: cadence
+    name: Tor carrier over the real Tor network
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang pkg-config libasound2-dev libudev-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: matrix-native
+      - run: flutter pub get
+      - name: Build the native library with Tor
+        run: |
+          cargo build --locked --release \
+            --manifest-path native/conest_native/Cargo.toml
+      - name: Send frames through this device's own onion service
+        env:
+          CONEST_TOR_LIVE: "1"
+          CONEST_NATIVE_LIBRARY: ${{ github.workspace }}/target/release/libconest_native.so
+        run: flutter test test/tor_live_test.dart
 
   nostr:
     if: ${{ !inputs.quick_build }}

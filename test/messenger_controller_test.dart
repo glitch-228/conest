@@ -47,6 +47,7 @@ import 'package:conest/src/reticulum/rnode_interface.dart';
 import 'package:conest/src/reticulum_carrier.dart';
 import 'package:conest/src/storage.dart';
 import 'package:conest/src/storage_capacity.dart';
+import 'package:conest/src/tor_carrier.dart';
 import 'package:conest/src/transport.dart';
 import 'package:conest/src/ui/app_mode_selector.dart';
 import 'package:conest/src/ui/matrix_home_screen.dart';
@@ -62,6 +63,7 @@ import 'support/fake_meshtastic.dart';
 import 'support/fake_nostr_relay.dart';
 import 'support/fake_ratchet_engine.dart';
 import 'support/fake_rns_bus.dart';
+import 'support/fake_tor.dart';
 
 const _fakeRelayIdentityKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
 
@@ -990,8 +992,10 @@ Future<MessengerController> _createController({
   MeshtasticConnector? meshtasticConnector,
   MeshCoreConnector? meshCoreConnector,
   BitchatConnector? bitchatConnector,
+  TorApi? torApi,
 }) async {
   final controller = MessengerController(
+    torApi: torApi,
     bitchatConnector: bitchatConnector,
     meshCoreConnector: meshCoreConnector,
     meshtasticConnector: meshtasticConnector,
@@ -12612,6 +12616,92 @@ void main() {
         isValidBitchatAddress(alice.bitchatChannel!.localAddress!),
         isTrue,
       );
+    });
+  });
+
+  group('Tor carrier', () {
+    test('two devices talk through their onion services', () async {
+      final tor = FakeTorNetwork();
+      final relay = _FakeRelayClient();
+      final aliceTor = tor.device();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        torApi: aliceTor,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        torApi: tor.device(),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      await alice.enableTorCarrier(
+        bridges: [
+          'Bridge 192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413',
+          '',
+        ],
+      );
+      await bob.enableTorCarrier();
+      expect(aliceTor.lastBridges, [
+        '192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413',
+      ]);
+      final deadline = DateTime.now().add(const Duration(seconds: 15));
+      while (bob.contacts.single.carrierAddress(TransportKind.tor) == null &&
+          DateTime.now().isBefore(deadline)) {
+        await alice.pollNow();
+        await bob.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      final aliceOnion = alice.torChannel!.localAddress!;
+      expect(isValidTorAddress(aliceOnion), isTrue);
+      expect(bob.contacts.single.carrierAddress(TransportKind.tor), aliceOnion);
+      // The address is saved, so it is known before Tor connects next time.
+      expect(alice.torCarrierConfig!.address, aliceOnion);
+
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      await bob.sendMessage(contact: bob.contacts.single, body: 'by tor');
+      final bobId = bob.identity!.deviceId;
+      while (!alice.messagesFor(bobId).any((m) => m.body == 'by tor') &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      final received = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'by tor');
+      expect(received.route, MessageRoute.torOnion);
+
+      relay.shouldFailStore = null;
+      await alice.disableTorCarrier();
+      expect(alice.torCarrierConfig, isNull);
+      for (var round = 0; round < 6; round++) {
+        await alice.pollNow();
+        await bob.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(bob.contacts.single.carrierAddress(TransportKind.tor), isNull);
+    });
+
+    test('bridges that need a pluggable transport are refused', () async {
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        torApi: FakeTorNetwork().device(),
+      );
+      addTearDown(controller.dispose);
+      await expectLater(
+        controller.enableTorCarrier(
+          bridges: ['obfs4 192.0.2.2:443 FINGERPRINT cert=abc iat-mode=0'],
+          pluggableTransports: true,
+        ),
+        throwsArgumentError,
+      );
+      await expectLater(
+        controller.enableTorCarrier(bridges: ['not a bridge\u0007 x']),
+        throwsArgumentError,
+      );
+      expect(controller.torCarrierConfig, isNull);
     });
   });
 

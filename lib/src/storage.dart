@@ -396,6 +396,24 @@ class VaultStore {
     );
   }
 
+  /// Where Arti keeps Tor state (including the onion service's keys) and
+  /// its directory cache.
+  Future<({String state, String cache})> torDirectories() async {
+    final vault = await _vaultFile();
+    final state = Directory('${vault.path}.tor/state');
+    final cache = Directory('${vault.path}.tor/cache');
+    await state.create(recursive: true);
+    await cache.create(recursive: true);
+    return (state: state.path, cache: cache.path);
+  }
+
+  /// Forgets the onion service's keys and Tor's cache.
+  Future<void> deleteTorDirectories() async {
+    final vault = await _vaultFile();
+    final directory = Directory('${vault.path}.tor');
+    if (await directory.exists()) await directory.delete(recursive: true);
+  }
+
   Future<VaultSnapshot> load() async {
     final file = await _vaultFile();
     final backup = File('${file.path}.bak');

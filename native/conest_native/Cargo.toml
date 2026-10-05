@@ -27,7 +27,7 @@ iroh = "1.0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "io-util"] }
 # Audited Olm/Megolm (Matrix). Forward-secret pairwise sessions; see
 # notes/FORWARD-SECRECY.md.
 vodozemac = "0.11"
@@ -36,6 +36,14 @@ matrix-sdk = { version = "0.19", default-features = false, features = ["e2e-encr
 matrix-sdk-ui = { version = "0.19", default-features = false }
 mime = "0.3"
 futures-util = "0.3"
+# Tor carrier (M20): onion services and bridges with pluggable transports.
+# Its directory store shares matrix-sdk's rusqlite 0.40.
+arti-client = { version = "0.47", default-features = false, features = ["tokio", "rustls", "compression", "onion-service-client", "onion-service-service", "pt-client", "bridge-client", "static-sqlite"] }
+tor-hsservice = "0.47"
+tor-cell = "0.47"
+tor-proto = "0.47"
+tor-rtcompat = { version = "0.47", default-features = false, features = ["tokio", "rustls"] }
+safelog = "0.10"
 
 [target.'cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))'.dependencies]
 crossbeam-queue = "0.3"

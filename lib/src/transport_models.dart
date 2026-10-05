@@ -106,7 +106,8 @@ extension TransportKindTraits on TransportKind {
     TransportKind.reticulum ||
     TransportKind.meshtastic ||
     TransportKind.meshCore ||
-    TransportKind.bitchat => true,
+    TransportKind.bitchat ||
+    TransportKind.tor => true,
     _ => false,
   };
 

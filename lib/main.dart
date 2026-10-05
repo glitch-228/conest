@@ -60,6 +60,7 @@ import 'src/ui/seal_avatar.dart';
 import 'src/ui/signature_decoration.dart';
 import 'src/ui/signature_panels.dart';
 import 'src/ui/signature_widgets.dart';
+import 'src/ui/tor_carrier_panel.dart';
 import 'src/update_service.dart';
 
 export 'src/conest_theme.dart'
@@ -13843,6 +13844,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             MeshCoreCarrierPanel(controller: widget.controller),
                             const SizedBox(height: 12),
                             BitchatCarrierPanel(controller: widget.controller),
+                            const SizedBox(height: 12),
+                            TorCarrierPanel(controller: widget.controller),
                             const SizedBox(height: 12),
                             Text(
                               'Transport policy',
