@@ -2436,6 +2436,103 @@ void main() {
   }
 
   test(
+    'transfer retries wait for the blocks in flight at the measured rate',
+    () {
+      // Nothing measured yet: assume a slow 1 Mbit/s path, so four 1 MiB
+      // blocks get a minute rather than the old fixed 30 seconds.
+      expect(
+        MessengerController.transferRetryDelay(
+          attempt: 0,
+          blockBytes: 1024 * 1024,
+          window: 4,
+          bytesPerSecond: null,
+        ),
+        greaterThanOrEqualTo(const Duration(seconds: 60)),
+      );
+      // A fast LAN keeps the base backoff.
+      expect(
+        MessengerController.transferRetryDelay(
+          attempt: 0,
+          blockBytes: 4 * 1024 * 1024,
+          window: 4,
+          bytesPerSecond: 50 * 1024 * 1024,
+        ),
+        const Duration(seconds: 30),
+      );
+      // A slow relay path (200 KiB/s) with 4 MiB in flight: well over a minute.
+      expect(
+        MessengerController.transferRetryDelay(
+          attempt: 0,
+          blockBytes: 1024 * 1024,
+          window: 4,
+          bytesPerSecond: 200 * 1024,
+        ),
+        greaterThan(const Duration(seconds: 40)),
+      );
+      // Bounded.
+      expect(
+        MessengerController.transferRetryDelay(
+          attempt: 9,
+          blockBytes: 4 * 1024 * 1024,
+          window: 4,
+          bytesPerSecond: 1,
+        ),
+        lessThanOrEqualTo(const Duration(minutes: 10)),
+      );
+    },
+  );
+
+  test(
+    'a file over the Iroh limit is refused while no LAN path works',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      // LAN stays enabled, so the send is staged; it just never works.
+      for (final controller in [alice, bob]) {
+        await controller.updateGlobalConnectivity(
+          _irohOnlyConnectivity.copyWith(lanEnabled: true),
+        );
+        controller.irohTransferLimitBytesForTesting = 1024 * 1024;
+      }
+      await _pairControllers(alice, bob);
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      // No LAN path has worked: the file is refused up front, not offered
+      // and left waiting.
+      await expectLater(
+        alice.sendAttachment(
+          contact: alice.contacts.single,
+          bytes: Uint8List(3 * 1024 * 1024),
+          fileName: 'big.bin',
+        ),
+        throwsA(isA<IrohTransferLimitException>()),
+      );
+      expect(
+        bob
+            .messagesFor(alice.identity!.deviceId)
+            .where((m) => m.attachment != null),
+        isEmpty,
+      );
+      expect(
+        network.envelopes.where((e) => e.kind == 'attachment_chunk'),
+        isEmpty,
+      );
+    },
+    timeout: const Timeout(Duration(seconds: 60)),
+  );
+
+  test(
     'Iroh limit blocks oversized manual and debug sends before preparation and honors both peers',
     () async {
       final network = _InProcessIrohNetwork();

@@ -1686,16 +1686,17 @@ class MessengerController extends ChangeNotifier {
           continue;
         }
         final lastProgress = state.lastChunkAt ?? state.activatedAt;
+        final patience = _outboundStallDelayFor(peer, state.descriptor.id);
         final elapsed = lastProgress == null
-            ? _outboundStallTimeout
+            ? patience
             : DateTime.now().toUtc().difference(lastProgress);
-        if (elapsed >= _outboundStallTimeout) {
+        if (elapsed >= patience) {
           // Desktop/Android backgrounding can suspend Dart timers. Account for
           // the real elapsed time on resume so a dead route does not retain
           // this contact's serial queue slot for another full timeout.
           _onOutboundStall(peer);
         } else {
-          _armOutboundStallTimer(peer, delay: _outboundStallTimeout - elapsed);
+          _armOutboundStallTimer(peer, delay: patience - elapsed);
         }
       } else if (_fastOutboundByContact[peer.deviceId] == state.descriptor.id) {
         if (reconnectOutbound) {
@@ -1703,16 +1704,17 @@ class MessengerController extends ChangeNotifier {
           continue;
         }
         final lastProgress = state.lastChunkAt ?? state.activatedAt;
+        final patience = _outboundStallDelayFor(peer, state.descriptor.id);
         final elapsed = lastProgress == null
-            ? _outboundStallTimeout
+            ? patience
             : DateTime.now().toUtc().difference(lastProgress);
-        if (elapsed >= _outboundStallTimeout) {
+        if (elapsed >= patience) {
           _onFastOutboundStall(peer, state.descriptor.id);
         } else {
           _armOutboundStallTimer(
             peer,
             attachmentId: state.descriptor.id,
-            delay: _outboundStallTimeout - elapsed,
+            delay: patience - elapsed,
           );
         }
       } else {
@@ -6374,9 +6376,13 @@ class MessengerController extends ChangeNotifier {
       'This file exceeds the recommended 100 MiB Iroh limit. Use LAN or disable '
       '“Limit Iroh files to 100 MiB” in Settings on both devices.';
 
+  /// Replaces the 100 MiB Iroh limit in tests, which cannot move 100 MiB.
+  @visibleForTesting
+  int? irohTransferLimitBytesForTesting;
+
   int get maxIrohAttachmentBytes =>
       (_snapshot.identity?.connectivity.irohTransferLimitEnabled ?? true)
-      ? recommendedIrohTransferLimitBytes
+      ? (irohTransferLimitBytesForTesting ?? recommendedIrohTransferLimitBytes)
       : maxLanAttachmentSizeBytes;
 
   bool _irohFileAllowed(int sizeBytes) => sizeBytes <= maxIrohAttachmentBytes;
@@ -8073,9 +8079,12 @@ class MessengerController extends ChangeNotifier {
         (_debugBuildId == null || debugTest?.buildId != _debugBuildId)) {
       throw StateError('Automatic file tests require this exact debug build.');
     }
-    if (!_effectiveTransports(contact).lan &&
-        _canUseIrohForContact(contact) &&
-        !_irohFileAllowed(source.sizeBytes)) {
+    // Over the Iroh limit, a file goes only over LAN: refuse it unless a
+    // LAN path to the contact is known to work, instead of offering it and
+    // leaving it waiting.
+    if (_canUseIrohForContact(contact) &&
+        !_irohFileAllowed(source.sizeBytes) &&
+        !(_effectiveTransports(contact).lan && _lanPathWorksFor(contact))) {
       throw const IrohTransferLimitException(_irohLimitMessage);
     }
     final perContactCap = effectiveMaxAttachmentSizeFor(contact);
@@ -8919,8 +8928,9 @@ class MessengerController extends ChangeNotifier {
   void _armOutboundStallTimer(
     ContactRecord contact, {
     String? attachmentId,
-    Duration delay = _outboundStallTimeout,
+    Duration? delay,
   }) {
+    delay ??= _outboundStallDelayFor(contact, attachmentId);
     if (attachmentId != null &&
         _fastOutboundByContact[contact.deviceId] == attachmentId) {
       _fastOutboundTimers.remove(attachmentId)?.cancel();
@@ -8935,6 +8945,24 @@ class MessengerController extends ChangeNotifier {
       delay.isNegative ? Duration.zero : delay,
       () => _onOutboundStall(contact),
     );
+  }
+
+  /// The sender's patience before calling a transfer stalled: at least
+  /// [_outboundStallTimeout], longer when the measured rate means the
+  /// blocks in flight take longer to land (slow Iroh relay paths).
+  Duration _outboundStallDelayFor(ContactRecord contact, String? attachmentId) {
+    final id = attachmentId ?? _activeOutboundByContact[contact.deviceId];
+    final state = id == null ? null : _outboundAttachments[id];
+    if (state == null) return _outboundStallTimeout;
+    final adaptive = transferRetryDelay(
+      attempt: 0,
+      blockBytes: state.descriptor.chunkSize,
+      window: state.descriptor.chunkSize > _attachmentChunkSize
+          ? _largeDirectInboundChunkWindow
+          : _inboundChunkWindow,
+      bytesPerSecond: state.bytesPerSecond,
+    );
+    return adaptive > _outboundStallTimeout ? adaptive : _outboundStallTimeout;
   }
 
   static const List<Duration> _transferRetryBackoff = <Duration>[
@@ -8952,6 +8980,37 @@ class MessengerController extends ChangeNotifier {
   // generic 1 s retry timer cleared the whole request window while healthy
   // blocks were still in flight, producing an endless
   // "downloaded a little → reconnecting" loop.
+  /// How long to wait for the next verified block before asking again (or,
+  /// on the sender, before calling the transfer stalled): at least the
+  /// backoff step, and long enough for the [window] of [blockBytes] blocks
+  /// in flight at the measured rate, twice over. Until a rate is measured a
+  /// slow 1 Mbit/s path is assumed. A fixed 30 s re-requested every block
+  /// still in flight on slow Iroh relay paths, so the duplicates competed
+  /// for the same bandwidth and the transfer crawled in jumps.
+  @visibleForTesting
+  static Duration transferRetryDelay({
+    required int attempt,
+    required int blockBytes,
+    required int window,
+    double? bytesPerSecond,
+  }) {
+    final base =
+        _inboundTransferRetryBackoff[min(
+          attempt,
+          _inboundTransferRetryBackoff.length - 1,
+        )];
+    final rate = bytesPerSecond == null || bytesPerSecond <= 0
+        ? 128 * 1024.0
+        : bytesPerSecond;
+    final needed = Duration(
+      milliseconds: (blockBytes * window * 2 / rate * 1000).round(),
+    );
+    final delay = needed > base ? needed : base;
+    return delay > const Duration(minutes: 10)
+        ? const Duration(minutes: 10)
+        : delay;
+  }
+
   static const List<Duration> _inboundTransferRetryBackoff = <Duration>[
     Duration(seconds: 30),
     Duration(seconds: 30),
@@ -16192,11 +16251,14 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     state.retryTimer?.cancel();
-    final delay =
-        _inboundTransferRetryBackoff[min(
-          state.retryAttempts,
-          _inboundTransferRetryBackoff.length - 1,
-        )];
+    final delay = transferRetryDelay(
+      attempt: state.retryAttempts,
+      blockBytes: state.descriptor.chunkSize,
+      window: state.descriptor.chunkSize > _attachmentChunkSize
+          ? _largeDirectInboundChunkWindow
+          : _inboundChunkWindow,
+      bytesPerSecond: state.bytesPerSecond,
+    );
     state.nextRetryAt = DateTime.now().toUtc().add(delay);
     state.retryTimer = Timer(delay, () {
       final s = _inboundAttachments[attachmentId];
@@ -21810,6 +21872,21 @@ class MessengerController extends ChangeNotifier {
   @visibleForTesting
   Future<void> retryPendingAckDeliveriesForTesting({bool force = true}) =>
       _retryPendingAckDeliveries(force: force);
+
+  /// Whether a LAN path to [contact] worked recently: a fresh LAN-direct
+  /// endpoint, or a LAN route that answered within ten minutes.
+  bool _lanPathWorksFor(ContactRecord contact) {
+    final endpoint = _peerLanDirect[contact.deviceId];
+    if (endpoint != null && _lanDirectEndpointUsable(endpoint)) return true;
+    final now = _now().toUtc();
+    return contact.lanRouteHints.any((route) {
+      final health = _routeHealthTracker.healthFor(route);
+      return health != null &&
+          health.available &&
+          now.difference(health.checkedAt.toUtc()) <
+              const Duration(minutes: 10);
+    });
+  }
 
   /// Picks the host of [endpoint] if it is currently reachable. Today
   /// returns the endpoint as-is; future work could probe via Socket.
