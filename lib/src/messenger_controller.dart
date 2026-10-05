@@ -35,6 +35,9 @@ import 'email/carrier_mail.dart';
 import 'email/mail_socket.dart';
 import 'email_carrier.dart';
 import 'models.dart';
+import 'reticulum/identity.dart';
+import 'reticulum/rnode_interface.dart';
+import 'reticulum_carrier.dart';
 import 'nostr/relay.dart';
 import 'nostr/secp256k1.dart';
 import 'nostr_carrier.dart';
@@ -434,7 +437,9 @@ class MessengerController extends ChangeNotifier {
     bool loadNativeMatrixClient = true,
     NostrSocketConnector? nostrConnector,
     MailConnector? mailConnector,
+    RnsConnector? reticulumConnector,
   }) : _vaultStore = vaultStore,
+       _reticulumConnector = reticulumConnector,
        _nostrConnector = nostrConnector,
        _mailConnector = mailConnector,
        _matrixNativeApi = matrixNativeApi,
@@ -513,6 +518,7 @@ class MessengerController extends ChangeNotifier {
   final MatrixHttp Function()? _matrixHttpFactory;
   final NostrSocketConnector? _nostrConnector;
   final MailConnector? _mailConnector;
+  final RnsConnector? _reticulumConnector;
   MatrixNativeApi? _matrixNativeApi;
   final bool _loadNativeMatrixClient;
   MatrixClientService? _matrixClient;
@@ -3382,9 +3388,19 @@ class MessengerController extends ChangeNotifier {
   /// kind's policy nor (for internet carriers) the Online switch is off.
   bool _carrierAllowed(TransportKind kind) {
     final global = _snapshot.identity?.connectivity;
-    return global != null &&
-        conestActive &&
-        global.policyFor(kind) != TransportPolicy.disabled;
+    if (global == null ||
+        !conestActive ||
+        global.policyFor(kind) == TransportPolicy.disabled) {
+      return false;
+    }
+    // Reticulum works without the internet over a radio or a local node,
+    // but a node on the internet obeys the Online switch.
+    if (kind == TransportKind.reticulum &&
+        !global.onlineEnabled &&
+        (reticulumCarrierConfig?.usesInternet ?? false)) {
+      return false;
+    }
+    return true;
   }
 
   Map<String, String> _ownCarrierAddressesFor(
@@ -3462,6 +3478,117 @@ class MessengerController extends ChangeNotifier {
         !_carrierTransports.containsKey(TransportKind.deltaChat)) {
       await _startEmailCarrier(advertise: false);
     }
+    if (reticulumCarrierConfig != null &&
+        !_carrierTransports.containsKey(TransportKind.reticulum)) {
+      await _startReticulumCarrier(advertise: false);
+    }
+  }
+
+  /// The Reticulum carrier's saved settings, if set up.
+  ReticulumCarrierConfig? get reticulumCarrierConfig =>
+      ReticulumCarrierConfig.fromJson(
+        _snapshot.carrierAccounts[TransportKind.reticulum.name],
+      );
+
+  /// The running Reticulum connection, for its state in settings.
+  ReticulumCarrierChannel? get reticulumChannel => _reticulumChannel;
+  ReticulumCarrierChannel? _reticulumChannel;
+
+  /// Carries messages over Reticulum: through the node at [host]:[port]
+  /// (rnsd's TCP server interface), or an RNode radio with [radio]
+  /// settings on a serial port ([host] is its device path) or on Wi-Fi.
+  /// The device keeps one Reticulum identity of its own; changing the
+  /// connection keeps it, so contacts keep the address.
+  Future<void> enableReticulumCarrier({
+    required String host,
+    int port = defaultReticulumPort,
+    ReticulumLink link = ReticulumLink.rnsd,
+    RnodeConfig? radio,
+  }) async {
+    _requireIdentity();
+    final trimmed = host.trim();
+    final serial = link == ReticulumLink.rnodeSerial;
+    if (trimmed.isEmpty ||
+        (serial
+            ? !RegExp(r'^/dev/[A-Za-z0-9._/-]+$').hasMatch(trimmed)
+            : trimmed.contains(RegExp(r'[\s/]'))) ||
+        port < 1 ||
+        port > 65535) {
+      throw ArgumentError(
+        serial
+            ? 'Choose the serial device of the RNode, such as /dev/ttyACM0.'
+            : 'Enter the Reticulum node address and TCP port.',
+      );
+    }
+    if (link != ReticulumLink.rnsd) {
+      final problem = radio == null
+          ? 'Enter the radio settings.'
+          : radio.problem;
+      if (problem != null) throw ArgumentError(problem);
+    }
+    final previous = reticulumCarrierConfig;
+    final identityKey =
+        previous?.identityKeyHex ??
+        hexEncode(await (await RnsIdentity.generate()).privateKey());
+    final config = ReticulumCarrierConfig(
+      identityKeyHex: identityKey,
+      nameHashHex:
+          previous?.nameHashHex ?? ReticulumCarrierConfig.newNameHashHex(),
+      host: trimmed,
+      port: port,
+      link: link,
+      radio: link == ReticulumLink.rnsd ? null : radio,
+    );
+    if (_carrierTransports.containsKey(TransportKind.reticulum)) {
+      if (previous?.isRadio != config.isRadio) {
+        // Radio and node links frame envelopes differently.
+        await unregisterCarrierTransport(TransportKind.reticulum);
+      } else {
+        await _detachCarrier(TransportKind.reticulum);
+      }
+    }
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.reticulum.name: config.toJson(),
+      },
+    );
+    await _persist('Reticulum carrier set up through ${config.label}.');
+    await _startReticulumCarrier();
+  }
+
+  /// Stops the Reticulum carrier and forgets its identity; contacts stop
+  /// using it.
+  Future<void> disableReticulumCarrier() async {
+    await unregisterCarrierTransport(TransportKind.reticulum);
+    _reticulumChannel = null;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts}
+        ..remove(TransportKind.reticulum.name),
+    );
+    await _persist('Reticulum carrier removed.');
+  }
+
+  Future<void> _startReticulumCarrier({bool advertise = true}) async {
+    final config = reticulumCarrierConfig;
+    if (config == null || _snapshot.identity == null || !conestActive) return;
+    final adapter =
+        _carrierTransports[TransportKind.reticulum] ??
+        createReticulumCarrierAdapter(
+          sealer: carrierSealer,
+          radio: config.isRadio,
+          now: _now,
+        );
+    final channel = await ReticulumCarrierChannel.create(
+      config: config,
+      connector: _reticulumConnector,
+      onFrame: adapter.receiveFrame,
+      onStatusChanged: notifyListeners,
+    );
+    await adapter.detach();
+    adapter.attach(channel);
+    _reticulumChannel = channel;
+    await registerCarrierTransport(adapter, advertise: advertise);
   }
 
   /// The email carrier's saved account, if set up.

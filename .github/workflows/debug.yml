@@ -254,6 +254,28 @@ jobs:
         if: failure()
         run: docker logs greenmail | tail -200
 
+  reticulum:
+    if: ${{ !inputs.quick_build }}
+    needs: cadence
+    name: Reticulum carrier against the Python reference (RNS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - run: flutter pub get
+      - name: Install Reticulum (pinned)
+        run: |
+          python3 -m venv rns-venv
+          rns-venv/bin/pip install --quiet rns==1.5.6
+          rns-venv/bin/python -c "import RNS"
+      - name: Run the interop tests
+        env:
+          CONEST_RNS_PYTHON: ${{ github.workspace }}/rns-venv/bin/python
+        run: flutter test test/reticulum_interop_test.dart
+
   android:
     name: Android debug battle-test APK
     needs: [cadence, verify]

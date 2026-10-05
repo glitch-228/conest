@@ -44,6 +44,7 @@ import 'src/ui/app_mode_selector.dart';
 import 'src/ui/matrix_account_panel.dart';
 import 'src/ui/email_carrier_panel.dart';
 import 'src/ui/nostr_carrier_panel.dart';
+import 'src/ui/reticulum_carrier_panel.dart';
 import 'src/ui/matrix_home_screen.dart';
 import 'src/ui/matrix_room_screen.dart';
 import 'src/ui/matrix_verification_dialog.dart';
@@ -13827,6 +13828,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             NostrCarrierPanel(controller: widget.controller),
                             const SizedBox(height: 12),
                             EmailCarrierPanel(controller: widget.controller),
+                            const SizedBox(height: 12),
+                            ReticulumCarrierPanel(
+                              controller: widget.controller,
+                            ),
                             const SizedBox(height: 12),
                             Text(
                               'Transport policy',

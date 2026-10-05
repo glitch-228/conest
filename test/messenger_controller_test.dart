@@ -39,6 +39,8 @@ import 'package:conest/src/relay_client.dart'
         RelayHealthInfo,
         RelayIdentityMismatchException;
 import 'package:conest/src/relay_defaults.dart';
+import 'package:conest/src/reticulum/rnode_interface.dart';
+import 'package:conest/src/reticulum_carrier.dart';
 import 'package:conest/src/storage.dart';
 import 'package:conest/src/storage_capacity.dart';
 import 'package:conest/src/transport.dart';
@@ -52,6 +54,7 @@ import 'support/fake_mail_server.dart';
 import 'support/fake_matrix_native.dart';
 import 'support/fake_nostr_relay.dart';
 import 'support/fake_ratchet_engine.dart';
+import 'support/fake_rns_bus.dart';
 
 const _fakeRelayIdentityKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
 
@@ -976,10 +979,12 @@ Future<MessengerController> _createController({
   Future<List<String>> Function()? lanAddressProvider,
   NostrSocketConnector? nostrConnector,
   MailConnector? mailConnector,
+  RnsConnector? reticulumConnector,
 }) async {
   final controller = MessengerController(
     nostrConnector: nostrConnector,
     mailConnector: mailConnector,
+    reticulumConnector: reticulumConnector,
     vaultStore: vaultStore ?? _MemoryVaultStore(),
     relayClient: relayClient,
     localRelayNode: localRelayNode ?? _FakeLocalRelayNode(),
@@ -12154,6 +12159,129 @@ void main() {
         alice.enableChatmailCarrier('not a domain'),
         throwsArgumentError,
       );
+    });
+  });
+
+  group('Reticulum carrier', () {
+    Future<void> settle(List<MessengerController> controllers) async {
+      for (var round = 0; round < 6; round++) {
+        for (final controller in controllers) {
+          await controller.retryUnacknowledgedMessagesNow();
+          await controller.pollNow();
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    }
+
+    Future<void> until(bool Function() condition) async {
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (!condition() && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+    }
+
+    test('two devices talk over a Reticulum network', () async {
+      final bus = FakeRnsBus();
+      final relay = _FakeRelayClient();
+      final aliceVault = _MemoryVaultStore();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: aliceVault,
+        reticulumConnector: bus.connect,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        reticulumConnector: bus.connect,
+      );
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      await alice.enableReticulumCarrier(host: 'node.test');
+      await bob.enableReticulumCarrier(host: 'node.test');
+      await settle([alice, bob]);
+      final aliceAddress = alice.reticulumChannel!.localAddress!;
+      expect(
+        bob.contacts.single.carrierAddress(TransportKind.reticulum),
+        aliceAddress,
+      );
+
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      await bob.sendMessage(contact: bob.contacts.single, body: 'by radio');
+      final bobId = bob.identity!.deviceId;
+      await until(
+        () => alice.messagesFor(bobId).any((m) => m.body == 'by radio'),
+      );
+      final received = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'by radio');
+      expect(received.route, MessageRoute.reticulum);
+
+      // Another node keeps the same identity and address.
+      await alice.enableReticulumCarrier(host: 'other.test', port: 4965);
+      expect(alice.reticulumChannel!.localAddress, aliceAddress);
+      alice.dispose();
+      final restarted = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: aliceVault,
+        createIdentity: false,
+        reticulumConnector: bus.connect,
+      );
+      addTearDown(restarted.dispose);
+      expect(restarted.reticulumChannel?.localAddress, aliceAddress);
+      expect(restarted.reticulumCarrierConfig?.port, 4965);
+
+      // Turning it off is announced over the remaining routes.
+      relay.shouldFailStore = (_, _, _, _, _) => false;
+      await restarted.disableReticulumCarrier();
+      await settle([restarted, bob]);
+      expect(
+        bob.contacts.single.carrierAddress(TransportKind.reticulum),
+        isNull,
+      );
+    });
+
+    test('node addresses are checked', () async {
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        reticulumConnector: FakeRnsBus().connect,
+      );
+      addTearDown(alice.dispose);
+      for (final (host, port) in [('', 4242), ('a b', 4242), ('x', 0)]) {
+        await expectLater(
+          alice.enableReticulumCarrier(host: host, port: port),
+          throwsArgumentError,
+        );
+      }
+      expect(alice.reticulumCarrierConfig, isNull);
+      expect(defaultReticulumPort, 4242);
+      // An RNode needs a device path and valid radio settings.
+      await expectLater(
+        alice.enableReticulumCarrier(
+          host: 'ttyACM0',
+          link: ReticulumLink.rnodeSerial,
+          radio: RnodeConfig.eu869,
+        ),
+        throwsArgumentError,
+      );
+      await expectLater(
+        alice.enableReticulumCarrier(
+          host: '/dev/ttyACM0',
+          link: ReticulumLink.rnodeSerial,
+        ),
+        throwsArgumentError,
+      );
+      await alice.enableReticulumCarrier(
+        host: '/dev/ttyACM0',
+        link: ReticulumLink.rnodeSerial,
+        radio: RnodeConfig.eu869,
+      );
+      final saved = alice.reticulumCarrierConfig!;
+      expect(saved.link, ReticulumLink.rnodeSerial);
+      expect(saved.radio?.frequency, RnodeConfig.eu869.frequency);
+      expect(saved.label, '/dev/ttyACM0');
     });
   });
 

@@ -102,7 +102,8 @@ extension TransportKindTraits on TransportKind {
     TransportKind.optical ||
     TransportKind.matrix ||
     TransportKind.nostr ||
-    TransportKind.deltaChat => true,
+    TransportKind.deltaChat ||
+    TransportKind.reticulum => true,
     _ => false,
   };
 
