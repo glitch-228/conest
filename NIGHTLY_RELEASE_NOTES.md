@@ -1,47 +1,53 @@
-## Conest 0.3.11 nightly (October 4, second build)
+## Conest 0.3.11 nightly (October 4, third build)
 
-This nightly adds the first of five new ways to reach contacts when the usual
-routes are blocked: Nostr relays.
+This nightly adds the second new way to reach contacts when the usual
+routes are blocked: email, in the style of Delta Chat.
 
-### Nostr relays (new)
+### Email (new)
 
-- Turn it on in **Settings → Connectivity → Nostr relays**. Conest then
-  carries messages through public Nostr relays whenever LAN, Iroh and Conest
-  relays cannot reach a contact. Both of you need it on.
-- Messages stay end-to-end encrypted by Conest. Relays see that someone
-  writes to your Nostr key and when, but not who writes or what. Each message
-  is signed by a one-time key.
-- Conest makes a separate Nostr key for this; it is not linked to your
-  identity or to any Nostr account. Your contacts learn it automatically.
-- Choose up to four relays to read from (three public relays by default). A
-  coloured dot shows whether each one is connected. Relays that ask for a
-  sign-in (NIP-42) are supported.
-- Messages that came over Nostr carry a purple **Nostr** route mark.
-- Files are not sent over Nostr; only messages, receipts and other small
+- Turn it on in **Settings → Connectivity → Email**. By default Conest
+  creates a fresh account on a chatmail server (nine.testrun.org) with a
+  random name and password; no sign-up and no phone number. You can enter
+  another chatmail server, or use your own mail account (IMAP and SMTP,
+  for example with an app password).
+- When LAN, Iroh and Conest relays cannot reach a contact, messages go as
+  encrypted email. Both of you need email turned on.
+- Messages stay end-to-end encrypted by Conest, and each mail is also
+  OpenPGP-encrypted as chatmail servers require. The mail servers see the
+  two addresses and when you write, not what.
+- New mail arrives within seconds (IMAP IDLE), also on servers without it
+  (checked every minute).
+- Your own mailbox is safe: Conest never downloads or touches your other
+  mail, starts after the newest mail at setup, and removes only its own
+  carrier mail once read.
+- Messages that came by email carry a grey **Email** route mark.
+- Files are not sent by email; only messages, receipts and other small
   updates are.
 
-### Under the hood
+### Fixes
 
-- A shared carrier layer now serves Matrix and every new route: email,
-  LoRa radios, Bluetooth mesh and Tor follow in the next nightlies.
-- Transport settings list only routes this build can use. Saved Email and
-  Reticulum placeholders reset to their new defaults once.
+- A test of the forward-secret sessions and a native Iroh test no longer
+  fail on slow build machines.
 
 ### Qualification
 
 - The full local test suite passed, including new tests:
-  - the official BIP-340 and NIP-44 test vectors;
-  - Nostr frames between two devices, an inbox relay that requires sign-in,
-    a relay dropping its connections, stored messages read after a restart;
-  - two devices talking over Nostr while Conest relays fail, with the route
-    mark, and Nostr turned off again;
-  - carrier framing limits, address exchange (newer wins, removal), policy
-    gating and file chunks kept off message-only carriers.
-- The remote debug workflow ran the Nostr carrier against two real relay
-  implementations (nostr-rs-relay and strfry).
+  - AES against the FIPS-197 vectors; OpenPGP messages read and written by
+    GnuPG;
+  - two devices talking by email while Conest relays fail, with the route
+    mark, after a restart, and with email turned off again;
+  - a local mail server that refuses unencrypted mail like chatmail; other
+    mail never fetched; mail from before setup never read; reconnects;
+    servers without IDLE.
+- The remote debug workflow ran the email carrier against a real mail
+  server (GreenMail).
+- An independent review of the email carrier was done and its findings
+  fixed.
 - Not yet tested on real devices:
-  - Nostr on phones and desktops, public relays from restricted networks;
-  - everything still pending from earlier nightlies.
+  - email with nine.testrun.org and with Gmail/Outlook, on phones in the
+    background;
+  - Nostr from the previous nightly, and everything still pending from
+    earlier nightlies.
 
 This nightly is prerelease software; keep important data backed up and
 report failures with the build identifier and a debug snapshot.
