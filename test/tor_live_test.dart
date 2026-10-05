@@ -1,7 +1,6 @@
 // Runs over the real Tor network when CONEST_TOR_LIVE is set and the native
 // library (CONEST_NATIVE_LIBRARY) has Arti: the device bootstraps, publishes
 // its onion service and sends frames to itself through it.
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -77,5 +76,40 @@ void main() {
     },
     skip: skip,
     timeout: const Timeout(Duration(minutes: 15)),
+  );
+
+  // CONEST_TOR_TRANSPORT is a lyrebird binary and CONEST_TOR_BRIDGES holds
+  // obfs4 bridge lines, one per line.
+  final transport = Platform.environment['CONEST_TOR_TRANSPORT'];
+  final bridges = [
+    for (final line in (Platform.environment['CONEST_TOR_BRIDGES'] ?? '').split(
+      '\n',
+    ))
+      ?normalizeBridgeLine(line),
+  ];
+  test(
+    'Tor connects through obfs4 bridges and the bundled transport',
+    () async {
+      final api = NativeTorApi.tryCreate()!;
+      final directory = await Directory.systemTemp.createTemp('conest-tor-');
+      addTearDown(() => directory.delete(recursive: true));
+      final state = Directory('${directory.path}/state')..createSync();
+      final cache = Directory('${directory.path}/cache')..createSync();
+      expect(bridges.every(bridgeNeedsTransport), isTrue);
+      final address = await api.start(
+        stateDirectory: state.path,
+        cacheDirectory: cache.path,
+        bridges: bridges,
+        transportPath: transport,
+      );
+      expect(isValidTorAddress(address), isTrue, reason: address);
+      await api.stop();
+    },
+    skip:
+        skip ??
+        (transport == null || bridges.isEmpty
+            ? 'CONEST_TOR_TRANSPORT or CONEST_TOR_BRIDGES is not set'
+            : null),
+    timeout: const Timeout(Duration(minutes: 10)),
   );
 }

@@ -3543,13 +3543,32 @@ class MessengerController extends ChangeNotifier {
   TorCarrierChannel? get torChannel => _torChannel;
   TorCarrierChannel? _torChannel;
 
+  /// The bundled pluggable transport client, looked up once.
+  Future<String?> _torTransportPath() async {
+    if (!_torTransportResolved) {
+      _torTransportResolved = true;
+      _torTransport = kIsWeb
+          ? null
+          : bundledPluggableTransportPath(
+              androidLibraryDirectory: Platform.isAndroid
+                  ? await _platformBridge.nativeLibraryDirectory()
+                  : null,
+            );
+    }
+    return _torTransport;
+  }
+
+  String? _torTransport;
+  bool _torTransportResolved = false;
+
+  /// Whether this build ships pluggable transports, which bridges such as
+  /// obfs4, webtunnel and snowflake need.
+  Future<bool> torPluggableTransportsAvailable() async =>
+      await _torTransportPath() != null;
+
   /// Reaches contacts through an onion service of this device, over Tor
-  /// directly or through [bridges] where Tor is blocked. Bridges with a
-  /// transport such as obfs4 need [pluggableTransports].
-  Future<void> enableTorCarrier({
-    List<String> bridges = const [],
-    bool pluggableTransports = false,
-  }) async {
+  /// directly or through [bridges] where Tor is blocked.
+  Future<void> enableTorCarrier({List<String> bridges = const []}) async {
     _requireIdentity();
     if (!torAvailable) {
       throw StateError('This build of Conest does not include Tor.');
@@ -3560,12 +3579,12 @@ class MessengerController extends ChangeNotifier {
     )) {
       throw ArgumentError('A bridge line is not valid.');
     }
-    if (lines.any(bridgeNeedsTransport) &&
-        (!pluggableTransports || bundledPluggableTransportPath() == null)) {
+    final pluggableTransports = lines.any(bridgeNeedsTransport);
+    if (pluggableTransports && await _torTransportPath() == null) {
       throw ArgumentError(
         'These bridges need pluggable transports (obfs4, webtunnel or '
-        'snowflake), which this build does not include yet. Use plain '
-        'bridges (address and fingerprint).',
+        'snowflake), which this build does not include. Use plain bridges '
+        '(address and fingerprint).',
       );
     }
     final config = TorCarrierConfig(
@@ -3620,7 +3639,7 @@ class MessengerController extends ChangeNotifier {
       api: api,
       stateDirectory: directories.state,
       cacheDirectory: directories.cache,
-      transportPath: bundledPluggableTransportPath(),
+      transportPath: await _torTransportPath(),
       knownAddress: config.address,
       onFrame: adapter.receiveFrame,
       onStatusChanged: notifyListeners,
@@ -3650,7 +3669,7 @@ class MessengerController extends ChangeNotifier {
   bool get bitchatAvailable =>
       _bitchatConnector != null || (!kIsWeb && Platform.isAndroid);
 
-  /// The Bluetooth mesh identity, if set up.
+  /// The Bluetooth mesh setup, if on.
   BitchatCarrierConfig? get bitchatCarrierConfig =>
       BitchatCarrierConfig.fromJson(
         _snapshot.carrierAccounts[TransportKind.bitchat.name],
@@ -3660,9 +3679,9 @@ class MessengerController extends ChangeNotifier {
   BitchatCarrierChannel? get bitchatChannel => _bitchatChannel;
   BitchatCarrierChannel? _bitchatChannel;
 
-  /// Joins the bitchat Bluetooth mesh with a separate identity and a
-  /// neutral nickname: messages to nearby contacts hop phone to phone, and
-  /// this phone relays for others.
+  /// Joins the bitchat Bluetooth mesh: messages to nearby contacts hop
+  /// phone to phone, and this phone relays for others. It never announces
+  /// itself, and its ids on the air change every hour.
   Future<void> enableBitchatCarrier() async {
     _requireIdentity();
     if (!bitchatAvailable) {
@@ -3681,7 +3700,7 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  /// Leaves the Bluetooth mesh and forgets its identity.
+  /// Leaves the Bluetooth mesh and forgets its address.
   Future<void> disableBitchatCarrier() async {
     await unregisterCarrierTransport(TransportKind.bitchat);
     _bitchatChannel = null;
@@ -3703,16 +3722,37 @@ class MessengerController extends ChangeNotifier {
     final adapter =
         _carrierTransports[TransportKind.bitchat] ??
         createBitchatCarrierAdapter(sealer: carrierSealer, now: _now);
-    final channel = await BitchatCarrierChannel.create(
+    final channel = BitchatCarrierChannel(
       config: config,
       connector: _bitchatConnector ?? AndroidBitchatLinks.start,
+      keyFor: _bitchatPairKey,
       onFrame: adapter.receiveFrame,
       onStatusChanged: notifyListeners,
+      now: _now,
     );
     await adapter.detach();
     adapter.attach(channel);
     _bitchatChannel = channel;
     await registerCarrierTransport(adapter, advertise: advertise);
+  }
+
+  /// The key a contact pair derives its Bluetooth mesh ids and MACs from,
+  /// for the contact with mesh [address].
+  Future<Uint8List?> _bitchatPairKey(String address) async {
+    final contact = _snapshot.contacts
+        .where(
+          (contact) =>
+              contact.canSendOutbound &&
+              contact.carrierAddress(TransportKind.bitchat) == address,
+        )
+        .firstOrNull;
+    if (contact == null) return null;
+    final key = await Hkdf(hmac: Hmac.sha256(), outputLength: 32).deriveKey(
+      secretKey: await _crypto.sessionKeyFor(contact),
+      nonce: const <int>[],
+      info: utf8.encode('conest.bitchat.ids.v1'),
+    );
+    return Uint8List.fromList(await key.extractBytes());
   }
 
   /// The MeshCore carrier's saved settings, if set up.

@@ -185,11 +185,28 @@ jobs:
         run: |
           cargo build --locked --release \
             --manifest-path native/conest_native/Cargo.toml
-      - name: Send frames through this device's own onion service
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+      - name: Build lyrebird and fetch obfs4 bridges
+        run: |
+          tool/build_lyrebird.sh linux-x64 "$RUNNER_TEMP/lyrebird"
+          # Tor's default bridges for censored users (Moat API).
+          curl -sf -X POST -H 'Content-Type: application/vnd.api+json' \
+            -d '{"transports":["obfs4"]}' \
+            https://bridges.torproject.org/moat/circumvention/defaults \
+            | jq -r '.settings[].bridges.bridge_strings // [] | .[]' \
+            > "$RUNNER_TEMP/bridges.txt"
+          wc -l "$RUNNER_TEMP/bridges.txt"
+      - name: Send frames through this device's own onion service, then over obfs4
         env:
           CONEST_TOR_LIVE: "1"
           CONEST_NATIVE_LIBRARY: ${{ github.workspace }}/target/release/libconest_native.so
-        run: flutter test test/tor_live_test.dart
+        run: |
+          export CONEST_TOR_TRANSPORT="$RUNNER_TEMP/lyrebird"
+          export CONEST_TOR_BRIDGES="$(cat "$RUNNER_TEMP/bridges.txt")"
+          flutter test test/tor_live_test.dart
 
   nostr:
     if: ${{ !inputs.quick_build }}
@@ -360,7 +377,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: android-debug
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
       - run: flutter pub get
+      - name: Build Tor's pluggable transports
+        run: tool/build_lyrebird.sh android-arm64 build/app/lyrebirdJniLibs/arm64-v8a/liblyrebird.so
       - name: Build isolated debug APK
         run: |
           flutter build apk --debug --target-platform android-arm64 \
@@ -399,6 +422,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: linux-debug
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
       - run: flutter pub get
       - name: Build Linux native library with visible Rust diagnostics
         run: |
@@ -438,6 +465,7 @@ jobs:
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true
+          tool/build_lyrebird.sh linux-x64 build/linux/x64/debug/bundle/lyrebird
           mkdir -p dist-stage/conest-debug-linux-x64 dist
           cp -a build/linux/x64/debug/bundle/. dist-stage/conest-debug-linux-x64/
           (cd dist-stage && zip -r ../dist/conest-debug-linux-x64-${GITHUB_RUN_NUMBER}.zip conest-debug-linux-x64)
@@ -478,6 +506,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-debug
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
       - run: flutter pub get
       - name: Build Windows native library with visible Rust diagnostics
         shell: bash
@@ -497,6 +529,7 @@ jobs:
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true
+          tool/build_lyrebird.sh windows-x64 build/windows/x64/runner/Debug/lyrebird.exe
           mkdir -p dist-stage/conest-debug-windows-x64 dist
           cp -a build/windows/x64/runner/Debug/. dist-stage/conest-debug-windows-x64/
           powershell -Command "Compress-Archive -Path dist-stage/conest-debug-windows-x64 -DestinationPath dist/conest-debug-windows-x64-${GITHUB_RUN_NUMBER}.zip"

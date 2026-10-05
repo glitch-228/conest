@@ -47,12 +47,23 @@ String? normalizeBridgeLine(String line) {
 /// their address, others with the transport's name.
 bool bridgeNeedsTransport(String line) => !RegExp(r'^[0-9\[]').hasMatch(line);
 
-/// The pluggable transport client (lyrebird) bundled next to the app, if
-/// this build ships it.
-String? bundledPluggableTransportPath() {
-  if (Platform.isAndroid || Platform.isIOS) return null;
-  final name = Platform.isWindows ? 'lyrebird.exe' : 'lyrebird';
-  final path = p.join(p.dirname(Platform.resolvedExecutable), name);
+/// The pluggable transport client (lyrebird) bundled with the app, if this
+/// build ships it: next to the executable on desktop, and among the native
+/// libraries ([androidLibraryDirectory]) on Android, where only those may
+/// run.
+String? bundledPluggableTransportPath({String? androidLibraryDirectory}) {
+  final String path;
+  if (Platform.isAndroid) {
+    if (androidLibraryDirectory == null) return null;
+    path = p.join(androidLibraryDirectory, 'liblyrebird.so');
+  } else if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+    path = p.join(
+      p.dirname(Platform.resolvedExecutable),
+      Platform.isWindows ? 'lyrebird.exe' : 'lyrebird',
+    );
+  } else {
+    return null;
+  }
   return File(path).existsSync() ? path : null;
 }
 

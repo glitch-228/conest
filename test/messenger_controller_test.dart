@@ -12566,13 +12566,7 @@ void main() {
         ..connect('alice', 'relay')
         ..connect('relay', 'bob');
       // A bitchat phone between them that only relays.
-      final (noise, signing) = newBitchatSeeds();
-      BitchatNode(
-        identity: await BitchatIdentity.fromSeeds(noise, signing),
-        nickname: 'stranger',
-        links: area.node('relay'),
-        onFrame: (_, _) {},
-      );
+      BitchatNode(links: area.node('relay'), onPrivate: (_, _) => false);
       final relay = _FakeRelayClient();
       final alice = await _createController(
         relayClient: relay,
@@ -12598,7 +12592,6 @@ void main() {
         bob.contacts.single.carrierAddress(TransportKind.bitchat),
         alice.bitchatChannel!.localAddress,
       );
-      expect(alice.bitchatCarrierConfig!.nickname, startsWith('anon'));
 
       relay.shouldFailStore = (_, _, _, _, _) => true;
       await bob.sendMessage(contact: bob.contacts.single, body: 'by bluetooth');
@@ -12693,7 +12686,6 @@ void main() {
       await expectLater(
         controller.enableTorCarrier(
           bridges: ['obfs4 192.0.2.2:443 FINGERPRINT cert=abc iat-mode=0'],
-          pluggableTransports: true,
         ),
         throwsArgumentError,
       );

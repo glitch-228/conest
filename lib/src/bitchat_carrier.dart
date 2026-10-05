@@ -1,133 +1,104 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart';
 
 import 'bitchat/mesh.dart';
 import 'bitchat/packet.dart';
 import 'carrier.dart';
-import 'nostr/secp256k1.dart' show hexDecode, hexEncode;
+import 'nostr/secp256k1.dart' show hexEncode;
 import 'transport_models.dart';
+
+/// Bytes of the MAC closing each Conest packet.
+const int _macBytes = 8;
 
 /// Frames sized so a bitchat packet never needs fragmenting; envelopes up
 /// to 16 KiB.
 const CarrierFraming bitchatCarrierFraming = CarrierFraming(
   maxSealedBytes: 16 * 1024,
-  chunkBytes: bitchatFrameBytes - carrierBinaryFrameHeaderBytes,
+  chunkBytes: bitchatPayloadBytes - _macBytes - carrierBinaryFrameHeaderBytes,
 );
 
-/// A device's address on the Bluetooth mesh: its bitchat peer id and the
-/// Noise static key the id is the hash of.
-class BitchatAddress {
-  const BitchatAddress({required this.peerId, required this.noisePublicKey});
+/// How long the ids of a pair of contacts stay the same on the air.
+const Duration bitchatIdPeriod = Duration(hours: 1);
 
-  final Uint8List peerId;
-  final Uint8List noisePublicKey;
+const String _addressPrefix = 'bc1:';
 
-  String encode() => '${hexEncode(peerId)}|${hexEncode(noisePublicKey)}';
-
-  static BitchatAddress? tryParse(String value) {
-    final parts = value.split('|');
-    if (parts.length != 2 ||
-        parts[0].length != 16 ||
-        parts[1].length != 64 ||
-        parts.any((part) => part != part.toLowerCase())) {
-      return null;
-    }
-    final peerId = hexDecode(parts[0]);
-    final key = hexDecode(parts[1]);
-    if (peerId == null || key == null) return null;
-    if (hexEncode(bitchatPeerId(key)) != parts[0]) return null;
-    return BitchatAddress(peerId: peerId, noisePublicKey: key);
-  }
-}
-
+/// A device's address on the Bluetooth mesh: a random id, sent only to
+/// contacts and never over the air. What goes over the air are ids derived
+/// from it and the pair's key, which change every [bitchatIdPeriod].
 bool isValidBitchatAddress(String address) =>
-    BitchatAddress.tryParse(address) != null;
+    address.length == _addressPrefix.length + 32 &&
+    address.startsWith(_addressPrefix) &&
+    RegExp(
+      r'^[0-9a-f]{32}$',
+    ).hasMatch(address.substring(_addressPrefix.length));
 
-/// The saved Bluetooth mesh identity: separate from the Conest identity,
-/// with a neutral nickname that bitchat users nearby see.
+/// The saved Bluetooth mesh setup: this device's mesh address.
 class BitchatCarrierConfig {
-  const BitchatCarrierConfig({
-    required this.noiseSeedHex,
-    required this.signingSeedHex,
-    required this.nickname,
-  });
+  const BitchatCarrierConfig({required this.address});
 
-  factory BitchatCarrierConfig.create() {
-    final (noise, signing) = newBitchatSeeds();
-    return BitchatCarrierConfig(
-      noiseSeedHex: hexEncode(noise),
-      signingSeedHex: hexEncode(signing),
-      nickname: 'anon${hexEncode(noise.sublist(0, 2))}',
-    );
-  }
+  /// A new address, so turning the mesh off and on again unlinks the past.
+  factory BitchatCarrierConfig.create() => BitchatCarrierConfig(
+    address: '$_addressPrefix${hexEncode(randomBitchatBytes(16))}',
+  );
 
-  final String noiseSeedHex;
-  final String signingSeedHex;
-  final String nickname;
+  final String address;
 
-  Map<String, Object?> toJson() => {
-    'noiseSeed': noiseSeedHex,
-    'signingSeed': signingSeedHex,
-    'nickname': nickname,
-  };
+  Map<String, Object?> toJson() => {'address': address};
 
   static BitchatCarrierConfig? fromJson(Object? json) {
     if (json is! Map<String, dynamic>) return null;
-    final noise = json['noiseSeed'];
-    final signing = json['signingSeed'];
-    final nickname = json['nickname'];
-    if (noise is! String ||
-        hexDecode(noise)?.length != 32 ||
-        signing is! String ||
-        hexDecode(signing)?.length != 32 ||
-        nickname is! String) {
-      return null;
-    }
-    return BitchatCarrierConfig(
-      noiseSeedHex: noise,
-      signingSeedHex: signing,
-      nickname: nickname,
-    );
+    final address = json['address'];
+    if (address is! String || !isValidBitchatAddress(address)) return null;
+    return BitchatCarrierConfig(address: address);
   }
 }
 
 typedef BitchatConnector = Future<BitchatLinkLayer> Function();
 
+/// The key a pair of contacts derives its mesh ids and MACs from, looked up
+/// by the contact's mesh address; null for no contact.
+typedef BitchatKeyLookup = Future<Uint8List?> Function(String address);
+
 enum BitchatCarrierState { stopped, starting, running, failed }
+
+/// The ids and MAC key one contact pair uses on the air.
+class _Pair {
+  _Pair(this.address, this.key);
+  final String address;
+  final Uint8List key;
+}
 
 /// The Bluetooth mesh side of the carrier: a bitchat mesh node that relays
 /// for its neighbours and carries Conest frames to Conest peers.
-class BitchatCarrierChannel implements ManagedCarrierChannel {
-  BitchatCarrierChannel._({
+///
+/// Each frame travels as a bitchat private (Noise-type) packet whose sender
+/// and recipient ids are derived from the pair's key, this hour and each
+/// side's address, followed by a MAC over the ids, time and frame. Relays
+/// and bitchat users see unrelated ids that change every hour, which they
+/// cannot tell apart from bitchat's own private messages or link to a
+/// device; only the contact can recognise and check them.
+class BitchatCarrierChannel
+    implements ManagedCarrierChannel, PeerAwareCarrierChannel {
+  BitchatCarrierChannel({
     required this.config,
-    required BitchatIdentity identity,
     required BitchatConnector connector,
+    required BitchatKeyLookup keyFor,
     required this.onFrame,
     this.onStatusChanged,
-  }) : _identity = identity,
-       _connector = connector;
-
-  static Future<BitchatCarrierChannel> create({
-    required BitchatCarrierConfig config,
-    required BitchatConnector connector,
-    required void Function(String sender, Uint8List frame) onFrame,
-    void Function()? onStatusChanged,
-  }) async => BitchatCarrierChannel._(
-    config: config,
-    identity: await BitchatIdentity.fromSeeds(
-      hexDecode(config.noiseSeedHex)!,
-      hexDecode(config.signingSeedHex)!,
-    ),
-    connector: connector,
-    onFrame: onFrame,
-    onStatusChanged: onStatusChanged,
-  );
+    DateTime Function()? now,
+  }) : _connector = connector,
+       _keyFor = keyFor,
+       _now = now ?? DateTime.now;
 
   final BitchatCarrierConfig config;
-  final BitchatIdentity _identity;
   final BitchatConnector _connector;
+  final BitchatKeyLookup _keyFor;
+  final DateTime Function() _now;
 
-  /// A frame from the bitchat peer whose id (hex) is [sender].
+  /// A frame from the contact whose mesh address is [sender].
   final void Function(String sender, Uint8List frame) onFrame;
   final void Function()? onStatusChanged;
 
@@ -137,17 +108,38 @@ class BitchatCarrierChannel implements ManagedCarrierChannel {
   String? _lastError;
   int _generation = 0;
 
+  final Map<String, _Pair> _pairs = {};
+  int _peersVersion = 0;
+
+  /// Recipient id (hex) → the pair it belongs to and its period, for the
+  /// periods around [_tablePeriod].
+  Map<String, (_Pair, int)> _table = const {};
+  int? _tablePeriod;
+
   BitchatCarrierState get state => _state;
   String? get lastError => _lastError;
 
   @override
-  String? get localAddress => BitchatAddress(
-    peerId: _identity.peerId,
-    noisePublicKey: _identity.noisePublicKey,
-  ).encode();
+  String? get localAddress => config.address;
 
   @override
   String get routeLabel => 'nearby phones';
+
+  @override
+  void updatePeers(Set<String> addresses) {
+    final version = ++_peersVersion;
+    _pairs.removeWhere((address, _) => !addresses.contains(address));
+    _tablePeriod = null;
+    unawaited(() async {
+      for (final address in addresses) {
+        if (_pairs.containsKey(address)) continue;
+        final key = await _keyFor(address);
+        if (version != _peersVersion) return;
+        if (key != null) _pairs[address] = _Pair(address, key);
+      }
+      _tablePeriod = null;
+    }());
+  }
 
   @override
   void start() {
@@ -164,14 +156,8 @@ class BitchatCarrierChannel implements ManagedCarrierChannel {
           await links.close();
           return;
         }
-        final node = BitchatNode(
-          identity: _identity,
-          nickname: config.nickname,
-          links: links,
-          onFrame: onFrame,
-        )..start();
         _links = links;
-        _node = node;
+        _node = BitchatNode(links: links, onPrivate: _private, now: _now);
         _lastError = null;
         _setState(BitchatCarrierState.running);
       } catch (error) {
@@ -198,9 +184,125 @@ class BitchatCarrierChannel implements ManagedCarrierChannel {
   Future<void> sendFrame(String address, Uint8List frame) async {
     final node = _node;
     if (node == null) throw StateError('The Bluetooth mesh is not running.');
-    final to = BitchatAddress.tryParse(address);
-    if (to == null) throw ArgumentError('Not a Bluetooth mesh address.');
-    await node.sendFrame(hexEncode(to.peerId), frame);
+    if (!isValidBitchatAddress(address)) {
+      throw ArgumentError('Not a Bluetooth mesh address.');
+    }
+    if (frame.length + _macBytes > bitchatPayloadBytes) {
+      throw ArgumentError('The frame is too large for one bitchat packet.');
+    }
+    var pair = _pairs[address];
+    if (pair == null) {
+      final key = await _keyFor(address);
+      if (key == null) throw StateError('No contact has this mesh address.');
+      pair = _Pair(address, key);
+    }
+    final timestamp = _now().millisecondsSinceEpoch;
+    final period = _period(timestamp);
+    final sender = _id(pair.key, 's', config.address, period);
+    final recipient = _id(pair.key, 'r', address, period);
+    await node.send(
+      BitchatPacket(
+        type: BitchatType.noiseEncrypted,
+        senderId: sender,
+        recipientId: recipient,
+        timestamp: timestamp,
+        payload: Uint8List.fromList([
+          ...frame,
+          ..._mac(pair.key, sender, recipient, timestamp, frame),
+        ]),
+      ),
+    );
+  }
+
+  bool _private(BitchatPacket packet, Uint8List payload) {
+    final now = _now().millisecondsSinceEpoch;
+    final entry = _recipients(_period(now))[hexEncode(packet.recipientId!)];
+    if (entry == null) return false;
+    final (pair, period) = entry;
+    if (!_equal(packet.senderId, _id(pair.key, 's', pair.address, period)) ||
+        payload.length <= _macBytes) {
+      // Addressed to this device but not from the contact: not relayed.
+      return true;
+    }
+    final frame = Uint8List.sublistView(payload, 0, payload.length - _macBytes);
+    final mac = Uint8List.sublistView(payload, payload.length - _macBytes);
+    if (_equal(
+      mac,
+      _mac(
+        pair.key,
+        packet.senderId,
+        packet.recipientId!,
+        packet.timestamp,
+        frame,
+      ),
+    )) {
+      onFrame(pair.address, frame);
+    }
+    return true;
+  }
+
+  /// Ids this device answers to, for the current period and its
+  /// neighbours (clocks differ).
+  Map<String, (_Pair, int)> _recipients(int period) {
+    if (_tablePeriod == period) return _table;
+    _table = {
+      for (final pair in _pairs.values)
+        for (final candidate in [period - 1, period, period + 1])
+          hexEncode(_id(pair.key, 'r', config.address, candidate)): (
+            pair,
+            candidate,
+          ),
+    };
+    _tablePeriod = period;
+    return _table;
+  }
+
+  static int _period(int milliseconds) =>
+      milliseconds ~/ bitchatIdPeriod.inMilliseconds;
+
+  /// An 8-byte id: [role] `s` names the sender with its own [address], `r`
+  /// the recipient with its.
+  static Uint8List _id(
+    List<int> key,
+    String role,
+    String address,
+    int period,
+  ) => Uint8List.fromList(
+    Hmac(sha256, key)
+        .convert(utf8.encode('conest.bitchat.id|$role|$address|$period'))
+        .bytes
+        .sublist(0, 8),
+  );
+
+  static Uint8List _mac(
+    List<int> key,
+    List<int> sender,
+    List<int> recipient,
+    int timestamp,
+    List<int> frame,
+  ) {
+    final time = ByteData(8)..setUint64(0, timestamp);
+    return Uint8List.fromList(
+      Hmac(sha256, key)
+          .convert([
+            ...utf8.encode('conest.bitchat.mac'),
+            ...sender,
+            ...recipient,
+            ...time.buffer.asUint8List(),
+            ...frame,
+          ])
+          .bytes
+          .sublist(0, _macBytes),
+    );
+  }
+
+  static bool _equal(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    var difference = 0;
+    for (var index = 0; index < a.length; index++) {
+      difference |= a[index] ^ b[index];
+    }
+    return difference == 0;
   }
 
   void _setState(BitchatCarrierState state) {

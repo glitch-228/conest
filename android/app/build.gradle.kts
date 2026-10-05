@@ -80,6 +80,17 @@ android {
     sourceSets.getByName("main").jniLibs.srcDir(
         layout.buildDirectory.dir("conestNativeJniLibs")
     )
+    // Tor's pluggable transport client (tool/build_lyrebird.sh), when built.
+    sourceSets.getByName("main").jniLibs.srcDir(
+        layout.buildDirectory.dir("lyrebirdJniLibs")
+    )
+    // Extract native libraries on install: Android only runs programs from
+    // the native library directory, and lyrebird is one.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 val conestAndroidTargets =

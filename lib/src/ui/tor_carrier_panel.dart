@@ -17,6 +17,7 @@ class _TorCarrierPanelState extends State<TorCarrierPanel> {
   final _bridges = TextEditingController();
   bool _busy = false;
   String? _error;
+  bool? _transports;
 
   @override
   void initState() {
@@ -24,6 +25,9 @@ class _TorCarrierPanelState extends State<TorCarrierPanel> {
     _bridges.text =
         widget.controller.torCarrierConfig?.bridges.join('\n') ?? '';
     widget.controller.addListener(_changed);
+    widget.controller.torPluggableTransportsAvailable().then((available) {
+      if (mounted) setState(() => _transports = available);
+    });
   }
 
   @override
@@ -53,10 +57,7 @@ class _TorCarrierPanelState extends State<TorCarrierPanel> {
 
   List<String> get _lines => _bridges.text.split('\n');
 
-  Future<void> _enable() => widget.controller.enableTorCarrier(
-    bridges: _lines,
-    pluggableTransports: bundledPluggableTransportPath() != null,
-  );
+  Future<void> _enable() => widget.controller.enableTorCarrier(bridges: _lines);
 
   @override
   Widget build(BuildContext context) {
@@ -95,9 +96,19 @@ class _TorCarrierPanelState extends State<TorCarrierPanel> {
           minLines: 2,
           maxLines: 6,
           enabled: !_busy,
-          decoration: const InputDecoration(
+          decoration: InputDecoration(
             labelText: 'Bridges (optional, one per line)',
             hintText: '192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413',
+            helperText: switch (_transports) {
+              true =>
+                'obfs4, webtunnel, snowflake or plain bridges, from '
+                    'bridges.torproject.org.',
+              false =>
+                'Plain bridges only (address and fingerprint) in '
+                    'this build.',
+              null => null,
+            },
+            helperMaxLines: 2,
           ),
         ),
         if (config != null)

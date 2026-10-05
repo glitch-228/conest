@@ -31,7 +31,14 @@ class AndroidBitchatLinks implements BitchatLinkLayer {
         links._changes.add(null);
       }
     });
-    await _methods.invokeMethod<void>('start');
+    try {
+      await _methods.invokeMethod<void>('start');
+    } catch (_) {
+      await links._subscription.cancel();
+      await links._received.close();
+      await links._changes.close();
+      rethrow;
+    }
     return links;
   }
 

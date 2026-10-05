@@ -195,6 +195,7 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                 }
+                "nativeLibraryDir" -> result.success(applicationInfo.nativeLibraryDir)
                 "showToast" -> {
                     val text = call.argument<String>("text") ?: ""
                     val long = call.argument<Boolean>("long") ?: false

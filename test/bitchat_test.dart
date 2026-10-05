@@ -1,8 +1,9 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:conest/src/bitchat/mesh.dart';
 import 'package:conest/src/bitchat/packet.dart';
-import 'package:cryptography/cryptography.dart';
+import 'package:conest/src/bitchat_carrier.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/fake_ble_mesh.dart';
@@ -79,19 +80,46 @@ void main() {
   });
 
   group('mesh', () {
-    Future<BitchatNode> node(
+    final key = Uint8List.fromList(List.generate(32, (i) => i * 7));
+    final aliceAddress = 'bc1:${'a' * 32}';
+    final daveAddress = 'bc1:${'d' * 32}';
+    var clock = DateTime.utc(2026, 10, 5, 12, 30);
+
+    BitchatNode relay(FakeBleNeighbourhood area, String name) => BitchatNode(
+      links: area.node(name),
+      onPrivate: (_, _) => false,
+      now: () => clock,
+    );
+
+    Future<BitchatCarrierChannel> channel(
       FakeBleNeighbourhood area,
       String name,
+      String address,
+      String peer,
       List<(String, Uint8List)> got,
     ) async {
-      final (noise, signing) = newBitchatSeeds();
-      return BitchatNode(
-        identity: await BitchatIdentity.fromSeeds(noise, signing),
-        nickname: 'anon',
-        links: area.node(name),
+      final result = BitchatCarrierChannel(
+        config: BitchatCarrierConfig(address: address),
+        connector: () async => area.node(name),
+        keyFor: (candidate) async => candidate == peer ? key : null,
         onFrame: (sender, frame) => got.add((sender, frame)),
-      );
+        now: () => clock,
+      )..updatePeers({peer});
+      result.start();
+      while (result.state != BitchatCarrierState.running) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      return result;
     }
+
+    Uint8List frame([int length = 0]) => Uint8List.fromList(
+      List.generate(
+        length == 0 ? bitchatCarrierFraming.chunkBytes + 11 : length,
+        (i) => i % 256,
+      ),
+    );
+
+    setUp(() => clock = DateTime.utc(2026, 10, 5, 12, 30));
 
     test('a frame crosses two relays and arrives once', () async {
       final area = FakeBleNeighbourhood()
@@ -101,21 +129,176 @@ void main() {
         ..connect('b', 'd');
       final aliceGot = <(String, Uint8List)>[];
       final daveGot = <(String, Uint8List)>[];
-      final alice = await node(area, 'a', aliceGot);
-      await node(area, 'b', []);
-      await node(area, 'c', []);
-      final dave = await node(area, 'd', daveGot);
-      final frame = Uint8List.fromList(
-        List.generate(bitchatFrameBytes, (i) => i % 256),
+      final alice = await channel(
+        area,
+        'a',
+        aliceAddress,
+        daveAddress,
+        aliceGot,
       );
-      await alice.sendFrame(dave.peerIdHex, frame);
+      relay(area, 'b');
+      relay(area, 'c');
+      await channel(area, 'd', daveAddress, aliceAddress, daveGot);
+      final sent = frame();
+      await alice.sendFrame(daveAddress, sent);
       await Future<void>.delayed(const Duration(milliseconds: 50));
-      expect(daveGot.single.$1, alice.peerIdHex);
-      expect(daveGot.single.$2, frame);
+      expect(daveGot.single.$1, aliceAddress);
+      expect(daveGot.single.$2, sent);
       expect(aliceGot, isEmpty);
-      // Every packet fits one BLE frame.
-      expect(area.airtime.every((packet) => packet.length <= 512), isTrue);
+      // Every packet fits one BLE frame and is a plain bitchat private
+      // packet: no marker, and no address on the air.
+      expect(area.airtime.every((packet) => packet.length == 512), isTrue);
+      final packet = BitchatPacket.decode(area.airtime.first)!;
+      expect(packet.type, BitchatType.noiseEncrypted);
+      expect(packet.signature, isNull);
+      final hexIds = [
+        packet.senderId,
+        packet.recipientId!,
+      ].map((id) => id.map((b) => b.toRadixString(16).padLeft(2, '0')).join());
+      expect(hexIds.any((id) => aliceAddress.contains(id)), isFalse);
+      expect(hexIds.any((id) => daveAddress.contains(id)), isFalse);
     });
+
+    test('ids on the air change every hour and still arrive', () async {
+      final area = FakeBleNeighbourhood()..connect('a', 'd');
+      final daveGot = <(String, Uint8List)>[];
+      final alice = await channel(area, 'a', aliceAddress, daveAddress, []);
+      await channel(area, 'd', daveAddress, aliceAddress, daveGot);
+      await alice.sendFrame(daveAddress, frame(20));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      clock = clock.add(const Duration(hours: 1));
+      await alice.sendFrame(daveAddress, frame(21));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(daveGot, hasLength(2));
+      final first = BitchatPacket.decode(area.airtime[0])!;
+      final second = BitchatPacket.decode(area.airtime[1])!;
+      expect(first.senderId, isNot(second.senderId));
+      expect(first.recipientId, isNot(second.recipientId));
+    });
+
+    test('tampered, replayed or stale packets are dropped', () async {
+      // Mallory sits between Alice and Dave and forwards by hand.
+      final area = FakeBleNeighbourhood()
+        ..connect('a', 'm')
+        ..connect('m', 'd');
+      final daveGot = <(String, Uint8List)>[];
+      final alice = await channel(area, 'a', aliceAddress, daveAddress, []);
+      await channel(area, 'd', daveAddress, aliceAddress, daveGot);
+      final captured = <Uint8List>[];
+      final mallory = area.node('m');
+      mallory.received.listen((event) => captured.add(event.$2));
+      Future<void> forward(Uint8List bytes) async {
+        await mallory.broadcast(bytes, except: 'a');
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+
+      await alice.sendFrame(daveAddress, frame(40));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      final original = BitchatPacket.decode(captured.single)!;
+      await forward(captured.single);
+      expect(daveGot, hasLength(1));
+
+      BitchatPacket altered({Uint8List? payload, int? timestamp}) =>
+          BitchatPacket(
+            type: original.type,
+            senderId: original.senderId,
+            recipientId: original.recipientId,
+            timestamp: timestamp ?? original.timestamp,
+            payload: payload ?? original.payload,
+          );
+      // The frame header, a byte of data, the time; then a plain replay.
+      await forward(
+        altered(
+          payload: Uint8List.fromList(original.payload)..[0] ^= 1,
+        ).encode(),
+      );
+      await forward(
+        altered(
+          payload: Uint8List.fromList(original.payload)..[20] ^= 1,
+        ).encode(),
+      );
+      await forward(altered(timestamp: original.timestamp + 1).encode());
+      await forward(captured.single);
+      expect(daveGot, hasLength(1));
+
+      // Sent with a clock 30 minutes ahead: outside the window, unread.
+      clock = clock.add(const Duration(minutes: 30));
+      await alice.sendFrame(daveAddress, frame(41));
+      clock = clock.subtract(const Duration(minutes: 30));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await forward(captured.last);
+      expect(daveGot, hasLength(1));
+    });
+
+    test('compressed packets from bitchat relays are expanded', () async {
+      final area = FakeBleNeighbourhood()
+        ..connect('a', 'm')
+        ..connect('m', 'd');
+      final daveGot = <(String, Uint8List)>[];
+      final alice = await channel(area, 'a', aliceAddress, daveAddress, []);
+      await channel(area, 'd', daveAddress, aliceAddress, daveGot);
+      final captured = <Uint8List>[];
+      area.node('m').received.listen((event) => captured.add(event.$2));
+      final sent = Uint8List(200);
+      await alice.sendFrame(daveAddress, sent);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      final original = BitchatPacket.decode(captured.single)!;
+      // bitchat's compressed form: the original size, then raw deflate.
+      final size = original.payload.length;
+      final bytes = BitchatPacket(
+        type: original.type,
+        senderId: original.senderId,
+        recipientId: original.recipientId,
+        timestamp: original.timestamp,
+        payload: Uint8List.fromList([
+          size >> 8,
+          size & 0xff,
+          ...ZLibEncoder(raw: true).convert(original.payload),
+        ]),
+      ).encode(pad: false);
+      bytes[11] |= 0x04; // the compressed flag
+      await area.node('m').broadcast(bytes, except: 'a');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(daveGot.single.$2, sent);
+    });
+
+    test(
+      'relays clamp TTL and drop unknown, stale and flooding packets',
+      () async {
+        final area = FakeBleNeighbourhood()
+          ..connect('x', 'r')
+          ..connect('r', 'y');
+        relay(area, 'r');
+        final forwarded = <Uint8List>[];
+        area.node('y').received.listen((event) => forwarded.add(event.$2));
+        Future<void> send(BitchatPacket packet) async {
+          await area.node('x').broadcast(packet.encode());
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+
+        final sender = Uint8List.fromList(List.filled(8, 3));
+        var serial = 0;
+        BitchatPacket packet({int type = 0x02, int ttl = 7, DateTime? at}) =>
+            BitchatPacket(
+              type: type,
+              ttl: ttl,
+              senderId: sender,
+              timestamp: (at ?? clock).millisecondsSinceEpoch,
+              payload: Uint8List.fromList([serial++]),
+            );
+        await send(packet(ttl: 200));
+        expect(BitchatPacket.decode(forwarded.single)!.ttl, 6);
+        await send(packet(type: 0x7f));
+        await send(packet(at: clock.subtract(const Duration(hours: 1))));
+        expect(forwarded, hasLength(1));
+        for (var i = 0; i < 250; i++) {
+          await area.node('x').broadcast(packet().encode());
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        // One neighbour gets at most 200 relays a minute.
+        expect(forwarded, hasLength(200));
+      },
+    );
 
     test('TTL limits how far a packet travels', () async {
       final area = FakeBleNeighbourhood();
@@ -124,40 +307,21 @@ void main() {
         area.connect(names[i], names[i + 1]);
       }
       final got = <(String, Uint8List)>[];
-      final first = await node(area, names.first, []);
+      final first = await channel(
+        area,
+        names.first,
+        aliceAddress,
+        daveAddress,
+        [],
+      );
       for (final name in names.sublist(1, names.length - 1)) {
-        await node(area, name, []);
+        relay(area, name);
       }
-      final last = await node(area, names.last, got);
-      await first.sendFrame(last.peerIdHex, Uint8List.fromList([1]));
+      await channel(area, names.last, daveAddress, aliceAddress, got);
+      await first.sendFrame(daveAddress, frame(1));
       await Future<void>.delayed(const Duration(milliseconds: 100));
       // Nine hops away: beyond the 7-hop TTL.
       expect(got, isEmpty);
-    });
-
-    test('announces are signed the way bitchat checks them', () async {
-      final area = FakeBleNeighbourhood()..connect('a', 'b');
-      final alice = await node(area, 'a', []);
-      final heard = <Uint8List>[];
-      area.node('b').received.listen((event) => heard.add(event.$2));
-      await alice.announce();
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      final packet = BitchatPacket.decode(heard.single)!;
-      expect(packet.type, BitchatType.announce);
-      final announcement = BitchatAnnouncement.decode(packet.payload)!;
-      expect(announcement.nickname, 'anon');
-      expect(bitchatPeerId(announcement.noisePublicKey), packet.senderId);
-      final valid = await Ed25519().verify(
-        packet.bytesToSign(),
-        signature: Signature(
-          packet.signature!,
-          publicKey: SimplePublicKey(
-            announcement.signingPublicKey,
-            type: KeyPairType.ed25519,
-          ),
-        ),
-      );
-      expect(valid, isTrue);
     });
   });
 }

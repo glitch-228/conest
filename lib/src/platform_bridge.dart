@@ -485,6 +485,17 @@ class PlatformBridge {
     }
   }
 
+  /// Where Android extracted the app's native libraries, which may also
+  /// hold bundled helper programs (such as Tor's pluggable transports).
+  Future<String?> nativeLibraryDirectory() async {
+    if (!_supportsAndroidSystemCalls) return null;
+    try {
+      return await _channel.invokeMethod<String>('nativeLibraryDir');
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
   Future<void> showToast(String text, {bool long = false}) async {
     if (!_supportsAndroidSystemCalls) return;
     if (text.isEmpty) return;
