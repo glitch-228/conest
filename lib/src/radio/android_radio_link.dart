@@ -104,22 +104,34 @@ abstract final class AndroidRadioLinks {
       'id': id,
       'baud': baud,
     });
-    return _register(handle!, id);
+    return _register(handle!, id, keepsMessages: false);
   }
 
-  static Future<AndroidRadioLink> openBle(String address) async {
+  /// Opens a Bluetooth LE serial (Nordic UART) device. With
+  /// [keepsMessages], each write goes as one characteristic write and each
+  /// notification is one message (MeshCore); otherwise the link is a byte
+  /// stream (RNode).
+  static Future<AndroidRadioLink> openBle(
+    String address, {
+    bool keepsMessages = false,
+  }) async {
     if (!await requestBluetoothPermission()) {
       throw StateError('Bluetooth access was not allowed.');
     }
     _listen();
     final handle = await _methods.invokeMethod<int>('openBle', {
       'address': address,
+      'messages': keepsMessages,
     });
-    return _register(handle!, address);
+    return _register(handle!, address, keepsMessages: keepsMessages);
   }
 
-  static AndroidRadioLink _register(int handle, String label) {
-    final link = AndroidRadioLink._(handle, label);
+  static AndroidRadioLink _register(
+    int handle,
+    String label, {
+    required bool keepsMessages,
+  }) {
+    final link = AndroidRadioLink._(handle, label, keepsMessages);
     _open[handle] = link;
     return link;
   }
@@ -127,11 +139,13 @@ abstract final class AndroidRadioLinks {
 
 /// One open USB or Bluetooth link.
 class AndroidRadioLink implements ByteLink {
-  AndroidRadioLink._(this._handle, this.label);
+  AndroidRadioLink._(this._handle, this.label, this.keepsMessages);
 
   final int _handle;
   @override
   final String label;
+  @override
+  final bool keepsMessages;
   final _input = StreamController<Uint8List>.broadcast();
   final _closed = Completer<Object?>();
   final WriteQueue _queue = WriteQueue();

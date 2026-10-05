@@ -23,6 +23,8 @@ import 'package:conest/src/iroh_transport.dart';
 import 'package:conest/src/lan_direct.dart';
 import 'package:conest/src/local_relay_node.dart';
 import 'package:conest/src/matrix_carrier.dart';
+import 'package:conest/src/meshcore_carrier.dart';
+import 'package:conest/src/meshtastic_carrier.dart';
 import 'package:conest/src/matrix_client.dart';
 import 'package:conest/src/matrix_service.dart';
 import 'package:conest/src/messenger_controller.dart';
@@ -52,6 +54,8 @@ import 'package:conest/src/voice_call_service.dart';
 import 'support/fake_homeserver.dart';
 import 'support/fake_mail_server.dart';
 import 'support/fake_matrix_native.dart';
+import 'support/fake_meshcore.dart';
+import 'support/fake_meshtastic.dart';
 import 'support/fake_nostr_relay.dart';
 import 'support/fake_ratchet_engine.dart';
 import 'support/fake_rns_bus.dart';
@@ -980,8 +984,12 @@ Future<MessengerController> _createController({
   NostrSocketConnector? nostrConnector,
   MailConnector? mailConnector,
   RnsConnector? reticulumConnector,
+  MeshtasticConnector? meshtasticConnector,
+  MeshCoreConnector? meshCoreConnector,
 }) async {
   final controller = MessengerController(
+    meshCoreConnector: meshCoreConnector,
+    meshtasticConnector: meshtasticConnector,
     nostrConnector: nostrConnector,
     mailConnector: mailConnector,
     reticulumConnector: reticulumConnector,
@@ -12290,6 +12298,159 @@ void main() {
       expect(saved.link, ReticulumLink.rnodeSerial);
       expect(saved.radio?.frequency, RnodeConfig.eu869.frequency);
       expect(saved.label, '/dev/ttyACM0');
+    });
+  });
+
+  group('Meshtastic carrier', () {
+    Future<void> settle(List<MessengerController> controllers) async {
+      for (var round = 0; round < 6; round++) {
+        for (final controller in controllers) {
+          await controller.retryUnacknowledgedMessagesNow();
+          await controller.pollNow();
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    }
+
+    Future<void> until(bool Function() condition) async {
+      final deadline = DateTime.now().add(const Duration(seconds: 20));
+      while (!condition() && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+    }
+
+    test('two devices talk over a Meshtastic mesh', () async {
+      final mesh = FakeMesh();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        meshtasticConnector: (_) async => mesh.device(0xa11ce001),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        meshtasticConnector: (_) async => mesh.device(0xb0b00002),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      await alice.enableMeshtasticCarrier(
+        link: MeshtasticLink.serial,
+        host: '/dev/ttyACM0',
+      );
+      await bob.enableMeshtasticCarrier(
+        link: MeshtasticLink.tcp,
+        host: '192.168.1.40',
+      );
+      await until(
+        () =>
+            alice.contacts.single.carrierAddress(TransportKind.meshtastic) !=
+                null &&
+            bob.contacts.single.carrierAddress(TransportKind.meshtastic) !=
+                null,
+      );
+      await settle([alice, bob]);
+      expect(
+        bob.contacts.single.carrierAddress(TransportKind.meshtastic),
+        'a11ce001',
+      );
+      expect(alice.meshtasticCarrierConfig?.nodeNum, 0xa11ce001);
+
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      await bob.sendMessage(contact: bob.contacts.single, body: 'by mesh');
+      final bobId = bob.identity!.deviceId;
+      await until(
+        () => alice.messagesFor(bobId).any((m) => m.body == 'by mesh'),
+      );
+      final received = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'by mesh');
+      expect(received.route, MessageRoute.meshtastic);
+      expect(
+        mesh.sent.every((packet) => packet.$3 == meshtasticConestPort),
+        isTrue,
+      );
+    });
+
+    test('radio settings are checked', () async {
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        meshtasticConnector: (_) async => FakeMesh().device(1),
+      );
+      addTearDown(alice.dispose);
+      for (final (link, host) in [
+        (MeshtasticLink.serial, 'ttyACM0'),
+        (MeshtasticLink.tcp, ''),
+        (MeshtasticLink.tcp, 'a b'),
+      ]) {
+        await expectLater(
+          alice.enableMeshtasticCarrier(link: link, host: host),
+          throwsArgumentError,
+        );
+      }
+      expect(alice.meshtasticCarrierConfig, isNull);
+      expect(isValidMeshtasticAddress('ffffffff'), isFalse);
+      expect(isValidMeshtasticAddress('a11ce001'), isTrue);
+      expect(isValidMeshtasticAddress('A11CE001'), isFalse);
+    });
+  });
+
+  group('MeshCore carrier', () {
+    test('two devices talk once their radios know each other', () async {
+      final mesh = FakeMeshCoreMesh();
+      final relay = _FakeRelayClient();
+      final aliceRadio = mesh.radio(1);
+      final bobRadio = mesh.radio(2);
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        meshCoreConnector: (_) async => aliceRadio,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        meshCoreConnector: (_) async => bobRadio,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      await alice.enableMeshCoreCarrier(
+        link: MeshCoreLink.serial,
+        host: '/dev/ttyACM0',
+      );
+      await bob.enableMeshCoreCarrier(
+        link: MeshCoreLink.serial,
+        host: '/dev/ttyACM0',
+      );
+      final deadline = DateTime.now().add(const Duration(seconds: 20));
+      while ((alice.contacts.single.carrierAddress(TransportKind.meshCore) ==
+                  null ||
+              bob.contacts.single.carrierAddress(TransportKind.meshCore) ==
+                  null ||
+              aliceRadio.contacts.isEmpty) &&
+          DateTime.now().isBefore(deadline)) {
+        await alice.pollNow();
+        await bob.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      // Each radio now lists the other device.
+      expect(aliceRadio.contacts, hasLength(1));
+      expect(alice.meshCoreCarrierConfig?.publicKeyHex, isNotNull);
+
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      await bob.sendMessage(contact: bob.contacts.single, body: 'by meshcore');
+      final bobId = bob.identity!.deviceId;
+      while (!alice.messagesFor(bobId).any((m) => m.body == 'by meshcore') &&
+          DateTime.now().isBefore(deadline.add(const Duration(seconds: 20)))) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      final received = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'by meshcore');
+      expect(received.route, MessageRoute.meshCore);
+      expect(mesh.refused, 0);
     });
   });
 

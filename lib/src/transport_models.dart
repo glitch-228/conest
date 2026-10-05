@@ -103,7 +103,9 @@ extension TransportKindTraits on TransportKind {
     TransportKind.matrix ||
     TransportKind.nostr ||
     TransportKind.deltaChat ||
-    TransportKind.reticulum => true,
+    TransportKind.reticulum ||
+    TransportKind.meshtastic ||
+    TransportKind.meshCore => true,
     _ => false,
   };
 

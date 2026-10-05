@@ -43,6 +43,8 @@ import 'src/qr_scan_screen.dart';
 import 'src/ui/app_mode_selector.dart';
 import 'src/ui/matrix_account_panel.dart';
 import 'src/ui/email_carrier_panel.dart';
+import 'src/ui/meshcore_carrier_panel.dart';
+import 'src/ui/meshtastic_carrier_panel.dart';
 import 'src/ui/nostr_carrier_panel.dart';
 import 'src/ui/reticulum_carrier_panel.dart';
 import 'src/ui/matrix_home_screen.dart';
@@ -13832,6 +13834,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             ReticulumCarrierPanel(
                               controller: widget.controller,
                             ),
+                            const SizedBox(height: 12),
+                            MeshtasticCarrierPanel(
+                              controller: widget.controller,
+                            ),
+                            const SizedBox(height: 12),
+                            MeshCoreCarrierPanel(controller: widget.controller),
                             const SizedBox(height: 12),
                             Text(
                               'Transport policy',

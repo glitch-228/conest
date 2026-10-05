@@ -40,6 +40,9 @@ class FakeRnode implements ByteLink {
   ].join();
 
   @override
+  bool get keepsMessages => false;
+
+  @override
   String get label => 'fake-rnode';
 
   @override

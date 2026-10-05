@@ -34,6 +34,8 @@ import 'matrix_service.dart';
 import 'email/carrier_mail.dart';
 import 'email/mail_socket.dart';
 import 'email_carrier.dart';
+import 'meshtastic_carrier.dart';
+import 'meshcore_carrier.dart';
 import 'models.dart';
 import 'reticulum/identity.dart';
 import 'reticulum/rnode_interface.dart';
@@ -43,6 +45,7 @@ import 'nostr/secp256k1.dart';
 import 'nostr_carrier.dart';
 import 'native_attachment_crypto.dart';
 import 'platform_bridge.dart';
+import 'radio/byte_link.dart';
 import 'ratchet.dart';
 import 'reachability_tracker.dart';
 import 'staged_attachment.dart';
@@ -438,7 +441,11 @@ class MessengerController extends ChangeNotifier {
     NostrSocketConnector? nostrConnector,
     MailConnector? mailConnector,
     RnsConnector? reticulumConnector,
+    MeshtasticConnector? meshtasticConnector,
+    MeshCoreConnector? meshCoreConnector,
   }) : _vaultStore = vaultStore,
+       _meshCoreConnector = meshCoreConnector,
+       _meshtasticConnector = meshtasticConnector,
        _reticulumConnector = reticulumConnector,
        _nostrConnector = nostrConnector,
        _mailConnector = mailConnector,
@@ -519,6 +526,8 @@ class MessengerController extends ChangeNotifier {
   final NostrSocketConnector? _nostrConnector;
   final MailConnector? _mailConnector;
   final RnsConnector? _reticulumConnector;
+  final MeshtasticConnector? _meshtasticConnector;
+  final MeshCoreConnector? _meshCoreConnector;
   MatrixNativeApi? _matrixNativeApi;
   final bool _loadNativeMatrixClient;
   MatrixClientService? _matrixClient;
@@ -3482,6 +3491,209 @@ class MessengerController extends ChangeNotifier {
         !_carrierTransports.containsKey(TransportKind.reticulum)) {
       await _startReticulumCarrier(advertise: false);
     }
+    if (meshtasticCarrierConfig != null &&
+        !_carrierTransports.containsKey(TransportKind.meshtastic)) {
+      await _startMeshtasticCarrier(advertise: false);
+    }
+    if (meshCoreCarrierConfig != null &&
+        !_carrierTransports.containsKey(TransportKind.meshCore)) {
+      await _startMeshCoreCarrier(advertise: false);
+    }
+  }
+
+  /// The MeshCore carrier's saved settings, if set up.
+  MeshCoreCarrierConfig? get meshCoreCarrierConfig =>
+      MeshCoreCarrierConfig.fromJson(
+        _snapshot.carrierAccounts[TransportKind.meshCore.name],
+      );
+
+  /// The running MeshCore connection, for its state in settings.
+  MeshCoreCarrierChannel? get meshCoreChannel => _meshCoreChannel;
+  MeshCoreCarrierChannel? _meshCoreChannel;
+
+  /// Carries messages through a MeshCore companion radio on USB ([host]
+  /// is the serial device) or Bluetooth ([host] is its address).
+  Future<void> enableMeshCoreCarrier({
+    required MeshCoreLink link,
+    required String host,
+  }) async {
+    _requireIdentity();
+    final trimmed = host.trim();
+    final valid = switch (link) {
+      MeshCoreLink.serial => isRadioDeviceName(trimmed),
+      MeshCoreLink.bluetooth => RegExp(
+        r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$',
+      ).hasMatch(trimmed),
+    };
+    if (!valid) {
+      throw ArgumentError(
+        link == MeshCoreLink.serial
+            ? 'Choose the USB device of the radio, such as /dev/ttyACM0.'
+            : 'Choose the radio from the Bluetooth scan.',
+      );
+    }
+    final previous = meshCoreCarrierConfig;
+    final config = MeshCoreCarrierConfig(
+      link: link,
+      host: trimmed,
+      publicKeyHex: previous?.publicKeyHex,
+    );
+    if (_carrierTransports.containsKey(TransportKind.meshCore)) {
+      await _detachCarrier(TransportKind.meshCore);
+    }
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.meshCore.name: config.toJson(),
+      },
+    );
+    await _persist('MeshCore carrier set up through $trimmed.');
+    await _startMeshCoreCarrier();
+  }
+
+  /// Stops the MeshCore carrier; contacts stop using it.
+  Future<void> disableMeshCoreCarrier() async {
+    await unregisterCarrierTransport(TransportKind.meshCore);
+    _meshCoreChannel = null;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts}
+        ..remove(TransportKind.meshCore.name),
+    );
+    await _persist('MeshCore carrier removed.');
+  }
+
+  Future<void> _startMeshCoreCarrier({bool advertise = true}) async {
+    final config = meshCoreCarrierConfig;
+    if (config == null || _snapshot.identity == null || !conestActive) return;
+    final adapter =
+        _carrierTransports[TransportKind.meshCore] ??
+        createMeshCoreCarrierAdapter(sealer: carrierSealer, now: _now);
+    final channel = MeshCoreCarrierChannel(
+      config: config,
+      connector: _meshCoreConnector,
+      now: _now,
+      onFrame: adapter.receiveFrame,
+      onStatusChanged: notifyListeners,
+      onPublicKey: _saveMeshCorePublicKey,
+    );
+    await adapter.detach();
+    adapter.attach(channel);
+    _meshCoreChannel = channel;
+    await registerCarrierTransport(adapter, advertise: advertise);
+  }
+
+  /// The radio's key is its address: save it, and tell contacts when new.
+  void _saveMeshCorePublicKey(String publicKeyHex) {
+    final config = meshCoreCarrierConfig;
+    if (config == null || config.publicKeyHex == publicKeyHex) return;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.meshCore.name: config
+            .withPublicKey(publicKeyHex)
+            .toJson(),
+      },
+    );
+    unawaited(_saveSnapshotSilently(notify: true));
+    _advertiseProfileToContacts();
+  }
+
+  /// The Meshtastic carrier's saved settings, if set up.
+  MeshtasticCarrierConfig? get meshtasticCarrierConfig =>
+      MeshtasticCarrierConfig.fromJson(
+        _snapshot.carrierAccounts[TransportKind.meshtastic.name],
+      );
+
+  /// The running Meshtastic connection, for its state in settings.
+  MeshtasticCarrierChannel? get meshtasticChannel => _meshtasticChannel;
+  MeshtasticCarrierChannel? _meshtasticChannel;
+
+  /// Carries messages through a Meshtastic radio on USB ([host] is the
+  /// serial device) or on the network ([host]:[port], its TCP API).
+  Future<void> enableMeshtasticCarrier({
+    required MeshtasticLink link,
+    required String host,
+    int port = defaultMeshtasticPort,
+  }) async {
+    _requireIdentity();
+    final trimmed = host.trim();
+    final serial = link == MeshtasticLink.serial;
+    if (trimmed.isEmpty ||
+        (serial
+            ? !isRadioDeviceName(trimmed)
+            : trimmed.contains(RegExp(r'[\s/]'))) ||
+        port < 1 ||
+        port > 65535) {
+      throw ArgumentError(
+        serial
+            ? 'Choose the USB device of the radio, such as /dev/ttyACM0.'
+            : 'Enter the radio address and TCP port.',
+      );
+    }
+    final previous = meshtasticCarrierConfig;
+    final config = MeshtasticCarrierConfig(
+      link: link,
+      host: trimmed,
+      port: port,
+      // The same radio keeps its number; another one reports its own.
+      nodeNum: previous?.nodeNum,
+    );
+    if (_carrierTransports.containsKey(TransportKind.meshtastic)) {
+      await _detachCarrier(TransportKind.meshtastic);
+    }
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.meshtastic.name: config.toJson(),
+      },
+    );
+    await _persist('Meshtastic carrier set up through ${config.label}.');
+    await _startMeshtasticCarrier();
+  }
+
+  /// Stops the Meshtastic carrier; contacts stop using it.
+  Future<void> disableMeshtasticCarrier() async {
+    await unregisterCarrierTransport(TransportKind.meshtastic);
+    _meshtasticChannel = null;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts}
+        ..remove(TransportKind.meshtastic.name),
+    );
+    await _persist('Meshtastic carrier removed.');
+  }
+
+  Future<void> _startMeshtasticCarrier({bool advertise = true}) async {
+    final config = meshtasticCarrierConfig;
+    if (config == null || _snapshot.identity == null || !conestActive) return;
+    final adapter =
+        _carrierTransports[TransportKind.meshtastic] ??
+        createMeshtasticCarrierAdapter(sealer: carrierSealer, now: _now);
+    final channel = MeshtasticCarrierChannel(
+      config: config,
+      connector: _meshtasticConnector,
+      onFrame: adapter.receiveFrame,
+      onStatusChanged: notifyListeners,
+      onNodeNum: _saveMeshtasticNodeNum,
+    );
+    await adapter.detach();
+    adapter.attach(channel);
+    _meshtasticChannel = channel;
+    await registerCarrierTransport(adapter, advertise: advertise);
+  }
+
+  /// The radio's node number is its address: save it, and tell contacts
+  /// when it is new.
+  void _saveMeshtasticNodeNum(int nodeNum) {
+    final config = meshtasticCarrierConfig;
+    if (config == null || config.nodeNum == nodeNum) return;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.meshtastic.name: config.withNodeNum(nodeNum).toJson(),
+      },
+    );
+    unawaited(_saveSnapshotSilently(notify: true));
+    _advertiseProfileToContacts();
   }
 
   /// The Reticulum carrier's saved settings, if set up.
@@ -3511,7 +3723,7 @@ class MessengerController extends ChangeNotifier {
     final bluetooth = link == ReticulumLink.rnodeBluetooth;
     if (trimmed.isEmpty ||
         (serial
-            ? !RegExp(r'^/dev/[A-Za-z0-9._/-]+$').hasMatch(trimmed)
+            ? !isRadioDeviceName(trimmed)
             : bluetooth
             ? !RegExp(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$').hasMatch(trimmed)
             : trimmed.contains(RegExp(r'[\s/]'))) ||
@@ -3785,6 +3997,7 @@ class MessengerController extends ChangeNotifier {
     }
     _carrierTransports[carrier.kind] = carrier;
     await _attachCarrier(carrier.kind);
+    _syncCarrierPeers();
     // Contacts learn the address to reach this device on the carrier.
     if (advertise) _advertiseProfileToContacts();
   }
@@ -3797,6 +4010,25 @@ class MessengerController extends ChangeNotifier {
     if (carrier != null) {
       await carrier.detach();
       _advertiseProfileToContacts();
+    }
+  }
+
+  /// Tells carriers that must know their peers ahead of time (MeshCore)
+  /// which contacts may reach this device over them.
+  void _syncCarrierPeers() {
+    final global = _snapshot.identity?.connectivity;
+    if (global == null) return;
+    for (final MapEntry(key: kind, value: carrier)
+        in _carrierTransports.entries) {
+      final channel = carrier.channel;
+      if (channel is! PeerAwareCarrierChannel) continue;
+      channel.updatePeers({
+        for (final contact in _snapshot.contacts)
+          if (contact.canSendOutbound &&
+              contact.routing.effectivePolicy(kind, global) !=
+                  TransportPolicy.disabled)
+            ?contact.carrierAddress(kind),
+      });
     }
   }
 
@@ -16671,6 +16903,7 @@ class MessengerController extends ChangeNotifier {
           updated = updated.copyWith(carrierAddresses: merged);
           _replaceContactRecord(updated);
           await _saveSnapshotSilently(notify: true);
+          _syncCarrierPeers();
         }
       }
       final matchesPendingRequest = pairingRequestId == null ||
@@ -24307,6 +24540,9 @@ class MessengerController extends ChangeNotifier {
   Future<void> _persist(String? status) async {
     _statusMessage = status;
     await _saveSnapshotSilently();
+    // Contacts, their policies or connectivity may have changed: carriers
+    // that keep their own contact list (MeshCore radios) follow.
+    _syncCarrierPeers();
   }
 
   void _setTransientStatus(String? status, {bool notify = true}) {

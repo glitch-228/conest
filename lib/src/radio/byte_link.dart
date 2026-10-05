@@ -14,6 +14,11 @@ abstract interface class ByteLink {
 
   /// What the user sees, such as `/dev/ttyACM0` or `rnode.local:8001`.
   String get label;
+
+  /// Whether the link keeps message boundaries: each write is delivered as
+  /// one message and each input event is one message (Bluetooth LE
+  /// characteristics), rather than a plain byte stream.
+  bool get keepsMessages;
 }
 
 /// A serial port on Linux or macOS, set to raw mode with `stty` and read
@@ -52,6 +57,9 @@ class UnixSerialLink implements ByteLink {
 
   @override
   final String label;
+
+  @override
+  bool get keepsMessages => false;
   final Stream<List<int>> _read;
   final RandomAccessFile _write;
   final WriteQueue _queue = WriteQueue();
@@ -114,6 +122,9 @@ class TcpByteLink implements ByteLink {
 
   @override
   final String label;
+
+  @override
+  bool get keepsMessages => false;
   final Socket _socket;
   final WriteQueue _queue = WriteQueue();
   final _input = StreamController<Uint8List>.broadcast();
@@ -177,3 +188,10 @@ void enableTcpKeepalive(Socket socket) {
     // Keepalive is an improvement, not a requirement.
   }
 }
+
+/// A radio device as the user picks it: a serial device path on Linux and
+/// macOS (`/dev/ttyACM0`), or an Android USB device (`vendor:product` in
+/// hex, or its system path).
+bool isRadioDeviceName(String value) =>
+    RegExp(r'^/dev/[A-Za-z0-9._/-]+$').hasMatch(value) ||
+    RegExp(r'^[0-9a-f]{4}:[0-9a-f]{4}$').hasMatch(value);

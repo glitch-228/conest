@@ -277,6 +277,13 @@ abstract interface class ManagedCarrierChannel implements CarrierChannel {
   Future<void> stop();
 }
 
+/// A channel that must know its peers ahead of time, such as a MeshCore
+/// radio that only accepts messages from contacts on the radio.
+abstract interface class PeerAwareCarrierChannel implements CarrierChannel {
+  /// The addresses of every contact that may use this carrier.
+  void updatePeers(Set<String> addresses);
+}
+
 /// Observable state of a carrier for settings and diagnostics.
 class CarrierStatus {
   const CarrierStatus({

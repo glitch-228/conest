@@ -276,6 +276,37 @@ jobs:
           CONEST_RNS_PYTHON: ${{ github.workspace }}/rns-venv/bin/python
         run: flutter test test/reticulum_interop_test.dart
 
+  meshtastic:
+    if: ${{ !inputs.quick_build }}
+    needs: cadence
+    name: Meshtastic carrier against meshtasticd
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - run: flutter pub get
+      - name: Start meshtasticd in simulation (pinned 2.7.26)
+        run: |
+          docker run -d --name meshtasticd -p 4403:4403 \
+            meshtastic/meshtasticd@sha256:23e92b1331a3a471eaef0c63cbca4365ca40b3111a9781cfdbe5a5114e5773d4 \
+            meshtasticd -s
+          for attempt in $(seq 1 60); do
+            if (exec 3<>/dev/tcp/localhost/4403) 2>/dev/null; then exit 0; fi
+            sleep 2
+          done
+          docker logs meshtasticd | tail -50
+          exit 1
+      - name: Run the client against it
+        env:
+          CONEST_MESHTASTIC_HOST: localhost
+        run: flutter test test/meshtastic_live_test.dart
+      - name: meshtasticd logs on failure
+        if: failure()
+        run: docker logs meshtasticd | tail -200
+
   android:
     name: Android debug battle-test APK
     needs: [cadence, verify]
