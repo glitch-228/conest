@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'transport_models.dart';
@@ -239,9 +240,7 @@ class TransportRegistry {
         leftPolicy,
       ).compareTo(_policyPriority(rightPolicy));
       if (policyOrder != 0) return policyOrder;
-      final pathOrder = _pathPriority(
-        left.path,
-      ).compareTo(_pathPriority(right.path));
+      final pathOrder = _routePriority(left).compareTo(_routePriority(right));
       if (pathOrder != 0) return pathOrder;
       return left.transport.routeRank.compareTo(right.transport.routeRank);
     });
@@ -315,6 +314,13 @@ class TransportRegistry {
     TransportPolicy.askBeforeUse => 2,
     TransportPolicy.disabled => 3,
   };
+
+  /// Tor reaches the contact directly but through three relays each way,
+  /// so it ranks with relayed routes rather than ahead of them.
+  static int _routePriority(RouteCandidate route) =>
+      route.transport == TransportKind.tor
+      ? max(_pathPriority(route.path), _pathPriority(TransportPathKind.relayed))
+      : _pathPriority(route.path);
 
   static int _pathPriority(TransportPathKind path) => switch (path) {
     TransportPathKind.local => 0,

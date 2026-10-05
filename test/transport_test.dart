@@ -110,6 +110,25 @@ void main() {
     },
   );
 
+  test('Tor ranks after relayed routes despite its direct path', () async {
+    final registry = TransportRegistry([
+      for (final (kind, path) in [
+        (TransportKind.tor, TransportPathKind.direct),
+        (TransportKind.conestRelay, TransportPathKind.relayed),
+        (TransportKind.iroh, TransportPathKind.direct),
+        (TransportKind.matrix, TransportPathKind.storeForward),
+      ])
+        _FakeAdapter(kind: kind, route: _route(kind, path)),
+    ]);
+    final routes = await registry.routesFor(peer, policies: const {});
+    expect(routes.map((route) => route.transport), [
+      TransportKind.iroh,
+      TransportKind.conestRelay,
+      TransportKind.tor,
+      TransportKind.matrix,
+    ]);
+  });
+
   test('route payload cap skips relay without attempting it', () async {
     final relay = _FakeAdapter(
       kind: TransportKind.conestRelay,
