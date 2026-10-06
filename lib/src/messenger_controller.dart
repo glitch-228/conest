@@ -127,6 +127,50 @@ String? _irohSocketAddressForRoute(PeerEndpoint route) {
       : '${address.address}:${route.port}';
 }
 
+/// Whether [host] can only be on a private or local network. Routes a
+/// contact hands over for forwarding must never point there.
+bool _isNonPublicHost(String host) {
+  final address = InternetAddress.tryParse(host);
+  if (address == null) {
+    final name = host.toLowerCase();
+    return !name.contains('.') ||
+        name == 'localhost' ||
+        name.endsWith('.localhost') ||
+        name.endsWith('.local') ||
+        name.endsWith('.lan') ||
+        name.endsWith('.internal') ||
+        name.endsWith('.home.arpa');
+  }
+  if (address.isLoopback || address.isLinkLocal || address.isMulticast) {
+    return true;
+  }
+  final bytes = address.rawAddress;
+  if (address.type == InternetAddressType.IPv4) {
+    final a = bytes[0];
+    final b = bytes[1];
+    return a == 0 ||
+        a == 10 ||
+        (a == 172 && b >= 16 && b <= 31) ||
+        (a == 192 && b == 168) ||
+        (a == 100 && b >= 64 && b <= 127) ||
+        (a == 169 && b == 254) ||
+        a >= 224;
+  }
+  if ((bytes[0] & 0xfe) == 0xfc || bytes.every((value) => value == 0)) {
+    return true;
+  }
+  final mapped =
+      bytes.sublist(0, 10).every((value) => value == 0) &&
+      bytes[10] == 0xff &&
+      bytes[11] == 0xff;
+  return mapped &&
+      _isNonPublicHost(
+        InternetAddress.fromRawAddress(
+          Uint8List.fromList(bytes.sublist(12)),
+        ).address,
+      );
+}
+
 ({String host, int port})? _parseIrohSocketAddress(String value) {
   final normalized = value.trim();
   if (normalized.isEmpty) return null;
@@ -254,6 +298,7 @@ const Set<String> _v2PairwiseKinds = <String>{
   'debug_file_test_probe_ack',
   'debug_file_test_result',
   'voice_call_signal',
+  'forward_request',
 };
 
 /// Outcome of a [`MessengerController.refreshDefaultRelays`] call.
@@ -4434,6 +4479,7 @@ class MessengerController extends ChangeNotifier {
         await _handleGroupFileIroh(inbound);
         return;
       }
+      if (await _handleForwardedIroh(inbound)) return;
       if (contact == null && await _handleGroupOnlyIrohInbound(inbound)) {
         return;
       }
@@ -6719,12 +6765,22 @@ class MessengerController extends ChangeNotifier {
             for (final kind in _carrierTransports.keys)
               contacts[index].routing.effectivePolicy(kind, global),
           ];
+    final carryBefore = contacts[index].routing.carryForContact;
     contacts[index] = contacts[index].copyWith(routing: prefs);
-    _snapshot = _snapshot.copyWith(contacts: contacts);
+    _snapshot = _snapshot.copyWith(
+      contacts: contacts,
+      pendingForwards: prefs.carryForContact
+          ? null
+          : [
+              for (final entry in _snapshot.pendingForwards)
+                if (entry.fromDeviceId != deviceId) entry,
+            ],
+    );
     await _persist('Routing preferences updated for ${contacts[index].alias}.');
     if (global != null &&
         contacts[index].canSendOutbound &&
-        ((_snapshot.matrixSession != null &&
+        (prefs.carryForContact != carryBefore ||
+            (_snapshot.matrixSession != null &&
                 prefs.effectivePolicy(TransportKind.matrix, global) !=
                     matrixBefore) ||
             !listEquals(carriersBefore, [
@@ -12278,9 +12334,12 @@ class MessengerController extends ChangeNotifier {
       'invitePayload': invitePayload,
       if (requestId != null) 'pairingRequestId': requestId,
       'featureCapabilityVersion': 1,
-      'featureCapabilities': _localApplicationCapabilities()
-          .map((capability) => capability.name)
-          .toList(),
+      'featureCapabilities': [
+        ..._localApplicationCapabilities().map((capability) => capability.name),
+        // Only the contacts this device carries for learn that it does.
+        if (contact.routing.carryForContact)
+          ApplicationCapability.forwardForContactsV1.name,
+      ],
       'requestPeerCapabilities': requestPeerCapabilities,
       if (pairingResponse != null) 'pairingResponse': pairingResponse,
       // Only peers that already know this identity read it (authenticated).
@@ -14591,6 +14650,15 @@ class MessengerController extends ChangeNotifier {
         if (envelope.kind == 'route_update') {
           await _handleRouteUpdate(envelope);
           _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'forward_request') {
+          // A request refused for now (carrying off, over quota) stays
+          // unseen, so the sender's retry can succeed later.
+          if (await _handleForwardRequest(envelope)) {
+            _markSeen(envelope.messageId);
+          }
           continue;
         }
 
@@ -20051,7 +20119,8 @@ class MessengerController extends ChangeNotifier {
         envelope: envelope,
         background: background,
       );
-      _reachability.noteAvailablePath(contact.deviceId);
+      // Handing it to a forwarder says nothing about reaching them.
+      if (!route.forwarded) _reachability.noteAvailablePath(contact.deviceId);
       if (_locallyDeletedMessageIds.contains(message.id) ||
           _messageById(contact.deviceId, message.id) == null) {
         await _sendMessageDeletion(
@@ -20060,7 +20129,7 @@ class MessengerController extends ChangeNotifier {
         );
         return true;
       }
-      final state = route.kind == PeerRouteKind.lan
+      final state = route.kind == PeerRouteKind.lan && !route.forwarded
           ? DeliveryState.local
           : DeliveryState.relayed;
       _updateMessageState(contact.deviceId, message.id, state, route: route);
@@ -20143,6 +20212,9 @@ class MessengerController extends ChangeNotifier {
     // too — drain them next so a peer who comes back online sees a fresh
     // batch of receipts for already-delivered messages.
     await _retryPendingAckDeliveries(force: force);
+    // Messages this device carries for contacts, on their own budget so
+    // they never hold up this device's own messages.
+    unawaited(_drainForwards());
     for (final contact in contacts) {
       if (!contact.canSendOutbound) {
         // Pending verification or archived — skip silently. The crypto
@@ -20307,6 +20379,7 @@ class MessengerController extends ChangeNotifier {
     Set<TransportKind>? allowedUnifiedKinds,
     bool irohFirst = false,
     bool background = false,
+    bool allowForwarding = true,
   }) async {
     // Defense in depth: the crypto layer already can't derive a shared
     // secret for a pending or archived contact (publicKeyBase64 is empty
@@ -20535,6 +20608,15 @@ class MessengerController extends ChangeNotifier {
     }
     final result = deliveredVia;
     if (result == null) {
+      // No route of ours reaches them: a contact who carries for us might.
+      if (allowForwarding) {
+        final forwarded = await _deliverViaForwarders(
+          contact,
+          envelope,
+          background: background,
+        );
+        if (forwarded != null) return forwarded;
+      }
       throw lastError ?? StateError('No reachable route for recipient.');
     }
     final deliveredEndpoint = result.endpoint;
@@ -20553,6 +20635,586 @@ class MessengerController extends ChangeNotifier {
       unawaited(_probeLanRoutesFor(contact));
     }
     return result;
+  }
+
+  /// Envelope kinds a contact may carry for us: messages and their small
+  /// updates. Files, groups and contact setup are not forwarded.
+  static const Set<String> _forwardableKinds = {
+    'direct_message',
+    'ack',
+    'message_edit',
+    'message_delete',
+    'message_reaction',
+  };
+  static const int _maxForwardEnvelopeBytes = 64 * 1024;
+  static const int _maxForwardRequestBytes = 96 * 1024;
+  static const int _maxForwardsPerSenderPerDay = 500;
+  static const int _maxForwardBytesPerSenderPerDay = 8 * 1024 * 1024;
+  static const int _maxPendingForwardsPerSender = 50;
+  static const int _maxPendingForwards = 500;
+  static const int _maxForwardAttempts = 40;
+  static const Duration _forwardLifetime = Duration(days: 7);
+  static const Duration _forwardDrainBudget = Duration(seconds: 30);
+  static const int _forwardDrainBatch = 20;
+  static const int _maxForwardedIngressPerEndpointPerMinute = 60;
+  static const int _maxForwardedIngressPerMinute = 600;
+  static final RegExp _irohEndpointPattern = RegExp(r'^[0-9a-f]{64}$');
+
+  /// Prefix of a forwarded envelope sent over Iroh (see [_sendForwarded]).
+  static final List<int> _forwardedIrohPrefix = utf8.encode(
+    '{"conestForwarded":1,',
+  );
+
+  /// Today's forwards per sender: (UTC day, count, bytes).
+  final Map<String, (int, int, int)> _forwardQuota = {};
+  bool _drainingForwards = false;
+
+  /// Forwarded frames received this minute, overall and per Iroh endpoint.
+  int _forwardedIngressMinute = 0;
+  int _forwardedIngressCount = 0;
+  final Map<String, int> _forwardedIngressByEndpoint = {};
+
+  /// As forwarder: (contact we carried for, recipient) → when, so the
+  /// recipient's replies and receipts may come back through us.
+  final Map<(String, String), DateTime> _carriedPairs = {};
+
+  /// As recipient: sender → (forwarder's Iroh endpoint, until when), the
+  /// way back to someone who reached us through a forwarder.
+  final Map<String, (String, DateTime)> _forwardReturnPaths = {};
+
+  /// Messages this device is carrying for contacts.
+  @visibleForTesting
+  List<PendingForward> get pendingForwardsForTesting =>
+      _snapshot.pendingForwards;
+
+  /// Contacts that told this device they carry its messages.
+  List<ContactRecord> _forwardersFor(ContactRecord recipient) => [
+    for (final contact in _snapshot.contacts)
+      if (contact.deviceId != recipient.deviceId &&
+          contact.canSendOutbound &&
+          !contact.isArchived &&
+          contact.featureCapabilities.contains(
+            ApplicationCapability.forwardForContactsV1,
+          ))
+        contact,
+  ];
+
+  /// What a forwarder needs to reach [contact], limited to what our own
+  /// settings for [contact] allow: its Iroh endpoint and direct addresses
+  /// when Iroh is allowed, and its relay mailboxes when relays are.
+  Map<String, dynamic> _forwardHintsFor(ContactRecord contact) {
+    final effective = _effectiveTransports(contact);
+    final policies = _effectiveTransportPolicies(contact);
+    final irohAllowed =
+        (policies[TransportKind.iroh] ?? TransportPolicy.disabled) !=
+            TransportPolicy.disabled &&
+        contact.irohEndpointId != null &&
+        contact.hasPinnedIrohIdentity;
+    return {
+      if (irohAllowed) 'iroh': contact.irohEndpointId,
+      if (irohAllowed)
+        'direct': [
+          for (final route in contact.directInternetRouteHints)
+            if (route.protocol == PeerRouteProtocol.udp &&
+                !_isNonPublicHost(route.host))
+              ?_irohSocketAddressForRoute(route),
+        ].take(8).toList(),
+      'routes': [
+        for (final route in _candidateRoutesForContact(contact))
+          if (route.kind == PeerRouteKind.relay &&
+              !_isNonPublicHost(route.host) &&
+              _legacyRouteAllowed(route, effective, policies))
+            route.toJson(),
+      ].take(4).toList(),
+    };
+  }
+
+  /// Keeps only well-formed public hints, so a contact cannot make this
+  /// device contact local hosts or store arbitrary data.
+  Map<String, dynamic> _sanitizedForwardHints(Map<String, dynamic> raw) {
+    final iroh = raw['iroh'];
+    final direct = [
+      for (final value in raw['direct'] as List<dynamic>? ?? const [])
+        if (value is String && value.length <= 64)
+          if (_parseIrohSocketAddress(value) case final parsed?
+              when !_isNonPublicHost(parsed.host))
+            value,
+    ].take(8).toList();
+    final routes = [
+      for (final value in raw['routes'] as List<dynamic>? ?? const [])
+        if (value is Map<String, dynamic>)
+          if (_peerEndpointOrNull(value) case final route?
+              when route.kind == PeerRouteKind.relay &&
+                  isValidPeerEndpointHost(route.host) &&
+                  isValidPeerEndpointPort(route.port) &&
+                  !_isNonPublicHost(route.host))
+            route.toJson(),
+    ].take(4).toList();
+    return {
+      if (iroh is String && _irohEndpointPattern.hasMatch(iroh)) 'iroh': iroh,
+      if (direct.isNotEmpty) 'direct': direct,
+      if (routes.isNotEmpty) 'routes': routes,
+    };
+  }
+
+  /// Asks contacts who carry for us to pass [envelope] on to [recipient],
+  /// whom no route of ours reaches. The envelope stays sealed for the
+  /// recipient; the forwarder learns only which device it is for. Failing
+  /// that, a reply goes back the way the recipient reached us.
+  Future<_DeliveryRoute?> _deliverViaForwarders(
+    ContactRecord recipient,
+    RelayEnvelope envelope, {
+    bool background = false,
+  }) async {
+    final global = _snapshot.identity?.connectivity;
+    if (!_forwardableKinds.contains(envelope.kind) ||
+        global == null ||
+        !global.onlineEnabled ||
+        !recipient.routing.onlineEnabled) {
+      return null;
+    }
+    final inner = envelope.toJson();
+    if (utf8.encode(jsonEncode(inner)).length > _maxForwardEnvelopeBytes) {
+      return null;
+    }
+    final me = _requireIdentity();
+    for (final forwarder in _forwardersFor(recipient).take(3)) {
+      try {
+        final request = await _crypto.encryptPayloadEnvelope(
+          kind: 'forward_request',
+          messageId: 'fwd-${envelope.messageId}',
+          conversationId: _crypto.conversationIdFor(forwarder.deviceId),
+          senderAccountId: me.accountId,
+          senderDeviceId: me.deviceId,
+          recipientDeviceId: forwarder.deviceId,
+          contact: forwarder,
+          plaintext: jsonEncode({
+            'v': 1,
+            'to': recipient.deviceId,
+            'envelope': inner,
+            'hints': _forwardHintsFor(recipient),
+          }),
+        );
+        final route = await _deliverToContact(
+          contact: forwarder,
+          recipientDeviceId: forwarder.deviceId,
+          envelope: request,
+          background: background,
+          allowForwarding: false,
+        );
+        appendDebugLog(
+          'Handed ${_boundedLogValue(envelope.messageId)} to '
+          '${forwarder.alias} to pass on to ${recipient.alias}.',
+        );
+        return _DeliveryRoute(
+          transportKind: route.transportKind,
+          path: route.path,
+          label: 'via ${forwarder.alias} (${route.label})',
+          routeKey: 'via:${forwarder.deviceId}:${route.routeKey}',
+          endpoint: route.endpoint,
+          routeOverride: MessageRoute.viaContact,
+        );
+      } catch (error) {
+        appendDebugLog(
+          'Forwarder ${forwarder.alias} not reached: '
+          '${_boundedLogValue(error.toString(), 160)}',
+        );
+      }
+    }
+    final back = _forwardReturnPaths[recipient.deviceId];
+    if (back != null && _now().isBefore(back.$2)) {
+      final (endpoint, _) = back;
+      if (await _sendForwarded(
+        endpoint: endpoint,
+        direct: const [],
+        deviceId: 'forwarder:$endpoint',
+        inner: envelope,
+      )) {
+        return _DeliveryRoute(
+          transportKind: TransportKind.iroh,
+          path: TransportPathKind.relayed,
+          label: 'back through the contact who passed their message on',
+          routeKey: 'via-back:$endpoint',
+          routeOverride: MessageRoute.viaContact,
+        );
+      }
+    }
+    return null;
+  }
+
+  /// A contact asks this device to pass a message on. Only contacts this
+  /// device carries for, only their own envelopes, within quotas. Returns
+  /// whether the request is settled (accepted or malformed); a request
+  /// refused for now is not, so its retry can succeed later.
+  Future<bool> _handleForwardRequest(RelayEnvelope envelope) async {
+    final sender = _contactByDeviceId(envelope.senderDeviceId);
+    if (sender == null || sender.isArchived || !sender.canSendOutbound) {
+      return true;
+    }
+    if (!sender.routing.carryForContact) {
+      appendDebugLog('Not carrying for ${sender.alias}: not allowed.');
+      return false;
+    }
+    final Object? decoded;
+    try {
+      final plaintext = await _crypto.decryptMessage(
+        contact: sender,
+        envelope: envelope,
+      );
+      if (plaintext.length > _maxForwardRequestBytes) return true;
+      decoded = jsonDecode(plaintext);
+    } on FormatException {
+      return true;
+    }
+    if (decoded is! Map<String, dynamic> || decoded['v'] != 1) return true;
+    final to = decoded['to'];
+    final innerJson = decoded['envelope'];
+    final rawHints = decoded['hints'];
+    if (to is! String ||
+        innerJson is! Map<String, dynamic> ||
+        rawHints is! Map<String, dynamic>) {
+      return true;
+    }
+    final RelayEnvelope inner;
+    try {
+      inner = RelayEnvelope.fromJson(innerJson);
+    } catch (_) {
+      return true;
+    }
+    final size = utf8.encode(jsonEncode(innerJson)).length;
+    final me = _requireIdentity();
+    // A contact may only have its own messages carried, and only messages.
+    if (inner.senderDeviceId != sender.deviceId ||
+        inner.recipientDeviceId != to ||
+        to == sender.deviceId ||
+        !_forwardableKinds.contains(inner.kind) ||
+        size > _maxForwardEnvelopeBytes) {
+      appendDebugLog('Refused a malformed forward from ${sender.alias}.');
+      return true;
+    }
+    if (to == me.deviceId) {
+      // It was for this device after all.
+      await _processEnvelopes([inner], route: MessageRoute.viaContact);
+      return true;
+    }
+    if (_snapshot.pendingForwards.any(
+      (entry) => entry.envelope.messageId == inner.messageId,
+    )) {
+      return true;
+    }
+    final day = _now().toUtc().millisecondsSinceEpoch ~/ 86400000;
+    final (quotaDay, count, bytes) =
+        _forwardQuota[sender.deviceId] ?? (day, 0, 0);
+    final (usedCount, usedBytes) = quotaDay == day ? (count, bytes) : (0, 0);
+    final pendingFromSender = _snapshot.pendingForwards
+        .where((entry) => entry.fromDeviceId == sender.deviceId)
+        .length;
+    if (usedCount >= _maxForwardsPerSenderPerDay ||
+        usedBytes + size > _maxForwardBytesPerSenderPerDay ||
+        pendingFromSender >= _maxPendingForwardsPerSender ||
+        _snapshot.pendingForwards.length >= _maxPendingForwards) {
+      appendDebugLog('Not carrying for ${sender.alias}: over quota.');
+      return false;
+    }
+    _forwardQuota[sender.deviceId] = (day, usedCount + 1, usedBytes + size);
+    final entry = PendingForward(
+      fromDeviceId: sender.deviceId,
+      toDeviceId: to,
+      envelope: inner,
+      hints: _sanitizedForwardHints(rawHints),
+      receivedAt: _now(),
+    );
+    _carriedPairs[(sender.deviceId, to)] = _now();
+    await _queueForward(entry);
+    return true;
+  }
+
+  /// Queues [entry] and tries it once right away.
+  Future<void> _queueForward(PendingForward entry) async {
+    _snapshot = _snapshot.copyWith(
+      pendingForwards: [..._snapshot.pendingForwards, entry],
+    );
+    await _saveSnapshotSilently(notify: false);
+    unawaited(() async {
+      final delivered = await _deliverForward(entry);
+      _settleForward(entry, delivered: delivered);
+      await _saveSnapshotSilently(notify: false, debounce: true);
+    }());
+  }
+
+  /// Records the outcome of one attempt at [entry].
+  void _settleForward(PendingForward entry, {required bool delivered}) {
+    final id = entry.envelope.messageId;
+    _snapshot = _snapshot.copyWith(
+      pendingForwards: [
+        for (final queued in _snapshot.pendingForwards)
+          if (queued.envelope.messageId != id)
+            queued
+          else if (!delivered && queued.attempts + 1 < _maxForwardAttempts)
+            queued.attempted(_now()),
+      ],
+    );
+  }
+
+  /// Tries carried messages that are due, a few at a time, so carrying for
+  /// others never holds up this device's own traffic.
+  Future<void> _drainForwards() async {
+    if (_drainingForwards ||
+        _snapshot.pendingForwards.isEmpty ||
+        !conestActive ||
+        _snapshot.identity == null) {
+      return;
+    }
+    _drainingForwards = true;
+    try {
+      final now = _now();
+      final started = DateTime.now();
+      var tried = 0;
+      final expired = {
+        for (final entry in _snapshot.pendingForwards)
+          if (now.difference(entry.receivedAt) > _forwardLifetime)
+            entry.envelope.messageId,
+      };
+      if (expired.isNotEmpty) {
+        _snapshot = _snapshot.copyWith(
+          pendingForwards: [
+            for (final entry in _snapshot.pendingForwards)
+              if (!expired.contains(entry.envelope.messageId)) entry,
+          ],
+        );
+      }
+      for (final entry in List<PendingForward>.of(_snapshot.pendingForwards)) {
+        if (tried >= _forwardDrainBatch ||
+            DateTime.now().difference(started) > _forwardDrainBudget) {
+          break;
+        }
+        final lastAttempt = entry.lastAttemptAt;
+        final wait = Duration(
+          seconds: min(15 * (1 << min(entry.attempts, 6)), 600),
+        );
+        if (lastAttempt != null && now.difference(lastAttempt) < wait) {
+          continue;
+        }
+        tried++;
+        _settleForward(entry, delivered: await _deliverForward(entry));
+      }
+      if (tried > 0 || expired.isNotEmpty) {
+        await _saveSnapshotSilently(notify: false, debounce: true);
+      }
+    } finally {
+      _drainingForwards = false;
+    }
+  }
+
+  /// Passes one carried message on. To one of our own contacts it goes
+  /// over our own routes only; otherwise to the relays and Iroh endpoint
+  /// the sender gave.
+  Future<bool> _deliverForward(PendingForward entry) async {
+    final inner = entry.envelope;
+    final recipient = _contactByDeviceId(entry.toDeviceId);
+    if (recipient != null) {
+      if (!recipient.canSendOutbound || recipient.isArchived) return false;
+      // Local network and relay stores carry the sealed envelope as is.
+      // Iroh would present this device's identity, so it goes wrapped.
+      try {
+        await _deliverToContact(
+          contact: recipient,
+          recipientDeviceId: recipient.deviceId,
+          envelope: inner,
+          allowedUnifiedKinds: const <TransportKind>{},
+          allowForwarding: false,
+        );
+        return true;
+      } catch (_) {}
+      final endpoint = recipient.irohEndpointId;
+      return endpoint != null &&
+          recipient.hasPinnedIrohIdentity &&
+          await _sendForwarded(
+            endpoint: endpoint,
+            direct: const [],
+            deviceId: recipient.deviceId,
+            inner: inner,
+          );
+    }
+    for (final json in entry.hints['routes'] as List<dynamic>? ?? const []) {
+      final route = json is Map<String, dynamic>
+          ? _peerEndpointOrNull(json)
+          : null;
+      if (route == null || _isNonPublicHost(route.host)) continue;
+      try {
+        // Not pinned or scored: these are someone else's relays.
+        if (await _relayClient.storeEnvelope(
+          host: route.host,
+          port: route.port,
+          protocol: route.protocol,
+          recipientDeviceId: entry.toDeviceId,
+          envelope: inner,
+        )) {
+          return true;
+        }
+      } catch (_) {}
+    }
+    final iroh = entry.hints['iroh'];
+    return iroh is String &&
+        await _sendForwarded(
+          endpoint: iroh,
+          direct: [
+            for (final address
+                in entry.hints['direct'] as List<dynamic>? ?? const [])
+              if (address is String) address,
+          ],
+          deviceId: 'forward:$iroh',
+          inner: inner,
+        );
+  }
+
+  /// Sends [inner] wrapped as a forwarded envelope to Iroh [endpoint].
+  /// [deviceId] keys the registry's route statistics.
+  Future<bool> _sendForwarded({
+    required String endpoint,
+    required List<String> direct,
+    required String deviceId,
+    required RelayEnvelope inner,
+  }) async {
+    final registry = _transportRegistry;
+    final global = _snapshot.identity?.connectivity;
+    if (registry?.adapterFor(TransportKind.iroh) == null ||
+        global == null ||
+        global.policyFor(TransportKind.iroh) == TransportPolicy.disabled) {
+      return false;
+    }
+    try {
+      await registry!.deliverEnvelope(
+        peer: TransportPeer(
+          deviceId: deviceId,
+          transportIdentity: endpoint,
+          identityPinned: true,
+          directAddresses: direct.take(8).toList(),
+          allowRelay: global.irohRelayEnabled,
+        ),
+        envelope: TransportEnvelope(
+          id: 'fwd-${inner.messageId}',
+          recipientDeviceId: inner.recipientDeviceId,
+          bytes: Uint8List.fromList([
+            ..._forwardedIrohPrefix,
+            ...utf8.encode('"envelope":${jsonEncode(inner.toJson())}}'),
+          ]),
+          createdAt: inner.createdAt,
+        ),
+        policies: {
+          for (final kind in TransportKind.values)
+            kind: kind == TransportKind.iroh
+                ? TransportPolicy.automatic
+                : TransportPolicy.disabled,
+        },
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static PeerEndpoint? _peerEndpointOrNull(Map<String, dynamic> json) {
+    try {
+      return PeerEndpoint.fromJson(json);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// A forwarded envelope over Iroh. For this device: accepted when sealed
+  /// by one of its contacts. For one of our contacts we carry for: a reply
+  /// or receipt coming back from someone we carried for them, queued on.
+  Future<bool> _handleForwardedIroh(TransportInboundEnvelope inbound) async {
+    final bytes = inbound.bytes;
+    if (bytes.length <= _forwardedIrohPrefix.length ||
+        bytes.length > _maxForwardEnvelopeBytes + 4096) {
+      return false;
+    }
+    for (var index = 0; index < _forwardedIrohPrefix.length; index++) {
+      if (bytes[index] != _forwardedIrohPrefix[index]) return false;
+    }
+    final from = inbound.senderTransportIdentity;
+    final minute = _now().millisecondsSinceEpoch ~/ 60000;
+    if (minute != _forwardedIngressMinute) {
+      _forwardedIngressMinute = minute;
+      _forwardedIngressCount = 0;
+      _forwardedIngressByEndpoint.clear();
+    }
+    final fromEndpoint = (_forwardedIngressByEndpoint[from] ?? 0) + 1;
+    if (fromEndpoint > _maxForwardedIngressPerEndpointPerMinute ||
+        _forwardedIngressCount >= _maxForwardedIngressPerMinute) {
+      return true;
+    }
+    _forwardedIngressByEndpoint[from] = fromEndpoint;
+    _forwardedIngressCount++;
+    try {
+      final decoded = jsonDecode(utf8.decode(bytes));
+      final innerJson = decoded is Map<String, dynamic>
+          ? decoded['envelope']
+          : null;
+      if (innerJson is! Map<String, dynamic>) return true;
+      final inner = RelayEnvelope.fromJson(innerJson);
+      if (!_forwardableKinds.contains(inner.kind)) return true;
+      final me = _snapshot.identity?.deviceId;
+      if (inner.recipientDeviceId != me) {
+        await _carryBack(inner, fromEndpoint: from);
+        return true;
+      }
+      final sender = _contactByDeviceId(inner.senderDeviceId);
+      if (sender == null || sender.isArchived) return true;
+      await _processEnvelopes(
+        [inner],
+        ingressKind: PeerRouteKind.relay,
+        route: MessageRoute.viaContact,
+      );
+      // Replies and receipts can go back the same way for a while.
+      if (_irohEndpointPattern.hasMatch(from)) {
+        _forwardReturnPaths[sender.deviceId] = (
+          from,
+          _now().add(_forwardLifetime),
+        );
+      }
+    } catch (error) {
+      appendDebugLog(
+        'Dropped a forwarded envelope: '
+        '${_boundedLogValue(error.toString(), 160)}',
+      );
+    }
+    return true;
+  }
+
+  /// A reply or receipt for a contact we carried a message for, from the
+  /// device we carried it to: passed on to the contact, but only for a
+  /// pair this device carried for recently.
+  Future<void> _carryBack(
+    RelayEnvelope inner, {
+    required String fromEndpoint,
+  }) async {
+    final contact = _contactByDeviceId(inner.recipientDeviceId);
+    final carriedAt =
+        _carriedPairs[(inner.recipientDeviceId, inner.senderDeviceId)];
+    if (contact == null ||
+        !contact.routing.carryForContact ||
+        carriedAt == null ||
+        _now().difference(carriedAt) > _forwardLifetime ||
+        utf8.encode(jsonEncode(inner.toJson())).length >
+            _maxForwardEnvelopeBytes ||
+        _snapshot.pendingForwards.any(
+          (entry) => entry.envelope.messageId == inner.messageId,
+        ) ||
+        _snapshot.pendingForwards.length >= _maxPendingForwards) {
+      return;
+    }
+    await _queueForward(
+      PendingForward(
+        fromDeviceId: 'iroh:$fromEndpoint',
+        toDeviceId: contact.deviceId,
+        envelope: inner,
+        hints: const {},
+        receivedAt: _now(),
+      ),
+    );
   }
 
   final Map<String, DateTime> _lanProbedAt = {};
@@ -25277,6 +25939,7 @@ class _DeliveryRoute {
     required this.label,
     required this.routeKey,
     this.endpoint,
+    this.routeOverride,
   });
 
   factory _DeliveryRoute.legacy(PeerEndpoint endpoint) => _DeliveryRoute(
@@ -25296,7 +25959,12 @@ class _DeliveryRoute {
   );
 
   MessageRoute? get messageRoute =>
-      MessageRoute.fromTransport(transportKind, path);
+      routeOverride ?? MessageRoute.fromTransport(transportKind, path);
+
+  /// Set when the message went to a contact who passes it on.
+  final MessageRoute? routeOverride;
+
+  bool get forwarded => routeOverride == MessageRoute.viaContact;
 
   factory _DeliveryRoute.transport(DeliveryReceipt receipt) => _DeliveryRoute(
     transportKind: receipt.route.transport,

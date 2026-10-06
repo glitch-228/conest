@@ -10,6 +10,10 @@ enum ApplicationCapability {
 
   /// Forward-secret Olm sessions (protocolVersion 3 envelopes).
   ratchetV1,
+
+  /// Passes on messages from this contact to devices it cannot reach (only
+  /// advertised to contacts this device carries for).
+  forwardForContactsV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

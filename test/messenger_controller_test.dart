@@ -16,6 +16,7 @@ import 'package:conest/src/bitchat_carrier.dart';
 import 'package:conest/src/build_info.dart';
 import 'package:conest/src/carrier.dart';
 import 'package:conest/src/crypto_service.dart';
+import 'package:conest/src/feature_models.dart';
 import 'package:conest/src/email/mail_socket.dart';
 import 'package:conest/src/group_file_crypto.dart';
 import 'package:conest/src/group_file_download.dart';
@@ -1159,6 +1160,9 @@ class _InProcessIrohNetwork {
   final envelopes = <RelayEnvelope>[];
   final groupFileHeaders = <GroupFileBinaryHeader>[];
 
+  /// (sender, recipient) endpoint pairs that cannot reach each other.
+  final blockedPairs = <(String, String)>{};
+
   Future<TransportRegistry?> registry(IdentityRecord identity) async {
     final bridge = _InProcessIrohBridge(this, identity.irohEndpointId!);
     bridges[bridge.endpointId] = bridge;
@@ -1219,14 +1223,20 @@ class _InProcessIrohBridge implements NativeIrohBridge {
     if (network.relayed && !allowRelay) throw StateError('Relay disabled');
     final recipient = network.bridges[remoteEndpointId];
     if (recipient == null) throw StateError('Peer offline');
+    if (network.blockedPairs.contains((endpointId, remoteEndpointId))) {
+      throw StateError('Peer unreachable');
+    }
     final range = decodeIrohAttachmentRangeFrame(bytes);
     if (range != null && isGroupFileBinary(range.bytes)) {
       network.groupFileHeaders.add(peekGroupFileBinary(range.bytes));
     }
     if (range == null) {
+      final decoded = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
       network.envelopes.add(
         RelayEnvelope.fromJson(
-          jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>,
+          decoded['conestForwarded'] == 1
+              ? decoded['envelope'] as Map<String, dynamic>
+              : decoded,
         ),
       );
     }
@@ -12709,6 +12719,292 @@ void main() {
     },
   );
 
+  group('forwarding through a contact', () {
+    test('a message reaches C through B when A cannot reach C', () async {
+      final shared = _FakeRelayClient();
+      final aliceRelay = _GatedRelayClient(shared);
+      final bobRelay = _GatedRelayClient(shared);
+      final carolRelay = _GatedRelayClient(shared);
+      final alice = await _createController(
+        relayClient: aliceRelay,
+        displayName: 'Alice',
+        internetRelayHost: 'relay-a.example',
+        lanAddresses: const ['10.0.1.1'],
+      );
+      final bob = await _createController(
+        relayClient: bobRelay,
+        displayName: 'Bob',
+        internetRelayHost: 'relay-b.example',
+        lanAddresses: const ['10.0.1.2'],
+      );
+      final carol = await _createController(
+        relayClient: carolRelay,
+        displayName: 'Carol',
+        internetRelayHost: 'relay-c.example',
+        lanAddresses: const ['10.0.9.3'],
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      addTearDown(carol.dispose);
+      // Alice knows Bob and Carol; Bob and Carol do not know each other.
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      Future<void> settle([int rounds = 6]) async {
+        for (var round = 0; round < rounds; round++) {
+          for (final peer in [alice, bob, carol]) {
+            await peer.retryUnacknowledgedMessagesNow();
+            await peer.pollNow();
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+      }
+
+      // Now Alice can only reach her own and Bob's relay; Bob reaches all.
+      aliceRelay.reachable = {'relay-a.example', 'relay-b.example'};
+      bobRelay.reachable = {
+        'relay-a.example',
+        'relay-b.example',
+        'relay-c.example',
+      };
+      carolRelay.reachable = {'relay-c.example'};
+      final aliceId = alice.identity!.deviceId;
+      final carolContact = alice.contacts.singleWhere(
+        (contact) => contact.deviceId == carol.identity!.deviceId,
+      );
+
+      // Without Bob's consent nothing is carried.
+      await alice.sendMessage(contact: carolContact, body: 'via bob');
+      await settle();
+      expect(carol.messagesFor(aliceId), isEmpty);
+      expect(
+        shared.storedEnvelopes.where((e) => e.kind == 'forward_request'),
+        isEmpty,
+      );
+
+      // Bob agrees to carry for Alice; Alice learns it and retries.
+      final aliceAtBob = bob.contacts.single;
+      await bob.updateContactRoutingPreferences(
+        aliceAtBob.deviceId,
+        aliceAtBob.routing.copyWith(carryForContact: true),
+      );
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (!carol.messagesFor(aliceId).any((m) => m.body == 'via bob') &&
+          DateTime.now().isBefore(deadline)) {
+        await settle(1);
+      }
+      expect(
+        alice.contacts
+            .singleWhere((c) => c.deviceId == bob.identity!.deviceId)
+            .featureCapabilities,
+        contains(ApplicationCapability.forwardForContactsV1),
+      );
+      expect(
+        carol.messagesFor(aliceId).map((message) => message.body),
+        contains('via bob'),
+      );
+      // Bob saw only a sealed envelope for Carol, and nothing is left over.
+      expect(bob.pendingForwardsForTesting, isEmpty);
+      expect(
+        bob.messagesFor(aliceId).map((m) => m.body),
+        isNot(contains('via bob')),
+      );
+    });
+
+    test('B passes a message on to C over Iroh using A\'s hints', () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> device(String name) => _createController(
+        relayClient: relay,
+        displayName: name,
+        transportRegistryFactory: network.registry,
+      );
+      final alice = await device('Alice');
+      final bob = await device('Bob');
+      final carol = await device('Carol');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      addTearDown(carol.dispose);
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      final aliceAtBob = bob.contacts.single;
+      await bob.updateContactRoutingPreferences(
+        aliceAtBob.deviceId,
+        aliceAtBob.routing.copyWith(carryForContact: true),
+      );
+      final bobId = bob.identity!.deviceId;
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        return alice.contacts
+            .singleWhere((c) => c.deviceId == bobId)
+            .featureCapabilities
+            .contains(ApplicationCapability.forwardForContactsV1);
+      });
+      // No relay works, and Alice's Iroh cannot reach Carol.
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      network.blockedPairs.add((
+        alice.identity!.irohEndpointId!,
+        carol.identity!.irohEndpointId!,
+      ));
+      final carolContact = alice.contacts.singleWhere(
+        (c) => c.deviceId == carol.identity!.deviceId,
+      );
+      await alice.sendMessage(contact: carolContact, body: 'iroh via bob');
+      final aliceId = alice.identity!.deviceId;
+      await _waitForIroh(
+        () => carol.messagesFor(aliceId).any((m) => m.body == 'iroh via bob'),
+        reason: 'the message did not reach Carol through Bob',
+      );
+      expect(
+        carol
+            .messagesFor(aliceId)
+            .singleWhere((m) => m.body == 'iroh via bob')
+            .route,
+        MessageRoute.viaContact,
+      );
+      // Carol cannot reach Alice either; her reply goes back through Bob.
+      network.blockedPairs.add((
+        carol.identity!.irohEndpointId!,
+        alice.identity!.irohEndpointId!,
+      ));
+      final aliceAtCarol = carol.contacts.singleWhere(
+        (c) => c.deviceId == aliceId,
+      );
+      await carol.sendMessage(contact: aliceAtCarol, body: 'reply via bob');
+      final carolId = carol.identity!.deviceId;
+      await _waitForIroh(
+        () => alice.messagesFor(carolId).any((m) => m.body == 'reply via bob'),
+        reason: 'the reply did not come back through Bob',
+      );
+      // Alice's message shows that it went through a contact.
+      expect(
+        alice
+            .messagesFor(carolId)
+            .singleWhere((m) => m.body == 'iroh via bob')
+            .route,
+        MessageRoute.viaContact,
+      );
+    });
+
+    test(
+      'a forwarder refuses envelopes that are not the sender\'s own',
+      () async {
+        final shared = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: shared,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: shared,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final aliceAtBob = bob.contacts.single;
+        final bobContact = alice.contacts.single;
+        final crypto = CryptoService(identityProvider: () => alice.identity!);
+        final me = alice.identity!;
+        Future<void> request(
+          Map<String, dynamic> inner, {
+          String? id,
+          Map<String, dynamic> hints = const {},
+        }) async {
+          final envelope = await crypto.encryptPayloadEnvelope(
+            kind: 'forward_request',
+            messageId: id ?? 'fwd-${DateTime.now().microsecondsSinceEpoch}',
+            conversationId: crypto.conversationIdFor(bobContact.deviceId),
+            senderAccountId: me.accountId,
+            senderDeviceId: me.deviceId,
+            recipientDeviceId: bobContact.deviceId,
+            contact: bobContact,
+            plaintext: jsonEncode({
+              'v': 1,
+              'to': 'dev-someone',
+              'envelope': inner,
+              'hints': hints,
+            }),
+          );
+          await shared.storeEnvelope(
+            host: 'relay.example',
+            port: defaultRelayPort,
+            recipientDeviceId: bobContact.deviceId,
+            envelope: envelope,
+          );
+          await bob.pollNow();
+        }
+
+        RelayEnvelope inner({
+          required String sender,
+          String kind = 'direct_message',
+        }) => RelayEnvelope(
+          kind: kind,
+          messageId: 'inner-${DateTime.now().microsecondsSinceEpoch}',
+          conversationId: 'c',
+          senderAccountId: 'a',
+          senderDeviceId: sender,
+          recipientDeviceId: 'dev-someone',
+          createdAt: DateTime.now().toUtc(),
+          nonceBase64: base64Encode(Uint8List(12)),
+          ciphertextBase64: base64Encode(Uint8List(4)),
+          macBase64: base64Encode(Uint8List(16)),
+        );
+        final own = inner(sender: me.deviceId).toJson();
+        final hints = {
+          'iroh': 'not-an-endpoint',
+          'direct': ['192.168.1.9:4433', '203.0.113.7:4433'],
+          'routes': [
+            const PeerEndpoint(
+              kind: PeerRouteKind.relay,
+              host: '127.0.0.1',
+              port: 7667,
+            ).toJson(),
+            const PeerEndpoint(
+              kind: PeerRouteKind.relay,
+              host: 'relay.example.org',
+              port: 7667,
+            ).toJson(),
+            const PeerEndpoint(
+              kind: PeerRouteKind.lan,
+              host: 'relay2.example.org',
+              port: 7667,
+            ).toJson(),
+          ],
+        };
+        // The hinted relay is down, so what Bob accepts stays queued.
+        shared.shouldFailStore = (host, _, _, _, _) =>
+            host == 'relay.example.org';
+        // Bob does not carry for Alice yet: refused, but not forgotten.
+        await request(own, id: 'fwd-own', hints: hints);
+        expect(bob.pendingForwardsForTesting, isEmpty);
+        await bob.updateContactRoutingPreferences(
+          aliceAtBob.deviceId,
+          aliceAtBob.routing.copyWith(carryForContact: true),
+        );
+        // Someone else's envelope, and a kind that is never carried.
+        await request(inner(sender: 'dev-mallory').toJson());
+        await request(
+          inner(sender: me.deviceId, kind: 'group_message').toJson(),
+        );
+        expect(bob.pendingForwardsForTesting, isEmpty);
+        // Alice's retry of her own message is now queued, with only public,
+        // well-formed hints kept.
+        await request(own, id: 'fwd-own', hints: hints);
+        final queued = bob.pendingForwardsForTesting.single;
+        expect(queued.hints['iroh'], isNull);
+        expect(queued.hints['direct'], ['203.0.113.7:4433']);
+        expect((queued.hints['routes'] as List).map((route) => route['host']), [
+          'relay.example.org',
+        ]);
+        // Turning carrying off drops what was queued for Alice.
+        await bob.updateContactRoutingPreferences(
+          aliceAtBob.deviceId,
+          bob.contacts.single.routing.copyWith(carryForContact: false),
+        );
+        expect(bob.pendingForwardsForTesting, isEmpty);
+      },
+    );
+  });
+
   group('Tor carrier', () {
     test('two devices talk through their onion services', () async {
       final tor = FakeTorNetwork();
@@ -15294,4 +15590,131 @@ class _FakeCarrierChannel implements CarrierChannel {
   @override
   Future<void> sendFrame(String address, Uint8List frame) async =>
       _network.deliver(carrierSenderIdentity(localAddress), address, frame);
+}
+
+/// A device's view of a shared fake relay network: it reaches only the
+/// hosts in [reachable] (all of them while that is null).
+class _GatedRelayClient extends RelayClient {
+  _GatedRelayClient(this.shared);
+
+  final _FakeRelayClient shared;
+  Set<String>? reachable;
+
+  void _check(String host) {
+    if (reachable != null && !reachable!.contains(host)) {
+      throw SocketException('$host is not reachable from here');
+    }
+  }
+
+  @override
+  Future<bool> storeEnvelope({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    required RelayEnvelope envelope,
+    Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
+  }) async {
+    _check(host);
+    return shared.storeEnvelope(
+      host: host,
+      port: port,
+      protocol: protocol,
+      recipientDeviceId: recipientDeviceId,
+      envelope: envelope,
+      timeout: timeout,
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    );
+  }
+
+  @override
+  Future<List<RelayEnvelope>> fetchEnvelopes({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    int limit = 64,
+    Duration timeout = const Duration(seconds: 4),
+    Duration waitFor = Duration.zero,
+    String? expectedIdentityPublicKeyBase64,
+  }) async {
+    _check(host);
+    return shared.fetchEnvelopes(
+      host: host,
+      port: port,
+      protocol: protocol,
+      recipientDeviceId: recipientDeviceId,
+      limit: limit,
+      timeout: timeout,
+      waitFor: waitFor,
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    );
+  }
+
+  @override
+  Future<RelayFetchBatch> fetchLeasedEnvelopes({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    int limit = 64,
+    Duration timeout = const Duration(seconds: 4),
+    Duration waitFor = Duration.zero,
+    Duration leaseFor = const Duration(seconds: 60),
+    String? expectedIdentityPublicKeyBase64,
+  }) async {
+    _check(host);
+    return shared.fetchLeasedEnvelopes(
+      host: host,
+      port: port,
+      protocol: protocol,
+      recipientDeviceId: recipientDeviceId,
+      limit: limit,
+      timeout: timeout,
+      waitFor: waitFor,
+      leaseFor: leaseFor,
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    );
+  }
+
+  @override
+  Future<void> acknowledgeLease({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    required String leaseId,
+    Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
+  }) async {
+    _check(host);
+    return shared.acknowledgeLease(
+      host: host,
+      port: port,
+      protocol: protocol,
+      recipientDeviceId: recipientDeviceId,
+      leaseId: leaseId,
+      timeout: timeout,
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    );
+  }
+
+  @override
+  Future<RelayHealthInfo> inspectHealth({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
+  }) async {
+    _check(host);
+    return shared.inspectHealth(
+      host: host,
+      port: port,
+      protocol: protocol,
+      timeout: timeout,
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    );
+  }
 }

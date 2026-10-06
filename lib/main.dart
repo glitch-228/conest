@@ -16738,6 +16738,7 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
   late bool _lan = widget.initial.lanEnabled;
   late bool _online = widget.initial.onlineEnabled;
   late bool _irohRelay = widget.initial.irohRelayEnabled;
+  late bool _carry = widget.initial.carryForContact;
   late RoutingPreference _preferred = widget.initial.preferred;
   late final Map<TransportKind, TransportPolicy> _policies =
       Map<TransportKind, TransportPolicy>.from(
@@ -16838,6 +16839,18 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
                   setState(() => _preferred = sel.first),
             ),
           ],
+          SwitchListTile.adaptive(
+            key: const ValueKey('carry-for-contact'),
+            value: _carry,
+            onChanged: (value) => setState(() => _carry = value),
+            title: const Text('Carry their messages'),
+            subtitle: const Text(
+              'When this contact cannot reach someone but this device can, '
+              'pass their messages on. You see only who they are for and '
+              'when; the content stays encrypted.',
+            ),
+            contentPadding: EdgeInsets.zero,
+          ),
           const SizedBox(height: 12),
           Text(_resolvedLabel(), style: Theme.of(context).textTheme.bodySmall),
         ],
@@ -16856,6 +16869,7 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
                       onlineEnabled: _online,
                       preferred: _preferred,
                       irohRelayEnabled: _irohRelay,
+                      carryForContact: _carry,
                       transportPolicies: Map.unmodifiable(_policies),
                     ),
                   );
@@ -19690,6 +19704,7 @@ extension MessageRouteStyle on MessageRoute {
     MessageRoute.meshCore => const Color(0xFFC0CA33),
     MessageRoute.bitchat => const Color(0xFF1565C0),
     MessageRoute.torOnion => const Color(0xFF7E57C2),
+    MessageRoute.viaContact => const Color(0xFFEF6C00),
   };
 
   String get shortLabel => switch (this) {
@@ -19709,6 +19724,7 @@ extension MessageRouteStyle on MessageRoute {
     MessageRoute.meshCore => 'MeshCore',
     MessageRoute.bitchat => 'Bluetooth',
     MessageRoute.torOnion => 'Tor',
+    MessageRoute.viaContact => 'Via contact',
   };
 }
 

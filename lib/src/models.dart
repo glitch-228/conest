@@ -799,6 +799,7 @@ class ContactRoutingPreferences {
     this.onlineEnabled = true,
     this.preferred = RoutingPreference.lan,
     this.irohRelayEnabled = true,
+    this.carryForContact = false,
     this.transportPolicies = const {
       TransportKind.lan: TransportPolicy.automatic,
       TransportKind.iroh: TransportPolicy.automatic,
@@ -820,6 +821,11 @@ class ContactRoutingPreferences {
   final bool onlineEnabled;
   final RoutingPreference preferred;
   final bool irohRelayEnabled;
+
+  /// This device passes on messages this contact sends to people it cannot
+  /// reach itself (it learns only which device they are for, size and
+  /// time; the content stays sealed for the recipient).
+  final bool carryForContact;
   final Map<TransportKind, TransportPolicy> transportPolicies;
 
   TransportPolicy policyFor(TransportKind kind) {
@@ -858,6 +864,7 @@ class ContactRoutingPreferences {
     bool? onlineEnabled,
     RoutingPreference? preferred,
     bool? irohRelayEnabled,
+    bool? carryForContact,
     Map<TransportKind, TransportPolicy>? transportPolicies,
   }) {
     return ContactRoutingPreferences(
@@ -865,6 +872,7 @@ class ContactRoutingPreferences {
       onlineEnabled: onlineEnabled ?? this.onlineEnabled,
       preferred: preferred ?? this.preferred,
       irohRelayEnabled: irohRelayEnabled ?? this.irohRelayEnabled,
+      carryForContact: carryForContact ?? this.carryForContact,
       transportPolicies: transportPolicies ?? this.transportPolicies,
     );
   }
@@ -886,6 +894,7 @@ class ContactRoutingPreferences {
     'onlineEnabled': onlineEnabled,
     'preferred': preferred.name,
     'irohRelayEnabled': irohRelayEnabled,
+    if (carryForContact) 'carryForContact': true,
     'transportPolicies': transportPoliciesToJson(transportPolicies),
     'transportPolicyVersion': currentTransportPolicyVersion,
   };
@@ -906,6 +915,7 @@ class ContactRoutingPreferences {
       onlineEnabled: onlineEnabled,
       preferred: preferred ?? RoutingPreference.lan,
       irohRelayEnabled: json['irohRelayEnabled'] as bool? ?? true,
+      carryForContact: json['carryForContact'] == true,
       transportPolicies: transportPoliciesFromJson(
         json['transportPolicies'],
         defaults: defaults,
@@ -2145,7 +2155,10 @@ enum MessageRoute {
   bitchat,
 
   /// Over Tor, between onion services.
-  torOnion;
+  torOnion,
+
+  /// Passed on by another contact who could reach the recipient.
+  viaContact;
 
   String get label => switch (this) {
     lanDirect => 'LAN direct',
@@ -2164,6 +2177,7 @@ enum MessageRoute {
     meshCore => 'MeshCore',
     bitchat => 'Bluetooth mesh',
     torOnion => 'Tor',
+    viaContact => 'Via a contact',
   };
 
   String get description => switch (this) {
@@ -2205,6 +2219,10 @@ enum MessageRoute {
     torOnion =>
       'Between onion services over Tor; no one on the way sees '
           'who talks to whom.',
+    viaContact =>
+      'Passed on by a contact who could reach the other device; '
+          'still end-to-end encrypted, the contact saw only who it '
+          'was for and when.',
   };
 
   /// The carrier this route goes over, if it is one.
@@ -3032,6 +3050,81 @@ class ConversationRecord {
       messages: messages,
       lastReadAt: inferredLastReadAt,
     );
+  }
+}
+
+/// A message this device carries for contact [fromDeviceId] to device
+/// [toDeviceId], which that contact could not reach. [envelope] stays sealed
+/// for the recipient; [hints] are the recipient's routes as the contact
+/// knows them (its Iroh endpoint, direct addresses and relay mailboxes).
+class PendingForward {
+  const PendingForward({
+    required this.fromDeviceId,
+    required this.toDeviceId,
+    required this.envelope,
+    required this.hints,
+    required this.receivedAt,
+    this.attempts = 0,
+    this.lastAttemptAt,
+  });
+
+  final String fromDeviceId;
+  final String toDeviceId;
+  final RelayEnvelope envelope;
+  final Map<String, dynamic> hints;
+  final DateTime receivedAt;
+  final int attempts;
+  final DateTime? lastAttemptAt;
+
+  PendingForward attempted(DateTime at) => PendingForward(
+    fromDeviceId: fromDeviceId,
+    toDeviceId: toDeviceId,
+    envelope: envelope,
+    hints: hints,
+    receivedAt: receivedAt,
+    attempts: attempts + 1,
+    lastAttemptAt: at,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'from': fromDeviceId,
+    'to': toDeviceId,
+    'envelope': envelope.toJson(),
+    'hints': hints,
+    'receivedAt': receivedAt.toUtc().toIso8601String(),
+    'attempts': attempts,
+    if (lastAttemptAt != null)
+      'lastAttemptAt': lastAttemptAt!.toUtc().toIso8601String(),
+  };
+
+  static PendingForward? tryFromJson(Map<String, dynamic> json) {
+    try {
+      final from = json['from'];
+      final to = json['to'];
+      final envelope = json['envelope'];
+      final hints = json['hints'];
+      final receivedAt = DateTime.tryParse(json['receivedAt'] as String? ?? '');
+      if (from is! String ||
+          to is! String ||
+          envelope is! Map<String, dynamic> ||
+          hints is! Map<String, dynamic> ||
+          receivedAt == null) {
+        return null;
+      }
+      return PendingForward(
+        fromDeviceId: from,
+        toDeviceId: to,
+        envelope: RelayEnvelope.fromJson(envelope),
+        hints: hints,
+        receivedAt: receivedAt,
+        attempts: json['attempts'] as int? ?? 0,
+        lastAttemptAt: DateTime.tryParse(
+          json['lastAttemptAt'] as String? ?? '',
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
   }
 }
 
@@ -4199,6 +4292,7 @@ class VaultSnapshot {
         const <PendingGroupMembershipDelivery>[],
     this.pinnedRelayIdentityKeys = const <String, String>{},
     this.pendingAckDeliveries = const <PendingAckDelivery>[],
+    this.pendingForwards = const <PendingForward>[],
     this.defaultRelayRouteKeys = const <String>{},
     this.defaultRelayHosts = const <String>{},
     this.defaultRelaysLastFetchedAt,
@@ -4252,6 +4346,11 @@ class VaultSnapshot {
   /// their target yet. Drained by the controller's periodic retry loop
   /// with backoff; persisted so retries survive process restarts.
   final List<PendingAckDelivery> pendingAckDeliveries;
+
+  /// Messages this device carries for a contact, to devices that contact
+  /// could not reach. Persisted so they survive restarts; dropped after a
+  /// week or once delivered.
+  final List<PendingForward> pendingForwards;
 
   /// `PeerEndpoint.routeKey` values for relays that were ingested from
   /// the signed default-relay manifest. The UI shows these as
@@ -4326,6 +4425,7 @@ class VaultSnapshot {
           const <PendingGroupMembershipDelivery>[],
       pinnedRelayIdentityKeys: const <String, String>{},
       pendingAckDeliveries: const <PendingAckDelivery>[],
+      pendingForwards: const <PendingForward>[],
       defaultRelayRouteKeys: const <String>{},
       defaultRelayHosts: const <String>{},
       defaultRelaysLastFetchedAt: null,
@@ -4352,6 +4452,7 @@ class VaultSnapshot {
     List<PendingGroupMembershipDelivery>? pendingGroupMembershipDeliveries,
     Map<String, String>? pinnedRelayIdentityKeys,
     List<PendingAckDelivery>? pendingAckDeliveries,
+    List<PendingForward>? pendingForwards,
     Set<String>? defaultRelayRouteKeys,
     Set<String>? defaultRelayHosts,
     DateTime? defaultRelaysLastFetchedAt,
@@ -4390,6 +4491,7 @@ class VaultSnapshot {
       pinnedRelayIdentityKeys:
           pinnedRelayIdentityKeys ?? this.pinnedRelayIdentityKeys,
       pendingAckDeliveries: pendingAckDeliveries ?? this.pendingAckDeliveries,
+      pendingForwards: pendingForwards ?? this.pendingForwards,
       defaultRelayRouteKeys:
           defaultRelayRouteKeys ?? this.defaultRelayRouteKeys,
       defaultRelayHosts: defaultRelayHosts ?? this.defaultRelayHosts,
@@ -4444,6 +4546,10 @@ class VaultSnapshot {
       'pendingAckDeliveries': pendingAckDeliveries
           .map((entry) => entry.toJson())
           .toList(),
+      if (pendingForwards.isNotEmpty)
+        'pendingForwards': pendingForwards
+            .map((entry) => entry.toJson())
+            .toList(),
       'defaultRelayRouteKeys': defaultRelayRouteKeys.toList(),
       'defaultRelayHosts': defaultRelayHosts.toList(),
       if (defaultRelaysLastFetchedAt != null)
@@ -4569,6 +4675,11 @@ class VaultSnapshot {
               .cast<Map<String, dynamic>>()
               .map(PendingAckDelivery.fromJson)
               .toList(),
+      pendingForwards: [
+        for (final entry
+            in json['pendingForwards'] as List<dynamic>? ?? const [])
+          if (entry is Map<String, dynamic>) ?PendingForward.tryFromJson(entry),
+      ],
       defaultRelayRouteKeys: <String>{
         for (final value
             in (json['defaultRelayRouteKeys'] as List<dynamic>? ?? const []))
