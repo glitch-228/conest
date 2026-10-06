@@ -1882,12 +1882,21 @@ class MessengerController extends ChangeNotifier {
     if (me == null) {
       return null;
     }
-    // Boost while any attachment transfer is in flight (sending or
-    // receiving). Without this the idle 15 s cadence stretched every
-    // chunk that fell back to relay polling into a 15 s wait — see the
-    // 95 KB-at-33% / 238 KB-at-25% reports from nightly.6 battle tests.
+    // While a transfer is in flight, poll fast only when its blocks move
+    // through a relay that must be polled and no long-poll is listening:
+    // without this the idle 15 s cadence stretched every relayed chunk
+    // into a 15 s wait (nightly.6 battle tests). Blocks pushed over LAN or
+    // Iroh need no polling, and polling every 250 ms for them only drained
+    // the battery.
     if (hasActiveTransfer) {
-      return _activeTransferPollInterval;
+      final now = _now();
+      _relayPolledTransferAt.removeWhere(
+        (_, at) => now.difference(at) > _relayPolledTransferWindow,
+      );
+      if (_relayPolledTransferAt.isNotEmpty && !_longPollRunning) {
+        return _activeTransferPollInterval;
+      }
+      return _foregroundActivePollInterval;
     }
     return switch (_runtimeMode) {
       _RuntimeMode.foregroundActive => _foregroundActivePollInterval,
@@ -1901,6 +1910,30 @@ class MessengerController extends ChangeNotifier {
       _RuntimeMode.backgroundDisabledAndroid => null,
     };
   }
+
+  /// When a transfer last moved through a relay that has to be polled, per
+  /// contact; the fast transfer poll runs only for a while after that.
+  final Map<String, DateTime> _relayPolledTransferAt = {};
+  static const Duration _relayPolledTransferWindow = Duration(seconds: 30);
+
+  /// Notes transfer traffic from [contact]; when it came by polling a
+  /// relay, polling speeds up for the transfer.
+  void _noteTransferIngress(ContactRecord contact) {
+    final route = _ingressRoute;
+    if (route != MessageRoute.conestRelay &&
+        route != MessageRoute.lanRelay &&
+        route != MessageRoute.internetDirect) {
+      return;
+    }
+    final fresh = !_relayPolledTransferAt.containsKey(contact.deviceId);
+    _relayPolledTransferAt[contact.deviceId] = _now();
+    if (fresh) _reschedulePolling();
+  }
+
+  /// Whether polling is currently sped up for a relayed transfer.
+  @visibleForTesting
+  bool get relayTransferPollBoosted =>
+      _relayPolledTransferAt.isNotEmpty && !_longPollRunning;
 
   /// True when at least one inbound or outbound attachment transfer is
   /// currently in flight. Used by [_currentPollInterval] to boost the
@@ -15207,9 +15240,11 @@ class MessengerController extends ChangeNotifier {
         await _handleAttachmentOffer(contact, envelope, payload);
         return;
       case 'attachment_chunk_request':
+        _noteTransferIngress(contact);
         await _handleAttachmentChunkRequest(contact, payload);
         return;
       case 'attachment_chunk':
+        _noteTransferIngress(contact);
         await _handleAttachmentChunk(contact, payload);
         return;
       case 'attachment_complete':

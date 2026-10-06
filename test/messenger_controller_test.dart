@@ -12719,6 +12719,54 @@ void main() {
     },
   );
 
+  test(
+    'transfer polling speeds up only for blocks that come by relay',
+    () async {
+      final shared = _FakeRelayClient();
+      final aliceRelay = _GatedRelayClient(shared);
+      final bobRelay = _GatedRelayClient(shared);
+      final alice = await _createController(
+        relayClient: aliceRelay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: bobRelay,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      // Only the internet relay works, so transfer traffic must be polled.
+      aliceRelay.reachable = {'relay.example'};
+      bobRelay.reachable = {'relay.example'};
+      await alice.sendAttachment(
+        contact: alice.contacts.single,
+        bytes: Uint8List(300 * 1024),
+        fileName: 'relayed.bin',
+      );
+      // A transfer is in flight but nothing came by relay yet: the normal
+      // active cadence, not the 250 ms one.
+      expect(alice.hasActiveTransfer, isTrue);
+      expect(alice.relayTransferPollBoosted, isFalse);
+      expect(alice.currentScheduledPollInterval, const Duration(seconds: 5));
+      await bob.pollNow();
+      final id = bob
+          .messagesFor(alice.identity!.deviceId)
+          .singleWhere((m) => m.attachment != null)
+          .attachment!
+          .id;
+      await bob.acceptIncomingAttachment(id);
+      await bob.pollNow();
+      // Bob's block requests reach Alice by polling the relay: now it is fast.
+      await alice.pollNow();
+      expect(alice.relayTransferPollBoosted, isTrue);
+      expect(
+        alice.currentScheduledPollInterval,
+        const Duration(milliseconds: 250),
+      );
+    },
+  );
+
   group('forwarding through a contact', () {
     test('a message reaches C through B when A cannot reach C', () async {
       final shared = _FakeRelayClient();
