@@ -193,14 +193,7 @@ class BitchatBlePlugin(
                         stopAll()
                         if (wanted) problem("Bluetooth is off.")
                     }
-                    BluetoothAdapter.STATE_ON -> if (wanted) {
-                        try {
-                            startAll()
-                            problem(null)
-                        } catch (error: Throwable) {
-                            problem(error.message ?: error.toString())
-                        }
-                    }
+                    BluetoothAdapter.STATE_ON -> if (wanted) restart(attempt = 0)
                 }
             }
         }
@@ -212,6 +205,21 @@ class BitchatBlePlugin(
             context.registerReceiver(receiver, filter)
         }
         stateReceiver = receiver
+    }
+
+    /**
+     * Starts again after Bluetooth comes back; the advertiser and scanner
+     * can be briefly missing right after, so failures are retried.
+     */
+    private fun restart(attempt: Int) {
+        if (!wanted || active) return
+        try {
+            startAll()
+            problem(null)
+        } catch (error: Throwable) {
+            problem(error.message ?: error.toString())
+            if (attempt < 5) main.postDelayed({ restart(attempt + 1) }, 3_000L)
+        }
     }
 
     private fun shutdown() {
@@ -443,6 +451,7 @@ class BitchatBlePlugin(
             status: Int,
         ) {
             main.post {
+                if (!link.writing) return@post
                 link.writing = false
                 pumpClient(link)
             }
@@ -531,12 +540,11 @@ class BitchatBlePlugin(
             link.writes.poll()
             link.writing = true
             val token = ++link.writeToken
-            // onCharacteristicWrite may never come if the link half-dies.
+            // onCharacteristicWrite may never come if the link half-dies; a
+            // link that stops answering is dropped, so a late answer can
+            // never be taken for a newer write's.
             main.postDelayed({
-                if (link.writing && link.writeToken == token) {
-                    link.writing = false
-                    pumpClient(link)
-                }
+                if (link.writing && link.writeToken == token) dropClient(link, failed = true)
             }, WRITE_WATCHDOG_MS)
         } else if (++head.attempts >= MAX_ATTEMPTS) {
             link.writes.poll()

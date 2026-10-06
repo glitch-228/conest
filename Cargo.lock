@@ -1069,6 +1069,7 @@ dependencies = [
  "mime",
  "nokhwa",
  "opus",
+ "rustls",
  "rxing",
  "safelog",
  "serde",

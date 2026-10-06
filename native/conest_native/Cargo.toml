@@ -44,6 +44,9 @@ tor-cell = "0.47"
 tor-proto = "0.47"
 tor-rtcompat = { version = "0.47", default-features = false, features = ["tokio", "rustls"] }
 safelog = "0.10"
+# Arti builds TLS from the process-wide provider, which rustls cannot pick
+# while dependencies enable both ring and aws-lc-rs; tor.rs installs ring.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
 [target.'cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))'.dependencies]
 crossbeam-queue = "0.3"

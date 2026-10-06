@@ -98,12 +98,14 @@ void main() {
       String peer,
       List<(String, Uint8List)> got, {
       List<Uint8List> extraKeys = const [],
+      List<Uint8List> Function()? keys,
     }) async {
       final result = BitchatCarrierChannel(
         config: BitchatCarrierConfig(address: address),
         connector: () async => area.node(name),
         keyFor: (candidate) async => [
-          if (candidate == peer) ...[key, ...extraKeys],
+          if (candidate == peer) ...?keys?.call(),
+          if (candidate == peer && keys == null) ...[key, ...extraKeys],
         ],
         onFrame: (sender, frame) => got.add((sender, frame)),
         now: () => clock,
@@ -364,29 +366,87 @@ void main() {
         ]),
       ).encode(pad: false);
       bytes[11] |= 0x04;
+      bitchatInflatedBytes = -1;
       await area.node('m').broadcast(bytes);
       await Future<void>.delayed(const Duration(milliseconds: 20));
       expect(daveGot, isEmpty);
-      // Inflating stopped near the stated 100 bytes, not at 4 MiB.
-      expect(bitchatInflatedBytes, lessThanOrEqualTo(100));
+      // Inflating ran and stopped near the stated 100 bytes, not at 4 MiB.
+      expect(bitchatInflatedBytes, inInclusiveRange(0, 100));
     });
 
     test('contacts sharing an address both still get through', () async {
-      final area = FakeBleNeighbourhood()..connect('a', 'd');
+      // Carol claims Dave's address; Alice has both as contacts.
+      final area = FakeBleNeighbourhood()
+        ..connect('a', 'd')
+        ..connect('a', 'c');
       final daveGot = <(String, Uint8List)>[];
-      final other = Uint8List.fromList(List.filled(32, 9));
+      final carolGot = <(String, Uint8List)>[];
+      final aliceGot = <(String, Uint8List)>[];
+      final carolKey = Uint8List.fromList(List.filled(32, 9));
       final alice = await channel(
         area,
         'a',
         aliceAddress,
         daveAddress,
-        [],
-        extraKeys: [other],
+        aliceGot,
+        extraKeys: [carolKey],
       );
-      await channel(area, 'd', daveAddress, aliceAddress, daveGot);
+      final dave = await channel(area, 'd', daveAddress, aliceAddress, daveGot);
+      final carol = await channel(
+        area,
+        'c',
+        daveAddress,
+        aliceAddress,
+        carolGot,
+        keys: () => [carolKey],
+      );
       await alice.sendFrame(daveAddress, frame(12));
       await Future<void>.delayed(const Duration(milliseconds: 20));
+      // Each reads only the copy sealed with its own pair key.
       expect(daveGot, hasLength(1));
+      expect(carolGot, hasLength(1));
+      await dave.sendFrame(aliceAddress, frame(13));
+      await carol.sendFrame(aliceAddress, frame(14));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(aliceGot.map((got) => got.$2.length), unorderedEquals([13, 14]));
+    });
+
+    test('a contact\'s new key is picked up on the next peer update', () async {
+      final area = FakeBleNeighbourhood()..connect('a', 'd');
+      final daveGot = <(String, Uint8List)>[];
+      var daveKey = key;
+      final alice = await channel(area, 'a', aliceAddress, daveAddress, []);
+      final dave = await channel(
+        area,
+        'd',
+        daveAddress,
+        aliceAddress,
+        daveGot,
+        keys: () => [daveKey],
+      );
+      await alice.sendFrame(daveAddress, frame(10));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(daveGot, hasLength(1));
+      // Alice re-keys (same address): Dave's old key no longer matches
+      // until his peers update, with the same address set.
+      final newKey = Uint8List.fromList(List.filled(32, 77));
+      final aliceRekeyed = await channel(
+        area,
+        'a',
+        aliceAddress,
+        daveAddress,
+        [],
+        keys: () => [newKey],
+      );
+      await aliceRekeyed.sendFrame(daveAddress, frame(11));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(daveGot, hasLength(1));
+      daveKey = newKey;
+      dave.updatePeers({aliceAddress});
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await aliceRekeyed.sendFrame(daveAddress, frame(12));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(daveGot.map((got) => got.$2.length), [10, 12]);
     });
 
     test('problems and missing neighbours reach the carrier', () async {

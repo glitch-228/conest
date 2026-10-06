@@ -129,8 +129,8 @@ class BitchatCarrierChannel
 
   Map<String, List<_Pair>> _pairs = {};
   Set<String> _peerAddresses = const {};
-  DateTime? _peersLoadedAt;
-  int _peersVersion = 0;
+  bool _reloading = false;
+  bool _reloadAgain = false;
   StreamSubscription<String?>? _problems;
 
   /// Recipient id (hex) → the pair it belongs to and its period, for the
@@ -155,33 +155,34 @@ class BitchatCarrierChannel
 
   @override
   void updatePeers(Set<String> addresses) {
-    final loadedAt = _peersLoadedAt;
-    // Settings are saved often; reload keys when contacts change, and now
-    // and then in case a contact's key did.
-    if (_peerAddresses.length == addresses.length &&
-        _peerAddresses.containsAll(addresses) &&
-        loadedAt != null &&
-        _now().difference(loadedAt) < const Duration(minutes: 10)) {
+    // Settings are saved often: reloads run one at a time, and calls during
+    // one only mark that another is needed, which then uses the latest set.
+    // Every reload reads keys afresh, so re-keyed contacts are picked up.
+    _peerAddresses = {...addresses};
+    if (_reloading) {
+      _reloadAgain = true;
       return;
     }
-    _peerAddresses = {...addresses};
-    _peersLoadedAt = _now();
-    final version = ++_peersVersion;
+    _reloading = true;
     unawaited(() async {
-      final next = <String, List<_Pair>>{};
-      for (final address in addresses) {
-        try {
-          final keys = await _keyFor(address);
-          if (keys.isNotEmpty) {
-            next[address] = [for (final key in keys) _Pair(address, key)];
+      do {
+        _reloadAgain = false;
+        final wanted = _peerAddresses;
+        final next = <String, List<_Pair>>{};
+        for (final address in wanted) {
+          try {
+            final keys = await _keyFor(address);
+            if (keys.isNotEmpty) {
+              next[address] = [for (final key in keys) _Pair(address, key)];
+            }
+          } catch (_) {
+            // That contact is skipped until the next reload.
           }
-        } catch (_) {
-          // That contact is skipped until the next reload.
         }
-      }
-      if (version != _peersVersion) return;
-      _pairs = next;
-      _tableMinute = null;
+        _pairs = next;
+        _tableMinute = null;
+      } while (_reloadAgain);
+      _reloading = false;
     }());
   }
 

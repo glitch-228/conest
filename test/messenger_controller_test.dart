@@ -4029,7 +4029,10 @@ void main() {
               payload: (await peer.buildInvite()).encodePayload(),
               codephrase: '',
             );
-            await _waitForIroh(() => peer.pendingContactRequests.isNotEmpty);
+            await _waitForIroh(
+              () => peer.pendingContactRequests.isNotEmpty,
+              reason: 'contact request reached ${peer.identity!.displayName}',
+            );
             await peer.approvePendingContactRequest(
               peer.pendingContactRequests.single.id,
             );
@@ -4040,6 +4043,7 @@ void main() {
           );
           await _waitForIroh(
             () => bob.groups.isNotEmpty && carol.groups.isNotEmpty,
+            reason: 'group invitation reached Bob and Carol',
           );
           expect(bob.contactByDeviceId(carol.identity!.deviceId), isNull);
           expect(carol.contactByDeviceId(bob.identity!.deviceId), isNull);
@@ -4059,6 +4063,7 @@ void main() {
           );
           await _waitForIroh(
             () => carol.messagesForGroup(group.groupId).length == 1,
+            reason: "Bob's first group message reached Carol",
           );
           await _waitForIroh(
             () =>
@@ -4067,6 +4072,7 @@ void main() {
                     .single
                     .recipientStates[carol.identity!.deviceId] ==
                 DeliveryState.delivered,
+            reason: "Carol's delivery receipt reached Bob",
           );
           await carol.markGroupReadThroughMessage(
             group.groupId,
@@ -4079,6 +4085,7 @@ void main() {
                     .single
                     .recipientStates[carol.identity!.deviceId] ==
                 DeliveryState.read,
+            reason: "Carol's read receipt reached Bob",
           );
           // A valid pairwise encrypted DM must not inherit the group's trust.
           await carol.synchronizeGroupHistory(
@@ -4109,6 +4116,7 @@ void main() {
           await carol.sendGroupMessage(groupId: group.groupId, body: 'reply');
           await _waitForIroh(
             () => bob.messagesForGroup(group.groupId).length == 2,
+            reason: "Carol's reply reached Bob",
           );
           expect(carol.messagesFor(bob.identity!.deviceId), isEmpty);
           await alice.setGroupMemberRole(
@@ -4122,6 +4130,7 @@ void main() {
                     GroupMemberRole.admin &&
                 bob.groups.single.roleFor(carol.identity!.deviceId) ==
                     GroupMemberRole.admin,
+            reason: "Carol's promotion reached Carol and Bob",
           );
           await carol.removeGroupMember(
             groupId: group.groupId,
@@ -4129,9 +4138,11 @@ void main() {
           );
           await _waitForIroh(
             () => !bob.groups.single.hasActiveMember(bob.identity!.deviceId),
+            reason: "Bob's removal reached Bob",
           );
           await _waitForIroh(
             () => carol.pendingGroupMembershipDeliveries.isEmpty,
+            reason: "Carol's membership deliveries finished",
           );
           await carol.addGroupMembers(
             groupId: group.groupId,
@@ -4143,6 +4154,7 @@ void main() {
           );
           await _waitForIroh(
             () => bob.groups.single.hasActiveMember(bob.identity!.deviceId),
+            reason: "Bob's re-admission reached Bob",
           );
           await bob.sendGroupMessage(
             groupId: group.groupId,
@@ -4150,6 +4162,7 @@ void main() {
           );
           await _waitForIroh(
             () => carol.messagesForGroup(group.groupId).length == 3,
+            reason: "Bob's message after rejoining reached Carol",
           );
 
           expect(

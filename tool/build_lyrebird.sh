@@ -26,6 +26,7 @@ if [ "$actual" != "$COMMIT" ]; then
 fi
 
 export CGO_ENABLED=0
+ldflags='-s -w -buildid='
 case "$target" in
   linux-x64) export GOOS=linux GOARCH=amd64 ;;
   windows-x64) export GOOS=windows GOARCH=amd64 ;;
@@ -33,6 +34,9 @@ case "$target" in
     toolchain="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
     export GOOS=android GOARCH=arm64 CGO_ENABLED=1 \
       CC="$toolchain/aarch64-linux-android24-clang"
+    # snowflake's Android network-interface helper (wlynxg/anet) links to
+    # a Go-internal symbol, which Go 1.23+ only allows with this flag.
+    ldflags="$ldflags -checklinkname=0"
     ;;
   *)
     echo "unknown target $target" >&2
@@ -42,6 +46,6 @@ esac
 
 mkdir -p "$(dirname "$output")"
 (cd "$work/lyrebird" &&
-  go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
+  go build -trimpath -buildvcs=false -ldflags="$ldflags" \
     -o "$output" ./cmd/lyrebird)
 echo "Built $VERSION for $target at $output"
