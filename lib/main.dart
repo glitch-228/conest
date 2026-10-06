@@ -1969,6 +1969,20 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  /// Empties the composer as soon as a message is handed over, so the next
+  /// one can be typed while this one is still being delivered.
+  void _takeComposer() {
+    _composerController.clear();
+    setState(() => _replyTarget = null);
+  }
+
+  /// Puts an unsent message back, unless something new has been typed.
+  void _restoreComposer(String body, ChatMessage? replyTarget) {
+    if (!mounted || _composerController.text.trim().isNotEmpty) return;
+    _composerController.text = body;
+    setState(() => _replyTarget = replyTarget);
+  }
+
   Future<void> _sendCurrentMessage() async {
     final contact = _selectedContact;
     if (contact == null) return;
@@ -1978,6 +1992,8 @@ class _HomeScreenState extends State<HomeScreen> {
     // staged, fall through to the text-only send path.
     final staged = widget.controller.stagedAttachmentsFor(contact.deviceId);
     if (staged.isNotEmpty) {
+      final replyTarget = _replyTarget;
+      _takeComposer();
       try {
         await widget.controller.sendStagedBundle(
           contact: contact,
@@ -1986,19 +2002,13 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       } catch (error) {
         widget.controller.setStatus('Could not send attachment: $error');
-        return;
+        _restoreComposer(body, replyTarget);
       }
-      if (!mounted ||
-          _composerController.text.trim() != body ||
-          _replyTarget != null) {
-        return;
-      }
-      _composerController.clear();
-      setState(() => _replyTarget = null);
       return;
     }
     if (body.isEmpty) return;
     final replyTarget = _replyTarget;
+    _takeComposer();
     try {
       await widget.controller.sendMessage(
         contact: contact,
@@ -2007,15 +2017,8 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     } catch (error) {
       widget.controller.setStatus('Could not send message: $error');
-      return;
+      _restoreComposer(body, replyTarget);
     }
-    if (!mounted ||
-        _composerController.text.trim() != body ||
-        _replyTarget != replyTarget) {
-      return;
-    }
-    _composerController.clear();
-    setState(() => _replyTarget = null);
   }
 
   Future<bool> _confirmOriginalSourceFallback(
@@ -2055,6 +2058,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     final replyTarget = _replyTarget;
+    _takeComposer();
     try {
       await widget.controller.sendGroupMessage(
         groupId: group.groupId,
@@ -2063,15 +2067,8 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     } catch (error) {
       widget.controller.setStatus('Could not send group message: $error');
-      return;
+      _restoreComposer(body, replyTarget);
     }
-    if (!mounted ||
-        _composerController.text.trim() != body ||
-        _replyTarget != replyTarget) {
-      return;
-    }
-    _composerController.clear();
-    setState(() => _replyTarget = null);
   }
 
   Future<void> _sendLanLobbyMessage() async {
@@ -2079,16 +2076,13 @@ class _HomeScreenState extends State<HomeScreen> {
     if (body.isEmpty) {
       return;
     }
+    _composerController.clear();
     try {
       await widget.controller.sendLanLobbyMessage(body);
     } catch (error) {
       widget.controller.setStatus('Could not send LAN lobby message: $error');
-      return;
+      _restoreComposer(body, null);
     }
-    if (!mounted || _composerController.text.trim() != body) {
-      return;
-    }
-    _composerController.clear();
   }
 
   Future<void> _handleDroppedFiles(List<XFile> files) async {

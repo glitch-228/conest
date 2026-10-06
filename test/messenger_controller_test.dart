@@ -12628,6 +12628,87 @@ void main() {
     });
   });
 
+  testWidgets(
+    'the composer empties as soon as a message is sent, before delivery',
+    (tester) async {
+      final relay = _FakeRelayClient();
+      late MessengerController alice;
+      late MessengerController bob;
+      await tester.runAsync(() async {
+        alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+        );
+        bob = await _createController(relayClient: relay, displayName: 'Bob');
+        await _pairControllers(alice, bob);
+      });
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      final updates = _createUpdateService();
+      final theme = app.ConestThemeController.memory();
+      addTearDown(updates.dispose);
+      addTearDown(theme.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ListenableBuilder(
+            listenable: alice,
+            builder: (context, _) => app.HomeScreen(
+              controller: alice,
+              updateService: updates,
+              buildInfo: _createBuildInfo(),
+              themeController: theme,
+              palette: app.ConestPalette(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('Bob').first);
+      await tester.pump();
+      // Delivery takes a while: every relay store waits two seconds.
+      relay
+        ..latencyMin = const Duration(seconds: 2)
+        ..latencyMax = const Duration(seconds: 2);
+      final composer = find.byWidgetPredicate(
+        (widget) => widget is TextField && widget.maxLines != 1,
+      );
+      await tester.enterText(composer.first, 'first while slow');
+      await tester.runAsync(() async {
+        await tester.tap(find.byTooltip('Send'));
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      });
+      await tester.pump();
+      // Still being delivered, yet the composer is free for the next one.
+      expect(
+        relay.storedEnvelopes.where(
+          (envelope) => envelope.kind == 'direct_message',
+        ),
+        isEmpty,
+      );
+      expect(
+        tester.widget<TextField>(composer.first).controller!.text,
+        isEmpty,
+      );
+      expect(
+        alice
+            .messagesFor(bob.identity!.deviceId)
+            .map((message) => message.body),
+        contains('first while slow'),
+      );
+      await tester.runAsync(() async {
+        await _waitForIroh(
+          () => relay.storedEnvelopes.any(
+            (envelope) => envelope.kind == 'direct_message',
+          ),
+        );
+      });
+      relay
+        ..latencyMin = Duration.zero
+        ..latencyMax = Duration.zero;
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   group('Tor carrier', () {
     test('two devices talk through their onion services', () async {
       final tor = FakeTorNetwork();
