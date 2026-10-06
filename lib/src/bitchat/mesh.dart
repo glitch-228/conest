@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'fragment.dart';
 import 'packet.dart';
 
 /// The Bluetooth side of the mesh: every connected neighbour, as links that
@@ -65,10 +66,13 @@ class BitchatNode {
   BitchatNode({
     required BitchatLinkLayer links,
     required this.onPrivate,
+    this.wantsRecipient,
+    this.maxPacketBytes = 512,
     this.relay = true,
     DateTime Function()? now,
   }) : _links = links,
-       _now = now ?? DateTime.now {
+       _now = now ?? DateTime.now,
+       _reassembler = BitchatReassembler(now: now) {
     _subscription = _links.received.listen(
       (event) =>
           unawaited(_handle(event.$1, event.$2).catchError((Object _) {})),
@@ -84,6 +88,15 @@ class BitchatNode {
   /// A private packet with a recipient, with its payload expanded.
   final BitchatPrivate Function(BitchatPacket packet, Uint8List payload)
   onPrivate;
+
+  /// Whether a recipient id is one of this device's, so fragments sent to
+  /// it are put back together (others are only relayed).
+  final bool Function(Uint8List recipientId)? wantsRecipient;
+
+  /// Largest packet sent whole; bigger ones go as bitchat fragments.
+  final int maxPacketBytes;
+
+  final BitchatReassembler _reassembler;
 
   late final StreamSubscription<(String, Uint8List)> _subscription;
   final LinkedHashSet<String> _seen = LinkedHashSet();
@@ -102,10 +115,25 @@ class BitchatNode {
   /// Sends a packet of this device's own.
   Future<void> send(BitchatPacket packet) async {
     _remember(packet.dedupKey);
-    await _links.broadcast(packet.encode());
+    final encoded = packet.encode();
+    if (encoded.length <= maxPacketBytes) {
+      await _links.broadcast(encoded);
+      return;
+    }
+    for (final fragment in bitchatFragmentsFor(
+      packet,
+      chunkBytes: maxPacketBytes - bitchatFragmentOverhead,
+    )) {
+      _remember(fragment.dedupKey);
+      await _links.broadcast(fragment.encode());
+    }
   }
 
-  Future<void> _handle(String link, Uint8List raw) async {
+  Future<void> _handle(
+    String link,
+    Uint8List raw, {
+    bool reassembled = false,
+  }) async {
     final packet = BitchatPacket.decode(raw);
     if (packet == null) return;
     final skew = _now().millisecondsSinceEpoch - packet.timestamp;
@@ -122,6 +150,17 @@ class BitchatNode {
           : onPrivate(packet, payload);
       if (kind == BitchatPrivate.accepted) _remember(key);
       if (kind != BitchatPrivate.notMine) return;
+    }
+    // A packet put back together here is never relayed: its fragments were.
+    if (reassembled) return;
+    final recipient = packet.recipientId;
+    if (packet.type == BitchatType.fragment &&
+        recipient != null &&
+        (wantsRecipient?.call(recipient) ?? false)) {
+      _remember(key);
+      final whole = _reassembler.add(packet);
+      if (whole != null) await _handle(link, whole, reassembled: true);
+      return;
     }
     // A copy that goes no further is not remembered: a copy sent with TTL 0
     // must not stop the original from being relayed.

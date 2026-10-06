@@ -202,7 +202,14 @@ class BitchatCarrierChannel
           return;
         }
         _links = links;
-        _node = BitchatNode(links: links, onPrivate: _private, now: _now);
+        _node = BitchatNode(
+          links: links,
+          onPrivate: _private,
+          wantsRecipient: (id) => _recipients(
+            _now().millisecondsSinceEpoch,
+          ).containsKey(hexEncode(id)),
+          now: _now,
+        );
         _problems = links.problems.listen((problem) {
           _lastError = problem;
           onStatusChanged?.call();
