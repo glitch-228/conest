@@ -17,8 +17,9 @@
 use std::{
     collections::{HashMap, VecDeque},
     future::Future,
+    panic::AssertUnwindSafe,
     sync::{
-        Arc, Condvar, LazyLock, Mutex,
+        Arc, Condvar, LazyLock, Mutex, Once,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -34,7 +35,7 @@ use arti_client::{
 };
 use base64::Engine;
 use futures_util::{
-    StreamExt,
+    FutureExt, StreamExt,
     future::{Either, select},
 };
 use safelog::DisplayRedacted;
@@ -179,8 +180,21 @@ pub fn call(request: Value) -> Result<()> {
         .context("missing Tor operation")?
         .to_owned();
     let request_id = request["requestId"].as_str().unwrap_or_default().to_owned();
+    install_crypto_provider();
     RUNTIME.spawn(async move {
-        let outcome = run(&op, &request).await;
+        // A panic still answers the command instead of leaving it to time
+        // out.
+        let outcome = match AssertUnwindSafe(run(&op, &request)).catch_unwind().await {
+            Ok(outcome) => outcome,
+            Err(panic) => Err(anyhow!(
+                "Tor {op} failed: {}",
+                panic
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| panic.downcast_ref::<&str>().copied())
+                    .unwrap_or("internal error")
+            )),
+        };
         push_event(match outcome {
             Ok(value) => {
                 json!({"type": "result", "requestId": request_id, "ok": true, "value": value})
@@ -194,6 +208,17 @@ pub fn call(request: Value) -> Result<()> {
         });
     });
     Ok(())
+}
+
+/// Arti builds its TLS settings from rustls's process-wide provider, which
+/// rustls cannot choose by itself here because dependencies enable both
+/// ring and aws-lc-rs. Everything else in the library passes its provider
+/// explicitly, so this only decides Arti's.
+fn install_crypto_provider() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
 }
 
 async fn run(op: &str, request: &Value) -> Result<Value> {
