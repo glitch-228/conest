@@ -42,13 +42,14 @@ use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     runtime::Runtime,
-    sync::{Mutex as AsyncMutex, Notify, Semaphore},
-    task::{JoinHandle, JoinSet},
+    sync::{Mutex as AsyncMutex, Notify},
+    task::{AbortHandle, JoinHandle, JoinSet},
     time::timeout,
 };
 use tor_cell::relaycell::msg::Connected;
 use tor_hsservice::{
-    RunningOnionService, config::TokenBucketConfig, handle_rend_requests, status::State,
+    RendRequest, RunningOnionService, config::TokenBucketConfig, handle_rend_requests,
+    status::State,
 };
 use tor_proto::stream::IncomingStreamRequest;
 use tor_rtcompat::PreferredRuntime;
@@ -64,10 +65,13 @@ pub const MAX_FRAME: usize = 1 << 20;
 const IDLE: Duration = Duration::from_secs(300);
 const INCOMING_IDLE: Duration = Duration::from_secs(360);
 
+/// Time a new incoming stream has to deliver its first frame.
+const FIRST_FRAME: Duration = Duration::from_secs(30);
+
 /// Time to receive a frame's bytes once its length has arrived.
 const FRAME_READ: Duration = Duration::from_secs(90);
 
-/// Incoming streams served at once; more are refused.
+/// Incoming streams served at once; a new one replaces the quietest.
 const MAX_INCOMING_STREAMS: usize = 32;
 
 /// Streams one rendezvous circuit may open at once.
@@ -76,10 +80,12 @@ const MAX_STREAMS_PER_CIRCUIT: u32 = 4;
 /// First bootstrap, possibly through bridges.
 const BOOTSTRAP: Duration = Duration::from_secs(240);
 
-/// Reaching a contact's onion service, and writing one frame to it; both
-/// shorter than the Dart side's two-minute send timeout together.
+/// Reaching a contact's onion service, writing one frame to it, and a whole
+/// send including waiting for an earlier send to the same contact: all
+/// within the Dart side's three-minute send timeout.
 const CONNECT: Duration = Duration::from_secs(75);
 const WRITE: Duration = Duration::from_secs(40);
+const SEND: Duration = Duration::from_secs(170);
 
 /// Frame events waiting for Dart, in bytes; further frames are dropped
 /// (their senders retry), command results never are.
@@ -205,20 +211,23 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
     }
 }
 
-fn running_address() -> Result<Option<String>> {
-    Ok(STATE
-        .lock()
-        .map_err(|_| anyhow!("Tor state poisoned"))?
-        .as_ref()
-        .map(|state| state.address.clone()))
+/// The running service's address, unless `stop` came after `generation`.
+/// `stop` changes the generation under the same lock.
+fn running_address(generation: u64) -> Result<Option<String>> {
+    let state = STATE.lock().map_err(|_| anyhow!("Tor state poisoned"))?;
+    if GENERATION.load(Ordering::SeqCst) != generation {
+        bail!("Tor was stopped");
+    }
+    Ok(state.as_ref().map(|state| state.address.clone()))
 }
 
 /// Runs `work` unless `stop` is called first.
 async fn unless_stopped<T>(generation: u64, work: impl Future<Output = T>) -> Result<T> {
+    // Registered before the check, so a stop in between still wakes it.
+    let cancelled = CANCEL.notified();
     if GENERATION.load(Ordering::SeqCst) != generation {
         bail!("Tor was stopped");
     }
-    let cancelled = CANCEL.notified();
     match select(Box::pin(work), Box::pin(cancelled)).await {
         Either::Left((value, _)) if GENERATION.load(Ordering::SeqCst) == generation => Ok(value),
         _ => bail!("Tor was stopped"),
@@ -230,7 +239,7 @@ async fn unless_stopped<T>(generation: u64, work: impl Future<Output = T>) -> Re
 async fn start(request: &Value) -> Result<Value> {
     let generation = GENERATION.load(Ordering::SeqCst);
     let _single = START.lock().await;
-    if let Some(address) = running_address()? {
+    if let Some(address) = running_address(generation)? {
         return Ok(json!({"address": address}));
     }
     let state_dir = request["stateDir"].as_str().context("missing stateDir")?;
@@ -323,49 +332,97 @@ async fn start(request: &Value) -> Result<Value> {
         .ok_or_else(|| anyhow!("the onion service has no address yet"))?
         .display_unredacted()
         .to_string();
-    let accept_task = RUNTIME.spawn(async move {
-        let mut streams = handle_rend_requests(requests);
-        let slots = Arc::new(Semaphore::new(MAX_INCOMING_STREAMS));
-        // Owned here: aborting this task drops the set and every stream.
-        let mut readers = JoinSet::new();
-        while let Some(stream_request) = streams.next().await {
-            while readers.try_join_next().is_some() {}
-            let wanted = matches!(
-                stream_request.request(),
-                IncomingStreamRequest::Begin(begin) if begin.port() == ONION_PORT
-            );
-            let slot = slots.clone().try_acquire_owned();
-            let (true, Ok(slot)) = (wanted, slot) else {
-                let _ = stream_request.shutdown_circuit();
-                continue;
-            };
-            readers.spawn(async move {
-                if let Ok(stream) = stream_request.accept(Connected::new_empty()).await {
-                    read_frames(stream).await;
-                }
-                drop(slot);
-            });
+    let accept_task = RUNTIME.spawn(accept_streams(requests));
+    {
+        // Checked and installed under the lock `stop` changes the
+        // generation under, so a stop cannot slip in between.
+        let mut state = STATE.lock().map_err(|_| anyhow!("Tor state poisoned"))?;
+        if GENERATION.load(Ordering::SeqCst) != generation {
+            drop(state);
+            accept_task.abort();
+            progress_task.abort();
+            bail!("Tor was stopped");
         }
-    });
-    if GENERATION.load(Ordering::SeqCst) != generation {
-        accept_task.abort();
-        progress_task.abort();
-        bail!("Tor was stopped");
+        *state = Some(TorState {
+            client,
+            service,
+            address: address.clone(),
+            tasks: vec![progress_task, accept_task],
+        });
     }
-    *STATE.lock().map_err(|_| anyhow!("Tor state poisoned"))? = Some(TorState {
-        client,
-        service,
-        address: address.clone(),
-        tasks: vec![progress_task, accept_task],
-    });
     Ok(json!({"address": address}))
+}
+
+/// Streams being read, by id: when they last delivered a frame (or were
+/// accepted), and how to end them.
+type Readers = Arc<Mutex<HashMap<u64, (Instant, AbortHandle)>>>;
+
+/// Serves streams contacts open to the onion service. When all slots are
+/// taken, the stream quiet the longest makes room, so streams that send
+/// nothing cannot keep contacts out for long.
+async fn accept_streams(requests: impl futures_util::Stream<Item = RendRequest> + Send) {
+    let mut streams = std::pin::pin!(handle_rend_requests(requests));
+    let active: Readers = Arc::new(Mutex::new(HashMap::new()));
+    // Owned here: aborting this task drops the set and every reader.
+    let mut readers = JoinSet::new();
+    let mut next_id = 0u64;
+    while let Some(stream_request) = streams.next().await {
+        while readers.try_join_next().is_some() {}
+        let wanted = matches!(
+            stream_request.request(),
+            IncomingStreamRequest::Begin(begin) if begin.port() == ONION_PORT
+        );
+        if !wanted {
+            let _ = stream_request.shutdown_circuit();
+            continue;
+        }
+        let Ok(mut map) = active.lock() else { return };
+        if map.len() >= MAX_INCOMING_STREAMS {
+            let quietest = map
+                .iter()
+                .min_by_key(|(_, (heard, _))| *heard)
+                .map(|(id, _)| *id);
+            if let Some((_, handle)) = quietest.and_then(|id| map.remove(&id)) {
+                handle.abort();
+            }
+        }
+        let id = next_id;
+        next_id += 1;
+        let tracker = active.clone();
+        let handle = readers.spawn(async move {
+            if let Ok(stream) = stream_request.accept(Connected::new_empty()).await {
+                read_frames(stream, || {
+                    if let Ok(mut map) = tracker.lock() {
+                        if let Some(entry) = map.get_mut(&id) {
+                            entry.0 = Instant::now();
+                        }
+                    }
+                })
+                .await;
+            }
+            if let Ok(mut map) = tracker.lock() {
+                map.remove(&id);
+            }
+        });
+        map.insert(id, (Instant::now(), handle));
+    }
 }
 
 /// Stops the onion service and Tor; a start in progress gives up.
 async fn stop() {
-    GENERATION.fetch_add(1, Ordering::SeqCst);
+    // The generation changes under the state lock (see `running_address`
+    // and the install in `start`).
+    let state = match STATE.lock() {
+        Ok(mut state) => {
+            GENERATION.fetch_add(1, Ordering::SeqCst);
+            state.take()
+        }
+        Err(_) => {
+            GENERATION.fetch_add(1, Ordering::SeqCst);
+            None
+        }
+    };
     CANCEL.notify_waiters();
-    let state = STATE.lock().ok().and_then(|mut state| state.take());
     if let Ok(mut outgoing) = OUTGOING.lock() {
         outgoing.clear();
     }
@@ -389,11 +446,13 @@ async fn stop() {
 }
 
 /// Reads length-prefixed frames from an incoming stream until it ends,
-/// idles or misbehaves.
-async fn read_frames(mut stream: DataStream) {
+/// idles or misbehaves; [heard] runs after each frame. A new stream must
+/// deliver its first frame quickly; after that it may idle longer.
+async fn read_frames(mut stream: DataStream, heard: impl Fn()) {
+    let mut idle = FIRST_FRAME;
     loop {
         let mut header = [0u8; 4];
-        match timeout(INCOMING_IDLE, stream.read_exact(&mut header)).await {
+        match timeout(idle, stream.read_exact(&mut header)).await {
             Ok(Ok(_)) => {}
             _ => return,
         }
@@ -417,13 +476,18 @@ async fn read_frames(mut stream: DataStream) {
         })
         .await;
         match read {
-            Ok(Ok(())) => push_frame(&frame),
+            Ok(Ok(())) => {
+                push_frame(&frame);
+                heard();
+                idle = INCOMING_IDLE;
+            }
             _ => return,
         }
     }
 }
 
-/// Sends one frame to the onion service `onion` (a `.onion` host).
+/// Sends one frame to the onion service `onion` (a `.onion` host), within
+/// [`SEND`] overall; `stop` ends it.
 async fn send(request: &Value) -> Result<Value> {
     let onion = request["onion"].as_str().context("missing onion")?.to_owned();
     anyhow::ensure!(
@@ -433,16 +497,33 @@ async fn send(request: &Value) -> Result<Value> {
     let data = base64::engine::general_purpose::STANDARD
         .decode(request["data"].as_str().context("missing data")?)?;
     anyhow::ensure!(!data.is_empty() && data.len() <= MAX_FRAME, "frame size");
-    let client = STATE
-        .lock()
-        .map_err(|_| anyhow!("Tor state poisoned"))?
-        .as_ref()
-        .map(|state| state.client.clone())
-        .ok_or_else(|| anyhow!("Tor is not running"))?;
+    let (client, generation) = {
+        let state = STATE.lock().map_err(|_| anyhow!("Tor state poisoned"))?;
+        let client = state
+            .as_ref()
+            .map(|state| state.client.clone())
+            .ok_or_else(|| anyhow!("Tor is not running"))?;
+        (client, GENERATION.load(Ordering::SeqCst))
+    };
+    match timeout(SEND, unless_stopped(generation, deliver(client, onion, data))).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(stopped)) => Err(stopped),
+        Err(_) => Err(anyhow!("sending over Tor timed out")),
+    }
+}
+
+async fn deliver(
+    client: Arc<TorClient<PreferredRuntime>>,
+    onion: String,
+    data: Vec<u8>,
+) -> Result<Value> {
     let slot = {
         let mut outgoing = OUTGOING.lock().map_err(|_| anyhow!("Tor state poisoned"))?;
+        // Forget streams idle too long, but never a slot some send holds
+        // or is about to lock.
         outgoing.retain(|host, slot| {
             host == &onion
+                || Arc::strong_count(slot) > 1
                 || slot
                     .try_lock()
                     .map(|guard| guard.as_ref().is_some_and(|(_, used)| used.elapsed() < IDLE))
