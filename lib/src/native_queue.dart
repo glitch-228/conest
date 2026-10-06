@@ -39,19 +39,25 @@ class NativeCommandQueue {
         'conest_string_free',
       );
 
-  /// Null when no library with the module's symbols is available.
+  /// Null when no library with the module's symbols is available. There is
+  /// one queue per module: the native event queue is process-wide, so a
+  /// second reader would take the first one's results.
   static NativeCommandQueue? tryOpen(String name) {
+    final open = _open[name];
+    if (open != null) return open;
     for (final candidate in conestNativeLibraryCandidates()) {
       try {
         final library = DynamicLibrary.open(candidate);
         library.lookup('conest_${name}_next_event');
-        return NativeCommandQueue._(name, candidate, library);
+        return _open[name] = NativeCommandQueue._(name, candidate, library);
       } catch (_) {
         // Try the next location.
       }
     }
     return null;
   }
+
+  static final Map<String, NativeCommandQueue> _open = {};
 
   final String _name;
   final String _libraryPath;
@@ -145,6 +151,7 @@ class NativeCommandQueue {
   }
 
   void dispose() {
+    if (identical(_open[_name], this)) _open.remove(_name);
     _reader?.kill(priority: Isolate.immediate);
     _reader = null;
     _port?.close();

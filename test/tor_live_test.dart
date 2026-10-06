@@ -31,8 +31,9 @@ void main() {
         }
       });
       addTearDown(subscription.cancel);
-      final state = Directory('${directory.path}/state')..createSync();
-      final cache = Directory('${directory.path}/cache')..createSync();
+      // Arti creates these itself, private to this user.
+      final state = Directory('${directory.path}/state');
+      final cache = Directory('${directory.path}/cache');
       final address = await api.start(
         stateDirectory: state.path,
         cacheDirectory: cache.path,
@@ -102,8 +103,9 @@ void main() {
       final api = NativeTorApi.tryCreate()!;
       final directory = await Directory.systemTemp.createTemp('conest-tor-');
       addTearDown(() => directory.delete(recursive: true));
-      final state = Directory('${directory.path}/state')..createSync();
-      final cache = Directory('${directory.path}/cache')..createSync();
+      // Arti creates these itself, private to this user.
+      final state = Directory('${directory.path}/state');
+      final cache = Directory('${directory.path}/cache');
       expect(bridges.every(bridgeNeedsTransport), isTrue);
       final address = await api.start(
         stateDirectory: state.path,
