@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../meshcore_carrier.dart';
 import '../messenger_controller.dart';
+import '../network_errors.dart';
 import '../radio/android_radio_link.dart';
 
 /// The MeshCore carrier in Settings: the companion radio and its state.
@@ -52,9 +53,7 @@ class _MeshCoreCarrierPanelState extends State<MeshCoreCarrierPanel> {
       await action();
     } catch (error) {
       if (mounted) {
-        setState(
-          () => _error = error is ArgumentError ? '${error.message}' : '$error',
-        );
+        setState(() => _error = describeActionError(error));
       }
     } finally {
       if (mounted) setState(() => _busy = false);

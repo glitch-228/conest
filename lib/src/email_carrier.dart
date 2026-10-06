@@ -8,6 +8,7 @@ import 'email/carrier_mail.dart';
 import 'email/imap.dart';
 import 'email/mail_socket.dart';
 import 'email/smtp.dart';
+import 'network_errors.dart';
 import 'transport_models.dart';
 
 /// Chatmail servers a new email carrier can create an account on. Any
@@ -330,7 +331,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
         }
       } catch (error) {
         if (!current()) break;
-        _lastError = '$error';
+        _lastError = describeNetworkError(error);
         _setState(EmailCarrierState.failed);
         final wake = Completer<void>();
         _wake = wake;

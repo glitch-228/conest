@@ -11,12 +11,30 @@ import 'nostr/secp256k1.dart';
 import 'transport_models.dart';
 
 /// Relays a new Nostr carrier starts with: public relays that accept and
-/// store gift-wrapped events, run by different operators.
+/// store gift-wrapped events and serve them without signing in, run by
+/// different operators. (relay.damus.io asks readers of gift wraps to sign
+/// in and, as of October 2026, refuses every sign-in.)
 const List<String> defaultNostrRelays = [
-  'wss://relay.damus.io',
   'wss://nos.lol',
-  'wss://relay.0xchat.com',
+  'wss://relay.primal.net',
+  'wss://nostr.mom',
 ];
+
+/// Relays that shut down, and the default each saved setup moves to.
+const Map<String, String> _retiredNostrRelays = {
+  'wss://relay.0xchat.com': 'wss://relay.primal.net',
+};
+
+/// [relays] with shut-down relays replaced (or dropped where the
+/// replacement is already listed).
+List<String> replaceRetiredNostrRelays(List<String> relays) {
+  final result = <String>[];
+  for (final relay in relays) {
+    final replacement = _retiredNostrRelays[relay] ?? relay;
+    if (!result.contains(replacement)) result.add(replacement);
+  }
+  return result;
+}
 
 /// Most relays an address may list.
 const int maxNostrAddressRelays = 4;
@@ -158,13 +176,14 @@ class NostrCarrierChannel implements ManagedCarrierChannel {
       ? _relayUrls.single.host
       : '${_relayUrls.first.host} +${_relayUrls.length - 1}';
 
-  /// Connection state of each relay this device reads from.
-  Map<Uri, (NostrRelayState, String?)> get relayStates => {
+  /// Connection state of each relay this device reads from, its last
+  /// problem, and whether it is serving this device's messages.
+  Map<Uri, (NostrRelayState, String?, bool)> get relayStates => {
     for (final url in _relayUrls)
       if (_own[url.toString()] case final relay?)
-        url: (relay.state, relay.lastError)
+        url: (relay.state, relay.lastError, relay.reading)
       else
-        url: (NostrRelayState.disconnected, null),
+        url: (NostrRelayState.disconnected, null, false),
   };
 
   @override

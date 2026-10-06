@@ -11,8 +11,14 @@ import 'package:conest/src/nostr/relay.dart';
 class FakeNostrRelays {
   final Map<String, FakeNostrRelay> _relays = {};
 
-  FakeNostrRelay relay(String url, {bool requireAuth = false}) =>
-      _relays.putIfAbsent(url, () => FakeNostrRelay(url, requireAuth));
+  FakeNostrRelay relay(
+    String url, {
+    bool requireAuth = false,
+    String authRefusal = 'auth-required: gift wraps need AUTH',
+  }) => _relays.putIfAbsent(
+    url,
+    () => FakeNostrRelay(url, requireAuth, authRefusal: authRefusal),
+  );
 
   /// Relays not created with [relay] refuse connections.
   Future<NostrSocket> connect(Uri url) async {
@@ -32,11 +38,25 @@ class SocketExceptionLike implements Exception {
 }
 
 class FakeNostrRelay {
-  FakeNostrRelay(this.url, this.requireAuth);
+  FakeNostrRelay(
+    this.url,
+    this.requireAuth, {
+    this.authRefusal = 'auth-required: gift wraps need AUTH',
+  });
 
   final String url;
   final bool requireAuth;
+
+  /// What a subscription is CLOSED with before signing in; strfry-based
+  /// relays such as relay.damus.io start it with "ERROR: ".
+  final String authRefusal;
   bool down = false;
+
+  /// Closes every subscription with this message when set.
+  String? closeSubscriptionsWith;
+
+  /// Refuses every sign-in, as a misconfigured relay does.
+  bool refuseAuth = false;
 
   /// Rejects published events with this message when set.
   String? rejectWith;
@@ -124,7 +144,11 @@ class _Connection implements NostrSocket {
         if (_relay.requireAuth &&
             (kinds?.contains(NostrKind.giftWrap) ?? true) &&
             _authedPubkey == null) {
-          _reply(['CLOSED', id, 'auth-required: gift wraps need AUTH']);
+          _reply(['CLOSED', id, _relay.authRefusal]);
+          return;
+        }
+        if (_relay.closeSubscriptionsWith case final reason?) {
+          _reply(['CLOSED', id, reason]);
           return;
         }
         _subscriptions[id] = filter;
@@ -137,6 +161,7 @@ class _Connection implements NostrSocket {
       case ['AUTH', final Map<String, dynamic> json]:
         final event = NostrEvent.fromJson(json);
         final ok =
+            !_relay.refuseAuth &&
             event != null &&
             event.isValid &&
             event.kind == NostrKind.clientAuth &&

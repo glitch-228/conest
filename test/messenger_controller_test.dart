@@ -12161,6 +12161,55 @@ void main() {
     );
 
     test(
+      'a shut-down relay in a saved setup is replaced and re-announced',
+      () async {
+        final relays = FakeNostrRelays()..relay('wss://public.test');
+        final relay = _FakeRelayClient();
+        final aliceVault = _MemoryVaultStore();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          vaultStore: aliceVault,
+          nostrConnector: relays.connect,
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          nostrConnector: relays.connect,
+        );
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        await alice.enableNostrCarrier(
+          relays: ['wss://relay.0xchat.com', 'wss://public.test'],
+        );
+        await settle([alice, bob]);
+        alice.dispose();
+
+        final restarted = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          vaultStore: aliceVault,
+          createIdentity: false,
+          nostrConnector: relays.connect,
+        );
+        addTearDown(restarted.dispose);
+        expect(restarted.nostrCarrierConfig!.relays, [
+          'wss://relay.primal.net',
+          'wss://public.test',
+        ]);
+        await settle([restarted, bob]);
+        expect(
+          bob.contacts.single.carrierAddress(TransportKind.nostr),
+          restarted.nostrChannel!.localAddress,
+        );
+        expect(
+          bob.contacts.single.carrierAddress(TransportKind.nostr),
+          isNot(contains('0xchat')),
+        );
+      },
+    );
+
+    test(
       'turning Nostr off withdraws the address and forgets the key',
       () async {
         final relays = FakeNostrRelays()..relay('wss://r.test');
@@ -12348,6 +12397,28 @@ void main() {
         alice.enableChatmailCarrier('not a domain'),
         throwsArgumentError,
       );
+    });
+
+    test('a connection the network drops is tried again', () async {
+      final server = await FakeMailServer.start();
+      addTearDown(server.close);
+      var drops = 2;
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        mailConnector: (host, port, {required bool tls}) {
+          if (drops-- > 0) {
+            throw const SocketException(
+              'Software caused connection abort',
+              osError: OSError('Software caused connection abort', 103),
+            );
+          }
+          return server.connect(host, port, tls: tls);
+        },
+      );
+      addTearDown(alice.dispose);
+      await alice.enableChatmailCarrier('chat.test');
+      expect(alice.emailCarrierConfig, isNotNull);
     });
   });
 
@@ -13178,7 +13249,10 @@ void main() {
       addTearDown(controller.dispose);
       await expectLater(
         controller.enableTorCarrier(
-          bridges: ['obfs4 192.0.2.2:443 FINGERPRINT cert=abc iat-mode=0'],
+          bridges: [
+            'obfs4 192.0.2.2:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413 '
+                'cert=abc iat-mode=0',
+          ],
         ),
         throwsArgumentError,
       );

@@ -46,6 +46,7 @@ import 'nostr/relay.dart';
 import 'nostr/secp256k1.dart';
 import 'nostr_carrier.dart';
 import 'native_attachment_crypto.dart';
+import 'network_errors.dart';
 import 'platform_bridge.dart';
 import 'radio/byte_link.dart';
 import 'ratchet.dart';
@@ -3570,9 +3571,22 @@ class MessengerController extends ChangeNotifier {
   /// Recreates carriers from saved accounts once Conest runs; contacts
   /// already have their addresses.
   Future<void> _restoreCarrierAccounts() async {
-    if (nostrCarrierConfig != null &&
-        !_carrierTransports.containsKey(TransportKind.nostr)) {
-      await _startNostrCarrier(advertise: false);
+    if (nostrCarrierConfig case final nostr?
+        when !_carrierTransports.containsKey(TransportKind.nostr)) {
+      // A relay that shut down is swapped for its replacement, and
+      // contacts learn the new address.
+      final relays = replaceRetiredNostrRelays(nostr.relays);
+      final retired = !listEquals(relays, nostr.relays);
+      if (retired) {
+        _snapshot = _snapshot.copyWith(
+          carrierAccounts: {
+            ..._snapshot.carrierAccounts,
+            'nostr': nostr.copyWith(relays: relays).toJson(),
+          },
+        );
+        await _persist('Nostr relays updated: a relay shut down.');
+      }
+      await _startNostrCarrier(advertise: retired);
     }
     if (emailCarrierConfig != null &&
         !_carrierTransports.containsKey(TransportKind.deltaChat)) {
@@ -3651,11 +3665,20 @@ class MessengerController extends ChangeNotifier {
     if (!torAvailable) {
       throw StateError('This build of Conest does not include Tor.');
     }
-    final lines = [for (final line in bridges) ?normalizeBridgeLine(line)];
-    if (bridges.any(
-      (line) => line.trim().isNotEmpty && normalizeBridgeLine(line) == null,
-    )) {
-      throw ArgumentError('A bridge line is not valid.');
+    final lines = <String>[];
+    for (final (index, line) in bridges.indexed) {
+      if (line.trim().isEmpty) continue;
+      final normalized = normalizeBridgeLine(line);
+      if (normalized == null) {
+        throw ArgumentError(
+          'Bridge line ${index + 1} is not valid. Paste the lines as '
+          'bridges.torproject.org gives them, starting with the type: '
+          '"obfs4 192.0.2.1:443 FINGERPRINT cert=… iat-mode=0" (also '
+          'webtunnel, snowflake or meek_lite), or a plain bridge '
+          '"192.0.2.1:443 FINGERPRINT".',
+        );
+      }
+      lines.add(normalized);
     }
     final pluggableTransports = lines.any(bridgeNeedsTransport);
     if (pluggableTransports && await _torTransportPath() == null) {
@@ -4201,7 +4224,17 @@ class MessengerController extends ChangeNotifier {
     if (!_carrierAllowed(TransportKind.deltaChat)) {
       throw StateError('Turn on Online and Email in Connectivity first.');
     }
-    await EmailCarrierChannel.checkLogin(config, connector: _mailConnector);
+    // A connection dropped by the network (common while a phone switches
+    // networks) is tried again before giving up; a refused login is not.
+    for (var attempt = 1; ; attempt++) {
+      try {
+        await EmailCarrierChannel.checkLogin(config, connector: _mailConnector);
+        break;
+      } catch (error) {
+        if (attempt == 3 || !isTransientNetworkError(error)) rethrow;
+        await Future<void>.delayed(Duration(seconds: attempt));
+      }
+    }
     if (_carrierTransports.containsKey(TransportKind.deltaChat)) {
       await unregisterCarrierTransport(TransportKind.deltaChat);
     }

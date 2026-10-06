@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../messenger_controller.dart';
+import '../network_errors.dart';
 import '../radio/android_radio_link.dart';
 import '../reticulum/rnode_interface.dart';
 import '../reticulum_carrier.dart';
@@ -164,9 +165,7 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
       await action();
     } catch (error) {
       if (mounted) {
-        setState(
-          () => _error = error is ArgumentError ? '${error.message}' : '$error',
-        );
+        setState(() => _error = describeActionError(error));
       }
     } finally {
       if (mounted) setState(() => _busy = false);

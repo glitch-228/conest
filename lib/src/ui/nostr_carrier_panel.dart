@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../messenger_controller.dart';
+import '../network_errors.dart';
 import '../nostr/relay.dart';
 import '../nostr_carrier.dart';
 
@@ -49,9 +50,7 @@ class _NostrCarrierPanelState extends State<NostrCarrierPanel> {
       await action();
     } catch (error) {
       if (mounted) {
-        setState(
-          () => _error = error is ArgumentError ? '${error.message}' : '$error',
-        );
+        setState(() => _error = describeActionError(error));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -92,7 +91,7 @@ class _NostrCarrierPanelState extends State<NostrCarrierPanel> {
                 ),
         ),
         if (config != null) ...[
-          for (final MapEntry(key: url, value: (state, error))
+          for (final MapEntry(key: url, value: (state, error, reading))
               in (channel?.relayStates ?? const {}).entries)
             ListTile(
               dense: true,
@@ -101,6 +100,8 @@ class _NostrCarrierPanelState extends State<NostrCarrierPanel> {
                 Icons.circle,
                 size: 12,
                 color: switch (state) {
+                  // Connected but not (yet) served: signing in, or refused.
+                  NostrRelayState.connected when !reading => Colors.amber,
                   NostrRelayState.connected => Colors.green,
                   NostrRelayState.connecting => Colors.amber,
                   NostrRelayState.disconnected => theme.colorScheme.error,

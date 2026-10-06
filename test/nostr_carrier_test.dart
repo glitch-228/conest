@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:conest/src/nostr/event.dart';
+import 'package:conest/src/nostr/relay.dart';
 import 'package:conest/src/nostr/secp256k1.dart';
 import 'package:conest/src/nostr_carrier.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -112,6 +113,68 @@ void main() {
       expect(bobGot.single.$2, frame);
     },
   );
+
+  test(
+    'relays that prefix the auth refusal (relay.damus.io) are read after AUTH',
+    () async {
+      relays.relay(
+        'wss://damus.test',
+        requireAuth: true,
+        authRefusal:
+            'ERROR: auth-required: requested filter requires authentication',
+      );
+      final bobGot = <(String, Uint8List)>[];
+      final bob = channel(['wss://damus.test'], bobGot)..start();
+      await until(() => bob.relayStates.values.single.$3);
+      expect(bob.relayStates.values.single.$2, isNull);
+      final alice = channel(['wss://damus.test'], [])..start();
+      await alice.sendFrame(bob.localAddress!, frame);
+      await until(() => bobGot.isNotEmpty);
+      expect(bobGot.single.$2, frame);
+    },
+  );
+
+  test(
+    'a relay that refuses the subscription is not shown as reading',
+    () async {
+      relays.relay('wss://closed.test').closeSubscriptionsWith =
+          'blocked: not today';
+      final bob = channel(['wss://closed.test'], [])..start();
+      await until(
+        () => bob.relayStates.values.single.$2 == 'blocked: not today',
+      );
+      final (state, _, reading) = bob.relayStates.values.single;
+      expect(state, NostrRelayState.connected);
+      expect(reading, isFalse);
+    },
+  );
+
+  test('a relay that refuses every sign-in says so', () async {
+    relays.relay('wss://broken.test', requireAuth: true).refuseAuth = true;
+    final bob = channel(['wss://broken.test'], [])..start();
+    await until(
+      () => bob.relayStates.values.single.$2?.contains('refused') ?? false,
+    );
+    expect(bob.relayStates.values.single.$3, isFalse);
+  });
+
+  test('shut-down relays are replaced in saved setups', () {
+    expect(
+      replaceRetiredNostrRelays([
+        'wss://relay.damus.io',
+        'wss://relay.0xchat.com',
+      ]),
+      ['wss://relay.damus.io', 'wss://relay.primal.net'],
+    );
+    expect(
+      replaceRetiredNostrRelays([
+        'wss://relay.primal.net',
+        'wss://relay.0xchat.com',
+      ]),
+      ['wss://relay.primal.net'],
+    );
+    expect(defaultNostrRelays, isNot(contains('wss://relay.0xchat.com')));
+  });
 
   test('reading resumes after the relay drops the connection', () async {
     final relay = relays.relay('wss://flaky.test');

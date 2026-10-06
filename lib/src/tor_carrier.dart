@@ -27,21 +27,48 @@ const CarrierFraming torFraming = CarrierFraming(
 bool isValidTorAddress(String address) =>
     RegExp(r'^[a-z2-7]{56}\.onion$').hasMatch(address);
 
+/// Pluggable transports the bundled client (lyrebird) provides.
+const Set<String> supportedBridgeTransports = {
+  'obfs4',
+  'webtunnel',
+  'snowflake',
+  'meek_lite',
+};
+
 /// A bridge line as Tor takes it (without a leading "Bridge"), or null when
-/// it cannot be one.
+/// it cannot be one. Bridges from bridges.torproject.org start with their
+/// type ("obfs4 192.0.2.1:443 FINGERPRINT cert=… iat-mode=0"); plain ones
+/// with their address and fingerprint.
 String? normalizeBridgeLine(String line) {
   var parts = line.trim().split(RegExp(r'\s+'));
   if (parts.isNotEmpty && parts.first.toLowerCase() == 'bridge') {
     parts = parts.sublist(1);
   }
+  if (parts.length < 2) return null;
+  final plain = _isBridgeAddress(parts.first);
+  if (plain) {
+    // Tor needs the relay fingerprint of a plain bridge.
+    if (!RegExp(r'^\$?[0-9A-Fa-f]{40}$').hasMatch(parts[1])) return null;
+  } else {
+    final transport = parts.first.toLowerCase();
+    if (!supportedBridgeTransports.contains(transport) ||
+        !_isBridgeAddress(parts[1])) {
+      return null;
+    }
+    parts = [transport, ...parts.skip(1)];
+  }
   final normalized = parts.join(' ');
-  if (parts.length < 2 ||
-      normalized.length > 2048 ||
+  if (normalized.length > 2048 ||
       !RegExp(r'^[\x21-\x7e ]+$').hasMatch(normalized)) {
     return null;
   }
   return normalized;
 }
+
+/// `192.0.2.1:443` or `[2001:db8::1]:443`.
+bool _isBridgeAddress(String value) => RegExp(
+  r'^(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9A-Fa-f:.]+\]):\d{1,5}$',
+).hasMatch(value);
 
 /// Whether a bridge needs a pluggable transport: plain bridges start with
 /// their address, others with the transport's name.

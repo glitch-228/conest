@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../meshtastic_carrier.dart';
 import '../messenger_controller.dart';
+import '../network_errors.dart';
 import '../radio/android_radio_link.dart';
 
 /// The Meshtastic carrier in Settings: the radio to use and its state.
@@ -57,9 +58,7 @@ class _MeshtasticCarrierPanelState extends State<MeshtasticCarrierPanel> {
       await action();
     } catch (error) {
       if (mounted) {
-        setState(
-          () => _error = error is ArgumentError ? '${error.message}' : '$error',
-        );
+        setState(() => _error = describeActionError(error));
       }
     } finally {
       if (mounted) setState(() => _busy = false);

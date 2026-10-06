@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../email_carrier.dart';
 import '../messenger_controller.dart';
+import '../network_errors.dart';
 
 /// The email carrier in Settings: a new chatmail account in one tap, or an
 /// existing mail account, and the connection state.
@@ -62,9 +63,7 @@ class _EmailCarrierPanelState extends State<EmailCarrierPanel> {
       await action();
     } catch (error) {
       if (mounted) {
-        setState(
-          () => _error = error is ArgumentError ? '${error.message}' : '$error',
-        );
+        setState(() => _error = describeActionError(error));
       }
     } finally {
       if (mounted) setState(() => _busy = false);

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import '../network_errors.dart';
 import 'event.dart';
 
 /// A text WebSocket to a relay; tests substitute an in-memory one.
@@ -53,6 +54,13 @@ class NostrRelayException implements Exception {
   String toString() => '$relay: $message';
 }
 
+/// Whether a relay's OK or CLOSED [message] asks to sign in first. Some
+/// relays (strfry-based, such as relay.damus.io) put "ERROR: " in front.
+bool isAuthRequired(String message) => RegExp(
+  r'^(?:error:\s*)?auth-required',
+  caseSensitive: false,
+).hasMatch(message);
+
 /// One relay connection: reconnects with backoff, answers NIP-42
 /// authentication, keeps an optional subscription and publishes events.
 class NostrRelay {
@@ -90,6 +98,7 @@ class NostrRelay {
   NostrRelayState _state = NostrRelayState.disconnected;
   bool _running = false;
   bool _authenticated = false;
+  bool _reading = false;
   String? _lastError;
   Duration _backoff = const Duration(seconds: 2);
   Timer? _retryTimer;
@@ -98,6 +107,12 @@ class NostrRelay {
   NostrRelayState get state => _state;
   String? get lastError => _lastError;
   bool get authenticated => _authenticated;
+
+  /// Whether the subscription is being served: connected and, for a
+  /// reading connection, the relay has sent its stored events.
+  bool get reading =>
+      _state == NostrRelayState.connected && (filter == null || _reading);
+
   DateTime get lastUsed => _lastUsed;
 
   void start() {
@@ -128,7 +143,7 @@ class NostrRelay {
     _lastUsed = DateTime.now();
     final deadline = DateTime.now().add(_publishTimeout);
     var (accepted, message) = await _send(event, deadline);
-    if (!accepted && message.startsWith('auth-required')) {
+    if (!accepted && isAuthRequired(message)) {
       await _waitForAuth(deadline);
       (accepted, message) = await _send(event, deadline);
     }
@@ -182,11 +197,13 @@ class NostrRelay {
       }
       _socket = socket;
       _authenticated = false;
+      _closedForAuth = false;
+      _authResubscribes = 0;
       _subscription = socket.messages.listen(
         _handle,
         onDone: _lost,
         onError: (Object error) {
-          _lastError = '$error';
+          _lastError = describeNetworkError(error);
           _lost();
         },
         cancelOnError: true,
@@ -199,7 +216,7 @@ class NostrRelay {
         if (!waiter.isCompleted) waiter.complete();
       }
     } catch (error) {
-      _lastError = '$error';
+      _lastError = describeNetworkError(error);
       _setState(NostrRelayState.disconnected);
       _scheduleRetry();
     }
@@ -208,10 +225,12 @@ class NostrRelay {
   void _subscribe() {
     final current = filter?.call();
     if (current == null) return;
+    _reading = false;
     _socket?.send(jsonEncode(['REQ', _subscriptionId, current]));
   }
 
   void _lost() {
+    _reading = false;
     unawaited(_closeSocket());
     for (final pending in _pendingOk.values) {
       if (!pending.isCompleted) {
@@ -262,7 +281,11 @@ class NostrRelay {
         if (id == _authEventId) {
           _authenticated = accepted;
           _authEventId = null;
-          if (accepted && _closedForAuth) {
+          if (!accepted) {
+            _lastError =
+                'Cannot read from this relay: it refused to sign in '
+                '($text). Replace it with another relay.';
+          } else if (_closedForAuth) {
             _closedForAuth = false;
             _subscribe();
           }
@@ -272,16 +295,30 @@ class NostrRelay {
         if (pending != null && !pending.isCompleted) {
           pending.complete((accepted, text));
         }
+      case ['EOSE', final String id] when id == _subscriptionId:
+        _reading = true;
+        _lastError = null;
+        onStateChanged?.call();
       case ['CLOSED', final String id, ...] when id == _subscriptionId:
         final text = message.length > 2 && message[2] is String
             ? message[2] as String
             : '';
-        if (text.startsWith('auth-required')) {
-          _closedForAuth = true;
+        _reading = false;
+        if (!isAuthRequired(text)) {
+          _lastError = text.isEmpty
+              ? 'The relay closed the subscription.'
+              : text;
+        } else if (_authenticated && _authResubscribes < 2) {
+          // Signed in before the refusal arrived: ask once more.
+          _authResubscribes++;
+          _subscribe();
         } else {
-          _lastError = text;
-          onStateChanged?.call();
+          _closedForAuth = true;
+          _lastError = _authenticated
+              ? 'The relay refuses to serve messages to this key: $text'
+              : 'Signing in to the relay…';
         }
+        onStateChanged?.call();
       case ['AUTH', final String challenge]:
         _authenticate(challenge);
       case ['NOTICE', final String text]:
@@ -294,6 +331,7 @@ class NostrRelay {
 
   String? _authEventId;
   bool _closedForAuth = false;
+  int _authResubscribes = 0;
 
   void _authenticate(String challenge) {
     if (challenge.length > 512) return;

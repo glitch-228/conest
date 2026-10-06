@@ -8,12 +8,29 @@ import 'support/fake_tor.dart';
 
 void main() {
   test('bridge lines are normalized and classified', () {
+    const fingerprint = '4352E58420E68F5E40BF7C74FADDCCD9D1349413';
     expect(
-      normalizeBridgeLine('  Bridge   192.0.2.1:443\tABCD  '),
-      '192.0.2.1:443 ABCD',
+      normalizeBridgeLine('  Bridge   192.0.2.1:443\t$fingerprint  '),
+      '192.0.2.1:443 $fingerprint',
+    );
+    expect(
+      normalizeBridgeLine(
+        'Bridge OBFS4 192.0.2.1:443 $fingerprint cert=abc+/= iat-mode=0',
+      ),
+      'obfs4 192.0.2.1:443 $fingerprint cert=abc+/= iat-mode=0',
+    );
+    expect(
+      normalizeBridgeLine('webtunnel [2001:db8::1]:443 $fingerprint url=x'),
+      isNotNull,
     );
     expect(normalizeBridgeLine('192.0.2.1:443'), isNull);
+    expect(normalizeBridgeLine('192.0.2.1:443 ABCD'), isNull);
     expect(normalizeBridgeLine('bridge 192.0.2.1:443 AB\u0000'), isNull);
+    // The type comes first, and only types the bundled client has.
+    expect(normalizeBridgeLine('192.0.2.1:443 obfs4 $fingerprint'), isNull);
+    expect(normalizeBridgeLine('$fingerprint 192.0.2.1:443'), isNull);
+    expect(normalizeBridgeLine('obfs5 192.0.2.1:443 $fingerprint'), isNull);
+    expect(normalizeBridgeLine('obfs4 $fingerprint cert=x'), isNull);
     expect(bridgeNeedsTransport('192.0.2.1:443 ABCD'), isFalse);
     expect(bridgeNeedsTransport('[2001:db8::1]:443 ABCD'), isFalse);
     expect(bridgeNeedsTransport('obfs4 192.0.2.1:443 ABCD cert=x'), isTrue);

@@ -98,11 +98,17 @@ class _TorCarrierPanelState extends State<TorCarrierPanel> {
           enabled: !_busy,
           decoration: InputDecoration(
             labelText: 'Bridges (optional, one per line)',
-            hintText: '192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413',
+            hintText: _transports == false
+                ? '192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413'
+                : 'obfs4 192.0.2.1:443 '
+                      '4352E58420E68F5E40BF7C74FADDCCD9D1349413 '
+                      'cert=… iat-mode=0',
+            hintMaxLines: 3,
             helperText: switch (_transports) {
               true =>
-                'obfs4, webtunnel, snowflake or plain bridges, from '
-                    'bridges.torproject.org.',
+                'Lines from bridges.torproject.org, starting with the '
+                    'type: obfs4, webtunnel, snowflake or meek_lite (or '
+                    'plain bridges: address and fingerprint).',
               false =>
                 'Plain bridges only (address and fingerprint) in '
                     'this build.',
