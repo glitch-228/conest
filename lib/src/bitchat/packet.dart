@@ -72,8 +72,9 @@ class BitchatPacket {
     compressed: compressed,
   );
 
-  /// The wire form; [pad] adds bitchat's block padding.
-  Uint8List encode({bool pad = true}) {
+  /// The wire form; [pad] adds bitchat's block padding, which bitchat uses
+  /// for Noise packets only (the default).
+  Uint8List encode({bool? pad}) {
     if (compressed) {
       throw StateError('Compressed packets are relayed as received.');
     }
@@ -101,7 +102,11 @@ class BitchatPacket {
     out.add(payload);
     if (signature != null) out.add(signature!);
     final raw = out.takeBytes();
-    return pad ? bitchatPad(raw) : raw;
+    final padded =
+        pad ??
+        (type == BitchatType.noiseHandshake ||
+            type == BitchatType.noiseEncrypted);
+    return padded ? bitchatPad(raw) : raw;
   }
 
   /// What the sender signs: the packet without its signature, with TTL 0
@@ -115,7 +120,7 @@ class BitchatPacket {
     ttl: 0,
     recipientId: recipientId,
     route: route,
-  ).encode();
+  ).encode(pad: true);
 
   /// Parses a packet, removing padding if needed; null when malformed.
   static BitchatPacket? decode(Uint8List data) =>

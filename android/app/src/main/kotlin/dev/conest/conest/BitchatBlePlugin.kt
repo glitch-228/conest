@@ -50,9 +50,10 @@ import java.util.UUID
  * again).
  * All state lives on the main thread.
  *
- * Links only carry packets once both sides can take a whole 512-byte
- * packet in one write or notification (ATT MTU of at least 515), because
- * bitchat treats every write as a complete packet.
+ * Every write or notification carries one whole packet, as bitchat
+ * expects. Each link reports the largest write it takes (its ATT MTU
+ * minus 3, often 182 with iPhones); Dart sends bigger packets to it as
+ * bitchat fragments, through sendTo {link, bytes}.
  */
 class BitchatBlePlugin(
     private val context: Context,
@@ -67,7 +68,8 @@ class BitchatBlePlugin(
         private const val MAX_CLIENT_LINKS = 6
         private const val MAX_SERVER_LINKS = 8
         private const val MAX_PACKET = 512
-        private const val MIN_MTU = MAX_PACKET + 3
+        /** ATT's default MTU, before any exchange. */
+        private const val DEFAULT_MTU = 23
         private const val MAX_QUEUED_PER_LINK = 64
         private const val MAX_ATTEMPTS = 5
         private const val NOTIFY_WATCHDOG_MS = 2_000L
@@ -116,7 +118,13 @@ class BitchatBlePlugin(
         var writeToken = 0
         var ready = false
         var since = SystemClock.elapsedRealtime()
+        var mtu = DEFAULT_MTU
     }
+
+    /** The largest write a link takes; bigger packets reach it as fragments. */
+    private fun clientLimit(link: ClientLink) = minOf(MAX_PACKET, link.mtu - 3)
+    private fun serverLimit(address: String) =
+        minOf(MAX_PACKET, (serverMtu[address] ?: DEFAULT_MTU) - 3)
 
     init {
         current?.shutdown()
@@ -171,6 +179,12 @@ class BitchatBlePlugin(
                     broadcast(
                         call.argument<ByteArray>("bytes") ?: ByteArray(0),
                         call.argument<String>("except"),
+                    ),
+                )
+                "sendTo" -> result.success(
+                    sendTo(
+                        call.argument<String>("link") ?: "",
+                        call.argument<ByteArray>("bytes") ?: ByteArray(0),
                     ),
                 )
                 else -> result.notImplemented()
@@ -405,12 +419,10 @@ class BitchatBlePlugin(
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             main.post {
-                // A smaller MTU would split packets bitchat reads whole.
-                if (status != BluetoothGatt.GATT_SUCCESS || mtu < MIN_MTU) {
-                    dropClient(link, failed = true)
-                } else if (!gatt.discoverServices()) {
-                    dropClient(link, failed = true)
-                }
+                // Any MTU works: packets bigger than the link takes go as
+                // bitchat fragments (iPhones often stop at 185).
+                if (status == BluetoothGatt.GATT_SUCCESS) link.mtu = mtu
+                if (!gatt.discoverServices()) dropClient(link, failed = true)
             }
         }
 
@@ -493,7 +505,7 @@ class BitchatBlePlugin(
         link.ready = true
         link.since = SystemClock.elapsedRealtime()
         backoff.remove(link.address)
-        emit(mapOf("link" to "c:${link.address}", "up" to true))
+        emit(mapOf("link" to "c:${link.address}", "up" to true, "limit" to clientLimit(link)))
         pumpClient(link)
     }
 
@@ -570,6 +582,9 @@ class BitchatBlePlugin(
         override fun onMtuChanged(device: BluetoothDevice, mtu: Int) {
             main.post {
                 serverMtu[device.address] = mtu
+                if (servers.containsKey(device.address)) {
+                    emit(mapOf("link" to "s:${device.address}", "limit" to serverLimit(device.address)))
+                }
                 pumpNotifications()
             }
         }
@@ -667,7 +682,13 @@ class BitchatBlePlugin(
                 if (full) return@post
                 if (enable && !servers.containsKey(device.address)) {
                     servers[device.address] = ServerLink(device)
-                    emit(mapOf("link" to "s:${device.address}", "up" to true))
+                    emit(
+                        mapOf(
+                            "link" to "s:${device.address}",
+                            "up" to true,
+                            "limit" to serverLimit(device.address),
+                        ),
+                    )
                 } else if (!enable) {
                     removeServerLink(device.address)
                 }
@@ -706,7 +727,7 @@ class BitchatBlePlugin(
         val gattServer = server ?: return
         val characteristic = serverCharacteristic ?: return
         val link = servers.values.firstOrNull { link ->
-            link.queue.isNotEmpty() && (serverMtu[link.device.address] ?: 23) >= MIN_MTU
+            link.queue.isNotEmpty()
         } ?: return
         // Rotate: the served link goes to the back of the order.
         servers.remove(link.device.address)
@@ -748,7 +769,7 @@ class BitchatBlePlugin(
         if (!active || bytes.isEmpty() || bytes.size > MAX_PACKET) return 0
         var queued = 0
         for (link in clients.values.toList()) {
-            if ("c:${link.address}" == except || !link.ready) continue
+            if ("c:${link.address}" == except || !link.ready || bytes.size > clientLimit(link)) continue
             if (link.writes.size < MAX_QUEUED_PER_LINK) {
                 link.writes.add(Outgoing(bytes))
                 queued++
@@ -756,7 +777,7 @@ class BitchatBlePlugin(
             pumpClient(link)
         }
         for ((address, link) in servers) {
-            if ("s:$address" == except || (serverMtu[address] ?: 23) < MIN_MTU) continue
+            if ("s:$address" == except || bytes.size > serverLimit(address)) continue
             if (link.queue.size < MAX_QUEUED_PER_LINK) {
                 link.queue.add(Outgoing(bytes))
                 queued++
@@ -764,5 +785,24 @@ class BitchatBlePlugin(
         }
         pumpNotifications()
         return queued
+    }
+
+    /** Queues [bytes] for the neighbour on [link] only, if it fits. Main thread. */
+    private fun sendTo(link: String, bytes: ByteArray): Boolean {
+        if (!active || bytes.isEmpty()) return false
+        val address = link.substringAfter(':')
+        if (link.startsWith("c:")) {
+            val client = clients[address] ?: return false
+            if (!client.ready || bytes.size > clientLimit(client)) return false
+            if (client.writes.size >= MAX_QUEUED_PER_LINK) return false
+            client.writes.add(Outgoing(bytes))
+            pumpClient(client)
+            return true
+        }
+        val server = servers[address] ?: return false
+        if (bytes.size > serverLimit(address) || server.queue.size >= MAX_QUEUED_PER_LINK) return false
+        server.queue.add(Outgoing(bytes))
+        pumpNotifications()
+        return true
     }
 }

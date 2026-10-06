@@ -9,7 +9,7 @@ const int bitchatDefaultFragmentChunk = 469;
 
 /// Bytes a fragment adds around its chunk: the packet header with sender
 /// and recipient, and the fragment header.
-const int bitchatFragmentOverhead = 42;
+const int bitchatFragmentOverhead = 43;
 
 const int _fragmentHeaderBytes = 8 + 2 + 2 + 1;
 

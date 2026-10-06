@@ -540,6 +540,37 @@ void main() {
       expect(daveGot.single.$2, sent);
     });
 
+    test('links that take less than a packet get fragments', () async {
+      // Alice talks to Dave over a small link, and through a relay whose
+      // link to Dave is small too.
+      for (final viaRelay in [false, true]) {
+        final area = FakeBleNeighbourhood();
+        if (viaRelay) {
+          area
+            ..connect('a', 'r')
+            ..connect('r', 'd')
+            ..limit('r', 'd', 182);
+          relay(area, 'r');
+        } else {
+          area
+            ..connect('a', 'd')
+            ..limit('a', 'd', 182);
+        }
+        final daveGot = <(String, Uint8List)>[];
+        final alice = await channel(area, 'a', aliceAddress, daveAddress, []);
+        await channel(area, 'd', daveAddress, aliceAddress, daveGot);
+        final sent = frame();
+        await alice.sendFrame(daveAddress, sent);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(daveGot.single.$2, sent, reason: 'via relay: $viaRelay');
+        // Only the hop to the relay may carry the whole packet.
+        expect(
+          area.airtime.where((packet) => packet.length > 182),
+          hasLength(viaRelay ? 1 : 0),
+        );
+      }
+    });
+
     test('TTL limits how far a packet travels', () async {
       final area = FakeBleNeighbourhood();
       final names = List.generate(10, (i) => 'n$i');

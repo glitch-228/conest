@@ -21,6 +21,13 @@ abstract interface class BitchatLinkLayer {
   /// null once it can again.
   Stream<String?> get problems;
 
+  /// The largest packet each connected neighbour takes in one write, by
+  /// link. Links that take less than a packet get it as fragments.
+  Map<String, int> get linkLimits;
+
+  /// Sends [packet] to the neighbour on [link] only.
+  Future<void> sendTo(String link, Uint8List packet);
+
   Future<void> close();
 }
 
@@ -117,7 +124,7 @@ class BitchatNode {
     _remember(packet.dedupKey);
     final encoded = packet.encode();
     if (encoded.length <= maxPacketBytes) {
-      await _links.broadcast(encoded);
+      await _sendFitting(packet, encoded);
       return;
     }
     for (final fragment in bitchatFragmentsFor(
@@ -125,7 +132,41 @@ class BitchatNode {
       chunkBytes: maxPacketBytes - bitchatFragmentOverhead,
     )) {
       _remember(fragment.dedupKey);
-      await _links.broadcast(fragment.encode());
+      await _sendFitting(fragment, fragment.encode());
+    }
+  }
+
+  /// Sends [encoded] ([packet]) to every neighbour but [except]: whole to
+  /// links that take it, as fragments sized to the link to the others.
+  Future<void> _sendFitting(
+    BitchatPacket packet,
+    Uint8List encoded, {
+    String? except,
+  }) async {
+    final limits = _links.linkLimits;
+    if (!limits.entries.any(
+      (link) => link.key != except && link.value < encoded.length,
+    )) {
+      await _links.broadcast(encoded, except: except);
+      return;
+    }
+    for (final MapEntry(key: link, value: limit) in limits.entries) {
+      if (link == except) continue;
+      try {
+        if (limit >= encoded.length) {
+          await _links.sendTo(link, encoded);
+          continue;
+        }
+        for (final fragment in bitchatFragmentsFor(
+          packet,
+          chunkBytes: max(16, limit - bitchatFragmentOverhead),
+        )) {
+          _remember(fragment.dedupKey);
+          await _links.sendTo(link, fragment.encode());
+        }
+      } catch (_) {
+        // That neighbour is gone; the others still get it.
+      }
     }
   }
 
@@ -175,7 +216,7 @@ class BitchatNode {
     // further than a fresh bitchat packet goes.
     final forward = Uint8List.fromList(raw)
       ..[2] = min(packet.ttl, bitchatDefaultTtl) - 1;
-    await _links.broadcast(forward, except: link);
+    await _sendFitting(packet.copyWith(ttl: forward[2]), forward, except: link);
   }
 
   bool _relayAllowed(String link) {

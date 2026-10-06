@@ -31,8 +31,18 @@ class AndroidBitchatLinks implements BitchatLinkLayer {
       if (data is Uint8List) {
         links._received.add((link, data));
       } else if (event['up'] case final bool up) {
-        up ? links.neighbours.add(link) : links.neighbours.remove(link);
+        if (up) {
+          links.neighbours.add(link);
+          links._limits[link] ??= 512;
+        } else {
+          links.neighbours.remove(link);
+          links._limits.remove(link);
+        }
         links._changes.add(null);
+      }
+      // The largest write the link takes (its ATT MTU minus 3).
+      if (event['limit'] case final int limit when limit > 0) {
+        links._limits[link] = limit;
       }
     });
     try {
@@ -54,6 +64,19 @@ class AndroidBitchatLinks implements BitchatLinkLayer {
 
   /// Links to neighbours currently connected.
   final Set<String> neighbours = {};
+  final Map<String, int> _limits = {};
+
+  @override
+  Map<String, int> get linkLimits => Map.unmodifiable(_limits);
+
+  @override
+  Future<void> sendTo(String link, Uint8List packet) async {
+    final sent = await _methods.invokeMethod<bool>('sendTo', {
+      'link': link,
+      'bytes': packet,
+    });
+    if (sent != true) throw StateError('That phone is no longer nearby.');
+  }
 
   Stream<void> get neighbourChanges => _changes.stream;
 
