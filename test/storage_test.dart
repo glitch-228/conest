@@ -10,6 +10,42 @@ import 'package:conest/src/models.dart';
 import 'package:conest/src/storage.dart';
 
 void main() {
+  test('a directory still being written to is deleted after retries', () async {
+    final root = await Directory.systemTemp.createTemp('conest-delete-');
+    final busy = Directory(p.join(root.path, 'tor'));
+    await Directory(
+      p.join(busy.path, 'state', 'keystore'),
+    ).create(recursive: true);
+    // Like Tor shutting down: files keep appearing for a moment.
+    var writing = true;
+    final writer = () async {
+      var count = 0;
+      while (writing) {
+        try {
+          await File(
+            p.join(busy.path, 'state', 'keystore', 'k${count++}'),
+          ).create(recursive: true);
+        } on FileSystemException {
+          // The directory went away under us.
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+    }();
+    Future<void>.delayed(
+      const Duration(milliseconds: 300),
+      () => writing = false,
+    );
+    await deleteDirectoryWithRetries(
+      busy,
+      pause: const Duration(milliseconds: 100),
+    );
+    await writer;
+    // A last file written after deletion is cleaned up by a final pass.
+    await deleteDirectoryWithRetries(busy);
+    expect(await busy.exists(), isFalse);
+    await root.delete(recursive: true);
+  });
+
   Future<Directory> createTempRoot(String prefix) async {
     final directory = await Directory.systemTemp.createTemp(prefix);
     addTearDown(() async {

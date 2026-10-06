@@ -4,6 +4,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:conest/src/storage.dart' show deleteDirectoryWithRetries;
 import 'package:conest/src/tor_carrier.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -19,7 +20,7 @@ void main() {
       final api = NativeTorApi.tryCreate();
       expect(api, isNotNull, reason: 'the native library has no Tor module');
       final directory = await Directory.systemTemp.createTemp('conest-tor-');
-      addTearDown(() => directory.delete(recursive: true));
+      addTearDown(() => deleteDirectoryWithRetries(directory));
       final frames = <Uint8List>[];
       final progress = <double>[];
       final subscription = api!.events.listen((event) {
@@ -102,7 +103,7 @@ void main() {
     () async {
       final api = NativeTorApi.tryCreate()!;
       final directory = await Directory.systemTemp.createTemp('conest-tor-');
-      addTearDown(() => directory.delete(recursive: true));
+      addTearDown(() => deleteDirectoryWithRetries(directory));
       // Arti creates these itself, private to this user.
       final state = Directory('${directory.path}/state');
       final cache = Directory('${directory.path}/cache');

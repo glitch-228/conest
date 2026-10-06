@@ -418,10 +418,11 @@ class VaultStore {
   }
 
   /// Forgets the onion service's keys and Tor's cache.
+  /// Arti's background work can still write for a moment after Tor stops,
+  /// so deleting retries briefly.
   Future<void> deleteTorDirectories() async {
     final vault = await _vaultFile();
-    final directory = Directory('${vault.path}.tor');
-    if (await directory.exists()) await directory.delete(recursive: true);
+    await deleteDirectoryWithRetries(Directory('${vault.path}.tor'));
   }
 
   Future<VaultSnapshot> load() async {
@@ -650,5 +651,23 @@ class _FileRatchetStore implements RatchetStore {
     final temporary = File('${file.path}.tmp');
     await _vault._writeFlushed(temporary, contents);
     await _vault._atomicReplace(temporary, file);
+  }
+}
+
+/// Deletes [directory] and everything in it, retrying while another writer
+/// (such as Tor shutting down) briefly keeps adding files.
+Future<void> deleteDirectoryWithRetries(
+  Directory directory, {
+  int attempts = 10,
+  Duration pause = const Duration(milliseconds: 500),
+}) async {
+  for (var attempt = 1; ; attempt++) {
+    try {
+      if (await directory.exists()) await directory.delete(recursive: true);
+      return;
+    } on FileSystemException {
+      if (attempt >= attempts) rethrow;
+      await Future<void>.delayed(pause);
+    }
   }
 }
