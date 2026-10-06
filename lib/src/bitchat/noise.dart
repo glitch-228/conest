@@ -206,7 +206,12 @@ class NoiseXXHandshake {
       keyPair: local,
       remotePublicKey: SimplePublicKey(remote, type: KeyPairType.x25519),
     );
-    return Uint8List.fromList(await shared.extractBytes());
+    final bytes = Uint8List.fromList(await shared.extractBytes());
+    // A low-order or all-zero public key gives an all-zero secret.
+    if (bytes.every((byte) => byte == 0)) {
+      throw const FormatException('Weak Noise public key.');
+    }
+    return bytes;
   }
 
   Future<Uint8List> _newEphemeral() async {

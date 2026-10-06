@@ -4,12 +4,12 @@ import 'dart:typed_data';
 
 import 'packet.dart';
 
-/// bitchat's fragment chunk when a link's limit is unknown.
-const int bitchatDefaultFragmentChunk = 469;
+/// The smallest chunk worth a fragment (bitchat's own floor).
+const int bitchatMinFragmentChunk = 64;
 
-/// Bytes a fragment adds around its chunk: the packet header with sender
-/// and recipient, and the fragment header.
-const int bitchatFragmentOverhead = 43;
+/// The smallest link that can carry fragments: the minimum chunk plus the
+/// fragment headers. Smaller links are not used.
+const int bitchatMinLinkLimit = 110;
 
 const int _fragmentHeaderBytes = 8 + 2 + 2 + 1;
 
@@ -53,24 +53,21 @@ class BitchatFragment {
   }
 }
 
-/// Splits [original] into FRAGMENT packets whose chunks are at most
-/// [chunkBytes] of its whole encoded (padded) form, as bitchat does for
-/// packets larger than a link can carry.
+/// Splits [original] into FRAGMENT packets of at most [maxPacketBytes]
+/// each, whose chunks are slices of its whole encoded (padded) form, as
+/// bitchat does for packets larger than a link can carry. The fragment
+/// header is measured, so v2 and routed packets fit too.
 List<BitchatPacket> bitchatFragmentsFor(
   BitchatPacket original, {
-  int chunkBytes = bitchatDefaultFragmentChunk,
+  int maxPacketBytes = 512,
   Random? random,
 }) {
   final encoded = original.encode();
-  final size = max(16, chunkBytes);
-  final total = (encoded.length + size - 1) ~/ size;
-  if (total > 0xffff) throw ArgumentError('Too large to fragment.');
   final source = random ?? Random.secure();
   final id = Uint8List.fromList(List.generate(8, (_) => source.nextInt(256)));
-  return [
-    for (var index = 0; index < total; index++)
+  BitchatPacket fragment(int index, int total, Uint8List chunk) =>
       BitchatPacket(
-        version: original.route?.isNotEmpty ?? false ? 2 : 1,
+        version: original.version,
         type: BitchatType.fragment,
         senderId: original.senderId,
         recipientId: original.recipientId,
@@ -82,12 +79,26 @@ List<BitchatPacket> bitchatFragmentsFor(
           index: index,
           total: total,
           originalType: original.type,
-          chunk: Uint8List.sublistView(
-            encoded,
-            index * size,
-            min((index + 1) * size, encoded.length),
-          ),
+          chunk: chunk,
         ).encode(),
+      );
+  final overhead = fragment(0, 1, Uint8List(0)).encode().length;
+  final size = maxPacketBytes - overhead;
+  if (size < bitchatMinFragmentChunk) {
+    throw ArgumentError('A $maxPacketBytes-byte link is too small.');
+  }
+  final total = (encoded.length + size - 1) ~/ size;
+  if (total > 0xffff) throw ArgumentError('Too large to fragment.');
+  return [
+    for (var index = 0; index < total; index++)
+      fragment(
+        index,
+        total,
+        Uint8List.sublistView(
+          encoded,
+          index * size,
+          min((index + 1) * size, encoded.length),
+        ),
       ),
   ];
 }
@@ -110,8 +121,9 @@ class BitchatReassembler {
   final LinkedHashMap<String, _Pending> _pending = LinkedHashMap();
 
   /// Adds the fragment carried by [packet]; returns the whole original
-  /// packet's bytes once every fragment has arrived.
-  Uint8List? add(BitchatPacket packet) {
+  /// packet's bytes, and the type it claimed, once every fragment has
+  /// arrived.
+  (Uint8List, int)? add(BitchatPacket packet) {
     final fragment = BitchatFragment.decode(packet.payload);
     if (fragment == null ||
         fragment.total * fragment.chunk.length > maxBytes * 2) {
@@ -125,11 +137,13 @@ class BitchatReassembler {
     var entry = _pending[key];
     if (entry == null) {
       if (_pending.length >= maxPending) _pending.remove(_pending.keys.first);
-      entry = _Pending(fragment.total, now);
+      entry = _Pending(fragment.total, fragment.originalType, now);
       _pending[key] = entry;
     }
-    if (entry.total != fragment.total) {
-      _pending.remove(key);
+    // A fragment that disagrees is ignored rather than allowed to discard
+    // what has arrived so far.
+    if (entry.total != fragment.total ||
+        entry.originalType != fragment.originalType) {
       return null;
     }
     if (!entry.chunks.containsKey(fragment.index)) {
@@ -146,7 +160,7 @@ class BitchatReassembler {
     for (var index = 0; index < entry.total; index++) {
       out.add(entry.chunks[index]!);
     }
-    return out.takeBytes();
+    return (out.takeBytes(), entry.originalType);
   }
 
   static String _hex(List<int> bytes) =>
@@ -154,8 +168,9 @@ class BitchatReassembler {
 }
 
 class _Pending {
-  _Pending(this.total, this.startedAt);
+  _Pending(this.total, this.originalType, this.startedAt);
   final int total;
+  final int originalType;
   final DateTime startedAt;
   final Map<int, Uint8List> chunks = {};
   int bytes = 0;

@@ -74,6 +74,7 @@ class BitchatNode {
     required BitchatLinkLayer links,
     required this.onPrivate,
     this.wantsRecipient,
+    this.onPacket,
     this.maxPacketBytes = 512,
     this.relay = true,
     DateTime Function()? now,
@@ -96,9 +97,13 @@ class BitchatNode {
   final BitchatPrivate Function(BitchatPacket packet, Uint8List payload)
   onPrivate;
 
-  /// Whether a recipient id is one of this device's, so fragments sent to
-  /// it are put back together (others are only relayed).
+  /// Whether a recipient id is one of this device's: fragments sent to it
+  /// are not relayed, and what they carry is.
   final bool Function(Uint8List recipientId)? wantsRecipient;
+
+  /// Every other packet that reaches this device (announces, handshakes),
+  /// including packets put back together from fragments.
+  final Future<void> Function(BitchatPacket packet)? onPacket;
 
   /// Largest packet sent whole; bigger ones go as bitchat fragments.
   final int maxPacketBytes;
@@ -122,51 +127,53 @@ class BitchatNode {
   /// Sends a packet of this device's own.
   Future<void> send(BitchatPacket packet) async {
     _remember(packet.dedupKey);
-    final encoded = packet.encode();
-    if (encoded.length <= maxPacketBytes) {
-      await _sendFitting(packet, encoded);
-      return;
-    }
-    for (final fragment in bitchatFragmentsFor(
-      packet,
-      chunkBytes: maxPacketBytes - bitchatFragmentOverhead,
-    )) {
-      _remember(fragment.dedupKey);
-      await _sendFitting(fragment, fragment.encode());
-    }
+    await _sendFitting(packet, packet.encode());
   }
 
-  /// Sends [encoded] ([packet]) to every neighbour but [except]: whole to
-  /// links that take it, as fragments sized to the link to the others.
+  /// Neighbours that can carry packets, and the largest each takes.
+  Map<String, int> _usableLinks(String? except) => {
+    for (final MapEntry(key: link, value: limit) in _links.linkLimits.entries)
+      if (link != except && limit >= bitchatMinLinkLimit)
+        link: min(limit, maxPacketBytes),
+  };
+
+  /// Sends [encoded] ([packet]) to every neighbour but [except]. A packet
+  /// bigger than the smallest link goes once as fragments that fit every
+  /// link; a fragment is never cut up again, and only goes where it fits.
   Future<void> _sendFitting(
     BitchatPacket packet,
     Uint8List encoded, {
     String? except,
   }) async {
-    final limits = _links.linkLimits;
-    if (!limits.entries.any(
-      (link) => link.key != except && link.value < encoded.length,
-    )) {
+    final links = _usableLinks(except);
+    if (links.isEmpty) {
+      // Own packets fail here when no neighbour is there.
       await _links.broadcast(encoded, except: except);
       return;
     }
-    for (final MapEntry(key: link, value: limit) in limits.entries) {
-      if (link == except) continue;
-      try {
-        if (limit >= encoded.length) {
+    final smallest = links.values.reduce(min);
+    if (encoded.length <= smallest) {
+      await _links.broadcast(encoded, except: except);
+      return;
+    }
+    if (packet.type == BitchatType.fragment) {
+      for (final MapEntry(key: link, value: limit) in links.entries) {
+        if (encoded.length > limit) continue;
+        try {
           await _links.sendTo(link, encoded);
-          continue;
-        }
-        for (final fragment in bitchatFragmentsFor(
-          packet,
-          chunkBytes: max(16, limit - bitchatFragmentOverhead),
-        )) {
-          _remember(fragment.dedupKey);
-          await _links.sendTo(link, fragment.encode());
-        }
-      } catch (_) {
-        // That neighbour is gone; the others still get it.
+        } catch (_) {}
       }
+      return;
+    }
+    final List<BitchatPacket> fragments;
+    try {
+      fragments = bitchatFragmentsFor(packet, maxPacketBytes: smallest);
+    } catch (_) {
+      return;
+    }
+    for (final fragment in fragments) {
+      _remember(fragment.dedupKey);
+      await _links.broadcast(fragment.encode(), except: except);
     }
   }
 
@@ -174,9 +181,12 @@ class BitchatNode {
     String link,
     Uint8List raw, {
     bool reassembled = false,
+    bool relayReassembled = false,
+    int? expectedType,
   }) async {
     final packet = BitchatPacket.decode(raw);
     if (packet == null) return;
+    if (expectedType != null && packet.type != expectedType) return;
     final skew = _now().millisecondsSinceEpoch - packet.timestamp;
     if (skew.abs() > bitchatClockWindow.inMilliseconds) return;
     final key = packet.dedupKey;
@@ -192,17 +202,30 @@ class BitchatNode {
       if (kind == BitchatPrivate.accepted) _remember(key);
       if (kind != BitchatPrivate.notMine) return;
     }
-    // A packet put back together here is never relayed: its fragments were.
-    if (reassembled) return;
-    final recipient = packet.recipientId;
-    if (packet.type == BitchatType.fragment &&
-        recipient != null &&
-        (wantsRecipient?.call(recipient) ?? false)) {
-      _remember(key);
+    if (packet.type == BitchatType.fragment) {
+      // Fragments to this device are not passed on; the packet they make
+      // is, if it is not for this device.
+      final toMe =
+          packet.recipientId != null &&
+          (wantsRecipient?.call(packet.recipientId!) ?? false);
+      if (toMe || packet.ttl == 0) _remember(key);
       final whole = _reassembler.add(packet);
-      if (whole != null) await _handle(link, whole, reassembled: true);
-      return;
+      if (whole != null) {
+        await _handle(
+          link,
+          whole.$1,
+          reassembled: true,
+          relayReassembled: toMe,
+          expectedType: whole.$2,
+        );
+      }
+      if (toMe) return;
+    } else if (onPacket != null && packet.type != BitchatType.noiseEncrypted) {
+      await onPacket!(packet);
     }
+    // A packet put back together here is relayed only when its fragments
+    // were not (they were addressed to this device).
+    if (reassembled && !relayReassembled) return;
     // A copy that goes no further is not remembered: a copy sent with TTL 0
     // must not stop the original from being relayed.
     if (packet.ttl == 0) return;

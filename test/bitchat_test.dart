@@ -90,31 +90,62 @@ void main() {
     );
 
     test('round-trip at the link sizes iPhones use', () {
-      for (final mtu in [23, 185, 512]) {
+      for (final limit in [bitchatMinLinkLimit, 182, 509]) {
         final original = big();
-        final fragments = bitchatFragmentsFor(
-          original,
-          chunkBytes: mtu - 3 - bitchatFragmentOverhead,
-        );
+        final fragments = bitchatFragmentsFor(original, maxPacketBytes: limit);
         expect(fragments.length, greaterThan(1));
         final reassembler = BitchatReassembler();
-        Uint8List? whole;
+        (Uint8List, int)? whole;
         // Out of order, with a duplicate.
         for (final fragment in [...fragments.reversed, fragments.first]) {
-          final decoded = BitchatPacket.decode(fragment.encode())!;
+          final bytes = fragment.encode();
+          expect(bytes.length, lessThanOrEqualTo(limit));
+          final decoded = BitchatPacket.decode(bytes)!;
           expect(decoded.type, BitchatType.fragment);
           expect(decoded.recipientId, original.recipientId);
           whole = reassembler.add(decoded) ?? whole;
         }
-        expect(whole, original.encode(), reason: 'MTU $mtu');
+        expect(whole!.$1, original.encode(), reason: 'limit $limit');
+        expect(whole.$2, BitchatType.noiseEncrypted);
       }
+      // Links too small for any fragment are not used.
+      expect(
+        () => bitchatFragmentsFor(big(), maxPacketBytes: 20),
+        throwsArgumentError,
+      );
     });
 
-    test('reassembly is bounded', () {
-      final reassembler = BitchatReassembler(maxBytes: 1000);
-      final fragments = bitchatFragmentsFor(big(), chunkBytes: 100);
-      Uint8List? whole;
+    test('v2 packets with a route still fit the link', () {
+      final routed = BitchatPacket(
+        version: 2,
+        type: BitchatType.noiseEncrypted,
+        senderId: Uint8List.fromList(List.filled(8, 1)),
+        recipientId: Uint8List.fromList(List.filled(8, 2)),
+        route: [
+          for (var hop = 0; hop < 3; hop++)
+            Uint8List.fromList(List.filled(8, 10 + hop)),
+        ],
+        timestamp: 1759651200123,
+        payload: Uint8List(900),
+      );
+      final fragments = bitchatFragmentsFor(routed, maxPacketBytes: 182);
+      expect(
+        fragments.every((fragment) => fragment.encode().length <= 182),
+        isTrue,
+      );
+      final reassembler = BitchatReassembler();
+      (Uint8List, int)? whole;
       for (final fragment in fragments) {
+        whole =
+            reassembler.add(BitchatPacket.decode(fragment.encode())!) ?? whole;
+      }
+      expect(whole!.$1, routed.encode());
+    });
+
+    test('reassembly is bounded and cannot be disrupted', () {
+      final reassembler = BitchatReassembler(maxBytes: 1000);
+      (Uint8List, int)? whole;
+      for (final fragment in bitchatFragmentsFor(big(), maxPacketBytes: 160)) {
         whole = reassembler.add(fragment) ?? whole;
       }
       // 1.5 KB does not fit in 1000 bytes.
@@ -126,6 +157,38 @@ void main() {
         ),
         isNull,
       );
+      // A forged fragment with another total does not discard the others.
+      final small = BitchatPacket(
+        type: BitchatType.noiseEncrypted,
+        senderId: Uint8List.fromList(List.filled(8, 1)),
+        recipientId: Uint8List.fromList(List.filled(8, 2)),
+        timestamp: 1759651200123,
+        payload: Uint8List(300),
+      );
+      final pieces = bitchatFragmentsFor(small, maxPacketBytes: 160);
+      final fresh = BitchatReassembler();
+      expect(fresh.add(pieces.first), isNull);
+      final first = BitchatFragment.decode(pieces.first.payload)!;
+      final forged = pieces.first.copyWith().encode();
+      final forgedPacket = BitchatPacket(
+        type: BitchatType.fragment,
+        senderId: small.senderId,
+        recipientId: small.recipientId,
+        timestamp: small.timestamp,
+        payload: BitchatFragment(
+          fragmentId: first.fragmentId,
+          index: 1,
+          total: 99,
+          originalType: first.originalType,
+          chunk: Uint8List(4),
+        ).encode(),
+      );
+      expect(forged, isNotEmpty);
+      expect(fresh.add(forgedPacket), isNull);
+      for (final piece in pieces.skip(1)) {
+        whole = fresh.add(piece) ?? whole;
+      }
+      expect(whole!.$1, small.encode());
     });
   });
 
@@ -532,7 +595,7 @@ void main() {
       final original = BitchatPacket.decode(captured.single)!;
       for (final fragment in bitchatFragmentsFor(
         original,
-        chunkBytes: 185 - 3 - bitchatFragmentOverhead,
+        maxPacketBytes: 182,
       )) {
         await iphone.broadcast(fragment.encode(), except: 'a');
       }
@@ -569,6 +632,34 @@ void main() {
           hasLength(viaRelay ? 1 : 0),
         );
       }
+    });
+
+    test('broadcast fragments, like an iPhone\'s announce, are read', () async {
+      final area = FakeBleNeighbourhood()..connect('i', 'n');
+      final seen = <BitchatPacket>[];
+      BitchatNode(
+        links: area.node('n'),
+        onPrivate: (_, _) => BitchatPrivate.notMine,
+        onPacket: (packet) async => seen.add(packet),
+        now: () => clock,
+      );
+      final announce = BitchatPacket(
+        type: BitchatType.announce,
+        senderId: Uint8List.fromList(List.filled(8, 7)),
+        timestamp: clock.millisecondsSinceEpoch,
+        payload: Uint8List(220),
+        signature: Uint8List(64),
+      );
+      for (final fragment in bitchatFragmentsFor(
+        announce,
+        maxPacketBytes: 182,
+      )) {
+        await area.node('i').broadcast(fragment.encode());
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      final whole = seen.where((p) => p.type == BitchatType.announce).single;
+      expect(whole.payload, announce.payload);
+      expect(whole.signature, announce.signature);
     });
 
     test('TTL limits how far a packet travels', () async {

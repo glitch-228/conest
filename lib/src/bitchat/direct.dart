@@ -18,6 +18,10 @@ abstract final class BitchatPayloadType {
 /// How long a Noise session is used before a fresh handshake.
 const Duration bitchatSessionLifetime = Duration(hours: 24);
 
+/// How long each side waits for a handshake to finish (as bitchat does).
+const Duration bitchatInitiatorDeadline = Duration(seconds: 10);
+const Duration bitchatResponderDeadline = Duration(seconds: 20);
+
 /// A peer seen through a verified announce.
 class BitchatPeer {
   BitchatPeer({
@@ -31,8 +35,13 @@ class BitchatPeer {
   final String peerId;
   String nickname;
   final Uint8List noiseKey;
-  final Uint8List signingKey;
+  Uint8List signingKey;
   DateTime lastSeen;
+
+  /// The signing key is pinned only once a handshake has proven that the
+  /// announcer holds the Noise key; until then a later valid announce may
+  /// replace it.
+  bool confirmed = false;
 }
 
 /// Something that happened in direct messaging with bitchat users.
@@ -111,16 +120,43 @@ class BitchatDirect {
   final Map<String, BitchatPeer> _peers = {};
   final Map<String, _Session> _sessions = {};
   final Map<String, List<Uint8List>> _waiting = {};
+  final Map<String, Future<void>> _queues = {};
   final _events = StreamController<BitchatDirectEvent>.broadcast();
 
+  /// Handshakes answered per peer and overall in the current minute.
+  int _handshakeMinute = 0;
+  int _handshakesThisMinute = 0;
+  final Map<String, int> _handshakesByPeer = {};
+
   static const int _maxPeers = 512;
+  static const int _maxSessions = 256;
   static const int _maxWaitingPerPeer = 32;
+  static const int _maxHandshakesPerPeerPerMinute = 10;
+  static const int _maxHandshakesPerMinute = 30;
+  static const int _maxCounter = 0xffffffff;
   static const Duration _announceMaxAge = Duration(seconds: 900);
 
   String get peerIdHex => _hex(peerId);
   Stream<BitchatDirectEvent> get events => _events.stream;
   Iterable<BitchatPeer> get peers => _peers.values;
   BitchatPeer? peer(String peerIdHex) => _peers[peerIdHex];
+
+  /// Whether a working session with [peerIdHex] exists.
+  bool hasSession(String peerIdHex) => _sessions[peerIdHex]?.ready ?? false;
+
+  /// Runs [work] for one peer at a time, in arrival order.
+  Future<T> _serial<T>(String peer, Future<T> Function() work) {
+    final previous = _queues[peer] ?? Future<void>.value();
+    final result = previous.then((_) => work());
+    final settled = result.then<void>((_) {}, onError: (Object _) {});
+    _queues[peer] = settled;
+    unawaited(
+      settled.then((_) {
+        if (identical(_queues[peer], settled)) _queues.remove(peer);
+      }),
+    );
+    return result;
+  }
 
   /// A signed announce for this identity, as bitchat expects: signed over
   /// the packet with TTL 0, no signature, and padding.
@@ -157,8 +193,9 @@ class BitchatDirect {
     final age = _now().millisecondsSinceEpoch - packet.timestamp;
     if (age.abs() > _announceMaxAge.inMilliseconds) return;
     final known = _peers[id];
-    // The signing key is pinned on first sight, as bitchat does.
+    // A confirmed signing key stays; an unconfirmed one may be replaced.
     if (known != null &&
+        known.confirmed &&
         !_equal(known.signingKey, announcement.signingPublicKey)) {
       return;
     }
@@ -176,14 +213,19 @@ class BitchatDirect {
     if (known != null) {
       known
         ..nickname = announcement.nickname
+        ..signingKey = announcement.signingPublicKey
         ..lastSeen = _now();
     } else {
       if (_peers.length >= _maxPeers) {
-        final oldest = _peers.values.reduce(
+        // Never forget someone a session is open with.
+        final evictable = _peers.values
+            .where((peer) => !hasSession(peer.peerId))
+            .toList();
+        if (evictable.isEmpty) return;
+        final oldest = evictable.reduce(
           (a, b) => a.lastSeen.isBefore(b.lastSeen) ? a : b,
         );
         _peers.remove(oldest.peerId);
-        _sessions.remove(oldest.peerId);
       }
       _peers[id] = BitchatPeer(
         peerId: id,
@@ -205,17 +247,25 @@ class BitchatDirect {
   ) async {
     final messageId = _uuid();
     final body = _privateMessage(messageId, text);
-    return (
-      await _send(peerIdHex, BitchatPayloadType.privateMessage, body),
-      messageId,
+    final packets = await _serial(
+      peerIdHex,
+      () => _send(peerIdHex, BitchatPayloadType.privateMessage, body),
     );
+    return (packets, messageId);
   }
 
   /// Tells [peerIdHex] its message [messageId] was read.
   Future<List<BitchatPacket>> sendReadReceipt(
     String peerIdHex,
     String messageId,
-  ) => _send(peerIdHex, BitchatPayloadType.readReceipt, utf8.encode(messageId));
+  ) => _serial(
+    peerIdHex,
+    () => _send(
+      peerIdHex,
+      BitchatPayloadType.readReceipt,
+      utf8.encode(messageId),
+    ),
+  );
 
   Future<List<BitchatPacket>> _send(
     String peerIdHex,
@@ -224,26 +274,40 @@ class BitchatDirect {
   ) async {
     final plaintext = Uint8List.fromList([type, ...body]);
     final session = _sessions[peerIdHex];
-    if (session != null &&
-        session.ready &&
-        _now().difference(session.startedAt) < bitchatSessionLifetime) {
+    if (session != null && _usable(session)) {
       return [await _encrypt(peerIdHex, session, plaintext)];
     }
     final waiting = _waiting.putIfAbsent(peerIdHex, () => []);
     if (waiting.length >= _maxWaitingPerPeer) waiting.removeAt(0);
     waiting.add(plaintext);
-    if (session != null && !session.ready && session.handshake.initiator) {
+    // A handshake of ours still in time: wait for it.
+    if (session != null &&
+        !session.ready &&
+        session.handshake.initiator &&
+        !_expired(session)) {
       return const [];
     }
     return [await _startHandshake(peerIdHex)];
   }
+
+  bool _usable(_Session session) =>
+      session.ready &&
+      session.sendCounter < _maxCounter &&
+      _now().difference(session.startedAt) < bitchatSessionLifetime;
+
+  bool _expired(_Session session) =>
+      !session.ready &&
+      _now().difference(session.startedAt) >
+          (session.handshake.initiator
+              ? bitchatInitiatorDeadline
+              : bitchatResponderDeadline);
 
   Future<BitchatPacket> _startHandshake(String peerIdHex) async {
     final handshake = await NoiseXXHandshake.start(
       initiator: true,
       staticSeed: _noiseSeed,
     );
-    _sessions[peerIdHex] = _Session(handshake, _now());
+    _install(peerIdHex, _Session(handshake, _now()));
     return _packet(
       BitchatType.noiseHandshake,
       peerIdHex,
@@ -251,44 +315,127 @@ class BitchatDirect {
     );
   }
 
+  /// Puts a new handshake in place; a working session it replaces keeps
+  /// decrypting until the new one completes.
+  void _install(String peerIdHex, _Session session) {
+    final current = _sessions[peerIdHex];
+    session.previous = (current?.ready ?? false) ? current : current?.previous;
+    if (current == null && _sessions.length >= _maxSessions) {
+      final entries = _sessions.entries.toList();
+      final waiting = entries.where((entry) => !entry.value.ready).toList();
+      final pool = waiting.isEmpty ? entries : waiting;
+      final oldest = pool.reduce(
+        (a, b) => a.value.startedAt.isBefore(b.value.startedAt) ? a : b,
+      );
+      _sessions.remove(oldest.key);
+    }
+    _sessions[peerIdHex] = session;
+  }
+
+  /// Gives up on [peerIdHex]'s handshake, going back to the session it
+  /// was replacing, if any.
+  void _abandon(String peerIdHex) {
+    final session = _sessions[peerIdHex];
+    if (session == null || session.ready) return;
+    final previous = session.previous;
+    if (previous != null) {
+      _sessions[peerIdHex] = previous;
+    } else {
+      _sessions.remove(peerIdHex);
+    }
+  }
+
+  /// Handshakes that ran out of time: abandoned, and started again when
+  /// messages are waiting. Call every few seconds.
+  Future<List<BitchatPacket>> tick() async {
+    final packets = <BitchatPacket>[];
+    for (final peer in _sessions.keys.toList()) {
+      packets.addAll(
+        await _serial(peer, () async {
+          final session = _sessions[peer];
+          if (session == null || !_expired(session)) {
+            return const <BitchatPacket>[];
+          }
+          _abandon(peer);
+          if (!(_waiting[peer]?.isNotEmpty ?? false)) {
+            return const <BitchatPacket>[];
+          }
+          final current = _sessions[peer];
+          if (current != null && _usable(current)) return _flush(peer);
+          return [await _startHandshake(peer)];
+        }),
+      );
+    }
+    return packets;
+  }
+
   /// A Noise packet (handshake or transport) addressed to this identity;
   /// returns the packets to send in answer.
   Future<List<BitchatPacket>> handleNoise(BitchatPacket packet) async {
     final from = _hex(packet.senderId);
-    if (packet.recipientId == null || !_equal(packet.recipientId!, peerId)) {
+    if (packet.recipientId == null ||
+        !_equal(packet.recipientId!, peerId) ||
+        from == peerIdHex) {
       return const [];
     }
-    try {
-      return packet.type == BitchatType.noiseHandshake
-          ? await _handleHandshake(from, packet.payload)
-          : await _handleTransport(from, packet.payload);
-    } on FormatException {
-      return const [];
-    } on StateError {
-      return const [];
+    return _serial(from, () async {
+      if (packet.type == BitchatType.noiseHandshake) {
+        try {
+          return await _handleHandshake(from, packet.payload);
+        } on FormatException {
+          _abandon(from);
+        } on StateError {
+          _abandon(from);
+        }
+        return const <BitchatPacket>[];
+      }
+      try {
+        return await _handleTransport(from, packet.payload);
+      } on FormatException {
+        return const <BitchatPacket>[];
+      }
+    });
+  }
+
+  bool _handshakeAllowed(String from) {
+    final minute = _now().millisecondsSinceEpoch ~/ 60000;
+    if (minute != _handshakeMinute) {
+      _handshakeMinute = minute;
+      _handshakesThisMinute = 0;
+      _handshakesByPeer.clear();
     }
+    final byPeer = (_handshakesByPeer[from] ?? 0) + 1;
+    if (byPeer > _maxHandshakesPerPeerPerMinute ||
+        _handshakesThisMinute >= _maxHandshakesPerMinute) {
+      return false;
+    }
+    _handshakesByPeer[from] = byPeer;
+    _handshakesThisMinute++;
+    return true;
   }
 
   Future<List<BitchatPacket>> _handleHandshake(
     String from,
     Uint8List message,
   ) async {
-    var session = _sessions[from];
-    final starting =
-        session == null || session.ready || !session.handshake.initiator
-        ? false
-        : true;
-    // A first message from them: answer as responder, unless both started
-    // at once and this side has the lower id (it stays the initiator).
+    final session = _sessions[from];
+    // A first message from them: answer as responder. When both started
+    // at once, the side with the lower id stays the initiator, as long as
+    // its own attempt is still in time.
     if (message.length == 32) {
-      if (starting && peerIdHex.compareTo(from) < 0) return const [];
+      final ours =
+          session != null &&
+          !session.ready &&
+          session.handshake.initiator &&
+          !_expired(session);
+      if (ours && peerIdHex.compareTo(from) < 0) return const [];
+      if (!_handshakeAllowed(from)) return const [];
       final handshake = await NoiseXXHandshake.start(
         initiator: false,
         staticSeed: _noiseSeed,
       );
-      session = _Session(handshake, _now());
-      _sessions[from] = session;
       await handshake.readMessage(message);
+      _install(from, _Session(handshake, _now()));
       return [
         _packet(
           BitchatType.noiseHandshake,
@@ -314,32 +461,63 @@ class BitchatDirect {
       // The key they proved must be the one their id is the hash of.
       final remote = handshake.remoteStaticKey!;
       if (_hex(bitchatPeerId(remote)) != from) {
-        _sessions.remove(from);
+        _abandon(from);
         return const [];
       }
-      session.ready = true;
-      for (final plaintext in _waiting.remove(from) ?? const <Uint8List>[]) {
-        answers.add(await _encrypt(from, session, plaintext));
+      session
+        ..ready = true
+        ..previous = null;
+      final known = _peers[from];
+      if (known != null && _equal(known.noiseKey, remote)) {
+        known.confirmed = true;
       }
+      answers.addAll(await _flush(from));
     }
     return answers;
+  }
+
+  Future<List<BitchatPacket>> _flush(String peer) async {
+    final session = _sessions[peer];
+    if (session == null || !_usable(session)) return const [];
+    return [
+      for (final plaintext in _waiting.remove(peer) ?? const <Uint8List>[])
+        await _encrypt(peer, session, plaintext),
+    ];
   }
 
   Future<List<BitchatPacket>> _handleTransport(
     String from,
     Uint8List payload,
   ) async {
-    final session = _sessions[from];
-    if (session == null || !session.ready || payload.length < 4 + 16) {
-      return const [];
-    }
+    if (payload.length < 4 + 16) return const [];
     final counter = ByteData.sublistView(payload, 0, 4).getUint32(0);
-    if (!session.window.accept(counter)) return const [];
-    final plaintext = await session.handshake.receiveCipher!.decryptAt(
-      counter,
-      Uint8List.sublistView(payload, 4),
-    );
-    session.window.mark(counter);
+    final current = _sessions[from];
+    // The working session, or the one a new handshake is replacing.
+    for (final session in [
+      if (current != null && current.ready) current,
+      ?current?.previous,
+    ]) {
+      if (!session.window.accept(counter)) continue;
+      final Uint8List plaintext;
+      try {
+        plaintext = await session.handshake.receiveCipher!.decryptAt(
+          counter,
+          Uint8List.sublistView(payload, 4),
+        );
+      } on FormatException {
+        continue;
+      }
+      session.window.mark(counter);
+      return _deliver(from, session, plaintext);
+    }
+    return const [];
+  }
+
+  Future<List<BitchatPacket>> _deliver(
+    String from,
+    _Session session,
+    Uint8List plaintext,
+  ) async {
     if (plaintext.isEmpty) return const [];
     final body = Uint8List.sublistView(plaintext, 1);
     switch (plaintext[0]) {
@@ -347,16 +525,16 @@ class BitchatDirect {
         final message = _decodePrivateMessage(body);
         if (message == null) return const [];
         _events.add(BitchatMessageReceived(from, message.$1, message.$2));
-        return [
-          await _encrypt(
-            from,
-            session,
-            Uint8List.fromList([
-              BitchatPayloadType.delivered,
-              ...utf8.encode(message.$1),
-            ]),
-          ),
-        ];
+        final receipt = Uint8List.fromList([
+          BitchatPayloadType.delivered,
+          ...utf8.encode(message.$1),
+        ]);
+        final current = _sessions[from];
+        if (current != null && _usable(current)) {
+          return [await _encrypt(from, current, receipt)];
+        }
+        if (_usable(session)) return [await _encrypt(from, session, receipt)];
+        return const [];
       case BitchatPayloadType.delivered || BitchatPayloadType.readReceipt:
         _events.add(
           BitchatReceiptReceived(
@@ -473,6 +651,10 @@ class _Session {
   bool ready = false;
   int sendCounter = 0;
   final window = _ReplayWindow();
+
+  /// The working session this handshake replaces, still used to decrypt
+  /// until this one completes.
+  _Session? previous;
 }
 
 /// Accepts each transport counter once, within the last 1024.
