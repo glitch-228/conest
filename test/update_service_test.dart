@@ -125,7 +125,180 @@ List<Map<String, dynamic>> _releaseTrustAssets({
   ];
 }
 
+/// Serves signed GitHub-style releases for Linux; returns the API base URL.
+Future<String> _serveReleases(
+  _ManifestSigner signer,
+  List<(String tag, bool prerelease)> releases,
+) async {
+  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  addTearDown(server.close);
+  final baseUrl = 'http://${server.address.host}:${server.port}';
+  final files = <String, _ManifestFiles>{};
+  for (final (tag, _) in releases) {
+    files[tag] = await signer.sign(
+      tagName: tag,
+      assets: {
+        'conest-linux-x64-$tag.zip': _ManifestAssetFixture(
+          sha256Hex: 'e' * 64,
+          sizeBytes: 10,
+        ),
+      },
+    );
+  }
+  server.listen((request) async {
+    final path = request.uri.path;
+    if (path == '/repos/glitch-228/conest/releases') {
+      request.response
+        ..headers.contentType = ContentType.json
+        ..write(
+          jsonEncode([
+            for (final (tag, prerelease) in releases)
+              {
+                'tag_name': tag,
+                'name': tag,
+                'html_url': 'https://example.invalid/$tag',
+                'published_at': '2026-10-06T10:00:00Z',
+                'prerelease': prerelease,
+                'draft': false,
+                'assets': [
+                  _assetJson(
+                    name: 'conest-linux-x64-$tag.zip',
+                    baseUrl: baseUrl,
+                    path: '/$tag.zip',
+                    size: 10,
+                  ),
+                  ..._releaseTrustAssets(
+                    baseUrl: baseUrl,
+                    files: files[tag]!,
+                    manifestPath: '/$tag-manifest.json',
+                    signaturePath: '/$tag-manifest.sig',
+                  ),
+                ],
+              },
+          ]),
+        );
+    } else if (path.endsWith('-manifest.json')) {
+      request.response.add(
+        files[path.substring(1, path.length - 14)]!.manifestBytes,
+      );
+    } else if (path.endsWith('-manifest.sig')) {
+      request.response.write(
+        files[path.substring(1, path.length - 13)]!.signatureText,
+      );
+    } else {
+      request.response.statusCode = HttpStatus.notFound;
+    }
+    await request.response.close();
+  });
+  return baseUrl;
+}
+
+UpdateService _serviceFor({
+  required String baseUrl,
+  required _ManifestSigner signer,
+  required UpdateChannel channel,
+  required String buildTag,
+  required Directory support,
+}) => UpdateService(
+  buildInfo: ConestBuildInfo(
+    appName: 'Conest',
+    packageName: 'dev.conest.conest',
+    version: buildTag.substring(1).split('-').first,
+    buildNumber: '1',
+    channel: channel,
+    isDebugBuild: false,
+    buildTag: buildTag,
+  ),
+  targetPlatform: UpdateTargetPlatform.linux,
+  apiBaseUri: Uri.parse(baseUrl),
+  releaseManifestPublicKeyBase64: signer.publicKeyBase64,
+  applicationSupportDirectoryProvider: () async => support,
+  tempDirectoryProvider: () async =>
+      await Directory.systemTemp.createTemp('conest-updates-temp'),
+  exitCallback: (_) {},
+);
+
 void main() {
+  test('stable installs get nightlies only when they ask for them', () async {
+    final signer = await _ManifestSigner.create();
+    final baseUrl = await _serveReleases(signer, [
+      ('v0.3.12-nightly.20261007.1', true),
+      ('v0.3.11', false),
+    ]);
+    final support = await Directory.systemTemp.createTemp('conest-upd-');
+    addTearDown(() => support.delete(recursive: true));
+    final service = _serviceFor(
+      baseUrl: baseUrl,
+      signer: signer,
+      channel: UpdateChannel.stable,
+      buildTag: 'v0.3.10',
+      support: support,
+    );
+    expect(service.receiveUnstableUpdates, isFalse);
+    expect(await service.checkForUpdate(userInitiated: true), isTrue);
+    expect(service.availableUpdate?.release.tagName, 'v0.3.11');
+
+    await service.setReceiveUnstableUpdates(true);
+    expect(
+      service.availableUpdate?.release.tagName,
+      'v0.3.12-nightly.20261007.1',
+    );
+    // The choice is kept for the next start.
+    final restarted = _serviceFor(
+      baseUrl: baseUrl,
+      signer: signer,
+      channel: UpdateChannel.stable,
+      buildTag: 'v0.3.10',
+      support: support,
+    );
+    await restarted.loadPreferences();
+    expect(restarted.receiveUnstableUpdates, isTrue);
+  });
+
+  test('nightly installs can always move to a newer stable release', () async {
+    final signer = await _ManifestSigner.create();
+    final baseUrl = await _serveReleases(signer, [
+      ('v0.3.11-nightly.20261006.1', true),
+      ('v0.3.11', false),
+    ]);
+    final support = await Directory.systemTemp.createTemp('conest-upd-');
+    addTearDown(() => support.delete(recursive: true));
+    final service = _serviceFor(
+      baseUrl: baseUrl,
+      signer: signer,
+      channel: UpdateChannel.nightly,
+      buildTag: 'v0.3.11-nightly.20261005.1',
+      support: support,
+    );
+    // Nightlies are on by default, and the stable release is newer.
+    expect(service.receiveUnstableUpdates, isTrue);
+    expect(await service.checkForUpdate(userInitiated: true), isTrue);
+    expect(service.availableUpdate?.release.tagName, 'v0.3.11');
+    // With nightlies turned off, stable is still offered.
+    await service.setReceiveUnstableUpdates(false);
+    expect(service.availableUpdate?.release.tagName, 'v0.3.11');
+    // The nightly default was saved on first use, so after moving to the
+    // stable release the install keeps receiving nightlies until turned off.
+    final firstUse = await Directory.systemTemp.createTemp('conest-upd-');
+    addTearDown(() => firstUse.delete(recursive: true));
+    await _serviceFor(
+      baseUrl: baseUrl,
+      signer: signer,
+      channel: UpdateChannel.nightly,
+      buildTag: 'v0.3.11-nightly.20261005.1',
+      support: firstUse,
+    ).loadPreferences();
+    final asStable = _serviceFor(
+      baseUrl: baseUrl,
+      signer: signer,
+      channel: UpdateChannel.stable,
+      buildTag: 'v0.3.11',
+      support: firstUse,
+    );
+    await asStable.loadPreferences();
+    expect(asStable.receiveUnstableUpdates, isTrue);
+  });
+
   test('nightly updates prefer signed manifest notes over release body', () {
     expect(
       resolveReleaseNotes(

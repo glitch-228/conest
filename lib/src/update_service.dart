@@ -377,6 +377,71 @@ class UpdateService extends ChangeNotifier {
   String? _statusMessage;
   String? _lastError;
   String? _dismissedPromptTagForSession;
+  bool? _receiveUnstableUpdates;
+  bool _preferencesLoaded = false;
+
+  static const String _preferencesFileName = 'update_preferences.json';
+
+  /// Whether nightly releases are offered besides stable ones. A newer
+  /// stable release is always offered, so a nightly install can always move
+  /// to stable. Nightly builds start with this on and stable builds off.
+  bool get receiveUnstableUpdates =>
+      _receiveUnstableUpdates ?? buildInfo.channel == UpdateChannel.nightly;
+
+  /// The channels updates come from, for status lines.
+  String get offeredChannelsLabel =>
+      receiveUnstableUpdates ? 'stable or nightly' : 'stable';
+
+  /// Reads the saved choice once. The first time, the build's default is
+  /// saved, so a nightly install that moves to a stable release keeps
+  /// receiving nightlies until the switch is turned off.
+  Future<void> loadPreferences() async {
+    if (_preferencesLoaded) return;
+    _preferencesLoaded = true;
+    try {
+      final file = File(
+        p.join(
+          (await _applicationSupportDirectoryProvider()).path,
+          _preferencesFileName,
+        ),
+      );
+      if (await file.exists()) {
+        final decoded = jsonDecode(await file.readAsString());
+        if (decoded is Map<String, dynamic> &&
+            decoded['receiveUnstableUpdates'] is bool) {
+          _receiveUnstableUpdates = decoded['receiveUnstableUpdates'] as bool;
+          return;
+        }
+      }
+      await _savePreferences(receiveUnstableUpdates);
+    } catch (_) {
+      // Without a readable file the build's default applies.
+    }
+  }
+
+  /// Turns nightly updates on or off and checks again.
+  Future<void> setReceiveUnstableUpdates(bool value) async {
+    await loadPreferences();
+    _receiveUnstableUpdates = value;
+    _availableUpdate = null;
+    notifyListeners();
+    try {
+      await _savePreferences(value);
+    } catch (_) {
+      // Kept for this session.
+    }
+    if (supportsUpdates) await checkForUpdate(userInitiated: true);
+  }
+
+  Future<void> _savePreferences(bool receiveUnstable) async {
+    final directory = await _applicationSupportDirectoryProvider();
+    await directory.create(recursive: true);
+    final file = File(p.join(directory.path, _preferencesFileName));
+    await file.writeAsString(
+      jsonEncode({'receiveUnstableUpdates': receiveUnstable}),
+      flush: true,
+    );
+  }
 
   bool get supportsUpdates {
     // Debug builds are CI/local artifacts, never GitHub releases. Keeping
@@ -444,8 +509,9 @@ class UpdateService extends ChangeNotifier {
       return _availableUpdate != null;
     }
     _checking = true;
+    await loadPreferences();
     if (userInitiated) {
-      _statusMessage = 'Checking for ${buildInfo.channelLabel} updates...';
+      _statusMessage = 'Checking for $offeredChannelsLabel updates...';
     }
     _lastError = null;
     notifyListeners();
@@ -454,20 +520,19 @@ class UpdateService extends ChangeNotifier {
       final selected = _selectRelease(releases);
       if (selected == null) {
         _availableUpdate = null;
-        _statusMessage = 'No ${buildInfo.channelLabel} releases found.';
+        _statusMessage = 'No $offeredChannelsLabel releases found.';
         return false;
       }
       if (!_isNewerThanCurrentBuild(selected.tagName)) {
         _availableUpdate = null;
-        _statusMessage =
-            'Already on the latest ${buildInfo.channelLabel} build.';
+        _statusMessage = 'Already on the latest $offeredChannelsLabel build.';
         return false;
       }
       final asset = _selectPlatformAsset(selected);
       if (asset == null) {
         _availableUpdate = null;
         _statusMessage =
-            'Latest ${buildInfo.channelLabel} release has no ${_targetPlatform.label} app asset.';
+            'Latest $offeredChannelsLabel release has no ${_targetPlatform.label} app asset.';
         return false;
       }
       final manifest = await _fetchVerifiedReleaseManifest(selected);
@@ -616,13 +681,11 @@ class UpdateService extends ChangeNotifier {
           if (release.draft) {
             return false;
           }
-          return switch (buildInfo.channel) {
-            UpdateChannel.debug => false,
-            UpdateChannel.nightly =>
-              release.prerelease &&
-                  release.tagName.toLowerCase().contains('nightly'),
-            UpdateChannel.stable => !release.prerelease,
-          };
+          if (buildInfo.channel == UpdateChannel.debug) return false;
+          // Stable releases always; nightlies when asked for.
+          return !release.prerelease ||
+              (receiveUnstableUpdates &&
+                  release.tagName.toLowerCase().contains('nightly'));
         })
         .where((release) => _versionForTag(release.tagName) != null)
         .toList();

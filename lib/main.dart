@@ -1050,7 +1050,7 @@ class UpdatePromptDialog extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${available.release.tagName} is available on the ${updateService.buildInfo.channelLabel} channel.',
+                  '${available.release.tagName} is available on the ${available.release.prerelease ? 'nightly' : 'stable'} channel.',
                 ),
                 const SizedBox(height: 10),
                 Text(
@@ -14123,6 +14123,32 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                         ),
                                   ),
                                 ],
+                                if (updateService.supportsUpdates)
+                                  SwitchListTile.adaptive(
+                                    key: const ValueKey(
+                                      'receive-unstable-updates',
+                                    ),
+                                    contentPadding: EdgeInsets.zero,
+                                    value: updateService.receiveUnstableUpdates,
+                                    onChanged:
+                                        updateService.isChecking ||
+                                            updateService.isDownloading
+                                        ? null
+                                        : (value) => unawaited(
+                                            updateService
+                                                .setReceiveUnstableUpdates(
+                                                  value,
+                                                ),
+                                          ),
+                                    title: const Text(
+                                      'Receive unstable updates',
+                                    ),
+                                    subtitle: const Text(
+                                      'Also offer nightly builds: newer '
+                                      'features, less tested. A newer stable '
+                                      'release is always offered.',
+                                    ),
+                                  ),
                                 if (available != null) ...[
                                   const SizedBox(height: 10),
                                   Text(
