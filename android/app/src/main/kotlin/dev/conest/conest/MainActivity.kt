@@ -802,7 +802,8 @@ class MainActivity : FlutterActivity() {
             Notification.Builder(this)
         }
         return builder
-            .setSmallIcon(applicationInfo.icon)
+            .setSmallIcon(R.drawable.ic_stat_conest)
+            .setColor(0xFF04F6AF.toInt())
             .setPriority(Notification.PRIORITY_DEFAULT)
     }
 

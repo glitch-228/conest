@@ -190,7 +190,8 @@ class ConestBackgroundService : Service() {
             Notification.Builder(this)
         }
         builder
-            .setSmallIcon(applicationInfo.icon)
+            .setSmallIcon(R.drawable.ic_stat_conest)
+            .setColor(0xFF04F6AF.toInt())
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setPriority(Notification.PRIORITY_LOW)

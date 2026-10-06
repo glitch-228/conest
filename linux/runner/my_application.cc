@@ -47,11 +47,20 @@ static void my_application_activate(GApplication* application) {
   if (use_header_bar) {
     GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
     gtk_widget_show(GTK_WIDGET(header_bar));
-    gtk_header_bar_set_title(header_bar, "conest");
+    gtk_header_bar_set_title(header_bar, "Conest");
     gtk_header_bar_set_show_close_button(header_bar, TRUE);
     gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
   } else {
-    gtk_window_set_title(window, "conest");
+    gtk_window_set_title(window, "Conest");
+  }
+
+  // The window icon ships next to the executable, in data/.
+  g_autofree gchar* executable = g_file_read_link("/proc/self/exe", nullptr);
+  if (executable != nullptr) {
+    g_autofree gchar* directory = g_path_get_dirname(executable);
+    g_autofree gchar* icon_path =
+        g_build_filename(directory, "data", "conest.png", nullptr);
+    gtk_window_set_icon_from_file(window, icon_path, nullptr);
   }
 
   gtk_window_set_default_size(window, 1280, 720);

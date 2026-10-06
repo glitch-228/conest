@@ -1,0 +1,11 @@
+# Copy to ~/.local/share/applications/ and replace /path/to/conest with the
+# folder this bundle was unpacked to, for a menu entry with the Conest icon.
+[Desktop Entry]
+Type=Application
+Name=Conest
+Comment=Private messenger that works without servers
+Exec=/path/to/conest/conest
+Icon=/path/to/conest/data/conest.png
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+StartupWMClass=conest
