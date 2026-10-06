@@ -47,6 +47,7 @@ import 'package:conest/src/reticulum/rnode_interface.dart';
 import 'package:conest/src/reticulum_carrier.dart';
 import 'package:conest/src/storage.dart';
 import 'package:conest/src/storage_capacity.dart';
+import 'package:conest/src/tor_carrier.dart';
 import 'package:conest/src/transport.dart';
 import 'package:conest/src/ui/app_mode_selector.dart';
 import 'package:conest/src/ui/matrix_home_screen.dart';
@@ -62,6 +63,7 @@ import 'support/fake_meshtastic.dart';
 import 'support/fake_nostr_relay.dart';
 import 'support/fake_ratchet_engine.dart';
 import 'support/fake_rns_bus.dart';
+import 'support/fake_tor.dart';
 
 const _fakeRelayIdentityKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
 
@@ -990,8 +992,10 @@ Future<MessengerController> _createController({
   MeshtasticConnector? meshtasticConnector,
   MeshCoreConnector? meshCoreConnector,
   BitchatConnector? bitchatConnector,
+  TorApi? torApi,
 }) async {
   final controller = MessengerController(
+    torApi: torApi,
     bitchatConnector: bitchatConnector,
     meshCoreConnector: meshCoreConnector,
     meshtasticConnector: meshtasticConnector,
@@ -4025,7 +4029,10 @@ void main() {
               payload: (await peer.buildInvite()).encodePayload(),
               codephrase: '',
             );
-            await _waitForIroh(() => peer.pendingContactRequests.isNotEmpty);
+            await _waitForIroh(
+              () => peer.pendingContactRequests.isNotEmpty,
+              reason: 'contact request reached ${peer.identity!.displayName}',
+            );
             await peer.approvePendingContactRequest(
               peer.pendingContactRequests.single.id,
             );
@@ -4036,6 +4043,7 @@ void main() {
           );
           await _waitForIroh(
             () => bob.groups.isNotEmpty && carol.groups.isNotEmpty,
+            reason: 'group invitation reached Bob and Carol',
           );
           expect(bob.contactByDeviceId(carol.identity!.deviceId), isNull);
           expect(carol.contactByDeviceId(bob.identity!.deviceId), isNull);
@@ -4055,6 +4063,7 @@ void main() {
           );
           await _waitForIroh(
             () => carol.messagesForGroup(group.groupId).length == 1,
+            reason: "Bob's first group message reached Carol",
           );
           await _waitForIroh(
             () =>
@@ -4063,6 +4072,7 @@ void main() {
                     .single
                     .recipientStates[carol.identity!.deviceId] ==
                 DeliveryState.delivered,
+            reason: "Carol's delivery receipt reached Bob",
           );
           await carol.markGroupReadThroughMessage(
             group.groupId,
@@ -4075,6 +4085,7 @@ void main() {
                     .single
                     .recipientStates[carol.identity!.deviceId] ==
                 DeliveryState.read,
+            reason: "Carol's read receipt reached Bob",
           );
           // A valid pairwise encrypted DM must not inherit the group's trust.
           await carol.synchronizeGroupHistory(
@@ -4105,6 +4116,7 @@ void main() {
           await carol.sendGroupMessage(groupId: group.groupId, body: 'reply');
           await _waitForIroh(
             () => bob.messagesForGroup(group.groupId).length == 2,
+            reason: "Carol's reply reached Bob",
           );
           expect(carol.messagesFor(bob.identity!.deviceId), isEmpty);
           await alice.setGroupMemberRole(
@@ -4118,6 +4130,7 @@ void main() {
                     GroupMemberRole.admin &&
                 bob.groups.single.roleFor(carol.identity!.deviceId) ==
                     GroupMemberRole.admin,
+            reason: "Carol's promotion reached Carol and Bob",
           );
           await carol.removeGroupMember(
             groupId: group.groupId,
@@ -4125,9 +4138,11 @@ void main() {
           );
           await _waitForIroh(
             () => !bob.groups.single.hasActiveMember(bob.identity!.deviceId),
+            reason: "Bob's removal reached Bob",
           );
           await _waitForIroh(
             () => carol.pendingGroupMembershipDeliveries.isEmpty,
+            reason: "Carol's membership deliveries finished",
           );
           await carol.addGroupMembers(
             groupId: group.groupId,
@@ -4139,6 +4154,7 @@ void main() {
           );
           await _waitForIroh(
             () => bob.groups.single.hasActiveMember(bob.identity!.deviceId),
+            reason: "Bob's re-admission reached Bob",
           );
           await bob.sendGroupMessage(
             groupId: group.groupId,
@@ -4146,6 +4162,7 @@ void main() {
           );
           await _waitForIroh(
             () => carol.messagesForGroup(group.groupId).length == 3,
+            reason: "Bob's message after rejoining reached Carol",
           );
 
           expect(
@@ -12562,12 +12579,9 @@ void main() {
         ..connect('alice', 'relay')
         ..connect('relay', 'bob');
       // A bitchat phone between them that only relays.
-      final (noise, signing) = newBitchatSeeds();
       BitchatNode(
-        identity: await BitchatIdentity.fromSeeds(noise, signing),
-        nickname: 'stranger',
         links: area.node('relay'),
-        onFrame: (_, _) {},
+        onPrivate: (_, _) => BitchatPrivate.notMine,
       );
       final relay = _FakeRelayClient();
       final alice = await _createController(
@@ -12594,7 +12608,6 @@ void main() {
         bob.contacts.single.carrierAddress(TransportKind.bitchat),
         alice.bitchatChannel!.localAddress,
       );
-      expect(alice.bitchatCarrierConfig!.nickname, startsWith('anon'));
 
       relay.shouldFailStore = (_, _, _, _, _) => true;
       await bob.sendMessage(contact: bob.contacts.single, body: 'by bluetooth');
@@ -12612,6 +12625,172 @@ void main() {
         isValidBitchatAddress(alice.bitchatChannel!.localAddress!),
         isTrue,
       );
+    });
+  });
+
+  testWidgets(
+    'the composer empties as soon as a message is sent, before delivery',
+    (tester) async {
+      final relay = _FakeRelayClient();
+      late MessengerController alice;
+      late MessengerController bob;
+      await tester.runAsync(() async {
+        alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+        );
+        bob = await _createController(relayClient: relay, displayName: 'Bob');
+        await _pairControllers(alice, bob);
+      });
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      final updates = _createUpdateService();
+      final theme = app.ConestThemeController.memory();
+      addTearDown(updates.dispose);
+      addTearDown(theme.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ListenableBuilder(
+            listenable: alice,
+            builder: (context, _) => app.HomeScreen(
+              controller: alice,
+              updateService: updates,
+              buildInfo: _createBuildInfo(),
+              themeController: theme,
+              palette: app.ConestPalette(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('Bob').first);
+      await tester.pump();
+      // Delivery takes a while: every relay store waits two seconds.
+      relay
+        ..latencyMin = const Duration(seconds: 2)
+        ..latencyMax = const Duration(seconds: 2);
+      final composer = find.byWidgetPredicate(
+        (widget) => widget is TextField && widget.maxLines != 1,
+      );
+      await tester.enterText(composer.first, 'first while slow');
+      await tester.runAsync(() async {
+        await tester.tap(find.byTooltip('Send'));
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      });
+      await tester.pump();
+      // Still being delivered, yet the composer is free for the next one.
+      expect(
+        relay.storedEnvelopes.where(
+          (envelope) => envelope.kind == 'direct_message',
+        ),
+        isEmpty,
+      );
+      expect(
+        tester.widget<TextField>(composer.first).controller!.text,
+        isEmpty,
+      );
+      expect(
+        alice
+            .messagesFor(bob.identity!.deviceId)
+            .map((message) => message.body),
+        contains('first while slow'),
+      );
+      await tester.runAsync(() async {
+        await _waitForIroh(
+          () => relay.storedEnvelopes.any(
+            (envelope) => envelope.kind == 'direct_message',
+          ),
+        );
+      });
+      relay
+        ..latencyMin = Duration.zero
+        ..latencyMax = Duration.zero;
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  group('Tor carrier', () {
+    test('two devices talk through their onion services', () async {
+      final tor = FakeTorNetwork();
+      final relay = _FakeRelayClient();
+      final aliceTor = tor.device();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        torApi: aliceTor,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        torApi: tor.device(),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      await alice.enableTorCarrier(
+        bridges: [
+          'Bridge 192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413',
+          '',
+        ],
+      );
+      await bob.enableTorCarrier();
+      expect(aliceTor.lastBridges, [
+        '192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413',
+      ]);
+      final deadline = DateTime.now().add(const Duration(seconds: 15));
+      while (bob.contacts.single.carrierAddress(TransportKind.tor) == null &&
+          DateTime.now().isBefore(deadline)) {
+        await alice.pollNow();
+        await bob.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      final aliceOnion = alice.torChannel!.localAddress!;
+      expect(isValidTorAddress(aliceOnion), isTrue);
+      expect(bob.contacts.single.carrierAddress(TransportKind.tor), aliceOnion);
+      // The address is saved, so it is known before Tor connects next time.
+      expect(alice.torCarrierConfig!.address, aliceOnion);
+
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      await bob.sendMessage(contact: bob.contacts.single, body: 'by tor');
+      final bobId = bob.identity!.deviceId;
+      while (!alice.messagesFor(bobId).any((m) => m.body == 'by tor') &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      final received = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'by tor');
+      expect(received.route, MessageRoute.torOnion);
+
+      relay.shouldFailStore = null;
+      await alice.disableTorCarrier();
+      expect(alice.torCarrierConfig, isNull);
+      for (var round = 0; round < 6; round++) {
+        await alice.pollNow();
+        await bob.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(bob.contacts.single.carrierAddress(TransportKind.tor), isNull);
+    });
+
+    test('bridges that need a pluggable transport are refused', () async {
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        torApi: FakeTorNetwork().device(),
+      );
+      addTearDown(controller.dispose);
+      await expectLater(
+        controller.enableTorCarrier(
+          bridges: ['obfs4 192.0.2.2:443 FINGERPRINT cert=abc iat-mode=0'],
+        ),
+        throwsArgumentError,
+      );
+      await expectLater(
+        controller.enableTorCarrier(bridges: ['not a bridge\u0007 x']),
+        throwsArgumentError,
+      );
+      expect(controller.torCarrierConfig, isNull);
     });
   });
 

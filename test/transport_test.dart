@@ -110,6 +110,100 @@ void main() {
     },
   );
 
+  test('a route that just failed waits behind working ones', () async {
+    var now = DateTime.utc(2026, 10, 6, 9);
+    final lan = _FakeAdapter(
+      kind: TransportKind.lan,
+      route: _route(TransportKind.lan, TransportPathKind.local),
+      fail: true,
+    );
+    final iroh = _FakeAdapter(
+      kind: TransportKind.iroh,
+      route: _route(TransportKind.iroh, TransportPathKind.direct),
+    );
+    final registry = TransportRegistry([lan, iroh], now: () => now);
+    Future<TransportKind> deliver() async => (await registry.deliverEnvelope(
+      peer: peer,
+      envelope: _envelope(),
+      policies: const {},
+    )).receipt.route.transport;
+
+    // LAN is tried first and fails; Iroh delivers.
+    expect(await deliver(), TransportKind.iroh);
+    expect(lan.sendCount, 1);
+    // Right after, the failed LAN route is not tried first.
+    expect(await deliver(), TransportKind.iroh);
+    expect(lan.sendCount, 1);
+    // Once it has cooled down it gets its turn again, and works.
+    lan.fail = false;
+    now = now.add(const Duration(seconds: 16));
+    expect(await deliver(), TransportKind.lan);
+    expect(
+      registry.statsFor(peer.deviceId, TransportKind.lan)!.failureStreak,
+      0,
+    );
+  });
+
+  test(
+    'within a path kind the faster route for a contact goes first',
+    () async {
+      final iroh = _FakeAdapter(
+        kind: TransportKind.iroh,
+        route: _route(TransportKind.iroh, TransportPathKind.relayed),
+        sendDelay: const Duration(milliseconds: 200),
+      );
+      final relay = _FakeAdapter(
+        kind: TransportKind.conestRelay,
+        route: _route(TransportKind.conestRelay, TransportPathKind.relayed),
+      );
+      final registry = TransportRegistry([iroh, relay]);
+      // Unmeasured, the usual order holds.
+      expect(
+        (await registry.routesFor(peer, policies: const {})).first.transport,
+        TransportKind.iroh,
+      );
+      // One send over each measures them.
+      for (final kind in [TransportKind.iroh, TransportKind.conestRelay]) {
+        await registry.deliverEnvelope(
+          peer: peer,
+          envelope: _envelope(),
+          policies: {kind: TransportPolicy.preferred},
+        );
+      }
+      expect(
+        (await registry.routesFor(peer, policies: const {})).first.transport,
+        TransportKind.conestRelay,
+      );
+      // Another contact has no measurements, so keeps the usual order.
+      expect(
+        (await registry.routesFor(
+          const TransportPeer(deviceId: 'someone-else'),
+          policies: const {},
+        )).first.transport,
+        TransportKind.iroh,
+      );
+    },
+  );
+
+  test('Tor ranks after relayed routes despite its direct path', () async {
+    final registry = TransportRegistry([
+      for (final (kind, path) in [
+        (TransportKind.tor, TransportPathKind.direct),
+        (TransportKind.conestRelay, TransportPathKind.relayed),
+        (TransportKind.iroh, TransportPathKind.direct),
+        (TransportKind.matrix, TransportPathKind.storeForward),
+      ])
+        _FakeAdapter(kind: kind, route: _route(kind, path)),
+    ]);
+    final routes = await registry.routesFor(peer, policies: const {});
+    expect(routes.map((route) => route.transport), [
+      TransportKind.iroh,
+      TransportKind.conestRelay,
+      TransportKind.tor,
+      TransportKind.matrix,
+    ]);
+  });
+
   test('route payload cap skips relay without attempting it', () async {
     final relay = _FakeAdapter(
       kind: TransportKind.conestRelay,
@@ -372,7 +466,7 @@ class _FakeAdapter implements TransportAdapter {
   @override
   final TransportKind kind;
   final RouteCandidate route;
-  final bool fail;
+  bool fail;
   final Duration sendDelay;
   int sendCount = 0;
 

@@ -89,9 +89,9 @@ jobs:
         run: |
           flutter test test/build_info_test.dart test/transport_test.dart test/feature_models_test.dart test/voice_call_sound_cues_test.dart
           flutter test test/group_history_test.dart test/group_history_sync_test.dart test/group_history_wire_test.dart test/group_membership_history_test.dart test/storage_test.dart test/group_file_crypto_test.dart test/ratchet_test.dart test/matrix_carrier_test.dart
-          flutter test test/storage_capacity_test.dart test/lan_direct_test.dart test/attachment_file_io_test.dart test/attachment_block_worker_test.dart
+          flutter test test/storage_capacity_test.dart test/lan_direct_test.dart test/attachment_file_io_test.dart test/attachment_block_worker_test.dart test/tor_carrier_test.dart test/bitchat_test.dart
           flutter test test/messenger_controller_test.dart \
-            --name "Iroh group admission|Iroh group history|Iroh group-only|real socket group-only|legacy group updates|retired default|Iroh pairing|Iroh bootstrap|storage reserve|Download anyway|manual Download storage|spool reserve|Beam pairing receives|rejected contact messages|discarded message duplicates|Contact approval releases locally queued messages|cancelled pairing ignores a late acceptance response|Iroh limit blocks|automatic online file|different-network|verification progress|repeated LAN hints|chat folders|scheduled messages recover|scheduled messages recheck|scheduled sends stay blocked after revocation|group poll converges after reordered|contact request stays queued|unknown exchange requires approval|double tap|sendMessage prefers LAN routes|heartbeat|queued controls keep plaintext|malformed queued payload|forward-secret sessions|Matrix carrier|Courier search keeps archived chats in the archive view"
+            --name "Iroh group admission|Iroh group history|Iroh group-only|real socket group-only|legacy group updates|retired default|Iroh pairing|Iroh bootstrap|storage reserve|Download anyway|manual Download storage|spool reserve|Beam pairing receives|rejected contact messages|discarded message duplicates|Contact approval releases locally queued messages|cancelled pairing ignores a late acceptance response|Iroh limit blocks|automatic online file|different-network|verification progress|repeated LAN hints|chat folders|scheduled messages recover|scheduled messages recheck|scheduled sends stay blocked after revocation|group poll converges after reordered|contact request stays queued|unknown exchange requires approval|double tap|sendMessage prefers LAN routes|heartbeat|queued controls keep plaintext|malformed queued payload|forward-secret sessions|Matrix carrier|Tor carrier|Bluetooth mesh carrier|Courier search keeps archived chats in the archive view"
           flutter test test/messenger_controller_test.dart \
             --plain-name "matching debug builds auto-accept, verify, report, and clean a real LAN test"
           flutter test test/messenger_controller_test.dart \
@@ -161,6 +161,54 @@ jobs:
       - name: Synapse logs on failure
         if: failure()
         run: docker logs synapse | tail -200
+
+  tor:
+    if: ${{ !inputs.quick_build }}
+    needs: cadence
+    name: Tor carrier over the real Tor network
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang pkg-config libasound2-dev libudev-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: matrix-native
+      - run: flutter pub get
+      - name: Build the native library with Tor
+        run: |
+          cargo build --locked --release \
+            --manifest-path native/conest_native/Cargo.toml
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+      - name: Build lyrebird and fetch obfs4 bridges
+        run: |
+          tool/build_lyrebird.sh linux-x64 "$RUNNER_TEMP/lyrebird"
+          # Tor's default bridges for censored users (Moat API); when Moat
+          # is down the bridge test is skipped rather than failing the job.
+          (curl -sf --max-time 60 -X POST \
+            -H 'Content-Type: application/vnd.api+json' \
+            -d '{"transports":["obfs4"]}' \
+            https://bridges.torproject.org/moat/circumvention/defaults \
+            | jq -r '.settings[].bridges.bridge_strings // [] | .[]' \
+            > "$RUNNER_TEMP/bridges.txt") || : > "$RUNNER_TEMP/bridges.txt"
+          wc -l "$RUNNER_TEMP/bridges.txt"
+      - name: Send frames through this device's own onion service, then over obfs4
+        env:
+          CONEST_TOR_LIVE: "1"
+          CONEST_NATIVE_LIBRARY: ${{ github.workspace }}/target/release/libconest_native.so
+        run: |
+          export CONEST_TOR_TRANSPORT="$RUNNER_TEMP/lyrebird"
+          export CONEST_TOR_BRIDGES="$(cat "$RUNNER_TEMP/bridges.txt")"
+          flutter test test/tor_live_test.dart
 
   nostr:
     if: ${{ !inputs.quick_build }}
@@ -331,7 +379,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: android-debug
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
       - run: flutter pub get
+      - name: Build Tor's pluggable transports
+        run: tool/build_lyrebird.sh android-arm64 build/app/lyrebirdJniLibs/arm64-v8a/liblyrebird.so
       - name: Build isolated debug APK
         run: |
           flutter build apk --debug --target-platform android-arm64 \
@@ -370,6 +424,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: linux-debug
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
       - run: flutter pub get
       - name: Build Linux native library with visible Rust diagnostics
         run: |
@@ -409,6 +467,7 @@ jobs:
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true
+          tool/build_lyrebird.sh linux-x64 build/linux/x64/debug/bundle/lyrebird
           mkdir -p dist-stage/conest-debug-linux-x64 dist
           cp -a build/linux/x64/debug/bundle/. dist-stage/conest-debug-linux-x64/
           (cd dist-stage && zip -r ../dist/conest-debug-linux-x64-${GITHUB_RUN_NUMBER}.zip conest-debug-linux-x64)
@@ -449,6 +508,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-debug
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
       - run: flutter pub get
       - name: Build Windows native library with visible Rust diagnostics
         shell: bash
@@ -468,6 +531,7 @@ jobs:
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true
+          tool/build_lyrebird.sh windows-x64 build/windows/x64/runner/Debug/lyrebird.exe
           mkdir -p dist-stage/conest-debug-windows-x64 dist
           cp -a build/windows/x64/runner/Debug/. dist-stage/conest-debug-windows-x64/
           powershell -Command "Compress-Archive -Path dist-stage/conest-debug-windows-x64 -DestinationPath dist/conest-debug-windows-x64-${GITHUB_RUN_NUMBER}.zip"

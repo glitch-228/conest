@@ -73,6 +73,7 @@ import 'relay_defaults.dart';
 import 'route_health_tracker.dart';
 import 'storage.dart';
 import 'storage_capacity.dart';
+import 'tor_carrier.dart';
 import 'transport.dart';
 
 const bool experimentalAndroidBackgroundRuntimeAvailable = bool.fromEnvironment(
@@ -446,7 +447,10 @@ class MessengerController extends ChangeNotifier {
     MeshtasticConnector? meshtasticConnector,
     MeshCoreConnector? meshCoreConnector,
     BitchatConnector? bitchatConnector,
+    TorApi? torApi,
   }) : _vaultStore = vaultStore,
+       _torApi = torApi,
+       _torApiResolved = torApi != null,
        _bitchatConnector = bitchatConnector,
        _meshCoreConnector = meshCoreConnector,
        _meshtasticConnector = meshtasticConnector,
@@ -533,6 +537,8 @@ class MessengerController extends ChangeNotifier {
   final MeshtasticConnector? _meshtasticConnector;
   final MeshCoreConnector? _meshCoreConnector;
   final BitchatConnector? _bitchatConnector;
+  TorApi? _torApi;
+  bool _torApiResolved;
   MatrixNativeApi? _matrixNativeApi;
   final bool _loadNativeMatrixClient;
   MatrixClientService? _matrixClient;
@@ -3510,6 +3516,152 @@ class MessengerController extends ChangeNotifier {
         !_carrierTransports.containsKey(TransportKind.bitchat)) {
       await _startBitchatCarrier(advertise: false);
     }
+    if (torCarrierConfig != null &&
+        !_carrierTransports.containsKey(TransportKind.tor)) {
+      await _startTorCarrier(advertise: false);
+    }
+  }
+
+  /// Tor through Arti in the native library, looked up once.
+  TorApi? get _resolvedTorApi {
+    if (!_torApiResolved) {
+      _torApiResolved = true;
+      _torApi = kIsWeb ? null : NativeTorApi.tryCreate();
+    }
+    return _torApi;
+  }
+
+  /// Whether this build can run Tor.
+  bool get torAvailable => _resolvedTorApi != null;
+
+  /// The Tor carrier's saved settings, if set up.
+  TorCarrierConfig? get torCarrierConfig => TorCarrierConfig.fromJson(
+    _snapshot.carrierAccounts[TransportKind.tor.name],
+  );
+
+  /// The running Tor connection, for its state in settings.
+  TorCarrierChannel? get torChannel => _torChannel;
+  TorCarrierChannel? _torChannel;
+
+  /// The bundled pluggable transport client, looked up once.
+  Future<String?> _torTransportPath() async {
+    if (!_torTransportResolved) {
+      _torTransportResolved = true;
+      _torTransport = kIsWeb
+          ? null
+          : bundledPluggableTransportPath(
+              androidLibraryDirectory: Platform.isAndroid
+                  ? await _platformBridge.nativeLibraryDirectory()
+                  : null,
+            );
+    }
+    return _torTransport;
+  }
+
+  String? _torTransport;
+  bool _torTransportResolved = false;
+
+  /// Whether this build ships pluggable transports, which bridges such as
+  /// obfs4, webtunnel and snowflake need.
+  Future<bool> torPluggableTransportsAvailable() async =>
+      await _torTransportPath() != null;
+
+  /// Reaches contacts through an onion service of this device, over Tor
+  /// directly or through [bridges] where Tor is blocked.
+  Future<void> enableTorCarrier({List<String> bridges = const []}) async {
+    _requireIdentity();
+    if (!torAvailable) {
+      throw StateError('This build of Conest does not include Tor.');
+    }
+    final lines = [for (final line in bridges) ?normalizeBridgeLine(line)];
+    if (bridges.any(
+      (line) => line.trim().isNotEmpty && normalizeBridgeLine(line) == null,
+    )) {
+      throw ArgumentError('A bridge line is not valid.');
+    }
+    final pluggableTransports = lines.any(bridgeNeedsTransport);
+    if (pluggableTransports && await _torTransportPath() == null) {
+      throw ArgumentError(
+        'These bridges need pluggable transports (obfs4, webtunnel or '
+        'snowflake), which this build does not include. Use plain bridges '
+        '(address and fingerprint).',
+      );
+    }
+    final config = TorCarrierConfig(
+      bridges: lines,
+      pluggableTransports: pluggableTransports,
+      address: torCarrierConfig?.address,
+    );
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.tor.name: config.toJson(),
+      },
+    );
+    await _persist('Tor carrier set up.');
+    // New bridges need a new Tor client.
+    await unregisterCarrierTransport(TransportKind.tor);
+    await _startTorCarrier();
+  }
+
+  /// Stops Tor and forgets the onion service, so a later setup gets a new
+  /// address; contacts are told to stop using it.
+  Future<void> disableTorCarrier() async {
+    await unregisterCarrierTransport(TransportKind.tor);
+    _torChannel = null;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts}
+        ..remove(TransportKind.tor.name),
+    );
+    await _persist('Tor carrier removed.');
+    try {
+      await _vaultStore.deleteTorDirectories();
+    } catch (error) {
+      appendDebugLog('Could not remove Tor state: $error');
+    }
+  }
+
+  Future<void> _startTorCarrier({bool advertise = true}) async {
+    final config = torCarrierConfig;
+    final api = _resolvedTorApi;
+    if (config == null ||
+        api == null ||
+        _snapshot.identity == null ||
+        !conestActive) {
+      return;
+    }
+    final directories = await _vaultStore.torDirectories();
+    final adapter =
+        _carrierTransports[TransportKind.tor] ??
+        createTorCarrierAdapter(sealer: carrierSealer, now: _now);
+    final channel = TorCarrierChannel(
+      config: config,
+      api: api,
+      stateDirectory: directories.state,
+      cacheDirectory: directories.cache,
+      transportPath: await _torTransportPath(),
+      knownAddress: config.address,
+      onFrame: adapter.receiveFrame,
+      onStatusChanged: notifyListeners,
+      onAddress: _saveTorAddress,
+    );
+    await adapter.detach();
+    adapter.attach(channel);
+    _torChannel = channel;
+    await registerCarrierTransport(adapter, advertise: advertise);
+  }
+
+  void _saveTorAddress(String address) {
+    final config = torCarrierConfig;
+    if (config == null) return;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.tor.name: config.copyWith(address: address).toJson(),
+      },
+    );
+    unawaited(_saveSnapshotSilently(notify: false));
+    _advertiseProfileToContacts();
   }
 
   /// Whether this device can join the Bluetooth mesh (Android, or a test
@@ -3517,7 +3669,7 @@ class MessengerController extends ChangeNotifier {
   bool get bitchatAvailable =>
       _bitchatConnector != null || (!kIsWeb && Platform.isAndroid);
 
-  /// The Bluetooth mesh identity, if set up.
+  /// The Bluetooth mesh setup, if on.
   BitchatCarrierConfig? get bitchatCarrierConfig =>
       BitchatCarrierConfig.fromJson(
         _snapshot.carrierAccounts[TransportKind.bitchat.name],
@@ -3527,9 +3679,9 @@ class MessengerController extends ChangeNotifier {
   BitchatCarrierChannel? get bitchatChannel => _bitchatChannel;
   BitchatCarrierChannel? _bitchatChannel;
 
-  /// Joins the bitchat Bluetooth mesh with a separate identity and a
-  /// neutral nickname: messages to nearby contacts hop phone to phone, and
-  /// this phone relays for others.
+  /// Joins the bitchat Bluetooth mesh: messages to nearby contacts hop
+  /// phone to phone, and this phone relays for others. It never announces
+  /// itself, and its ids on the air change every hour.
   Future<void> enableBitchatCarrier() async {
     _requireIdentity();
     if (!bitchatAvailable) {
@@ -3548,7 +3700,7 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  /// Leaves the Bluetooth mesh and forgets its identity.
+  /// Leaves the Bluetooth mesh and forgets its address.
   Future<void> disableBitchatCarrier() async {
     await unregisterCarrierTransport(TransportKind.bitchat);
     _bitchatChannel = null;
@@ -3570,17 +3722,41 @@ class MessengerController extends ChangeNotifier {
     final adapter =
         _carrierTransports[TransportKind.bitchat] ??
         createBitchatCarrierAdapter(sealer: carrierSealer, now: _now);
-    final channel = await BitchatCarrierChannel.create(
+    final channel = BitchatCarrierChannel(
       config: config,
       connector: _bitchatConnector ?? AndroidBitchatLinks.start,
+      keyFor: _bitchatPairKeys,
       onFrame: adapter.receiveFrame,
       onStatusChanged: notifyListeners,
+      now: _now,
     );
     await adapter.detach();
     adapter.attach(channel);
     _bitchatChannel = channel;
     await registerCarrierTransport(adapter, advertise: advertise);
   }
+
+  /// The keys contact pairs derive their Bluetooth mesh ids and MACs from,
+  /// for each contact with mesh [address] (normally one).
+  Future<List<Uint8List>> _bitchatPairKeys(String address) async => [
+    for (final contact in _snapshot.contacts)
+      if (contact.canSendOutbound &&
+          contact.carrierAddress(TransportKind.bitchat) == address)
+        await _bitchatPairKeyCache.putIfAbsent(
+          '${contact.deviceId}|${contact.publicKeyBase64}',
+          () async {
+            final key = await Hkdf(hmac: Hmac.sha256(), outputLength: 32)
+                .deriveKey(
+                  secretKey: await _crypto.sessionKeyFor(contact),
+                  nonce: const <int>[],
+                  info: utf8.encode('conest.bitchat.ids.v1'),
+                );
+            return Uint8List.fromList(await key.extractBytes());
+          },
+        ),
+  ];
+
+  final Map<String, Future<Uint8List>> _bitchatPairKeyCache = {};
 
   /// The MeshCore carrier's saved settings, if set up.
   MeshCoreCarrierConfig? get meshCoreCarrierConfig =>

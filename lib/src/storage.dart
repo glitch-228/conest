@@ -396,6 +396,34 @@ class VaultStore {
     );
   }
 
+  /// Where Arti keeps Tor state (including the onion service's keys) and
+  /// its directory cache.
+  ///
+  /// Only the private parent is made here: Arti refuses state that others
+  /// can read and creates its own directories with the right permissions.
+  Future<({String state, String cache})> torDirectories() async {
+    final vault = await _vaultFile();
+    final root = Directory('${vault.path}.tor');
+    await root.create(recursive: true);
+    if (!Platform.isWindows) {
+      final result = await Process.run('chmod', ['700', root.path]);
+      if (result.exitCode != 0) {
+        throw FileSystemException(
+          'Could not restrict Tor state permissions: ${result.stderr}',
+          root.path,
+        );
+      }
+    }
+    return (state: '${root.path}/state', cache: '${root.path}/cache');
+  }
+
+  /// Forgets the onion service's keys and Tor's cache.
+  Future<void> deleteTorDirectories() async {
+    final vault = await _vaultFile();
+    final directory = Directory('${vault.path}.tor');
+    if (await directory.exists()) await directory.delete(recursive: true);
+  }
+
   Future<VaultSnapshot> load() async {
     final file = await _vaultFile();
     final backup = File('${file.path}.bak');

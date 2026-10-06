@@ -66,8 +66,9 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
           subtitle: const Text(
             'Reach contacts nearby without any network: messages hop from '
             'phone to phone over Bluetooth, through Conest and bitchat '
-            'users alike, and this phone relays for others. Uses a separate '
-            'identity; nearby bitchat users see only a neutral name.',
+            'users alike, and this phone relays for others. This phone does '
+            'not show up in bitchat, and what it sends looks like any '
+            'bitchat private message, with ids that change every hour.',
           ),
           value: config != null,
           onChanged: _busy ? null : _set,
@@ -80,12 +81,18 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
               Icons.circle,
               size: 12,
               color: switch (channel?.state) {
-                BitchatCarrierState.running => Colors.green,
+                BitchatCarrierState.running when channel?.lastError == null =>
+                  Colors.green,
                 BitchatCarrierState.starting => Colors.amber,
                 _ => theme.colorScheme.error,
               },
             ),
-            title: Text('Shown nearby as ${config.nickname}'),
+            title: Text(switch (channel?.state) {
+              BitchatCarrierState.running when channel?.lastError == null =>
+                'Bluetooth mesh on',
+              BitchatCarrierState.starting => 'Starting Bluetooth',
+              _ => 'Bluetooth unavailable',
+            }),
             subtitle: channel?.lastError == null
                 ? null
                 : Text(channel!.lastError!, maxLines: 2),

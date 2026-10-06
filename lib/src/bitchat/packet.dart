@@ -181,9 +181,15 @@ class BitchatPacket {
   }
 
   /// A key for duplicate suppression: the same packet relayed again (with
-  /// another TTL or padding) has the same key.
+  /// another TTL or padding) has the same key; a copy with other flags does
+  /// not, so it cannot stand in for the original.
   String get dedupKey => sha256.convert([
+    version,
     type,
+    (recipientId != null ? _Flags.hasRecipient : 0) |
+        (signature != null ? _Flags.hasSignature : 0) |
+        (compressed ? _Flags.isCompressed : 0) |
+        (route?.isNotEmpty ?? false ? _Flags.hasRoute : 0),
     ...senderId,
     ..._uint(timestamp, 8),
     ...?recipientId,

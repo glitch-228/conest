@@ -5,17 +5,42 @@ on:
     branches: [ci/tor-compile]
 
 jobs:
-  check:
+  live:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: |
           sudo apt-get update
           sudo apt-get install -y cmake clang pkg-config libasound2-dev libudev-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.41.9"
+          channel: stable
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: tor-check
-      - run: cargo check --locked --manifest-path native/conest_native/Cargo.toml 2>&1 | tail -150
-        shell: bash
-      - run: cargo check --locked --manifest-path native/conest_native/Cargo.toml
+          key: matrix-native
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+      - run: flutter pub get
+      - run: cargo build --locked --release --manifest-path native/conest_native/Cargo.toml
+      - name: Build lyrebird and fetch obfs4 bridges
+        run: |
+          tool/build_lyrebird.sh linux-x64 "$RUNNER_TEMP/lyrebird"
+          (curl -sf --max-time 60 -X POST \
+            -H 'Content-Type: application/vnd.api+json' \
+            -d '{"transports":["obfs4"]}' \
+            https://bridges.torproject.org/moat/circumvention/defaults \
+            | jq -r '.settings[].bridges.bridge_strings // [] | .[]' \
+            > "$RUNNER_TEMP/bridges.txt") || : > "$RUNNER_TEMP/bridges.txt"
+          wc -l "$RUNNER_TEMP/bridges.txt"
+      - name: Live Tor
+        env:
+          CONEST_TOR_LIVE: "1"
+          CONEST_NATIVE_LIBRARY: ${{ github.workspace }}/target/release/libconest_native.so
+        run: |
+          export CONEST_TOR_TRANSPORT="$RUNNER_TEMP/lyrebird"
+          export CONEST_TOR_BRIDGES="$(cat "$RUNNER_TEMP/bridges.txt")"
+          flutter test test/tor_live_test.dart

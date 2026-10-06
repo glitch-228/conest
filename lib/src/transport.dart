@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'transport_models.dart';
@@ -183,11 +184,51 @@ abstract interface class TransportAdapter {
   Future<void> cancel(String operationId);
 }
 
+/// What the registry has seen of one transport to one contact: how fast
+/// sends complete and whether it has been failing.
+class TransportRouteStats {
+  /// Moving average of accepted sends of small envelopes, in milliseconds.
+  double? latencyMs;
+  int failureStreak = 0;
+  DateTime? lastFailureAt;
+  DateTime? lastSuccessAt;
+
+  /// While a route that just failed cools down, working routes go first.
+  bool coolingAt(DateTime now) {
+    final failedAt = lastFailureAt;
+    if (failureStreak == 0 || failedAt == null) return false;
+    final seconds = min(15 * (1 << min(failureStreak - 1, 10)), 600);
+    return now.difference(failedAt) < Duration(seconds: seconds);
+  }
+}
+
 class TransportRegistry {
-  TransportRegistry(Iterable<TransportAdapter> adapters)
-    : _adapters = {for (final adapter in adapters) adapter.kind: adapter};
+  TransportRegistry(
+    Iterable<TransportAdapter> adapters, {
+    DateTime Function()? now,
+  }) : _adapters = {for (final adapter in adapters) adapter.kind: adapter},
+       _now = now ?? DateTime.now;
 
   final Map<TransportKind, TransportAdapter> _adapters;
+  final DateTime Function() _now;
+
+  /// Route statistics by `deviceId|transport`, oldest first.
+  final Map<String, TransportRouteStats> _stats = {};
+  static const int _maxStats = 4096;
+
+  /// Envelopes up to this size time the route rather than the payload.
+  static const int _latencySampleBytes = 64 * 1024;
+
+  TransportRouteStats? statsFor(String deviceId, TransportKind kind) =>
+      _stats['$deviceId|${kind.name}'];
+
+  TransportRouteStats _statsEntry(String deviceId, TransportKind kind) {
+    final key = '$deviceId|${kind.name}';
+    final entry = _stats.remove(key) ?? TransportRouteStats();
+    _stats[key] = entry;
+    if (_stats.length > _maxStats) _stats.remove(_stats.keys.first);
+    return entry;
+  }
 
   Iterable<TransportAdapter> get adapters => _adapters.values;
   TransportAdapter? adapterFor(TransportKind kind) => _adapters[kind];
@@ -231,6 +272,15 @@ class TransportRegistry {
           return true;
         })
         .toList(growable: false);
+    // The user's policy first; then routes that have not just failed; then
+    // the kind of path (local, direct, relayed, stored); then, within a
+    // kind, the measured (or expected) speed for this contact.
+    final now = _now();
+    bool cooling(RouteCandidate route) =>
+        statsFor(peer.deviceId, route.transport)?.coolingAt(now) ?? false;
+    double speed(RouteCandidate route) =>
+        statsFor(peer.deviceId, route.transport)?.latencyMs ??
+        _expectedLatencyMs(route);
     routes.sort((left, right) {
       final leftPolicy = policies[left.transport] ?? TransportPolicy.automatic;
       final rightPolicy =
@@ -239,10 +289,14 @@ class TransportRegistry {
         leftPolicy,
       ).compareTo(_policyPriority(rightPolicy));
       if (policyOrder != 0) return policyOrder;
-      final pathOrder = _pathPriority(
-        left.path,
-      ).compareTo(_pathPriority(right.path));
+      final coolingOrder = (cooling(left) ? 1 : 0).compareTo(
+        cooling(right) ? 1 : 0,
+      );
+      if (coolingOrder != 0) return coolingOrder;
+      final pathOrder = _routePriority(left).compareTo(_routePriority(right));
       if (pathOrder != 0) return pathOrder;
+      final speedOrder = speed(left).compareTo(speed(right));
+      if (speedOrder != 0) return speedOrder;
       return left.transport.routeRank.compareTo(right.transport.routeRank);
     });
     return routes;
@@ -276,22 +330,32 @@ class TransportRegistry {
                       ? const Duration(seconds: 60)
                       : const Duration(seconds: 4)),
             );
+        final completedAt = DateTime.now().toUtc();
         attempts.add(
           DeliveryAttempt(
             route: route,
             startedAt: startedAt,
-            completedAt: DateTime.now().toUtc(),
+            completedAt: completedAt,
           ),
         );
         if (receipt.accepted) {
+          _recordSuccess(
+            peer.deviceId,
+            route.transport,
+            envelope.bytes.length <= _latencySampleBytes
+                ? completedAt.difference(startedAt)
+                : null,
+          );
           return TransportDeliveryResult(
             receipt: receipt,
             attempts: List.unmodifiable(attempts),
           );
         }
         lastError = receipt.detail ?? 'Transport rejected the envelope.';
+        _recordFailure(peer.deviceId, route.transport);
       } catch (error) {
         lastError = error;
+        _recordFailure(peer.deviceId, route.transport);
         attempts.add(
           DeliveryAttempt(
             route: route,
@@ -309,12 +373,55 @@ class TransportRegistry {
     );
   }
 
+  void _recordSuccess(String deviceId, TransportKind kind, Duration? took) {
+    final stats = _statsEntry(deviceId, kind)
+      ..failureStreak = 0
+      ..lastSuccessAt = _now();
+    if (took == null) return;
+    final sample = took.inMicroseconds / 1000;
+    final previous = stats.latencyMs;
+    stats.latencyMs = previous == null ? sample : previous * 0.7 + sample * 0.3;
+  }
+
+  void _recordFailure(String deviceId, TransportKind kind) {
+    _statsEntry(deviceId, kind)
+      ..failureStreak += 1
+      ..lastFailureAt = _now();
+  }
+
+  /// Rough send time before anything is measured: the path kind, and how
+  /// slow the network behind the transport usually is.
+  static double _expectedLatencyMs(RouteCandidate route) =>
+      switch (route.path) {
+        TransportPathKind.local => 30.0,
+        TransportPathKind.direct => 250.0,
+        TransportPathKind.relayed => 700.0,
+        TransportPathKind.storeForward => 1500.0,
+        TransportPathKind.manual => 60000.0,
+      } +
+      switch (route.transport) {
+        TransportKind.tor => 2500.0,
+        TransportKind.deltaChat => 3000.0,
+        TransportKind.bitchat => 2000.0,
+        TransportKind.reticulum ||
+        TransportKind.meshtastic ||
+        TransportKind.meshCore => 20000.0,
+        _ => 0.0,
+      };
+
   static int _policyPriority(TransportPolicy policy) => switch (policy) {
     TransportPolicy.preferred => 0,
     TransportPolicy.automatic => 1,
     TransportPolicy.askBeforeUse => 2,
     TransportPolicy.disabled => 3,
   };
+
+  /// Tor reaches the contact directly but through three relays each way,
+  /// so it ranks with relayed routes rather than ahead of them.
+  static int _routePriority(RouteCandidate route) =>
+      route.transport == TransportKind.tor
+      ? max(_pathPriority(route.path), _pathPriority(TransportPathKind.relayed))
+      : _pathPriority(route.path);
 
   static int _pathPriority(TransportPathKind path) => switch (path) {
     TransportPathKind.local => 0,
