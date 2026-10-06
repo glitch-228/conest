@@ -2455,6 +2455,58 @@ void main() {
   }
 
   test(
+    'Iroh-only transfers use 1 MiB blocks with receivers that take them',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      for (final controller in [alice, bob]) {
+        await controller.updateGlobalConnectivity(_irohOnlyConnectivity);
+      }
+      await _pairControllers(alice, bob);
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      expect(
+        alice.contacts.single.featureCapabilities,
+        contains(ApplicationCapability.irohBlock1MiBV1),
+      );
+      final bytes = Uint8List.fromList(
+        List.generate(2 * 1024 * 1024 + 3001, (index) => index * 7 % 251),
+      );
+      await alice.sendAttachment(
+        contact: alice.contacts.single,
+        bytes: bytes,
+        fileName: 'iroh-1mib.bin',
+      );
+      ChatMessage? received;
+      await _waitForIroh(() {
+        received = bob
+            .messagesFor(alice.identity!.deviceId)
+            .where((m) => m.attachment?.fileName == 'iroh-1mib.bin')
+            .firstOrNull;
+        final id = received?.attachment?.id;
+        if (id != null && bob.attachmentAwaitingAcceptance(id)) {
+          unawaited(bob.acceptIncomingAttachment(id));
+        }
+        return id != null && bob.attachmentAvailableLocally(id);
+      }, reason: 'the 1 MiB-block transfer did not finish');
+      expect(received!.attachment!.chunkSize, 1024 * 1024);
+      final cache = await bob.attachmentCachePathFor(received!.attachment!.id);
+      expect(await File(cache!).readAsBytes(), bytes);
+    },
+  );
+
+  test(
     'transfer retries wait for the blocks in flight at the measured rate',
     () {
       // Nothing measured yet: assume a slow 1 Mbit/s path, so four 1 MiB

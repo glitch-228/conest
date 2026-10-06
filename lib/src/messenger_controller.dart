@@ -8211,6 +8211,11 @@ class MessengerController extends ChangeNotifier {
   /// resume, corruption recovery, and bounded-memory random access.
   static const int _lanAttachmentChunkSize = 4 * 1024 * 1024;
 
+  /// Iroh-only transfers to receivers that take them use 1 MiB blocks: on
+  /// a slow Iroh path a 4 MiB block made progress jump and each retry
+  /// costly.
+  static const int _irohAttachmentChunkSize = 1024 * 1024;
+
   /// A failed binary PUT must release quickly so the receiver can re-request
   /// the same verified block and the route-health logic can try an alternate
   /// host. A healthy 4 MiB LAN block completes well below this bound even on
@@ -8271,10 +8276,38 @@ class MessengerController extends ChangeNotifier {
             endpoint.binaryBlockVersion >= 1 &&
             _lanDirectEndpointUsable(endpoint)) ||
         _canUseIrohForContact(contact)) {
-      return _lanAttachmentChunkSize;
+      return _directChunkSizeFor(contact);
     }
     return _attachmentChunkSize;
   }
+
+  /// Direct blocks: 4 MiB over a working local network, 1 MiB over Iroh
+  /// alone when the receiver takes them.
+  int _directChunkSizeFor(ContactRecord contact) {
+    final endpoint = _peerLanDirect[contact.deviceId];
+    final lanWorks =
+        _effectiveTransports(contact).lan &&
+        (_lanPathWorksFor(contact) ||
+            (endpoint != null &&
+                endpoint.binaryBlockVersion >= 1 &&
+                _lanDirectEndpointUsable(endpoint)));
+    if (!lanWorks &&
+        _canUseIrohForContact(contact) &&
+        contact.featureCapabilities.contains(
+          ApplicationCapability.irohBlock1MiBV1,
+        )) {
+      return _irohAttachmentChunkSize;
+    }
+    return _lanAttachmentChunkSize;
+  }
+
+  /// Blocks requested at once: fewer for bigger blocks.
+  static int _inboundWindowFor(int chunkSize) =>
+      chunkSize >= _lanAttachmentChunkSize
+      ? _largeDirectInboundChunkWindow
+      : chunkSize > _attachmentChunkSize
+      ? 6
+      : _inboundChunkWindow;
 
   /// Maximum number of attachments accepted in one user-triggered batch
   /// (multi-file picker, drag-and-drop, mobile gallery multi-select). Each
@@ -8443,7 +8476,7 @@ class MessengerController extends ChangeNotifier {
     final requiresLan =
         forceLanOnly || source.sizeBytes > maxAttachmentSizeBytes;
     final chunkSize = requiresLan
-        ? _lanAttachmentChunkSize
+        ? _directChunkSizeFor(contact)
         : _effectiveChunkSizeFor(contact);
     final chunkCount = (source.sizeBytes + chunkSize - 1) ~/ chunkSize;
     final attachmentKey = SecretKeyData.random(length: 32);
@@ -9301,9 +9334,7 @@ class MessengerController extends ChangeNotifier {
     final adaptive = transferRetryDelay(
       attempt: 0,
       blockBytes: state.descriptor.chunkSize,
-      window: state.descriptor.chunkSize > _attachmentChunkSize
-          ? _largeDirectInboundChunkWindow
-          : _inboundChunkWindow,
+      window: _inboundWindowFor(state.descriptor.chunkSize),
       bytesPerSecond: state.bytesPerSecond,
     );
     return adaptive > _outboundStallTimeout ? adaptive : _outboundStallTimeout;
@@ -15487,6 +15518,7 @@ class MessengerController extends ChangeNotifier {
         descriptor.protocolVersion != 2 ||
         descriptor.chunkHashes.isNotEmpty ||
         (descriptor.chunkSize != _attachmentChunkSize &&
+            descriptor.chunkSize != _irohAttachmentChunkSize &&
             descriptor.chunkSize != _lanAttachmentChunkSize) ||
         descriptor.effectiveChunkCount <= 0 ||
         descriptor.effectiveChunkCount > 16384 ||
@@ -15501,7 +15533,7 @@ class MessengerController extends ChangeNotifier {
       throw const FormatException('Attachment descriptor is out of range.');
     }
     if (descriptor.sizeBytes > maxAttachmentSizeBytes &&
-        descriptor.chunkSize != _lanAttachmentChunkSize) {
+        descriptor.chunkSize == _attachmentChunkSize) {
       throw const FormatException('Large attachments require LAN chunks.');
     }
     if (base64Decode(descriptor.fileHashBase64).length != 32 ||
@@ -16544,9 +16576,7 @@ class MessengerController extends ChangeNotifier {
         state.partialPath == null) {
       return;
     }
-    final window = state.descriptor.chunkSize > _attachmentChunkSize
-        ? _largeDirectInboundChunkWindow
-        : _inboundChunkWindow;
+    final window = _inboundWindowFor(state.descriptor.chunkSize);
     final requests = <Future<void>>[];
     while (state.requestedInFlight.length < window) {
       final next = state.nextUnrequestedIndex();
@@ -16612,9 +16642,7 @@ class MessengerController extends ChangeNotifier {
     final delay = transferRetryDelay(
       attempt: state.retryAttempts,
       blockBytes: state.descriptor.chunkSize,
-      window: state.descriptor.chunkSize > _attachmentChunkSize
-          ? _largeDirectInboundChunkWindow
-          : _inboundChunkWindow,
+      window: _inboundWindowFor(state.descriptor.chunkSize),
       bytesPerSecond: state.bytesPerSecond,
     );
     state.nextRetryAt = DateTime.now().toUtc().add(delay);
@@ -24583,6 +24611,7 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.groupPollsV1,
       ApplicationCapability.voiceMessageAttachmentsV1,
       ApplicationCapability.groupFileCaptionsV2,
+      ApplicationCapability.irohBlock1MiBV1,
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,

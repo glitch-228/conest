@@ -14,6 +14,9 @@ enum ApplicationCapability {
   /// Passes on messages from this contact to devices it cannot reach (only
   /// advertised to contacts this device carries for).
   forwardForContactsV1,
+
+  /// Accepts 1 MiB attachment blocks (besides 128 KiB and 4 MiB).
+  irohBlock1MiBV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

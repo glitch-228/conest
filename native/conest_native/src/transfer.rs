@@ -26,6 +26,9 @@ use sha2::{Digest, Sha256};
 pub const ATTACHMENT_PROTOCOL_VERSION: u16 = 2;
 pub const ATTACHMENT_BLOCK_SIZE: u32 = 128 * 1024;
 pub const ATTACHMENT_LAN_BLOCK_SIZE: u32 = 4 * 1024 * 1024;
+/// Iroh-only transfers to receivers that take them: finer progress and
+/// cheaper retries on slow paths.
+pub const ATTACHMENT_IROH_BLOCK_SIZE: u32 = 1024 * 1024;
 pub const MAX_ATTACHMENT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub const JOURNAL_CHECKPOINT_BYTES: u64 = 8 * 1024 * 1024;
 pub const JOURNAL_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(2);
@@ -126,9 +129,11 @@ impl TransferManifest {
         if self.size_bytes == 0 || self.size_bytes > MAX_ATTACHMENT_BYTES {
             bail!("attachment size is outside the allowed range");
         }
-        if self.block_size != ATTACHMENT_BLOCK_SIZE && self.block_size != ATTACHMENT_LAN_BLOCK_SIZE
+        if self.block_size != ATTACHMENT_BLOCK_SIZE
+            && self.block_size != ATTACHMENT_IROH_BLOCK_SIZE
+            && self.block_size != ATTACHMENT_LAN_BLOCK_SIZE
         {
-            bail!("attachment v2 requires 128 KiB or 4 MiB blocks");
+            bail!("attachment v2 requires 128 KiB, 1 MiB or 4 MiB blocks");
         }
         let expected = self.size_bytes.div_ceil(self.block_size as u64);
         if self.block_count == 0 || self.block_count as u64 != expected {
@@ -624,6 +629,19 @@ mod tests {
             ATTACHMENT_LAN_BLOCK_SIZE
         );
         assert_eq!(manifest.expected_plaintext_len(1).unwrap(), 17);
+    }
+
+    #[test]
+    fn one_mib_iroh_block_geometry_is_supported_and_others_are_not() {
+        let bytes = vec![0x2a; ATTACHMENT_IROH_BLOCK_SIZE as usize * 2 + 5];
+        let mut manifest = manifest(&bytes);
+        manifest.block_size = ATTACHMENT_IROH_BLOCK_SIZE;
+        manifest.block_count = bytes.len().div_ceil(ATTACHMENT_IROH_BLOCK_SIZE as usize) as u32;
+        manifest.validate().unwrap();
+        assert_eq!(manifest.expected_plaintext_len(2).unwrap(), 5);
+        manifest.block_size = 512 * 1024;
+        manifest.block_count = bytes.len().div_ceil(512 * 1024) as u32;
+        assert!(manifest.validate().is_err());
     }
 
     #[test]
