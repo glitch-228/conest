@@ -1,97 +1,85 @@
 # Conest
 
-Conest is a phased secure messenger and transfer app. The repository contains:
+Conest is a serverless messenger for Linux, Windows and Android. Contacts
+reach each other directly over the local network or the internet, and fall
+back to whatever still works when that fails: relays, Matrix, Nostr, email,
+Tor, LoRa radios or a Bluetooth mesh of nearby phones. Every route carries
+messages end-to-end encrypted by Conest.
 
-- Flutter client for Linux, Windows, and Android.
-- Signed `ci6` invites plus backward-compatible `ci5` import.
-- QR-import-only and codephrase-only contact pairing.
-- Encrypted local vault for identity, contacts, and message history.
-- A shared transport policy/orchestration layer over encrypted LAN delivery,
-  authenticated Iroh QUIC, visible Iroh relay fallback, and Conest's offline relay.
-- Resumable, hash-verified attachment transfer with route-boundary migration.
-- Conest Beam optical transfer for public files, contact-encrypted files, and
-  contact invites.
-- Invite-only trusted groups with pairwise encrypted text fanout, including Iroh peers who are not individual contacts.
-- Rust workspace with the native transport/camera library, standalone relay,
-  and desktop updater.
+It can also be used as a Matrix client, alongside Conest chats or instead
+of them.
 
-The active implementation roadmap and qualification gates are in [PLAN.md](PLAN.md).
+## Features
 
-## What Is Implemented Now
+**Messaging**
+- Direct chats and invite-only groups of up to 16 people: text, replies,
+  edits, reactions, read receipts, scheduled messages, voice messages and
+  files with albums and captions.
+- Saved messages: a chat with yourself for notes, files and forwards,
+  kept only on this device.
+- Voice calls between Conest devices (experimental, off by default).
+- Every message shows a route mark telling how it travelled.
 
-- One account on one device.
-- Direct text conversations and invite-only trusted groups up to 16 members.
-- Signed compact `ci6` invite payloads carrying Ed25519/X25519 keys, pinned
-  Iroh endpoint identity, capabilities, and bounded route hints; `ci5` remains
-  accepted for migration.
-- Contact requests from signed `ci6` invites can arrive over Iroh before a
-  contact is trusted. The invite must match the authenticated endpoint; the
-  receiver approves the request before exchanging encrypted messages.
-- Route hints carry both route kind and protocol, currently `tcp`, `udp`, `http`, or `https`.
-- No bundled Conest relay servers. Previously bundled routes are retired on upgrade; explicitly configured relays and Iroh discovery/fallback remain available.
-- Rotating pairing code derived from the payload in 120-second windows.
-- Desktop-style relay behavior enabled by default through the app's local LAN node.
-- X25519-derived shared secret encryption per direct conversation.
-- Nearby pairing and messaging that try LAN routes first, then continue through internet relay routes when available.
-- Codephrase discovery over LAN beacons, bounded nearby LAN scans, or the configured shared relay.
-- Relay polling, outbound queueing, duplicate suppression, and ack-based delivery state updates.
-- Global and per-contact automatic/preferred/disabled/ask-before-use transport
-  policy, with the actual path shown on messages and transfers.
-- Visible Iroh relay fallback with global/contact opt-outs and an optional
-  persisted list of up to eight custom HTTPS relay URLs (blank uses N0).
-- Persistent, verified attachment ranges, pause/cancel, restart recovery, and a
-  30 MiB default store-forward relay cap. Larger files require LAN or direct
-  Iroh and pause instead of silently consuming relay capacity.
-- Attachment protocol v2 manifests, 128 KiB authenticated blocks, exact
-  durable-byte progress, resumable private partial files, foreground Android
-  transfer controls, and a content-addressed managed cache. The protocol and
-  storage guards accept 1:1 attachments up to 2 GiB.
-- Storage settings keep a 10% free-space reserve by default and allow disabling
-  it. A receive warning offers **Download anyway** when only the reserve blocks
-  a file; this bypass applies to that download and still requires enough actual
-  free space.
-- Preparing/queued/waiting/reconnecting/verifying transfer bubbles, a global
-  Transfers screen, batch/album staging and reordering, media/file presentation
-  modes, priority controls, retry, keep-offline, save, and cache eviction.
-- SQLite-WAL relay mailboxes with deduplication, TTL/quota enforcement, and
-  lease/ack fetching so unacknowledged deliveries survive relay restarts.
-- A Linux/Windows relay supervisor with signed channel-aware updates,
-  maintenance-window application, identity/database continuity checks, and
-  automatic rollback after a failed health gate.
-- Conest Beam v1 systematic LT fountain frames with CRC32C, a signed manifest,
-  final SHA-256 verification, a 64 MiB limit, and explicit acceptance for
-  public/untrusted imports.
-- Android camera scanning and a Linux/Windows native scanner based on Nokhwa
-  and RXing, with manual frame input retained as a backend fallback.
-- Native compact-envelope, expiry/replay protection, and bounded trusted
-  courier queue primitives for the Reticulum-inspired mode.
+**Privacy and security**
+- Forward secrecy between updated devices: messages and controls travel in
+  Double Ratchet sessions (vodozemac, the library Matrix uses), so keys
+  stolen later cannot decrypt recorded traffic. Group files use keys that
+  change daily; each call gets its own key.
+- Contacts are added from a signed invite (QR code, pasted text, or a
+  rotating codephrase) and must accept the request. Adding is recoverable:
+  a lost acceptance, decline or removal is repeated, and removed contacts
+  can be added again.
+- An encrypted local vault, unlocked by the device, a key file or a
+  passphrase; a portable "ghost" storage mode is available.
+
+**Routes** (Settings → Connectivity)
+- On by default: LAN, Iroh QUIC (direct, or through Iroh relays) and
+  Conest relays you configure.
+- Opt-in, for when the usual routes are blocked or there is no internet:
+  - Matrix (with a signed-in Matrix account),
+  - Nostr relays (gift-wrapped events),
+  - email (a free chatmail account or your own mailbox, OpenPGP),
+  - Tor onion services, with obfs4, webtunnel, snowflake or meek bridges,
+  - LoRa radios: Reticulum, Meshtastic and MeshCore,
+  - a Bluetooth mesh with nearby phones (bitchat-compatible).
+- Both sides need a route on for it to be used. Routes enabled later reach
+  existing contacts automatically.
+- Routes are ranked per contact by what works and how fast; a contact can
+  carry messages for another contact you cannot reach yourself.
+- Files go over LAN, Iroh, Conest relays and Tor; the other routes carry
+  messages only.
+
+**Files**
+- Resumable, hash-verified transfers up to 2 GiB with pause, retry,
+  keep-offline and a managed cache; a 30 MiB cap for relay routes.
+- Conest Beam: animated-QR transfer of files and invites between screens,
+  with no network at all.
+
+**Matrix**
+- App modes: Conest, Both (Conest and Matrix chats with filters) or Matrix
+  only (no Conest identity needed).
+- Password or browser (single sign-on) sign-in, emoji verification,
+  recovery, rooms with replies, edits, reactions, files and invites.
+
+**Updates**
+- Signed in-app updates on a stable or nightly channel ("Receive unstable
+  updates" in Settings); a nightly device can always move back to stable.
 
 ## What Is Not Complete Yet
 
-- Multi-provider group attachment swarming and multi-device identity sync.
-- Delta Chat account integration and explicit fingerprint-verified contact
-  linking.
-- Full LocalSend v2 compatibility (the existing LAN HTTP path is Conest's
-  encrypted transfer path, not a LocalSend trust domain).
-- Optional official RNS/LXMF interoperability sidecar and its redistribution,
-  Android-runtime, and all-platform qualification work.
-- Production enablement of courier forwarding, which remains off by default
-  until queue persistence, quota UI, and adversarial tests are complete.
-- Beam receive-session persistence across an application restart. Completed
-  files are verified and saved privately, but an interrupted optical scan must
-  currently be restarted.
-- Physical camera qualification across the supported Linux/Windows backends;
-  manual Beam frame entry remains available when native capture is absent.
-- Forced-Iroh-relay/offline integration qualification and native cancellation
-  of an already-open QUIC stream; controller cancellation already stops later
-  verified ranges from being issued.
-- Moving the remaining Dart attachment orchestration onto the native Rust
-  transfer primitives and replacing the current LAN block envelopes with a
-  fully binary long-lived session.
-- Platform media transcoding/EXIF stripping, verified-range streaming proxy
-  playback, and seek-driven range prioritization.
-- Repeated physical 2 GiB/device certification on Android, Linux, and Windows;
-  the automated boundary tests do not substitute for that release gate.
+- Several devices on one account (planned: per-device keys under an account
+  key, linking through Matrix or a QR code, optional sync).
+- Talking to other apps' users: bitchat (iPhone) direct messages, Nostr
+  NIP-17, Matrix DMs with Element, Delta Chat, Telegram and Discord are
+  planned.
+- Sending one message over several routes at once, and files over several
+  routes in parallel.
+- Relay protocol v2 with registration for large files and call relaying.
+- Background notifications on Android and a background runtime on by
+  default; Linux Bluetooth mesh.
+- Beam receive sessions do not survive an app restart.
+- Device testing of the newer routes (Tor bridges, radios, Bluetooth mesh,
+  email) and of 2 GiB transfers on every platform is ongoing.
 
 ## Run The Relay
 
@@ -180,27 +168,33 @@ flutter run -d linux
 
 On first launch:
 
-1. Create a device with a local LAN port and, optionally, an internet relay host or URL.
-2. Open `My invite` to show a QR, payload, and current codephrase.
-3. Add the contact by scanning the QR, pasting the payload, or entering only the current codephrase.
-4. Nearby delivery will try LAN routes first and fall back to the internet relay when needed.
+1. Choose where Conest stores its data and how the vault unlocks.
+2. Create your device (a display name is enough), or pick "Use as a Matrix
+   client instead".
+3. Open **My invite** to show a QR code, the invite text and the current
+   codephrase.
+4. Add a contact by scanning their QR code, pasting their invite or typing
+   their current codephrase; they accept the request on their side.
+5. Optionally turn on more routes under **Settings → Connectivity**.
 
-With a signed QR/pasted invite, contact pairing also works over Iroh when
-Conest relay and LAN delivery are disabled. The receiving device must be
-online and approve the incoming contact request. Codephrase-only discovery
-still needs LAN discovery or a shared Conest relay to obtain the invite.
+A signed QR code or pasted invite is enough to add a contact over the
+internet (Iroh) with no relay and no shared network. A codephrase needs the
+same LAN or a shared Conest relay to find the invite.
 
 ## Rust Workspace
 
+- `native/conest_native`: the app's native library: Iroh endpoint and file
+  transfer, voice-call audio, Matrix (matrix-sdk), Tor (Arti), the Beam
+  camera decoder, and a stable C ABI for Dart.
 - `native/conest_relay`: TCP/UDP/HTTP JSON relay with queued offline delivery.
-- `native/conest_native`: persistent Iroh endpoint, stable C ABI / FRB API, and
-  Linux/Windows Beam camera decoder.
-- `native/conest_updater`: desktop helper that swaps a staged update bundle into the running app's install directory and relaunches the app.
 - `native/conest_relay_supervisor`: Linux/Windows service wrapper for durable,
   signed relay updates and health-gated rollback.
+- `native/conest_updater`: desktop helper that swaps a staged update bundle
+  into the install directory and relaunches the app.
 
-Linux and Windows CMake builds compile and bundle `conest_native`. Android's
-Gradle build invokes `cargo ndk` and packages the generated JNI libraries.
+Linux and Windows CMake builds compile and bundle `conest_native` (and the
+lyrebird pluggable-transport client for Tor bridges). Android's Gradle build
+invokes `cargo ndk` and packages the generated JNI libraries.
 
 ## Tests
 

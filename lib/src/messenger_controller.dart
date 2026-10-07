@@ -8315,6 +8315,143 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(contacts: contacts);
   }
 
+  /// Saved messages: a chat with this device itself, kept here only (not
+  /// sent anywhere). It is a direct conversation whose peer is this device,
+  /// so files, search and storage work as in any chat, and older builds
+  /// simply do not list it.
+  ContactRecord? get savedMessagesContact {
+    final me = identity;
+    if (me == null) return null;
+    return ContactRecord(
+      accountId: me.accountId,
+      deviceId: me.deviceId,
+      alias: 'Saved messages',
+      displayName: 'Saved messages',
+      bio: '',
+      relayCapable: false,
+      publicKeyBase64: me.publicKeyBase64,
+      routeHints: const [],
+      safetyNumber: me.safetyNumber,
+      trustedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      pairingState: ContactPairingState.accepted,
+    );
+  }
+
+  /// Whether [deviceId] is the Saved messages chat.
+  bool isSavedMessages(String deviceId) => deviceId == identity?.deviceId;
+
+  Future<void> _saveText(
+    String body, {
+    ChatMessage? replyTo,
+    String? messageId,
+  }) async {
+    final me = _requireIdentity();
+    _upsertMessage(
+      me.deviceId,
+      ChatMessage(
+        id: messageId ?? _randomId('msg'),
+        conversationId: _crypto.conversationIdFor(me.deviceId),
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: me.deviceId,
+        body: body,
+        outbound: true,
+        state: DeliveryState.delivered,
+        createdAt: _now().toUtc(),
+        replyToMessageId: replyTo?.id,
+        replySnippet: replyTo == null ? null : _replySnippetForMessage(replyTo),
+        replySenderDeviceId: replyTo?.senderDeviceId,
+        replySenderDisplayName: replyTo == null
+            ? null
+            : _replySenderDisplayName(replyTo),
+      ),
+    );
+    await _persist('Saved.');
+  }
+
+  /// Copies [source] into the managed cache, kept offline, as a saved
+  /// message.
+  Future<void> _saveAttachment(
+    StagedAttachment source, {
+    String caption = '',
+    String? albumId,
+    VoiceMessageMetadata? voiceMetadata,
+    String? messageId,
+  }) async {
+    final me = _requireIdentity();
+    if (source.sizeBytes <= 0) {
+      throw ArgumentError('Cannot save an empty file.');
+    }
+    final attachmentId = _randomId('att');
+    final prepared = await _prepareOutboundAttachmentSource(
+      attachmentId: attachmentId,
+      source: source,
+      allowOriginalFallback: false,
+    );
+    final createdAt = _now().toUtc();
+    final descriptor = AttachmentDescriptor(
+      id: attachmentId,
+      fileName: sanitizeAttachmentFileName(source.fileName),
+      mimeType: sanitizeAttachmentMimeType(source.mimeType),
+      sizeBytes: prepared.sizeBytes,
+      chunkSize: _lanAttachmentChunkSize,
+      chunkHashes: const <ChunkHash>[],
+      chunkCount:
+          (prepared.sizeBytes + _lanAttachmentChunkSize - 1) ~/
+          _lanAttachmentChunkSize,
+      fileHashBase64: prepared.fileHashBase64,
+      encryptionKeyBase64: base64Encode(
+        await SecretKeyData.random(length: 32).extractBytes(),
+      ),
+      protocolVersion: 2,
+      noncePrefixBase64: base64Encode(
+        List<int>.generate(16, (_) => Random.secure().nextInt(256)),
+      ),
+      presentation: source.presentation,
+      thumbnailBase64:
+          source.poster != null && source.poster!.length <= 32 * 1024
+          ? base64Encode(source.poster!)
+          : null,
+      voiceMetadata: voiceMetadata,
+      createdAt: createdAt,
+    );
+    _upsertMessage(
+      me.deviceId,
+      ChatMessage(
+        id: messageId ?? _randomId('msg'),
+        conversationId: _crypto.conversationIdFor(me.deviceId),
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: me.deviceId,
+        body: caption.length <= 4096 ? caption : caption.substring(0, 4096),
+        outbound: true,
+        state: DeliveryState.delivered,
+        createdAt: createdAt,
+        attachment: descriptor,
+        albumId: albumId,
+      ),
+    );
+    // The cache is named by content, so a file saved twice is stored once.
+    final cache = await _attachmentCacheFile(attachmentId);
+    final spooled = File(prepared.path);
+    if (await cache.exists()) {
+      if (prepared.sourceKind == TransferSourceKind.privateSpool) {
+        await spooled.delete().catchError((Object _) => spooled);
+      }
+    } else if (prepared.sourceKind == TransferSourceKind.privateSpool) {
+      await spooled.rename(cache.path);
+    } else {
+      await spooled.copy(cache.path);
+    }
+    _locallyAvailableAttachments.add(attachmentId);
+    if (prepared.sizeBytes <= 8 * 1024 * 1024) {
+      _assembledAttachments[attachmentId] = await cache.readAsBytes();
+    }
+    if (source.poster case final poster? when poster.isNotEmpty) {
+      _videoPosters[attachmentId] = poster;
+    }
+    _recordAttachmentCacheReference(attachmentId, keepOffline: true);
+    await _persist('Saved.');
+  }
+
   Future<void> sendMessage({
     required ContactRecord contact,
     required String body,
@@ -8324,6 +8461,10 @@ class MessengerController extends ChangeNotifier {
     final me = _requireIdentity();
     final trimmed = body.trim();
     if (trimmed.isEmpty) {
+      return;
+    }
+    if (contact.deviceId == me.deviceId) {
+      await _saveText(trimmed, replyTo: replyTo, messageId: outgoingMessageId);
       return;
     }
     if (!contact.canComposeOutbound) {
@@ -8431,6 +8572,8 @@ class MessengerController extends ChangeNotifier {
   /// contact or because no relay/direct-internet route is healthy), the
   /// LAN-unlimited cap applies. Otherwise the standard 30 MB cap holds.
   int effectiveMaxAttachmentSizeFor(ContactRecord contact) {
+    // Saved messages stay on this device: only storage limits them.
+    if (contact.deviceId == identity?.deviceId) return 1 << 40;
     final effective = _effectiveTransports(contact);
     final policies = _effectiveTransportPolicies(contact);
     final irohAllowed =
@@ -8625,6 +8768,16 @@ class MessengerController extends ChangeNotifier {
     String? outgoingMessageId,
   }) async {
     final me = _requireIdentity();
+    if (contact.deviceId == me.deviceId) {
+      await _saveAttachment(
+        source,
+        caption: caption,
+        albumId: albumId,
+        voiceMetadata: voiceMetadata,
+        messageId: outgoingMessageId,
+      );
+      return;
+    }
     if (!contact.canComposeOutbound) {
       throw StateError(
         'Cannot stage an attachment for ${contact.alias} while blocked.',
@@ -9867,6 +10020,8 @@ class MessengerController extends ChangeNotifier {
     final seen = <String>{};
     final snapshots = <TransferSnapshot>[];
     for (final conversation in _snapshot.conversations) {
+      // Saved messages never travel.
+      if (isSavedMessages(conversation.peerDeviceId)) continue;
       for (final message in conversation.messages.reversed) {
         final id = message.attachment?.id;
         if (id == null || _dismissedTransferIds.contains(id) || !seen.add(id)) {
@@ -12372,6 +12527,7 @@ class MessengerController extends ChangeNotifier {
     _clearOutboundAttempt(contact.deviceId, messageId);
     _deleteMessage(contact.deviceId, messageId);
     await _persist('Message deleted locally.');
+    if (contact.deviceId == identity?.deviceId) return;
 
     // nightly.12: send attachment_cancel whenever the deleted message
     // carries an attachment, regardless of direction. Pre-nightly.12
@@ -12421,7 +12577,8 @@ class MessengerController extends ChangeNotifier {
     );
     await _persist('Message edited locally.');
 
-    if (message.state == DeliveryState.pending) {
+    if (message.state == DeliveryState.pending ||
+        contact.deviceId == identity?.deviceId) {
       return;
     }
     final payload = jsonEncode({
@@ -12488,6 +12645,7 @@ class MessengerController extends ChangeNotifier {
       reactionClocks: reactionClocks,
     );
     await _persist('Reaction updated locally.');
+    if (contact.deviceId == me.deviceId) return;
 
     final payload = jsonEncode({
       'targetMessageId': messageId,

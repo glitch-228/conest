@@ -2121,6 +2121,132 @@ void main() {
     );
   });
 
+  test('saved messages stay on this device and survive a restart', () async {
+    final relay = _FakeRelayClient();
+    final vault = _MemoryVaultStore();
+    final root = Directory.systemTemp.createTempSync('conest_saved_');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      vaultStore: vault,
+      attachmentRootProvider: () async => root,
+    );
+    final saved = alice.savedMessagesContact!;
+    final me = alice.identity!.deviceId;
+    expect(alice.isSavedMessages(saved.deviceId), isTrue);
+    expect(alice.contacts, isEmpty);
+
+    await alice.sendMessage(contact: saved, body: 'note to self');
+    await alice.sendAttachment(
+      contact: saved,
+      bytes: Uint8List.fromList(List<int>.generate(5000, (i) => i % 251)),
+      fileName: 'ticket.pdf',
+      mimeType: 'application/pdf',
+      caption: 'boarding pass',
+    );
+    final file = alice
+        .messagesFor(me)
+        .singleWhere((m) => m.hasAttachment)
+        .attachment!;
+    expect(alice.messagesFor(me).map((m) => m.state).toSet(), {
+      DeliveryState.delivered,
+    });
+    expect(alice.attachmentAvailableLocally(file.id), isTrue);
+    final text = alice
+        .messagesFor(me)
+        .singleWhere((m) => m.body == 'note to self');
+    await alice.editMessage(contact: saved, messageId: text.id, body: 'edited');
+    await alice.toggleMessageReaction(
+      contact: saved,
+      messageId: text.id,
+      emoji: '⭐',
+    );
+    // Nothing leaves the device.
+    expect(relay.storeAttempts, isEmpty);
+    expect(alice.transferSnapshots, isEmpty);
+
+    alice.dispose();
+    final restarted = await _createController(
+      relayClient: relay,
+      displayName: 'unused',
+      createIdentity: false,
+      vaultStore: vault,
+      attachmentRootProvider: () async => root,
+    );
+    addTearDown(restarted.dispose);
+    final kept = restarted.messagesFor(me);
+    expect(kept.map((m) => m.body), containsAll(['edited', 'boarding pass']));
+    expect(kept.singleWhere((m) => m.body == 'edited').reactions.keys, ['⭐']);
+    expect(restarted.attachmentAvailableLocally(file.id), isTrue);
+    // Loaded from disk on first use.
+    restarted.attachmentBytesFor(file.id);
+    for (
+      var i = 0;
+      i < 50 && restarted.attachmentBytesFor(file.id) == null;
+      i++
+    ) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(
+      restarted.attachmentBytesFor(file.id),
+      List<int>.generate(5000, (i) => i % 251),
+    );
+    await restarted.deleteMessage(
+      contact: restarted.savedMessagesContact!,
+      messageId: text.id,
+    );
+    expect(restarted.messagesFor(me).map((m) => m.body), ['boarding pass']);
+    expect(relay.storeAttempts, isEmpty);
+  });
+
+  testWidgets('Saved messages is pinned and opens as a chat with yourself', (
+    tester,
+  ) async {
+    late MessengerController alice;
+    await tester.runAsync(() async {
+      alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+      );
+      await alice.sendMessage(
+        contact: alice.savedMessagesContact!,
+        body: 'buy oat milk',
+      );
+    });
+    addTearDown(alice.dispose);
+    final updates = _createUpdateService();
+    final theme = app.ConestThemeController.memory();
+    addTearDown(updates.dispose);
+    addTearDown(theme.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ListenableBuilder(
+          listenable: alice,
+          builder: (context, _) => app.HomeScreen(
+            controller: alice,
+            updateService: updates,
+            buildInfo: _createBuildInfo(),
+            themeController: theme,
+            palette: app.ConestPalette(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const ValueKey('saved-messages-row')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('saved-messages-row')));
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.text('buy oat milk'), findsWidgets);
+    // A chat with yourself: no routes, reachability or route inspector.
+    expect(
+      find.textContaining(RegExp('only on this device', caseSensitive: false)),
+      findsOneWidget,
+    );
+    expect(find.byTooltip('Route inspector'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   group('contact recovery', () {
     late _FakeRelayClient relay;
     late MessengerController alice;

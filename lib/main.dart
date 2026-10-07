@@ -1249,7 +1249,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               ),
                               const SizedBox(height: 6),
                               Text(
-                                '◢ SECURE TEXT EXCHANGE',
+                                '◢ SERVERLESS SECURE MESSENGER',
                                 style: TextStyle(
                                   fontFamily: ConestPalette.monoFont,
                                   fontSize: 11,
@@ -1259,7 +1259,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               ),
                               const SizedBox(height: 16),
                               Text(
-                                'Pair by scanning a QR invite or by sharing only the current codephrase, deliver over LAN first, and continue over the internet through relay routes when LAN disappears.',
+                                'Reach contacts directly over your network or the internet, end-to-end encrypted with forward secrecy. When the usual routes are blocked, Conest falls back to relays, Matrix, Nostr, email, Tor, LoRa radios or a Bluetooth mesh of nearby phones.',
                                 style: Theme.of(context).textTheme.titleMedium
                                     ?.copyWith(
                                       color: palette.inkSoft,
@@ -1270,10 +1270,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               _FeatureStrip(
                                 palette: palette,
                                 items: const [
-                                  'QR scan alone',
-                                  'Codephrase-only add',
-                                  'LAN-first delivery',
-                                  'Internet relay fallback',
+                                  'Forward-secret chats',
+                                  'Direct over LAN and internet',
+                                  'Tor, mesh and radio fallbacks',
+                                  'Also a Matrix client',
                                 ],
                               ),
                               const SizedBox(height: 18),
@@ -1311,7 +1311,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                   ),
                                   const SizedBox(height: 8),
                                   Text(
-                                    'The local relay port is used for nearby LAN delivery, codephrase pairing, and desktop relay mode. The internet relay is optional but needed once peers leave the LAN.',
+                                    'Only a display name is needed. The local port is for nearby (LAN) delivery and codephrase pairing. An internet relay is optional: contacts are reached over the internet without one. Turn on more routes later under Settings → Connectivity.',
                                     style: Theme.of(context)
                                         .textTheme
                                         .bodyMedium
@@ -1379,6 +1379,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                       label: const Text(
                                         'Use as a Matrix client instead',
                                       ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'Matrix chats only, with no Conest identity. You can '
+                                      'switch to Both (Conest and Matrix side by side) '
+                                      'later under Settings → Connectivity → App mode.',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(color: palette.inkSoft),
                                     ),
                                   ],
                                   if (widget.controller.statusMessage !=
@@ -1688,6 +1698,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final current = _selectedContactId;
     if (current == null) {
       return null;
+    }
+    if (widget.controller.isSavedMessages(current)) {
+      return widget.controller.savedMessagesContact;
     }
     for (final contact in widget.controller.contacts) {
       if (contact.deviceId == current) {
@@ -4297,7 +4310,17 @@ class _CourierHomeState extends State<_CourierHome> {
       return bt.compareTo(at);
     });
 
+    final saved = widget.controller.savedMessagesContact;
     _navigation = [
+      if (!_showArchived &&
+          showConest &&
+          saved != null &&
+          'saved messages'.contains(query))
+        (
+          id: 'saved',
+          selected: widget.selectedContactId == saved.deviceId,
+          open: () => widget.onContactSelected(saved),
+        ),
       if (!_showArchived && showConest && 'lan lobby'.contains(query))
         (
           id: 'lobby',
@@ -4483,6 +4506,15 @@ class _CourierHomeState extends State<_CourierHome> {
                     title: const Text('Archived chats'),
                     trailing: Text('$archivedCount'),
                     onTap: () => setState(() => _showArchived = true),
+                  ),
+                if (!_showArchived &&
+                    showConest &&
+                    'saved messages'.contains(query))
+                  _savedMessagesRow(
+                    widget.controller,
+                    widget.palette,
+                    selectedContactId: widget.selectedContactId,
+                    onSelected: widget.onContactSelected,
                   ),
                 if (!_showArchived && showConest && 'lan lobby'.contains(query))
                   _CourierRow(
@@ -4684,6 +4716,30 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
 
 /// One Telegram-style row in the [_CourierHome] list.
 enum _ChatSource { all, conest, matrix }
+
+/// The Saved messages entry pinned above every chat list; it opens like a
+/// contact (this device itself).
+Widget _savedMessagesRow(
+  MessengerController controller,
+  ConestPalette palette, {
+  required String? selectedContactId,
+  required ValueChanged<ContactRecord> onSelected,
+}) {
+  final saved = controller.savedMessagesContact;
+  if (saved == null) return const SizedBox.shrink();
+  final last = controller.messagesFor(saved.deviceId).lastOrNull;
+  return _CourierRow(
+    key: const ValueKey('saved-messages-row'),
+    palette: palette,
+    icon: Icons.bookmark_outline,
+    title: 'Saved messages',
+    preview: last?.bodyPreview ?? 'Notes, files and forwards for yourself',
+    unread: 0,
+    pinned: true,
+    selected: selectedContactId == saved.deviceId,
+    onTap: () => onSelected(saved),
+  );
+}
 
 class _CourierRow extends StatelessWidget {
   const _CourierRow({
@@ -5154,6 +5210,12 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
           child: ListView(
             padding: const EdgeInsets.only(bottom: 12),
             children: [
+              _savedMessagesRow(
+                controller,
+                palette,
+                selectedContactId: widget.selectedContactId,
+                onSelected: widget.onContactSelected,
+              ),
               _CourierRow(
                 palette: palette,
                 icon: Icons.forum_outlined,
@@ -5697,6 +5759,15 @@ class _Sidebar extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
+        if (controller.savedMessagesContact != null) ...[
+          _savedMessagesRow(
+            controller,
+            palette,
+            selectedContactId: selectedContactId,
+            onSelected: onContactSelected,
+          ),
+          const SizedBox(height: 8),
+        ],
         InkWell(
           borderRadius: BorderRadius.circular(18),
           onTap: onLanLobbySelected,
@@ -6824,6 +6895,14 @@ Future<void> _forwardTextMessage(
                   Expanded(
                     child: ListView(
                       children: [
+                        if (controller.savedMessagesContact case final saved?
+                            when 'saved messages'.contains(query))
+                          ListTile(
+                            key: const ValueKey('forward-to-saved'),
+                            leading: const Icon(Icons.bookmark_outline),
+                            title: const Text('Saved messages'),
+                            onTap: () => Navigator.pop(context, saved),
+                          ),
                         if (contacts.isEmpty && groups.isEmpty)
                           const ListTile(title: Text('No available chats')),
                         for (final contact in contacts)
@@ -6943,6 +7022,14 @@ Future<void> _forwardAttachment(
                   Expanded(
                     child: ListView(
                       children: [
+                        if (controller.savedMessagesContact case final saved?
+                            when 'saved messages'.contains(query))
+                          ListTile(
+                            key: const ValueKey('forward-to-saved'),
+                            leading: const Icon(Icons.bookmark_outline),
+                            title: const Text('Saved messages'),
+                            onTap: () => Navigator.pop(context, saved),
+                          ),
                         if (contacts.isEmpty && groups.isEmpty)
                           const ListTile(title: Text('No available chats')),
                         for (final contact in contacts)
@@ -10665,6 +10752,8 @@ class _ChatPanelState extends State<_ChatPanel> {
     }
     _scheduleInitialPosition();
     _scheduleReadSweep();
+    // Saved messages: no routes, calls or profile.
+    final saved = controller.isSavedMessages(contact.deviceId);
     final reachabilityState = controller.reachabilityStateFor(contact.deviceId);
     final activeReplyTarget =
         widget.replyTarget != null &&
@@ -10693,15 +10782,22 @@ class _ChatPanelState extends State<_ChatPanel> {
                 onSearch: _searchMessages,
                 palette: palette,
                 title: contact.alias,
-                subtitle: reachabilityState.label,
+                subtitle: saved
+                    ? 'Only on this device'
+                    : reachabilityState.label,
                 seed: contact.deviceId,
                 onBack: widget.onBack,
-                onDetails: widget.onShowProfile,
-                onConnectionDetails: () =>
-                    setState(() => _routeInspectorOpen = !_routeInspectorOpen),
+                onDetails: saved ? () {} : widget.onShowProfile,
+                onConnectionDetails: saved
+                    ? null
+                    : () => setState(
+                        () => _routeInspectorOpen = !_routeInspectorOpen,
+                      ),
                 // Builds without native call media hide the action rather
                 // than offering a button that can only fail.
-                onCall: controller.voiceCallService?.media.available != true
+                onCall:
+                    saved ||
+                        controller.voiceCallService?.media.available != true
                     ? null
                     : () {
                   if (controller.identity?.experimentalVoiceCallsEnabled !=
@@ -10755,7 +10851,9 @@ class _ChatPanelState extends State<_ChatPanel> {
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                '${contact.routeSummary} • safety ${contact.shortSafetyNumber}',
+                                saved
+                                    ? 'Notes, files and forwards, only on this device'
+                                    : '${contact.routeSummary} • safety ${contact.shortSafetyNumber}',
                                 maxLines: compactHeader ? 3 : 2,
                                 overflow: TextOverflow.ellipsis,
                                 style: Theme.of(context).textTheme.bodySmall
@@ -10770,6 +10868,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                       ],
                     );
                     final controls = <Widget>[
+                      if (!saved) ...[
                       _ReachabilityChip(
                         state: reachabilityState,
                         palette: palette,
@@ -10793,6 +10892,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                         icon: const Icon(Icons.badge_outlined),
                         tooltip: 'Contact profile',
                       ),
+                      ],
                     ];
                     if (!compactHeader) {
                       return Row(
@@ -10803,10 +10903,13 @@ class _ChatPanelState extends State<_ChatPanel> {
                               icon: const Icon(Icons.arrow_back),
                             ),
                           Expanded(child: title),
-                          const SizedBox(width: 12),
+                          if (controls.isNotEmpty) const SizedBox(width: 12),
                           ...controls.expand(
                             (control) => [control, const SizedBox(width: 8)],
                           ),
+                          // Something for removeLast to drop when there
+                          // are no controls (Saved messages).
+                          if (controls.isEmpty) const SizedBox.shrink(),
                         ]..removeLast(),
                       );
                     }
