@@ -65,6 +65,33 @@ class GroupFileDownload {
     return result.whenComplete(() => _running = null);
   }
 
+  /// Reads back the pieces already verified on disk, without asking anyone:
+  /// a file this device has whole (its own, or one finished before a
+  /// restart) completes here. Returns whether it is complete.
+  Future<bool> recoverLocal() async {
+    if (_running != null) return state == GroupFileDownloadState.complete;
+    try {
+      if (!_recovered) {
+        scheduler.restoreVerified(await store.recover());
+        _recovered = true;
+      }
+      if (scheduler.complete && state != GroupFileDownloadState.complete) {
+        completedFile = await store.assemble();
+        state = GroupFileDownloadState.complete;
+        lastError = null;
+        onChanged?.call();
+      } else if (state == GroupFileDownloadState.checking) {
+        state = GroupFileDownloadState.waiting;
+        onChanged?.call();
+      }
+    } catch (error) {
+      lastError = error;
+      state = GroupFileDownloadState.failed;
+      onChanged?.call();
+    }
+    return state == GroupFileDownloadState.complete;
+  }
+
   /// Stop current requests and remove this device's verified cache. The
   /// conversation metadata is deliberately preserved by the caller.
   Future<void> evict() async {

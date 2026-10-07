@@ -36,6 +36,7 @@ import 'src/lan_direct.dart';
 import 'src/iroh_ffi_bridge.dart';
 import 'src/iroh_transport.dart';
 import 'src/media_picker_sheet.dart';
+import 'src/network_errors.dart';
 import 'src/messenger_controller.dart';
 import 'src/models.dart';
 import 'src/platform_bridge.dart';
@@ -6978,6 +6979,59 @@ Future<void> _forwardAttachment(
     controller.setStatus('This attachment is not available locally yet.');
     return;
   }
+  await _forwardFile(
+    context,
+    controller,
+    palette,
+    path: path,
+    fileName: descriptor.fileName,
+    mimeType: descriptor.mimeType,
+    sizeBytes: descriptor.sizeBytes,
+    presentation: descriptor.presentation,
+  );
+}
+
+/// Forwards a group file this device holds to a chat, a group or Saved
+/// messages.
+Future<void> _forwardGroupFile(
+  BuildContext context,
+  MessengerController controller,
+  ConestPalette palette,
+  ChatMessage message,
+) async {
+  final manifest = message.groupFile;
+  final path = controller.groupFilePathFor(message.id);
+  if (manifest == null) return;
+  if (path == null) {
+    controller.setStatus('Download this file before forwarding it.');
+    return;
+  }
+  await _forwardFile(
+    context,
+    controller,
+    palette,
+    path: path,
+    fileName: manifest.fileName,
+    mimeType: manifest.mimeType,
+    sizeBytes: manifest.sizeBytes,
+    presentation:
+        manifest.mimeType.startsWith('image/') ||
+            manifest.mimeType.startsWith('video/')
+        ? AttachmentPresentation.media
+        : AttachmentPresentation.file,
+  );
+}
+
+Future<void> _forwardFile(
+  BuildContext context,
+  MessengerController controller,
+  ConestPalette palette, {
+  required String path,
+  required String fileName,
+  required String mimeType,
+  required int sizeBytes,
+  required AttachmentPresentation presentation,
+}) async {
   final search = TextEditingController();
   Object? destination;
   try {
@@ -7003,11 +7057,7 @@ Future<void> _forwardAttachment(
               height: 400,
               child: Column(
                 children: [
-                  Text(
-                    descriptor.fileName,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  Text(fileName, maxLines: 2, overflow: TextOverflow.ellipsis),
                   const SizedBox(height: 16),
                   TextField(
                     controller: search,
@@ -7076,19 +7126,19 @@ Future<void> _forwardAttachment(
           contact: contact,
           source: StagedAttachment(
             id: 'forward-${DateTime.now().microsecondsSinceEpoch}',
-            fileName: descriptor.fileName,
-            mimeType: descriptor.mimeType,
-            sizeBytes: descriptor.sizeBytes,
+            fileName: fileName,
+            mimeType: mimeType,
+            sizeBytes: sizeBytes,
             filePath: path,
-            presentation: descriptor.presentation,
+            presentation: presentation,
           ),
         );
       case GroupRecord group:
         await controller.publishGroupFile(
           groupId: group.groupId,
           path: path,
-          fileName: descriptor.fileName,
-          mimeType: descriptor.mimeType,
+          fileName: fileName,
+          mimeType: mimeType,
         );
     }
     if (context.mounted) {
@@ -8564,9 +8614,15 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           ),
                           state: controller.groupFileDownloadState(message.id),
                           onOpen: () => unawaited(_openGroupFile(message)),
-                          error: controller
-                              .groupFileError(message.id)
-                              ?.toString(),
+                          previewPath: file.mimeType.startsWith('image/')
+                              ? controller.groupFilePathFor(message.id)
+                              : null,
+                          error: switch (controller.groupFileError(
+                            message.id,
+                          )) {
+                            final Object error => describeActionError(error),
+                            null => null,
+                          },
                           onDownload: () => unawaited(
                             controller
                                 .downloadGroupFile(group.groupId, message.id)
@@ -8727,7 +8783,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       ),
                     ),
                   ],
-                  if (!outbound && message.effectiveRoute != null) ...[
+                  if (message.effectiveRoute != null) ...[
                     const SizedBox(width: 8),
                     _MessageRouteChip(
                       message: message,
@@ -8824,6 +8880,13 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       } else if (value == 'forward_attachment' &&
                           attachmentRow != null) {
                         await attachmentRow.onForward?.call();
+                      } else if (value == 'forward_group_file') {
+                        await _forwardGroupFile(
+                          context,
+                          controller,
+                          palette,
+                          message,
+                        );
                       } else if (value == 'edit' || value == 'delete') {
                         await _changeGroupMessage(
                           message,
@@ -8908,6 +8971,12 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         const PopupMenuItem(
                           value: 'forward_attachment',
                           child: Text('Forward attachment'),
+                        ),
+                      if (message.groupFile != null &&
+                          controller.groupFilePathFor(message.id) != null)
+                        const PopupMenuItem(
+                          value: 'forward_group_file',
+                          child: Text('Forward file'),
                         ),
                       if (!message.hasAttachment &&
                           message.groupFile == null &&

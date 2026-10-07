@@ -2520,6 +2520,57 @@ void main() {
       },
     );
 
+    test(
+      'a contact who removes you stays reachable in a shared group',
+      () async {
+        await _pairControllers(alice, bob);
+        final group = await alice.createGroup(
+          title: 'Team',
+          members: [contactOf(alice, bob)!],
+        );
+        await until(() => bob.groups.isNotEmpty);
+        await bob.removeContact(id(alice));
+        await until(() => contactOf(alice, bob)?.remoteRemovedAt != null);
+        expect(contactOf(alice, bob)!.remoteRemovedAt, isNotNull);
+
+        await alice.sendGroupMessage(
+          groupId: group.groupId,
+          body: 'still here?',
+        );
+        await until(
+          () => bob
+              .messagesForGroup(group.groupId)
+              .any((m) => m.body == 'still here?'),
+        );
+        expect(
+          bob.messagesForGroup(group.groupId).map((m) => m.body),
+          contains('still here?'),
+        );
+        // Our own group message shows how it went, as in a direct chat.
+        expect(
+          alice
+              .messagesForGroup(group.groupId)
+              .singleWhere((m) => m.body == 'still here?')
+              .route,
+          isNotNull,
+        );
+        await bob.sendGroupMessage(groupId: group.groupId, body: 'yes');
+        await until(
+          () =>
+              alice.messagesForGroup(group.groupId).any((m) => m.body == 'yes'),
+        );
+        expect(
+          alice.messagesForGroup(group.groupId).map((m) => m.body),
+          contains('yes'),
+        );
+        // Their group traffic is no reason to repeat the removal notice.
+        final removals = relay.storedEnvelopes
+            .where((e) => e.kind == 'contact_remove')
+            .length;
+        expect(removals, 1);
+      },
+    );
+
     test('the removed side can add the contact again', () async {
       await _pairControllers(alice, bob);
       await alice.removeContact(id(bob));
@@ -4663,6 +4714,102 @@ void main() {
       );
     }
   }
+
+  test(
+    'group files get receipts and stay finished with nobody reachable',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final bobVault = _MemoryVaultStore();
+      final aliceRoot = await Directory.systemTemp.createTemp('conest_gf_a-');
+      final bobRoot = await Directory.systemTemp.createTemp('conest_gf_b-');
+      addTearDown(() async {
+        if (await aliceRoot.exists()) await aliceRoot.delete(recursive: true);
+        if (await bobRoot.exists()) await bobRoot.delete(recursive: true);
+      });
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        internetRelayHost: null,
+        transportRegistryFactory: network.registry,
+        attachmentRootProvider: () async => aliceRoot,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        internetRelayHost: null,
+        vaultStore: bobVault,
+        transportRegistryFactory: network.registry,
+        attachmentRootProvider: () async => bobRoot,
+      );
+      var aliceDisposed = false;
+      var bobDisposed = false;
+      addTearDown(() {
+        if (!aliceDisposed) alice.dispose();
+        if (!bobDisposed) bob.dispose();
+      });
+      await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Receipts',
+        members: [alice.contacts.single],
+      );
+      await _waitForIroh(() => bob.groups.isNotEmpty);
+      final source = await File(
+        '${aliceRoot.path}/photo.bin',
+      ).writeAsBytes([4, 8, 15, 16, 23, 42]);
+      await alice.publishGroupFile(
+        groupId: group.groupId,
+        path: source.path,
+        fileName: 'photo.bin',
+        mimeType: 'application/octet-stream',
+      );
+      final eventId = alice
+          .messagesForGroup(group.groupId)
+          .singleWhere((message) => message.groupFile != null)
+          .id;
+      final bobId = bob.identity!.deviceId;
+      ChatMessage aliceCopy() => alice
+          .messagesForGroup(group.groupId)
+          .singleWhere((message) => message.id == eventId);
+      // Sent, not "waiting for a reachable path".
+      expect(aliceCopy().state, isNot(DeliveryState.pending));
+      await _waitForIroh(
+        () =>
+            bob.groupFileSession(eventId)?.download.state ==
+            GroupFileDownloadState.complete,
+      );
+      await _waitForIroh(
+        () => aliceCopy().recipientStates[bobId] == DeliveryState.delivered,
+        reason: 'Bob tells Alice he has the file',
+      );
+      expect(aliceCopy().state, DeliveryState.delivered);
+
+      // Nobody else is reachable when Bob starts again.
+      alice.dispose();
+      aliceDisposed = true;
+      bob.dispose();
+      bobDisposed = true;
+      final resumed = await _createController(
+        relayClient: relay,
+        displayName: 'unused',
+        createIdentity: false,
+        vaultStore: bobVault,
+        internetRelayHost: null,
+        transportRegistryFactory: network.registry,
+        attachmentRootProvider: () async => bobRoot,
+      );
+      addTearDown(resumed.dispose);
+      await _waitForIroh(
+        () =>
+            resumed.groupFileSession(eventId)?.download.state ==
+            GroupFileDownloadState.complete,
+        reason: 'a file held whole needs no provider',
+      );
+    },
+    timeout: const Timeout(Duration(seconds: 45)),
+  );
 
   test(
     'retained group file sessions restore providers after a vault restart',
@@ -12854,6 +13001,67 @@ void main() {
       },
     );
 
+    test(
+      'group members who are not contacts reach each other over carriers',
+      () async {
+        final network = _FakeCarrierNetwork();
+        final relay = _FakeRelayClient();
+        final people = <MessengerController>[];
+        for (final name in ['Alice', 'Bob', 'Carol']) {
+          final person = await _createController(
+            relayClient: relay,
+            displayName: name,
+          );
+          addTearDown(person.dispose);
+          people.add(person);
+        }
+        final [alice, bob, carol] = people;
+        await network.join(alice, 'npub-alice|wss://relay.one');
+        await network.join(bob, 'npub-bob|wss://relay.two');
+        await network.join(carol, 'npub-carol|wss://relay.three');
+        await _pairControllers(alice, bob);
+        await _pairControllers(alice, carol);
+        await settle(people);
+        final group = await alice.createGroup(
+          title: 'Three',
+          members: alice.contacts,
+        );
+        await settle(people);
+        expect(
+          bob.contacts.map((c) => c.deviceId),
+          isNot(contains(carol.identity!.deviceId)),
+        );
+        final carolProfile = bob.groups.single.memberProfileFor(
+          carol.identity!.deviceId,
+        )!;
+        expect(
+          carolProfile.carrierAddresses[TransportKind.nostr],
+          'npub-carol|wss://relay.three',
+        );
+        // Bob and Carol cannot use relays between them.
+        final bobId = bob.identity!.deviceId;
+        final carolId = carol.identity!.deviceId;
+        relay.shouldFailStore = (_, _, _, recipient, envelope) =>
+            (envelope.senderDeviceId == carolId && recipient == bobId) ||
+            (envelope.senderDeviceId == bobId && recipient == carolId);
+        await carol.sendGroupMessage(groupId: group.groupId, body: 'hi Bob');
+        for (
+          var round = 0;
+          round < 20 &&
+              !bob
+                  .messagesForGroup(group.groupId)
+                  .any((m) => m.body == 'hi Bob');
+          round++
+        ) {
+          await settle(people);
+        }
+        final got = bob
+            .messagesForGroup(group.groupId)
+            .singleWhere((m) => m.body == 'hi Bob');
+        expect(got.route, MessageRoute.nostrCarrier);
+      },
+    );
+
     test('a mutual add works over a carrier alone', () async {
       final network = _FakeCarrierNetwork();
       final relay = _FakeRelayClient();
@@ -14442,6 +14650,42 @@ void main() {
       expect(copies.last.messageId, id);
       expect(copies.last.protocolVersion, 2);
     });
+
+    test(
+      'a late copy of a group update is acknowledged, not decrypted',
+      () async {
+        final relay = _FakeRelayClient();
+        final bobVault = _MemoryVaultStore();
+        final alice = await ratchetController(relay, 'Alice');
+        final bob = await ratchetController(relay, 'Bob', vaultStore: bobVault);
+        addTearDown(alice.dispose);
+        await establish(alice, bob);
+        await alice.createGroup(title: 'FS', members: alice.contacts);
+        await settle([alice, bob]);
+        final update = relay.storedEnvelopes.lastWhere(
+          (envelope) =>
+              envelope.kind == 'group_membership' &&
+              envelope.recipientDeviceId == bob.identity!.deviceId,
+        );
+        bob.dispose();
+        final restarted = await ratchetController(
+          relay,
+          'Bob',
+          vaultStore: bobVault,
+          createIdentity: false,
+        );
+        addTearDown(restarted.dispose);
+        final before = relay.storedEnvelopes.length;
+        await restarted.processEnvelopesForTesting([update]);
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        final sent = relay.storedEnvelopes
+            .skip(before)
+            .map((envelope) => envelope.kind)
+            .toList();
+        expect(sent, contains('group_membership_ack'));
+        expect(sent, isNot(contains('ratchet_bundle')));
+      },
+    );
 
     test('retries send the same encrypted copy', () async {
       final copies = <RelayEnvelope>[];

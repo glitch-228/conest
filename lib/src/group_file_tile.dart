@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import 'group_file_download.dart';
@@ -21,6 +23,7 @@ class GroupFileTile extends StatelessWidget {
     this.onOpen,
     this.playbackControls,
     this.error,
+    this.previewPath,
   });
 
   final String filename;
@@ -38,6 +41,9 @@ class GroupFileTile extends StatelessWidget {
   final VoidCallback? onOpen;
   final Widget? playbackControls;
   final String? error;
+
+  /// A downloaded image shown above the file name.
+  final String? previewPath;
 
   @override
   Widget build(BuildContext context) {
@@ -62,6 +68,26 @@ class GroupFileTile extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (complete && previewPath != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: GestureDetector(
+              onTap: onOpen,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 260),
+                  child: Image.file(
+                    File(previewPath!),
+                    fit: BoxFit.cover,
+                    cacheWidth: 720,
+                    errorBuilder: (context, error, stackTrace) =>
+                        const SizedBox.shrink(),
+                  ),
+                ),
+              ),
+            ),
+          ),
         Text(filename, style: Theme.of(context).textTheme.titleSmall),
         Text(_bytes(total)),
         Text(status),

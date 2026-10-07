@@ -2783,6 +2783,7 @@ class GroupMemberProfile {
     this.capabilities = const <TransportKind>[],
     this.featureCapabilities = const <ApplicationCapability>[],
     this.featureCapabilityVersion = 0,
+    this.carrierAddresses = const <TransportKind, String>{},
   }) : routeHints = prunePeerEndpointsByKind(routeHints);
 
   final String accountId;
@@ -2798,6 +2799,11 @@ class GroupMemberProfile {
   final List<ApplicationCapability> featureCapabilities;
   final int featureCapabilityVersion;
 
+  /// The member's carrier addresses (Nostr, email, Matrix, Tor, radios), so
+  /// members who are not each other's contacts can still reach each other
+  /// there. Empty from older clients: unknown, not withdrawn.
+  final Map<TransportKind, String> carrierAddresses;
+
   GroupMemberProfile copyWith({
     String? displayName,
     String? bio,
@@ -2808,6 +2814,7 @@ class GroupMemberProfile {
     List<TransportKind>? capabilities,
     List<ApplicationCapability>? featureCapabilities,
     int? featureCapabilityVersion,
+    Map<TransportKind, String>? carrierAddresses,
   }) {
     return GroupMemberProfile(
       accountId: accountId,
@@ -2824,12 +2831,18 @@ class GroupMemberProfile {
       featureCapabilities: featureCapabilities ?? this.featureCapabilities,
       featureCapabilityVersion:
           featureCapabilityVersion ?? this.featureCapabilityVersion,
+      carrierAddresses: carrierAddresses ?? this.carrierAddresses,
     );
   }
 
   Map<String, dynamic> toJson() {
     return {
       'profileVersion': 3,
+      if (carrierAddresses.isNotEmpty)
+        'carrierAddresses': {
+          for (final MapEntry(:key, :value) in carrierAddresses.entries)
+            key.name: value,
+        },
       if (signingPublicKeyBase64 != null)
         'signingPublicKeyBase64': signingPublicKeyBase64,
       if (irohEndpointId != null) 'irohEndpointId': irohEndpointId,
@@ -2872,6 +2885,19 @@ class GroupMemberProfile {
         json['routeHints'] as List<dynamic>? ?? const [],
         expandMissingProtocol: true,
       ),
+      carrierAddresses: {
+        if (json['carrierAddresses'] case final Map<String, dynamic> map)
+          for (final MapEntry(:key, :value) in map.entries.take(16))
+            if (TransportKind.values
+                    .where((kind) => kind.name == key)
+                    .firstOrNull
+                case final kind?
+                when kind.isCarrier &&
+                    value is String &&
+                    value.isNotEmpty &&
+                    value.length <= 4096)
+              kind: value,
+      },
     );
   }
 }
