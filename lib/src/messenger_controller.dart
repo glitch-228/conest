@@ -4556,6 +4556,28 @@ class MessengerController extends ChangeNotifier {
     final label = kind.label;
     final contact = _contactByDeviceId(inbound.senderTransportIdentity);
     final global = _snapshot.identity?.connectivity;
+    if (contact == null && global != null && _carrierAllowed(kind)) {
+      // Someone not yet a contact asking to be added; only requests that
+      // passed _openFirstContactFrame get here.
+      try {
+        final decoded = jsonDecode(utf8.decode(inbound.bytes));
+        if (decoded is! Map<String, dynamic>) return;
+        final envelope = RelayEnvelope.fromJson(decoded);
+        if (!_verifiedFirstContacts.remove(envelope.messageId) ||
+            envelope.senderDeviceId != inbound.senderTransportIdentity ||
+            global.policyFor(kind) == TransportPolicy.disabled) {
+          return;
+        }
+        await _processEnvelopes(
+          [envelope],
+          ingressKind: PeerRouteKind.relay,
+          route: MessageRoute.forCarrier(kind),
+        );
+      } catch (error) {
+        appendDebugLog('Rejected $label first contact: $error');
+      }
+      return;
+    }
     if (contact == null ||
         global == null ||
         !_carrierAllowed(kind) ||
@@ -5584,7 +5606,7 @@ class MessengerController extends ChangeNotifier {
     await _sendPairingRouteBeacon();
     await _announcePairingAvailabilityIfNeeded(force: true);
     await _persist('Pairing code rotated and advertised.');
-    return _inviteForIdentity(_requireIdentity());
+    return _sharedInvite(_requireIdentity());
   }
 
   String buildDebugSnapshotText({DebugRunReport? report}) {
@@ -7488,7 +7510,7 @@ class MessengerController extends ChangeNotifier {
     await _ensurePairingBeaconRunning();
     await _sendPairingRouteBeacon();
     await _announcePairingAvailabilityIfNeeded(force: true);
-    return _inviteForIdentity(_requireIdentity());
+    return _sharedInvite(_requireIdentity());
   }
 
   /// Prepares an explicitly untrusted public optical transfer. It is signed
@@ -7818,6 +7840,11 @@ class MessengerController extends ChangeNotifier {
       pairingRequestId: approvalGranted
           ? pairingRequestId
           : _randomId('pair'),
+      carrierAddresses: _carrierHintsForContact(invite).carriers,
+      matrixAddress: _carrierHintsForContact(invite).matrixAddress,
+      matrixAddressAt: _carrierHintsForContact(invite).matrixAddress == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
     );
     final conversations = List<ConversationRecord>.from(_snapshot.conversations)
       ..add(
@@ -12827,9 +12854,17 @@ class MessengerController extends ChangeNotifier {
     final me = _requireIdentity();
     final invitePayload = (await _inviteForIdentity(me)).encodePayload();
     final requestId = pairingRequestId ?? contact.pairingRequestId;
+    // A first request also carries the invite with signed carrier hints
+    // (older builds ignore the field), so the answer can come back over a
+    // carrier.
+    final carrierInvite = recipientKnowsIdentity
+        ? null
+        : await _sharedInvite(me);
     final structuredPayload = jsonEncode({
       'exchangeVersion': 2,
       'invitePayload': invitePayload,
+      if (carrierInvite != null && carrierInvite.hasSignedCarrierHints)
+        'carrierInvite': carrierInvite.encodePayload(),
       if (requestId != null) 'pairingRequestId': requestId,
       'featureCapabilityVersion': 1,
       'featureCapabilities': [
@@ -17694,7 +17729,12 @@ class MessengerController extends ChangeNotifier {
                   (requestId is! String || requestId.isEmpty || requestId.length > 128))) {
             return;
           }
-          payload = invitePayload;
+          payload =
+              await _matchingCarrierInvite(
+                invitePayload,
+                wrapper['carrierInvite'],
+              ) ??
+              invitePayload;
           pairingRequestId = requestId as String?;
         }
       } on FormatException {
@@ -17992,6 +18032,43 @@ class MessengerController extends ChangeNotifier {
     }
     _snapshot = _snapshot.copyWith(pendingContactRequests: pending);
     await _persist('New contact request from ${invite.displayName}.');
+  }
+
+  /// [carrierInvite] (a ci7 invite sent beside [invitePayload]) when it is
+  /// the same identity and its signatures hold; null otherwise.
+  Future<String?> _matchingCarrierInvite(
+    String invitePayload,
+    Object? carrierInvite,
+  ) async {
+    if (carrierInvite is! String || carrierInvite.length > 8192) return null;
+    final base = ContactInvite.tryDecodePayload(invitePayload);
+    final extended = ContactInvite.tryDecodePayload(carrierInvite);
+    if (base == null ||
+        extended == null ||
+        !extended.hasSignedCarrierHints ||
+        extended.deviceId != base.deviceId ||
+        extended.accountId != base.accountId ||
+        extended.publicKeyBase64 != base.publicKeyBase64 ||
+        extended.signingPublicKeyBase64 != base.signingPublicKeyBase64 ||
+        !await _crypto.verifyContactInvite(extended)) {
+      return null;
+    }
+    return carrierInvite;
+  }
+
+  /// [invite]'s carrier hints as contact addresses, ranked below anything
+  /// the contact later says itself (an authenticated exchange always wins).
+  static ({Map<TransportKind, CarrierAddress> carriers, String? matrixAddress})
+  _carrierHintsForContact(ContactInvite invite) {
+    final unranked = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    return (
+      carriers: {
+        for (final MapEntry(:key, :value) in invite.carrierHints.entries)
+          if (key != TransportKind.matrix)
+            key: CarrierAddress(value: value, at: unranked),
+      },
+      matrixAddress: invite.carrierHints[TransportKind.matrix],
+    );
   }
 
   /// Whether [invite] carries the keys pinned for [contact].
@@ -24038,6 +24115,51 @@ class MessengerController extends ChangeNotifier {
     return dedupePeerEndpoints(routes);
   }
 
+  /// Carriers a stranger may first reach this device on (never LoRa or the
+  /// Bluetooth mesh: their airtime is too scarce for unknown senders).
+  static const Set<TransportKind> _firstContactCarriers = {
+    TransportKind.nostr,
+    TransportKind.deltaChat,
+    TransportKind.matrix,
+    TransportKind.tor,
+  };
+
+  /// This device's carrier addresses for its invite.
+  Map<TransportKind, String> _ownInviteCarrierHints() {
+    final global = _snapshot.identity?.connectivity;
+    if (global == null) return const {};
+    final hints = <TransportKind, String>{
+      for (final MapEntry(key: kind, value: carrier)
+          in _carrierTransports.entries)
+        if (carrier.localAddress case final address?
+            when _firstContactCarriers.contains(kind) &&
+                _carrierAllowed(kind) &&
+                global.policyFor(kind) != TransportPolicy.disabled &&
+                address.length <= ContactInvite.maxCarrierHintLength)
+          kind: address,
+    };
+    final matrix = _ownMatrixAddress;
+    if (matrix != null &&
+        _matrixAllowed &&
+        global.policyFor(TransportKind.matrix) != TransportPolicy.disabled) {
+      hints[TransportKind.matrix] = matrix.encode();
+    }
+    return hints;
+  }
+
+  /// The invite shown to people (QR, text, Beam): with signed carrier hints
+  /// when any carrier is on. Invites inside messages stay compatible.
+  Future<ContactInvite> _sharedInvite(IdentityRecord identity) async {
+    final invite = await _inviteForIdentity(identity);
+    final hints = _ownInviteCarrierHints();
+    if (hints.isEmpty) return invite;
+    final withHints = invite.copyWithCarrierHints(hints, '');
+    return withHints.copyWithCarrierHints(
+      hints,
+      await _crypto.signCarrierHints(withHints),
+    );
+  }
+
   Future<ContactInvite> _inviteForIdentity(IdentityRecord identity) async {
     if (!identity.hasTransportIdentity ||
         identity.irohEndpointId?.isNotEmpty != true) {
@@ -25399,6 +25521,18 @@ class MessengerController extends ChangeNotifier {
   ) async {
     final contact = _contactByDeviceId(peerDeviceId);
     final me = _requireIdentity();
+    if (contact != null &&
+        !contact.canSendOutbound &&
+        _pairingWithKeys(contact) &&
+        _firstContactCarriers.contains(kind)) {
+      // Asking a contact that has not accepted us yet: sealed to its
+      // identity key from the invite, opened only by that device.
+      return _crypto.sealFirstContact(
+        recipientPublicKeyBase64: contact.publicKeyBase64,
+        context: '${kind.name}|${contact.deviceId}',
+        plaintext: envelope,
+      );
+    }
     if (contact == null || !contact.canSendOutbound) {
       throw StateError(
         '${kind.label} carries traffic only for approved contacts.',
@@ -25437,12 +25571,113 @@ class MessengerController extends ChangeNotifier {
     final global = _snapshot.identity?.connectivity;
     if (global == null) return false;
     return _snapshot.contacts.any(
-      (contact) =>
-          contact.canSendOutbound &&
-          contact.routing.effectivePolicy(kind, global) !=
-              TransportPolicy.disabled &&
-          _carrierSenderMatches(kind, contact, sender),
+          (contact) =>
+              (contact.canSendOutbound || _pairingWithKeys(contact)) &&
+              contact.routing.effectivePolicy(kind, global) !=
+                  TransportPolicy.disabled &&
+              _carrierSenderMatches(kind, contact, sender),
+        ) ||
+        _admitCarrierStranger(kind, global);
+  }
+
+  /// A contact whose request is still open, with its keys known.
+  bool _pairingWithKeys(ContactRecord contact) =>
+      !contact.pendingVerification &&
+      !contact.isArchived &&
+      contact.publicKeyBase64.isNotEmpty &&
+      (contact.pairingState == ContactPairingState.queued ||
+          contact.pairingState == ContactPairingState.sending ||
+          contact.pairingState == ContactPairingState.awaitingAcceptance);
+
+  /// Frames from unknown senders admitted per carrier, as (window start,
+  /// count): room for first-contact requests without letting strangers
+  /// fill the reassembly buffers.
+  final Map<TransportKind, (DateTime, int)> _strangerFrames = {};
+  static const int _strangerFramesPerWindow = 40;
+  static const Duration _strangerFrameWindow = Duration(minutes: 10);
+
+  bool _admitCarrierStranger(
+    TransportKind kind,
+    GlobalConnectivityPreferences global,
+  ) {
+    if (!_firstContactCarriers.contains(kind) ||
+        global.policyFor(kind) == TransportPolicy.disabled) {
+      return false;
+    }
+    final now = _now();
+    final (start, count) = _strangerFrames[kind] ?? (now, 0);
+    if (now.difference(start) > _strangerFrameWindow) {
+      _strangerFrames[kind] = (now, 1);
+      return true;
+    }
+    if (count >= _strangerFramesPerWindow) return false;
+    _strangerFrames[kind] = (start, count + 1);
+    return true;
+  }
+
+  /// First-contact envelopes opened and checked by [_openFirstContactFrame],
+  /// by message id, for [_handleCarrierInbound] to admit once.
+  final Set<String> _verifiedFirstContacts = <String>{};
+
+  /// A frame sealed to this device's identity key by someone asking to be
+  /// added. Admitted only when it is a first-contact request whose signed
+  /// invite names [sender] as its address on this carrier.
+  Future<({String peerDeviceId, Uint8List envelope})?> _openFirstContactFrame(
+    TransportKind kind,
+    String sender,
+    Uint8List sealed,
+  ) async {
+    final me = _snapshot.identity;
+    if (me == null || !_firstContactCarriers.contains(kind)) return null;
+    final clear = await _crypto.openFirstContact(
+      context: '${kind.name}|${me.deviceId}',
+      sealed: sealed,
     );
+    if (clear == null || clear.length > _maxBootstrapPayloadBytes * 2) {
+      return null;
+    }
+    try {
+      final decoded = jsonDecode(utf8.decode(clear));
+      if (decoded is! Map<String, dynamic>) return null;
+      final envelope = RelayEnvelope.fromJson(decoded);
+      if (envelope.protocolVersion != 1 ||
+          envelope.kind != 'contact_exchange' ||
+          !_isValidInboundEnvelope(envelope)) {
+        return null;
+      }
+      final wrapper = jsonDecode(
+        utf8.decode(base64Decode(envelope.payloadBase64!)),
+      );
+      if (wrapper is! Map<String, dynamic> ||
+          wrapper['invitePayload'] is! String) {
+        return null;
+      }
+      final extended = await _matchingCarrierInvite(
+        wrapper['invitePayload'] as String,
+        wrapper['carrierInvite'],
+      );
+      final invite = extended == null
+          ? null
+          : ContactInvite.tryDecodePayload(extended);
+      final hint = invite?.carrierHints[kind];
+      final hintSender = hint == null
+          ? null
+          : kind == TransportKind.matrix
+          ? MatrixAddress.decode(hint)?.userId
+          : carrierSenderIdentity(hint);
+      if (invite == null ||
+          invite.deviceId != envelope.senderDeviceId ||
+          invite.accountId != envelope.senderAccountId ||
+          hintSender != sender) {
+        appendDebugLog('Rejected a ${kind.label} first contact: not bound.');
+        return null;
+      }
+      if (_verifiedFirstContacts.length > 64) _verifiedFirstContacts.clear();
+      _verifiedFirstContacts.add(envelope.messageId);
+      return (peerDeviceId: envelope.senderDeviceId, envelope: clear);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Opens a frame from [sender] with each approved contact pinned to that
@@ -25456,7 +25691,7 @@ class MessengerController extends ChangeNotifier {
     if (me == null || sealed.length < 12 + 16) return null;
     final cipher = Chacha20.poly1305Aead();
     for (final contact in _snapshot.contacts) {
-      if (!contact.canSendOutbound ||
+      if (!(contact.canSendOutbound || _pairingWithKeys(contact)) ||
           !_carrierSenderMatches(kind, contact, sender)) {
         continue;
       }
@@ -25478,7 +25713,7 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
     }
-    return null;
+    return _openFirstContactFrame(kind, sender, sealed);
   }
 
   List<ApplicationCapability> _localApplicationCapabilities() {

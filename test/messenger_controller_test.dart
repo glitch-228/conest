@@ -12651,6 +12651,210 @@ void main() {
       },
     );
 
+    test('contacts can be added over a carrier alone', () async {
+      final network = _FakeCarrierNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await network.join(alice, 'npub-alice|wss://relay.one');
+      await network.join(bob, 'npub-bob|wss://relay.two');
+      // No relay, LAN or Iroh between them: only the carrier.
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      final invite = await bob.buildInvite();
+      expect(invite.encodePayload(), startsWith('ci7|'));
+      expect(invite.encodeCompatiblePayload(), startsWith('ci6|'));
+      expect(ContactInvite.decodePayload(invite.encodePayload()).carrierHints, {
+        TransportKind.nostr: 'npub-bob|wss://relay.two',
+      });
+
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: invite.encodePayload(),
+        codephrase: '',
+      );
+      final aliceId = alice.identity!.deviceId;
+      for (
+        var round = 0;
+        round < 20 &&
+            !bob.pendingContactRequests.any((r) => r.senderDeviceId == aliceId);
+        round++
+      ) {
+        await settle([alice, bob]);
+      }
+      final request = bob.pendingContactRequests.singleWhere(
+        (r) => r.senderDeviceId == aliceId,
+      );
+      await bob.approvePendingContactRequest(request.id);
+      for (
+        var round = 0;
+        round < 20 &&
+            alice.contacts.single.pairingState != ContactPairingState.accepted;
+        round++
+      ) {
+        await settle([alice, bob]);
+      }
+      expect(alice.contacts.single.pairingState, ContactPairingState.accepted);
+
+      await alice.sendMessage(
+        contact: alice.contacts.single,
+        body: 'hi via nostr',
+      );
+      for (
+        var round = 0;
+        round < 20 &&
+            !bob.messagesFor(aliceId).any((m) => m.body == 'hi via nostr');
+        round++
+      ) {
+        await settle([alice, bob]);
+      }
+      expect(
+        bob
+            .messagesFor(aliceId)
+            .singleWhere((m) => m.body == 'hi via nostr')
+            .route,
+        MessageRoute.nostrCarrier,
+      );
+    });
+
+    test(
+      'a first contact counts only from the address its invite names',
+      () async {
+        final network = _FakeCarrierNetwork();
+        final relay = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await network.join(alice, 'npub-alice|wss://relay.one');
+        await network.join(bob, 'npub-bob|wss://relay.two');
+        relay.shouldFailStore = (_, _, _, _, _) => true;
+        network.holdFrom.add('npub-alice');
+        await alice.addContactFromInvite(
+          alias: 'Bob',
+          payload: (await bob.buildInvite()).encodePayload(),
+          codephrase: '',
+        );
+        await settle([alice, bob]);
+        expect(network.held, isNotEmpty);
+        // Mallory replays Alice's request from her own address.
+        for (final (_, to, frame) in network.held) {
+          network.deliver('npub-mallory', to, frame);
+        }
+        await settle([alice, bob]);
+        expect(bob.pendingContactRequests, isEmpty);
+        // From Alice's own address it is a request.
+        network.holdFrom.clear();
+        for (final (from, to, frame) in network.held) {
+          network.deliver(from, to, frame);
+        }
+        await settle([alice, bob]);
+        expect(
+          bob.pendingContactRequests.map((r) => r.senderDeviceId),
+          contains(alice.identity!.deviceId),
+        );
+      },
+    );
+
+    testWidgets(
+      'the invite screen shows the extended invite, legacy on request',
+      (tester) async {
+        late MessengerController alice;
+        late ContactInvite invite;
+        final network = _FakeCarrierNetwork();
+        await tester.runAsync(() async {
+          alice = await _createController(
+            relayClient: _FakeRelayClient(),
+            displayName: 'Alice',
+          );
+          await network.join(alice, 'npub-alice|wss://relay.one');
+          invite = await alice.buildInvite();
+        });
+        addTearDown(alice.dispose);
+        Future<void> show(ContactInvite invite) async {
+          await tester.pumpWidget(
+            MaterialApp(
+              home: app.InviteScreen(
+                key: ValueKey(invite.encodePayload()),
+                controller: alice,
+                invite: invite,
+                palette: app.ConestPalette(),
+              ),
+            ),
+          );
+          await tester.pump();
+        }
+
+        await show(invite);
+        String shownPayload() => tester
+            .widgetList<SelectableText>(find.byType(SelectableText))
+            .map((text) => text.data ?? '')
+            .firstWhere((text) => text.startsWith('ci'));
+        final code = currentPairingCodeSnapshotForPayload(
+          invite.encodeCompatiblePayload(),
+        ).codephrase;
+        expect(shownPayload(), startsWith('ci7|'));
+        expect(find.text(code), findsWidgets);
+        await tester.ensureVisible(find.byKey(const ValueKey('invite-legacy')));
+        await tester.tap(find.byKey(const ValueKey('invite-legacy')));
+        await tester.pump();
+        expect(shownPayload(), startsWith('ci6|'));
+        expect(find.text(code), findsWidgets);
+
+        // A very long carrier address makes the invite Beam-first.
+        final long = invite.copyWithCarrierHints({
+          TransportKind.nostr: 'npub-alice|${'wss://relay.example/' * 60}',
+        }, 'sig');
+        await show(long);
+        expect(find.byKey(const ValueKey('invite-beam-first')), findsOneWidget);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    test('a ci7 invite with altered carrier hints is refused', () async {
+      final relay = _FakeRelayClient();
+      final network = _FakeCarrierNetwork();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await network.join(bob, 'npub-bob|wss://relay.two');
+      final payload = (await bob.buildInvite()).encodePayload();
+      final tampered = payload.replaceFirst(
+        Uri.encodeComponent('npub-bob|wss://relay.two'),
+        Uri.encodeComponent('npub-mallory|wss://relay.two'),
+      );
+      expect(tampered, isNot(payload));
+      await expectLater(
+        alice.addContactFromInvite(
+          alias: 'Bob',
+          payload: tampered,
+          codephrase: '',
+        ),
+        throwsA(anything),
+      );
+      expect(alice.contacts, isEmpty);
+    });
+
     test('contacts learn each other\'s carrier address', () async {
       final (alice, bob, _, _) = await linkedPair();
       expect(
@@ -16538,6 +16742,10 @@ class _FakeCarrierNetwork {
   final Map<String, CarrierTransportAdapter> _byAddress = {};
   final List<(String, String, Uint8List)> frames = [];
 
+  /// Frames from these sender identities are kept in [held], not delivered.
+  final Set<String> holdFrom = {};
+  final List<(String, String, Uint8List)> held = [];
+
   Future<void> join(MessengerController controller, String address) async {
     final carrier = CarrierTransportAdapter(
       kind: TransportKind.nostr,
@@ -16550,6 +16758,10 @@ class _FakeCarrierNetwork {
 
   void deliver(String fromIdentity, String to, Uint8List frame) {
     frames.add((fromIdentity, to, frame));
+    if (holdFrom.contains(fromIdentity)) {
+      held.add((fromIdentity, to, frame));
+      return;
+    }
     _byAddress[to]?.receiveFrame(fromIdentity, frame);
   }
 }

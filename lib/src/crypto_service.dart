@@ -304,21 +304,137 @@ class CryptoService {
   }
 
   Future<bool> verifyContactInvite(ContactInvite invite) async {
-    if (!invite.usesSignedFormat) return invite.version < 6;
+    if (!invite.usesSignedFormat) {
+      return invite.version < 6 && invite.carrierHints.isEmpty;
+    }
     try {
-      final signature = Signature(
-        base64Decode(invite.signatureBase64!),
-        publicKey: SimplePublicKey(
-          base64Decode(invite.signingPublicKeyBase64!),
-          type: KeyPairType.ed25519,
-        ),
+      final publicKey = SimplePublicKey(
+        base64Decode(invite.signingPublicKeyBase64!),
+        type: KeyPairType.ed25519,
       );
-      return Ed25519().verify(
+      if (!await Ed25519().verify(
         utf8.encode(invite.signingPayload()),
-        signature: signature,
-      );
+        signature: Signature(
+          base64Decode(invite.signatureBase64!),
+          publicKey: publicKey,
+        ),
+      )) {
+        return false;
+      }
+      // ci7: the carrier hints carry their own signature by the same key.
+      if (invite.carrierHintsSignatureBase64 case final hintsSignature?) {
+        return Ed25519().verify(
+          utf8.encode(invite.carrierHintsSigningPayload()),
+          signature: Signature(
+            base64Decode(hintsSignature),
+            publicKey: publicKey,
+          ),
+        );
+      }
+      return invite.carrierHints.isEmpty;
     } catch (_) {
       return false;
+    }
+  }
+
+  /// Signs [invite]'s carrier hints with this installation's key.
+  Future<String> signCarrierHints(ContactInvite invite) =>
+      signInstallationBytes(utf8.encode(invite.carrierHintsSigningPayload()));
+
+  /// Marks a carrier frame sealed to an identity key rather than to a
+  /// pairwise key: a first contact, before either side trusts the other.
+  static const List<int> firstContactMagic = [0x43, 0x46, 0x43, 0x31];
+
+  Future<SecretKey> _firstContactKey(
+    SimpleKeyPair keyPair,
+    List<int> remotePublic,
+    List<int> ephemeralPublic,
+    List<int> recipientPublic,
+    String context,
+  ) async {
+    final shared = await X25519().sharedSecretKey(
+      keyPair: keyPair,
+      remotePublicKey: SimplePublicKey(remotePublic, type: KeyPairType.x25519),
+    );
+    return Hkdf(hmac: Hmac.sha256(), outputLength: 32).deriveKey(
+      secretKey: shared,
+      nonce: [...ephemeralPublic, ...recipientPublic],
+      info: utf8.encode('conest.carrier.first-contact.v1|$context'),
+    );
+  }
+
+  /// Seals [plaintext] to [recipientPublicKeyBase64] (an identity X25519
+  /// key from an invite) with a fresh ephemeral key: magic, ephemeral
+  /// public key, nonce, ciphertext, tag.
+  Future<Uint8List> sealFirstContact({
+    required String recipientPublicKeyBase64,
+    required String context,
+    required List<int> plaintext,
+  }) async {
+    final recipient = base64Decode(recipientPublicKeyBase64);
+    final ephemeral = await X25519().newKeyPair();
+    final ephemeralPublic = (await ephemeral.extractPublicKey()).bytes;
+    final key = await _firstContactKey(
+      ephemeral,
+      recipient,
+      ephemeralPublic,
+      recipient,
+      context,
+    );
+    final cipher = Chacha20.poly1305Aead();
+    final box = await cipher.encrypt(
+      plaintext,
+      secretKey: key,
+      nonce: cipher.newNonce(),
+      aad: [...firstContactMagic, ...ephemeralPublic],
+    );
+    return Uint8List.fromList([
+      ...firstContactMagic,
+      ...ephemeralPublic,
+      ...box.nonce,
+      ...box.cipherText,
+      ...box.mac.bytes,
+    ]);
+  }
+
+  /// Opens a [sealFirstContact] frame addressed to this installation, or
+  /// returns null.
+  Future<Uint8List?> openFirstContact({
+    required String context,
+    required Uint8List sealed,
+  }) async {
+    const header = 4 + 32 + 12;
+    if (sealed.length < header + 16) return null;
+    for (var index = 0; index < firstContactMagic.length; index++) {
+      if (sealed[index] != firstContactMagic[index]) return null;
+    }
+    final me = _identityProvider();
+    final ephemeralPublic = Uint8List.sublistView(sealed, 4, 36);
+    final ownPublic = base64Decode(me.publicKeyBase64);
+    try {
+      final key = await _firstContactKey(
+        SimpleKeyPairData(
+          base64Decode(me.privateKeyBase64),
+          publicKey: SimplePublicKey(ownPublic, type: KeyPairType.x25519),
+          type: KeyPairType.x25519,
+        ),
+        ephemeralPublic,
+        ephemeralPublic,
+        ownPublic,
+        context,
+      );
+      final clear = await Chacha20.poly1305Aead().decrypt(
+        SecretBox(
+          Uint8List.sublistView(sealed, header, sealed.length - 16),
+          nonce: Uint8List.sublistView(sealed, 36, header),
+          mac: Mac(Uint8List.sublistView(sealed, sealed.length - 16)),
+        ),
+        secretKey: key,
+        aad: [...firstContactMagic, ...ephemeralPublic],
+      );
+      return Uint8List.fromList(clear);
+    } catch (_) {
+      return null;
     }
   }
 

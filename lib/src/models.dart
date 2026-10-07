@@ -1198,6 +1198,8 @@ class ContactInvite {
     this.irohEndpointId,
     this.capabilities = const <TransportKind>[],
     this.signatureBase64,
+    this.carrierHints = const <TransportKind, String>{},
+    this.carrierHintsSignatureBase64,
   });
 
   final int version;
@@ -1215,8 +1217,70 @@ class ContactInvite {
   final List<TransportKind> capabilities;
   final String? signatureBase64;
 
+  /// Carrier addresses (Nostr, email, Matrix, Tor, mesh) a contact can be
+  /// first reached on, signed separately ([carrierHintsSignatureBase64]) so
+  /// the ci6 part stays readable by older builds that receive it bare.
+  final Map<TransportKind, String> carrierHints;
+  final String? carrierHintsSignatureBase64;
+
+  /// Most carrier hints an invite carries, and their longest address.
+  static const int maxCarrierHints = 12;
+  static const int maxCarrierHintLength = 1024;
+
   bool get usesSignedFormat =>
       version >= 6 && signingPublicKeyBase64?.isNotEmpty == true;
+
+  /// Whether [encodePayload] gives the extended ci7 form.
+  bool get hasSignedCarrierHints =>
+      usesSignedFormat &&
+      carrierHints.isNotEmpty &&
+      carrierHintsSignatureBase64?.isNotEmpty == true;
+
+  /// The same invite with signed carrier hints.
+  ContactInvite copyWithCarrierHints(
+    Map<TransportKind, String> hints,
+    String signature,
+  ) => ContactInvite(
+    version: version,
+    accountId: accountId,
+    deviceId: deviceId,
+    displayName: displayName,
+    bio: bio,
+    pairingNonce: pairingNonce,
+    pairingEpochMs: pairingEpochMs,
+    relayCapable: relayCapable,
+    publicKeyBase64: publicKeyBase64,
+    routeHints: routeHints,
+    signingPublicKeyBase64: signingPublicKeyBase64,
+    irohEndpointId: irohEndpointId,
+    capabilities: capabilities,
+    signatureBase64: signatureBase64,
+    carrierHints: Map.unmodifiable(hints),
+    carrierHintsSignatureBase64: signature,
+  );
+
+  String _encodedCarrierHints() {
+    final entries =
+        carrierHints.entries
+            .map(
+              (entry) =>
+                  '${entry.key.name}=${Uri.encodeComponent(entry.value)}',
+            )
+            .toList()
+          ..sort();
+    return entries.join(',');
+  }
+
+  /// Text covered by the carrier hints' Ed25519 signature: bound to this
+  /// device and its key, so hints cannot be moved to another invite.
+  String carrierHintsSigningPayload() =>
+      'conest.invite.carriers.v1|$deviceId|$publicKeyBase64|'
+      '${_encodedCarrierHints()}';
+
+  /// The invite as every version reads it: ci6 (or ci5) without hints.
+  String encodeCompatiblePayload() => usesSignedFormat
+      ? _encodeSignedCompactPayload()
+      : _encodeCompactPayload();
 
   ContactInvite copyWithSignature(String signature) => ContactInvite(
     version: version,
@@ -1233,6 +1297,8 @@ class ContactInvite {
     irohEndpointId: irohEndpointId,
     capabilities: capabilities,
     signatureBase64: signature,
+    carrierHints: carrierHints,
+    carrierHintsSignatureBase64: carrierHintsSignatureBase64,
   );
 
   Map<String, dynamic> toJson() {
@@ -1256,10 +1322,16 @@ class ContactInvite {
     };
   }
 
+  /// The extended ci7 form when carrier hints are signed (read by 0.3.12
+  /// and later), otherwise the compatible form.
   String encodePayload() {
-    return usesSignedFormat
-        ? _encodeSignedCompactPayload()
-        : _encodeCompactPayload();
+    if (!hasSignedCarrierHints) return encodeCompatiblePayload();
+    return [
+      'ci7',
+      _encodeSignedCompactPayload().substring(4),
+      _encodedCarrierHints(),
+      carrierHintsSignatureBase64!,
+    ].join('|');
   }
 
   /// Canonical text covered by the ci6 Ed25519 signature.
@@ -1370,6 +1442,9 @@ class ContactInvite {
 
   factory ContactInvite.decodePayload(String payload) {
     final normalized = payload.trim();
+    if (normalized.startsWith('ci7|')) {
+      return _decodeExtendedPayload(normalized);
+    }
     if (normalized.startsWith('ci6|')) {
       return _decodeSignedCompactPayload(normalized);
     }
@@ -1421,6 +1496,42 @@ class ContactInvite {
     );
   }
 
+  static ContactInvite _decodeExtendedPayload(String payload) {
+    final parts = payload.split('|');
+    if (parts.length != 17 || parts.first != 'ci7') {
+      throw const FormatException('Invalid extended invite payload.');
+    }
+    final base = _decodeSignedCompactPayload(
+      ['ci6', ...parts.sublist(1, 15)].join('|'),
+    );
+    final hints = <TransportKind, String>{};
+    for (final entry in parts[15].split(',')) {
+      if (entry.isEmpty) continue;
+      final split = entry.indexOf('=');
+      if (split <= 0) throw const FormatException('Invalid carrier hint.');
+      final kind = TransportKind.values
+          .where((kind) => kind.name == entry.substring(0, split))
+          .firstOrNull;
+      final address = Uri.decodeComponent(entry.substring(split + 1));
+      // Kinds a newer build added are skipped here but stay in the signed
+      // text kept below.
+      if (kind == null || !kind.isCarrier) continue;
+      if (address.isEmpty ||
+          address.length > maxCarrierHintLength ||
+          address.codeUnits.any((unit) => unit < 0x20 || unit == 0x7f)) {
+        throw const FormatException('Invalid carrier hint.');
+      }
+      hints[kind] = address;
+    }
+    if (hints.length > maxCarrierHints) {
+      throw const FormatException('Too many carrier hints.');
+    }
+    return _ExtendedContactInvite(
+      base.copyWithCarrierHints(hints, parts[16]),
+      signedHints: parts[15],
+    );
+  }
+
   static ContactInvite _decodeSignedCompactPayload(String payload) {
     final parts = payload.split('|');
     if (parts.length != 15 || parts.first != 'ci6') {
@@ -1463,6 +1574,46 @@ class ContactInvite {
       ),
     );
   }
+}
+
+/// A decoded ci7 invite, keeping the hints text exactly as signed (it may
+/// name carrier kinds this build skips).
+class _ExtendedContactInvite extends ContactInvite {
+  _ExtendedContactInvite(ContactInvite invite, {required this.signedHints})
+    : super(
+        version: invite.version,
+        accountId: invite.accountId,
+        deviceId: invite.deviceId,
+        displayName: invite.displayName,
+        bio: invite.bio,
+        pairingNonce: invite.pairingNonce,
+        pairingEpochMs: invite.pairingEpochMs,
+        relayCapable: invite.relayCapable,
+        publicKeyBase64: invite.publicKeyBase64,
+        routeHints: invite.routeHints,
+        signingPublicKeyBase64: invite.signingPublicKeyBase64,
+        irohEndpointId: invite.irohEndpointId,
+        capabilities: invite.capabilities,
+        signatureBase64: invite.signatureBase64,
+        carrierHints: invite.carrierHints,
+        carrierHintsSignatureBase64: invite.carrierHintsSignatureBase64,
+      );
+
+  final String signedHints;
+
+  @override
+  String carrierHintsSigningPayload() =>
+      'conest.invite.carriers.v1|$deviceId|$publicKeyBase64|$signedHints';
+
+  @override
+  String encodePayload() => hasSignedCarrierHints
+      ? [
+          'ci7',
+          encodeCompatiblePayload().substring(4),
+          signedHints,
+          carrierHintsSignatureBase64!,
+        ].join('|')
+      : encodeCompatiblePayload();
 }
 
 ContactInvite _validatedContactInvite(ContactInvite invite) {

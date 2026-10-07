@@ -12191,9 +12191,43 @@ class InviteScreen extends StatefulWidget {
 }
 
 class _InviteScreenState extends State<InviteScreen> {
+  /// Above this, the extended invite is hard to scan as one QR code: Beam
+  /// (an animated QR) is offered first.
+  static const int _comfortableQrLength = 1200;
+
   late ContactInvite _invite = widget.invite;
-  late String _payload = _invite.encodePayload();
+
+  /// The ci6 invite for contacts on older versions.
+  bool _legacy = false;
+  bool _qrDespiteSize = false;
   late bool _showQr = !_isWindowsPlatform;
+
+  String get _payload =>
+      _legacy ? _invite.encodeCompatiblePayload() : _invite.encodePayload();
+
+  /// Codephrases come from the compatible invite: that is what nearby
+  /// devices and relays announce.
+  String get _codePayload => _invite.encodeCompatiblePayload();
+
+  bool get _tooBigForQr =>
+      !_legacy && !_qrDespiteSize && _payload.length > _comfortableQrLength;
+
+  Future<void> _showAsBeam() async {
+    try {
+      final transfer = await widget.controller.prepareInviteBeam();
+      if (!mounted) return;
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          fullscreenDialog: true,
+          builder: (context) =>
+              BeamSenderScreen(transfer: transfer, palette: widget.palette),
+        ),
+      );
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    }
+  }
+
   bool _rotating = false;
   String? _error;
   String? _lastAdvertisedCodephrase;
@@ -12232,7 +12266,6 @@ class _InviteScreenState extends State<InviteScreen> {
       if (mounted) {
         setState(() {
           _invite = invite;
-          _payload = invite.encodePayload();
           _lastAdvertisedCodephrase = null;
         });
         _advertiseVisibleCodephrase();
@@ -12250,7 +12283,7 @@ class _InviteScreenState extends State<InviteScreen> {
 
   void _advertiseVisibleCodephrase() {
     final codephrase = currentPairingCodeSnapshotForPayload(
-      _payload,
+      _codePayload,
     ).codephrase;
     if (codephrase == _lastAdvertisedCodephrase) {
       return;
@@ -12265,7 +12298,9 @@ class _InviteScreenState extends State<InviteScreen> {
         fullscreenDialog: true,
         builder: (context) => FullscreenQrScreen(
           payload: _payload,
-          codephrase: currentPairingCodeSnapshotForPayload(_payload).codephrase,
+          codephrase: currentPairingCodeSnapshotForPayload(
+            _codePayload,
+          ).codephrase,
           palette: widget.palette,
         ),
       ),
@@ -12274,7 +12309,7 @@ class _InviteScreenState extends State<InviteScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final pairingSnapshot = currentPairingCodeSnapshotForPayload(_payload);
+    final pairingSnapshot = currentPairingCodeSnapshotForPayload(_codePayload);
     final palette = widget.palette;
     return Scaffold(
       body: DecoratedBox(
@@ -12320,7 +12355,48 @@ class _InviteScreenState extends State<InviteScreen> {
                           message:
                               'Connectivity is off. Turn on LAN or Online before sharing this invite.',
                         ),
-                        if (_showQr)
+                        if (_tooBigForQr)
+                          Container(
+                            key: const ValueKey('invite-beam-first'),
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: palette.paper,
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: palette.stroke),
+                            ),
+                            child: Column(
+                              children: [
+                                Icon(
+                                  Icons.animation_outlined,
+                                  size: 42,
+                                  color: palette.primary,
+                                ),
+                                const SizedBox(height: 10),
+                                Text(
+                                  'This invite also lists your routes for '
+                                  'blocked networks, which makes it too large '
+                                  'for one QR code. Show it as Beam, an '
+                                  'animated QR the other camera reads in a '
+                                  'few seconds.',
+                                  textAlign: TextAlign.center,
+                                  style: Theme.of(context).textTheme.bodyMedium,
+                                ),
+                                const SizedBox(height: 12),
+                                FilledButton.icon(
+                                  onPressed: _showAsBeam,
+                                  icon: const Icon(Icons.animation_outlined),
+                                  label: const Text('Show as Beam'),
+                                ),
+                                TextButton(
+                                  onPressed: () =>
+                                      setState(() => _qrDespiteSize = true),
+                                  child: const Text('Show the QR anyway'),
+                                ),
+                              ],
+                            ),
+                          )
+                        else if (_showQr)
                           Column(
                             children: [
                               GestureDetector(
@@ -12355,10 +12431,22 @@ class _InviteScreenState extends State<InviteScreen> {
                                 ),
                               ),
                               const SizedBox(height: 10),
-                              OutlinedButton.icon(
-                                onPressed: _openFullscreenQr,
-                                icon: const Icon(Icons.open_in_full),
-                                label: const Text('Open Fullscreen QR'),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                alignment: WrapAlignment.center,
+                                children: [
+                                  OutlinedButton.icon(
+                                    onPressed: _openFullscreenQr,
+                                    icon: const Icon(Icons.open_in_full),
+                                    label: const Text('Open Fullscreen QR'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: _showAsBeam,
+                                    icon: const Icon(Icons.animation_outlined),
+                                    label: const Text('Show as Beam'),
+                                  ),
+                                ],
                               ),
                             ],
                           )
@@ -12436,6 +12524,23 @@ class _InviteScreenState extends State<InviteScreen> {
                           style: Theme.of(context).textTheme.labelSmall
                               ?.copyWith(color: palette.inkSoft),
                         ),
+                        if (_invite.hasSignedCarrierHints) ...[
+                          const SizedBox(height: 6),
+                          SwitchListTile.adaptive(
+                            key: const ValueKey('invite-legacy'),
+                            contentPadding: EdgeInsets.zero,
+                            dense: true,
+                            title: const Text('Legacy invite'),
+                            subtitle: const Text(
+                              'For contacts on Conest 0.3.11 or older. It '
+                              'leaves out your routes for blocked networks; '
+                              'they arrive once you are connected.',
+                            ),
+                            value: _legacy,
+                            onChanged: (value) =>
+                                setState(() => _legacy = value),
+                          ),
+                        ],
                         const SizedBox(height: 10),
                         OutlinedButton.icon(
                           onPressed: _rotating ? null : _rotateNow,
