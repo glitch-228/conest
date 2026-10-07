@@ -447,12 +447,19 @@ class CryptoService {
     );
   }
 
+  /// [reportFailure] off: a failure says nothing about the session (a late
+  /// copy of a message already received), so no new session is offered.
   Future<String> decryptMessage({
     required ContactRecord contact,
     required RelayEnvelope envelope,
+    bool reportFailure = true,
   }) async {
     if (envelope.protocolVersion == 3) {
-      return _decryptRatchetMessage(contact: contact, envelope: envelope);
+      return _decryptRatchetMessage(
+        contact: contact,
+        envelope: envelope,
+        reportFailure: reportFailure,
+      );
     }
     if (envelope.protocolVersion != 2) {
       throw const FormatException('Legacy unauthenticated envelope rejected.');
@@ -464,7 +471,7 @@ class CryptoService {
       final confirmedAt = await sessions.confirmedAt(ratchetPeerId(contact));
       if (confirmedAt != null &&
           envelope.createdAt.toUtc().isAfter(confirmedAt)) {
-        onRatchetFailure?.call(contact, downgrade: true);
+        if (reportFailure) onRatchetFailure?.call(contact, downgrade: true);
         throw const RatchetDowngradeException();
       }
     }
@@ -485,6 +492,7 @@ class CryptoService {
   Future<String> _decryptRatchetMessage({
     required ContactRecord contact,
     required RelayEnvelope envelope,
+    bool reportFailure = true,
   }) async {
     final sessions = ratchet;
     final ciphertext = envelope.ciphertextBase64;
@@ -512,7 +520,7 @@ class CryptoService {
         RatchetMessage(type: type!, ciphertext: base64Decode(ciphertext)),
       );
     } on RatchetDecryptException {
-      onRatchetFailure?.call(contact, downgrade: false);
+      if (reportFailure) onRatchetFailure?.call(contact, downgrade: false);
       rethrow;
     }
     final inner = jsonDecode(utf8.decode(clear));

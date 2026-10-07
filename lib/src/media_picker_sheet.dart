@@ -1,11 +1,13 @@
 // ignore_for_file: prefer_initializing_formals
 
+import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
 
 import 'package:crop_your_image/crop_your_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show MethodCall;
 import 'package:image/image.dart' as img;
 import 'package:photo_manager/photo_manager.dart';
 
@@ -79,14 +81,131 @@ bool get _supportsGallery {
   return Platform.isAndroid || Platform.isIOS;
 }
 
+/// The device's photo library; tests substitute a fake.
+abstract interface class MediaLibrary {
+  Future<PermissionState> requestPermission();
+
+  /// Albums, the one with everything ("Recent") first.
+  Future<List<AssetPathEntity>> albums();
+  Future<int> countOf(AssetPathEntity album);
+  Future<List<AssetEntity>> page(
+    AssetPathEntity album, {
+    required int page,
+    required int size,
+  });
+  Future<Uint8List?> thumbnail(AssetEntity asset, int size);
+  Future<File?> file(AssetEntity asset);
+
+  /// Lets the user pick more photos when only some are shared.
+  Future<void> presentLimited();
+  Future<void> openSettings();
+  void addChangeListener(VoidCallback listener);
+  void removeChangeListener(VoidCallback listener);
+}
+
+/// [MediaLibrary] over photo_manager (Android and iOS).
+class PhotoManagerLibrary implements MediaLibrary {
+  PhotoManagerLibrary();
+
+  final Map<VoidCallback, ValueChanged<MethodCall>> _listeners = {};
+
+  @override
+  Future<PermissionState> requestPermission() =>
+      PhotoManager.requestPermissionExtend();
+
+  @override
+  Future<List<AssetPathEntity>> albums() async {
+    final albums = await PhotoManager.getAssetPathList(
+      type: RequestType.common,
+      filterOption: FilterOptionGroup(
+        orders: const [
+          OrderOption(type: OrderOptionType.createDate, asc: false),
+        ],
+      ),
+    );
+    return [...albums.where((a) => a.isAll), ...albums.where((a) => !a.isAll)];
+  }
+
+  @override
+  Future<int> countOf(AssetPathEntity album) => album.assetCountAsync;
+
+  @override
+  Future<List<AssetEntity>> page(
+    AssetPathEntity album, {
+    required int page,
+    required int size,
+  }) => album.getAssetListPaged(page: page, size: size);
+
+  @override
+  Future<Uint8List?> thumbnail(AssetEntity asset, int size) =>
+      asset.thumbnailDataWithSize(ThumbnailSize.square(size), quality: 80);
+
+  @override
+  Future<File?> file(AssetEntity asset) => asset.file;
+
+  @override
+  Future<void> presentLimited() =>
+      PhotoManager.presentLimited(type: RequestType.common);
+
+  @override
+  Future<void> openSettings() => PhotoManager.openSetting();
+
+  @override
+  void addChangeListener(VoidCallback listener) {
+    if (_listeners.isEmpty) unawaited(PhotoManager.startChangeNotify());
+    final callback = _listeners[listener] = (_) => listener();
+    PhotoManager.addChangeCallback(callback);
+  }
+
+  @override
+  void removeChangeListener(VoidCallback listener) {
+    final callback = _listeners.remove(listener);
+    if (callback == null) return;
+    PhotoManager.removeChangeCallback(callback);
+    if (_listeners.isEmpty) unawaited(PhotoManager.stopChangeNotify());
+  }
+}
+
+/// Thumbnails shared by every tile and the caption strip, so scrolling back
+/// or reopening the sheet does not ask the platform again.
+class _ThumbnailCache {
+  static const int _capacity = 600;
+  static final LinkedHashMap<String, Future<Uint8List?>> _entries =
+      LinkedHashMap();
+
+  static Future<Uint8List?> get(
+    MediaLibrary library,
+    AssetEntity asset,
+    int size,
+  ) {
+    final key = '${asset.id}@$size@${asset.modifiedDateSecond}';
+    final cached = _entries.remove(key);
+    if (cached != null) {
+      _entries[key] = cached;
+      return cached;
+    }
+    final future = library.thumbnail(asset, size).catchError((Object _) {
+      _entries.remove(key);
+      return null;
+    });
+    _entries[key] = future;
+    while (_entries.length > _capacity) {
+      _entries.remove(_entries.keys.first);
+    }
+    return future;
+  }
+}
+
 /// Bottom-sheet entry point. Returns the chosen action, or null if the user
-/// dismissed without picking anything.
+/// dismissed without picking anything. [library] replaces the device's
+/// photo library (tests).
 Future<MediaPickerResult?> showMediaPickerSheet({
   required BuildContext context,
   required ConestPalette palette,
   required int maxBytes,
+  MediaLibrary? library,
 }) async {
-  if (!_supportsGallery) {
+  if (library == null && !_supportsGallery) {
     // Desktop / web have no native gallery — fall through to the file picker.
     return MediaPickerResult.fallback();
   }
@@ -97,16 +216,24 @@ Future<MediaPickerResult?> showMediaPickerSheet({
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
     ),
-    builder: (sheetCtx) =>
-        _MediaPickerSheet(palette: palette, maxBytes: maxBytes),
+    builder: (sheetCtx) => _MediaPickerSheet(
+      palette: palette,
+      maxBytes: maxBytes,
+      library: library ?? PhotoManagerLibrary(),
+    ),
   );
 }
 
 class _MediaPickerSheet extends StatefulWidget {
-  const _MediaPickerSheet({required this.palette, required this.maxBytes});
+  const _MediaPickerSheet({
+    required this.palette,
+    required this.maxBytes,
+    required this.library,
+  });
 
   final ConestPalette palette;
   final int maxBytes;
+  final MediaLibrary library;
 
   @override
   State<_MediaPickerSheet> createState() => _MediaPickerSheetState();
@@ -116,18 +243,37 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
   // Picker cap matches MessengerController.maxAttachmentsPerSend; the sender
   // splits larger batches into albums of 6 on the fly.
   static const int _maxBatch = 30;
+  static const int _pageSize = 80;
+  static const int _thumbnailSize = 200;
+
+  MediaLibrary get _library => widget.library;
 
   PermissionState? _permission;
-  List<AssetEntity> _assets = const [];
+  List<AssetPathEntity> _albums = const [];
+  AssetPathEntity? _album;
+  final List<AssetEntity> _assets = [];
+  int _total = 0;
+  int _nextPage = 0;
+  bool _loadingMore = false;
   bool _loading = true;
-  final LinkedHashSet<String> _selectedIds = LinkedHashSet<String>();
+
+  /// Bumped when the album changes or reloads; pages for an older one are
+  /// dropped.
+  int _generation = 0;
+  Timer? _reloadDebounce;
+  final ScrollController _scroll = ScrollController();
+
+  /// Selected assets in selection order, kept across album switches.
+  final LinkedHashMap<String, AssetEntity> _selected =
+      LinkedHashMap<String, AssetEntity>();
   final Map<String, String> _captionsById = <String, String>{};
   final Map<String, TextEditingController> _captionControllers =
       <String, TextEditingController>{};
   final Map<String, int?> _sizeBytesById = <String, int?>{};
   bool _sending = false;
+  String? _preparing;
 
-  bool get _selectionMode => _selectedIds.isNotEmpty;
+  bool get _selectionMode => _selected.isNotEmpty;
 
   TextEditingController _captionControllerFor(String id) {
     return _captionControllers.putIfAbsent(id, () {
@@ -139,15 +285,13 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
     });
   }
 
+  /// The file size; resolving it may copy the original (Android 10), so
+  /// only selected or opened assets are asked.
   Future<int?> _resolveAssetSize(AssetEntity asset) async {
     if (_sizeBytesById.containsKey(asset.id)) return _sizeBytesById[asset.id];
     try {
-      final file = await asset.file;
-      if (file == null) {
-        _sizeBytesById[asset.id] = null;
-        return null;
-      }
-      final length = await file.length();
+      final file = await _library.file(asset);
+      final length = file == null ? null : await file.length();
       _sizeBytesById[asset.id] = length;
       return length;
     } catch (_) {
@@ -158,6 +302,9 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
 
   @override
   void dispose() {
+    _library.removeChangeListener(_libraryChanged);
+    _reloadDebounce?.cancel();
+    _scroll.dispose();
     for (final c in _captionControllers.values) {
       c.dispose();
     }
@@ -167,39 +314,112 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
   @override
   void initState() {
     super.initState();
+    _scroll.addListener(_maybeLoadMore);
     _bootstrap();
   }
 
+  bool get _hasAccess {
+    final permission = _permission;
+    return permission != null && (permission.isAuth || permission.hasAccess);
+  }
+
   Future<void> _bootstrap() async {
-    final permission = await PhotoManager.requestPermissionExtend();
+    final permission = await _library.requestPermission();
     if (!mounted) return;
     setState(() => _permission = permission);
-    if (permission.isAuth || permission.hasAccess) {
-      try {
-        final paths = await PhotoManager.getAssetPathList(
-          type: RequestType.common,
-          onlyAll: true,
-          filterOption: FilterOptionGroup(
-            orders: const [
-              OrderOption(type: OrderOptionType.createDate, asc: false),
-            ],
-          ),
-        );
-        if (paths.isEmpty) {
-          if (mounted) setState(() => _loading = false);
-          return;
-        }
-        final assets = await paths.first.getAssetListPaged(page: 0, size: 60);
-        if (!mounted) return;
+    if (!_hasAccess) {
+      setState(() => _loading = false);
+      return;
+    }
+    _library.addChangeListener(_libraryChanged);
+    await _reload();
+  }
+
+  /// The library changed (new photos, or a different limited selection).
+  void _libraryChanged() {
+    _reloadDebounce?.cancel();
+    _reloadDebounce = Timer(const Duration(milliseconds: 500), () {
+      if (mounted) unawaited(_reload());
+    });
+  }
+
+  Future<void> _reload() async {
+    try {
+      final albums = await _library.albums();
+      if (!mounted) return;
+      final current = _album;
+      final album =
+          albums.where((a) => a.id == current?.id).firstOrNull ??
+          albums.firstOrNull;
+      setState(() => _albums = albums);
+      if (album == null) {
         setState(() {
-          _assets = assets;
+          _assets.clear();
+          _total = 0;
           _loading = false;
         });
-      } catch (_) {
-        if (mounted) setState(() => _loading = false);
+        return;
       }
-    } else {
+      await _openAlbum(album);
+    } catch (_) {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _openAlbum(AssetPathEntity album) async {
+    // Switched in one step, so a page load already running for the old album
+    // sees the new generation only together with the new album.
+    final generation = ++_generation;
+    setState(() {
+      _album = album;
+      _assets.clear();
+      _total = 0;
+      _nextPage = 0;
+      _loadingMore = false;
+    });
+    if (_scroll.hasClients) _scroll.jumpTo(0);
+    final total = await _library.countOf(album);
+    if (!mounted || generation != _generation) return;
+    setState(() => _total = total);
+    await _loadMore();
+    if (mounted) setState(() => _loading = false);
+  }
+
+  void _maybeLoadMore() {
+    if (!_scroll.hasClients) return;
+    final position = _scroll.position;
+    // Two screens ahead, so the next page is there before it is needed.
+    if (position.extentAfter < position.viewportDimension * 2) {
+      unawaited(_loadMore());
+    }
+  }
+
+  Future<void> _loadMore() async {
+    final album = _album;
+    if (album == null || _loadingMore || _assets.length >= _total) return;
+    final generation = _generation;
+    _loadingMore = true;
+    try {
+      final page = await _library.page(album, page: _nextPage, size: _pageSize);
+      if (!mounted || generation != _generation || album != _album) return;
+      setState(() {
+        _assets.addAll(page);
+        _nextPage++;
+        // A library that shrank while paging ends here.
+        if (page.isEmpty) _total = _assets.length;
+      });
+    } catch (_) {
+      if (mounted && generation == _generation) {
+        setState(() => _total = _assets.length);
+      }
+    } finally {
+      if (generation == _generation) _loadingMore = false;
+    }
+    // A short first page may not fill the screen.
+    if (mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _maybeLoadMore();
+      });
     }
   }
 
@@ -228,90 +448,115 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
     return 'image/jpeg';
   }
 
-  void _toggleSelection(AssetEntity asset) {
-    setState(() {
-      if (_selectedIds.contains(asset.id)) {
-        _selectedIds.remove(asset.id);
-      } else if (_selectedIds.length < _maxBatch) {
-        _selectedIds.add(asset.id);
-      } else {
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text('Max $_maxBatch items per send.')),
+  void _showSnack(String text) {
+    ScaffoldMessenger.maybeOf(
+      context,
+    )?.showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  void _select(AssetEntity asset) {
+    if (_selected.length >= _maxBatch) {
+      _showSnack('Max $_maxBatch items per send.');
+      return;
+    }
+    setState(() => _selected[asset.id] = asset);
+    // Too large for this chat: dropped again once its size is known.
+    unawaited(() async {
+      final size = await _resolveAssetSize(asset);
+      if (!mounted || size == null || size <= widget.maxBytes) return;
+      if (_selected.remove(asset.id) != null) {
+        setState(() {});
+        _showSnack(
+          'Skipped: ${_humanSize(size)} is over the '
+          '${widget.maxBytes ~/ (1024 * 1024)} MB cap.',
         );
       }
-    });
+    }());
+  }
+
+  void _toggleSelection(AssetEntity asset) {
+    if (_selected.containsKey(asset.id)) {
+      setState(() => _selected.remove(asset.id));
+    } else {
+      _select(asset);
+    }
   }
 
   void _longPressAsset(AssetEntity asset) {
-    if (_selectedIds.contains(asset.id)) {
-      return;
-    }
-    setState(() {
-      if (_selectedIds.length < _maxBatch) {
-        _selectedIds.add(asset.id);
-      }
-    });
+    if (!_selected.containsKey(asset.id)) _select(asset);
   }
 
   void _clearSelection() {
-    setState(() => _selectedIds.clear());
+    setState(() => _selected.clear());
   }
 
   Future<void> _sendSelected() async {
-    if (_sending || _selectedIds.isEmpty) return;
-    setState(() => _sending = true);
-    final byId = {for (final a in _assets) a.id: a};
-    final items =
-        <
-          ({
-            Uint8List? bytes,
-            String? filePath,
-            int sizeBytes,
-            String fileName,
-            String mimeType,
-            String caption,
-            Uint8List? poster,
-          })
-        >[];
-    for (final id in _selectedIds) {
-      final asset = byId[id];
-      if (asset == null) continue;
-      try {
-        final file = await asset.file;
-        if (file == null) continue;
-        final fileName = asset.title ?? 'media-${asset.id}';
-        // For videos, photo_manager already generates a thumbnail —
-        // reuse it as the offer-envelope poster so the receiver sees a
-        // preview before the full bytes finish transferring.
-        Uint8List? poster;
-        if (asset.type == AssetType.video) {
-          try {
-            poster = await asset.thumbnailDataWithSize(
-              const ThumbnailSize.square(320),
-            );
-            // Cap at ~32 KB to fit in the relay envelope.
-            if (poster != null && poster.length > 32 * 1024) {
+    if (_sending || _selected.isEmpty) return;
+    final assets = _selected.values.toList();
+    var prepared = 0;
+    setState(() {
+      _sending = true;
+      _preparing = '0/${assets.length}';
+    });
+    var tooLarge = 0;
+    // Files are resolved together (each may be copied out of the library),
+    // in selection order.
+    final results = await Future.wait(
+      assets.map((asset) async {
+        try {
+          final file = await _library.file(asset);
+          if (file == null) return null;
+          final sizeBytes = await file.length();
+          if (sizeBytes > widget.maxBytes) {
+            tooLarge++;
+            return null;
+          }
+          final fileName = asset.title ?? 'media-${asset.id}';
+          // For videos, photo_manager already generates a thumbnail —
+          // reuse it as the offer-envelope poster so the receiver sees a
+          // preview before the full bytes finish transferring.
+          Uint8List? poster;
+          if (asset.type == AssetType.video) {
+            try {
+              poster = await _library.thumbnail(asset, 320);
+              // Cap at ~32 KB to fit in the relay envelope.
+              if (poster != null && poster.length > 32 * 1024) {
+                poster = null;
+              }
+            } catch (_) {
               poster = null;
             }
-          } catch (_) {
-            poster = null;
+          }
+          return (
+            bytes: null,
+            filePath: file.path,
+            sizeBytes: sizeBytes,
+            fileName: fileName,
+            mimeType: _mimeForAsset(asset, fileName),
+            caption: _captionsById[asset.id]?.trim() ?? '',
+            poster: poster,
+          );
+        } catch (_) {
+          // Skip unreadable assets; the rest of the batch still goes.
+          return null;
+        } finally {
+          prepared++;
+          if (mounted) {
+            setState(() => _preparing = '$prepared/${assets.length}');
           }
         }
-        items.add((
-          bytes: null,
-          filePath: file.path,
-          sizeBytes: await file.length(),
-          fileName: fileName,
-          mimeType: _mimeForAsset(asset, fileName),
-          caption: _captionsById[id]?.trim() ?? '',
-          poster: poster,
-        ));
-      } catch (_) {
-        // Skip unreadable assets; the rest of the batch still goes.
-      }
-    }
+      }),
+    );
     if (!mounted) return;
-    Navigator.of(context).pop(MediaPickerResult.sendMultiple(items: items));
+    if (tooLarge > 0) {
+      _showSnack(
+        '$tooLarge over the ${widget.maxBytes ~/ (1024 * 1024)} MB cap '
+        'skipped.',
+      );
+    }
+    Navigator.of(
+      context,
+    ).pop(MediaPickerResult.sendMultiple(items: results.nonNulls.toList()));
   }
 
   Future<void> _pickAsset(AssetEntity asset) async {
@@ -319,7 +564,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
       _toggleSelection(asset);
       return;
     }
-    final file = await asset.file;
+    final file = await _library.file(asset);
     if (file == null || !mounted) return;
     final fileName = asset.title ?? 'media-${asset.id}';
     final mime = _mimeForAsset(asset, fileName);
@@ -440,21 +685,31 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
                       tooltip: 'Clear selection',
                     ),
                     const SizedBox(width: 4),
-                    Text(
-                      '${_selectedIds.length} selected',
-                      style: Theme.of(context).textTheme.titleMedium,
+                    Expanded(
+                      child: Text(
+                        '${_selected.length} selected',
+                        style: Theme.of(context).textTheme.titleMedium,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                    const Spacer(),
                     FilledButton.icon(
                       onPressed: _sending ? null : _sendSelected,
-                      icon: const Icon(Icons.send),
-                      label: Text('Send ${_selectedIds.length}'),
+                      icon: _preparing == null
+                          ? const Icon(Icons.send)
+                          : const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                      label: Text(_preparing ?? 'Send ${_selected.length}'),
                     ),
                   ],
                 ),
               )
+            else if (_albums.length > 1)
+              _buildAlbumSwitcher()
             else
               const SizedBox(height: 12),
+            if (_permission == PermissionState.limited) _buildLimitedBanner(),
             Expanded(child: _buildBody()),
             if (_selectionMode) _buildCaptionStrip(),
             const Divider(height: 1),
@@ -476,12 +731,69 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
     );
   }
 
+  Widget _buildAlbumSwitcher() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: DropdownButton<String>(
+          key: const ValueKey('media-album'),
+          value: _album?.id,
+          underline: const SizedBox.shrink(),
+          items: [
+            for (final album in _albums)
+              DropdownMenuItem(
+                value: album.id,
+                child: Text(album.isAll ? 'Recent' : album.name),
+              ),
+          ],
+          onChanged: (id) {
+            final album = _albums.where((a) => a.id == id).firstOrNull;
+            if (album != null && album.id != _album?.id) {
+              unawaited(_openAlbum(album));
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  /// Android 14+ and iOS can share only some photos with the app.
+  Widget _buildLimitedBanner() {
+    final theme = Theme.of(context);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+      padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+      decoration: BoxDecoration(
+        color: widget.palette.paperStrong,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              'Conest sees only the photos you picked.',
+              style: theme.textTheme.bodySmall,
+            ),
+          ),
+          TextButton(
+            onPressed: () async {
+              await _library.presentLimited();
+              if (mounted) await _reload();
+            },
+            child: const Text('Select more'),
+          ),
+          TextButton(
+            onPressed: _library.openSettings,
+            child: const Text('Allow all'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCaptionStrip() {
-    final byId = {for (final a in _assets) a.id: a};
-    final entries = _selectedIds
-        .map((id) => byId[id])
-        .whereType<AssetEntity>()
-        .toList();
+    final entries = _selected.values.toList();
     if (entries.isEmpty) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -504,8 +816,11 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
                   width: 48,
                   height: 48,
                   child: FutureBuilder<Uint8List?>(
-                    future: asset.thumbnailDataWithSize(
-                      const ThumbnailSize.square(120),
+                    // The grid's thumbnail, already cached.
+                    future: _ThumbnailCache.get(
+                      _library,
+                      asset,
+                      _thumbnailSize,
                     ),
                     builder: (context, snap) {
                       final thumb = snap.data;
@@ -569,7 +884,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
             ),
             const SizedBox(height: 12),
             OutlinedButton(
-              onPressed: () => PhotoManager.openSetting(),
+              onPressed: _library.openSettings,
               child: const Text('Open settings'),
             ),
           ],
@@ -581,7 +896,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
         padding: const EdgeInsets.all(24),
         child: Center(
           child: Text(
-            'No recent photos or videos.',
+            'No photos or videos here.',
             style: Theme.of(
               context,
             ).textTheme.bodyMedium?.copyWith(color: widget.palette.inkSoft),
@@ -589,7 +904,12 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
         ),
       );
     }
+    final order = {
+      for (final (index, id) in _selected.keys.indexed) id: index + 1,
+    };
     return GridView.builder(
+      key: const ValueKey('media-grid'),
+      controller: _scroll,
       padding: const EdgeInsets.symmetric(horizontal: 8),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
@@ -599,15 +919,14 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
       itemCount: _assets.length,
       itemBuilder: (context, i) {
         final asset = _assets[i];
-        final selectionIndex = _selectedIds.toList().indexOf(asset.id);
         return _AssetTile(
+          key: ValueKey(asset.id),
           asset: asset,
+          library: _library,
+          thumbnailSize: _thumbnailSize,
           palette: widget.palette,
-          humanSize: _humanSize,
           humanDuration: _humanDuration,
-          sizeBytesFuture: _resolveAssetSize(asset),
-          maxBytes: widget.maxBytes,
-          selectionIndex: selectionIndex >= 0 ? selectionIndex + 1 : null,
+          selectionIndex: order[asset.id],
           onTap: () => _pickAsset(asset),
           onLongPress: () => _longPressAsset(asset),
         );
@@ -616,27 +935,28 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
   }
 }
 
+/// One grid cell. Sizes are not shown here: finding one may copy the whole
+/// original out of the library, so only selected items are measured.
 class _AssetTile extends StatefulWidget {
   const _AssetTile({
+    super.key,
     required this.asset,
+    required this.library,
+    required this.thumbnailSize,
     required this.palette,
-    required this.humanSize,
     required this.humanDuration,
     required this.onTap,
     required this.onLongPress,
-    required this.sizeBytesFuture,
-    required this.maxBytes,
     this.selectionIndex,
   });
 
   final AssetEntity asset;
+  final MediaLibrary library;
+  final int thumbnailSize;
   final ConestPalette palette;
-  final String Function(int) humanSize;
   final String Function(Duration) humanDuration;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
-  final Future<int?> sizeBytesFuture;
-  final int maxBytes;
   final int? selectionIndex;
 
   @override
@@ -644,136 +964,82 @@ class _AssetTile extends StatefulWidget {
 }
 
 class _AssetTileState extends State<_AssetTile> {
-  // nightly.11: cache the thumbnail future PER tile across rebuilds.
-  // Previously the picker re-issued thumbnailDataWithSize on every
-  // parent setState (e.g. when a selection toggled), which thrashed the
-  // photo_manager isolate channel and caused the freezing / flickering
-  // the user reported.
-  Future<Uint8List?>? _thumbFuture;
+  late Future<Uint8List?> _thumb = _load();
 
-  Future<Uint8List?> _thumb() {
-    return _thumbFuture ??= widget.asset.thumbnailDataWithSize(
-      const ThumbnailSize.square(300),
-    );
-  }
+  Future<Uint8List?> _load() =>
+      _ThumbnailCache.get(widget.library, widget.asset, widget.thumbnailSize);
 
   @override
   void didUpdateWidget(covariant _AssetTile oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.asset.id != widget.asset.id) {
-      _thumbFuture = null;
-    }
+    if (oldWidget.asset.id != widget.asset.id) _thumb = _load();
   }
 
   @override
   Widget build(BuildContext context) {
     final selected = widget.selectionIndex != null;
-    final errorColor = Theme.of(context).colorScheme.error;
-    return FutureBuilder<int?>(
-      future: widget.sizeBytesFuture,
-      builder: (context, sizeSnap) {
-        final size = sizeSnap.data;
-        final overCap = size != null && size > widget.maxBytes;
-        return InkWell(
-          onTap: overCap
-              ? () {
-                  ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Skipped: ${widget.humanSize(size)} is over the '
-                        '${widget.maxBytes ~/ (1024 * 1024)} MB cap.',
-                      ),
-                    ),
-                  );
-                }
-              : widget.onTap,
-          onLongPress: overCap ? null : widget.onLongPress,
-          child: FutureBuilder<Uint8List?>(
-            future: _thumb(),
+    return InkWell(
+      onTap: widget.onTap,
+      onLongPress: widget.onLongPress,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          FutureBuilder<Uint8List?>(
+            future: _thumb,
             builder: (context, snap) {
               final thumb = snap.data;
-              return Stack(
-                fit: StackFit.expand,
-                children: [
-                  if (thumb != null)
-                    Image.memory(
+              return thumb != null
+                  ? Image.memory(
                       thumb,
                       fit: BoxFit.cover,
                       gaplessPlayback: true,
                     )
-                  else
-                    Container(color: widget.palette.stroke),
-                  if (selected && !overCap)
-                    Container(
-                      color: widget.palette.primary.withValues(alpha: 0.30),
-                    ),
-                  if (overCap)
-                    Container(color: errorColor.withValues(alpha: 0.18)),
-                  if (widget.asset.type == AssetType.video)
-                    Positioned(
-                      left: 4,
-                      bottom: 4,
-                      child: _BadgeChip(
-                        icon: Icons.play_arrow,
-                        text: widget.humanDuration(widget.asset.videoDuration),
-                      ),
-                    ),
-                  // Size badge (bottom-right). Loading… until resolved.
-                  Positioned(
-                    right: 4,
-                    bottom: 4,
-                    child: _BadgeChip(
-                      text: size == null ? '…' : widget.humanSize(size),
-                      foreground: overCap ? errorColor : null,
-                    ),
-                  ),
-                  if (selected && !overCap)
-                    Positioned(
-                      top: 4,
-                      right: 4,
-                      child: CircleAvatar(
-                        radius: 12,
-                        backgroundColor: widget.palette.primary,
-                        child: Text(
-                          '${widget.selectionIndex!}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ),
-                  if (overCap)
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: Container(
-                          decoration: BoxDecoration(
-                            border: Border.all(color: errorColor, width: 2),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              );
+                  : Container(color: widget.palette.stroke);
             },
           ),
-        );
-      },
+          if (selected)
+            Container(color: widget.palette.primary.withValues(alpha: 0.30)),
+          if (widget.asset.type == AssetType.video)
+            Positioned(
+              left: 4,
+              bottom: 4,
+              child: _BadgeChip(
+                icon: Icons.play_arrow,
+                text: widget.humanDuration(widget.asset.videoDuration),
+              ),
+            ),
+          if (selected)
+            Positioned(
+              top: 4,
+              right: 4,
+              child: CircleAvatar(
+                radius: 12,
+                backgroundColor: widget.palette.primary,
+                child: Text(
+                  '${widget.selectionIndex!}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
 
 class _BadgeChip extends StatelessWidget {
-  const _BadgeChip({this.icon, required this.text, this.foreground});
+  const _BadgeChip({this.icon, required this.text});
 
   final IconData? icon;
   final String text;
-  final Color? foreground;
 
   @override
   Widget build(BuildContext context) {
-    final color = foreground ?? Colors.white;
+    const color = Colors.white;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(

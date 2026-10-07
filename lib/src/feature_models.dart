@@ -17,6 +17,10 @@ enum ApplicationCapability {
 
   /// Accepts 1 MiB attachment blocks (besides 128 KiB and 4 MiB).
   irohBlock1MiBV1,
+
+  /// Re-sends "file verified" until it lands and answers a repeated offer
+  /// for a file it has: the sender waits for it instead of guessing.
+  attachmentCompleteRetryV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

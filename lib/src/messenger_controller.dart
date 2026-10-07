@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -9433,6 +9434,8 @@ class MessengerController extends ChangeNotifier {
     String reason,
   ) {
     final attachmentId = state.descriptor.id;
+    // Not verifying any more: the transfer is being offered again.
+    state.peerVerifying = false;
     state.autoRetries = min(state.autoRetries + 1, 1 << 20);
     final delay =
         _transferRetryBackoff[min(
@@ -9478,6 +9481,28 @@ class MessengerController extends ChangeNotifier {
     if (state.paused ||
         _transferSessionById(activeId)?.lastError == _irohLimitMessage) {
       _armOutboundStallTimer(contact);
+      return;
+    }
+    // Older receivers send "verified" once and ignore a repeated offer; newer
+    // ones re-send it, so only for the older ones is silence taken as done.
+    if (state.peerReportedAll &&
+        !contact.featureCapabilities.contains(
+          ApplicationCapability.attachmentCompleteRetryV1,
+        ) &&
+        ++state.stallsAfterPeerHadAll >= 2) {
+      appendDebugLog(
+        'Outbound ${state.descriptor.id}: the receiver had every block and '
+        'its completion never came; treating the transfer as done.',
+      );
+      _assumedCompleteAttachments[state.descriptor.id] = (
+        peerDeviceId: contact.deviceId,
+        messageId: state.messageId,
+      );
+      unawaited(
+        _handleAttachmentComplete(contact, {
+          'attachmentId': state.descriptor.id,
+        }),
+      );
       return;
     }
     appendDebugLog(
@@ -9638,9 +9663,15 @@ class MessengerController extends ChangeNotifier {
         message.transportDetail,
       ),
     };
-    final phase = pause != null && (pause.pausedByMe || pause.pausedByPeer)
+    final delivered =
+        message.state == DeliveryState.delivered ||
+        message.state == DeliveryState.read;
+    final phase = delivered && inbound == null && outbound == null
+        ? TransferPhase.completed
+        : pause != null && (pause.pausedByMe || pause.pausedByPeer)
         ? TransferPhase.paused
-        : inbound?.finalizing == true || outbound?.peerVerifying == true
+        : inbound?.finalizing == true ||
+              (outbound?.peerVerifying == true && !delivered)
         ? TransferPhase.verifying
         : inbound?.awaitingAcceptance == true
         ? TransferPhase.awaitingApproval
@@ -9713,6 +9744,32 @@ class MessengerController extends ChangeNotifier {
 
   AttachmentDescriptor? attachmentDescriptorFor(String attachmentId) =>
       messageForAttachment(attachmentId)?.attachment;
+
+  /// Makes [contactDeviceId] look like a build without [capability].
+  @visibleForTesting
+  void dropContactCapabilityForTesting(
+    String contactDeviceId,
+    ApplicationCapability capability,
+  ) {
+    final contact = _contactByDeviceId(contactDeviceId);
+    if (contact == null) return;
+    _replaceContactRecord(
+      contact.copyWith(
+        featureCapabilities: [
+          for (final entry in contact.featureCapabilities)
+            if (entry != capability) entry,
+        ],
+      ),
+    );
+  }
+
+  /// Runs the outbound stall handling for [contactDeviceId] now instead of
+  /// after its timeout.
+  @visibleForTesting
+  void triggerOutboundStallForTesting(String contactDeviceId) {
+    final contact = _contactByDeviceId(contactDeviceId);
+    if (contact != null) _onOutboundStall(contact);
+  }
 
   @visibleForTesting
   String inboundTransferDebugForTesting(String attachmentId) {
@@ -14791,6 +14848,7 @@ class MessengerController extends ChangeNotifier {
 
         if (envelope.kind == 'group_message') {
           await _handleGroupMessage(envelope);
+          _rememberMessageDigest(envelope);
           _markSeen(envelope.messageId);
           continue;
         }
@@ -14935,6 +14993,7 @@ class MessengerController extends ChangeNotifier {
         }
         _reachability.noteAnySignal(contact.deviceId, at: envelope.createdAt);
         await _sendAck(contact: contact, envelope: envelope);
+        _rememberMessageDigest(envelope);
         _markSeen(envelope.messageId);
       } catch (error) {
         failed++;
@@ -15379,13 +15438,23 @@ class MessengerController extends ChangeNotifier {
     // cache miss, retry, double-poll) would otherwise create a second
     // ghost bubble with the same attachment.
     final existingInbound = _inboundAttachments[descriptor.id];
+    final existingMessage = _snapshot.conversations
+        .expand((conversation) => conversation.messages)
+        .where((message) => message.attachment?.id == descriptor.id)
+        .firstOrNull;
     if (existingInbound != null ||
         _outboundAttachments.containsKey(descriptor.id) ||
-        _snapshot.conversations.any(
-          (conversation) => conversation.messages.any(
-            (message) => message.attachment?.id == descriptor.id,
-          ),
-        )) {
+        existingMessage != null) {
+      if (existingInbound == null &&
+          existingMessage != null &&
+          !existingMessage.outbound &&
+          existingMessage.senderDeviceId == sender.deviceId &&
+          (attachmentAvailableLocally(descriptor.id) ||
+              existingMessage.state == DeliveryState.delivered ||
+              existingMessage.state == DeliveryState.read)) {
+        _answerOfferForCompletedAttachment(sender, descriptor.id);
+        return;
+      }
       appendDebugLog(
         'Dropping duplicate attachment_offer for ${descriptor.id} '
         'from ${sender.alias}.',
@@ -16880,30 +16949,59 @@ class MessengerController extends ChangeNotifier {
     return null;
   }
 
+  /// Tells the sender the file arrived and verified. Queued and retried
+  /// like other control envelopes: the sender keeps the transfer open (and
+  /// its bubble at 100%) until this arrives.
   Future<void> _sendAttachmentComplete(
     ContactRecord peer,
     String attachmentId,
   ) async {
-    final me = _requireIdentity();
-    final envelope = await _crypto.encryptPayloadEnvelope(
-      kind: 'attachment_complete',
-      messageId: _randomId('adone'),
-      conversationId: _crypto.conversationIdFor(peer.deviceId),
-      senderAccountId: me.accountId,
-      senderDeviceId: me.deviceId,
-      recipientDeviceId: peer.deviceId,
-      contact: peer,
-      plaintext: jsonEncode({'attachmentId': attachmentId}),
-    );
+    if (!hasIdentity) return;
     try {
-      await _deliverToContact(
+      await _enqueueAndDeliverEnvelope(
         contact: peer,
-        recipientDeviceId: peer.deviceId,
-        envelope: envelope,
+        payload: QueuedEnvelopePayload(
+          kind: 'attachment_complete',
+          messageId: _randomId('adone'),
+          conversationId: _crypto.conversationIdFor(peer.deviceId),
+          plaintext: jsonEncode({'attachmentId': attachmentId}),
+          createdAt: _now().toUtc(),
+        ),
+        kind: PendingAckKind.attachmentComplete,
       );
-    } catch (_) {
-      // Best effort; the sender's local state is already correct.
+    } catch (error) {
+      appendDebugLog('Could not queue attachment_complete: $error');
     }
+  }
+
+  /// Transfers finished without the receiver's word (older receivers whose
+  /// completion was lost). A later cancel from that receiver means its
+  /// verification failed after all.
+  final Map<String, ({String peerDeviceId, String messageId})>
+  _assumedCompleteAttachments = {};
+
+  /// When completions were last re-sent for offers of finished files.
+  final Map<String, DateTime> _completedOfferRepliesAt = {};
+
+  /// Answers a repeated offer for a file that already arrived here: the
+  /// sender missed the completion and would otherwise offer it forever.
+  void _answerOfferForCompletedAttachment(
+    ContactRecord sender,
+    String attachmentId,
+  ) {
+    final now = _now();
+    final last = _completedOfferRepliesAt[attachmentId];
+    if (last != null && now.difference(last) < const Duration(seconds: 30)) {
+      return;
+    }
+    if (_completedOfferRepliesAt.length > 512) {
+      _completedOfferRepliesAt.remove(_completedOfferRepliesAt.keys.first);
+    }
+    _completedOfferRepliesAt[attachmentId] = now;
+    appendDebugLog(
+      'Re-sending attachment_complete for $attachmentId to ${sender.alias}.',
+    );
+    unawaited(_sendAttachmentComplete(sender, attachmentId));
   }
 
   /// Debounce window for outgoing `attachment_progress` envelopes. Cap to
@@ -17006,6 +17104,7 @@ class MessengerController extends ChangeNotifier {
     }
     state.peerReceivedCount = received;
     state.peerVerifying = received == state.descriptor.effectiveChunkCount;
+    if (state.peerVerifying) state.peerReportedAll = true;
     if (_isActiveOutbound(sender.deviceId, attachmentId)) {
       _armOutboundStallTimer(sender, attachmentId: attachmentId);
       // Byte acknowledgements are rendered through the throttled transfer
@@ -17108,6 +17207,25 @@ class MessengerController extends ChangeNotifier {
     }
     final inbound = _inboundAttachments[attachmentId];
     final outbound = _outboundAttachments[attachmentId];
+    final assumed = _assumedCompleteAttachments[attachmentId];
+    if (inbound == null &&
+        outbound == null &&
+        assumed?.peerDeviceId == sender.deviceId) {
+      // Taken as delivered after the receiver went quiet; it failed after
+      // all.
+      _assumedCompleteAttachments.remove(attachmentId);
+      // Delivered never goes back through _updateMessageState.
+      final message = _messageById(sender.deviceId, assumed!.messageId);
+      if (message != null) {
+        _upsertMessage(
+          sender.deviceId,
+          message.copyWith(state: DeliveryState.failed),
+        );
+        unawaited(_saveSnapshotSilently(notify: false));
+      }
+      notifyListeners();
+      return;
+    }
     if ((inbound == null && outbound == null) ||
         (inbound != null && inbound.peerDeviceId != sender.deviceId) ||
         (outbound != null && outbound.peerDeviceId != sender.deviceId)) {
@@ -20201,9 +20319,11 @@ class MessengerController extends ChangeNotifier {
     }
     _noteOutboundAttempt(contact.deviceId, message.id);
     try {
-      final envelope = await _crypto.encryptDirectMessage(
-        contact: contact,
-        message: message,
+      final envelope = await _outboxEnvelope(
+        contact,
+        message.id,
+        _crypto.encodeDirectMessagePayload(message),
+        () => _crypto.encryptDirectMessage(contact: contact, message: message),
       );
       if (_locallyDeletedMessageIds.contains(message.id) ||
           _messageById(contact.deviceId, message.id) == null) {
@@ -20259,10 +20379,15 @@ class MessengerController extends ChangeNotifier {
     }
     _noteOutboundAttempt(contact.deviceId, message.id);
     try {
-      final envelope = await _crypto.encryptGroupMessage(
-        group: group,
-        contact: contact,
-        message: message,
+      final envelope = await _outboxEnvelope(
+        contact,
+        message.id,
+        _crypto.encodeGroupMessagePayload(group: group, message: message),
+        () => _crypto.encryptGroupMessage(
+          group: group,
+          contact: contact,
+          message: message,
+        ),
       );
       final route = await _deliverToContact(
         contact: contact,
@@ -20413,8 +20538,35 @@ class MessengerController extends ChangeNotifier {
         contact.accountId != envelope.senderAccountId) {
       return;
     }
+    // An identical copy of the authenticated original needs no decrypting:
+    // its message key is spent, and decrypting it again failed and reset
+    // the session. Only a copy encrypted afresh (older senders encrypt
+    // every retry) is decrypted to authenticate it.
+    final sameBytes =
+        _snapshot.seenMessageDigests[envelope.messageId] ==
+        _envelopeDigest(envelope);
+    if (sameBytes) {
+      final now = _now();
+      final last = _duplicateAckedAt[envelope.messageId];
+      if (last != null && now.difference(last) < const Duration(seconds: 10)) {
+        return;
+      }
+      _duplicateAckedAt.remove(envelope.messageId);
+      while (_duplicateAckedAt.length >= 1024) {
+        _duplicateAckedAt.remove(_duplicateAckedAt.keys.first);
+      }
+      _duplicateAckedAt[envelope.messageId] = now;
+    }
     try {
-      await _crypto.decryptMessage(contact: contact, envelope: envelope);
+      if (!sameBytes) {
+        // A late copy failing to decrypt (its key long spent) says nothing
+        // about the session: no new session is offered for it.
+        await _crypto.decryptMessage(
+          contact: contact,
+          envelope: envelope,
+          reportFailure: false,
+        );
+      }
       await _sendAck(contact: contact, envelope: envelope);
     } catch (_) {
       // Duplicate deliveries are retried best-effort; missing the replayed ack
@@ -20464,7 +20616,102 @@ class MessengerController extends ChangeNotifier {
     final key = _outboundAttemptKey(peerDeviceId, messageId);
     _outboundAttemptedAt.remove(key);
     _outboundAttemptCount.remove(key);
+    _envelopeOutbox.remove(key);
   }
+
+  /// Envelopes already encrypted for unacknowledged messages, reused by
+  /// retries. Encrypting each attempt again stepped the ratchet every time,
+  /// and identical copies let the receiver recognise a duplicate without
+  /// decrypting it again. An entry holds only while the peer's key, its
+  /// session generation and the message content are unchanged.
+  final LinkedHashMap<
+    String,
+    ({String fingerprint, Future<RelayEnvelope> envelope})
+  >
+  _envelopeOutbox = LinkedHashMap();
+  static const int _envelopeOutboxCap = 2048;
+
+  /// Bumped whenever a peer's forward-secret session changes (a bundle, a
+  /// failed decrypt): envelopes encrypted before belong to the old session.
+  final Map<String, int> _peerSessionGeneration = {};
+
+  void _newPeerSession(String deviceId) {
+    _peerSessionGeneration[deviceId] =
+        (_peerSessionGeneration[deviceId] ?? 0) + 1;
+  }
+
+  Future<RelayEnvelope> _outboxEnvelope(
+    ContactRecord contact,
+    String messageId,
+    String payload,
+    Future<RelayEnvelope> Function() encrypt,
+  ) async {
+    final key = _outboundAttemptKey(contact.deviceId, messageId);
+    // Whether a forward-secret session exists decides the envelope format:
+    // a session opened or dropped (a downgrade) needs a new encryption.
+    final hasSession =
+        await _ratchet?.hasSession(ratchetPeerId(contact)) ?? false;
+    final fingerprint = [
+      contact.publicKeyBase64,
+      _peerSessionGeneration[contact.deviceId] ?? 0,
+      hasSession,
+      dart_crypto.sha256.convert(utf8.encode(payload)),
+    ].join('|');
+    final cached = _envelopeOutbox.remove(key);
+    if (cached != null && cached.fingerprint == fingerprint) {
+      _envelopeOutbox[key] = cached;
+      return cached.envelope;
+    }
+    // The pending encryption is shared, so two sends at once still go out
+    // as one ciphertext.
+    final envelope = encrypt();
+    _envelopeOutbox[key] = (fingerprint: fingerprint, envelope: envelope);
+    while (_envelopeOutbox.length > _envelopeOutboxCap) {
+      _envelopeOutbox.remove(_envelopeOutbox.keys.first);
+    }
+    try {
+      return await envelope;
+    } catch (_) {
+      if (identical(_envelopeOutbox[key]?.envelope, envelope)) {
+        _envelopeOutbox.remove(key);
+      }
+      rethrow;
+    }
+  }
+
+  static const int _seenMessageDigestCap = 4096;
+
+  /// Identifies one encrypted copy: identical bytes give the same digest.
+  static String _envelopeDigest(RelayEnvelope envelope) => base64Encode(
+    dart_crypto.sha256
+        .convert(
+          utf8.encode(
+            [
+              utf8.decode(envelope.authenticatedHeaderBytes()),
+              envelope.nonceBase64,
+              envelope.ciphertextBase64,
+              envelope.macBase64,
+              envelope.payloadBase64,
+              envelope.ratchetType,
+            ].join('\n'),
+          ),
+        )
+        .bytes
+        .sublist(0, 16),
+  );
+
+  void _rememberMessageDigest(RelayEnvelope envelope) {
+    final digests = Map<String, String>.of(_snapshot.seenMessageDigests)
+      ..remove(envelope.messageId)
+      ..[envelope.messageId] = _envelopeDigest(envelope);
+    while (digests.length > _seenMessageDigestCap) {
+      digests.remove(digests.keys.first);
+    }
+    _snapshot = _snapshot.copyWith(seenMessageDigests: digests);
+  }
+
+  /// When an identical duplicate was last acknowledged, by message id.
+  final Map<String, DateTime> _duplicateAckedAt = {};
 
   Future<_DeliveryRoute> _deliverToContact({
     required ContactRecord contact,
@@ -23773,6 +24020,7 @@ class MessengerController extends ChangeNotifier {
         ..ratchet = sessions
         ..groupFileSendKey = _groupFileSendKey
         ..onRatchetFailure = (peer, {required bool downgrade}) {
+          _newPeerSession(peer.deviceId);
           appendDebugLog(
             downgrade
                 ? 'Rejected static-key traffic from ratchet peer ${peer.alias}; offering a new session.'
@@ -24079,9 +24327,12 @@ class MessengerController extends ChangeNotifier {
     if (reason != 'offer' && reason != 'answer' && reason != 'reset') return;
     final bundle = RatchetBundle.fromJson(decoded['bundle']);
     final id = ratchetPeerId(peer);
+    // Messages encrypted before this bundle must be encrypted again.
+    _newPeerSession(peer.deviceId);
     await sessions.rememberPeerIdentity(id, bundle.identityKey);
     if (reason == 'answer') return;
     await sessions.startSession(id, bundle);
+    _newPeerSession(peer.deviceId);
     await _sendRatchetBundle(peer, reason: 'answer');
     final me = _requireIdentity();
     try {
@@ -24645,6 +24896,7 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.voiceMessageAttachmentsV1,
       ApplicationCapability.groupFileCaptionsV2,
       ApplicationCapability.irohBlock1MiBV1,
+      ApplicationCapability.attachmentCompleteRetryV1,
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,
@@ -26179,6 +26431,12 @@ class _OutboundAttachmentState {
   /// shows — fixes the nightly.7 desync where each side computed its
   /// own value (LocalSend-style).
   bool peerVerifying = false;
+
+  /// Stalls since the receiver reported every block. A receiver that
+  /// verified the file but whose completion was lost (older versions sent
+  /// it once and ignore re-offers) is taken as done after two.
+  int stallsAfterPeerHadAll = 0;
+  bool peerReportedAll = false;
   int? peerReceivedCount;
   int? peerReceivedBytes;
   DateTime? peerProgressAt;

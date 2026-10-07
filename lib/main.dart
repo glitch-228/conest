@@ -2326,7 +2326,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _openMediaPicker() async {
     final contact = _selectedContact;
     if (contact == null) {
-      if (_selectedGroup != null) await _pickAndShareGroupFiles();
+      if (_selectedGroup != null) await _openGroupMediaPicker();
       return;
     }
     final result = await showMediaPickerSheet(
@@ -2354,6 +2354,70 @@ class _HomeScreenState extends State<HomeScreen> {
       fileName: result.fileName!,
       mimeType: result.mimeType ?? 'application/octet-stream',
     );
+  }
+
+  /// Photos and videos for a group: the same gallery sheet as in chats,
+  /// shared as group files (no size cap: group files go by path).
+  Future<void> _openGroupMediaPicker() async {
+    final group = _selectedGroup;
+    if (group == null) return;
+    final result = await showMediaPickerSheet(
+      context: context,
+      palette: widget.palette,
+      maxBytes: 1 << 40,
+    );
+    if (!mounted || result == null) return;
+    if (result.fallbackToFilePicker) {
+      await _pickAndShareGroupFiles();
+      return;
+    }
+    final items = [
+      ...?result.items,
+      if (result.items == null)
+        (
+          bytes: result.bytes,
+          filePath: result.filePath,
+          sizeBytes: result.sizeBytes ?? 0,
+          fileName: result.fileName ?? 'media',
+          mimeType: result.mimeType ?? 'application/octet-stream',
+          caption: '',
+          poster: null,
+        ),
+    ];
+    for (final item in items) {
+      try {
+        if (item.filePath case final path?) {
+          try {
+            await widget.controller.publishGroupFile(
+              groupId: group.groupId,
+              path: path,
+              fileName: item.fileName,
+              mimeType: item.mimeType,
+              caption: item.caption,
+            );
+          } on StateError catch (error) {
+            // Some members cannot show captions: share it without one.
+            if (item.caption.isEmpty) rethrow;
+            widget.controller.setStatus('${error.message} Sent without it.');
+            await widget.controller.publishGroupFile(
+              groupId: group.groupId,
+              path: path,
+              fileName: item.fileName,
+              mimeType: item.mimeType,
+            );
+          }
+        } else if (item.bytes case final bytes?) {
+          await _publishGroupClipboardBytes(
+            group,
+            bytes: bytes,
+            fileName: item.fileName,
+            mimeType: item.mimeType,
+          );
+        }
+      } catch (error) {
+        widget.controller.setStatus('Could not share ${item.fileName}: $error');
+      }
+    }
   }
 
   Future<void> _pickAndShareGroupFiles() async {
@@ -18452,9 +18516,19 @@ class _AttachmentRow extends StatelessWidget {
     final hasBytes = bytes != null;
     final hasLocalFile = controller.attachmentAvailableLocally(descriptor.id);
     final showImage = _isImage && (hasBytes || hasLocalFile);
+    // A delivered or read message is done, whatever a lingering transfer
+    // record still says (a lost completion once left albums at 100%).
+    // A later message read marks earlier ones read too, uploads still
+    // running included; those keep their controls until every byte is in.
+    final settled =
+        (!outbound && hasLocalFile) ||
+        ((messageState == DeliveryState.delivered ||
+                messageState == DeliveryState.read) &&
+            (snapshot == null || snapshot.progress >= 1));
     final transferInFlight =
-        snapshot?.phase.isActive == true ||
-        snapshot?.phase == TransferPhase.paused;
+        !settled &&
+        (snapshot?.phase.isActive == true ||
+            snapshot?.phase == TransferPhase.paused);
 
     if (!outbound && controller.attachmentAwaitingAcceptance(descriptor.id)) {
       final sizeMb = descriptor.sizeBytes / (1024 * 1024);

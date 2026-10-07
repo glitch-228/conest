@@ -10386,6 +10386,239 @@ void main() {
     expect(calls, 1);
   });
 
+  group('a lost file completion', () {
+    // Sends a small file from Alice to Bob while [dropCompletion] decides
+    // which attachment_complete envelopes vanish after being "stored".
+    Future<(MessengerController, MessengerController, String)> transfer(
+      bool Function(int index) dropCompletion,
+    ) async {
+      var completions = 0;
+      final relay = _FakeRelayClient(
+        shouldBlackholeStore: (_, _, _, _, envelope) =>
+            envelope.kind == 'attachment_complete' &&
+            dropCompletion(completions++),
+      );
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      await alice.sendAttachment(
+        contact: alice.contacts.single,
+        bytes: Uint8List.fromList(List<int>.generate(4096, (i) => i & 0xff)),
+        fileName: 'photo.jpg',
+      );
+      final id = alice
+          .messagesFor(bob.identity!.deviceId)
+          .singleWhere((m) => m.hasAttachment)
+          .attachment!
+          .id;
+      for (var round = 0; round < 60; round++) {
+        await bob.pollNow();
+        await alice.pollNow();
+        if (bob.attachmentAwaitingAcceptance(id)) {
+          await bob.acceptIncomingAttachment(id);
+        }
+        if (bob.attachmentAvailableLocally(id) && completions > 0) break;
+      }
+      expect(bob.attachmentAvailableLocally(id), isTrue);
+      return (alice, bob, id);
+    }
+
+    // The transfer is still open on the sender (the bubble at 100% with a
+    // pause button), even when the offer message itself was acknowledged.
+    bool open(MessengerController alice, String id) =>
+        alice.transferSnapshotFor(id)?.phase.isActive ?? false;
+
+    Future<void> pump(
+      MessengerController alice,
+      MessengerController bob, {
+      bool Function()? until,
+      Duration limit = const Duration(seconds: 15),
+    }) async {
+      final deadline = DateTime.now().add(limit);
+      while (!(until?.call() ?? false) && DateTime.now().isBefore(deadline)) {
+        await bob.pollNow();
+        await alice.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    }
+
+    test('is sent again when the sender offers the file again', () async {
+      final (alice, bob, id) = await transfer((index) => index == 0);
+      final bobId = bob.identity!.deviceId;
+      await pump(alice, bob, limit: const Duration(seconds: 3));
+      expect(open(alice, id), isTrue);
+
+      alice.triggerOutboundStallForTesting(bobId);
+      await pump(alice, bob, until: () => !open(alice, id));
+      expect(open(alice, id), isFalse);
+      expect(
+        alice.messagesFor(bobId).singleWhere((m) => m.hasAttachment).state,
+        DeliveryState.delivered,
+      );
+    });
+
+    testWidgets('an upload marked read by a later message keeps its controls', (
+      tester,
+    ) async {
+      late MessengerController alice;
+      late String id;
+      await tester.runAsync(() async {
+        final relay = _FakeRelayClient();
+        alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        // Bob has to accept files: this one waits for him.
+        await bob.updateGlobalConnectivity(
+          bob.identity!.connectivity.copyWith(
+            autoDownloadPreset: AutoDownloadPreset.custom,
+          ),
+        );
+        final bobId = bob.identity!.deviceId;
+        final aliceId = alice.identity!.deviceId;
+        await alice.sendAttachment(
+          contact: alice.contacts.single,
+          bytes: Uint8List(64 * 1024),
+          fileName: 'clip.mp4',
+        );
+        id = alice
+            .messagesFor(bobId)
+            .singleWhere((m) => m.hasAttachment)
+            .attachment!
+            .id;
+        await alice.sendMessage(contact: alice.contacts.single, body: 'here');
+        await pump(
+          alice,
+          bob,
+          until: () => bob.messagesFor(aliceId).any((m) => m.body == 'here'),
+        );
+        await bob.markConversationRead(aliceId);
+        await pump(
+          alice,
+          bob,
+          until: () =>
+              alice
+                  .messagesFor(bobId)
+                  .singleWhere((m) => m.hasAttachment)
+                  .state ==
+              DeliveryState.read,
+        );
+      });
+      expect(open(alice, id), isTrue);
+      final updates = _createUpdateService();
+      final theme = app.ConestThemeController.memory();
+      addTearDown(updates.dispose);
+      addTearDown(theme.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ListenableBuilder(
+            listenable: alice,
+            builder: (context, _) => app.HomeScreen(
+              controller: alice,
+              updateService: updates,
+              buildInfo: _createBuildInfo(),
+              themeController: theme,
+              palette: app.ConestPalette(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('Bob').first);
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.byIcon(Icons.pause_circle_outline), findsWidgets);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    test('from a newer receiver is waited for, not assumed', () async {
+      final (alice, bob, id) = await transfer((_) => true);
+      final bobId = bob.identity!.deviceId;
+      for (var stall = 0; stall < 3; stall++) {
+        alice.triggerOutboundStallForTesting(bobId);
+        await pump(alice, bob, limit: const Duration(seconds: 3));
+      }
+      expect(open(alice, id), isTrue);
+    });
+
+    testWidgets('leaves no pause button on a delivered file', (tester) async {
+      late MessengerController alice;
+      late String id;
+      await tester.runAsync(() async {
+        final MessengerController bob;
+        (alice, bob, id) = await transfer((_) => true);
+        await pump(
+          alice,
+          bob,
+          until: () =>
+              alice
+                  .messagesFor(bob.identity!.deviceId)
+                  .singleWhere((m) => m.hasAttachment)
+                  .state ==
+              DeliveryState.delivered,
+        );
+      });
+      // The offer was acknowledged, the transfer record is still open.
+      expect(open(alice, id), isTrue);
+      final updates = _createUpdateService();
+      final theme = app.ConestThemeController.memory();
+      addTearDown(updates.dispose);
+      addTearDown(theme.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ListenableBuilder(
+            listenable: alice,
+            builder: (context, _) => app.HomeScreen(
+              controller: alice,
+              updateService: updates,
+              buildInfo: _createBuildInfo(),
+              themeController: theme,
+              palette: app.ConestPalette(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('Bob').first);
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.byIcon(Icons.pause_circle_outline), findsNothing);
+      expect(find.text('100%'), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    test(
+      'from an older receiver that never re-sends it still finishes',
+      () async {
+        final (alice, bob, id) = await transfer((_) => true);
+        final bobId = bob.identity!.deviceId;
+        alice.dropContactCapabilityForTesting(
+          bobId,
+          ApplicationCapability.attachmentCompleteRetryV1,
+        );
+        alice.triggerOutboundStallForTesting(bobId);
+        await pump(alice, bob, limit: const Duration(seconds: 4));
+        expect(open(alice, id), isTrue);
+        alice.triggerOutboundStallForTesting(bobId);
+        await pump(alice, bob, until: () => !open(alice, id));
+        expect(open(alice, id), isFalse);
+      },
+    );
+  });
+
   test('sendAttachment round-trips a 1 MB file with 128 KiB blocks', () async {
     final relayClient = _FakeRelayClient();
     final alice = await _createController(
@@ -13327,6 +13560,152 @@ void main() {
       expect(
         directs.every((envelope) => envelope.nonceBase64 == null),
         isTrue,
+      );
+    });
+
+    test(
+      'a duplicate after a restart is acknowledged without a new session',
+      () async {
+        final relay = _FakeRelayClient();
+        final bobVault = _MemoryVaultStore();
+        final alice = await ratchetController(relay, 'Alice');
+        final bob = await ratchetController(relay, 'Bob', vaultStore: bobVault);
+        addTearDown(alice.dispose);
+        await establish(alice, bob);
+        final aliceId = alice.identity!.deviceId;
+        await alice.sendMessage(contact: alice.contacts.single, body: 'once');
+        await settle([alice, bob]);
+        final copy = relay.storedEnvelopes.lastWhere(
+          (envelope) =>
+              envelope.kind == 'direct_message' &&
+              envelope.senderDeviceId == aliceId,
+        );
+        expect(copy.protocolVersion, 3);
+        // A restart empties every in-memory cache of decrypted messages.
+        bob.dispose();
+        final restarted = await ratchetController(
+          relay,
+          'Bob',
+          vaultStore: bobVault,
+          createIdentity: false,
+        );
+        addTearDown(restarted.dispose);
+        final before = relay.storedEnvelopes.length;
+        await restarted.processEnvelopesForTesting([copy]);
+        final sent = relay.storedEnvelopes
+            .skip(before)
+            .map((envelope) => envelope.kind)
+            .toList();
+        expect(sent, contains('ack'));
+        expect(sent, isNot(contains('ratchet_bundle')));
+        expect(
+          restarted.messagesFor(aliceId).where((m) => m.body == 'once'),
+          hasLength(1),
+        );
+      },
+    );
+
+    test('a late copy that fails to decrypt starts no new session', () async {
+      final relay = _FakeRelayClient();
+      final bobVault = _MemoryVaultStore();
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob', vaultStore: bobVault);
+      addTearDown(alice.dispose);
+      await establish(alice, bob);
+      final aliceId = alice.identity!.deviceId;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'once');
+      await settle([alice, bob]);
+      final copy = relay.storedEnvelopes.lastWhere(
+        (envelope) =>
+            envelope.kind == 'direct_message' &&
+            envelope.senderDeviceId == aliceId,
+      );
+      final bytes = base64Decode(copy.ciphertextBase64!);
+      bytes[bytes.length ~/ 2] ^= 1;
+      final altered = RelayEnvelope.fromJson({
+        ...copy.toJson(),
+        'ciphertextBase64': base64Encode(bytes),
+      });
+      bob.dispose();
+      final restarted = await ratchetController(
+        relay,
+        'Bob',
+        vaultStore: bobVault,
+        createIdentity: false,
+      );
+      addTearDown(restarted.dispose);
+      final before = relay.storedEnvelopes.length;
+      await restarted.processEnvelopesForTesting([altered]);
+      // A new session would be offered in the background.
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      final sent = relay.storedEnvelopes
+          .skip(before)
+          .map((envelope) => envelope.kind)
+          .toList();
+      expect(sent, isNot(contains('ack')));
+      expect(sent, isNot(contains('ratchet_bundle')));
+    });
+
+    test('a retry after the session was dropped is encrypted again', () async {
+      final copies = <RelayEnvelope>[];
+      final relay = _FakeRelayClient(
+        shouldBlackholeStore: (_, _, _, _, envelope) {
+          if (envelope.kind != 'direct_message') return false;
+          copies.add(envelope);
+          return copies.length > 2;
+        },
+      );
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await establish(alice, bob);
+      final bobId = bob.identity!.deviceId;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'lost');
+      final id = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'lost')
+          .id;
+      expect(copies.last.messageId, id);
+      expect(copies.last.protocolVersion, 3);
+      // Bob moved to a build without forward secrecy.
+      await alice.forgetRatchetSessionsForTesting(bobId);
+      await alice.retryUnacknowledgedMessagesNow();
+      expect(copies.last.messageId, id);
+      expect(copies.last.protocolVersion, 2);
+    });
+
+    test('retries send the same encrypted copy', () async {
+      final copies = <RelayEnvelope>[];
+      final relay = _FakeRelayClient(
+        shouldBlackholeStore: (_, _, _, _, envelope) {
+          if (envelope.kind != 'direct_message') return false;
+          copies.add(envelope);
+          return copies.length > 2;
+        },
+      );
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await establish(alice, bob);
+      final aliceId = alice.identity!.deviceId;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'lost');
+      for (var round = 0; round < 3; round++) {
+        await alice.retryUnacknowledgedMessagesNow();
+      }
+      final lost = copies.where((envelope) {
+        return envelope.senderDeviceId == aliceId &&
+            envelope.messageId ==
+                alice
+                    .messagesFor(bob.identity!.deviceId)
+                    .singleWhere((m) => m.body == 'lost')
+                    .id;
+      }).toList();
+      expect(lost, hasLength(greaterThanOrEqualTo(2)));
+      expect(
+        lost.map((envelope) => envelope.ciphertextBase64).toSet(),
+        hasLength(1),
       );
     });
 

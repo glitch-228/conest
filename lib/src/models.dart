@@ -3801,7 +3801,10 @@ enum PendingAckKind {
   debugProbeAck,
   debugTwoWayMessage,
   debugTwoWayReply,
-  voiceCallSignal;
+  voiceCallSignal,
+  // The receiver's "file verified" notice: lost once, it left the sender's
+  // bubble at 100% forever.
+  attachmentComplete;
 
   String get wireValue => name;
 
@@ -4293,6 +4296,7 @@ class VaultSnapshot {
     this.pinnedRelayIdentityKeys = const <String, String>{},
     this.pendingAckDeliveries = const <PendingAckDelivery>[],
     this.pendingForwards = const <PendingForward>[],
+    this.seenMessageDigests = const <String, String>{},
     this.defaultRelayRouteKeys = const <String>{},
     this.defaultRelayHosts = const <String>{},
     this.defaultRelaysLastFetchedAt,
@@ -4351,6 +4355,11 @@ class VaultSnapshot {
   /// could not reach. Persisted so they survive restarts; dropped after a
   /// week or once delivered.
   final List<PendingForward> pendingForwards;
+
+  /// Digest of each message envelope received (by message id, oldest
+  /// first, capped), so an identical copy arriving later over another route
+  /// or after a restart is acknowledged without decrypting it again.
+  final Map<String, String> seenMessageDigests;
 
   /// `PeerEndpoint.routeKey` values for relays that were ingested from
   /// the signed default-relay manifest. The UI shows these as
@@ -4426,6 +4435,7 @@ class VaultSnapshot {
       pinnedRelayIdentityKeys: const <String, String>{},
       pendingAckDeliveries: const <PendingAckDelivery>[],
       pendingForwards: const <PendingForward>[],
+      seenMessageDigests: const <String, String>{},
       defaultRelayRouteKeys: const <String>{},
       defaultRelayHosts: const <String>{},
       defaultRelaysLastFetchedAt: null,
@@ -4453,6 +4463,7 @@ class VaultSnapshot {
     Map<String, String>? pinnedRelayIdentityKeys,
     List<PendingAckDelivery>? pendingAckDeliveries,
     List<PendingForward>? pendingForwards,
+    Map<String, String>? seenMessageDigests,
     Set<String>? defaultRelayRouteKeys,
     Set<String>? defaultRelayHosts,
     DateTime? defaultRelaysLastFetchedAt,
@@ -4492,6 +4503,7 @@ class VaultSnapshot {
           pinnedRelayIdentityKeys ?? this.pinnedRelayIdentityKeys,
       pendingAckDeliveries: pendingAckDeliveries ?? this.pendingAckDeliveries,
       pendingForwards: pendingForwards ?? this.pendingForwards,
+      seenMessageDigests: seenMessageDigests ?? this.seenMessageDigests,
       defaultRelayRouteKeys:
           defaultRelayRouteKeys ?? this.defaultRelayRouteKeys,
       defaultRelayHosts: defaultRelayHosts ?? this.defaultRelayHosts,
@@ -4550,6 +4562,8 @@ class VaultSnapshot {
         'pendingForwards': pendingForwards
             .map((entry) => entry.toJson())
             .toList(),
+      if (seenMessageDigests.isNotEmpty)
+        'seenMessageDigests': seenMessageDigests,
       'defaultRelayRouteKeys': defaultRelayRouteKeys.toList(),
       'defaultRelayHosts': defaultRelayHosts.toList(),
       if (defaultRelaysLastFetchedAt != null)
@@ -4680,6 +4694,11 @@ class VaultSnapshot {
             in json['pendingForwards'] as List<dynamic>? ?? const [])
           if (entry is Map<String, dynamic>) ?PendingForward.tryFromJson(entry),
       ],
+      seenMessageDigests: <String, String>{
+        if (json['seenMessageDigests'] case final Map<String, dynamic> map)
+          for (final MapEntry(:key, :value) in map.entries)
+            if (value is String) key: value,
+      },
       defaultRelayRouteKeys: <String>{
         for (final value
             in (json['defaultRelayRouteKeys'] as List<dynamic>? ?? const []))
