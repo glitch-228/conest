@@ -4047,25 +4047,43 @@ class ContactRemovalTombstone {
     required this.deviceId,
     required this.removedAt,
     this.pairingRequestId,
+    this.contact,
   });
 
   final String deviceId;
   final DateTime removedAt;
   final String? pairingRequestId;
 
+  /// The removed contact, kept hidden for [noticeWindow] when the peer was
+  /// told: a peer that missed the notice and writes again is told again.
+  final ContactRecord? contact;
+
+  /// How long the removed contact is kept to repeat the notice.
+  static const Duration noticeWindow = Duration(days: 30);
+
   Map<String, dynamic> toJson() => {
     'deviceId': deviceId,
     'removedAt': removedAt.toUtc().toIso8601String(),
     if (pairingRequestId != null) 'pairingRequestId': pairingRequestId,
+    if (contact != null) 'contact': contact!.toJson(),
   };
 
-  factory ContactRemovalTombstone.fromJson(Map<String, dynamic> json) =>
-      ContactRemovalTombstone(
-        deviceId: json['deviceId'] as String,
-        removedAt: DateTime.tryParse(json['removedAt'] as String? ?? '')?.toUtc() ??
-            DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
-        pairingRequestId: json['pairingRequestId'] as String?,
-      );
+  factory ContactRemovalTombstone.fromJson(Map<String, dynamic> json) {
+    ContactRecord? contact;
+    if (json['contact'] case final Map<String, dynamic> value) {
+      try {
+        contact = ContactRecord.fromJson(value);
+      } catch (_) {}
+    }
+    return ContactRemovalTombstone(
+      deviceId: json['deviceId'] as String,
+      removedAt:
+          DateTime.tryParse(json['removedAt'] as String? ?? '')?.toUtc() ??
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      pairingRequestId: json['pairingRequestId'] as String?,
+      contact: contact,
+    );
+  }
 }
 
 /// A user-imported relay list, fetched from an arbitrary URL. Unlike the

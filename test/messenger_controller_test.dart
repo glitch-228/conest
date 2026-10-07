@@ -2121,6 +2121,201 @@ void main() {
     );
   });
 
+  group('contact recovery', () {
+    late _FakeRelayClient relay;
+    late MessengerController alice;
+    late MessengerController bob;
+    // Envelopes from Bob to Alice vanish while this says so.
+    var dropBobToAlice = (RelayEnvelope envelope) => false;
+    var dropAliceToBob = (RelayEnvelope envelope) => false;
+
+    setUp(() async {
+      dropBobToAlice = (_) => false;
+      dropAliceToBob = (_) => false;
+      relay = _FakeRelayClient(
+        shouldBlackholeStore: (_, _, _, recipient, envelope) {
+          if (envelope.senderDeviceId == bob.identity?.deviceId &&
+              recipient == alice.identity?.deviceId) {
+            return dropBobToAlice(envelope);
+          }
+          if (envelope.senderDeviceId == alice.identity?.deviceId &&
+              recipient == bob.identity?.deviceId) {
+            return dropAliceToBob(envelope);
+          }
+          return false;
+        },
+      );
+      alice = await _createController(relayClient: relay, displayName: 'Alice');
+      bob = await _createController(relayClient: relay, displayName: 'Bob');
+    });
+    tearDown(() {
+      alice.dispose();
+      bob.dispose();
+    });
+
+    String id(MessengerController controller) => controller.identity!.deviceId;
+    ContactRecord? contactOf(
+      MessengerController owner,
+      MessengerController peer,
+    ) => owner.contacts.where((c) => c.deviceId == id(peer)).firstOrNull;
+
+    Future<void> until(bool Function() done, {int rounds = 60}) async {
+      for (var round = 0; round < rounds && !done(); round++) {
+        await alice.pollNow();
+        await bob.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    }
+
+    Future<PendingContactRequest> requestAt(
+      MessengerController owner,
+      MessengerController from,
+    ) async {
+      await until(
+        () => owner.pendingContactRequests.any(
+          (r) => r.senderDeviceId == id(from),
+        ),
+      );
+      return owner.pendingContactRequests.singleWhere(
+        (r) => r.senderDeviceId == id(from),
+      );
+    }
+
+    Future<void> add(MessengerController from, MessengerController to) async {
+      await from.addContactFromInvite(
+        alias: to.identity!.displayName,
+        payload: (await to.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+    }
+
+    test('a lost acceptance is given again when the request repeats', () async {
+      dropBobToAlice = (_) => true;
+      await add(alice, bob);
+      await bob.approvePendingContactRequest((await requestAt(bob, alice)).id);
+      await until(() => false, rounds: 5);
+      expect(
+        contactOf(alice, bob)!.pairingState,
+        isNot(ContactPairingState.accepted),
+      );
+
+      dropBobToAlice = (_) => false;
+      await alice.retryContactPairingNow(id(bob));
+      await until(
+        () =>
+            contactOf(alice, bob)!.pairingState == ContactPairingState.accepted,
+      );
+      expect(contactOf(alice, bob)!.pairingState, ContactPairingState.accepted);
+    });
+
+    test('a message from the accepting side implies the acceptance', () async {
+      dropBobToAlice = (envelope) => envelope.kind == 'contact_exchange';
+      await add(alice, bob);
+      await bob.approvePendingContactRequest((await requestAt(bob, alice)).id);
+      await bob.sendMessage(contact: contactOf(bob, alice)!, body: 'hi Alice');
+      await until(
+        () => alice.messagesFor(id(bob)).any((m) => m.body == 'hi Alice'),
+      );
+      expect(contactOf(alice, bob)!.pairingState, ContactPairingState.accepted);
+    });
+
+    test('a lost decline is given again when the request repeats', () async {
+      dropBobToAlice = (_) => true;
+      await add(alice, bob);
+      await bob.rejectPendingContactRequest((await requestAt(bob, alice)).id);
+      await until(() => false, rounds: 5);
+      dropBobToAlice = (_) => false;
+      await alice.retryContactPairingNow(id(bob));
+      await until(
+        () =>
+            contactOf(alice, bob)!.pairingState == ContactPairingState.declined,
+      );
+      expect(contactOf(alice, bob)!.pairingState, ContactPairingState.declined);
+    });
+
+    test('both adding each other at once needs no approval', () async {
+      await add(alice, bob);
+      await add(bob, alice);
+      await until(
+        () =>
+            contactOf(alice, bob)?.pairingState ==
+                ContactPairingState.accepted &&
+            contactOf(bob, alice)?.pairingState == ContactPairingState.accepted,
+      );
+      expect(contactOf(alice, bob)!.pairingState, ContactPairingState.accepted);
+      expect(contactOf(bob, alice)!.pairingState, ContactPairingState.accepted);
+    });
+
+    test(
+      'a lost removal is repeated, and the contact can be added again',
+      () async {
+        await _pairControllers(alice, bob);
+        await bob.sendMessage(contact: contactOf(bob, alice)!, body: 'before');
+        await until(
+          () => alice.messagesFor(id(bob)).any((m) => m.body == 'before'),
+        );
+        // Only the first notice is lost.
+        var removals = 0;
+        dropAliceToBob = (envelope) =>
+            envelope.kind == 'contact_remove' && removals++ == 0;
+        await alice.removeContact(id(bob));
+        expect(contactOf(bob, alice)!.remoteRemovedAt, isNull);
+
+        // Bob, unaware, writes again: Alice repeats the notice.
+        await bob.sendMessage(contact: contactOf(bob, alice)!, body: 'hello?');
+        await until(() => contactOf(bob, alice)!.remoteRemovedAt != null);
+        expect(removals, greaterThanOrEqualTo(2));
+        expect(contactOf(bob, alice)!.remoteRemovedAt, isNotNull);
+
+        // Alice adds Bob again: he sees a request to reconnect.
+        await add(alice, bob);
+        await bob.approvePendingContactRequest(
+          (await requestAt(bob, alice)).id,
+        );
+        await until(
+          () =>
+              contactOf(alice, bob)?.pairingState ==
+              ContactPairingState.accepted,
+        );
+        expect(
+          contactOf(alice, bob)!.pairingState,
+          ContactPairingState.accepted,
+        );
+        expect(contactOf(bob, alice)!.remoteRemovedAt, isNull);
+        expect(
+          bob.messagesFor(id(alice)).map((m) => m.body),
+          contains('before'),
+        );
+        await alice.sendMessage(contact: contactOf(alice, bob)!, body: 'again');
+        await until(
+          () => bob.messagesFor(id(alice)).any((m) => m.body == 'again'),
+        );
+        expect(
+          bob.messagesFor(id(alice)).map((m) => m.body),
+          contains('again'),
+        );
+      },
+    );
+
+    test('the removed side can add the contact again', () async {
+      await _pairControllers(alice, bob);
+      await alice.removeContact(id(bob));
+      await until(() => contactOf(bob, alice)?.remoteRemovedAt != null);
+      expect(contactOf(bob, alice)!.remoteRemovedAt, isNotNull);
+
+      await add(bob, alice);
+      await alice.approvePendingContactRequest(
+        (await requestAt(alice, bob)).id,
+      );
+      await until(
+        () =>
+            contactOf(bob, alice)?.pairingState == ContactPairingState.accepted,
+      );
+      expect(contactOf(bob, alice)!.pairingState, ContactPairingState.accepted);
+      expect(contactOf(bob, alice)!.remoteRemovedAt, isNull);
+    });
+  });
+
   test('cancelled pairing ignores a late acceptance response', () async {
     final relay = _FakeRelayClient();
     final alice = await _createController(
@@ -12225,6 +12420,40 @@ void main() {
       await settle([alice, bob]);
       return (alice, bob, network, relay);
     }
+
+    test(
+      'a carrier enabled while the contact was away reaches it later',
+      () async {
+        final network = _FakeCarrierNetwork();
+        final relay = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        // Bob is unreachable while Alice turns the carrier on.
+        relay.shouldFailStore = (_, _, _, recipient, _) =>
+            recipient == bob.identity!.deviceId;
+        await network.join(alice, 'npub-alice|wss://relay.one');
+        await settle([alice, bob]);
+        expect(bob.contacts.single.carrierAddress(TransportKind.nostr), isNull);
+
+        // Back in touch: the next path check carries Alice's carrier digest.
+        relay.shouldFailStore = null;
+        await alice.checkContactRoutes(alice.contacts.single);
+        await settle([alice, bob]);
+        expect(
+          bob.contacts.single.carrierAddress(TransportKind.nostr),
+          'npub-alice|wss://relay.one',
+        );
+      },
+    );
 
     test('contacts learn each other\'s carrier address', () async {
       final (alice, bob, _, _) = await linkedPair();

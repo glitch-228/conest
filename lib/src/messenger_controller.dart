@@ -3505,6 +3505,69 @@ class MessengerController extends ChangeNotifier {
     return true;
   }
 
+  /// This device's Matrix carrier address as [contact] may use it.
+  String? _ownMatrixAddressFor(ContactRecord contact, IdentityRecord me) =>
+      _ownMatrixAddress != null &&
+          _matrixAllowed &&
+          contact.routing.effectivePolicy(
+                TransportKind.matrix,
+                me.connectivity,
+              ) !=
+              TransportPolicy.disabled
+      ? _ownMatrixAddress!.encode()
+      : null;
+
+  /// A short digest of carrier addresses (kind name → address) and a Matrix
+  /// address, the same for the sender's own set and what a contact holds.
+  static String _carrierDigest(
+    Map<String, String> addresses,
+    String? matrixAddress,
+  ) {
+    final entries = [
+      for (final entry in addresses.entries) '${entry.key}=${entry.value}',
+      if (matrixAddress != null) 'matrix=$matrixAddress',
+    ]..sort();
+    return base64Encode(
+      dart_crypto.sha256
+          .convert(utf8.encode(entries.join('\n')))
+          .bytes
+          .sublist(0, 9),
+    );
+  }
+
+  /// When a contact was last asked for its carrier addresses.
+  final Map<String, DateTime> _carrierRefreshAskedAt = {};
+
+  /// [contact]'s carrier digest differs from what this device holds for it:
+  /// it enabled or dropped a route since; ask for a fresh exchange.
+  void _refreshCarriersIfStale(ContactRecord contact, Object? digest) {
+    if (digest is! String || !contact.canSendOutbound) return;
+    final held = _carrierDigest({
+      for (final entry in contact.carrierAddresses.entries)
+        if (entry.value.value case final address?
+            when entry.key != TransportKind.matrix)
+          entry.key.name: address,
+    }, contact.matrixAddress);
+    if (held == digest) return;
+    final now = _now();
+    final last = _carrierRefreshAskedAt[contact.deviceId];
+    if (last != null && now.difference(last) < const Duration(minutes: 10)) {
+      return;
+    }
+    _carrierRefreshAskedAt[contact.deviceId] = now;
+    appendDebugLog('${contact.alias} has new routes; asking for them.');
+    unawaited(
+      _sendReciprocalContactExchange(
+        contact,
+        recipientKnowsIdentity: true,
+        requestPeerCapabilities: true,
+      ).catchError((Object error) {
+        appendDebugLog('Route refresh request failed: $error');
+        return false;
+      }),
+    );
+  }
+
   Map<String, String> _ownCarrierAddressesFor(
     ContactRecord contact,
     GlobalConnectivityPreferences global,
@@ -7191,6 +7254,8 @@ class MessengerController extends ChangeNotifier {
             deviceId: removed.deviceId,
             pairingRequestId: removed.pairingRequestId,
             removedAt: _now().toUtc(),
+            // Kept to tell the peer again if this notice is lost.
+            contact: notifyPeer ? removed : null,
           ),
       },
     );
@@ -7684,10 +7749,26 @@ class MessengerController extends ChangeNotifier {
     if (invite.deviceId == me.deviceId) {
       throw ArgumentError('This invite belongs to the current device.');
     }
-    if (_snapshot.contacts.any(
-      (contact) => contact.deviceId == invite.deviceId,
-    )) {
-      throw ArgumentError('This contact is already trusted.');
+    final known = _contactByDeviceId(invite.deviceId);
+    if (known != null) {
+      final revivable =
+          known.replacedByDeviceId == null &&
+          !known.pendingVerification &&
+          (known.remoteRemovedAt != null ||
+              known.pairingState == ContactPairingState.declined ||
+              known.pairingState == ContactPairingState.cancelled);
+      if (!revivable || !_invitePinnedTo(invite, known)) {
+        throw ArgumentError('This contact is already trusted.');
+      }
+      return _reviveContact(
+        known,
+        invite: invite,
+        alias: alias,
+        attemptReciprocalExchange: attemptReciprocalExchange,
+        recipientKnowsIdentity: recipientKnowsIdentity,
+        approvalGranted: approvalGranted,
+        pairingRequestId: pairingRequestId,
+      );
     }
 
     final safetyNumber = await _crypto.deriveSafetyNumber([
@@ -7778,6 +7859,72 @@ class MessengerController extends ChangeNotifier {
     }
     return ContactAdditionResult(
       contact: contact,
+      exchangeStatus: approvalGranted
+          ? ContactExchangeStatus.automatic
+          : ContactExchangeStatus.pendingApproval,
+    );
+  }
+
+  /// Adds [contact] again after it removed us, or after a declined or
+  /// cancelled request: same keys, so the record and its history stay.
+  Future<ContactAdditionResult> _reviveContact(
+    ContactRecord contact, {
+    required ContactInvite invite,
+    required String alias,
+    required bool attemptReciprocalExchange,
+    required bool recipientKnowsIdentity,
+    required bool approvalGranted,
+    String? pairingRequestId,
+  }) async {
+    final revived = contact.copyWith(
+      alias: alias.trim().isEmpty ? null : alias.trim(),
+      displayName: invite.displayName,
+      routeHints: prunePeerEndpointsByKind(invite.routeHints),
+      clearRemoteRemovedAt: true,
+      pairingState: approvalGranted
+          ? ContactPairingState.accepted
+          : ContactPairingState.queued,
+      pairingRequestId: approvalGranted ? pairingRequestId : _randomId('pair'),
+      clearPairingLastAttemptAt: true,
+    );
+    _replaceContactRecord(revived);
+    _snapshot = _snapshot.copyWith(
+      contactRemovalTombstones: Map.of(_snapshot.contactRemovalTombstones)
+        ..remove(revived.deviceId),
+      reachabilityRecords: [
+        ..._snapshot.reachabilityRecords,
+        if (!_snapshot.reachabilityRecords.any(
+          (record) => record.deviceId == revived.deviceId,
+        ))
+          ContactReachabilityRecord(deviceId: revived.deviceId),
+      ],
+    );
+    _conversationFor(revived.deviceId);
+    await _persist(
+      approvalGranted
+          ? 'Reconnected with ${revived.alias}.'
+          : 'Asking ${revived.alias} to reconnect.',
+    );
+    if (attemptReciprocalExchange) {
+      if (approvalGranted) {
+        unawaited(
+          _sendReciprocalContactExchange(
+            revived,
+            recipientKnowsIdentity: recipientKnowsIdentity,
+            pairingRequestId: pairingRequestId,
+            pairingResponse: 'accepted',
+          ).catchError((Object error) {
+            appendDebugLog('Reconnect approval not sent yet: $error');
+            return false;
+          }),
+        );
+        _contactAccepted(revived);
+      } else {
+        unawaited(_attemptContactPairing(revived.deviceId, force: true));
+      }
+    }
+    return ContactAdditionResult(
+      contact: revived,
       exchangeStatus: approvalGranted
           ? ContactExchangeStatus.automatic
           : ContactExchangeStatus.pendingApproval,
@@ -12497,14 +12644,7 @@ class MessengerController extends ChangeNotifier {
       'requestPeerCapabilities': requestPeerCapabilities,
       if (pairingResponse != null) 'pairingResponse': pairingResponse,
       // Only peers that already know this identity read it (authenticated).
-      if (recipientKnowsIdentity &&
-          _ownMatrixAddress != null &&
-          _matrixAllowed &&
-          contact.routing.effectivePolicy(
-                TransportKind.matrix,
-                me.connectivity,
-              ) !=
-              TransportPolicy.disabled)
+      if (recipientKnowsIdentity && _ownMatrixAddressFor(contact, me) != null)
         'matrixAddress': _ownMatrixAddress!.toJson(),
       // Every carrier this device can be reached on for this contact; a
       // carrier missing here tells the contact to stop using it.
@@ -12571,6 +12711,8 @@ class MessengerController extends ChangeNotifier {
       plaintext: jsonEncode({
         'removedDeviceId': contact.deviceId,
         'removedAt': removedAt.toIso8601String(),
+        if (contact.pairingRequestId != null)
+          'pairingRequestId': contact.pairingRequestId,
       }),
       createdAt: removedAt,
     );
@@ -12957,6 +13099,12 @@ class MessengerController extends ChangeNotifier {
       'requestReply': requestReply,
       'reason': reason,
       'sentAt': effectiveSentAt.toIso8601String(),
+      // What this device can be reached on besides these routes: a contact
+      // holding something else asks for a fresh exchange.
+      'carrierDigest': _carrierDigest(
+        _ownCarrierAddressesFor(contact, me.connectivity),
+        _ownMatrixAddressFor(contact, me),
+      ),
       ..._localLanDirectHintPayload(),
     };
     if (effectiveProbeId != null) {
@@ -14732,6 +14880,10 @@ class MessengerController extends ChangeNotifier {
           _markSeen(envelope.messageId);
           continue;
         }
+        if (envelope.protocolVersion != 1 &&
+            _contactByDeviceId(envelope.senderDeviceId) == null) {
+          _answerRemovedSender(envelope);
+        }
         // Identity-reset guardrail: if the sender is a known contact in
         // `pendingVerification`, hold the raw envelope without decrypt /
         // dispatch — applies to every kind (ack, route_update, group_*,
@@ -14962,6 +15114,7 @@ class MessengerController extends ChangeNotifier {
           contact: contact,
           envelope: envelope,
         );
+        _acceptedByTraffic(contact);
         final existingConversation = _conversationFor(contact.deviceId);
         final alreadyKnown = existingConversation.messages.any(
           (message) => message.id == envelope.messageId,
@@ -15091,8 +15244,10 @@ class MessengerController extends ChangeNotifier {
       return false;
     }
     if (envelope.protocolVersion == 1) {
+      // Known contacts may ask again (a lost acceptance, a removal they
+      // never heard of): the handler checks the request against the keys
+      // pinned for them.
       if (envelope.kind != 'contact_exchange' ||
-          _contactByDeviceId(envelope.senderDeviceId) != null ||
           envelope.payloadBase64 == null) {
         return false;
       }
@@ -15151,6 +15306,7 @@ class MessengerController extends ChangeNotifier {
       await _crypto.decryptMessage(contact: contact, envelope: envelope),
     );
     if (decoded is! Map<String, dynamic>) return;
+    if (group == null) _acceptedByTraffic(contact);
     final receipt = decoded['receipt'] as String?;
     final target = decoded['acknowledgedMessageId'] as String?;
     if ((receipt != 'read' && receipt != 'delivered') ||
@@ -17322,7 +17478,7 @@ class MessengerController extends ChangeNotifier {
     // addresses then stay as they are.
     Map<TransportKind, String>? peerCarrierAddresses;
     if (envelope.protocolVersion == 1) {
-      if (existing != null) return;
+      if (existing?.pendingVerification == true) return;
       final rawPayload = envelope.payloadBase64;
       if (rawPayload == null || rawPayload.isEmpty) return;
       payload = utf8.decode(base64Decode(rawPayload));
@@ -17422,9 +17578,38 @@ class MessengerController extends ChangeNotifier {
             (pairingRequestId == null &&
                 !envelope.createdAt.isAfter(tombstone.removedAt)))) {
       appendDebugLog('Ignored late pairing traffic from a removed contact.');
+      // A request repeated after it was declined (or after the contact was
+      // removed): the answer may have been lost, so it is given again.
+      if (envelope.protocolVersion == 1 && pairingRequestId != null) {
+        _answerPairingAgain(invite.deviceId, () async {
+          await _sendPairingResponse(
+            PendingContactRequest(
+              id: pairingRequestId!,
+              senderAccountId: invite.accountId,
+              senderDeviceId: invite.deviceId,
+              invitePayload: payload,
+              receivedAt: _now().toUtc(),
+            ),
+            'declined',
+          );
+        });
+      }
       return;
     }
-    if (existing != null) {
+    if (existing != null && envelope.protocolVersion == 1) {
+      if (!_invitePinnedTo(invite, existing)) {
+        appendDebugLog(
+          'Rejected a pairing request with different keys for '
+          '${existing.deviceId}.',
+        );
+        return;
+      }
+      if (await _answerRepeatedPairingRequest(existing, pairingRequestId)) {
+        return;
+      }
+      // An archived, declined or cancelled contact asking again: shown as a
+      // request to reconnect below, approved like a new one.
+    } else if (existing != null) {
       if (invite.publicKeyBase64 != existing.publicKeyBase64 ||
           invite.accountId != existing.accountId ||
           (existing.signingPublicKeyBase64 != null &&
@@ -17438,18 +17623,7 @@ class MessengerController extends ChangeNotifier {
         );
         return;
       }
-      if (envelope.protocolVersion == 1 &&
-          existing.pairingState == ContactPairingState.accepted) {
-        unawaited(
-          _sendReciprocalContactExchange(
-            existing,
-            recipientKnowsIdentity: true,
-            pairingRequestId: pairingRequestId ?? existing.pairingRequestId,
-            pairingResponse: 'accepted',
-          ),
-        );
-        return;
-      }
+      if (pairingResponse != 'declined') _acceptedByTraffic(existing);
       final capabilitySet = featureCapabilities?.toSet();
       final capabilitiesChanged =
           featureCapabilityVersion > 0 &&
@@ -17602,6 +17776,144 @@ class MessengerController extends ChangeNotifier {
     await _persist('New contact request from ${invite.displayName}.');
   }
 
+  /// Whether [invite] carries the keys pinned for [contact].
+  bool _invitePinnedTo(ContactInvite invite, ContactRecord contact) =>
+      invite.publicKeyBase64 == contact.publicKeyBase64 &&
+      invite.accountId == contact.accountId &&
+      (contact.signingPublicKeyBase64 == null ||
+          invite.signingPublicKeyBase64 == contact.signingPublicKeyBase64) &&
+      (contact.irohEndpointId == null ||
+          invite.irohEndpointId == contact.irohEndpointId);
+
+  /// When pairing traffic was last answered again, by device.
+  final Map<String, DateTime> _pairingAnsweredAt = {};
+
+  /// Runs [answer] unless this device was answered within the last 20 s:
+  /// a requester retries every 30 s, and a replayed request must not make
+  /// this device send in a loop.
+  void _answerPairingAgain(String deviceId, Future<void> Function() answer) {
+    final now = _now();
+    final last = _pairingAnsweredAt[deviceId];
+    if (last != null && now.difference(last) < const Duration(seconds: 20)) {
+      return;
+    }
+    if (_pairingAnsweredAt.length > 256) {
+      _pairingAnsweredAt.remove(_pairingAnsweredAt.keys.first);
+    }
+    _pairingAnsweredAt[deviceId] = now;
+    unawaited(
+      answer().catchError((Object error) {
+        appendDebugLog('Pairing answer not sent: $error');
+      }),
+    );
+  }
+
+  /// A known contact sent a pairing request again. Returns false when it
+  /// should become a request to reconnect (archived, declined, cancelled).
+  Future<bool> _answerRepeatedPairingRequest(
+    ContactRecord contact,
+    String? pairingRequestId,
+  ) async {
+    if (contact.replacedByDeviceId != null) return true;
+    if (contact.remoteRemovedAt != null) return false;
+    switch (contact.pairingState) {
+      case ContactPairingState.accepted:
+        // Our acceptance never arrived: give it again.
+        _answerPairingAgain(
+          contact.deviceId,
+          () => _sendReciprocalContactExchange(
+            contact,
+            recipientKnowsIdentity: true,
+            pairingRequestId: pairingRequestId ?? contact.pairingRequestId,
+            pairingResponse: 'accepted',
+          ),
+        );
+        return true;
+      case ContactPairingState.queued:
+      case ContactPairingState.sending:
+      case ContactPairingState.awaitingAcceptance:
+        // Both added each other: that is agreement on both sides.
+        final accepted = contact.copyWith(
+          pairingState: ContactPairingState.accepted,
+          clearPairingLastAttemptAt: true,
+        );
+        _replaceContactRecord(accepted);
+        await _persist('${accepted.alias} added you too.');
+        _answerPairingAgain(
+          accepted.deviceId,
+          () => _sendReciprocalContactExchange(
+            accepted,
+            recipientKnowsIdentity: true,
+            pairingRequestId: pairingRequestId ?? accepted.pairingRequestId,
+            pairingResponse: 'accepted',
+          ),
+        );
+        _contactAccepted(accepted);
+        return true;
+      case ContactPairingState.declined:
+      case ContactPairingState.cancelled:
+        return false;
+    }
+  }
+
+  /// Authenticated traffic from a contact still waiting for approval: only
+  /// a device that accepted sends it, so a lost acceptance is implied.
+  void _acceptedByTraffic(ContactRecord contact) {
+    if (contact.pairingState != ContactPairingState.queued &&
+        contact.pairingState != ContactPairingState.sending &&
+        contact.pairingState != ContactPairingState.awaitingAcceptance) {
+      return;
+    }
+    final current = _contactByDeviceId(contact.deviceId);
+    if (current == null || current.pairingState != contact.pairingState) {
+      return;
+    }
+    final accepted = current.copyWith(
+      pairingState: ContactPairingState.accepted,
+      clearPairingLastAttemptAt: true,
+    );
+    _replaceContactRecord(accepted);
+    appendDebugLog(
+      '${accepted.alias} is writing to us: their acceptance is implied.',
+    );
+    unawaited(_saveSnapshotSilently(notify: true));
+    _contactAccepted(accepted);
+  }
+
+  /// Releases what waited for [contact] to accept.
+  void _contactAccepted(ContactRecord contact) {
+    if (_outboundQueueByContact[contact.deviceId]?.isNotEmpty ?? false) {
+      _pumpOutboundQueue(contact);
+    }
+    unawaited(_retryUnacknowledgedMessages(force: true));
+  }
+
+  /// When removal notices were last repeated, by device.
+  final Map<String, DateTime> _removalNoticesAt = {};
+
+  /// A device this one removed is still writing: it missed the notice, so
+  /// it is sent again (at most every 10 minutes, for 30 days).
+  void _answerRemovedSender(RelayEnvelope envelope) {
+    final tombstone =
+        _snapshot.contactRemovalTombstones[envelope.senderDeviceId];
+    final removed = tombstone?.contact;
+    if (tombstone == null ||
+        removed == null ||
+        removed.accountId != envelope.senderAccountId ||
+        _now().difference(tombstone.removedAt) >
+            ContactRemovalTombstone.noticeWindow) {
+      return;
+    }
+    final now = _now();
+    final last = _removalNoticesAt[removed.deviceId];
+    if (last != null && now.difference(last) < const Duration(minutes: 10)) {
+      return;
+    }
+    _removalNoticesAt[removed.deviceId] = now;
+    appendDebugLog('Repeating the removal notice to ${removed.alias}.');
+    unawaited(_sendContactRemoval(removed));
+  }
+
   Future<void> _handleRouteUpdate(RelayEnvelope envelope) async {
     final sender = _contactByDeviceId(envelope.senderDeviceId);
     if (sender == null) {
@@ -17659,6 +17971,8 @@ class MessengerController extends ChangeNotifier {
     if (routePayload != null) {
       _cachePeerLanDirectFromPayload(sender.deviceId, routePayload);
     }
+    _acceptedByTraffic(sender);
+    _refreshCarriersIfStale(sender, routePayload?['carrierDigest']);
     _reachability.noteAnySignal(
       sender.deviceId,
       at: sentAt ?? envelope.createdAt,
@@ -18114,6 +18428,15 @@ class MessengerController extends ChangeNotifier {
     );
     if (decoded is! Map<String, dynamic> ||
         decoded['removedDeviceId'] != identity?.deviceId) {
+      return;
+    }
+    // A notice about an earlier pairing (repeated after we reconnected)
+    // does not end the current one.
+    final noticeRequestId = decoded['pairingRequestId'];
+    if (noticeRequestId is String &&
+        contact.pairingRequestId != null &&
+        noticeRequestId != contact.pairingRequestId) {
+      appendDebugLog('Ignored a removal notice for an earlier pairing.');
       return;
     }
     final removedAt =
@@ -24192,7 +24515,12 @@ class MessengerController extends ChangeNotifier {
     final me = _snapshot.identity;
     if (sessions == null || me == null) return;
     for (final contact in _snapshot.contacts) {
-      if (contact.canSendOutbound) {
+      if (!contact.canSendOutbound) continue;
+      if (contact.featureCapabilityVersion < 1) {
+        // Accepted without its capability list (implied by its traffic):
+        // ask for it rather than offering blindly.
+        unawaited(_requestPeerCapabilities(contact));
+      } else {
         unawaited(_maybeOfferRatchetBundle(contact));
       }
     }

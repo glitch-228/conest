@@ -465,7 +465,11 @@ class CryptoService {
       throw const FormatException('Legacy unauthenticated envelope rejected.');
     }
     final sessions = ratchet;
-    if (sessions != null && ratchetedEnvelopeKinds.contains(envelope.kind)) {
+    // A removal notice may be repeated after the sender dropped the session
+    // (it forgets it on removal), so it is accepted under the static key.
+    if (sessions != null &&
+        ratchetedEnvelopeKinds.contains(envelope.kind) &&
+        envelope.kind != 'contact_remove') {
       // Static-key traffic sent before the peer switched is still accepted;
       // anything created after the peer's first ratcheted message is not.
       final confirmedAt = await sessions.confirmedAt(ratchetPeerId(contact));

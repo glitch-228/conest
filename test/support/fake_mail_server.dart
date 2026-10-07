@@ -182,6 +182,9 @@ class FakeMailServer {
     String? user;
     String? idleTag;
     StreamSubscription<String>? idleWatch;
+    // Mail count last reported to this client. As real servers do, mail
+    // that arrived since is announced when IDLE starts.
+    var reported = 0;
     void reply(String line) => socket.write('$line\r\n');
     List<FakeMail> box() => mailboxes[user] ?? const [];
     reply('* OK fake IMAP ready');
@@ -215,11 +218,13 @@ class FakeMailServer {
           reply('* CAPABILITY IMAP4rev1 UIDPLUS${idle ? ' IDLE' : ''}');
           reply('$tag OK');
         } else if (upper.startsWith('SELECT')) {
+          reported = box().length;
           reply('* ${box().length} EXISTS');
           reply('* OK [UIDVALIDITY 7] ok');
           reply('* OK [UIDNEXT $_nextUid] ok');
           reply('$tag OK [READ-WRITE] selected');
         } else if (upper.startsWith('UID SEARCH UID ')) {
+          reported = box().length;
           final from = int.parse(command.substring(15).split(':').first);
           final encryptedOnly = upper.contains(
             'HEADER CONTENT-TYPE "MULTIPART/ENCRYPTED"',
@@ -271,9 +276,15 @@ class FakeMailServer {
         } else if (upper == 'IDLE' && idle) {
           idleTag = tag;
           reply('+ idling');
-          final count = box().length;
+          if (box().length > reported) {
+            reported = box().length;
+            reply('* $reported EXISTS');
+          }
           idleWatch = _arrivals.stream.where((to) => to == user).listen((_) {
-            if (box().length > count) reply('* ${box().length} EXISTS');
+            if (box().length > reported) {
+              reported = box().length;
+              reply('* $reported EXISTS');
+            }
           });
         } else if (upper == 'LOGOUT') {
           reply('* BYE');
