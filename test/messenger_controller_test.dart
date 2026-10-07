@@ -2493,6 +2493,33 @@ void main() {
       expect(bob.pendingContactRequests, isEmpty);
     });
 
+    test(
+      'a removal still arrives after re-adding over a cancelled request',
+      () async {
+        dropBobToAlice = (_) => true;
+        await add(alice, bob);
+        await bob.approvePendingContactRequest(
+          (await requestAt(bob, alice)).id,
+        );
+        await until(() => false, rounds: 5);
+        await alice.cancelContactPairing(id(bob));
+        dropBobToAlice = (_) => false;
+        await add(alice, bob);
+        await until(
+          () =>
+              contactOf(alice, bob)!.pairingState ==
+              ContactPairingState.accepted,
+        );
+        expect(
+          contactOf(alice, bob)!.pairingState,
+          ContactPairingState.accepted,
+        );
+        await bob.removeContact(id(alice));
+        await until(() => contactOf(alice, bob)!.remoteRemovedAt != null);
+        expect(contactOf(alice, bob)!.remoteRemovedAt, isNotNull);
+      },
+    );
+
     test('the removed side can add the contact again', () async {
       await _pairControllers(alice, bob);
       await alice.removeContact(id(bob));
@@ -12724,6 +12751,9 @@ void main() {
       );
     });
 
+    // Meaningful on carriers that authenticate senders (Nostr events are
+    // signed, Matrix homeservers vouch for user ids); email and Tor senders
+    // are self-claimed, where it only filters accidents.
     test(
       'a first contact counts only from the address its invite names',
       () async {
@@ -12823,6 +12853,115 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
       },
     );
+
+    test('a mutual add works over a carrier alone', () async {
+      final network = _FakeCarrierNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await network.join(alice, 'npub-alice|wss://relay.one');
+      await network.join(bob, 'npub-bob|wss://relay.two');
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      final aliceInvite = await alice.buildInvite();
+      final bobInvite = await bob.buildInvite();
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: bobInvite.encodePayload(),
+        codephrase: '',
+      );
+      await bob.addContactFromInvite(
+        alias: 'Alice',
+        payload: aliceInvite.encodePayload(),
+        codephrase: '',
+      );
+      for (
+        var round = 0;
+        round < 15 &&
+            (alice.contacts.single.pairingState !=
+                    ContactPairingState.accepted ||
+                bob.contacts.single.pairingState !=
+                    ContactPairingState.accepted);
+        round++
+      ) {
+        await settle([alice, bob]);
+        await alice.retryContactPairingNow(bob.identity!.deviceId);
+        await bob.retryContactPairingNow(alice.identity!.deviceId);
+      }
+      expect(alice.contacts.single.pairingState, ContactPairingState.accepted);
+      expect(bob.contacts.single.pairingState, ContactPairingState.accepted);
+    });
+
+    test('junk from strangers does not block a first contact', () async {
+      final network = _FakeCarrierNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await network.join(alice, 'npub-alice|wss://relay.one');
+      await network.join(bob, 'npub-bob|wss://relay.two');
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      for (var i = 0; i < 100; i++) {
+        network.deliver(
+          'npub-mallory$i',
+          'npub-bob|wss://relay.two',
+          Uint8List.fromList(List<int>.filled(80, i)),
+        );
+      }
+      await alice.addContactFromInvite(
+        alias: 'Bob',
+        payload: (await bob.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      for (
+        var round = 0;
+        round < 5 && bob.pendingContactRequests.isEmpty;
+        round++
+      ) {
+        await settle([alice, bob]);
+      }
+      expect(bob.pendingContactRequests, isNotEmpty);
+    });
+
+    test('the shown codephrase works with an extended invite', () async {
+      final network = _FakeCarrierNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await network.join(alice, 'npub-alice|wss://relay.one');
+      final invite = await alice.buildInvite();
+      final code = currentPairingCodeSnapshotForPayload(
+        invite.encodeCompatiblePayload(),
+      ).codephrase;
+      await bob.addContactFromInvite(
+        alias: 'Alice',
+        payload: invite.encodePayload(),
+        codephrase: code,
+      );
+      expect(bob.contacts.single.deviceId, alice.identity!.deviceId);
+    });
 
     test('a ci7 invite with altered carrier hints is refused', () async {
       final relay = _FakeRelayClient();

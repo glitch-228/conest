@@ -3559,7 +3559,11 @@ class MessengerController extends ChangeNotifier {
     if (last != null && now.difference(last) < const Duration(minutes: 10)) {
       return;
     }
-    if (_carrierRefreshAskedDigest[contact.deviceId] == digest) return;
+    if (_carrierRefreshAskedDigest[contact.deviceId] == digest &&
+        last != null &&
+        now.difference(last) < const Duration(hours: 6)) {
+      return;
+    }
     _carrierRefreshAskedAt[contact.deviceId] = now;
     _carrierRefreshAskedDigest[contact.deviceId] = digest;
     appendDebugLog('${contact.alias} has new routes; asking for them.');
@@ -7551,12 +7555,16 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
-  Future<PreparedBeamTransfer> prepareInviteBeam() async {
+  /// [legacy]: the ci6 form, for contacts on 0.3.11 or older.
+  Future<PreparedBeamTransfer> prepareInviteBeam({bool legacy = false}) async {
     final invite = await buildInvite();
+    final payload = legacy
+        ? invite.encodeCompatiblePayload()
+        : invite.encodePayload();
     return _prepareBeam(
       mode: BeamMode.contactInvite,
-      cleartext: Uint8List.fromList(utf8.encode(invite.encodePayload())),
-      fileName: 'conest-contact.ci6',
+      cleartext: Uint8List.fromList(utf8.encode(payload)),
+      fileName: 'conest-contact.${payload.substring(0, 3)}',
       mimeType: 'application/vnd.conest.invite',
     );
   }
@@ -7742,7 +7750,13 @@ class MessengerController extends ChangeNotifier {
     final normalizedCodephrase = codephrase.trim();
     late final ContactInvite invite;
     if (normalizedPayload.isNotEmpty) {
+      invite = ContactInvite.decodePayload(normalizedPayload);
+      // Codephrases come from the compatible (ci6) form of an invite.
       if (normalizedCodephrase.isNotEmpty &&
+          !matchesDynamicCodephraseForPayload(
+            invite.encodeCompatiblePayload(),
+            normalizedCodephrase,
+          ) &&
           !matchesDynamicCodephraseForPayload(
             normalizedPayload,
             normalizedCodephrase,
@@ -7751,7 +7765,6 @@ class MessengerController extends ChangeNotifier {
           'Codephrase mismatch. Clear it and trust the QR invite alone, or compare the current code again.',
         );
       }
-      invite = ContactInvite.decodePayload(normalizedPayload);
     } else {
       if (normalizedCodephrase.isEmpty) {
         throw ArgumentError(
@@ -7914,7 +7927,11 @@ class MessengerController extends ChangeNotifier {
       ...contact.retiredPairingRequestIds,
       ?contact.pairingRequestId,
     ];
+    final hints = _carrierHintsForContact(invite);
     final revived = contact.copyWith(
+      revivedAt: _now().toUtc(),
+      carrierAddresses: {...hints.carriers, ...contact.carrierAddresses},
+      matrixAddress: contact.matrixAddress ?? hints.matrixAddress,
       retiredPairingRequestIds: retired.length > 8
           ? retired.sublist(retired.length - 8)
           : retired,
@@ -8285,6 +8302,14 @@ class MessengerController extends ChangeNotifier {
       contact = contact.copyWith(
         pairingState: ContactPairingState.queued,
         pairingRequestId: _randomId('pair'),
+        retiredPairingRequestIds: [
+          ...contact.retiredPairingRequestIds.reversed
+              .take(7)
+              .toList()
+              .reversed,
+          ?contact.pairingRequestId,
+        ],
+        revivedAt: _now().toUtc(),
         pairingAttempts: 0,
         clearPairingLastAttemptAt: true,
       );
@@ -12882,6 +12907,10 @@ class MessengerController extends ChangeNotifier {
       // carrier missing here tells the contact to stop using it.
       if (recipientKnowsIdentity)
         'carrierAddresses': _ownCarrierAddressesFor(contact, me.connectivity),
+      // Pairings this device left behind with them (it added them again):
+      // a contact still on one of those ids moves to the current one.
+      if (recipientKnowsIdentity && contact.retiredPairingRequestIds.isNotEmpty)
+        'retiredPairingRequestIds': contact.retiredPairingRequestIds,
     });
     final payloads = pairingResponse == null
         ? <String>[structuredPayload, invitePayload]
@@ -15346,7 +15375,7 @@ class MessengerController extends ChangeNotifier {
           contact: contact,
           envelope: envelope,
         );
-        _acceptedByTraffic(contact);
+        _acceptedByTraffic(contact, sentAt: envelope.createdAt);
         final existingConversation = _conversationFor(contact.deviceId);
         final alreadyKnown = existingConversation.messages.any(
           (message) => message.id == envelope.messageId,
@@ -15541,7 +15570,7 @@ class MessengerController extends ChangeNotifier {
     if (group == null &&
         envelope.conversationId ==
             _crypto.conversationIdFor(contact.deviceId)) {
-      _acceptedByTraffic(contact);
+      _acceptedByTraffic(contact, sentAt: envelope.createdAt);
     }
     final receipt = decoded['receipt'] as String?;
     final target = decoded['acknowledgedMessageId'] as String?;
@@ -17713,6 +17742,7 @@ class MessengerController extends ChangeNotifier {
     // Null when the peer predates carrier address maps: its other carrier
     // addresses then stay as they are.
     Map<TransportKind, String>? peerCarrierAddresses;
+    Set<String> peerRetiredRequestIds = const {};
     if (envelope.protocolVersion == 1) {
       if (existing?.pendingVerification == true) return;
       final rawPayload = envelope.payloadBase64;
@@ -17794,6 +17824,13 @@ class MessengerController extends ChangeNotifier {
           peerCarrierAddresses = _carrierAddressesFromExchange(
             decodedExchange['carrierAddresses'],
           );
+          final retired = decodedExchange['retiredPairingRequestIds'];
+          if (retired is List && retired.length <= 16) {
+            peerRetiredRequestIds = {
+              for (final id in retired)
+                if (id is String && id.length <= 128) id,
+            };
+          }
         }
       } on FormatException {
         // Existing peers send the signed invite payload without the wrapper.
@@ -17873,7 +17910,21 @@ class MessengerController extends ChangeNotifier {
         );
         return;
       }
-      if (pairingResponse != 'declined') _acceptedByTraffic(existing);
+      if (pairingResponse != 'declined') {
+        _acceptedByTraffic(existing, sentAt: envelope.createdAt);
+      }
+      // They left our shared pairing id behind by adding us again: theirs
+      // is the pairing's id now, so removal notices match on both sides.
+      final ownId = existing.pairingRequestId;
+      if (pairingRequestId != null &&
+          ownId != null &&
+          pairingRequestId != ownId &&
+          peerRetiredRequestIds.contains(ownId)) {
+        final moved = (_contactByDeviceId(existing.deviceId) ?? existing)
+            .copyWith(pairingRequestId: pairingRequestId);
+        _replaceContactRecord(moved);
+        await _saveSnapshotSilently(notify: false);
+      }
       final capabilitySet = featureCapabilities?.toSet();
       final capabilitiesChanged =
           featureCapabilityVersion > 0 &&
@@ -18064,7 +18115,8 @@ class MessengerController extends ChangeNotifier {
     return (
       carriers: {
         for (final MapEntry(:key, :value) in invite.carrierHints.entries)
-          if (key != TransportKind.matrix)
+          if (key != TransportKind.matrix &&
+              _firstContactCarriers.contains(key))
             key: CarrierAddress(value: value, at: unranked),
       },
       matrixAddress: invite.carrierHints[TransportKind.matrix],
@@ -18149,7 +18201,12 @@ class MessengerController extends ChangeNotifier {
 
   /// Authenticated traffic from a contact still waiting for approval: only
   /// a device that accepted sends it, so a lost acceptance is implied.
-  void _acceptedByTraffic(ContactRecord contact) {
+  void _acceptedByTraffic(ContactRecord contact, {DateTime? sentAt}) {
+    // Traffic from before we added them again belongs to the old pairing.
+    final revivedAt = contact.revivedAt;
+    if (revivedAt != null && sentAt != null && !sentAt.isAfter(revivedAt)) {
+      return;
+    }
     if (contact.pairingState != ContactPairingState.queued &&
         contact.pairingState != ContactPairingState.sending &&
         contact.pairingState != ContactPairingState.awaitingAcceptance) {
@@ -18304,7 +18361,7 @@ class MessengerController extends ChangeNotifier {
     if (routePayload != null) {
       _cachePeerLanDirectFromPayload(sender.deviceId, routePayload);
     }
-    _acceptedByTraffic(sender);
+    _acceptedByTraffic(sender, sentAt: envelope.createdAt);
     _refreshCarriersIfStale(sender, routePayload?['carrierDigest']);
     _reachability.noteAnySignal(
       sender.deviceId,
@@ -18765,6 +18822,10 @@ class MessengerController extends ChangeNotifier {
     }
     // A notice about an earlier pairing (repeated after we reconnected)
     // does not end the current one.
+    // A notice about a pairing we left behind by adding them again (their
+    // tombstone may still repeat it) does not end the current one. Both
+    // sides keep the same id for the current pairing: the side answering a
+    // repeated request adopts its id.
     final noticeRequestId = decoded['pairingRequestId'];
     if (noticeRequestId is String &&
         contact.retiredPairingRequestIds.contains(noticeRequestId)) {
@@ -25524,7 +25585,8 @@ class MessengerController extends ChangeNotifier {
     if (contact != null &&
         !contact.canSendOutbound &&
         _pairingWithKeys(contact) &&
-        _firstContactCarriers.contains(kind)) {
+        _firstContactCarriers.contains(kind) &&
+        _isFirstContactRequest(envelope)) {
       // Asking a contact that has not accepted us yet: sealed to its
       // identity key from the invite, opened only by that device.
       return _crypto.sealFirstContact(
@@ -25533,7 +25595,10 @@ class MessengerController extends ChangeNotifier {
         plaintext: envelope,
       );
     }
-    if (contact == null || !contact.canSendOutbound) {
+    // A contact still pairing gets the pairwise seal for everything else
+    // (an encrypted acceptance in a mutual add): it holds our keys too.
+    if (contact == null ||
+        !(contact.canSendOutbound || _pairingWithKeys(contact))) {
       throw StateError(
         '${kind.label} carries traffic only for approved contacts.',
       );
@@ -25580,6 +25645,19 @@ class MessengerController extends ChangeNotifier {
         _admitCarrierStranger(kind, global);
   }
 
+  /// Whether [envelope] (a serialized envelope) is a first-contact request:
+  /// the only kind sealed to an identity key.
+  static bool _isFirstContactRequest(Uint8List envelope) {
+    try {
+      final decoded = jsonDecode(utf8.decode(envelope));
+      return decoded is Map<String, dynamic> &&
+          decoded['protocolVersion'] == 1 &&
+          decoded['kind'] == 'contact_exchange';
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// A contact whose request is still open, with its keys known.
   bool _pairingWithKeys(ContactRecord contact) =>
       !contact.pendingVerification &&
@@ -25617,7 +25695,7 @@ class MessengerController extends ChangeNotifier {
 
   /// First-contact envelopes opened and checked by [_openFirstContactFrame],
   /// by message id, for [_handleCarrierInbound] to admit once.
-  final Set<String> _verifiedFirstContacts = <String>{};
+  final LinkedHashSet<String> _verifiedFirstContacts = LinkedHashSet();
 
   /// A frame sealed to this device's identity key by someone asking to be
   /// added. Admitted only when it is a first-contact request whose signed
@@ -25672,7 +25750,9 @@ class MessengerController extends ChangeNotifier {
         appendDebugLog('Rejected a ${kind.label} first contact: not bound.');
         return null;
       }
-      if (_verifiedFirstContacts.length > 64) _verifiedFirstContacts.clear();
+      while (_verifiedFirstContacts.length >= 64) {
+        _verifiedFirstContacts.remove(_verifiedFirstContacts.first);
+      }
       _verifiedFirstContacts.add(envelope.messageId);
       return (peerDeviceId: envelope.senderDeviceId, envelope: clear);
     } catch (_) {

@@ -511,7 +511,15 @@ class CarrierTransportAdapter implements TransportAdapter {
   Future<void> cancel(String operationId) async {}
 
   Future<void> _receive(String sender, Uint8List frame, int generation) async {
-    if (!_sealer.acceptsSender(kind, sender)) return;
+    // A single-frame envelope is never buffered: it goes straight to open,
+    // which keeps only what it can authenticate. Only frames that would
+    // wait in the reassembly buffer need a known (or budgeted) sender, so
+    // junk from strangers cannot crowd out a first-contact request.
+    final singleFrame =
+        frame.length > carrierBinaryFrameHeaderBytes &&
+        frame[0] == carrierBinaryFrameVersion &&
+        frame[10] == 1;
+    if (!singleFrame && !_sealer.acceptsSender(kind, sender)) return;
     final sealed = _reassembler.addBinary(sender, frame);
     if (sealed == null) return;
     final opened = await _sealer.open(kind, sender, sealed);

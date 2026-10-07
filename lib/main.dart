@@ -12214,7 +12214,9 @@ class _InviteScreenState extends State<InviteScreen> {
 
   Future<void> _showAsBeam() async {
     try {
-      final transfer = await widget.controller.prepareInviteBeam();
+      final transfer = await widget.controller.prepareInviteBeam(
+        legacy: _legacy,
+      );
       if (!mounted) return;
       await Navigator.of(context).push<void>(
         MaterialPageRoute(
@@ -12526,6 +12528,14 @@ class _InviteScreenState extends State<InviteScreen> {
                         ),
                         if (_invite.hasSignedCarrierHints) ...[
                           const SizedBox(height: 6),
+                          if (!_legacy)
+                            Text(
+                              'Also lists your addresses on: '
+                              '${_invite.carrierHints.keys.map((kind) => kind.label).join(', ')}.',
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: palette.inkSoft),
+                            ),
                           SwitchListTile.adaptive(
                             key: const ValueKey('invite-legacy'),
                             contentPadding: EdgeInsets.zero,
@@ -12738,7 +12748,7 @@ class _BeamHubScreenState extends State<BeamHubScreen> {
   }
 
   Future<void> _prepareInvite() =>
-      _runPreparation(widget.controller.prepareInviteBeam);
+      _runPreparation(() => widget.controller.prepareInviteBeam());
 
   Future<void> _runPreparation(
     Future<PreparedBeamTransfer?> Function() prepare,

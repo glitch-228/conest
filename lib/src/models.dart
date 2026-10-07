@@ -1275,7 +1275,7 @@ class ContactInvite {
   /// device and its key, so hints cannot be moved to another invite.
   String carrierHintsSigningPayload() =>
       'conest.invite.carriers.v1|$deviceId|$publicKeyBase64|'
-      '${_encodedCarrierHints()}';
+      '${signatureBase64 ?? ''}|${_encodedCarrierHints()}';
 
   /// The invite as every version reads it: ci6 (or ci5) without hints.
   String encodeCompatiblePayload() => usesSignedFormat
@@ -1603,7 +1603,8 @@ class _ExtendedContactInvite extends ContactInvite {
 
   @override
   String carrierHintsSigningPayload() =>
-      'conest.invite.carriers.v1|$deviceId|$publicKeyBase64|$signedHints';
+      'conest.invite.carriers.v1|$deviceId|$publicKeyBase64|'
+      '${signatureBase64 ?? ''}|$signedHints';
 
   @override
   String encodePayload() => hasSignedCarrierHints
@@ -1768,6 +1769,7 @@ class ContactRecord {
     this.pairingLastAttemptAt,
     this.pairingAttempts = 0,
     this.retiredPairingRequestIds = const <String>[],
+    this.revivedAt,
   });
 
   final String accountId;
@@ -1807,6 +1809,11 @@ class ContactRecord {
   /// Pairing ids of earlier pairings with this device (before it was added
   /// again): removal notices for those no longer apply.
   final List<String> retiredPairingRequestIds;
+
+  /// When this device last added the contact again (after a removal, or
+  /// a cancelled or declined request). Traffic created before it belongs
+  /// to the earlier pairing.
+  final DateTime? revivedAt;
 
   /// True when this contact arrived with a `displayName` matching an existing
   /// trusted contact AND a different identity public key — i.e. possibly a
@@ -1897,6 +1904,7 @@ class ContactRecord {
     bool clearPairingLastAttemptAt = false,
     int? pairingAttempts,
     List<String>? retiredPairingRequestIds,
+    DateTime? revivedAt,
   }) {
     return ContactRecord(
       accountId: accountId,
@@ -1947,6 +1955,7 @@ class ContactRecord {
       pairingAttempts: pairingAttempts ?? this.pairingAttempts,
       retiredPairingRequestIds:
           retiredPairingRequestIds ?? this.retiredPairingRequestIds,
+      revivedAt: revivedAt ?? this.revivedAt,
     );
   }
 
@@ -2058,6 +2067,7 @@ class ContactRecord {
       if (pairingAttempts > 0) 'pairingAttempts': pairingAttempts,
       if (retiredPairingRequestIds.isNotEmpty)
         'retiredPairingRequestIds': retiredPairingRequestIds,
+      if (revivedAt != null) 'revivedAt': revivedAt!.toUtc().toIso8601String(),
     };
   }
 
@@ -2157,6 +2167,7 @@ class ContactRecord {
         for (final id in json['retiredPairingRequestIds'] as List? ?? const [])
           if (id is String) id,
       ],
+      revivedAt: DateTime.tryParse(json['revivedAt'] as String? ?? '')?.toUtc(),
     );
   }
 }
