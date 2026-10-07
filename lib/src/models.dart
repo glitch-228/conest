@@ -1616,6 +1616,7 @@ class ContactRecord {
     this.pairingRequestId,
     this.pairingLastAttemptAt,
     this.pairingAttempts = 0,
+    this.retiredPairingRequestIds = const <String>[],
   });
 
   final String accountId;
@@ -1651,6 +1652,10 @@ class ContactRecord {
   final String? pairingRequestId;
   final DateTime? pairingLastAttemptAt;
   final int pairingAttempts;
+
+  /// Pairing ids of earlier pairings with this device (before it was added
+  /// again): removal notices for those no longer apply.
+  final List<String> retiredPairingRequestIds;
 
   /// True when this contact arrived with a `displayName` matching an existing
   /// trusted contact AND a different identity public key — i.e. possibly a
@@ -1740,6 +1745,7 @@ class ContactRecord {
     DateTime? pairingLastAttemptAt,
     bool clearPairingLastAttemptAt = false,
     int? pairingAttempts,
+    List<String>? retiredPairingRequestIds,
   }) {
     return ContactRecord(
       accountId: accountId,
@@ -1788,6 +1794,8 @@ class ContactRecord {
           ? null
           : (pairingLastAttemptAt ?? this.pairingLastAttemptAt),
       pairingAttempts: pairingAttempts ?? this.pairingAttempts,
+      retiredPairingRequestIds:
+          retiredPairingRequestIds ?? this.retiredPairingRequestIds,
     );
   }
 
@@ -1897,6 +1905,8 @@ class ContactRecord {
       if (pairingLastAttemptAt != null)
         'pairingLastAttemptAt': pairingLastAttemptAt!.toUtc().toIso8601String(),
       if (pairingAttempts > 0) 'pairingAttempts': pairingAttempts,
+      if (retiredPairingRequestIds.isNotEmpty)
+        'retiredPairingRequestIds': retiredPairingRequestIds,
     };
   }
 
@@ -1992,6 +2002,10 @@ class ContactRecord {
         json['pairingLastAttemptAt'] as String? ?? '',
       )?.toUtc(),
       pairingAttempts: (json['pairingAttempts'] as num?)?.toInt() ?? 0,
+      retiredPairingRequestIds: [
+        for (final id in json['retiredPairingRequestIds'] as List? ?? const [])
+          if (id is String) id,
+      ],
     );
   }
 }
@@ -4048,11 +4062,16 @@ class ContactRemovalTombstone {
     required this.removedAt,
     this.pairingRequestId,
     this.contact,
+    this.invitePayload,
   });
 
   final String deviceId;
   final DateTime removedAt;
   final String? pairingRequestId;
+
+  /// The invite of a declined request, to decline its repeats with the
+  /// keys it came with (never with keys a repeat brings).
+  final String? invitePayload;
 
   /// The removed contact, kept hidden for [noticeWindow] when the peer was
   /// told: a peer that missed the notice and writes again is told again.
@@ -4066,7 +4085,16 @@ class ContactRemovalTombstone {
     'removedAt': removedAt.toUtc().toIso8601String(),
     if (pairingRequestId != null) 'pairingRequestId': pairingRequestId,
     if (contact != null) 'contact': contact!.toJson(),
+    if (invitePayload != null) 'invitePayload': invitePayload,
   };
+
+  /// Without the kept contact once the notice window is over.
+  ContactRemovalTombstone withoutContact() => ContactRemovalTombstone(
+    deviceId: deviceId,
+    removedAt: removedAt,
+    pairingRequestId: pairingRequestId,
+    invitePayload: invitePayload,
+  );
 
   factory ContactRemovalTombstone.fromJson(Map<String, dynamic> json) {
     ContactRecord? contact;
@@ -4082,6 +4110,7 @@ class ContactRemovalTombstone {
           DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
       pairingRequestId: json['pairingRequestId'] as String?,
       contact: contact,
+      invitePayload: json['invitePayload'] as String?,
     );
   }
 }

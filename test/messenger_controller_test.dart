@@ -2423,6 +2423,76 @@ void main() {
       },
     );
 
+    test('a replayed invite does not accept a waiting request', () async {
+      await add(alice, bob);
+      await until(
+        () => bob.pendingContactRequests.any(
+          (r) => r.senderDeviceId == id(alice),
+        ),
+      );
+      // Anyone holding Bob's (public) invite can send this.
+      final forged = RelayEnvelope(
+        protocolVersion: 1,
+        kind: 'contact_exchange',
+        messageId: 'forged-request',
+        conversationId: 'pairing',
+        senderAccountId: bob.identity!.accountId,
+        senderDeviceId: id(bob),
+        recipientDeviceId: id(alice),
+        createdAt: DateTime.now().toUtc(),
+        payloadBase64: base64Encode(
+          utf8.encode(
+            jsonEncode({
+              'exchangeVersion': 2,
+              'invitePayload': (await bob.buildInvite()).encodePayload(),
+              'pairingRequestId': 'forged',
+            }),
+          ),
+        ),
+      );
+      dropAliceToBob = (_) => true;
+      await alice.processEnvelopesForTesting([forged]);
+      expect(
+        contactOf(alice, bob)!.pairingState,
+        isNot(ContactPairingState.accepted),
+      );
+    });
+
+    test('a contact added by both sides can still be removed', () async {
+      await add(alice, bob);
+      await add(bob, alice);
+      await until(
+        () =>
+            contactOf(alice, bob)?.pairingState ==
+                ContactPairingState.accepted &&
+            contactOf(bob, alice)?.pairingState == ContactPairingState.accepted,
+      );
+      expect(bob.pendingContactRequests, isEmpty);
+      expect(alice.pendingContactRequests, isEmpty);
+      await alice.removeContact(id(bob));
+      await until(() => contactOf(bob, alice)?.remoteRemovedAt != null);
+      expect(contactOf(bob, alice)!.remoteRemovedAt, isNotNull);
+    });
+
+    test('approving someone you asked too accepts on both sides', () async {
+      await add(alice, bob);
+      final request = await requestAt(bob, alice);
+      // Bob adds Alice himself before looking at her request.
+      dropBobToAlice = (_) => true;
+      await add(bob, alice);
+      dropBobToAlice = (_) => false;
+      await bob.approvePendingContactRequest(request.id);
+      await until(
+        () =>
+            contactOf(alice, bob)?.pairingState ==
+                ContactPairingState.accepted &&
+            contactOf(bob, alice)?.pairingState == ContactPairingState.accepted,
+      );
+      expect(contactOf(alice, bob)!.pairingState, ContactPairingState.accepted);
+      expect(contactOf(bob, alice)!.pairingState, ContactPairingState.accepted);
+      expect(bob.pendingContactRequests, isEmpty);
+    });
+
     test('the removed side can add the contact again', () async {
       await _pairControllers(alice, bob);
       await alice.removeContact(id(bob));
