@@ -1,42 +1,39 @@
-## Conest 0.3.12 nightly (October 8, third build)
+## Conest 0.3.12 nightly (October 8, fourth build)
 
-This nightly brings chats from other networks into one chat list, and
-adds private messages with anyone on Nostr. Everything from the earlier
-October 8 nightlies is included.
+This nightly finishes chats with other apps' users: people on the
+Meshtastic and MeshCore apps, and verifying people on Matrix (as Element
+X does). Everything from the earlier October 8 nightlies is included.
 
 ### Before you update
 
-- Nothing changes until you turn something on: Conest chats stay as they
-  are.
+- Nothing changes until you turn something on.
 
-### Chats from other networks in one list (new)
+### Meshtastic and MeshCore app users (new)
 
-- Matrix chats, Nostr chats and bitchat chats (the mesh chat and private
-  chats with bitchat users nearby) now sit in the chat list beside your
-  Conest chats, each marked with its network.
-- Each network gets a filter chip above the list. Settings → Connectivity
-  → **Chats from other networks** hides a network's chats from the list
-  (they stay in that network's settings).
+- With your radio set up (Settings → Connectivity), turn on **Messages
+  with Meshtastic app users** or **Messages with MeshCore app users** to
+  read and write the apps' own messages through it:
+  - direct messages with a node (Meshtastic) or with the radio's contacts
+    (MeshCore), marked delivered when the other radio confirms, or not
+    delivered when it could not read the message;
+  - the radio's channels, as group chats.
+- They appear in the chat list, each with its filter.
+- These messages are protected only as the radios protect them, not with
+  Conest's encryption. On a channel anyone with the channel key can read
+  and can write under any name; Meshtastic direct messages that arrived
+  without the radios' own keys are marked "sender not verified".
+- Saving the radio settings again keeps the setting.
 
-### Nostr private messages (new)
+### Matrix: verifying people (new)
 
-- Settings → Connectivity → **Nostr private messages** lets you chat with
-  anyone on Nostr in apps that use private messages (NIP-17), such as
-  0xchat and Amethyst, one to one or in small groups with a title.
-- It uses a Nostr account of its own: your Conest contacts and your
-  Conest Nostr route are not linked to it. Copy your address (npub, with
-  your relays) to give it to people; start a chat with someone's npub, or
-  several for a group.
-- Messages are end-to-end encrypted, and relays see neither who wrote
-  nor when, but there is no forward secrecy.
-- Chats from strangers are requests: few, kept short, and the oldest go
-  first, until you reply. A deleted chat stays deleted.
-- Someone whose app has not published where it reads private messages
-  cannot be written to yet; Conest says so instead of sending into the
-  void. A profile you paste with relays (nprofile) is used for them.
-- Files sent from other apps show as a note (open them in that app).
-- Not available in Matrix-only mode.
+- In a direct chat, the shield button verifies the other person by
+  comparing emojis, as in Element; verified chats show a badge.
+- Requests from other people are accepted only from someone you have a
+  direct chat with, one at a time.
+- A direct chat says what the homeservers can see, and says so plainly
+  when it is not encrypted.
 
 ### Not tested on devices yet
 
-- Nostr private messages with 0xchat, Amethyst and Damus.
+- Meshtastic and MeshCore app messages with real radios and the official
+  apps; verifying an Element X user.
