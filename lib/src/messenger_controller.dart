@@ -29,6 +29,10 @@ import 'bitchat/mesh.dart' show randomBitchatBytes;
 import 'bitchat_carrier.dart';
 import 'bitchat_chats.dart';
 import 'bitchat_gateway_relays.dart';
+import 'nostr/nip17.dart';
+import 'nostr/nip19.dart';
+import 'nostr_chats.dart';
+import 'nostr_direct.dart';
 import 'carrier.dart';
 import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
@@ -686,6 +690,7 @@ class MessengerController extends ChangeNotifier {
     await _stopPairingBeacon();
     await _detachMatrixTransport();
     _closeBitchatGateway();
+    await _stopNostrDirect();
     await _stopTransportRegistry();
     await _lanDirectChannel?.stop();
     await _localRelayNode.stop();
@@ -3722,6 +3727,7 @@ class MessengerController extends ChangeNotifier {
   /// Recreates carriers from saved accounts once Conest runs; contacts
   /// already have their addresses.
   Future<void> _restoreCarrierAccounts() async {
+    if (nostrDirectConfig != null && _nostrDirect == null) _startNostrDirect();
     if (nostrCarrierConfig case final nostr?
         when !_carrierTransports.containsKey(TransportKind.nostr)) {
       // A relay that shut down is swapped for its replacement, and
@@ -4040,6 +4046,276 @@ class MessengerController extends ChangeNotifier {
     final chats = BitchatChats.fromJson(json);
     _bitchatChatsCache = (json, chats);
     return chats;
+  }
+
+  // Nostr private messages (NIP-17) with anyone on Nostr.
+
+  /// The saved setup for Nostr private messages, if on.
+  NostrDirectConfig? get nostrDirectConfig {
+    final config = NostrDirectConfig.fromJson(
+      _snapshot.carrierAccounts['nostrDirect'],
+    );
+    return config != null && config.enabled ? config : null;
+  }
+
+  NostrDirectService? _nostrDirect;
+  (Map<String, dynamic>?, NostrChats)? _nostrChatsCache;
+
+  /// Relays people's profiles named, by public key, for this session.
+  final Map<String, List<Uri>> _nostrHints = {};
+
+  /// This account's Nostr public key while private messages are on.
+  String? get nostrPublicKey => nostrDirectConfig?.publicKey;
+
+  /// `npub` and `nprofile` to give people, while on.
+  String? get nostrNpub => _nostrDirect?.npub;
+  String? get nostrProfile => _nostrDirect?.nprofile;
+
+  /// Whether the relays serve this account's messages.
+  bool get nostrDirectReading => _nostrDirect?.reading ?? false;
+
+  NostrChats get nostrChats {
+    final json = _snapshot.networkChats['nostr'];
+    final cached = _nostrChatsCache;
+    if (cached != null && identical(cached.$1, json)) return cached.$2;
+    final chats = NostrChats.fromJson(json);
+    _nostrChatsCache = (json, chats);
+    return chats;
+  }
+
+  /// Turns Nostr private messages on: a Nostr key of this device's own
+  /// (never the carrier's), reading from [relays] or the defaults.
+  Future<void> enableNostrDirect({List<Uri>? relays}) async {
+    _requireIdentity();
+    if (!conestActive) {
+      throw StateError(
+        'Nostr messages run with Conest: leave Matrix-only mode.',
+      );
+    }
+    // Back on, the same key: people keep reaching the same npub.
+    var config =
+        NostrDirectConfig.fromJson(
+          _snapshot.carrierAccounts['nostrDirect'],
+        )?.copyWith(enabled: true) ??
+        NostrDirectConfig.create();
+    final wss = [
+      for (final relay in relays ?? const <Uri>[])
+        if (relay.scheme == 'wss' && relay.host.isNotEmpty) relay,
+    ];
+    if (wss.isNotEmpty) config = config.copyWith(relays: wss.take(6).toList());
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        'nostrDirect': config.toJson(),
+      },
+    );
+    await _persist('Nostr messages on.');
+    await _stopNostrDirect();
+    _startNostrDirect();
+  }
+
+  /// Turns Nostr private messages off; the key and the chats are kept.
+  Future<void> disableNostrDirect() async {
+    await _stopNostrDirect();
+    final config = nostrDirectConfig;
+    if (config == null) return;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        'nostrDirect': config.copyWith(enabled: false).toJson(),
+      },
+    );
+    await _persist('Nostr messages off.');
+  }
+
+  void _startNostrDirect() {
+    final config = nostrDirectConfig;
+    if (config == null || _nostrDirect != null || !conestActive || _disposed) {
+      return;
+    }
+    _nostrDirect = NostrDirectService(
+      secretKey: config.secretKeyBytes,
+      relays: config.relays,
+      since: config.since,
+      onMessage: _onNostrMessage,
+      onCursor: (since) {
+        final current = nostrDirectConfig;
+        if (current == null) return;
+        _snapshot = _snapshot.copyWith(
+          carrierAccounts: {
+            ..._snapshot.carrierAccounts,
+            'nostrDirect': current.copyWith(since: since).toJson(),
+          },
+        );
+        unawaited(_saveSnapshotSilently(debounce: true));
+      },
+      onStatusChanged: notifyListeners,
+      connector: _nostrConnector,
+      now: _now,
+    )..start();
+    notifyListeners();
+  }
+
+  Future<void> _stopNostrDirect() async {
+    final service = _nostrDirect;
+    _nostrDirect = null;
+    await service?.stop();
+  }
+
+  void _onNostrMessage(NostrDirectMessage message) {
+    final me = nostrPublicKey;
+    if (me == null) return;
+    final people = message.participants.where((key) => key != me).toList();
+    // A message to ourselves only is kept in a chat with nobody else.
+    final chatPeople = people.isEmpty ? [me] : people;
+    // The author picks the date: one from the future would stay on top.
+    final now = _now().toUtc();
+    final written = DateTime.fromMillisecondsSinceEpoch(
+      message.createdAt * 1000,
+      isUtc: true,
+    );
+    final at = written.isAfter(now.add(const Duration(minutes: 10)))
+        ? now
+        : written;
+    final subject = message.subject;
+    unawaited(
+      _saveNostrChats(
+        nostrChats.add(
+          chatPeople,
+          NostrChatMessage(
+            id: message.id,
+            author: message.author,
+            text: message.content.length > maxNostrMessageChars
+                ? '${String.fromCharCodes(message.content.runes.take(maxNostrMessageChars))}…'
+                : message.content,
+            at: at,
+            outgoing: message.author == me,
+          ),
+          subject: subject == null || subject.trim().isEmpty
+              ? null
+              : subject.trim().substring(0, min(subject.trim().length, 100)),
+        ),
+      ).catchError((Object _) {}),
+    );
+  }
+
+  /// Starts a chat with the people in [profiles] (npub, nprofile or hex,
+  /// separated by spaces, commas or lines); returns its key.
+  Future<String> startNostrChat(String profiles) async {
+    final me = nostrPublicKey;
+    if (me == null) throw StateError('Turn on Nostr messages first.');
+    final people = <String>{};
+    for (final part in profiles.split(RegExp(r'[\s,]+'))) {
+      if (part.isEmpty) continue;
+      final profile = Nip19.decodeProfile(part);
+      if (profile == null) {
+        throw ArgumentError('Not a Nostr key or profile: $part');
+      }
+      if (profile.publicKey == me) continue;
+      people.add(profile.publicKey);
+      if (profile.relays.isNotEmpty) {
+        _nostrHints[profile.publicKey] = profile.relays;
+      }
+    }
+    if (people.isEmpty) throw ArgumentError('Enter someone\'s npub.');
+    if (people.length > NostrChats.maxPeople) {
+      throw ArgumentError('At most ${NostrChats.maxPeople} people.');
+    }
+    final chats = nostrChats.start(
+      people.toList(),
+      relays: {
+        for (final person in people)
+          if (_nostrHints[person] case final hints?) person: hints,
+      },
+    );
+    await _saveNostrChats(chats);
+    return chats.chatWith(people.toList()).key;
+  }
+
+  /// Longest Nostr message kept or sent.
+  static const int maxNostrMessageChars = 4000;
+
+  /// Writes [text] in the chat [key].
+  Future<void> sendNostrMessage(String key, String text) async {
+    if (text.trim().length > maxNostrMessageChars) {
+      throw ArgumentError(
+        'Too long for one Nostr message ($maxNostrMessageChars characters '
+        'at most).',
+      );
+    }
+    final service = _nostrDirect;
+    final me = nostrPublicKey;
+    final chat = nostrChats.chats[key];
+    final trimmed = text.trim();
+    if (service == null || me == null) {
+      throw StateError('Turn on Nostr messages first.');
+    }
+    if (chat == null || trimmed.isEmpty) return;
+    final recipients = chat.people.where((key) => key != me).toList();
+    final sent = await service.send(
+      recipients.isEmpty ? [me] : recipients,
+      trimmed,
+      subject: chat.isGroup ? chat.subject : null,
+      hints: {
+        for (final person in recipients)
+          if (_nostrHints[person] ??
+                  [
+                    for (final relay
+                        in nostrChats.hints[person] ?? const <String>[])
+                      ?Uri.tryParse(relay),
+                  ]
+              case final hints when hints.isNotEmpty)
+            person: hints,
+      },
+    );
+    _onNostrMessage(sent);
+  }
+
+  Future<void> markNostrChatRead(String key) =>
+      _saveNostrChats(nostrChats.markRead(key));
+
+  Future<void> deleteNostrChat(String key) =>
+      _saveNostrChats(nostrChats.withoutChat(key, _now().toUtc()));
+
+  /// Gives [publicKey] a name shown in Nostr chats.
+  Future<void> nameNostrPerson(String publicKey, String name) =>
+      _saveNostrChats(nostrChats.named(publicKey, name));
+
+  /// What to call [publicKey]: the name given to it, or its npub's start.
+  String nostrName(String publicKey) {
+    final named = nostrChats.names[publicKey];
+    if (named != null) return named;
+    // Start and end, so a look-alike key is harder to make.
+    final npub = Nip19.npub(publicKey);
+    return '${npub.substring(0, 12)}…${npub.substring(npub.length - 6)}';
+  }
+
+  Future<void> _saveNostrChats(NostrChats chats) async {
+    final json = chats.toJson();
+    _snapshot = _snapshot.copyWith(
+      networkChats: {..._snapshot.networkChats, 'nostr': json},
+    );
+    _nostrChatsCache = (json, chats);
+    await _saveSnapshotSilently(notify: true, debounce: true);
+  }
+
+  /// Whether the chat list shows [network]'s chats (all networks are shown
+  /// unless hidden).
+  bool showsChatNetwork(String network) =>
+      !_snapshot.hiddenChatNetworks.contains(network);
+
+  /// Shows or hides [network]'s chats in the chat list.
+  Future<void> setShowsChatNetwork(String network, bool shown) async {
+    if (showsChatNetwork(network) == shown) return;
+    _snapshot = _snapshot.copyWith(
+      hiddenChatNetworks: shown
+          ? [
+              for (final hidden in _snapshot.hiddenChatNetworks)
+                if (hidden != network) hidden,
+            ]
+          : [..._snapshot.hiddenChatNetworks, network],
+    );
+    await _saveSnapshotSilently(notify: true);
   }
 
   /// Whether bitchat users nearby can see this device and write to it.
@@ -28184,6 +28460,7 @@ class MessengerController extends ChangeNotifier {
     }
     _groupProfileRefreshTimers.clear();
     unawaited(_closeBitchatIdentity());
+    unawaited(_stopNostrDirect());
     unawaited(_voiceCallChanges?.cancel());
     _voiceCallChanges = null;
     unawaited(_voiceCallSoundCues.dispose());

@@ -208,6 +208,8 @@ class _Connection implements NostrSocket {
     if (p != null && !p.contains(event.tag('p'))) return false;
     final g = (filter['#g'] as List?)?.cast<String>();
     if (g != null && !g.contains(event.tag('g'))) return false;
+    final authors = (filter['authors'] as List?)?.cast<String>();
+    if (authors != null && !authors.contains(event.pubkey)) return false;
     // Inbox relays serve gift wraps only to their recipient.
     if (_relay.requireAuth &&
         event.kind == NostrKind.giftWrap &&

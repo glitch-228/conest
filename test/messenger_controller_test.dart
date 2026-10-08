@@ -41,6 +41,8 @@ import 'package:conest/src/native_attachment_crypto.dart';
 import 'package:conest/src/nostr/event.dart';
 import 'package:conest/src/nostr/relay.dart';
 import 'package:conest/src/nostr_carrier.dart';
+import 'package:conest/src/nostr_direct.dart';
+import 'package:conest/src/nostr/nip17.dart';
 import 'package:conest/src/platform_bridge.dart';
 import 'package:conest/src/ratchet.dart';
 import 'package:conest/src/relay_client.dart'
@@ -8366,6 +8368,101 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
   });
 
+  testWidgets('bitchat chats join the chat list with a filter of their own', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    late MessengerController alice;
+    late MessengerController bob;
+    late _FakeBitchatPhone phone;
+    final area = FakeBleNeighbourhood()..connect('alice', 'phone');
+    await tester.runAsync(() async {
+      final relay = _FakeRelayClient();
+      alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        bitchatConnector: () async => area.node('alice'),
+      );
+      bob = await _createController(relayClient: relay, displayName: 'Bob');
+      await _pairControllers(alice, bob);
+      await alice.enableBitchatCarrier();
+      while (alice.bitchatChannel?.state != BitchatCarrierState.running) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      phone = await _FakeBitchatPhone.start(area, 'phone');
+      await phone.say('anyone around?');
+      while (alice.bitchatChats.mesh.isEmpty) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      await alice.flushPendingChanges();
+    });
+    final theme = app.ConestThemeController.memory();
+    final updates = _createUpdateService();
+    addTearDown(theme.dispose);
+    addTearDown(updates.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: app.HomeScreen(
+          controller: alice,
+          updateService: updates,
+          buildInfo: _createBuildInfo(),
+          themeController: theme,
+          palette: app.ConestPalette(),
+        ),
+      ),
+    );
+    await tester.pump();
+    Finder chip(String label) => find.widgetWithText(ChoiceChip, label);
+    final bobRow = find.byKey(
+      ValueKey('courier-chat-${bob.identity!.deviceId}'),
+    );
+    final meshRow = find.byKey(const ValueKey('courier-chat-bitchat:#mesh'));
+    expect(chip('bitchat'), findsOneWidget);
+    expect(meshRow, findsOneWidget);
+    expect(
+      find.descendant(of: meshRow, matching: find.textContaining('anyone')),
+      findsOneWidget,
+    );
+    expect(bobRow, findsOneWidget);
+
+    // The chip row scrolls sideways in the narrow chat list.
+    await tester.scrollUntilVisible(
+      chip('bitchat'),
+      80,
+      scrollable: find
+          .ancestor(
+            of: find.byType(ChoiceChip).first,
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await tester.pump();
+    await tester.tap(chip('bitchat'));
+    await tester.pump();
+    expect(meshRow, findsOneWidget);
+    expect(bobRow, findsNothing);
+
+    // Hidden from the chat list: no row and no filter, and the list falls
+    // back to everything rather than staying empty.
+    await tester.runAsync(() => alice.setShowsChatNetwork('bitchat', false));
+    await tester.pump();
+    expect(meshRow, findsNothing);
+    expect(chip('bitchat'), findsNothing);
+    expect(bobRow, findsOneWidget);
+
+    await tester.runAsync(() async {
+      await phone.stop();
+      await alice.flushPendingChanges();
+    });
+    await tester.pumpWidget(const SizedBox.shrink());
+    alice.dispose();
+    bob.dispose();
+    await tester.pump(const Duration(milliseconds: 100));
+  });
+
   testWidgets('Matrix-only home signs in, then lists rooms', (tester) async {
     late MessengerController controller;
     final native = FakeMatrixNative(FakeMatrixHub())
@@ -13949,6 +14046,160 @@ void main() {
       await bob.unregisterCarrierTransport(TransportKind.nostr);
       await settle([alice, bob]);
       expect(alice.contacts.single.carrierAddress(TransportKind.nostr), isNull);
+    });
+  });
+
+  group('Nostr private messages', () {
+    Future<void> until(bool Function() done) async {
+      final deadline = DateTime.now().add(const Duration(seconds: 15));
+      while (!done() && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    }
+
+    test('chats with people on other Nostr apps, alone or in groups', () async {
+      final nostr = FakeNostrRelays();
+      for (final url in [
+        'wss://alice.relay',
+        'wss://other.relay',
+        'wss://purplepag.es',
+      ]) {
+        nostr.relay(url);
+      }
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        nostrConnector: nostr.connect,
+      );
+      addTearDown(alice.dispose);
+      await alice.enableNostrDirect(relays: [Uri.parse('wss://alice.relay')]);
+      final aliceKey = alice.nostrPublicKey!;
+      expect(alice.nostrNpub, startsWith('npub1'));
+
+      // Someone using another NIP-17 app, and a friend of theirs.
+      NostrDirectService other(int seed, List<NostrDirectMessage> got) {
+        final service = NostrDirectService(
+          secretKey: Uint8List.fromList(List.filled(32, seed)),
+          relays: [Uri.parse('wss://other.relay')],
+          onMessage: got.add,
+          connector: nostr.connect,
+        )..start();
+        addTearDown(service.stop);
+        return service;
+      }
+
+      final bobGot = <NostrDirectMessage>[];
+      final carolGot = <NostrDirectMessage>[];
+      final bob = other(7, bobGot);
+      final carol = other(8, carolGot);
+      await until(() => nostr.relay('wss://purplepag.es').stored.length >= 3);
+
+      await bob.send([aliceKey], 'hi Alice, from another app');
+      await until(() => alice.nostrChats.chats.isNotEmpty);
+      final chat = alice.nostrChats.chats.values.single;
+      expect(chat.people, [bob.publicKey]);
+      expect(chat.messages.single.text, 'hi Alice, from another app');
+      expect(chat.unread, 1);
+
+      await alice.sendNostrMessage(chat.key, 'hello Bob');
+      await until(() => bobGot.any((m) => m.content == 'hello Bob'));
+      expect(bobGot.last.author, aliceKey);
+      expect(
+        alice.nostrChats.chats[chat.key]!.messages.last.outgoing,
+        isTrue,
+      );
+
+      // A group: its own chat, with everyone in it.
+      await bob.send(
+        [aliceKey, carol.publicKey],
+        'hello both',
+        subject: 'Weekend',
+      );
+      await until(() => alice.nostrChats.chats.length == 2);
+      final group = alice.nostrChats.chats.values.singleWhere(
+        (chat) => chat.isGroup,
+      );
+      expect(group.people.toSet(), {bob.publicKey, carol.publicKey});
+      expect(group.subject, 'Weekend');
+      await alice.sendNostrMessage(group.key, 'count me in');
+      await until(
+        () =>
+            bobGot.any((m) => m.content == 'count me in') &&
+            carolGot.any((m) => m.content == 'count me in'),
+      );
+      expect(
+        carolGot.singleWhere((m) => m.content == 'count me in').participants,
+        {aliceKey, bob.publicKey, carol.publicKey},
+      );
+
+      // Off and on again: the same address.
+      await alice.disableNostrDirect();
+      expect(alice.nostrDirectConfig, isNull);
+      expect(alice.nostrChats.chats, hasLength(2));
+      await alice.enableNostrDirect();
+      expect(alice.nostrPublicKey, aliceKey);
+    });
+
+    test('a message dated in the future is shown as arriving now', () async {
+      final nostr = FakeNostrRelays()
+        ..relay('wss://alice.relay')
+        ..relay('wss://purplepag.es');
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        nostrConnector: nostr.connect,
+      );
+      addTearDown(alice.dispose);
+      await alice.enableNostrDirect(relays: [Uri.parse('wss://alice.relay')]);
+      final stranger = Uint8List.fromList(List.filled(32, 9));
+      final wraps = Nip17.wrap(
+        secretKey: stranger,
+        recipients: [alice.nostrPublicKey!],
+        content: 'from the year 2999',
+        now: DateTime.utc(2999),
+      );
+      final forAlice = wraps
+          .singleWhere((entry) => entry.$1 == alice.nostrPublicKey)
+          .$2;
+      nostr.relay('wss://alice.relay').inject(forAlice);
+      await until(() => alice.nostrChats.chats.isNotEmpty);
+      final at = alice.nostrChats.chats.values.single.messages.single.at;
+      expect(at.isBefore(DateTime.now().add(const Duration(hours: 1))), isTrue);
+    });
+
+    test('Nostr messages run with Conest, not in Matrix-only mode', () async {
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        nostrConnector: FakeNostrRelays().connect,
+      );
+      addTearDown(alice.dispose);
+      await alice.setAppMode(AppMode.matrixOnly);
+      expect(alice.enableNostrDirect, throwsStateError);
+      expect(alice.nostrDirectConfig, isNull);
+    });
+
+    test('a new chat takes npubs and profiles, not junk', () async {
+      final nostr = FakeNostrRelays()..relay('wss://alice.relay');
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        nostrConnector: nostr.connect,
+      );
+      addTearDown(alice.dispose);
+      await alice.enableNostrDirect(relays: [Uri.parse('wss://alice.relay')]);
+      const npub =
+          'npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg';
+      final key = await alice.startNostrChat(npub);
+      expect(
+        key,
+        '7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e',
+      );
+      expect(() => alice.startNostrChat('hello'), throwsArgumentError);
+      expect(
+        () => alice.startNostrChat(alice.nostrNpub!),
+        throwsArgumentError,
+      );
     });
   });
 

@@ -48,9 +48,11 @@ import 'src/ui/email_carrier_panel.dart';
 import 'src/ui/meshcore_carrier_panel.dart';
 import 'src/ui/meshtastic_carrier_panel.dart';
 import 'src/ui/nostr_carrier_panel.dart';
+import 'src/ui/nostr_chats_screen.dart';
 import 'src/ui/reticulum_carrier_panel.dart';
 import 'src/ui/matrix_home_screen.dart';
 import 'src/ui/matrix_room_screen.dart';
+import 'src/ui/network_chat_sources.dart';
 import 'src/ui/matrix_verification_dialog.dart';
 import 'src/relay_client.dart';
 import 'src/storage.dart';
@@ -3699,7 +3701,8 @@ class _CourierHomeState extends State<_CourierHome> {
   String _activeFolderId = 'all';
 
   /// In Both mode: which chats the list shows.
-  _ChatSource _source = _ChatSource.all;
+  /// "all", "conest" or a network's id.
+  String _source = 'all';
   List<({String id, bool selected, VoidCallback open})> _navigation = const [];
 
   void navigateChat(int direction) {
@@ -4165,7 +4168,7 @@ class _CourierHomeState extends State<_CourierHome> {
             int unread,
             bool selected,
             bool isGroup,
-            bool isMatrix,
+            String? network,
             bool pinned,
             bool archived,
             bool muted,
@@ -4175,7 +4178,22 @@ class _CourierHomeState extends State<_CourierHome> {
             VoidCallback onTap,
           })
         >[];
-    final showConest = _source != _ChatSource.matrix;
+    final networks = [
+      for (final source in networkChatSources(
+        widget.controller,
+        widget.palette,
+      ))
+        if (source.active && widget.controller.showsChatNetwork(source.id))
+          source,
+    ];
+    // A network's filter that is gone (hidden, signed out, turned off)
+    // shows everything again, not an empty list.
+    if (_source != 'all' &&
+        _source != 'conest' &&
+        !networks.any((network) => network.id == _source)) {
+      _source = 'all';
+    }
+    final showConest = _source == 'all' || _source == 'conest';
     for (final contact
         in showConest ? widget.controller.contacts : const <ContactRecord>[]) {
       if (_activeFolderId != 'all' && !folderIds.contains(contact.deviceId))
@@ -4205,7 +4223,7 @@ class _CourierHomeState extends State<_CourierHome> {
         unread: widget.controller.unreadCountFor(contact.deviceId),
         selected: widget.selectedContactId == contact.deviceId,
         isGroup: false,
-        isMatrix: false,
+        network: null,
         memberCount: 0,
         reachability: widget.controller.reachabilityStateFor(contact.deviceId),
         onTap: () => widget.onContactSelected(contact),
@@ -4245,58 +4263,36 @@ class _CourierHomeState extends State<_CourierHome> {
         unread: widget.controller.unreadGroupCountFor(group.groupId),
         selected: widget.selectedGroupId == group.groupId,
         isGroup: true,
-        isMatrix: false,
+        network: null,
         memberCount: group.activeMemberDeviceIds.length,
         reachability: null,
         onTap: () => widget.onGroupSelected(group),
       ));
     }
-    // Matrix rooms and DMs from the full Matrix client.
-    final matrix = widget.controller.matrixClient;
-    if (matrix != null &&
-        matrix.signedIn &&
-        _activeFolderId == 'all' &&
-        widget.controller.appMode != AppMode.conest &&
-        _source != _ChatSource.conest) {
-      for (final room in matrix.rooms) {
-        final items = matrix.timeline(room.roomId).items;
-        final last = matrix.lastVisible(room.roomId);
-        if (query.isNotEmpty &&
-            !room.name.toLowerCase().contains(query) &&
-            !items.any((item) => item.body.toLowerCase().contains(query))) {
-          continue;
+    // Chats on other networks (Matrix, bitchat, …).
+    if (_activeFolderId == 'all') {
+      for (final source in networks) {
+        if (_source != 'all' && _source != source.id) continue;
+        for (final chat in source.chats()) {
+          if (!chat.matches(query)) continue;
+          entries.add((
+            seed: '${source.id}:${chat.id}',
+            pinned: false,
+            archived: false,
+            muted: false,
+            draft: '',
+            title: chat.title,
+            preview: chat.preview,
+            at: chat.at,
+            unread: chat.unread,
+            selected: false,
+            isGroup: chat.isGroup,
+            network: source.label,
+            memberCount: chat.memberCount,
+            reachability: null,
+            onTap: () => chat.open(context),
+          ));
         }
-        entries.add((
-          seed: 'matrix:${room.roomId}',
-          pinned: false,
-          archived: false,
-          muted: false,
-          draft: '',
-          title: room.invited ? 'Invitation: ${room.name}' : room.name,
-          preview: room.invited
-              ? 'Matrix invitation'
-              : last == null
-              ? (room.encrypted ? 'Encrypted Matrix chat' : 'Matrix chat')
-              : matrixPreview(last),
-          at: last?.timestamp.toLocal(),
-          unread: room.unread,
-          selected: false,
-          isGroup: !room.direct,
-          isMatrix: true,
-          memberCount: room.direct ? 0 : room.members,
-          reachability: null,
-          onTap: () => unawaited(
-            Navigator.of(context).push<void>(
-              MaterialPageRoute(
-                builder: (_) => MatrixRoomScreen(
-                  client: matrix,
-                  roomId: room.roomId,
-                  palette: widget.palette,
-                ),
-              ),
-            ),
-          ),
-        ));
       }
     }
     final archivedCount = entries.where((entry) => entry.archived).length;
@@ -4388,14 +4384,14 @@ class _CourierHomeState extends State<_CourierHome> {
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 scrollDirection: Axis.horizontal,
                 children: [
-                  if (widget.controller.appMode == AppMode.both &&
-                      widget.controller.matrixClient?.signedIn == true)
-                    for (final (source, label) in const [
-                      (_ChatSource.all, 'All chats'),
-                      (_ChatSource.conest, 'Conest'),
-                      (_ChatSource.matrix, 'Matrix'),
+                  if (networks.isNotEmpty)
+                    for (final (source, label) in [
+                      ('all', 'All chats'),
+                      ('conest', 'Conest'),
+                      for (final network in networks)
+                        (network.id, network.label),
                     ]) ...[
-                      if (source != _ChatSource.all) const SizedBox(width: 8),
+                      if (source != 'all') const SizedBox(width: 8),
                       ChoiceChip(
                         label: Text(label),
                         selected: _activeFolderId == 'all' && _source == source,
@@ -4411,7 +4407,7 @@ class _CourierHomeState extends State<_CourierHome> {
                       selected: _activeFolderId == 'all',
                       onSelected: (_) => setState(() {
                         _activeFolderId = 'all';
-                        _source = _ChatSource.all;
+                        _source = 'all';
                       }),
                     ),
                   for (final folder in widget.controller.chatFolders) ...[
@@ -4424,7 +4420,7 @@ class _CourierHomeState extends State<_CourierHome> {
                         // Folders hold Conest chats.
                         onSelected: (_) => setState(() {
                           _activeFolderId = folder.id;
-                          _source = _ChatSource.all;
+                          _source = 'all';
                         }),
                         onDeleted: () async {
                           await widget.controller.deleteChatFolder(folder.id);
@@ -4550,8 +4546,8 @@ class _CourierHomeState extends State<_CourierHome> {
                         : entry.preview,
                     pinned: entry.pinned,
                     muted: entry.muted,
-                    badge: entry.isMatrix ? 'Matrix' : null,
-                    onLongPress: entry.isMatrix
+                    badge: entry.network,
+                    onLongPress: entry.network != null
                         ? null
                         : () => unawaited(
                       _chatActions(
@@ -4561,7 +4557,7 @@ class _CourierHomeState extends State<_CourierHome> {
                         entry.seed,
                       ),
                     ),
-                    onSecondaryTapDown: entry.isMatrix
+                    onSecondaryTapDown: entry.network != null
                         ? null
                         : (event) => unawaited(
                       _chatActions(
@@ -4716,7 +4712,6 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
 }
 
 /// One Telegram-style row in the [_CourierHome] list.
-enum _ChatSource { all, conest, matrix }
 
 /// The Saved messages entry pinned above every chat list; it opens like a
 /// contact (this device itself).
@@ -14191,11 +14186,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               const SizedBox(height: 16),
                               AppModeSelector(controller: widget.controller),
                             ],
+                            NetworkChatsSettings(
+                              controller: widget.controller,
+                              palette: widget.palette,
+                            ),
                             const _MessageRouteLegend(),
                             if (widget.controller.matrixCarrierAvailable)
                               MatrixAccountPanel(controller: widget.controller),
                             const SizedBox(height: 12),
                             NostrCarrierPanel(controller: widget.controller),
+                            const SizedBox(height: 12),
+                            NostrDirectPanel(controller: widget.controller),
                             const SizedBox(height: 12),
                             EmailCarrierPanel(controller: widget.controller),
                             const SizedBox(height: 12),

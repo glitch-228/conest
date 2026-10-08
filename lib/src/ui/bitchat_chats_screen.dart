@@ -96,17 +96,27 @@ class BitchatChatsScreen extends StatelessWidget {
     );
   }
 
-  void _open(BuildContext context, String key, String title) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => _BitchatChatScreen(
-          controller: controller,
-          chatKey: key,
-          title: title,
-        ),
+  void _open(BuildContext context, String key, String title) =>
+      openBitchatChat(context, controller, key, title);
+}
+
+/// Opens one bitchat chat: [chatKey] is [BitchatChats.meshKey] or a peer
+/// id.
+void openBitchatChat(
+  BuildContext context,
+  MessengerController controller,
+  String chatKey,
+  String title,
+) {
+  Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => _BitchatChatScreen(
+        controller: controller,
+        chatKey: chatKey,
+        title: title,
       ),
-    );
-  }
+    ),
+  );
 }
 
 class _Unread extends StatelessWidget {

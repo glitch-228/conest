@@ -4623,6 +4623,7 @@ class VaultSnapshot {
     this.matrixShowMembership = false,
     this.carrierAccounts = const <String, Map<String, dynamic>>{},
     this.networkChats = const <String, Map<String, dynamic>>{},
+    this.hiddenChatNetworks = const <String>[],
   });
 
   final IdentityRecord? identity;
@@ -4725,6 +4726,9 @@ class VaultSnapshot {
   /// chat and private chats); each network reads its own entry.
   final Map<String, Map<String, dynamic>> networkChats;
 
+  /// Networks whose chats the chat list leaves out (for example "bitchat").
+  final List<String> hiddenChatNetworks;
+
   /// What the app is used as; null until chosen (an identity from before
   /// app modes reads as [AppMode.both] where Matrix exists).
   final AppMode? appMode;
@@ -4796,6 +4800,7 @@ class VaultSnapshot {
     bool? matrixShowMembership,
     Map<String, Map<String, dynamic>>? carrierAccounts,
     Map<String, Map<String, dynamic>>? networkChats,
+    List<String>? hiddenChatNetworks,
     bool clearMatrixSession = false,
     bool clearIdentity = false,
   }) {
@@ -4847,6 +4852,7 @@ class VaultSnapshot {
       matrixShowMembership: matrixShowMembership ?? this.matrixShowMembership,
       carrierAccounts: carrierAccounts ?? this.carrierAccounts,
       networkChats: networkChats ?? this.networkChats,
+      hiddenChatNetworks: hiddenChatNetworks ?? this.hiddenChatNetworks,
     );
   }
 
@@ -4918,6 +4924,8 @@ class VaultSnapshot {
       if (matrixShowMembership) 'matrixShowMembership': true,
       if (carrierAccounts.isNotEmpty) 'carrierAccounts': carrierAccounts,
       if (networkChats.isNotEmpty) 'networkChats': networkChats,
+      if (hiddenChatNetworks.isNotEmpty)
+        'hiddenChatNetworks': hiddenChatNetworks,
     };
   }
 
@@ -4971,6 +4979,11 @@ class VaultSnapshot {
           if (entry.value case final Map<String, dynamic> chats)
             entry.key: chats,
       },
+      hiddenChatNetworks: [
+        for (final network
+            in json['hiddenChatNetworks'] as List<dynamic>? ?? const [])
+          if (network is String) network,
+      ],
       contacts: (json['contacts'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>()
           .map(ContactRecord.fromJson)
