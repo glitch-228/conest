@@ -12,6 +12,8 @@ import 'package:path/path.dart' as p;
 import 'package:conest/main.dart' as app;
 import 'package:conest/main.dart' show sniffImageMimeType;
 import 'package:conest/src/bitchat/direct.dart';
+import 'package:conest/src/bitchat/gateway.dart';
+import 'package:conest/src/bitchat/geo_relays.g.dart';
 import 'package:conest/src/bitchat/mesh.dart';
 import 'package:conest/src/bitchat/packet.dart';
 import 'package:conest/src/bitchat_carrier.dart';
@@ -36,6 +38,7 @@ import 'package:conest/src/matrix_service.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/native_attachment_crypto.dart';
+import 'package:conest/src/nostr/event.dart';
 import 'package:conest/src/nostr/relay.dart';
 import 'package:conest/src/nostr_carrier.dart';
 import 'package:conest/src/platform_bridge.dart';
@@ -13011,7 +13014,8 @@ void main() {
         String shownPayload() => tester
             .widgetList<SelectableText>(find.byType(SelectableText))
             .map((text) => text.data ?? '')
-            .firstWhere((text) => text.startsWith('ci'));
+            // An invite, not a codephrase that happens to start with "ci".
+            .firstWhere((text) => RegExp(r'^ci\d\|').hasMatch(text));
         final code = currentPairingCodeSnapshotForPayload(
           invite.encodeCompatiblePayload(),
         ).codephrase;
@@ -14771,6 +14775,91 @@ void main() {
       await until(() => alice.bitchatChats.mesh.length >= 20);
       await Future<void>.delayed(const Duration(milliseconds: 200));
       expect(alice.bitchatChats.mesh, hasLength(20));
+    });
+
+    test('phones nearby reach location channels through a gateway', () async {
+      final area = FakeBleNeighbourhood()..connect('alice', 'phone');
+      final nostr = FakeNostrRelays();
+      const cell = 'u4pruy';
+      final directory = BitchatGeoRelays.parse(bitchatBundledGeoRelays)!;
+      final cellRelays = [
+        for (final url in directory.closest(cell)) nostr.relay(url.toString()),
+      ];
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        bitchatConnector: () async => area.node('alice'),
+        nostrConnector: nostr.connect,
+      );
+      addTearDown(alice.dispose);
+      await alice.enableBitchatCarrier();
+      await until(
+        () => alice.bitchatChannel?.state == BitchatCarrierState.running,
+      );
+      final phone = await _FakeBitchatPhone.start(area, 'phone');
+      addTearDown(phone.stop);
+      expect(() => alice.setBitchatGateway(true), throwsStateError);
+      await alice.setBitchatReachable(true);
+      await alice.setBitchatGateway(true);
+      final aliceId = alice.bitchatPeerId!;
+      // The phone learns that Alice is a gateway from her announce.
+      await until(
+        () =>
+            phone.direct.peer(aliceId)?.capabilities ==
+            bitchatGatewayCapability,
+      );
+      expect(
+        phone.direct.peer(aliceId)?.capabilities,
+        bitchatGatewayCapability,
+      );
+
+      // The iPhone has no internet: it hands its signed channel message to
+      // Alice, who publishes it on the cell's relays.
+      final authorKey = Uint8List.fromList(List.generate(32, (i) => i + 7));
+      NostrEvent chat(String text) => NostrEvent.sign(
+        secretKey: authorKey,
+        kind: bitchatGeohashEventKind,
+        tags: [
+          ['g', cell],
+        ],
+        content: text,
+        createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      );
+      final up = chat('hello from a phone without internet');
+      await phone.deposit(aliceId, cell, up);
+      bool everywhere() =>
+          cellRelays.every((r) => r.stored.any((e) => e.id == up.id));
+      await until(everywhere);
+      expect(everywhere(), isTrue);
+      await until(() => alice.bitchatGatewayCells.isNotEmpty);
+      expect(alice.bitchatGatewayCells, {cell});
+
+      // Someone online writes in the cell, which reaches all its relays:
+      // Alice passes it to the phone once.
+      final down = chat('hello from the internet');
+      for (final relay in cellRelays) {
+        relay.inject(down);
+      }
+      await until(() => phone.carried.any((e) => e.id == down.id));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(phone.carried.where((e) => e.id == down.id), hasLength(1));
+      // Its own deposit does not come back down.
+      expect(phone.carried.map((e) => e.id), isNot(contains(up.id)));
+
+      // Hiding closes every relay connection the gateway opened.
+      await alice.setBitchatReachable(false);
+      expect(alice.bitchatGateway, isFalse);
+      expect(alice.bitchatGatewayCells, isEmpty);
+      await until(() => nostr.openConnections == 0);
+      expect(nostr.openConnections, 0);
+
+      // So does Matrix-only mode, and back again the gateway returns.
+      await alice.setBitchatReachable(true);
+      expect(alice.bitchatGateway, isTrue);
+      await alice.setAppMode(AppMode.matrixOnly);
+      expect(alice.bitchatGatewayCells, isEmpty);
+      await until(() => nostr.openConnections == 0);
+      expect(nostr.openConnections, 0);
     });
 
     test('a bitchat identity is renewed after a week', () async {
@@ -18202,6 +18291,9 @@ class _FakeBitchatPhone {
   final List<BitchatReceiptReceived> receipts = [];
   final List<BitchatPublicMessage> publics = [];
 
+  /// Events a gateway passed down to everyone nearby.
+  final List<NostrEvent> carried = [];
+
   static bool _same(List<int> a, List<int> b) =>
       a.length == b.length &&
       Iterable<int>.generate(a.length).every((i) => a[i] == b[i]);
@@ -18247,6 +18339,16 @@ class _FakeBitchatPhone {
           case BitchatType.message:
             final message = await phone.direct.readPublic(packet);
             if (message != null) phone.publics.add(message);
+          case bitchatNostrCarrierType:
+            final payload = packet.expandedPayload(maxBytes: 20000);
+            final carrier = payload == null
+                ? null
+                : BitchatNostrCarrier.decode(payload);
+            if (packet.recipientId == null &&
+                carrier?.direction == BitchatCarrierDirection.fromGateway) {
+              final event = carrier!.event();
+              if (event != null) phone.carried.add(event);
+            }
         }
         return true;
       },
@@ -18271,6 +18373,32 @@ class _FakeBitchatPhone {
   /// A message in the mesh chat, without announcing again.
   Future<void> shout(String text) async =>
       _sendAll(await direct.publicMessages(text));
+
+  /// Hands [event] for [geohash] to the gateway [gatewayId], signed as
+  /// bitchat signs such deposits.
+  Future<void> deposit(String gatewayId, String geohash, NostrEvent event) async {
+    final unsigned = BitchatPacket(
+      type: bitchatNostrCarrierType,
+      senderId: direct.peerId,
+      recipientId: Uint8List.fromList([
+        for (var i = 0; i < gatewayId.length; i += 2)
+          int.parse(gatewayId.substring(i, i + 2), radix: 16),
+      ]),
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      payload: BitchatNostrCarrier(
+        direction: BitchatCarrierDirection.toGateway,
+        geohash: geohash,
+        eventJson: Uint8List.fromList(utf8.encode(jsonEncode(event))),
+      ).encode(),
+    );
+    final signature = await Ed25519().sign(
+      unsigned.bytesToSign(),
+      keyPair: await Ed25519().newKeyPairFromSeed(List.filled(32, 19)),
+    );
+    await _sendAll([
+      unsigned.copyWith(signature: Uint8List.fromList(signature.bytes)),
+    ]);
+  }
 
   /// A private message to [peerId].
   Future<void> write(String peerId, String text) async {

@@ -23,9 +23,12 @@ import 'group_membership_history.dart';
 import 'beam_protocol.dart';
 import 'bitchat/android_links.dart';
 import 'bitchat/direct.dart';
+import 'bitchat/gateway.dart';
+import 'bitchat/geo_relays.g.dart';
 import 'bitchat/mesh.dart' show randomBitchatBytes;
 import 'bitchat_carrier.dart';
 import 'bitchat_chats.dart';
+import 'bitchat_gateway_relays.dart';
 import 'carrier.dart';
 import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
@@ -667,6 +670,7 @@ class MessengerController extends ChangeNotifier {
     unawaited(_startLongPollIfEnabled());
     _requestVisibleGroupCatchUp();
     _scheduleScheduledMessagePump();
+    _useBitchatGateway();
   }
 
   /// Stops Conest's networking for Matrix-only mode. Every entry point also
@@ -681,6 +685,7 @@ class MessengerController extends ChangeNotifier {
     unawaited(_platformBridge.scheduleAndroidScheduledMessageWakeup(null));
     await _stopPairingBeacon();
     await _detachMatrixTransport();
+    _closeBitchatGateway();
     await _stopTransportRegistry();
     await _lanDirectChannel?.stop();
     await _localRelayNode.stop();
@@ -4103,6 +4108,139 @@ class MessengerController extends ChangeNotifier {
     await _useBitchatIdentity();
   }
 
+  /// Whether this phone shares its internet with bitchat users nearby for
+  /// bitchat's geohash chat.
+  bool get bitchatGateway =>
+      bitchatReachable && (bitchatCarrierConfig?.gateway ?? false);
+
+  /// Cells (geohashes) whose chat this phone carries for phones nearby.
+  Set<String> get bitchatGatewayCells =>
+      _bitchatGatewayRelays?.followed ?? const {};
+
+  /// Shares this phone's internet with bitchat users nearby, for bitchat's
+  /// public geohash chat only, or stops. Needs "Reachable by bitchat
+  /// users": they find gateways by their announce.
+  Future<void> setBitchatGateway(bool enabled) async {
+    final config = bitchatCarrierConfig;
+    if (config == null || (enabled && !config.visible)) {
+      throw StateError('Turn on "Reachable by bitchat users" first.');
+    }
+    if (config.gateway == enabled) return;
+    await _saveBitchatConfig(config.copyWith(gateway: enabled));
+    _useBitchatGateway();
+    notifyListeners();
+  }
+
+  BitchatGateway? _bitchatGatewayInstance;
+  BitchatGatewayRelays? _bitchatGatewayRelays;
+  Timer? _bitchatGatewayTimer;
+
+  /// Starts or stops the gateway to match the settings and the identity in
+  /// use.
+  void _useBitchatGateway() {
+    final channel = _bitchatChannel;
+    final wanted =
+        !_disposed &&
+        conestActive &&
+        channel != null &&
+        _bitchatDirect != null &&
+        bitchatGateway;
+    if (!wanted) {
+      _closeBitchatGateway();
+      return;
+    }
+    if (_bitchatGatewayInstance != null) return;
+    final bundled = BitchatGeoRelays.parse(bitchatBundledGeoRelays)!;
+    final relays = BitchatGatewayRelays(
+      directory: bundled,
+      onEvent: (event, geohash) => unawaited(
+        _bitchatGatewayInstance
+            ?.relayEvent(event, geohash)
+            .catchError((Object _) {}),
+      ),
+      connector: _nostrConnector,
+      now: _now,
+    );
+    late final BitchatGateway gateway;
+    Timer? followSoon;
+    gateway = BitchatGateway(
+      publish: relays.publish,
+      broadcast: channel.broadcastCarrier,
+      relaysConnected: () => relays.connected,
+      // New cells are followed a few seconds later, together.
+      onCellsChanged: () =>
+          followSoon ??= Timer(const Duration(seconds: 3), () {
+            followSoon = null;
+            if (identical(_bitchatGatewayRelays, relays)) {
+              relays.follow(gateway.cells);
+            }
+          }),
+      now: _now,
+    );
+    _bitchatGatewayRelays = relays;
+    _bitchatGatewayInstance = gateway;
+    channel.useGateway(gateway);
+    // Cells phones stopped using are dropped, and what waited for the
+    // relays goes out.
+    _bitchatGatewayTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      relays
+        ..follow(gateway.cells)
+        ..prune();
+      unawaited(gateway.flushQueued().catchError((Object _) {}));
+    });
+    // On a real phone, bitchat's current relay list.
+    if (_bitchatConnector == null) {
+      unawaited(
+        _fetchBitchatGeoRelays(bundled).then((fresh) {
+          if (fresh != null && identical(_bitchatGatewayRelays, relays)) {
+            relays.directory = fresh;
+          }
+        }),
+      );
+    }
+  }
+
+  void _closeBitchatGateway() {
+    _bitchatGatewayTimer?.cancel();
+    _bitchatGatewayTimer = null;
+    final gateway = _bitchatGatewayInstance;
+    final relays = _bitchatGatewayRelays;
+    _bitchatGatewayInstance = null;
+    _bitchatGatewayRelays = null;
+    if (gateway != null) _bitchatChannel?.useGateway(null);
+    gateway?.close();
+    unawaited(relays?.close());
+  }
+
+  static Future<BitchatGeoRelays?> _fetchBitchatGeoRelays(
+    BitchatGeoRelays bundled,
+  ) async {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10);
+    try {
+      final request = await client.getUrl(BitchatGeoRelays.source)
+        ..followRedirects = false;
+      final response = await request.close().timeout(
+        const Duration(seconds: 20),
+      );
+      if (response.statusCode != 200) return null;
+      final bytes = BytesBuilder(copy: false);
+      await for (final chunk in response) {
+        bytes.add(chunk);
+        if (bytes.length > 512 * 1024) return null;
+      }
+      // Checked as bitchat checks it, and against the list this build has.
+      return BitchatGeoRelays.parse(
+        utf8.decode(bytes.takeBytes()),
+        baseline: bundled,
+      );
+    } catch (_) {
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   /// Starts a new bitchat identity: bitchat users see a new person.
   Future<void> newBitchatIdentity() async {
     final config = bitchatCarrierConfig;
@@ -4295,6 +4433,7 @@ class MessengerController extends ChangeNotifier {
       ),
     );
     channel.useDirect(direct, visible: config.visible);
+    _useBitchatGateway();
     // A phone left running renews its identity too.
     if (config.visible) {
       _bitchatRenewTimer = Timer.periodic(const Duration(hours: 1), (_) {
@@ -4310,6 +4449,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _closeBitchatIdentity() async {
+    _closeBitchatGateway();
     final events = _bitchatDirectEvents;
     final direct = _bitchatDirect;
     _bitchatDirectEvents = null;

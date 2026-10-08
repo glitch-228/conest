@@ -248,33 +248,53 @@ Uint8List bitchatUnpad(Uint8List data) {
   return Uint8List.sublistView(data, 0, data.length - length);
 }
 
-/// A bitchat identity announcement: TLVs for nickname, Noise static key and
-/// Ed25519 signing key.
+/// A bitchat identity announcement: TLVs for nickname, Noise static key,
+/// Ed25519 signing key and, optionally, capabilities.
 class BitchatAnnouncement {
   const BitchatAnnouncement({
     required this.nickname,
     required this.noisePublicKey,
     required this.signingPublicKey,
+    this.capabilities,
   });
 
   final String nickname;
   final Uint8List noisePublicKey;
   final Uint8List signingPublicKey;
 
+  /// bitchat's capability bits (such as the gateway's); null when the
+  /// announce has none.
+  final int? capabilities;
+
   Uint8List encode() {
     final name = utf8.encode(nickname);
     if (name.length > 255) throw ArgumentError('Nickname is too long.');
+    final caps = capabilities;
     return Uint8List.fromList([
       0x01, name.length, ...name, //
       0x02, noisePublicKey.length, ...noisePublicKey,
       0x03, signingPublicKey.length, ...signingPublicKey,
+      if (caps != null) ...[0x05, ..._capabilityBytes(caps)],
     ]);
+  }
+
+  /// Little-endian, without trailing zero bytes, at least one byte; with
+  /// its length first.
+  static List<int> _capabilityBytes(int capabilities) {
+    final bytes = <int>[];
+    var value = capabilities;
+    do {
+      bytes.add(value & 0xff);
+      value >>= 8;
+    } while (value != 0);
+    return [bytes.length, ...bytes];
   }
 
   static BitchatAnnouncement? decode(Uint8List data) {
     String? nickname;
     Uint8List? noise;
     Uint8List? signing;
+    int? capabilities;
     var offset = 0;
     while (offset + 2 <= data.length) {
       final type = data[offset];
@@ -290,6 +310,12 @@ class BitchatAnnouncement {
           noise = Uint8List.fromList(value);
         case 0x03:
           signing = Uint8List.fromList(value);
+        case 0x05:
+          var bits = 0;
+          for (var index = 0; index < value.length && index < 8; index++) {
+            bits |= value[index] << (8 * index);
+          }
+          capabilities = bits;
       }
     }
     if (nickname == null || noise == null || signing == null) return null;
@@ -297,6 +323,7 @@ class BitchatAnnouncement {
       nickname: nickname,
       noisePublicKey: noise,
       signingPublicKey: signing,
+      capabilities: capabilities,
     );
   }
 }

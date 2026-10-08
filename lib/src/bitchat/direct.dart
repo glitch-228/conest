@@ -86,6 +86,12 @@ class BitchatPeer {
   /// Set once a handshake has proven that the announcer holds the Noise
   /// key.
   bool confirmed = false;
+
+  /// bitchat capability bits from the latest announce.
+  int capabilities = 0;
+
+  /// The latest announce checked, to skip checking the same one again.
+  Uint8List? lastAnnounce;
 }
 
 /// Something that happened in direct messaging with bitchat users.
@@ -182,10 +188,34 @@ class BitchatDirect {
 
   String get peerIdHex => _hex(peerId);
 
+  /// bitchat capability bits this identity announces (the gateway's).
+  int capabilities = 0;
+
   /// The nickname as announced: cut so the announce stays below
-  /// [bitchatCompressionThreshold] (its keys and headers take 70 bytes).
+  /// [bitchatCompressionThreshold] (its keys and headers take 70 bytes,
+  /// capabilities 3 more; kept free always, so the name does not change
+  /// when they do).
   String get announcedNickname =>
-      bitchatCutUtf8(nickname, bitchatCompressionThreshold - 1 - 70);
+      bitchatCutUtf8(nickname, bitchatCompressionThreshold - 1 - 70 - 3);
+
+  /// Whether [packet] carries the signature of the peer it claims to come
+  /// from (as announced); null when that peer is unknown or checking is
+  /// over budget.
+  Future<bool?> signedByPeer(BitchatPacket packet) async {
+    final peer = _peers[_hex(packet.senderId)];
+    final signature = packet.signature;
+    if (peer == null) return null;
+    if (signature == null) return false;
+    if (!_messageBudget.take()) return null;
+    return Ed25519().verify(
+      packet.bytesToSign(),
+      signature: Signature(
+        signature,
+        publicKey: SimplePublicKey(peer.signingKey, type: KeyPairType.ed25519),
+      ),
+    );
+  }
+
   Stream<BitchatDirectEvent> get events => _events.stream;
   Iterable<BitchatPeer> get peers => _peers.values;
   BitchatPeer? peer(String peerIdHex) => _peers[peerIdHex];
@@ -237,6 +267,7 @@ class BitchatDirect {
         nickname: announcedNickname,
         noisePublicKey: noisePublicKey,
         signingPublicKey: signingPublicKey,
+        capabilities: capabilities == 0 ? null : capabilities,
       ).encode(),
     );
     final signature = await Ed25519().sign(
@@ -272,9 +303,11 @@ class BitchatDirect {
       return true;
     }
     final sameKey = known != null;
-    // Someone announcing every few seconds is checked every ten.
+    // Someone announcing the same every few seconds is checked every ten;
+    // a change (name, capabilities) is checked at once.
     if (sameKey &&
-        _now().difference(known.lastSeen) < const Duration(seconds: 10)) {
+        _now().difference(known.lastSeen) < const Duration(seconds: 10) &&
+        _equal(known.lastAnnounce ?? const [], payload)) {
       return true;
     }
     if (!_announceBudget.take()) return true;
@@ -292,6 +325,8 @@ class BitchatDirect {
     if (known != null) {
       known
         ..nickname = announcement.nickname
+        ..capabilities = announcement.capabilities ?? 0
+        ..lastAnnounce = payload
         ..lastSeen = _now();
     } else {
       if (_peers.length >= _maxPeers) {
@@ -305,13 +340,16 @@ class BitchatDirect {
         );
         _peers.remove(oldest.peerId);
       }
-      _peers[id] = BitchatPeer(
-        peerId: id,
-        nickname: announcement.nickname,
-        noiseKey: announcement.noisePublicKey,
-        signingKey: announcement.signingPublicKey,
-        lastSeen: _now(),
-      );
+      _peers[id] =
+          BitchatPeer(
+              peerId: id,
+              nickname: announcement.nickname,
+              noiseKey: announcement.noisePublicKey,
+              signingKey: announcement.signingPublicKey,
+              lastSeen: _now(),
+            )
+            ..capabilities = announcement.capabilities ?? 0
+            ..lastAnnounce = payload;
     }
     _events.add(BitchatPeerSeen(id));
     return true;

@@ -165,6 +165,28 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
                 : (value) => _run(() => controller.setBitchatReachable(value)),
           ),
         if (config != null && controller.bitchatReachable)
+          SwitchListTile.adaptive(
+            key: const ValueKey('bitchat-gateway-switch'),
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Share internet with bitchat users'),
+            subtitle: Text(
+              controller.bitchatGateway
+                  ? 'Phones nearby without internet can use bitchat\'s '
+                        'location channels through this phone. Only those '
+                        'public, signed messages pass. This phone connects '
+                        'to the relays of the areas they use'
+                        '${controller.bitchatGatewayCells.isEmpty ? '' : ' (now ${controller.bitchatGatewayCells.length})'}'
+                        ': those relays see your internet address and the '
+                        'area, so they can tell roughly where you are.'
+                  : 'Off: bitchat users nearby without internet cannot '
+                        'reach location channels through you.',
+            ),
+            value: controller.bitchatGateway,
+            onChanged: _busy
+                ? null
+                : (value) => _run(() => controller.setBitchatGateway(value)),
+          ),
+        if (config != null && controller.bitchatReachable)
           Wrap(
             spacing: 8,
             children: [

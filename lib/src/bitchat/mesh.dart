@@ -59,6 +59,7 @@ const Set<int> _relayedTypes = {
   BitchatType.fragment,
   0x21, // sync request
   0x22, // file transfer
+  0x28, // a Nostr event to or from a gateway
 };
 
 /// Packets further than this from the local clock are neither relayed nor
@@ -101,9 +102,10 @@ class BitchatNode {
   final bool Function(Uint8List recipientId)? wantsRecipient;
 
   /// Every other packet that reaches this device (announces, handshakes),
-  /// including packets put back together from fragments. False means its
-  /// signature failed against a known key: that copy is neither
-  /// remembered nor passed on, so the genuine packet still gets through.
+  /// including packets put back together from fragments. False means the
+  /// copy is neither remembered nor passed on: its signature failed
+  /// against a known key (so the genuine packet still gets through), or it
+  /// was for this device and goes no further.
   final Future<bool> Function(BitchatPacket packet)? onPacket;
 
   /// Largest packet sent whole; bigger ones go as bitchat fragments.

@@ -61,6 +61,13 @@ of them.
 - Password or browser (single sign-on) sign-in, emoji verification,
   recovery, rooms with replies, edits, reactions, files and invites.
 
+**bitchat users nearby** (Android, with the Bluetooth mesh on)
+- Read bitchat's mesh chat; with "Reachable by bitchat users", chat
+  privately with bitchat users on iPhone and Android and write in the mesh
+  chat, under a separate identity that changes weekly.
+- "Share internet with bitchat users" lets phones nearby without internet
+  use bitchat's location channels through yours.
+
 **Updates**
 - Signed in-app updates on a stable or nightly channel ("Receive unstable
   updates" in Settings); a nightly device can always move back to stable.
@@ -69,9 +76,9 @@ of them.
 
 - Several devices on one account (planned: per-device keys under an account
   key, linking through Matrix or a QR code, optional sync).
-- Talking to other apps' users: bitchat (iPhone) direct messages, Nostr
-  NIP-17, Matrix DMs with Element, Delta Chat, Telegram and Discord are
-  planned.
+- Talking to other apps' users: Nostr NIP-17, Matrix DMs with Element,
+  Delta Chat, Telegram and Discord are planned; bitchat chats move into the
+  main chat list with the network modes.
 - Sending one message over several routes at once, and files over several
   routes in parallel.
 - Relay protocol v2 with registration for large files and call relaying.

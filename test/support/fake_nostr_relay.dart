@@ -20,6 +20,12 @@ class FakeNostrRelays {
     () => FakeNostrRelay(url, requireAuth, authRefusal: authRefusal),
   );
 
+  /// Connections open to all relays right now.
+  int get openConnections => _relays.values.fold(
+    0,
+    (sum, relay) => sum + relay.openConnections,
+  );
+
   /// Relays not created with [relay] refuse connections.
   Future<NostrSocket> connect(Uri url) async {
     final relay = _relays[url.toString()];
@@ -71,6 +77,18 @@ class FakeNostrRelay {
     _connections.add(connection);
     if (requireAuth) connection._challenge();
     return connection;
+  }
+
+  /// Connections open right now.
+  int get openConnections => _connections.length;
+
+  /// [event] published by someone else: stored and sent to subscribers.
+  void inject(NostrEvent event) {
+    if (stored.any((existing) => existing.id == event.id)) return;
+    stored.add(event);
+    for (final connection in _connections) {
+      connection._deliver(event);
+    }
   }
 
   /// Drops every connection, as a relay restart would.
@@ -188,6 +206,8 @@ class _Connection implements NostrSocket {
     if (since != null && event.createdAt < since) return false;
     final p = (filter['#p'] as List?)?.cast<String>();
     if (p != null && !p.contains(event.tag('p'))) return false;
+    final g = (filter['#g'] as List?)?.cast<String>();
+    if (g != null && !g.contains(event.tag('g'))) return false;
     // Inbox relays serve gift wraps only to their recipient.
     if (_relay.requireAuth &&
         event.kind == NostrKind.giftWrap &&

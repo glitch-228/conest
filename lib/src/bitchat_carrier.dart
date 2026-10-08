@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 
 import 'bitchat/direct.dart';
+import 'bitchat/gateway.dart';
 import 'bitchat/mesh.dart';
 import 'bitchat/packet.dart';
 import 'carrier.dart';
@@ -47,6 +48,7 @@ class BitchatCarrierConfig {
     this.nickname = '',
     this.identitySeed,
     this.identityAt,
+    this.gateway = false,
   });
 
   /// A new address, so turning the mesh off and on again unlinks the past.
@@ -70,13 +72,18 @@ class BitchatCarrierConfig {
   /// When [identitySeed] was made.
   final DateTime? identityAt;
 
+  /// Shares this phone's internet with bitchat users nearby for bitchat's
+  /// geohash chat, while [visible].
+  final bool gateway;
+
   /// How long one bitchat identity is used before a new one is made, so
   /// bitchat users cannot follow this device for longer.
   static const Duration identityLifetime = Duration(days: 7);
 
-  /// Longest nickname: what fits in an announce bitchat never compresses
-  /// (longer names in other scripts are cut further when announced).
-  static const int maxNicknameLength = 29;
+  /// Longest nickname: what fits in an announce bitchat never compresses,
+  /// with room for the gateway's capabilities (longer names in other
+  /// scripts are cut further when announced).
+  static const int maxNicknameLength = 26;
 
   /// With a fresh identity made now.
   BitchatCarrierConfig withNewIdentity(DateTime now) => BitchatCarrierConfig(
@@ -85,16 +92,21 @@ class BitchatCarrierConfig {
     nickname: nickname,
     identitySeed: hexEncode(randomBitchatBytes(32)),
     identityAt: now.toUtc(),
+    gateway: gateway,
   );
 
-  BitchatCarrierConfig copyWith({bool? visible, String? nickname}) =>
-      BitchatCarrierConfig(
-        address: address,
-        visible: visible ?? this.visible,
-        nickname: nickname ?? this.nickname,
-        identitySeed: identitySeed,
-        identityAt: identityAt,
-      );
+  BitchatCarrierConfig copyWith({
+    bool? visible,
+    String? nickname,
+    bool? gateway,
+  }) => BitchatCarrierConfig(
+    address: address,
+    visible: visible ?? this.visible,
+    nickname: nickname ?? this.nickname,
+    identitySeed: identitySeed,
+    identityAt: identityAt,
+    gateway: gateway ?? this.gateway,
+  );
 
   Map<String, Object?> toJson() => {
     'address': address,
@@ -102,6 +114,7 @@ class BitchatCarrierConfig {
     if (nickname.isNotEmpty) 'nickname': nickname,
     if (identitySeed != null) 'identitySeed': identitySeed,
     if (identityAt != null) 'identityAt': identityAt!.toIso8601String(),
+    if (gateway) 'gateway': true,
   };
 
   static BitchatCarrierConfig? fromJson(Object? json) {
@@ -122,6 +135,7 @@ class BitchatCarrierConfig {
       identityAt: validSeed
           ? DateTime.tryParse(json['identityAt'] as String? ?? '')?.toUtc()
           : null,
+      gateway: json['gateway'] == true,
     );
   }
 }
@@ -199,6 +213,11 @@ class BitchatCarrierChannel
   /// to) only while [_visible].
   BitchatDirect? _direct;
   bool _visible = false;
+
+  /// Shares this phone's internet with bitchat users nearby (geohash chat)
+  /// while set and visible.
+  BitchatGateway? _gateway;
+  final LinkedHashSet<String> _depositsTaken = LinkedHashSet();
   Timer? _announceTimer;
   Timer? _tickTimer;
   Set<String> _knownLinks = const {};
@@ -436,7 +455,32 @@ class BitchatCarrierChannel
   void useDirect(BitchatDirect? direct, {required bool visible}) {
     _direct = direct;
     _visible = direct != null && visible;
+    direct?.capabilities = _gateway == null ? 0 : bitchatGatewayCapability;
     _scheduleDirect();
+  }
+
+  /// Acts as [gateway] for bitchat users nearby (announced while visible),
+  /// or stops.
+  void useGateway(BitchatGateway? gateway) {
+    _gateway = gateway;
+    _direct?.capabilities = gateway == null ? 0 : bitchatGatewayCapability;
+    announceNow();
+  }
+
+  /// Passes an event from the relays on to everyone nearby: unsigned, as
+  /// bitchat sends it (the event carries its author's signature).
+  Future<void> broadcastCarrier(Uint8List payload) async {
+    final direct = _direct;
+    final node = _node;
+    if (direct == null || node == null || !_visible) return;
+    await node.send(
+      BitchatPacket(
+        type: bitchatNostrCarrierType,
+        senderId: direct.peerId,
+        timestamp: _now().millisecondsSinceEpoch,
+        payload: payload,
+      ),
+    );
   }
 
   /// Sends [text] to everyone nearby (as several messages when long);
@@ -533,8 +577,47 @@ class BitchatCarrierChannel
         final (message, forged) = await direct.checkPublic(packet);
         if (forged) return false;
         if (message != null) onPublic?.call(message);
+      case bitchatNostrCarrierType:
+        return _carrier(direct, packet);
     }
     return true;
+  }
+
+  /// An event carried to or from a gateway. One addressed to us must carry
+  /// its sender's signature, so deposits are counted per real sender.
+  Future<bool> _carrier(BitchatDirect direct, BitchatPacket packet) async {
+    final gateway = _gateway;
+    if (gateway == null || !_visible) return true;
+    final recipient = packet.recipientId;
+    final toUs = recipient != null && _isDirectRecipient(recipient);
+    // Addressed to someone else: only relayed.
+    if (recipient != null && !toUs) return true;
+    if (toUs) {
+      // A copy of a deposit already taken is not checked again.
+      final key = packet.dedupKey;
+      if (_depositsTaken.contains(key)) return false;
+      final signed = await direct.signedByPeer(packet);
+      // For us, so never passed on: unless checked, it is dropped.
+      if (signed != true) return false;
+      _depositsTaken.add(key);
+      if (_depositsTaken.length > 256)
+        _depositsTaken.remove(_depositsTaken.first);
+    }
+    final payload = packet.expandedPayload(
+      maxBytes: BitchatNostrCarrier.maxEventJsonBytes + 64,
+    );
+    if (payload == null) return true;
+    unawaited(
+      gateway
+          .handleCarrier(
+            payload,
+            from: hexEncode(packet.senderId),
+            directedToUs: toUs,
+          )
+          .catchError((Object _) {}),
+    );
+    // A deposit for us goes no further, as bitchat keeps its own.
+    return !toUs;
   }
 
   /// Announces a visible identity now and every so often, and retries
