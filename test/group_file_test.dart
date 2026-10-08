@@ -452,4 +452,67 @@ void main() {
       expect(scheduler.verifiedBytes, 1);
     },
   );
+
+  for (final pauseAfter in [false, true]) {
+    test(
+      pauseAfter
+          ? 'a pause during local recovery holds'
+          : 'a resume during local recovery downloads after it',
+      () async {
+        final root = await Directory.systemTemp.createTemp('group-recover-');
+        try {
+          final first = Uint8List(GroupFileManifest.pieceSize)..[0] = 7;
+          final source = await File('${root.path}/source').writeAsBytes(first);
+          final description = await hashGroupFile(
+            path: source.path,
+            fileName: 'data.bin',
+            mimeType: 'application/octet-stream',
+          );
+          final provider = GroupFileStore(
+            root: Directory('${root.path}/a'),
+            manifest: description,
+          );
+          await provider.writePiece(0, first);
+          final sharing = GroupFileProvider(
+            store: provider,
+            authorize: (_) async => true,
+            persistSharing: (_) async {},
+            sharing: true,
+          );
+          var fetched = 0;
+          final download = GroupFileDownload(
+            store: GroupFileStore(
+              root: Directory('${root.path}/r'),
+              manifest: description,
+            ),
+            allowed: (_, _) => true,
+            authorize: (_) async => true,
+            fetch: (request) async {
+              fetched++;
+              return (await sharing.readPiece('r', request.piece))!;
+            },
+          );
+          download.scheduler.updateProvider(
+            'a',
+            await sharing.availability('r'),
+            lan: true,
+          );
+          final recovering = download.recoverLocal();
+          final resumed = download.resume();
+          if (pauseAfter) download.pause();
+          await recovering;
+          await resumed;
+          if (pauseAfter) {
+            expect(fetched, 0);
+            expect(download.state, GroupFileDownloadState.paused);
+          } else {
+            expect(fetched, 1);
+            expect(download.state, GroupFileDownloadState.complete);
+          }
+        } finally {
+          await root.delete(recursive: true);
+        }
+      },
+    );
+  }
 }

@@ -673,6 +673,7 @@ class GlobalConnectivityPreferences {
     this.autoDownloadPreset = AutoDownloadPreset.medium,
     this.storageReserveEnabled = true,
     this.irohTransferLimitEnabled = true,
+    this.shareIdentifyingCarriersWithGroups = false,
     this.transportPolicies = const {
       TransportKind.lan: TransportPolicy.automatic,
       TransportKind.iroh: TransportPolicy.automatic,
@@ -704,6 +705,11 @@ class GlobalConnectivityPreferences {
   final AutoDownloadPreset autoDownloadPreset;
   final bool storageReserveEnabled;
   final bool irohTransferLimitEnabled;
+
+  /// Whether group members who are not contacts may learn this device's
+  /// email and Matrix addresses (they identify a person). Pseudonymous
+  /// carriers (Nostr, Tor, radios) are shared with groups regardless.
+  final bool shareIdentifyingCarriersWithGroups;
   final Map<TransportKind, TransportPolicy> transportPolicies;
 
   bool get anyEnabled => lanEnabled || onlineEnabled;
@@ -727,9 +733,13 @@ class GlobalConnectivityPreferences {
     AutoDownloadPreset? autoDownloadPreset,
     bool? storageReserveEnabled,
     bool? irohTransferLimitEnabled,
+    bool? shareIdentifyingCarriersWithGroups,
     Map<TransportKind, TransportPolicy>? transportPolicies,
   }) {
     return GlobalConnectivityPreferences(
+      shareIdentifyingCarriersWithGroups:
+          shareIdentifyingCarriersWithGroups ??
+          this.shareIdentifyingCarriersWithGroups,
       lanEnabled: lanEnabled ?? this.lanEnabled,
       onlineEnabled: onlineEnabled ?? this.onlineEnabled,
       irohRelayEnabled: irohRelayEnabled ?? this.irohRelayEnabled,
@@ -754,6 +764,8 @@ class GlobalConnectivityPreferences {
     'autoDownloadPreset': autoDownloadPreset.name,
     'storageReserveEnabled': storageReserveEnabled,
     'irohTransferLimitEnabled': irohTransferLimitEnabled,
+    if (shareIdentifyingCarriersWithGroups)
+      'shareIdentifyingCarriersWithGroups': true,
     'transportPolicies': transportPoliciesToJson(transportPolicies),
     'transportPolicyVersion': currentTransportPolicyVersion,
   };
@@ -771,6 +783,8 @@ class GlobalConnectivityPreferences {
       storageReserveEnabled: json['storageReserveEnabled'] as bool? ?? true,
       irohTransferLimitEnabled:
           json['irohTransferLimitEnabled'] as bool? ?? true,
+      shareIdentifyingCarriersWithGroups:
+          json['shareIdentifyingCarriersWithGroups'] == true,
       irohRelayEnabled: json['irohRelayEnabled'] as bool? ?? true,
       irohRelayUrls: normalizeIrohRelayUrls(
         (json['irohRelayUrls'] as List<dynamic>? ?? const [])
@@ -1770,6 +1784,8 @@ class ContactRecord {
     this.pairingAttempts = 0,
     this.retiredPairingRequestIds = const <String>[],
     this.revivedAt,
+    this.groupCarrierAddresses,
+    this.groupCarrierAddressesAt,
   });
 
   final String accountId;
@@ -1809,6 +1825,14 @@ class ContactRecord {
   /// Pairing ids of earlier pairings with this device (before it was added
   /// again): removal notices for those no longer apply.
   final List<String> retiredPairingRequestIds;
+
+  /// The carrier addresses this contact lets members of its groups know
+  /// (it publishes them itself); null from older clients, which share none.
+  final Map<TransportKind, String>? groupCarrierAddresses;
+
+  /// When the contact sent [groupCarrierAddresses]: an older exchange that
+  /// arrives late cannot bring back an address they stopped sharing.
+  final DateTime? groupCarrierAddressesAt;
 
   /// When this device last added the contact again (after a removal, or
   /// a cancelled or declined request). Traffic created before it belongs
@@ -1905,6 +1929,8 @@ class ContactRecord {
     int? pairingAttempts,
     List<String>? retiredPairingRequestIds,
     DateTime? revivedAt,
+    Map<TransportKind, String>? groupCarrierAddresses,
+    DateTime? groupCarrierAddressesAt,
   }) {
     return ContactRecord(
       accountId: accountId,
@@ -1956,6 +1982,10 @@ class ContactRecord {
       retiredPairingRequestIds:
           retiredPairingRequestIds ?? this.retiredPairingRequestIds,
       revivedAt: revivedAt ?? this.revivedAt,
+      groupCarrierAddresses:
+          groupCarrierAddresses ?? this.groupCarrierAddresses,
+      groupCarrierAddressesAt:
+          groupCarrierAddressesAt ?? this.groupCarrierAddressesAt,
     );
   }
 
@@ -2068,6 +2098,15 @@ class ContactRecord {
       if (retiredPairingRequestIds.isNotEmpty)
         'retiredPairingRequestIds': retiredPairingRequestIds,
       if (revivedAt != null) 'revivedAt': revivedAt!.toUtc().toIso8601String(),
+      if (groupCarrierAddresses != null)
+        'groupCarrierAddresses': {
+          for (final MapEntry(:key, :value) in groupCarrierAddresses!.entries)
+            key.name: value,
+        },
+      if (groupCarrierAddressesAt != null)
+        'groupCarrierAddressesAt': groupCarrierAddressesAt!
+            .toUtc()
+            .toIso8601String(),
     };
   }
 
@@ -2168,6 +2207,12 @@ class ContactRecord {
           if (id is String) id,
       ],
       revivedAt: DateTime.tryParse(json['revivedAt'] as String? ?? '')?.toUtc(),
+      groupCarrierAddresses: _carrierAddressMapFromJson(
+        json['groupCarrierAddresses'],
+      ),
+      groupCarrierAddressesAt: DateTime.tryParse(
+        json['groupCarrierAddressesAt'] as String? ?? '',
+      )?.toUtc(),
     );
   }
 }
@@ -2197,6 +2242,22 @@ Map<TransportKind, CarrierAddress>? mergeCarrierAddresses(
     changed = true;
   }
   return changed ? result : null;
+}
+
+/// A kind-name → address map from JSON (carrier kinds only, bounded); null
+/// when absent.
+Map<TransportKind, String>? _carrierAddressMapFromJson(Object? json) {
+  if (json is! Map) return null;
+  return {
+    for (final MapEntry(:key, :value) in json.entries.take(16))
+      if (TransportKind.values.where((kind) => kind.name == key).firstOrNull
+          case final kind?
+          when kind.isCarrier &&
+              value is String &&
+              value.isNotEmpty &&
+              value.length <= 4096)
+        kind: value,
+  };
 }
 
 Map<TransportKind, CarrierAddress> _carrierAddressesFromJson(Object? json) {
@@ -2784,6 +2845,7 @@ class GroupMemberProfile {
     this.featureCapabilities = const <ApplicationCapability>[],
     this.featureCapabilityVersion = 0,
     this.carrierAddresses = const <TransportKind, String>{},
+    this.carrierAddressesKnown = false,
   }) : routeHints = prunePeerEndpointsByKind(routeHints);
 
   final String accountId;
@@ -2799,10 +2861,14 @@ class GroupMemberProfile {
   final List<ApplicationCapability> featureCapabilities;
   final int featureCapabilityVersion;
 
-  /// The member's carrier addresses (Nostr, email, Matrix, Tor, radios), so
-  /// members who are not each other's contacts can still reach each other
-  /// there. Empty from older clients: unknown, not withdrawn.
+  /// The carrier addresses the member publishes to its groups (Nostr, Tor,
+  /// radios; email and Matrix only if it allows), so members who are not
+  /// each other's contacts can still reach each other there.
   final Map<TransportKind, String> carrierAddresses;
+
+  /// False from older clients, which do not send the field: unknown, keep
+  /// what was known. True with an empty map: the member withdrew them all.
+  final bool carrierAddressesKnown;
 
   GroupMemberProfile copyWith({
     String? displayName,
@@ -2815,8 +2881,11 @@ class GroupMemberProfile {
     List<ApplicationCapability>? featureCapabilities,
     int? featureCapabilityVersion,
     Map<TransportKind, String>? carrierAddresses,
+    bool? carrierAddressesKnown,
   }) {
     return GroupMemberProfile(
+      carrierAddressesKnown:
+          carrierAddressesKnown ?? this.carrierAddressesKnown,
       accountId: accountId,
       deviceId: deviceId,
       displayName: displayName ?? this.displayName,
@@ -2838,7 +2907,7 @@ class GroupMemberProfile {
   Map<String, dynamic> toJson() {
     return {
       'profileVersion': 3,
-      if (carrierAddresses.isNotEmpty)
+      if (carrierAddressesKnown)
         'carrierAddresses': {
           for (final MapEntry(:key, :value) in carrierAddresses.entries)
             key.name: value,
@@ -2885,19 +2954,9 @@ class GroupMemberProfile {
         json['routeHints'] as List<dynamic>? ?? const [],
         expandMissingProtocol: true,
       ),
-      carrierAddresses: {
-        if (json['carrierAddresses'] case final Map<String, dynamic> map)
-          for (final MapEntry(:key, :value) in map.entries.take(16))
-            if (TransportKind.values
-                    .where((kind) => kind.name == key)
-                    .firstOrNull
-                case final kind?
-                when kind.isCarrier &&
-                    value is String &&
-                    value.isNotEmpty &&
-                    value.length <= 4096)
-              kind: value,
-      },
+      carrierAddresses:
+          _carrierAddressMapFromJson(json['carrierAddresses']) ?? const {},
+      carrierAddressesKnown: json['carrierAddresses'] is Map,
     );
   }
 }
@@ -2913,6 +2972,7 @@ class GroupRecord {
     required List<String> removedDeviceIds,
     List<GroupMemberProfile> memberProfiles = const <GroupMemberProfile>[],
     required this.membershipVersion,
+    this.profileRevision = 0,
     required this.createdAt,
     required this.updatedAt,
     this.localRemovedAt,
@@ -2950,6 +3010,11 @@ class GroupRecord {
   final List<String> removedDeviceIds;
   final List<GroupMemberProfile> memberProfiles;
   final int membershipVersion;
+
+  /// Raised by the owner when only member profiles changed (new routes,
+  /// carriers, capabilities): members take such a record at the same
+  /// [membershipVersion], so it never competes with a membership change.
+  final int profileRevision;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -3040,6 +3105,7 @@ class GroupRecord {
     List<String>? removedDeviceIds,
     List<GroupMemberProfile>? memberProfiles,
     int? membershipVersion,
+    int? profileRevision,
     DateTime? updatedAt,
     DateTime? localRemovedAt,
     DateTime? dissolvedAt,
@@ -3055,6 +3121,7 @@ class GroupRecord {
       removedDeviceIds: removedDeviceIds ?? this.removedDeviceIds,
       memberProfiles: memberProfiles ?? this.memberProfiles,
       membershipVersion: membershipVersion ?? this.membershipVersion,
+      profileRevision: profileRevision ?? this.profileRevision,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       localRemovedAt: clearLocalRemovedAt
@@ -3077,6 +3144,7 @@ class GroupRecord {
           .map((profile) => profile.toJson())
           .toList(),
       'membershipVersion': membershipVersion,
+      if (profileRevision > 0) 'profileRevision': profileRevision,
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
       'localRemovedAt': localRemovedAt?.toIso8601String(),
@@ -3104,6 +3172,10 @@ class GroupRecord {
           .map(GroupMemberProfile.fromJson)
           .toList(),
       membershipVersion: json['membershipVersion'] as int? ?? 1,
+      profileRevision: switch (json['profileRevision']) {
+        final int revision when revision > 0 => revision,
+        _ => 0,
+      },
       createdAt: createdAt,
       updatedAt:
           DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? createdAt,

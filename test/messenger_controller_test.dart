@@ -2520,6 +2520,35 @@ void main() {
       },
     );
 
+    test('a lost removal notice is repeated to a group co-member', () async {
+      await _pairControllers(alice, bob);
+      await alice.createGroup(title: 'Team', members: [contactOf(alice, bob)!]);
+      await until(() => bob.groups.isNotEmpty);
+      dropBobToAlice = (e) => e.kind == 'contact_remove';
+      await bob.removeContact(id(alice));
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      dropBobToAlice = (_) => false;
+      expect(contactOf(alice, bob)!.remoteRemovedAt, isNull);
+      // A direct message, unlike group traffic, gets the notice repeated.
+      await alice.sendMessage(contact: contactOf(alice, bob)!, body: 'hello?');
+      await until(() => contactOf(alice, bob)?.remoteRemovedAt != null);
+      expect(contactOf(alice, bob)!.remoteRemovedAt, isNotNull);
+    });
+
+    test('someone who removed you cannot pull you into a new group', () async {
+      await _pairControllers(alice, bob);
+      final oldBob = contactOf(alice, bob)!;
+      await alice.removeContact(id(bob));
+      await until(() => contactOf(bob, alice)?.remoteRemovedAt != null);
+      expect(contactOf(bob, alice)!.remoteRemovedAt, isNotNull);
+      await alice.createGroup(title: 'Surprise', members: [oldBob]);
+      await until(
+        () => relay.storedEnvelopes.any((e) => e.kind == 'group_membership'),
+      );
+      await bob.pollNow();
+      expect(bob.groups, isEmpty);
+    });
+
     test(
       'a contact who removes you stays reachable in a shared group',
       () async {
@@ -13062,6 +13091,642 @@ void main() {
       },
     );
 
+    test('group co-members add each other over a carrier', () async {
+      final network = _FakeCarrierNetwork();
+      final relay = _FakeRelayClient();
+      final people = <MessengerController>[];
+      for (final name in ['Alice', 'Bob', 'Carol']) {
+        final person = await _createController(
+          relayClient: relay,
+          displayName: name,
+        );
+        addTearDown(person.dispose);
+        people.add(person);
+      }
+      final [alice, bob, carol] = people;
+      await network.join(alice, 'npub-alice|wss://relay.one');
+      await network.join(bob, 'npub-bob|wss://relay.two');
+      await network.join(carol, 'npub-carol|wss://relay.three');
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      await settle(people);
+      await alice.createGroup(title: 'Three', members: alice.contacts);
+      await settle(people);
+      final bobId = bob.identity!.deviceId;
+      final carolId = carol.identity!.deviceId;
+      relay.shouldFailStore = (_, _, _, recipient, envelope) =>
+          (envelope.senderDeviceId == carolId && recipient == bobId) ||
+          (envelope.senderDeviceId == bobId && recipient == carolId);
+      // The group profile must not stand in for a contact being added.
+      await bob.addContactFromInvite(
+        alias: 'Carol',
+        payload: (await carol.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      for (
+        var round = 0;
+        round < 20 &&
+            !carol.pendingContactRequests.any((r) => r.senderDeviceId == bobId);
+        round++
+      ) {
+        await settle(people);
+        await bob.retryContactPairingNow(carolId);
+      }
+      expect(
+        carol.pendingContactRequests.map((r) => r.senderDeviceId),
+        contains(bobId),
+      );
+      await carol.approvePendingContactRequest(
+        carol.pendingContactRequests
+            .singleWhere((r) => r.senderDeviceId == bobId)
+            .id,
+      );
+      ContactPairingState bobSeesCarol() =>
+          bob.contacts.singleWhere((c) => c.deviceId == carolId).pairingState;
+      for (
+        var round = 0;
+        round < 20 && bobSeesCarol() != ContactPairingState.accepted;
+        round++
+      ) {
+        await settle(people);
+      }
+      expect(bobSeesCarol(), ContactPairingState.accepted);
+    });
+
+    test('email addresses reach group members only when allowed', () async {
+      final network = _FakeCarrierNetwork();
+      final relay = _FakeRelayClient();
+      final people = <MessengerController>[];
+      for (final name in ['Alice', 'Bob', 'Carol']) {
+        final person = await _createController(
+          relayClient: relay,
+          displayName: name,
+        );
+        addTearDown(person.dispose);
+        people.add(person);
+      }
+      final [alice, bob, carol] = people;
+      await network.join(carol, 'npub-carol|wss://relay.three');
+      await network.join(
+        carol,
+        'carol@chat.example',
+        kind: TransportKind.deltaChat,
+      );
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      await settle(people);
+      await alice.createGroup(title: 'Three', members: alice.contacts);
+      await settle(people);
+      final carolId = carol.identity!.deviceId;
+      Map<TransportKind, String> seenByBob() =>
+          bob.groups.single.memberProfileFor(carolId)!.carrierAddresses;
+      // Alice, a contact, knows both.
+      expect(
+        alice.contacts
+            .singleWhere((c) => c.deviceId == carolId)
+            .carrierAddresses
+            .keys,
+        contains(TransportKind.deltaChat),
+      );
+      // Bob, only a group member, learns the pseudonymous Nostr key.
+      expect(seenByBob()[TransportKind.nostr], 'npub-carol|wss://relay.three');
+      expect(seenByBob(), isNot(contains(TransportKind.deltaChat)));
+
+      await carol.updateShareIdentifyingCarriersWithGroups(true);
+      for (
+        var round = 0;
+        round < 20 && !seenByBob().containsKey(TransportKind.deltaChat);
+        round++
+      ) {
+        await settle(people);
+      }
+      expect(seenByBob()[TransportKind.deltaChat], 'carol@chat.example');
+    });
+
+    test(
+      'a member who keeps its email private does not email group peers',
+      () async {
+        final network = _FakeCarrierNetwork();
+        final relay = _FakeRelayClient();
+        final people = <MessengerController>[];
+        for (final name in ['Alice', 'Bob', 'Carol']) {
+          final person = await _createController(
+            relayClient: relay,
+            displayName: name,
+          );
+          addTearDown(person.dispose);
+          people.add(person);
+        }
+        final [alice, bob, carol] = people;
+        await network.join(
+          bob,
+          'bob@chat.example',
+          kind: TransportKind.deltaChat,
+        );
+        await network.join(carol, 'npub-carol|wss://relay.three');
+        await network.join(
+          carol,
+          'carol@chat.example',
+          kind: TransportKind.deltaChat,
+        );
+        await bob.updateShareIdentifyingCarriersWithGroups(true);
+        await _pairControllers(alice, bob);
+        await _pairControllers(alice, carol);
+        await settle(people);
+        final group = await alice.createGroup(
+          title: 'Three',
+          members: alice.contacts,
+        );
+        await settle(people);
+        final bobId = bob.identity!.deviceId;
+        final carolId = carol.identity!.deviceId;
+        expect(
+          carol.groups.single.memberProfileFor(bobId)!.carrierAddresses,
+          contains(TransportKind.deltaChat),
+        );
+        expect(
+          bob.groups.single.memberProfileFor(carolId)!.carrierAddresses,
+          isNot(contains(TransportKind.deltaChat)),
+        );
+        relay.shouldFailStore = (_, _, _, recipient, envelope) =>
+            (envelope.senderDeviceId == carolId && recipient == bobId) ||
+            (envelope.senderDeviceId == bobId && recipient == carolId);
+        network.frames.clear();
+        await carol.sendGroupMessage(groupId: group.groupId, body: 'hi Bob');
+        for (var round = 0; round < 5; round++) {
+          await settle(people);
+        }
+        final leaked = network.frames
+            .where((f) => f.$1 == 'carol@chat.example')
+            .map((f) => f.$2)
+            .toSet();
+        expect(leaked, isNot(contains('bob@chat.example')));
+      },
+    );
+
+    test(
+      'a late older exchange does not share a withdrawn email again',
+      () async {
+        final network = _FakeCarrierNetwork();
+        final relay = _FakeRelayClient();
+        final people = <MessengerController>[];
+        for (final name in ['Alice', 'Bob', 'Carol']) {
+          final person = await _createController(
+            relayClient: relay,
+            displayName: name,
+          );
+          addTearDown(person.dispose);
+          people.add(person);
+        }
+        final [alice, bob, carol] = people;
+        await network.join(alice, 'npub-alice|wss://relay.one');
+        await network.join(carol, 'npub-carol|wss://relay.three');
+        await network.join(
+          carol,
+          'carol@chat.example',
+          kind: TransportKind.deltaChat,
+        );
+        await _pairControllers(alice, bob);
+        await _pairControllers(alice, carol);
+        await settle(people);
+        await alice.createGroup(title: 'Three', members: alice.contacts);
+        await settle(people);
+        final aliceId = alice.identity!.deviceId;
+        final carolId = carol.identity!.deviceId;
+        Map<TransportKind, String> seenByBob() =>
+            bob.groups.single.memberProfileFor(carolId)!.carrierAddresses;
+        expect(seenByBob(), isNot(contains(TransportKind.deltaChat)));
+        // Carol shares, but the exchange is slow (held on the carrier).
+        relay.shouldFailStore = (_, _, _, recipient, envelope) =>
+            envelope.senderDeviceId == carolId && recipient == aliceId;
+        network.holdFrom.add('npub-carol');
+        await carol.updateShareIdentifyingCarriersWithGroups(true);
+        await settle([carol]);
+        // She changes her mind; this one arrives at once.
+        relay.shouldFailStore = null;
+        network.holdFrom.clear();
+        final held = List.of(network.held);
+        network.held.clear();
+        await carol.updateShareIdentifyingCarriersWithGroups(false);
+        await settle(people);
+        // The old one shows up late.
+        for (final (from, to, frame) in held) {
+          network.deliver(from, to, frame);
+        }
+        for (var round = 0; round < 3; round++) {
+          await settle(people);
+        }
+        expect(seenByBob(), isNot(contains(TransportKind.deltaChat)));
+      },
+      timeout: const Timeout(Duration(minutes: 4)),
+    );
+
+    test(
+      "an admin's update keeps the admin's own carrier addresses",
+      () async {
+        final network = _FakeCarrierNetwork();
+        final relay = _FakeRelayClient();
+        final people = <MessengerController>[];
+        for (final name in ['Alice', 'Bob', 'Carol', 'Dave']) {
+          final person = await _createController(
+            relayClient: relay,
+            displayName: name,
+          );
+          addTearDown(person.dispose);
+          people.add(person);
+        }
+        final [alice, bob, carol, dave] = people;
+        await network.join(alice, 'npub-alice|wss://relay.one');
+        await network.join(bob, 'npub-bob|wss://relay.two');
+        await network.join(carol, 'npub-carol|wss://relay.three');
+        await network.join(dave, 'npub-dave|wss://relay.four');
+        await _pairControllers(alice, bob);
+        await _pairControllers(alice, carol);
+        await _pairControllers(bob, dave);
+        await settle(people);
+        final group = await alice.createGroup(
+          title: 'Four',
+          members: alice.contacts,
+        );
+        await settle(people);
+        final bobId = bob.identity!.deviceId;
+        await alice.setGroupMemberRole(
+          groupId: group.groupId,
+          memberDeviceId: bobId,
+          role: GroupMemberRole.admin,
+        );
+        await settle(people);
+        expect(
+          carol.groups.single.memberProfileFor(bobId)!.carrierAddresses,
+          contains(TransportKind.nostr),
+        );
+        await bob.addGroupMembers(
+          groupId: group.groupId,
+          members: [
+            bob.contacts.singleWhere(
+              (c) => c.deviceId == dave.identity!.deviceId,
+            ),
+          ],
+        );
+        await settle(people);
+        expect(
+          carol.groups.single.memberProfileFor(bobId)!.carrierAddresses,
+          contains(TransportKind.nostr),
+        );
+      },
+      timeout: const Timeout(Duration(minutes: 4)),
+    );
+
+    test(
+      'withdrawing an email over a carrier reaches the group',
+      () async {
+        final network = _FakeCarrierNetwork();
+        final relay = _FakeRelayClient();
+        final people = <MessengerController>[];
+        for (final name in ['Alice', 'Bob', 'Carol']) {
+          final person = await _createController(
+            relayClient: relay,
+            displayName: name,
+          );
+          addTearDown(person.dispose);
+          people.add(person);
+        }
+        final [alice, bob, carol] = people;
+        await network.join(alice, 'npub-alice|wss://relay.one');
+        await network.join(carol, 'npub-carol|wss://relay.three');
+        await network.join(
+          carol,
+          'carol@chat.example',
+          kind: TransportKind.deltaChat,
+        );
+        await _pairControllers(alice, bob);
+        await _pairControllers(alice, carol);
+        await settle(people);
+        await alice.createGroup(title: 'Three', members: alice.contacts);
+        await settle(people);
+        final aliceId = alice.identity!.deviceId;
+        final carolId = carol.identity!.deviceId;
+        Map<TransportKind, String> seenByBob() =>
+            bob.groups.single.memberProfileFor(carolId)!.carrierAddresses;
+        await carol.updateShareIdentifyingCarriersWithGroups(true);
+        for (var round = 0; round < 3; round++) {
+          await settle(people);
+        }
+        expect(seenByBob(), contains(TransportKind.deltaChat));
+        relay.shouldFailStore = (_, _, _, recipient, envelope) =>
+            envelope.senderDeviceId == carolId && recipient == aliceId;
+        await carol.updateShareIdentifyingCarriersWithGroups(false);
+        for (var round = 0; round < 3; round++) {
+          await settle(people);
+        }
+        expect(
+          alice.contacts
+              .singleWhere((c) => c.deviceId == carolId)
+              .groupCarrierAddresses,
+          isNot(contains(TransportKind.deltaChat)),
+        );
+        expect(seenByBob(), isNot(contains(TransportKind.deltaChat)));
+      },
+      timeout: const Timeout(Duration(minutes: 4)),
+    );
+
+    test(
+      'an owner withdrawing its email reaches every member',
+      () async {
+        final network = _FakeCarrierNetwork();
+        final relay = _FakeRelayClient();
+        final people = <MessengerController>[];
+        for (final name in ['Alice', 'Bob', 'Dave']) {
+          final person = await _createController(
+            relayClient: relay,
+            displayName: name,
+          );
+          addTearDown(person.dispose);
+          people.add(person);
+        }
+        final [alice, bob, dave] = people;
+        await network.join(alice, 'npub-alice|wss://relay.one');
+        await network.join(
+          alice,
+          'alice@chat.example',
+          kind: TransportKind.deltaChat,
+        );
+        await alice.updateShareIdentifyingCarriersWithGroups(true);
+        await _pairControllers(alice, bob);
+        await _pairControllers(bob, dave);
+        await settle(people);
+        final group = await alice.createGroup(
+          title: 'G',
+          members: alice.contacts,
+        );
+        await settle(people);
+        await alice.setGroupMemberRole(
+          groupId: group.groupId,
+          memberDeviceId: bob.identity!.deviceId,
+          role: GroupMemberRole.admin,
+        );
+        await settle(people);
+        await bob.addGroupMembers(
+          groupId: group.groupId,
+          members: [
+            bob.contacts.singleWhere(
+              (c) => c.deviceId == dave.identity!.deviceId,
+            ),
+          ],
+        );
+        for (var round = 0; round < 3; round++) {
+          await settle(people);
+        }
+        final aliceId = alice.identity!.deviceId;
+        await alice.updateShareIdentifyingCarriersWithGroups(false);
+        for (var round = 0; round < 3; round++) {
+          await settle(people);
+        }
+        expect(
+          dave.groups.single.memberProfileFor(aliceId)!.carrierAddresses,
+          isNot(contains(TransportKind.deltaChat)),
+        );
+      },
+      timeout: const Timeout(Duration(minutes: 4)),
+    );
+
+    test(
+      "a profile change racing an admin's add keeps the group whole",
+      () async {
+        final network = _FakeCarrierNetwork();
+        // Bob reaches only Dave for a while: his copies to anyone else, and
+        // anything to him, are lost on the way.
+        var bobCutOff = false;
+        late final String bobId;
+        late final String daveId;
+        final relay = _FakeRelayClient(
+          shouldBlackholeStore: (_, _, _, recipient, envelope) =>
+              bobCutOff &&
+              (envelope.senderDeviceId == bobId && recipient != daveId ||
+                  recipient == bobId),
+        );
+        final people = <MessengerController>[];
+        for (final name in ['Alice', 'Bob', 'Carol', 'Dave']) {
+          final person = await _createController(
+            relayClient: relay,
+            displayName: name,
+          );
+          addTearDown(person.dispose);
+          people.add(person);
+        }
+        final [alice, bob, carol, dave] = people;
+        bobId = bob.identity!.deviceId;
+        daveId = dave.identity!.deviceId;
+        await network.join(carol, 'npub-carol|wss://relay.three');
+        await _pairControllers(alice, bob);
+        await _pairControllers(alice, carol);
+        await _pairControllers(bob, dave);
+        await settle(people);
+        final group = await alice.createGroup(
+          title: 'G',
+          members: alice.contacts,
+        );
+        await settle(people);
+        await alice.setGroupMemberRole(
+          groupId: group.groupId,
+          memberDeviceId: bobId,
+          role: GroupMemberRole.admin,
+        );
+        await settle(people);
+        bobCutOff = true;
+        // Meanwhile Carol's profile changes, and the owner passes it on.
+        await carol.updateShareIdentifyingCarriersWithGroups(true);
+        await network.join(carol, 'npub-carol2|wss://relay.three');
+        await settle([alice, carol]);
+        await bob.addGroupMembers(
+          groupId: group.groupId,
+          members: [bob.contacts.singleWhere((c) => c.deviceId == daveId)],
+        );
+        await settle([bob, dave]);
+        bobCutOff = false;
+        bool whole() => [alice, bob, carol].every(
+          (person) => person.groups.single.memberDeviceIds.contains(daveId),
+        );
+        // Bob's add is repeated once he is back; it must not be refused.
+        for (var round = 0; round < 20 && !whole(); round++) {
+          await bob.retryUnacknowledgedMessagesNow();
+          await settle(people);
+        }
+        for (final person in [alice, bob, carol]) {
+          expect(person.groups.single.memberDeviceIds, contains(daveId));
+        }
+        // Dave got Bob's old view of Carol; the owner sends the newer one.
+        final carolId = carol.identity!.deviceId;
+        String? carolFor(MessengerController person) => person.groups.single
+            .memberProfileFor(carolId)
+            ?.carrierAddresses[TransportKind.nostr];
+        for (
+          var round = 0;
+          round < 20 &&
+              [bob, dave].any(
+                (person) => carolFor(person) != 'npub-carol2|wss://relay.three',
+              );
+          round++
+        ) {
+          await alice.retryUnacknowledgedMessagesNow();
+          await settle(people);
+        }
+        expect(carolFor(bob), 'npub-carol2|wss://relay.three');
+        expect(carolFor(dave), 'npub-carol2|wss://relay.three');
+      },
+      timeout: const Timeout(Duration(minutes: 4)),
+    );
+
+    test(
+      'a group message does not take back the owner\'s profile number',
+      () async {
+        final network = _FakeCarrierNetwork();
+        final relay = _FakeRelayClient();
+        final people = <MessengerController>[];
+        for (final name in ['Alice', 'Bob', 'Carol']) {
+          final person = await _createController(
+            relayClient: relay,
+            displayName: name,
+          );
+          addTearDown(person.dispose);
+          people.add(person);
+        }
+        final [alice, bob, carol] = people;
+        await network.join(carol, 'npub-carol|wss://relay.three');
+        await network.join(
+          carol,
+          'carol@chat.example',
+          kind: TransportKind.deltaChat,
+        );
+        await _pairControllers(alice, bob);
+        await _pairControllers(alice, carol);
+        await settle(people);
+        final group = await alice.createGroup(
+          title: 'Three',
+          members: alice.contacts,
+        );
+        await settle(people);
+        // A profile change noticed only when the owner next writes.
+        await alice.updateBio('new bio');
+        await alice.sendGroupMessage(groupId: group.groupId, body: 'hi');
+        await settle(people);
+        expect(
+          alice.groups.single.profileRevision,
+          greaterThanOrEqualTo(bob.groups.single.profileRevision),
+        );
+        // So the next change still reaches the members.
+        final carolId = carol.identity!.deviceId;
+        await carol.updateShareIdentifyingCarriersWithGroups(true);
+        for (
+          var round = 0;
+          round < 10 &&
+              !bob.groups.single
+                  .memberProfileFor(carolId)!
+                  .carrierAddresses
+                  .containsKey(TransportKind.deltaChat);
+          round++
+        ) {
+          await settle(people);
+        }
+        expect(
+          bob.groups.single.memberProfileFor(carolId)!.carrierAddresses,
+          contains(TransportKind.deltaChat),
+        );
+      },
+    );
+
+    test(
+      "the owner's new name reaches a member who is not its contact",
+      () async {
+        final relay = _FakeRelayClient();
+        final people = <MessengerController>[];
+        for (final name in ['Alice', 'Bob', 'Dave']) {
+          final person = await _createController(
+            relayClient: relay,
+            displayName: name,
+          );
+          addTearDown(person.dispose);
+          people.add(person);
+        }
+        final [alice, bob, dave] = people;
+        await _pairControllers(alice, bob);
+        await _pairControllers(bob, dave);
+        await settle(people);
+        final group = await alice.createGroup(
+          title: 'G',
+          members: alice.contacts,
+        );
+        await settle(people);
+        final aliceId = alice.identity!.deviceId;
+        await alice.setGroupMemberRole(
+          groupId: group.groupId,
+          memberDeviceId: bob.identity!.deviceId,
+          role: GroupMemberRole.admin,
+        );
+        await settle(people);
+        // Dave is Bob's contact only.
+        await bob.addGroupMembers(
+          groupId: group.groupId,
+          members: [
+            bob.contacts.singleWhere(
+              (c) => c.deviceId == dave.identity!.deviceId,
+            ),
+          ],
+        );
+        for (var round = 0; round < 3; round++) {
+          await settle(people);
+        }
+        String? aliceAtDave() =>
+            dave.groups.single.memberProfileFor(aliceId)?.displayName;
+        expect(aliceAtDave(), 'Alice');
+        await alice.updateDisplayName('Alicia');
+        await alice.sendGroupMessage(groupId: group.groupId, body: 'renamed');
+        for (var round = 0; round < 10 && aliceAtDave() != 'Alicia'; round++) {
+          await settle(people);
+        }
+        expect(aliceAtDave(), 'Alicia');
+      },
+    );
+
+    test('a clock set back does not hold up profile changes', () async {
+      final network = _FakeCarrierNetwork();
+      final relay = _FakeRelayClient();
+      var offset = Duration.zero;
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        nowProvider: () => DateTime.now().toUtc().add(offset),
+      );
+      addTearDown(alice.dispose);
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      addTearDown(bob.dispose);
+      final people = [alice, bob];
+      await network.join(
+        alice,
+        'alice@chat.example',
+        kind: TransportKind.deltaChat,
+      );
+      await _pairControllers(alice, bob);
+      await settle(people);
+      await alice.createGroup(title: 'G', members: alice.contacts);
+      await settle(people);
+      final start = alice.groups.single.profileRevision;
+      // Three changes use up the minute's allowance.
+      for (final share in [true, false, true]) {
+        await alice.updateShareIdentifyingCarriersWithGroups(share);
+        await settle(people);
+      }
+      expect(alice.groups.single.profileRevision - start, 3);
+      // An hour back, those three look like the future: they do not count.
+      offset = const Duration(hours: -1);
+      await alice.updateShareIdentifyingCarriersWithGroups(false);
+      await settle(people);
+      expect(alice.groups.single.profileRevision - start, 4);
+    });
+
     test('a mutual add works over a carrier alone', () async {
       final network = _FakeCarrierNetwork();
       final relay = _FakeRelayClient();
@@ -17129,11 +17794,19 @@ class _FakeCarrierNetwork {
   final Set<String> holdFrom = {};
   final List<(String, String, Uint8List)> held = [];
 
-  Future<void> join(MessengerController controller, String address) async {
+  Future<void> join(
+    MessengerController controller,
+    String address, {
+    TransportKind kind = TransportKind.nostr,
+  }) async {
     final carrier = CarrierTransportAdapter(
-      kind: TransportKind.nostr,
+      kind: kind,
       sealer: controller.carrierSealer,
-      framing: CarrierFraming.nostr,
+      framing: switch (kind) {
+        TransportKind.deltaChat => CarrierFraming.email,
+        TransportKind.matrix => CarrierFraming.matrix,
+        _ => CarrierFraming.nostr,
+      },
     )..attach(_FakeCarrierChannel(this, address));
     _byAddress[address] = carrier;
     await controller.registerCarrierTransport(carrier);

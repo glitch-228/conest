@@ -36,6 +36,7 @@ class GroupFileDownload {
   File? completedFile;
   Future<void>? _running;
   bool _recovered = false;
+  bool _recovering = false;
   bool _paused = false;
 
   int get verifiedBytes => scheduler.verifiedBytes;
@@ -59,6 +60,15 @@ class GroupFileDownload {
   Future<void> resume() {
     _paused = false;
     final active = _running;
+    // A local recovery holds the slot: download once it is done.
+    if (active != null && _recovering) {
+      return active.then((_) async {
+        // Unless paused or evicted meanwhile.
+        if (!_paused && state != GroupFileDownloadState.complete) {
+          await resume();
+        }
+      });
+    }
     if (active != null) return active;
     final result = _pump();
     _running = result;
@@ -69,7 +79,23 @@ class GroupFileDownload {
   /// a file this device has whole (its own, or one finished before a
   /// restart) completes here. Returns whether it is complete.
   Future<bool> recoverLocal() async {
-    if (_running != null) return state == GroupFileDownloadState.complete;
+    final active = _running;
+    if (active != null) {
+      await active;
+      return state == GroupFileDownloadState.complete;
+    }
+    // Holds the same slot as the pump, so the two never overlap.
+    _recovering = true;
+    final result = _recoverLocal();
+    _running = result;
+    await result.whenComplete(() {
+      _running = null;
+      _recovering = false;
+    });
+    return state == GroupFileDownloadState.complete;
+  }
+
+  Future<void> _recoverLocal() async {
     try {
       if (!_recovered) {
         scheduler.restoreVerified(await store.recover());
@@ -89,7 +115,6 @@ class GroupFileDownload {
       state = GroupFileDownloadState.failed;
       onChanged?.call();
     }
-    return state == GroupFileDownloadState.complete;
   }
 
   /// Stop current requests and remove this device's verified cache. The

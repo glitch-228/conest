@@ -4635,17 +4635,29 @@ class MessengerController extends ChangeNotifier {
                 (member) => member.deviceId == inbound.senderTransportIdentity,
               )
               .firstOrNull;
-    if (groupPeer != null && global != null && _carrierAllowed(kind)) {
-      // A member of a shared group who is not a usable contact: group
-      // traffic only, as over Iroh.
+    RelayEnvelope? groupEnvelope;
+    if (groupPeer != null) {
       try {
         final decoded = jsonDecode(utf8.decode(inbound.bytes));
-        if (decoded is! Map<String, dynamic>) return;
-        final envelope = RelayEnvelope.fromJson(decoded);
+        if (decoded is Map<String, dynamic>) {
+          final envelope = RelayEnvelope.fromJson(decoded);
+          if (_groupOnlyKinds.contains(envelope.kind)) groupEnvelope = envelope;
+        }
+      } catch (_) {}
+    }
+    // A member of a shared group who is not a usable contact: their group
+    // traffic, as over Iroh. Anything else from them (a contact request,
+    // an acceptance) goes the contact or first-contact way below.
+    if (groupPeer != null &&
+        groupEnvelope != null &&
+        global != null &&
+        _carrierAllowed(kind)) {
+      try {
+        final envelope = groupEnvelope;
         if (envelope.senderDeviceId != groupPeer.deviceId ||
             envelope.recipientDeviceId != _snapshot.identity?.deviceId ||
-            !_groupOnlyKinds.contains(envelope.kind) ||
-            global.policyFor(kind) == TransportPolicy.disabled) {
+            groupPeer.routing.effectivePolicy(kind, global) ==
+                TransportPolicy.disabled) {
           return;
         }
         await _processEnvelopes(
@@ -4869,8 +4881,6 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  /// Membership grants access only to this group's control/text envelopes.
-  /// A member not accepted as a contact cannot use this to send a private DM.
   /// What a member of a shared group who is not a contact may send us.
   static const Set<String> _groupOnlyKinds = {
     'group_history',
@@ -4881,6 +4891,8 @@ class MessengerController extends ChangeNotifier {
     'ack',
   };
 
+  /// Membership grants access only to this group's control/text envelopes.
+  /// A member not accepted as a contact cannot use this to send a private DM.
   Future<bool> _handleGroupOnlyIrohInbound(
     TransportInboundEnvelope inbound,
   ) async {
@@ -4890,14 +4902,7 @@ class MessengerController extends ChangeNotifier {
     final decoded = jsonDecode(utf8.decode(inbound.bytes));
     if (decoded is! Map<String, dynamic>) return false;
     final envelope = RelayEnvelope.fromJson(decoded);
-    if (!const {
-      'group_history',
-      'group_message',
-      'group_membership',
-      'group_membership_ack',
-      'group_leave',
-      'ack',
-    }.contains(envelope.kind)) {
+    if (!_groupOnlyKinds.contains(envelope.kind)) {
       return false;
     }
     final group = _groupById(envelope.conversationId);
@@ -6961,6 +6966,22 @@ class MessengerController extends ChangeNotifier {
       : maxLanAttachmentSizeBytes;
 
   bool _irohFileAllowed(int sizeBytes) => sizeBytes <= maxIrohAttachmentBytes;
+
+  /// Whether members of shared groups who are not contacts may learn this
+  /// device's email and Matrix addresses. Contacts are told at once; the
+  /// groups' owners pass it on.
+  Future<void> updateShareIdentifyingCarriersWithGroups(bool enabled) async {
+    final me = _requireIdentity();
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(
+        connectivity: me.connectivity.copyWith(
+          shareIdentifyingCarriersWithGroups: enabled,
+        ),
+      ),
+    );
+    await _saveSnapshotSilently();
+    _advertiseProfileToContacts();
+  }
 
   Future<void> updateIrohTransferLimitEnabled(bool enabled) async {
     final me = _requireIdentity();
@@ -11494,6 +11515,12 @@ class MessengerController extends ChangeNotifier {
     }
     final profiledGroup = _refreshGroupMemberProfiles(group);
     if (!_sameGroupMemberProfiles(profiledGroup, group)) {
+      // As the owner, tell the members too, not only use it here.
+      if (group.ownerDeviceId == me.deviceId) {
+        unawaited(
+          _sendGroupProfileRefresh(group.groupId).catchError((Object _) {}),
+        );
+      }
       _upsertGroup(profiledGroup);
     }
     final recipientContacts = _groupRecipientContacts(profiledGroup);
@@ -13027,6 +13054,14 @@ class MessengerController extends ChangeNotifier {
       // a contact still on one of those ids moves to the current one.
       if (recipientKnowsIdentity && contact.retiredPairingRequestIds.isNotEmpty)
         'retiredPairingRequestIds': contact.retiredPairingRequestIds,
+      // What members of groups we share may learn (the group owner passes
+      // it on in our member profile).
+      if (recipientKnowsIdentity)
+        'groupCarrierAddresses': {
+          for (final MapEntry(:key, :value)
+              in _ownGroupCarrierAddresses().entries)
+            key.name: value,
+        },
     });
     final payloads = pairingResponse == null
         ? <String>[structuredPayload, invitePayload]
@@ -17864,6 +17899,7 @@ class MessengerController extends ChangeNotifier {
     // addresses then stay as they are.
     Map<TransportKind, String>? peerCarrierAddresses;
     Set<String> peerRetiredRequestIds = const {};
+    Map<TransportKind, String>? peerGroupCarrierAddresses;
     if (envelope.protocolVersion == 1) {
       if (existing?.pendingVerification == true) return;
       final rawPayload = envelope.payloadBase64;
@@ -17944,6 +17980,9 @@ class MessengerController extends ChangeNotifier {
           )?.encode();
           peerCarrierAddresses = _carrierAddressesFromExchange(
             decodedExchange['carrierAddresses'],
+          );
+          peerGroupCarrierAddresses = _groupCarrierAddressesFromExchange(
+            decodedExchange['groupCarrierAddresses'],
           );
           final retired = decodedExchange['retiredPairingRequestIds'];
           if (retired is List && retired.length <= 16) {
@@ -18073,6 +18112,10 @@ class MessengerController extends ChangeNotifier {
       final latestAllowed = _now().toUtc().add(const Duration(minutes: 5));
       final sentAt = envelope.createdAt.toUtc();
       final addressAt = sentAt.isAfter(latestAllowed) ? latestAllowed : sentAt;
+      // Each step below reads the contact afresh, with no wait before its
+      // write: another exchange may have been handled meanwhile, and a copy
+      // from before it would undo what that exchange stored.
+      if (updated != null) updated = _contactByDeviceId(updated.deviceId);
       final knownAt = updated?.matrixAddressAt;
       if (updated != null &&
           matrixAddressAdvertised &&
@@ -18088,6 +18131,21 @@ class MessengerController extends ChangeNotifier {
         _replaceContactRecord(updated);
         await _saveSnapshotSilently(notify: true);
       }
+      if (updated != null) updated = _contactByDeviceId(updated.deviceId);
+      final groupAddressesAt = updated?.groupCarrierAddressesAt;
+      if (updated != null &&
+          peerGroupCarrierAddresses != null &&
+          (groupAddressesAt == null || addressAt.isAfter(groupAddressesAt))) {
+        // Only a newer exchange: a late one must not re-share an address
+        // the contact has stopped showing its groups.
+        updated = updated.copyWith(
+          groupCarrierAddresses: peerGroupCarrierAddresses,
+          groupCarrierAddressesAt: addressAt,
+        );
+        _replaceContactRecord(updated);
+        await _saveSnapshotSilently(notify: false);
+      }
+      if (updated != null) updated = _contactByDeviceId(updated.deviceId);
       if (updated != null && peerCarrierAddresses != null) {
         final merged = mergeCarrierAddresses(
           updated.carrierAddresses,
@@ -18163,17 +18221,7 @@ class MessengerController extends ChangeNotifier {
               group.ownerDeviceId == me.deviceId &&
               group.hasActiveMember(capabilityDeviceId),
         )) {
-          final refreshed = _refreshGroupMemberProfiles(group);
-          if (_sameGroupMemberProfiles(refreshed, group)) continue;
-          _upsertGroup(refreshed);
-          await _saveSnapshotSilently(notify: false);
-          await _sendGroupMembershipUpdate(
-            refreshed,
-            targetDeviceIds: refreshed.activeMemberDeviceIds
-                .where((deviceId) => deviceId != me.deviceId)
-                .toList(growable: false),
-            reason: 'member_capabilities',
-          );
+          await _sendGroupProfileRefresh(group.groupId);
         }
       }
       return;
@@ -18417,9 +18465,10 @@ class MessengerController extends ChangeNotifier {
   void _answerRemovedSender(RelayEnvelope envelope) {
     // Someone we removed may still share a group with us: their group
     // traffic is expected, not a sign they missed the notice.
+    // Direct traffic (a message, an edit, a file) still gets the notice.
     if (envelope.kind.startsWith('group_') ||
-        envelope.kind == 'ack' ||
-        _sharesActiveGroup(envelope.senderDeviceId)) {
+        ((envelope.kind.startsWith('ratchet_') || envelope.kind == 'ack') &&
+            _sharesActiveGroup(envelope.senderDeviceId))) {
       return;
     }
     final tombstone =
@@ -18694,6 +18743,12 @@ class MessengerController extends ChangeNotifier {
           senderRole != GroupMemberRole.admin) {
         return;
       }
+      // Only an accepted contact may bring us into a new group: not one who
+      // removed us, or whose request was declined, cancelled or is open.
+      if (!sender.canSendOutbound) {
+        appendDebugLog('Ignored a new group from a contact not accepted.');
+        return;
+      }
     } else {
       if (!_preservesExistingGroupMemberIdentities(existing, incoming)) {
         appendDebugLog(
@@ -18702,18 +18757,27 @@ class MessengerController extends ChangeNotifier {
         );
         return;
       }
-      if (incoming.membershipVersion <= existing.membershipVersion) {
-        if (incoming.membershipVersion == existing.membershipVersion &&
-            incoming.ownerDeviceId == existing.ownerDeviceId &&
-            incoming.title == existing.title &&
-            incoming.dissolvedAt == existing.dissolvedAt &&
-            _sameIdSet(incoming.adminDeviceIds, existing.adminDeviceIds) &&
-            _sameIdSet(
-              incoming.moderatorDeviceIds,
-              existing.moderatorDeviceIds,
-            ) &&
-            _sameIdSet(incoming.memberDeviceIds, existing.memberDeviceIds) &&
-            _sameIdSet(incoming.removedDeviceIds, existing.removedDeviceIds)) {
+      final sameMembership =
+          incoming.membershipVersion == existing.membershipVersion &&
+          incoming.ownerDeviceId == existing.ownerDeviceId &&
+          incoming.title == existing.title &&
+          incoming.dissolvedAt == existing.dissolvedAt &&
+          _sameIdSet(incoming.adminDeviceIds, existing.adminDeviceIds) &&
+          _sameIdSet(
+            incoming.moderatorDeviceIds,
+            existing.moderatorDeviceIds,
+          ) &&
+          _sameIdSet(incoming.memberDeviceIds, existing.memberDeviceIds) &&
+          _sameIdSet(incoming.removedDeviceIds, existing.removedDeviceIds);
+      // The owner's newer member profiles for the same membership.
+      final profileUpdate =
+          sameMembership &&
+          envelope.senderDeviceId == existing.ownerDeviceId &&
+          incoming.profileRevision > existing.profileRevision &&
+          incoming.profileRevision <= _maxGroupProfileRevision;
+      if (incoming.membershipVersion <= existing.membershipVersion &&
+          !profileUpdate) {
+        if (sameMembership) {
           await _sendGroupMembershipAck(
             envelope,
             group: existing,
@@ -18722,7 +18786,8 @@ class MessengerController extends ChangeNotifier {
         }
         return;
       }
-      if (!_isAuthorizedGroupMembershipUpdate(
+      if (!profileUpdate &&
+          !_isAuthorizedGroupMembershipUpdate(
         existing: existing,
         incoming: incoming,
         senderDeviceId: envelope.senderDeviceId,
@@ -18730,10 +18795,39 @@ class MessengerController extends ChangeNotifier {
         return;
       }
     }
-    final enriched = _mergeIncomingGroupMemberProfiles(
-      incoming,
-      trustedProfiles: [_groupProfileForContact(sender)],
-    );
+    // The sender vouches for its own keys; what it shows groups of its
+    // carriers is in its own profile when we do not have it as a contact.
+    final enriched =
+        _mergeIncomingGroupMemberProfiles(
+          incoming,
+          trustedProfiles: [
+            if (_contactByDeviceId(sender.deviceId) != null)
+              _retainMissingGroupTransportIdentity(
+                _groupProfileForContact(sender),
+                incoming.memberProfileFor(sender.deviceId),
+              )
+            // Not a contact: our record of them is our old copy of their
+            // group profile, and their own in the update is newer (its keys
+            // were checked against the pinned ones above).
+            else if (incoming.memberProfileFor(sender.deviceId) case final own?)
+              _retainMissingGroupTransportIdentity(
+                own,
+                existing?.memberProfileFor(sender.deviceId),
+              ),
+          ],
+        ).copyWith(
+          // Only the owner numbers profile changes: an admin's record could
+          // otherwise set a number the owner's updates never pass.
+          // On the owner's own record any authorised number counts: it must
+          // stay ahead of what members hold (after a restore, say).
+          profileRevision:
+              (envelope.senderDeviceId ==
+                          (existing?.ownerDeviceId ?? incoming.ownerDeviceId) ||
+                      existing?.ownerDeviceId == me.deviceId) &&
+                  incoming.profileRevision <= _maxGroupProfileRevision
+              ? max(incoming.profileRevision, existing?.profileRevision ?? 0)
+              : existing?.profileRevision ?? 0,
+        );
     // localRemovedAt is local-only state. The wire payload never carries it,
     // so a routine inbound update would otherwise wipe a prior local removal.
     // Preserve the existing flag, unless the update re-adds the local user
@@ -18764,6 +18858,29 @@ class MessengerController extends ChangeNotifier {
     // Tell the sender we applied their version so they can drop the
     // pending-retry entry. Best-effort; the sender will retry on miss.
     await _sendGroupMembershipAck(envelope, group: merged, sender: sender);
+    // An admin's change carries the admin's view of everyone; as the owner,
+    // pass on ours where it is newer, so members the admin added do not keep
+    // an old one (an address someone has since withdrawn, say).
+    // Our own entry and the sender's always differ between views (each is
+    // built on its own device), so they are left out.
+    GroupRecord others(GroupRecord group) => group.copyWith(
+      memberProfiles: [
+        for (final profile in group.memberProfiles)
+          if (profile.deviceId != me.deviceId &&
+              profile.deviceId != envelope.senderDeviceId)
+            profile,
+      ],
+    );
+    if (merged.ownerDeviceId == me.deviceId &&
+        envelope.senderDeviceId != me.deviceId &&
+        !_sameGroupMemberProfiles(others(incoming), others(merged))) {
+      unawaited(
+        _sendGroupProfileRefresh(
+          merged.groupId,
+          force: true,
+        ).catchError((Object _) {}),
+      );
+    }
   }
 
   Future<void> _handleGroupLeave(RelayEnvelope envelope) async {
@@ -18902,6 +19019,14 @@ class MessengerController extends ChangeNotifier {
     required String Function(ContactRecord contact) statusBuilder,
     bool persistStatus = true,
   }) async {
+    if (_contactByDeviceId(invite.deviceId) == null) {
+      return null;
+    }
+    if (invite.version >= 6 && !await _crypto.verifyContactInvite(invite)) {
+      return null;
+    }
+    // Read after the check: another exchange may have changed the contact
+    // meanwhile, and writing back an earlier copy would undo it.
     final existingIndex = _snapshot.contacts.indexWhere(
       (contact) => contact.deviceId == invite.deviceId,
     );
@@ -18910,9 +19035,6 @@ class MessengerController extends ChangeNotifier {
     }
     final contacts = List<ContactRecord>.from(_snapshot.contacts);
     final existing = contacts[existingIndex];
-    if (invite.version >= 6 && !await _crypto.verifyContactInvite(invite)) {
-      return null;
-    }
     if ((existing.signingPublicKeyBase64 != null &&
             existing.signingPublicKeyBase64 != invite.signingPublicKeyBase64) ||
         (existing.irohEndpointId != null &&
@@ -21405,13 +21527,18 @@ class MessengerController extends ChangeNotifier {
         : _groupMemberContact(group, envelope.senderDeviceId);
     if (group == null ||
         sender == null ||
+        !sender.canSendOutbound ||
         sender.accountId != envelope.senderAccountId) {
       return true;
     }
     final now = _now();
-    final last = _duplicateAckedAt[envelope.messageId];
+    final last = _duplicateAckedAt.remove(envelope.messageId);
     if (last != null && now.difference(last) < const Duration(seconds: 10)) {
+      _duplicateAckedAt[envelope.messageId] = last;
       return true;
+    }
+    while (_duplicateAckedAt.length >= 1024) {
+      _duplicateAckedAt.remove(_duplicateAckedAt.keys.first);
     }
     _duplicateAckedAt[envelope.messageId] = now;
     await _sendGroupMembershipAck(envelope, group: group, sender: sender);
@@ -24396,6 +24523,36 @@ class MessengerController extends ChangeNotifier {
     return hints;
   }
 
+  /// Carriers that name the person behind them (an email address, a Matrix
+  /// account): shared with group members only if the user allows it.
+  static const Set<TransportKind> _identifyingCarriers = {
+    TransportKind.deltaChat,
+    TransportKind.matrix,
+  };
+
+  /// The carrier addresses this device publishes to members of its groups.
+  Map<TransportKind, String> _ownGroupCarrierAddresses() {
+    final global = _snapshot.identity?.connectivity;
+    if (global == null) return const {};
+    final addresses = <TransportKind, String>{
+      for (final MapEntry(key: kind, value: carrier)
+          in _carrierTransports.entries)
+        if (carrier.localAddress case final address?
+            when _carrierAllowed(kind) &&
+                global.policyFor(kind) != TransportPolicy.disabled)
+          kind: address,
+      if (_ownMatrixAddress case final matrix?
+          when _matrixAllowed &&
+              global.policyFor(TransportKind.matrix) !=
+                  TransportPolicy.disabled)
+        TransportKind.matrix: matrix.encode(),
+    };
+    if (!global.shareIdentifyingCarriersWithGroups) {
+      addresses.removeWhere((kind, _) => _identifyingCarriers.contains(kind));
+    }
+    return addresses;
+  }
+
   /// The invite shown to people (QR, text, Beam): with signed carrier hints
   /// when any carrier is on. Invites inside messages stay compatible.
   Future<ContactInvite> _sharedInvite(IdentityRecord identity) async {
@@ -24922,7 +25079,13 @@ class MessengerController extends ChangeNotifier {
     if (index == -1) {
       groups.add(group);
     } else {
-      groups[index] = group;
+      // A copy made before a profile refresh must not take its revision
+      // back: the refresh would then be sent again under the same number,
+      // and members would ignore it.
+      final revision = groups[index].profileRevision;
+      groups[index] = group.profileRevision < revision
+          ? group.copyWith(profileRevision: revision)
+          : group;
     }
     _snapshot = _snapshot.copyWith(groups: groups);
   }
@@ -24952,6 +25115,8 @@ class MessengerController extends ChangeNotifier {
       featureCapabilities: _localApplicationCapabilities(),
       featureCapabilityVersion: 1,
       routeHints: _inviteRouteHintsForIdentity(identity),
+      carrierAddresses: _ownGroupCarrierAddresses(),
+      carrierAddressesKnown: true,
     );
   }
 
@@ -25108,7 +25273,8 @@ class MessengerController extends ChangeNotifier {
       if (group.hasActiveMember(me.deviceId) &&
           group.hasActiveMember(deviceId)) {
         final member = _groupMemberContact(group, deviceId);
-        if (member != null) return member;
+        // A replaced or unverified device stays without a session.
+        if (member != null && member.canSendOutbound) return member;
       }
     }
     return null;
@@ -25163,13 +25329,15 @@ class MessengerController extends ChangeNotifier {
     for (final group in _snapshot.groups) {
       if (!group.hasActiveMember(me.deviceId)) continue;
       for (final deviceId in group.activeMemberDeviceIds) {
+        // Usable contacts were handled above; a former or not yet accepted
+        // contact is a group peer like any member.
         if (deviceId == me.deviceId ||
-            _contactByDeviceId(deviceId) != null ||
+            (_contactByDeviceId(deviceId)?.canSendOutbound ?? false) ||
             groupPeers.containsKey(deviceId)) {
           continue;
         }
         final peer = _groupMemberContact(group, deviceId);
-        if (peer != null) groupPeers[deviceId] = peer;
+        if (peer != null && peer.canSendOutbound) groupPeers[deviceId] = peer;
       }
     }
     for (final peer in groupPeers.values) {
@@ -25704,6 +25872,25 @@ class MessengerController extends ChangeNotifier {
   /// Carrier addresses from an authenticated exchange; null when the field
   /// is missing or malformed. Matrix keeps its own field; unknown kinds are
   /// ignored and implausible addresses dropped.
+  /// A contact's published group addresses (any carrier kind, Matrix
+  /// included); null when the exchange has none (older clients).
+  static Map<TransportKind, String>? _groupCarrierAddressesFromExchange(
+    Object? json,
+  ) {
+    if (json is! Map<String, dynamic> || json.length > 16) return null;
+    return {
+      for (final entry in json.entries)
+        if (TransportKind.values
+                .where((kind) => kind.name == entry.key)
+                .firstOrNull
+            case final kind?
+            when kind.isCarrier &&
+                entry.value is String &&
+                isPlausibleCarrierAddress(entry.value as String))
+          kind: entry.value as String,
+    };
+  }
+
   static Map<TransportKind, String>? _carrierAddressesFromExchange(
     Object? json,
   ) {
@@ -25735,6 +25922,89 @@ class MessengerController extends ChangeNotifier {
         ).then<void>((_) {}).catchError((Object _) {}),
       );
     }
+    // Members of our own groups who are not contacts hear it from us as
+    // the owner; other groups hear it through their owner.
+    final me = _snapshot.identity;
+    if (me == null) return;
+    for (final group in _snapshot.groups.where(
+      (group) => group.ownerDeviceId == me.deviceId,
+    )) {
+      unawaited(
+        _sendGroupProfileRefresh(group.groupId).catchError((Object _) {}),
+      );
+    }
+  }
+
+  /// When the owner recently sent each group a profile change.
+  final Map<String, List<DateTime>> _groupProfileRefreshes = {};
+  final Map<String, Timer> _groupProfileRefreshTimers = {};
+  static const Duration _groupProfileRefreshWindow = Duration(minutes: 1);
+  static const int _groupProfileRefreshesPerWindow = 3;
+  static const int _maxGroupProfileRevision = 1 << 40;
+
+  /// As the owner, sends members the current member profiles when they
+  /// changed: a few times a minute per group, then the latest state once
+  /// the minute is over, so a member flapping its settings cannot flood the
+  /// group. Same membership version, higher profile revision, so it never
+  /// competes with a membership change made at the same time.
+  Future<void> _sendGroupProfileRefresh(
+    String groupId, {
+    bool force = false,
+  }) async {
+    final me = _snapshot.identity;
+    final group = _groupById(groupId);
+    if (_disposed ||
+        me == null ||
+        group == null ||
+        group.ownerDeviceId != me.deviceId ||
+        group.dissolvedAt != null ||
+        group.localRemovedAt != null) {
+      return;
+    }
+    final profiled = _refreshGroupMemberProfiles(group);
+    // A forced refresh sends anyway: the change may already be stored
+    // locally (sending a message refreshes profiles) but not sent.
+    if (!force && _sameGroupMemberProfiles(profiled, group)) return;
+    final now = _now();
+    // Times after now (the clock was set back) do not count, and no wait
+    // is longer than the window.
+    final recent = (_groupProfileRefreshes[groupId] ?? const <DateTime>[])
+        .where(
+          (at) =>
+              !at.isAfter(now) &&
+              now.difference(at) < _groupProfileRefreshWindow,
+        )
+        .toList();
+    if (recent.length >= _groupProfileRefreshesPerWindow) {
+      final wait = _groupProfileRefreshWindow - now.difference(recent.first);
+      if (wait > Duration.zero) {
+        _groupProfileRefreshes[groupId] = recent;
+        _groupProfileRefreshTimers[groupId] ??= Timer(wait, () {
+          _groupProfileRefreshTimers.remove(groupId);
+          unawaited(
+            _sendGroupProfileRefresh(
+              groupId,
+              force: true,
+            ).catchError((Object _) {}),
+          );
+        });
+        return;
+      }
+    }
+    _groupProfileRefreshes[groupId] = [...recent, now];
+    final refreshed = profiled.copyWith(
+      profileRevision: group.profileRevision + 1,
+      updatedAt: now,
+    );
+    _upsertGroup(refreshed);
+    await _saveSnapshotSilently(notify: false);
+    await _sendGroupMembershipUpdate(
+      refreshed,
+      targetDeviceIds: refreshed.activeMemberDeviceIds
+          .where((deviceId) => deviceId != me.deviceId)
+          .toList(growable: false),
+      reason: 'member_capabilities',
+    );
   }
 
   /// Key and authenticated-data label of carrier [kind]. Matrix keeps the
@@ -25771,7 +26041,10 @@ class MessengerController extends ChangeNotifier {
     final known = _contactByDeviceId(peerDeviceId);
     // A member of a shared group who is not a usable contact is sealed to
     // with the group profile's keys.
-    final contact = known != null && known.canSendOutbound
+    // A contact still pairing keeps its own record: its first request needs
+    // the first-contact seal, its acceptance the pairwise one.
+    final contact =
+        known != null && (known.canSendOutbound || _pairingWithKeys(known))
         ? known
         : _carrierGroupPeers()
                   .where((member) => member.deviceId == peerDeviceId)
@@ -26027,11 +26300,9 @@ class MessengerController extends ChangeNotifier {
       featureCapabilities: contact.featureCapabilities,
       featureCapabilityVersion: contact.featureCapabilityVersion,
       routeHints: contact.routeHints,
-      carrierAddresses: {
-        for (final kind in TransportKind.values)
-          if (kind.isCarrier)
-            if (contact.carrierAddress(kind) case final address?) kind: address,
-      },
+      // Only what the member publishes to its groups itself.
+      carrierAddresses: contact.groupCarrierAddresses ?? const {},
+      carrierAddressesKnown: contact.groupCarrierAddresses != null,
     );
   }
 
@@ -26040,9 +26311,14 @@ class MessengerController extends ChangeNotifier {
     GroupMemberProfile profile,
     GroupMemberProfile? prior,
   ) => profile.copyWith(
-    carrierAddresses: profile.carrierAddresses.isEmpty
-        ? prior?.carrierAddresses
-        : profile.carrierAddresses,
+    // An older client's profile says nothing about them: keep what was
+    // known. A newer one's empty map means they were withdrawn.
+    carrierAddresses: profile.carrierAddressesKnown
+        ? profile.carrierAddresses
+        : prior?.carrierAddresses,
+    carrierAddressesKnown:
+        profile.carrierAddressesKnown ||
+        (prior?.carrierAddressesKnown ?? false),
     signingPublicKeyBase64:
         profile.signingPublicKeyBase64 ?? prior?.signingPublicKeyBase64,
     irohEndpointId: profile.irohEndpointId ?? prior?.irohEndpointId,
@@ -26342,6 +26618,10 @@ class MessengerController extends ChangeNotifier {
     if (profile == null) {
       return null;
     }
+    // Only carriers this device shows its groups too: a member who keeps
+    // its email to itself does not write from it, and a peer that does not
+    // know our address there could not read the frame anyway.
+    final shared = _ownGroupCarrierAddresses().keys.toSet();
     return ContactRecord(
       accountId: profile.accountId,
       deviceId: profile.deviceId,
@@ -26356,21 +26636,57 @@ class MessengerController extends ChangeNotifier {
       routeHints: profile.routeHints,
       safetyNumber: 'group-${_shortId(profile.publicKeyBase64)}',
       trustedAt: group.createdAt,
+      // Per-contact route settings still apply to a former contact.
+      routing: contact?.routing ?? const ContactRoutingPreferences(),
       carrierAddresses: {
         for (final MapEntry(:key, :value) in profile.carrierAddresses.entries)
-          if (key != TransportKind.matrix)
+          if (key != TransportKind.matrix && shared.contains(key))
             key: CarrierAddress(
               value: value,
               at: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
             ),
       },
-      matrixAddress: profile.carrierAddresses[TransportKind.matrix],
+      matrixAddress: shared.contains(TransportKind.matrix)
+          ? profile.carrierAddresses[TransportKind.matrix]
+          : null,
     );
   }
 
   /// Members of shared groups who are not (usable) contacts, as the
   /// group profiles describe them: they reach us over carriers too.
   List<ContactRecord> _carrierGroupPeers() {
+    // Asked for every carrier frame: kept until contacts, groups, the
+    // identity (they are replaced, never changed in place) or the carriers
+    // shown to groups change.
+    final shared =
+        (_ownGroupCarrierAddresses().keys.map((k) => k.name).toList()..sort())
+            .join(',');
+    final key = (
+      _snapshot.contacts,
+      _snapshot.groups,
+      _snapshot.identity,
+      shared,
+    );
+    final cached = _carrierGroupPeersCache;
+    if (cached != null &&
+        identical(cached.$1.$1, key.$1) &&
+        identical(cached.$1.$2, key.$2) &&
+        identical(cached.$1.$3, key.$3) &&
+        cached.$1.$4 == key.$4) {
+      return cached.$2;
+    }
+    final peers = _computeCarrierGroupPeers();
+    _carrierGroupPeersCache = (key, peers);
+    return peers;
+  }
+
+  (
+    (List<ContactRecord>, List<GroupRecord>, IdentityRecord?, String),
+    List<ContactRecord>,
+  )?
+  _carrierGroupPeersCache;
+
+  List<ContactRecord> _computeCarrierGroupPeers() {
     final me = _snapshot.identity;
     if (me == null) return const [];
     final peers = <String, ContactRecord>{};
@@ -27346,6 +27662,10 @@ class MessengerController extends ChangeNotifier {
     for (final timer in _contactFlushTimers.values) {
       timer.cancel();
     }
+    for (final timer in _groupProfileRefreshTimers.values) {
+      timer.cancel();
+    }
+    _groupProfileRefreshTimers.clear();
     unawaited(_voiceCallChanges?.cancel());
     _voiceCallChanges = null;
     unawaited(_voiceCallSoundCues.dispose());

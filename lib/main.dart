@@ -14068,6 +14068,27 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 'Applies to direct online and Iroh relay transfers. Disable for larger files; they may take a long time. LAN transfers keep their larger limit.',
                               ),
                             ),
+                            SwitchListTile.adaptive(
+                              key: const ValueKey('share-identifying-carriers'),
+                              value: identity
+                                  .connectivity
+                                  .shareIdentifyingCarriersWithGroups,
+                              contentPadding: EdgeInsets.zero,
+                              onChanged: _busy
+                                  ? null
+                                  : (value) => _run(
+                                      () => widget.controller
+                                          .updateShareIdentifyingCarriersWithGroups(
+                                            value,
+                                          ),
+                                    ),
+                              title: const Text(
+                                'Share email and Matrix addresses with group members',
+                              ),
+                              subtitle: const Text(
+                                'Lets members of your groups who are not your contacts reach you by email or Matrix. Off: they only learn your Nostr, Tor and radio addresses, which do not name you. Turning it off stops sharing from now on; members who already saw an address may keep it.',
+                              ),
+                            ),
                             ListTile(
                               contentPadding: EdgeInsets.zero,
                               title: const Text('Automatic downloads'),
