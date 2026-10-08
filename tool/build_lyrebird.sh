@@ -16,13 +16,41 @@ REPOSITORY=https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transport
 target=$1
 output=$(realpath -m "$2")
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+trap 'chmod -R u+w "$work" 2>/dev/null; rm -rf "$work"' EXIT
 
-git clone --quiet --depth 1 --branch "$VERSION" "$REPOSITORY" "$work/lyrebird"
-actual=$(git -C "$work/lyrebird" rev-parse HEAD)
-if [ "$actual" != "$COMMIT" ]; then
-  echo "lyrebird $VERSION is $actual, expected $COMMIT" >&2
-  exit 1
+# The same commit through the Go module proxy, checked against Go's
+# checksum database and this hash, for when gitlab.torproject.org is down.
+MODULE=gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird
+MODULE_VERSION=v0.0.0-20260115133752-0b10edbb61e0
+MODULE_SUM=h1:l15DHGpOwsY5auqBcLjmHxUvm7EV3bhRbPVsiu40Hsw=
+
+cloned=false
+for delay in 0 20 60; do
+  sleep "$delay"
+  rm -rf "$work/lyrebird"
+  if git clone --quiet --depth 1 --branch "$VERSION" "$REPOSITORY" \
+    "$work/lyrebird"; then
+    cloned=true
+    break
+  fi
+done
+if $cloned; then
+  actual=$(git -C "$work/lyrebird" rev-parse HEAD)
+  if [ "$actual" != "$COMMIT" ]; then
+    echo "lyrebird $VERSION is $actual, expected $COMMIT" >&2
+    exit 1
+  fi
+else
+  echo "gitlab.torproject.org unreachable; using the Go module proxy" >&2
+  download=$(cd "$work" && GOFLAGS=-mod=mod GOPATH="$work/gopath" \
+    go mod download -json "$MODULE@$MODULE_VERSION")
+  sum=$(printf '%s' "$download" | sed -n 's/^\t"Sum": "\(.*\)",$/\1/p')
+  if [ "$sum" != "$MODULE_SUM" ]; then
+    echo "lyrebird module sum is '$sum', expected $MODULE_SUM" >&2
+    exit 1
+  fi
+  cp -r "$work/gopath/pkg/mod/$MODULE@$MODULE_VERSION" "$work/lyrebird"
+  chmod -R u+w "$work/lyrebird" "$work/gopath"
 fi
 
 export CGO_ENABLED=0
