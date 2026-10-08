@@ -1,54 +1,42 @@
-## Conest 0.3.12 nightly (October 8, second build)
+## Conest 0.3.12 nightly (October 8, third build)
 
-This nightly finishes Conest's side of bitchat, the Bluetooth messenger
-on iPhone and Android: you can now chat with bitchat users nearby, and
-lend them your internet for bitchat's location channels. Everything from
-this morning's 0.3.12 nightly is included.
+This nightly brings chats from other networks into one chat list, and
+adds private messages with anyone on Nostr. Everything from the earlier
+October 8 nightlies is included.
 
 ### Before you update
 
-- All of this needs the Bluetooth mesh (Settings → Connectivity →
-  Bluetooth mesh), which works on Android only for now.
-- Without the new settings nothing changes: this phone stays invisible to
-  bitchat users, as before.
+- Nothing changes until you turn something on: Conest chats stay as they
+  are.
 
-### bitchat chats (new)
+### Chats from other networks in one list (new)
 
-- Settings → Connectivity → Bluetooth mesh → **bitchat chats** shows the
-  mesh chat (what everyone in Bluetooth range writes) and private chats
-  with bitchat users nearby. You can always read the mesh chat.
-- **Reachable by bitchat users** lets bitchat users see this phone and
-  write to it:
-  - they see a name you choose, or "anon" and four digits;
-  - private messages both ways, with delivered and read marks;
-  - you can write in the mesh chat; long text goes as several messages
-    (up to about 450 characters in all);
-  - the identity they see is separate from your Conest identity and is
-    new every week, or when you tap **New identity**. A name you choose
-    yourself stays the same, so people can tell it is still you.
-- Messages in the mesh chat are signed by their authors and checked, so
-  nobody can write under someone else's name. They are not encrypted:
-  everyone nearby can read them. Private chats are encrypted between the
-  two phones.
-- Strangers writing too much are cut off, and the mesh chat keeps only
-  the last 200 messages of the past week.
+- Matrix chats, Nostr chats and bitchat chats (the mesh chat and private
+  chats with bitchat users nearby) now sit in the chat list beside your
+  Conest chats, each marked with its network.
+- Each network gets a filter chip above the list. Settings → Connectivity
+  → **Chats from other networks** hides a network's chats from the list
+  (they stay in that network's settings).
 
-### Share internet with bitchat users (new)
+### Nostr private messages (new)
 
-- With **Share internet with bitchat users** on (it needs "Reachable by
-  bitchat users"), bitchat phones nearby that have no internet can use
-  bitchat's location channels through yours: their messages go to the
-  relays, and new messages in those channels come back to them.
-- Only those public, signed channel messages pass, a few a minute per
-  phone. Your phone connects to the relays of the areas the phones nearby
-  use, so those relays see your internet address.
-
-### Groups
-
-- Members of a group who are not each other's contacts now reach each
-  other over the Bluetooth mesh too.
+- Settings → Connectivity → **Nostr private messages** lets you chat with
+  anyone on Nostr in apps that use private messages (NIP-17), such as
+  0xchat and Amethyst, one to one or in small groups with a title.
+- It uses a Nostr account of its own: your Conest contacts and your
+  Conest Nostr route are not linked to it. Copy your address (npub, with
+  your relays) to give it to people; start a chat with someone's npub, or
+  several for a group.
+- Messages are end-to-end encrypted, and relays see neither who wrote
+  nor when, but there is no forward secrecy.
+- Chats from strangers are requests: few, kept short, and the oldest go
+  first, until you reply. A deleted chat stays deleted.
+- Someone whose app has not published where it reads private messages
+  cannot be written to yet; Conest says so instead of sending into the
+  void. A profile you paste with relays (nprofile) is used for them.
+- Files sent from other apps show as a note (open them in that app).
+- Not available in Matrix-only mode.
 
 ### Not tested on devices yet
 
-- Chatting with the bitchat iOS and Android apps, and the gateway with an
-  iPhone in airplane mode.
+- Nostr private messages with 0xchat, Amethyst and Damus.
