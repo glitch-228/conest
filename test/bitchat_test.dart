@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:conest/src/bitchat/direct.dart';
 import 'package:conest/src/bitchat/fragment.dart';
 import 'package:conest/src/bitchat/mesh.dart';
 import 'package:conest/src/bitchat/packet.dart';
@@ -640,7 +642,10 @@ void main() {
       BitchatNode(
         links: area.node('n'),
         onPrivate: (_, _) => BitchatPrivate.notMine,
-        onPacket: (packet) async => seen.add(packet),
+        onPacket: (packet) async {
+          seen.add(packet);
+          return true;
+        },
         now: () => clock,
       );
       final announce = BitchatPacket(
@@ -684,6 +689,217 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 100));
       // Nine hops away: beyond the 7-hop TTL.
       expect(got, isEmpty);
+    });
+
+    group('chats with bitchat users', () {
+      bool same(List<int> a, List<int> b) =>
+          a.length == b.length &&
+          Iterable<int>.generate(a.length).every((i) => a[i] == b[i]);
+
+      /// A bitchat app on an iPhone: its own identity on a plain node.
+      Future<
+        (BitchatDirect, List<BitchatDirectEvent>, List<BitchatPublicMessage>)
+      >
+      iphone(FakeBleNeighbourhood area, String name) async {
+        final phone = await BitchatDirect.create(
+          nickname: 'iphone',
+          noiseSeed: List.filled(32, 9),
+          signingSeed: List.filled(32, 19),
+          now: () => clock,
+        );
+        final events = <BitchatDirectEvent>[];
+        final publics = <BitchatPublicMessage>[];
+        phone.events.listen(events.add);
+        late final BitchatNode node;
+        Future<void> sendAll(List<BitchatPacket> packets) async {
+          for (final packet in packets) {
+            await node.send(packet);
+          }
+        }
+
+        node = BitchatNode(
+          links: area.node(name),
+          now: () => clock,
+          wantsRecipient: (id) => same(id, phone.peerId),
+          onPrivate: (packet, _) {
+            if (!same(packet.recipientId!, phone.peerId)) {
+              return BitchatPrivate.notMine;
+            }
+            unawaited(phone.handleNoise(packet).then(sendAll));
+            return BitchatPrivate.accepted;
+          },
+          onPacket: (packet) async {
+            switch (packet.type) {
+              case BitchatType.announce:
+                await phone.handleAnnounce(packet);
+              case BitchatType.noiseHandshake:
+                if (same(packet.recipientId ?? [], phone.peerId)) {
+                  await sendAll(await phone.handleNoise(packet));
+                }
+              case BitchatType.message:
+                final message = await phone.readPublic(packet);
+                if (message != null) publics.add(message);
+            }
+            return true;
+          },
+        );
+        await sendAll([await phone.announce()]);
+        addTearDown(node.stop);
+        return (phone, events, publics);
+      }
+
+      Future<(BitchatCarrierChannel, List<BitchatPublicMessage>)> conest(
+        FakeBleNeighbourhood area,
+        String name, {
+        required bool visible,
+      }) async {
+        final publics = <BitchatPublicMessage>[];
+        final result = BitchatCarrierChannel(
+          config: BitchatCarrierConfig(address: aliceAddress),
+          connector: () async => area.node(name),
+          keyFor: (_) async => const [],
+          onFrame: (_, _) {},
+          onPublic: publics.add,
+          now: () => clock,
+        );
+        result.useDirect(
+          await BitchatDirect.create(
+            nickname: 'alice',
+            noiseSeed: List.filled(32, 1),
+            signingSeed: List.filled(32, 101),
+            now: () => clock,
+          ),
+          visible: visible,
+        );
+        result.start();
+        while (result.state != BitchatCarrierState.running) {
+          await Future<void>.delayed(Duration.zero);
+        }
+        addTearDown(result.stop);
+        return (result, publics);
+      }
+
+      test('a visible identity chats with an iPhone through a relay', () async {
+        final area = FakeBleNeighbourhood()
+          ..connect('a', 'b')
+          ..connect('b', 'c');
+        relay(area, 'b');
+        final (alice, alicePublics) = await conest(area, 'a', visible: true);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        final (phone, phoneEvents, phonePublics) = await iphone(area, 'c');
+        // The iPhone was not there for the first announce.
+        clock = clock.add(const Duration(seconds: 1));
+        alice.announceNow();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        final direct = alice.direct!;
+        // Each saw the other's signed announce.
+        expect(phone.peer(direct.peerIdHex)?.nickname, 'alice');
+        expect(direct.peer(phone.peerIdHex)?.nickname, 'iphone');
+
+        final aliceEvents = <BitchatDirectEvent>[];
+        direct.events.listen(aliceEvents.add);
+        final messageId = await alice.sendDirectText(phone.peerIdHex, 'hi');
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        final received = phoneEvents.whereType<BitchatMessageReceived>().single;
+        expect(received.text, 'hi');
+        expect(received.messageId, messageId);
+        expect(
+          aliceEvents.whereType<BitchatReceiptReceived>().single.messageId,
+          messageId,
+        );
+
+        await alice.sendPublic('hello, everyone');
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        expect(phonePublics.single.text, 'hello, everyone');
+        expect(alicePublics, isEmpty);
+      });
+
+      test(
+        'a forged copy that arrives first does not hide the real one',
+        () async {
+          final area = FakeBleNeighbourhood()
+            ..connect('x', 'a')
+            ..connect('a', 'b');
+          final (alice, publics) = await conest(area, 'a', visible: false);
+          final phone = await BitchatDirect.create(
+            nickname: 'iphone',
+            noiseSeed: List.filled(32, 9),
+            signingSeed: List.filled(32, 19),
+            now: () => clock,
+          );
+          final node = BitchatNode(
+            links: area.node('x'),
+            onPrivate: (_, _) => BitchatPrivate.notMine,
+            now: () => clock,
+          );
+          final behind = <BitchatPacket>[];
+          BitchatNode(
+            links: area.node('b'),
+            onPrivate: (_, _) => BitchatPrivate.notMine,
+            onPacket: (packet) async {
+              behind.add(packet);
+              return true;
+            },
+            now: () => clock,
+          );
+          await node.send(await phone.announce());
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          final genuine = (await phone.publicMessages('the real one')).single;
+          final forged = BitchatPacket(
+            type: genuine.type,
+            senderId: genuine.senderId,
+            timestamp: genuine.timestamp,
+            payload: genuine.payload,
+            signature: Uint8List(64),
+          );
+          await node.send(forged);
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          expect(publics, isEmpty);
+          // Not passed on either.
+          expect(behind.where((p) => p.type == BitchatType.message), isEmpty);
+          // The node remembers its own sends: a second node sends the real one.
+          final second = BitchatNode(
+            links: area.node('y'),
+            onPrivate: (_, _) => BitchatPrivate.notMine,
+            now: () => clock,
+          );
+          area.connect('y', 'a');
+          await second.send(genuine);
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          expect(publics.single.text, 'the real one');
+          expect(alice.direct, isNotNull);
+        },
+      );
+
+      test(
+        'a hidden identity reads the mesh chat but never announces',
+        () async {
+          final area = FakeBleNeighbourhood()..connect('a', 'c');
+          final (alice, publics) = await conest(area, 'a', visible: false);
+          final (phone, _, _) = await iphone(area, 'c');
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          expect(phone.peer(alice.direct!.peerIdHex), isNull);
+          expect(
+            area.airtime
+                .map(BitchatPacket.decode)
+                .where((p) => p?.type == BitchatType.announce)
+                .map((p) => p!.senderId),
+            everyElement(equals(phone.peerId)),
+          );
+          expect(alice.sendPublic('hi'), throwsStateError);
+          // The iPhone's public message is still read.
+          final node = BitchatNode(
+            links: area.node('x'),
+            onPrivate: (_, _) => BitchatPrivate.notMine,
+            now: () => clock,
+          );
+          area.connect('x', 'a');
+          await node.send((await phone.publicMessages('anyone there?')).single);
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          expect(publics.single.text, 'anyone there?');
+          expect(publics.single.nickname, 'iphone');
+        },
+      );
     });
   });
 }

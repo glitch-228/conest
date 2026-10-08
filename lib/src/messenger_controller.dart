@@ -22,7 +22,10 @@ import 'group_message_projection.dart';
 import 'group_membership_history.dart';
 import 'beam_protocol.dart';
 import 'bitchat/android_links.dart';
+import 'bitchat/direct.dart';
+import 'bitchat/mesh.dart' show randomBitchatBytes;
 import 'bitchat_carrier.dart';
+import 'bitchat_chats.dart';
 import 'carrier.dart';
 import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
@@ -3948,6 +3951,7 @@ class MessengerController extends ChangeNotifier {
   Future<void> disableBitchatCarrier() async {
     await unregisterCarrierTransport(TransportKind.bitchat);
     _bitchatChannel = null;
+    await _closeBitchatIdentity();
     _snapshot = _snapshot.copyWith(
       carrierAccounts: {..._snapshot.carrierAccounts}
         ..remove(TransportKind.bitchat.name),
@@ -3972,20 +3976,28 @@ class MessengerController extends ChangeNotifier {
       keyFor: _bitchatPairKeys,
       onFrame: adapter.receiveFrame,
       onStatusChanged: notifyListeners,
+      onPublic: _onBitchatPublic,
       now: _now,
     );
     await adapter.detach();
     adapter.attach(channel);
     _bitchatChannel = channel;
+    await _useBitchatIdentity();
     await registerCarrierTransport(adapter, advertise: advertise);
   }
 
   /// The keys contact pairs derive their Bluetooth mesh ids and MACs from,
   /// for each contact with mesh [address] (normally one).
   Future<List<Uint8List>> _bitchatPairKeys(String address) async => [
-    for (final contact in _snapshot.contacts)
-      if (contact.canSendOutbound &&
-          contact.carrierAddress(TransportKind.bitchat) == address)
+    for (final contact in [
+      ..._snapshot.contacts.where((contact) => contact.canSendOutbound),
+      // Group members who are not contacts reach us over the mesh too,
+      // unless they claim a contact's address (to see when we write to
+      // that contact).
+      if (!_bitchatContactAddresses().contains(address))
+        ..._carrierGroupPeers(),
+    ])
+      if (contact.carrierAddress(TransportKind.bitchat) == address)
         await _bitchatPairKeyCache.putIfAbsent(
           '${contact.deviceId}|${contact.publicKeyBase64}',
           () async {
@@ -4001,6 +4013,363 @@ class MessengerController extends ChangeNotifier {
   ];
 
   final Map<String, Future<Uint8List>> _bitchatPairKeyCache = {};
+
+  /// Bluetooth mesh addresses of contacts (and our own).
+  Set<String> _bitchatContactAddresses() => {
+    ?_bitchatChannel?.localAddress,
+    for (final contact in _snapshot.contacts)
+      ?contact.carrierAddress(TransportKind.bitchat),
+  };
+
+  // bitchat chats: the identity bitchat users see, and what was said.
+
+  BitchatDirect? _bitchatDirect;
+  StreamSubscription<BitchatDirectEvent>? _bitchatDirectEvents;
+  (Map<String, dynamic>?, BitchatChats)? _bitchatChatsCache;
+
+  /// Chats with bitchat users nearby (kept when the mesh is turned off).
+  BitchatChats get bitchatChats {
+    final json = _snapshot.networkChats[TransportKind.bitchat.name];
+    final cached = _bitchatChatsCache;
+    if (cached != null && identical(cached.$1, json)) return cached.$2;
+    final chats = BitchatChats.fromJson(json);
+    _bitchatChatsCache = (json, chats);
+    return chats;
+  }
+
+  /// Whether bitchat users nearby can see this device and write to it.
+  bool get bitchatReachable => bitchatCarrierConfig?.visible ?? false;
+
+  /// The name bitchat users see.
+  String get bitchatNickname {
+    final config = bitchatCarrierConfig;
+    if (config == null) return '';
+    if (config.nickname.isNotEmpty) return config.nickname;
+    // bitchat's own default: "anon" and four digits, here from the
+    // identity, so each new identity has a new name.
+    final seed = config.identitySeed;
+    if (seed == null) return 'anon';
+    // From the seed under its own label, so the name tells nothing of it.
+    final tag = dart_crypto.Hmac(
+      dart_crypto.sha256,
+      hexDecode(seed)!,
+    ).convert(utf8.encode('conest.bitchat.identity.nickname')).bytes;
+    final digits = ((tag[0] << 16) | (tag[1] << 8) | tag[2]) % 10000;
+    return 'anon${digits.toString().padLeft(4, '0')}';
+  }
+
+  /// This device's bitchat peer id while reachable.
+  String? get bitchatPeerId =>
+      bitchatReachable ? _bitchatDirect?.peerIdHex : null;
+
+  /// bitchat users seen announcing in the last five minutes, newest first.
+  List<BitchatPeer> get bitchatNearbyPeers {
+    final now = _now();
+    return [
+      for (final peer in _bitchatDirect?.peers ?? const <BitchatPeer>[])
+        if (now.difference(peer.lastSeen) < const Duration(minutes: 5)) peer,
+    ]..sort((a, b) => b.lastSeen.compareTo(a.lastSeen));
+  }
+
+  /// Lets bitchat users nearby see this device and write to it, or stops.
+  Future<void> setBitchatReachable(bool reachable) async {
+    final config = bitchatCarrierConfig;
+    if (config == null) {
+      throw StateError('Turn the Bluetooth mesh on first.');
+    }
+    if (config.visible == reachable) return;
+    await _saveBitchatConfig(config.copyWith(visible: reachable));
+    await _useBitchatIdentity();
+    _setTransientStatus(
+      reachable
+          ? 'bitchat users nearby can now see you as $bitchatNickname.'
+          : 'bitchat users no longer see you.',
+    );
+  }
+
+  /// Sets the name bitchat users see.
+  Future<void> setBitchatNickname(String nickname) async {
+    final config = bitchatCarrierConfig;
+    if (config == null) return;
+    final trimmed = nickname.trim();
+    await _saveBitchatConfig(
+      config.copyWith(
+        nickname: trimmed.substring(
+          0,
+          min(trimmed.length, BitchatCarrierConfig.maxNicknameLength),
+        ),
+      ),
+    );
+    await _useBitchatIdentity();
+  }
+
+  /// Starts a new bitchat identity: bitchat users see a new person.
+  Future<void> newBitchatIdentity() async {
+    final config = bitchatCarrierConfig;
+    if (config == null) return;
+    await _saveBitchatConfig(config.withNewIdentity(_now()));
+    await _useBitchatIdentity();
+  }
+
+  /// Writes [text] in the mesh chat everyone nearby shares.
+  Future<void> sendBitchatMeshMessage(String text) async {
+    final channel = _bitchatChannel;
+    if (channel == null || text.trim().isEmpty) return;
+    var chats = bitchatChats;
+    final (parts, total) = await channel.sendPublic(text.trim());
+    for (final sent in parts) {
+      chats = chats.addMesh(
+        BitchatChatMessage(
+          id: sent.id,
+          peerId: sent.peerId,
+          nickname: sent.nickname,
+          text: sent.text,
+          at: sent.sentAt,
+          outgoing: true,
+        ),
+      );
+    }
+    await _saveBitchatChats(chats);
+    if (parts.length < total) {
+      throw StateError(
+        'Only ${parts.length} of $total parts went out; the rest was not '
+        'sent.',
+      );
+    }
+  }
+
+  /// Writes [text] to the bitchat user [peerId].
+  Future<void> sendBitchatDirectMessage(String peerId, String text) async {
+    final channel = _bitchatChannel;
+    final trimmed = text.trim();
+    if (channel == null || trimmed.isEmpty) return;
+    final messageId = await channel.sendDirectText(peerId, trimmed);
+    await _saveBitchatChats(
+      bitchatChats.addDirect(
+        BitchatChatMessage(
+          id: messageId,
+          peerId: peerId,
+          nickname:
+              _bitchatDirect?.peer(peerId)?.nickname ??
+              bitchatChats.nicknameOf(peerId) ??
+              '',
+          text: trimmed,
+          at: _now().toUtc(),
+          outgoing: true,
+          via: bitchatPeerId,
+        ),
+      ),
+    );
+  }
+
+  /// Chat [key] (the mesh chat's [BitchatChats.meshKey] or a peer id) was
+  /// read: private messages get read receipts while reachable.
+  Future<void> markBitchatChatRead(String key) async {
+    final chats = bitchatChats;
+    final unread = chats.unread[key] ?? 0;
+    if (unread == 0) return;
+    await _saveBitchatChats(chats.markRead(key));
+    final channel = _bitchatChannel;
+    if (key == BitchatChats.meshKey || channel == null || !bitchatReachable) {
+      return;
+    }
+    // Only for what this identity received: answering for an earlier one
+    // would tell them both are the same phone.
+    final current = bitchatPeerId;
+    final incoming = (chats.direct[key] ?? const <BitchatChatMessage>[])
+        .where((message) => !message.outgoing)
+        .toList();
+    if (incoming.isEmpty || incoming.last.via != current) return;
+    for (final message
+        in incoming
+            .skip(max(0, incoming.length - min(unread, 20)))
+            .where((message) => message.via == current)) {
+      try {
+        await channel.sendReadReceipt(key, message.id);
+      } catch (_) {
+        // Out of range: they keep the message as delivered.
+      }
+    }
+  }
+
+  /// Deletes the private chat with [peerId] from this device.
+  Future<void> deleteBitchatChat(String peerId) =>
+      _saveBitchatChats(bitchatChats.withoutChat(peerId));
+
+  Future<void> _saveBitchatConfig(BitchatCarrierConfig config) async {
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.bitchat.name: config.toJson(),
+      },
+    );
+    await _saveSnapshotSilently();
+  }
+
+  Future<void> _saveBitchatChats(BitchatChats chats) async {
+    _snapshot = _snapshot.copyWith(
+      networkChats: {
+        ..._snapshot.networkChats,
+        TransportKind.bitchat.name: chats.toJson(),
+      },
+    );
+    // Strangers write here: saved in batches, not once per message.
+    await _saveSnapshotSilently(notify: true, debounce: true);
+  }
+
+  /// Whether a stranger's message is let in: a few a minute from each
+  /// bitchat user, and a limit for all of them together.
+  bool _bitchatMessageAllowed(String peerId) {
+    final minute = _now().millisecondsSinceEpoch ~/ 60000;
+    if (minute != _bitchatMinute) {
+      _bitchatMinute = minute;
+      _bitchatMessagesThisMinute = 0;
+      _bitchatMessagesByPeer.clear();
+    }
+    final byPeer = (_bitchatMessagesByPeer[peerId] ?? 0) + 1;
+    if (byPeer > 20 || _bitchatMessagesThisMinute >= 300) return false;
+    _bitchatMessagesByPeer[peerId] = byPeer;
+    _bitchatMessagesThisMinute++;
+    return true;
+  }
+
+  int _bitchatMinute = 0;
+  int _bitchatMessagesThisMinute = 0;
+  final Map<String, int> _bitchatMessagesByPeer = {};
+
+  /// Gives the running mesh the identity bitchat users see: the saved one
+  /// while reachable (renewed once it is a week old), otherwise a throwaway
+  /// one that only reads announces and the mesh chat.
+  Future<void> _useBitchatIdentity() {
+    // One switch at a time: two at once could leave an identity running.
+    final next = _bitchatIdentitySwitch.then((_) => _switchBitchatIdentity());
+    _bitchatIdentitySwitch = next.catchError((Object _) {});
+    return next;
+  }
+
+  Future<void> _bitchatIdentitySwitch = Future<void>.value();
+  Timer? _bitchatRenewTimer;
+
+  Future<void> _switchBitchatIdentity() async {
+    if (_disposed) return;
+    final channel = _bitchatChannel;
+    var config = bitchatCarrierConfig;
+    if (channel == null || config == null) return;
+    final now = _now();
+    final identityAt = config.identityAt;
+    if (config.visible &&
+        (config.identitySeed == null ||
+            identityAt == null ||
+            now.difference(identityAt) >
+                BitchatCarrierConfig.identityLifetime ||
+            identityAt.isAfter(now.add(const Duration(days: 1))))) {
+      config = config.withNewIdentity(now);
+      await _saveBitchatConfig(config);
+    }
+    final seed = config.visible
+        ? hexDecode(config.identitySeed!)!
+        : randomBitchatBytes(32);
+    List<int> derive(String label) => dart_crypto.Hmac(
+      dart_crypto.sha256,
+      seed,
+    ).convert(utf8.encode(label)).bytes;
+    final direct = await BitchatDirect.create(
+      nickname: bitchatNickname,
+      noiseSeed: derive('conest.bitchat.identity.noise'),
+      signingSeed: derive('conest.bitchat.identity.signing'),
+      now: _now,
+    );
+    // Who is nearby stays known across the switch.
+    direct.adoptPeers(_bitchatDirect?.peers ?? const <BitchatPeer>[]);
+    await _closeBitchatIdentity();
+    if (_disposed || !identical(_bitchatChannel, channel)) {
+      await direct.close();
+      return;
+    }
+    _bitchatDirect = direct;
+    _bitchatDirectEvents = direct.events.listen(
+      (event) => unawaited(
+        _onBitchatDirectEvent(event).catchError((Object error) {
+          appendDebugLog('bitchat chat event failed: $error');
+        }),
+      ),
+    );
+    channel.useDirect(direct, visible: config.visible);
+    // A phone left running renews its identity too.
+    if (config.visible) {
+      _bitchatRenewTimer = Timer.periodic(const Duration(hours: 1), (_) {
+        if (_disposed) return;
+        final at = bitchatCarrierConfig?.identityAt;
+        if (at != null &&
+            _now().difference(at) > BitchatCarrierConfig.identityLifetime) {
+          unawaited(_useBitchatIdentity().catchError((Object _) {}));
+        }
+      });
+    }
+    notifyListeners();
+  }
+
+  Future<void> _closeBitchatIdentity() async {
+    final events = _bitchatDirectEvents;
+    final direct = _bitchatDirect;
+    _bitchatDirectEvents = null;
+    _bitchatDirect = null;
+    _bitchatRenewTimer?.cancel();
+    _bitchatRenewTimer = null;
+    _bitchatChannel?.useDirect(null, visible: false);
+    await events?.cancel();
+    await direct?.close();
+  }
+
+  Future<void> _onBitchatDirectEvent(BitchatDirectEvent event) async {
+    switch (event) {
+      case BitchatMessageReceived(:final peerId, :final messageId, :final text):
+        if (!_bitchatMessageAllowed(peerId)) return;
+        await _saveBitchatChats(
+          bitchatChats.addDirect(
+            BitchatChatMessage(
+              id: messageId,
+              peerId: peerId,
+              nickname: _bitchatDirect?.peer(peerId)?.nickname ?? '',
+              text: text.length > bitchatMaxReceivedChars
+                  ? '${text.substring(0, bitchatMaxReceivedChars)}…'
+                  : text,
+              at: _now().toUtc(),
+              outgoing: false,
+              via: bitchatPeerId,
+            ),
+          ),
+        );
+      case BitchatReceiptReceived(:final peerId, :final messageId, :final read):
+        await _saveBitchatChats(
+          bitchatChats.markOutgoing(
+            peerId,
+            messageId,
+            read ? BitchatMessageState.read : BitchatMessageState.delivered,
+          ),
+        );
+      case BitchatPeerSeen():
+        notifyListeners();
+    }
+  }
+
+  void _onBitchatPublic(BitchatPublicMessage message) {
+    if (!_bitchatMessageAllowed(message.peerId)) return;
+    unawaited(
+      _saveBitchatChats(
+        bitchatChats.addMesh(
+          BitchatChatMessage(
+            id: message.id,
+            peerId: message.peerId,
+            nickname: message.nickname,
+            text: message.text,
+            at: message.sentAt,
+            outgoing: false,
+          ),
+        ),
+      ).catchError((Object _) {}),
+    );
+  }
 
   /// The MeshCore carrier's saved settings, if set up.
   MeshCoreCarrierConfig? get meshCoreCarrierConfig =>
@@ -4539,6 +4908,14 @@ class MessengerController extends ChangeNotifier {
               contact.routing.effectivePolicy(kind, global) !=
                   TransportPolicy.disabled)
             ?contact.carrierAddress(kind),
+        // Members of shared groups too, on the Bluetooth mesh only: a radio
+        // has few contact slots to give them.
+        if (kind == TransportKind.bitchat)
+          for (final peer in _carrierGroupPeers())
+            if (peer.routing.effectivePolicy(kind, global) !=
+                    TransportPolicy.disabled &&
+                !_bitchatContactAddresses().contains(peer.carrierAddress(kind)))
+              ?peer.carrierAddress(kind),
       });
     }
   }
@@ -27666,6 +28043,7 @@ class MessengerController extends ChangeNotifier {
       timer.cancel();
     }
     _groupProfileRefreshTimers.clear();
+    unawaited(_closeBitchatIdentity());
     unawaited(_voiceCallChanges?.cancel());
     _voiceCallChanges = null;
     unawaited(_voiceCallSoundCues.dispose());

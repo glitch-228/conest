@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -73,11 +74,10 @@ class BitchatPacket {
   );
 
   /// The wire form; [pad] adds bitchat's block padding, which bitchat uses
-  /// for Noise packets only (the default).
+  /// for Noise packets only (the default). A compressed packet keeps its
+  /// payload as carried (size, then deflate): Conest never compresses, it
+  /// only re-encodes what bitchat sent, to check signatures.
   Uint8List encode({bool? pad}) {
-    if (compressed) {
-      throw StateError('Compressed packets are relayed as received.');
-    }
     final out = BytesBuilder(copy: false)
       ..addByte(version)
       ..addByte(type)
@@ -86,6 +86,7 @@ class BitchatPacket {
     var flags = 0;
     if (recipientId != null) flags |= _Flags.hasRecipient;
     if (signature != null) flags |= _Flags.hasSignature;
+    if (compressed) flags |= _Flags.isCompressed;
     final hops = route ?? const <Uint8List>[];
     if (version >= 2 && hops.isNotEmpty) flags |= _Flags.hasRoute;
     out
@@ -110,7 +111,8 @@ class BitchatPacket {
   }
 
   /// What the sender signs: the packet without its signature, with TTL 0
-  /// (relays change it), padded as on the wire.
+  /// (relays change it), padded as on the wire. bitchat signs a compressed
+  /// payload in its compressed form, as carried.
   Uint8List bytesToSign() => BitchatPacket(
     type: type,
     senderId: senderId,
@@ -120,7 +122,15 @@ class BitchatPacket {
     ttl: 0,
     recipientId: recipientId,
     route: route,
+    compressed: compressed,
   ).encode(pad: true);
+
+  /// The payload, expanded when compressed (up to [maxBytes]); null when it
+  /// does not expand to its stated size.
+  Uint8List? expandedPayload({int maxBytes = bitchatMaxInflatedBytes}) =>
+      compressed
+      ? bitchatInflate(payload, version, maxBytes: maxBytes)
+      : payload;
 
   /// Parses a packet, removing padding if needed; null when malformed.
   static BitchatPacket? decode(Uint8List data) =>
@@ -294,3 +304,59 @@ class BitchatAnnouncement {
 /// A peer's id: the first 8 bytes of the SHA-256 of its Noise static key.
 Uint8List bitchatPeerId(List<int> noisePublicKey) =>
     Uint8List.fromList(sha256.convert(noisePublicKey).bytes.sublist(0, 8));
+
+/// Largest payload a compressed packet may expand to, unless asked for
+/// more.
+const int bitchatMaxInflatedBytes = 2048;
+
+/// A compressed payload: the original size, then raw deflate. Inflating
+/// stops as soon as it passes the stated size, so a small packet cannot
+/// expand into megabytes.
+Uint8List? bitchatInflate(
+  Uint8List payload,
+  int version, {
+  int maxBytes = bitchatMaxInflatedBytes,
+}) {
+  final sizeBytes = version >= 2 ? 4 : 2;
+  if (payload.length <= sizeBytes) return null;
+  var size = 0;
+  for (var index = 0; index < sizeBytes; index++) {
+    size = (size << 8) | payload[index];
+  }
+  if (size == 0 || size > maxBytes) return null;
+  final out = _BoundedSink(size);
+  try {
+    ZLibDecoder(raw: true).startChunkedConversion(out)
+      ..add(Uint8List.sublistView(payload, sizeBytes))
+      ..close();
+  } catch (_) {
+    bitchatInflatedBytes = out.bytes.length;
+    return null;
+  }
+  final bytes = out.bytes.takeBytes();
+  bitchatInflatedBytes = bytes.length;
+  return bytes.length == size ? bytes : null;
+}
+
+/// Bytes the last compressed payload expanded to before it was kept or
+/// dropped; tests check that a bomb stops early.
+int bitchatInflatedBytes = 0;
+
+class _TooLarge implements Exception {}
+
+/// Collects inflated bytes and throws once there are more than [limit].
+class _BoundedSink implements Sink<List<int>> {
+  _BoundedSink(this.limit);
+
+  final int limit;
+  final bytes = BytesBuilder(copy: true);
+
+  @override
+  void add(List<int> chunk) {
+    if (bytes.length + chunk.length > limit) throw _TooLarge();
+    bytes.add(chunk);
+  }
+
+  @override
+  void close() {}
+}

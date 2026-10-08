@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 
+import 'bitchat/direct.dart';
 import 'bitchat/mesh.dart';
 import 'bitchat/packet.dart';
 import 'carrier.dart';
@@ -36,9 +38,16 @@ bool isValidBitchatAddress(String address) =>
       r'^[0-9a-f]{32}$',
     ).hasMatch(address.substring(_addressPrefix.length));
 
-/// The saved Bluetooth mesh setup: this device's mesh address.
+/// The saved Bluetooth mesh setup: this device's mesh address, and whether
+/// (and as whom) bitchat users can reach it.
 class BitchatCarrierConfig {
-  const BitchatCarrierConfig({required this.address});
+  const BitchatCarrierConfig({
+    required this.address,
+    this.visible = false,
+    this.nickname = '',
+    this.identitySeed,
+    this.identityAt,
+  });
 
   /// A new address, so turning the mesh off and on again unlinks the past.
   factory BitchatCarrierConfig.create() => BitchatCarrierConfig(
@@ -47,13 +56,73 @@ class BitchatCarrierConfig {
 
   final String address;
 
-  Map<String, Object?> toJson() => {'address': address};
+  /// Announces a bitchat identity, so bitchat users nearby see this device
+  /// and can write to it. Off: it only relays and reads the mesh chat.
+  final bool visible;
+
+  /// The name bitchat users see.
+  final String nickname;
+
+  /// 32 random bytes (hex) the bitchat identity's keys come from; replaced
+  /// to start a new identity.
+  final String? identitySeed;
+
+  /// When [identitySeed] was made.
+  final DateTime? identityAt;
+
+  /// How long one bitchat identity is used before a new one is made, so
+  /// bitchat users cannot follow this device for longer.
+  static const Duration identityLifetime = Duration(days: 7);
+
+  /// Longest nickname: what fits in an announce bitchat never compresses
+  /// (longer names in other scripts are cut further when announced).
+  static const int maxNicknameLength = 29;
+
+  /// With a fresh identity made now.
+  BitchatCarrierConfig withNewIdentity(DateTime now) => BitchatCarrierConfig(
+    address: address,
+    visible: visible,
+    nickname: nickname,
+    identitySeed: hexEncode(randomBitchatBytes(32)),
+    identityAt: now.toUtc(),
+  );
+
+  BitchatCarrierConfig copyWith({bool? visible, String? nickname}) =>
+      BitchatCarrierConfig(
+        address: address,
+        visible: visible ?? this.visible,
+        nickname: nickname ?? this.nickname,
+        identitySeed: identitySeed,
+        identityAt: identityAt,
+      );
+
+  Map<String, Object?> toJson() => {
+    'address': address,
+    if (visible) 'visible': true,
+    if (nickname.isNotEmpty) 'nickname': nickname,
+    if (identitySeed != null) 'identitySeed': identitySeed,
+    if (identityAt != null) 'identityAt': identityAt!.toIso8601String(),
+  };
 
   static BitchatCarrierConfig? fromJson(Object? json) {
     if (json is! Map<String, dynamic>) return null;
     final address = json['address'];
     if (address is! String || !isValidBitchatAddress(address)) return null;
-    return BitchatCarrierConfig(address: address);
+    final seed = json['identitySeed'];
+    final validSeed =
+        seed is String && RegExp(r'^[0-9a-f]{64}$').hasMatch(seed);
+    final nickname = json['nickname'];
+    return BitchatCarrierConfig(
+      address: address,
+      visible: json['visible'] == true,
+      nickname: nickname is String
+          ? nickname.substring(0, min(nickname.length, maxNicknameLength))
+          : '',
+      identitySeed: validSeed ? seed : null,
+      identityAt: validSeed
+          ? DateTime.tryParse(json['identityAt'] as String? ?? '')?.toUtc()
+          : null,
+    );
   }
 }
 
@@ -107,6 +176,7 @@ class BitchatCarrierChannel
     required BitchatKeyLookup keyFor,
     required this.onFrame,
     this.onStatusChanged,
+    this.onPublic,
     DateTime Function()? now,
   }) : _connector = connector,
        _keyFor = keyFor,
@@ -120,6 +190,28 @@ class BitchatCarrierChannel
   /// A frame from the contact whose mesh address is [sender].
   final void Function(String sender, Uint8List frame) onFrame;
   final void Function()? onStatusChanged;
+
+  /// A public message from a bitchat user nearby.
+  final void Function(BitchatPublicMessage message)? onPublic;
+
+  /// The identity bitchat users talk to. It reads announces and public
+  /// messages always, but this device announces it (and so can be written
+  /// to) only while [_visible].
+  BitchatDirect? _direct;
+  bool _visible = false;
+  Timer? _announceTimer;
+  Timer? _tickTimer;
+  Set<String> _knownLinks = const {};
+  final Random _jitter = Random();
+
+  /// How often a visible identity announces itself (bitchat: 15 to 30 s
+  /// while connected), plus up to [_announceJitter].
+  static const Duration _announceEvery = Duration(seconds: 20);
+  static const Duration _announceJitter = Duration(seconds: 8);
+  static const Duration _tickEvery = Duration(seconds: 5);
+
+  BitchatDirect? get direct => _direct;
+  bool get visible => _visible;
 
   BitchatNode? _node;
   BitchatLinkLayer? _links;
@@ -205,9 +297,12 @@ class BitchatCarrierChannel
         _node = BitchatNode(
           links: links,
           onPrivate: _private,
-          wantsRecipient: (id) => _recipients(
-            _now().millisecondsSinceEpoch,
-          ).containsKey(hexEncode(id)),
+          onPacket: _packet,
+          wantsRecipient: (id) =>
+              _isDirectRecipient(id) ||
+              _recipients(
+                _now().millisecondsSinceEpoch,
+              ).containsKey(hexEncode(id)),
           now: _now,
         );
         _problems = links.problems.listen((problem) {
@@ -216,6 +311,7 @@ class BitchatCarrierChannel
         });
         _lastError = null;
         _setState(BitchatCarrierState.running);
+        _scheduleDirect();
       } catch (error) {
         if (generation != _generation) return;
         _lastError = '$error';
@@ -227,6 +323,10 @@ class BitchatCarrierChannel
   @override
   Future<void> stop() async {
     _generation++;
+    _announceTimer?.cancel();
+    _tickTimer?.cancel();
+    _announceTimer = null;
+    _tickTimer = null;
     final node = _node;
     final links = _links;
     _node = null;
@@ -280,6 +380,27 @@ class BitchatCarrierChannel
   }
 
   BitchatPrivate _private(BitchatPacket packet, Uint8List payload) {
+    if (_isDirectRecipient(packet.recipientId!)) {
+      final direct = _direct!;
+      unawaited(
+        direct
+            .handleNoise(
+              packet.compressed
+                  ? BitchatPacket(
+                      type: packet.type,
+                      senderId: packet.senderId,
+                      recipientId: packet.recipientId,
+                      timestamp: packet.timestamp,
+                      payload: payload,
+                      version: packet.version,
+                    )
+                  : packet,
+            )
+            .then((packets) => _sendFor(direct, packets))
+            .catchError((Object _) => 0),
+      );
+      return BitchatPrivate.accepted;
+    }
     final now = _now().millisecondsSinceEpoch;
     final entry = _recipients(now)[hexEncode(packet.recipientId!)];
     if (entry == null) return BitchatPrivate.notMine;
@@ -308,6 +429,158 @@ class BitchatCarrierChannel
       return BitchatPrivate.accepted;
     }
     return BitchatPrivate.rejected;
+  }
+
+  /// Uses [direct] as the identity bitchat users see, announced while
+  /// [visible]; null leaves bitchat chats alone.
+  void useDirect(BitchatDirect? direct, {required bool visible}) {
+    _direct = direct;
+    _visible = direct != null && visible;
+    _scheduleDirect();
+  }
+
+  /// Sends [text] to everyone nearby (as several messages when long);
+  /// returns the parts that went out and how many there were. Fewer went
+  /// out when the mesh failed or the person hid meanwhile.
+  Future<(List<BitchatPublicMessage>, int)> sendPublic(String text) async {
+    final direct = _requireVisible();
+    final packets = await direct.publicMessages(text);
+    final sent = <BitchatPublicMessage>[];
+    for (final packet in packets) {
+      try {
+        if (await _sendFor(direct, [packet]) == 0) break;
+      } catch (_) {
+        if (sent.isEmpty) rethrow;
+        break;
+      }
+      final part = utf8.decode(packet.payload);
+      sent.add(
+        BitchatPublicMessage(
+          id: bitchatPublicMessageId(direct.peerIdHex, packet.timestamp, part),
+          peerId: direct.peerIdHex,
+          nickname: direct.announcedNickname,
+          text: part,
+          sentAt: DateTime.fromMillisecondsSinceEpoch(
+            packet.timestamp,
+            isUtc: true,
+          ),
+        ),
+      );
+    }
+    return (sent, packets.length);
+  }
+
+  /// Sends [text] to the bitchat user [peerIdHex]; returns its message id.
+  Future<String> sendDirectText(String peerIdHex, String text) async {
+    final direct = _requireVisible();
+    final (packets, messageId) = await direct.sendText(peerIdHex, text);
+    await _sendFor(direct, packets);
+    return messageId;
+  }
+
+  /// Tells [peerIdHex] that its message [messageId] was read.
+  Future<void> sendReadReceipt(String peerIdHex, String messageId) async {
+    final direct = _requireVisible();
+    await _sendFor(direct, await direct.sendReadReceipt(peerIdHex, messageId));
+  }
+
+  BitchatDirect _requireVisible() {
+    final direct = _direct;
+    if (direct == null || !_visible) {
+      throw StateError('Turn on "Reachable by bitchat users" first.');
+    }
+    if (_node == null) throw StateError('The Bluetooth mesh is not running.');
+    return direct;
+  }
+
+  bool _isDirectRecipient(Uint8List id) {
+    final direct = _direct;
+    return direct != null && _visible && _equal(id, direct.peerId);
+  }
+
+  /// Sends what [direct] made, unless it is no longer the identity in use
+  /// or no longer visible (the person hid meanwhile); returns how many
+  /// went out.
+  Future<int> _sendFor(
+    BitchatDirect direct,
+    List<BitchatPacket> packets,
+  ) async {
+    var sent = 0;
+    for (final packet in packets) {
+      final node = _node;
+      if (node == null || !identical(_direct, direct) || !_visible) break;
+      await node.send(packet);
+      sent++;
+    }
+    return sent;
+  }
+
+  /// Announces, handshakes and public messages. False for a copy whose
+  /// signature fails against a known key: the mesh then neither remembers
+  /// nor relays it, so the genuine packet still gets through.
+  Future<bool> _packet(BitchatPacket packet) async {
+    final direct = _direct;
+    if (direct == null) return true;
+    switch (packet.type) {
+      case BitchatType.announce:
+        return direct.handleAnnounce(packet);
+      case BitchatType.noiseHandshake:
+        if (packet.recipientId != null &&
+            _isDirectRecipient(packet.recipientId!)) {
+          await _sendFor(direct, await direct.handleNoise(packet));
+        }
+      case BitchatType.message:
+        final (message, forged) = await direct.checkPublic(packet);
+        if (forged) return false;
+        if (message != null) onPublic?.call(message);
+    }
+    return true;
+  }
+
+  /// Announces a visible identity now and every so often, and retries
+  /// handshakes, while the mesh runs.
+  void _scheduleDirect() {
+    _announceTimer?.cancel();
+    _tickTimer?.cancel();
+    _announceTimer = null;
+    _tickTimer = null;
+    final direct = _direct;
+    if (direct == null || _node == null) return;
+    _knownLinks = {...?_links?.linkLimits.keys};
+    _tickTimer = Timer.periodic(_tickEvery, (_) {
+      unawaited(
+        direct
+            .tick()
+            .then((packets) => _sendFor(direct, packets))
+            .catchError((Object _) => 0),
+      );
+      // A new neighbour hears us at once, as bitchat does on connecting.
+      final links = {...?_links?.linkLimits.keys};
+      final joined = links.difference(_knownLinks).isNotEmpty;
+      _knownLinks = links;
+      if (joined && _visible) announceNow();
+    });
+    if (_visible) announceNow();
+  }
+
+  /// Announces a visible identity now, then again every 20 to 28 seconds.
+  void announceNow() {
+    final direct = _direct;
+    if (direct == null || !_visible || _node == null) return;
+    _announceTimer?.cancel();
+    unawaited(
+      direct
+          .announce()
+          .then((packet) => _sendFor(direct, [packet]))
+          .catchError((Object _) => 0),
+    );
+    _announceTimer = Timer(
+      _announceEvery +
+          Duration(
+            milliseconds: _jitter.nextInt(_announceJitter.inMilliseconds),
+          ),
+      announceNow,
+    );
   }
 
   /// Ids this device answers to, for each pair's current period and its

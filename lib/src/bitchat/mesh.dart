@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -102,8 +101,10 @@ class BitchatNode {
   final bool Function(Uint8List recipientId)? wantsRecipient;
 
   /// Every other packet that reaches this device (announces, handshakes),
-  /// including packets put back together from fragments.
-  final Future<void> Function(BitchatPacket packet)? onPacket;
+  /// including packets put back together from fragments. False means its
+  /// signature failed against a known key: that copy is neither
+  /// remembered nor passed on, so the genuine packet still gets through.
+  final Future<bool> Function(BitchatPacket packet)? onPacket;
 
   /// Largest packet sent whole; bigger ones go as bitchat fragments.
   final int maxPacketBytes;
@@ -194,7 +195,7 @@ class BitchatNode {
     if (packet.type == BitchatType.noiseEncrypted &&
         packet.recipientId != null) {
       final payload = packet.compressed
-          ? _inflate(packet.payload, packet.version)
+          ? bitchatInflate(packet.payload, packet.version)
           : packet.payload;
       final kind = payload == null
           ? BitchatPrivate.notMine
@@ -221,7 +222,7 @@ class BitchatNode {
       }
       if (toMe) return;
     } else if (onPacket != null && packet.type != BitchatType.noiseEncrypted) {
-      await onPacket!(packet);
+      if (!await onPacket!(packet)) return;
     }
     // A packet put back together here is relayed only when its fragments
     // were not (they were addressed to this device).
@@ -266,58 +267,10 @@ class BitchatNode {
     if (_seen.length > _maxSeen) _seen.remove(_seen.first);
     return true;
   }
-
-  /// A compressed payload: the original size, then raw deflate. Inflating
-  /// stops as soon as it passes the stated size, so a small packet cannot
-  /// expand into megabytes.
-  static Uint8List? _inflate(Uint8List payload, int version) {
-    final sizeBytes = version >= 2 ? 4 : 2;
-    if (payload.length <= sizeBytes) return null;
-    var size = 0;
-    for (var index = 0; index < sizeBytes; index++) {
-      size = (size << 8) | payload[index];
-    }
-    if (size == 0 || size > 2048) return null;
-    final out = _BoundedSink(size);
-    try {
-      ZLibDecoder(raw: true).startChunkedConversion(out)
-        ..add(Uint8List.sublistView(payload, sizeBytes))
-        ..close();
-    } catch (_) {
-      bitchatInflatedBytes = out.bytes.length;
-      return null;
-    }
-    final bytes = out.bytes.takeBytes();
-    bitchatInflatedBytes = bytes.length;
-    return bytes.length == size ? bytes : null;
-  }
 }
 
 /// Random bytes, for a new mesh address.
 Uint8List randomBitchatBytes(int length, [Random? random]) {
   final source = random ?? Random.secure();
   return Uint8List.fromList(List.generate(length, (_) => source.nextInt(256)));
-}
-
-/// Bytes the last compressed payload expanded to before it was kept or
-/// dropped; tests check that a bomb stops early.
-int bitchatInflatedBytes = 0;
-
-class _TooLarge implements Exception {}
-
-/// Collects inflated bytes and throws once there are more than [limit].
-class _BoundedSink implements Sink<List<int>> {
-  _BoundedSink(this.limit);
-
-  final int limit;
-  final bytes = BytesBuilder(copy: true);
-
-  @override
-  void add(List<int> chunk) {
-    if (bytes.length + chunk.length > limit) throw _TooLarge();
-    bytes.add(chunk);
-  }
-
-  @override
-  void close() {}
 }

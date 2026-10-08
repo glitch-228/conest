@@ -4622,6 +4622,7 @@ class VaultSnapshot {
     this.appMode,
     this.matrixShowMembership = false,
     this.carrierAccounts = const <String, Map<String, dynamic>>{},
+    this.networkChats = const <String, Map<String, dynamic>>{},
   });
 
   final IdentityRecord? identity;
@@ -4720,6 +4721,10 @@ class VaultSnapshot {
   /// carrier's key and relays); each carrier reads its own entry.
   final Map<String, Map<String, dynamic>> carrierAccounts;
 
+  /// Chats on other networks by network name (for example bitchat's mesh
+  /// chat and private chats); each network reads its own entry.
+  final Map<String, Map<String, dynamic>> networkChats;
+
   /// What the app is used as; null until chosen (an identity from before
   /// app modes reads as [AppMode.both] where Matrix exists).
   final AppMode? appMode;
@@ -4790,6 +4795,7 @@ class VaultSnapshot {
     AppMode? appMode,
     bool? matrixShowMembership,
     Map<String, Map<String, dynamic>>? carrierAccounts,
+    Map<String, Map<String, dynamic>>? networkChats,
     bool clearMatrixSession = false,
     bool clearIdentity = false,
   }) {
@@ -4840,6 +4846,7 @@ class VaultSnapshot {
       appMode: appMode ?? this.appMode,
       matrixShowMembership: matrixShowMembership ?? this.matrixShowMembership,
       carrierAccounts: carrierAccounts ?? this.carrierAccounts,
+      networkChats: networkChats ?? this.networkChats,
     );
   }
 
@@ -4910,6 +4917,7 @@ class VaultSnapshot {
       if (appMode != null) 'appMode': appMode!.name,
       if (matrixShowMembership) 'matrixShowMembership': true,
       if (carrierAccounts.isNotEmpty) 'carrierAccounts': carrierAccounts,
+      if (networkChats.isNotEmpty) 'networkChats': networkChats,
     };
   }
 
@@ -4955,6 +4963,13 @@ class VaultSnapshot {
                 .entries)
           if (entry.value case final Map<String, dynamic> account)
             entry.key: account,
+      },
+      networkChats: {
+        for (final entry
+            in (json['networkChats'] as Map<String, dynamic>? ?? const {})
+                .entries)
+          if (entry.value case final Map<String, dynamic> chats)
+            entry.key: chats,
       },
       contacts: (json['contacts'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>()

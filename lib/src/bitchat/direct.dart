@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' as hashing;
 import 'package:cryptography/cryptography.dart';
 
 import 'noise.dart';
@@ -22,6 +23,50 @@ const Duration bitchatSessionLifetime = Duration(hours: 24);
 const Duration bitchatInitiatorDeadline = Duration(seconds: 10);
 const Duration bitchatResponderDeadline = Duration(seconds: 20);
 
+/// Most messages one mesh chat text goes as: bitchat on iPhones takes 5
+/// from a sender at once, then one a second, and drops the rest.
+const int bitchatMaxPublicParts = 5;
+
+/// Longest text kept from a message received; the rest is cut.
+const int bitchatMaxReceivedChars = 2000;
+
+/// bitchat compresses a payload of this many bytes or more, and signs and
+/// checks it compressed, as its own compressor makes it. Conest cannot
+/// make the same bytes, so what it signs stays below this: longer mesh
+/// chat text goes as several messages, and the announced name is cut.
+const int bitchatCompressionThreshold = 100;
+
+/// How far a public message's time may be from ours: the mesh drops
+/// anything further (bitchat shows hours of history carried between
+/// groups of people; Conest shows only what is current).
+const Duration bitchatPublicMaxAge = Duration(minutes: 10);
+
+/// A message to everyone nearby (bitchat's mesh chat), signed by a sender
+/// whose announce this device has checked.
+class BitchatPublicMessage {
+  const BitchatPublicMessage({
+    required this.id,
+    required this.peerId,
+    required this.nickname,
+    required this.text,
+    required this.sentAt,
+  });
+
+  /// The id every bitchat device derives for this message (the wire carries
+  /// none): the same on each phone, so copies can be told apart.
+  final String id;
+  final String peerId;
+  final String nickname;
+  final String text;
+  final DateTime sentAt;
+}
+
+/// The id bitchat derives for a public message.
+String bitchatPublicMessageId(String senderIdHex, int timestamp, String text) {
+  final input = '${senderIdHex.toLowerCase()}|$timestamp|${text.trim()}';
+  return hashing.sha256.convert(utf8.encode(input)).toString().substring(0, 32);
+}
+
 /// A peer seen through a verified announce.
 class BitchatPeer {
   BitchatPeer({
@@ -38,9 +83,8 @@ class BitchatPeer {
   Uint8List signingKey;
   DateTime lastSeen;
 
-  /// The signing key is pinned only once a handshake has proven that the
-  /// announcer holds the Noise key; until then a later valid announce may
-  /// replace it.
+  /// Set once a handshake has proven that the announcer holds the Noise
+  /// key.
   bool confirmed = false;
 }
 
@@ -137,9 +181,33 @@ class BitchatDirect {
   static const Duration _announceMaxAge = Duration(seconds: 900);
 
   String get peerIdHex => _hex(peerId);
+
+  /// The nickname as announced: cut so the announce stays below
+  /// [bitchatCompressionThreshold] (its keys and headers take 70 bytes).
+  String get announcedNickname =>
+      bitchatCutUtf8(nickname, bitchatCompressionThreshold - 1 - 70);
   Stream<BitchatDirectEvent> get events => _events.stream;
   Iterable<BitchatPeer> get peers => _peers.values;
   BitchatPeer? peer(String peerIdHex) => _peers[peerIdHex];
+
+  /// Peers another identity of this device has seen (it was just replaced),
+  /// kept unconfirmed: their signing keys are pinned only by a handshake
+  /// with this identity.
+  void adoptPeers(Iterable<BitchatPeer> peers) {
+    for (final peer in peers) {
+      if (_peers.length >= _maxPeers) return;
+      if (peer.peerId == peerIdHex || _peers.containsKey(peer.peerId)) {
+        continue;
+      }
+      _peers[peer.peerId] = BitchatPeer(
+        peerId: peer.peerId,
+        nickname: peer.nickname,
+        noiseKey: peer.noiseKey,
+        signingKey: peer.signingKey,
+        lastSeen: peer.lastSeen,
+      );
+    }
+  }
 
   /// Whether a working session with [peerIdHex] exists.
   bool hasSession(String peerIdHex) => _sessions[peerIdHex]?.ready ?? false;
@@ -166,7 +234,7 @@ class BitchatDirect {
       senderId: peerId,
       timestamp: _now().millisecondsSinceEpoch,
       payload: BitchatAnnouncement(
-        nickname: nickname,
+        nickname: announcedNickname,
         noisePublicKey: noisePublicKey,
         signingPublicKey: signingPublicKey,
       ).encode(),
@@ -179,26 +247,37 @@ class BitchatDirect {
   }
 
   /// A peer's announce: kept when its signature, id and age check out.
-  Future<void> handleAnnounce(BitchatPacket packet) async {
-    final announcement = BitchatAnnouncement.decode(packet.payload);
+  /// False only when the signature fails: that copy is not passed on.
+  Future<bool> handleAnnounce(BitchatPacket packet) async {
+    final payload = packet.expandedPayload();
+    if (payload == null) return true;
+    final announcement = BitchatAnnouncement.decode(payload);
     final signature = packet.signature;
     if (announcement == null ||
         signature == null ||
         announcement.signingPublicKey.length != 32 ||
         announcement.noisePublicKey.length != 32) {
-      return;
+      return true;
     }
     final id = _hex(bitchatPeerId(announcement.noisePublicKey));
-    if (id != _hex(packet.senderId) || id == peerIdHex) return;
+    if (id != _hex(packet.senderId) || id == peerIdHex) return true;
     final age = _now().millisecondsSinceEpoch - packet.timestamp;
-    if (age.abs() > _announceMaxAge.inMilliseconds) return;
+    if (age.abs() > _announceMaxAge.inMilliseconds) return true;
     final known = _peers[id];
-    // A confirmed signing key stays; an unconfirmed one may be replaced.
+    // The first signing key checked for an id stays, as bitchat keeps it:
+    // someone re-announcing a peer's Noise key with their own signing key
+    // cannot write in the mesh chat as that peer (or silence them).
     if (known != null &&
-        known.confirmed &&
         !_equal(known.signingKey, announcement.signingPublicKey)) {
-      return;
+      return true;
     }
+    final sameKey = known != null;
+    // Someone announcing every few seconds is checked every ten.
+    if (sameKey &&
+        _now().difference(known.lastSeen) < const Duration(seconds: 10)) {
+      return true;
+    }
+    if (!_announceBudget.take()) return true;
     final valid = await Ed25519().verify(
       packet.bytesToSign(),
       signature: Signature(
@@ -209,11 +288,10 @@ class BitchatDirect {
         ),
       ),
     );
-    if (!valid) return;
+    if (!valid) return false;
     if (known != null) {
       known
         ..nickname = announcement.nickname
-        ..signingKey = announcement.signingPublicKey
         ..lastSeen = _now();
     } else {
       if (_peers.length >= _maxPeers) {
@@ -221,7 +299,7 @@ class BitchatDirect {
         final evictable = _peers.values
             .where((peer) => !hasSession(peer.peerId))
             .toList();
-        if (evictable.isEmpty) return;
+        if (evictable.isEmpty) return true;
         final oldest = evictable.reduce(
           (a, b) => a.lastSeen.isBefore(b.lastSeen) ? a : b,
         );
@@ -236,6 +314,106 @@ class BitchatDirect {
       );
     }
     _events.add(BitchatPeerSeen(id));
+    return true;
+  }
+
+  /// Signed messages to everyone nearby, as bitchat sends them: no
+  /// recipient, the text as the payload. Text of
+  /// [bitchatCompressionThreshold] bytes or more is split at spaces where it
+  /// can be, one message per part, a millisecond apart.
+  /// Throws [ArgumentError] for text that needs more than
+  /// [bitchatMaxPublicParts] messages.
+  Future<List<BitchatPacket>> publicMessages(String text) async {
+    final start = _now().millisecondsSinceEpoch;
+    final parts = bitchatSplitUtf8(text, bitchatCompressionThreshold - 1);
+    if (parts.length > bitchatMaxPublicParts) {
+      throw ArgumentError(
+        'Too long for the mesh chat: bitchat users would get only the start.',
+      );
+    }
+    return [
+      for (var index = 0; index < parts.length; index++)
+        await _signed(
+          BitchatPacket(
+            type: BitchatType.message,
+            senderId: peerId,
+            timestamp: start + index,
+            payload: Uint8List.fromList(utf8.encode(parts[index])),
+          ),
+        ),
+    ];
+  }
+
+  Future<BitchatPacket> _signed(BitchatPacket unsigned) async {
+    final signature = await Ed25519().sign(
+      unsigned.bytesToSign(),
+      keyPair: _signing,
+    );
+    return unsigned.copyWith(signature: Uint8List.fromList(signature.bytes));
+  }
+
+  /// A public message, when it comes from a peer whose announce was checked
+  /// and carries that peer's signature; null otherwise (and for our own
+  /// copies relayed back).
+  Future<BitchatPublicMessage?> readPublic(BitchatPacket packet) async =>
+      (await checkPublic(packet)).$1;
+
+  /// As [readPublic], and whether the packet is forged: its signature
+  /// fails against the key the claimed sender announced.
+  Future<(BitchatPublicMessage?, bool forged)> checkPublic(
+    BitchatPacket packet,
+  ) async {
+    const unread = (null, false);
+    if (packet.type != BitchatType.message || packet.payload.length > 0xffff) {
+      return unread;
+    }
+    final recipient = packet.recipientId;
+    if (recipient != null && recipient.any((byte) => byte != 0xff)) {
+      return unread;
+    }
+    final from = _hex(packet.senderId);
+    final peer = _peers[from];
+    final signature = packet.signature;
+    if (from == peerIdHex || peer == null || signature == null) return unread;
+    final age = _now().millisecondsSinceEpoch - packet.timestamp;
+    if (age.abs() > bitchatPublicMaxAge.inMilliseconds) return unread;
+    // Checked as signed: compressed, as carried.
+    if (!_messageBudget.take()) return unread;
+    final valid = await Ed25519().verify(
+      packet.bytesToSign(),
+      signature: Signature(
+        signature,
+        publicKey: SimplePublicKey(peer.signingKey, type: KeyPairType.ed25519),
+      ),
+    );
+    if (!valid) return (null, true);
+    final payload = packet.expandedPayload(maxBytes: 0xffff);
+    if (payload == null) return unread;
+    String text;
+    try {
+      text = utf8.decode(payload);
+    } on FormatException {
+      return unread;
+    }
+    if (text.trim().isEmpty) return unread;
+    final id = bitchatPublicMessageId(from, packet.timestamp, text);
+    if (text.length > bitchatMaxReceivedChars) {
+      text =
+          '${String.fromCharCodes(text.runes.take(bitchatMaxReceivedChars))}…';
+    }
+    return (
+      BitchatPublicMessage(
+        id: id,
+        peerId: from,
+        nickname: peer.nickname,
+        text: text,
+        sentAt: DateTime.fromMillisecondsSinceEpoch(
+          packet.timestamp,
+          isUtc: true,
+        ),
+      ),
+      false,
+    );
   }
 
   /// Sends [text] to [peerIdHex]; returns the packets to send now and the
@@ -396,6 +574,12 @@ class BitchatDirect {
       }
     });
   }
+
+  /// Signature checks per minute, for announces and for the mesh chat
+  /// apart: strangers in range cannot keep the phone busy checking, and a
+  /// crowd announcing does not crowd out what is said.
+  late final _BitchatBudget _announceBudget = _BitchatBudget(300, _now);
+  late final _BitchatBudget _messageBudget = _BitchatBudget(300, _now);
 
   bool _handshakeAllowed(String from) {
     final minute = _now().millisecondsSinceEpoch ~/ 60000;
@@ -672,5 +856,58 @@ class _ReplayWindow {
       _highest = counter;
       _seen.removeWhere((value) => value <= _highest - _size);
     }
+  }
+}
+
+/// [text] cut to at most [maxBytes] of UTF-8, between characters.
+String bitchatCutUtf8(String text, int maxBytes) {
+  if (utf8.encode(text).length <= maxBytes) return text;
+  final out = StringBuffer();
+  var bytes = 0;
+  for (final rune in text.runes) {
+    final char = String.fromCharCode(rune);
+    final size = utf8.encode(char).length;
+    if (bytes + size > maxBytes) break;
+    out.write(char);
+    bytes += size;
+  }
+  return out.toString();
+}
+
+/// [text] in parts of at most [maxBytes] of UTF-8, split after a space
+/// where one is near the end of a part.
+List<String> bitchatSplitUtf8(String text, int maxBytes) {
+  final parts = <String>[];
+  var rest = text.trim();
+  while (rest.isNotEmpty) {
+    var part = bitchatCutUtf8(rest, maxBytes);
+    if (part.length < rest.length) {
+      final space = part.lastIndexOf(' ');
+      if (space > part.length ~/ 2) part = part.substring(0, space + 1);
+    }
+    parts.add(part.trim());
+    rest = rest.substring(part.length).trimLeft();
+  }
+  return parts.where((part) => part.isNotEmpty).toList();
+}
+
+/// A number of things allowed per minute.
+class _BitchatBudget {
+  _BitchatBudget(this.perMinute, this._now);
+
+  final int perMinute;
+  final DateTime Function() _now;
+  int _minute = 0;
+  int _used = 0;
+
+  bool take() {
+    final minute = _now().millisecondsSinceEpoch ~/ 60000;
+    if (minute != _minute) {
+      _minute = minute;
+      _used = 0;
+    }
+    if (_used >= perMinute) return false;
+    _used++;
+    return true;
   }
 }

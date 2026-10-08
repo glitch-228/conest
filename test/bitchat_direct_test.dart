@@ -1,8 +1,11 @@
+import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:conest/src/bitchat/direct.dart';
 import 'package:conest/src/bitchat/noise.dart';
 import 'package:conest/src/bitchat/packet.dart';
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -325,5 +328,199 @@ void main() {
     ]);
     await Future<void>.delayed(Duration.zero);
     expect(got, ['real']);
+  });
+
+  test('public messages are read only from checked announcers', () async {
+    final alice = await person('alice', 1);
+    final bob = await person('bob', 2);
+    BitchatPacket air(BitchatPacket packet) =>
+        BitchatPacket.decode(packet.encode())!;
+    final hello = air((await alice.publicMessages('hello everyone')).single);
+    expect(hello.recipientId, isNull);
+    // Unknown sender: nobody to check the signature against.
+    expect(await bob.readPublic(hello), isNull);
+    await bob.handleAnnounce(air(await alice.announce()));
+    final read = (await bob.readPublic(hello))!;
+    expect(read.text, 'hello everyone');
+    expect(read.nickname, 'alice');
+    expect(read.peerId, alice.peerIdHex);
+    expect(
+      read.id,
+      bitchatPublicMessageId(
+        alice.peerIdHex,
+        hello.timestamp,
+        'hello'
+        ' everyone',
+      ),
+    );
+    expect(read.id, hasLength(32));
+    // Our own copy relayed back is not shown again.
+    expect(await alice.readPublic(hello), isNull);
+    // Changed on the way: the signature no longer matches.
+    final altered = BitchatPacket(
+      type: hello.type,
+      senderId: hello.senderId,
+      timestamp: hello.timestamp,
+      payload: Uint8List.fromList('hello evil'.codeUnits),
+      signature: hello.signature,
+    );
+    expect(await bob.readPublic(altered), isNull);
+    // Someone else claiming Alice's id cannot sign for her.
+    final mallory = await person('mallory', 3);
+    final forged = (await mallory.publicMessages('I am alice')).single;
+    expect(
+      await bob.readPublic(
+        BitchatPacket(
+          type: forged.type,
+          senderId: alice.peerId,
+          timestamp: forged.timestamp,
+          payload: forged.payload,
+          signature: forged.signature,
+        ),
+      ),
+      isNull,
+    );
+    // Too old to show.
+    clock = clock.add(const Duration(hours: 7));
+    await bob.handleAnnounce(air(await alice.announce()));
+    clock = clock.subtract(const Duration(hours: 7));
+    final stale = air((await alice.publicMessages('old news')).single);
+    clock = clock.add(const Duration(hours: 7));
+    expect(await bob.readPublic(stale), isNull);
+  });
+
+  test(
+    'long mesh chat text goes as messages bitchat never compresses',
+    () async {
+      final alice = await person('alice', 1);
+      final bob = await person('bob', 2);
+      await bob.handleAnnounce(
+        BitchatPacket.decode((await alice.announce()).encode())!,
+      );
+      final text = List.generate(45, (i) => 'word$i').join(' ');
+      final packets = await alice.publicMessages(text);
+      expect(packets.length, greaterThan(1));
+      for (final packet in packets) {
+        expect(packet.payload.length, lessThan(bitchatCompressionThreshold));
+      }
+      final read = [
+        for (final packet in packets)
+          (await bob.readPublic(BitchatPacket.decode(packet.encode())!))!,
+      ];
+      expect(read.map((m) => m.text).join(' '), text);
+      expect(read.map((m) => m.id).toSet(), hasLength(packets.length));
+      // More than an iPhone takes at once is refused, not cut.
+      expect(() => alice.publicMessages('word ' * 200), throwsArgumentError);
+    },
+  );
+
+  test('a long nickname is cut so the announce is never compressed', () async {
+    final alice = await BitchatDirect.create(
+      nickname: 'a very long nickname that goes on and on and on',
+      noiseSeed: List.filled(32, 1),
+      signingSeed: List.filled(32, 101),
+      now: () => clock,
+    );
+    final announce = await alice.announce();
+    expect(announce.payload.length, lessThan(bitchatCompressionThreshold));
+    final bob = await person('bob', 2);
+    await bob.handleAnnounce(BitchatPacket.decode(announce.encode())!);
+    expect(
+      'a very long nickname that goes on and on and on',
+      startsWith(bob.peer(alice.peerIdHex)!.nickname),
+    );
+  });
+
+  test('compressed announces and messages from bitchat are read', () async {
+    // What a bitchat phone sends for long payloads: the size, then raw
+    // deflate, flagged compressed, and signed in that form.
+    final iphone = await person('iphone', 7);
+    final bob = await person('bob', 2);
+    Uint8List compressed(List<int> plain) => Uint8List.fromList([
+      plain.length >> 8,
+      plain.length & 0xff,
+      ...ZLibEncoder(raw: true).convert(plain),
+    ]);
+    Future<BitchatPacket> signedByPhone(BitchatPacket unsigned) async {
+      // bitchat signs its own encoding: TTL 0, compressed, padded.
+      final signature = await Ed25519().sign(
+        unsigned.copyWith(ttl: 0).encode(pad: true),
+        keyPair: await Ed25519().newKeyPairFromSeed(List.filled(32, 107)),
+      );
+      return unsigned.copyWith(signature: Uint8List.fromList(signature.bytes));
+    }
+
+    final plainAnnounce = (await iphone.announce()).payload;
+    final announce = await signedByPhone(
+      BitchatPacket(
+        type: BitchatType.announce,
+        senderId: iphone.peerId,
+        timestamp: clock.millisecondsSinceEpoch,
+        payload: compressed(plainAnnounce),
+        compressed: true,
+      ),
+    );
+    await bob.handleAnnounce(BitchatPacket.decode(announce.encode())!);
+    expect(bob.peer(iphone.peerIdHex)?.nickname, 'iphone');
+
+    final text = 'a long message that bitchat would compress ' * 4;
+    final message = await signedByPhone(
+      BitchatPacket(
+        type: BitchatType.message,
+        senderId: iphone.peerId,
+        timestamp: clock.millisecondsSinceEpoch,
+        payload: compressed(utf8.encode(text)),
+        compressed: true,
+      ),
+    );
+    final read = await bob.readPublic(BitchatPacket.decode(message.encode())!);
+    expect(read?.text, text);
+    expect(
+      read?.id,
+      bitchatPublicMessageId(iphone.peerIdHex, message.timestamp, text),
+    );
+  });
+
+  test('a peer\'s first signing key stays, as bitchat keeps it', () async {
+    final alice = await person('alice', 1);
+    final bob = await person('bob', 2);
+    BitchatPacket air(BitchatPacket packet) =>
+        BitchatPacket.decode(packet.encode())!;
+    await bob.handleAnnounce(air(await alice.announce()));
+    // Mallory announces Alice's Noise key with her own signing key.
+    final mallory = await BitchatDirect.create(
+      nickname: 'alice',
+      noiseSeed: List.filled(32, 1),
+      signingSeed: List.filled(32, 103),
+      now: () => clock,
+    );
+    clock = clock.add(const Duration(seconds: 1));
+    await bob.handleAnnounce(air(await mallory.announce()));
+    final forged = (await mallory.publicMessages('send me money')).single;
+    expect(await bob.readPublic(air(forged)), isNull);
+    final real = (await alice.publicMessages('it is really me')).single;
+    expect((await bob.readPublic(air(real)))?.text, 'it is really me');
+  });
+
+  test('junk announces do not keep a real new peer out', () async {
+    final bob = await person('bob', 2);
+    final alice = await person('alice', 1);
+    final real = await alice.announce();
+    // Copies of Alice's announce with broken signatures: refused, and they
+    // do not use up the room for new peers (only checking time, of which
+    // a minute has room for this many).
+    for (var i = 0; i < 250; i++) {
+      final junk = BitchatPacket(
+        type: real.type,
+        senderId: real.senderId,
+        timestamp: real.timestamp - i - 1,
+        payload: real.payload,
+        signature: Uint8List(64)..[0] = i % 256,
+      );
+      expect(await bob.handleAnnounce(junk), isFalse);
+    }
+    expect(bob.peer(alice.peerIdHex), isNull);
+    expect(await bob.handleAnnounce(real), isTrue);
+    expect(bob.peer(alice.peerIdHex)?.nickname, 'alice');
   });
 }
