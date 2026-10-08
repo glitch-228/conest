@@ -1,94 +1,120 @@
-## Conest 0.3.11 nightly (October 5)
+## Conest 0.3.12 nightly (October 8)
 
-This nightly adds LoRa radio meshes as ways to reach contacts with no
-internet at all: Reticulum, Meshtastic and MeshCore.
+This nightly fixes what testers reported after 0.3.11: adding and removing
+contacts now recovers from lost messages, albums no longer hang at 100%, and
+the photo picker shows your whole library. It also adds Saved messages,
+contacts that can be added over Nostr, email, Matrix or Tor, and makes group
+chats work like direct chats in all of this.
 
-One firmware cannot listen to all three networks at once (a LoRa chip hears
-one frequency and setting at a time, and the three differ), so Conest
-talks to each radio's own firmware; you can attach several radios.
+### Before you update
 
-### Reticulum (new)
+- Contacts on 0.3.11 keep working. A few fixes need both sides on this
+  nightly: answering a repeated contact request, adding each other over a
+  carrier, and group file receipts.
+- Group members still on 0.3.11 learn other members' new routes only when
+  the member list changes, as before.
+- Invites now carry your routes for blocked networks (see below). For
+  someone still on 0.3.11, turn on **Legacy invite** on the invite screen.
 
-- Turn it on in **Settings → Connectivity → Reticulum** and choose how to
-  reach a Reticulum network:
-  - **Node (rnsd):** a computer or Raspberry Pi running rnsd with a TCP
-    server interface (port 4242 by default), for example the one your RNode
-    is attached to;
-  - **RNode on USB:** the radio plugged into this computer (Linux, macOS)
-    or phone (Android asks to allow the USB device);
-  - **RNode on Bluetooth** (Android): scan for the radio and pick it;
-  - **RNode on Wi-Fi:** a radio that offers its serial protocol over the
-    network.
-- For an RNode, set the same frequency, bandwidth and spreading factor as
-  the Reticulum network you join (presets for EU 869.525 MHz and
-  US 914.875 MHz). In the EU, Conest asks the radio to keep to the legal
-  airtime limit.
-- When no other route reaches a contact who also has Reticulum on, messages
-  travel over Reticulum, through other Reticulum nodes if needed. They stay
-  end-to-end encrypted by Conest and again by Reticulum.
-- Conest keeps a Reticulum identity of its own, separate from your Conest
-  identity, and a random destination name: the network does not see that
-  you use Conest. Your contacts learn your Reticulum address automatically.
-- A node on the internet follows the **Online** switch; a radio or a node
-  on your own network keeps working with Online off.
-- Over a radio, only messages and small updates go (up to 4 KiB each,
-  paced for airtime); files never do.
-- Messages that came over Reticulum carry a teal **Reticulum** route mark.
-- Not yet: the compact message form for slow LoRa settings, and Bluetooth
-  radios on desktop.
+### Contacts
 
-### Meshtastic (new)
+- **Lost messages no longer break adding or removing contacts:**
+  - an acceptance that never arrived is given again when the request
+    repeats, and a message from the other side counts as acceptance;
+  - a decline or a removal that never arrived is repeated when the other
+    side writes again;
+  - you can add someone again after removing them, or after they removed
+    you; the chat history is kept;
+  - two people adding each other at the same time are both accepted.
+- **Routes you turn on later reach your contacts:** when you enable Nostr,
+  email, Tor or another route, contacts that were offline learn it the next
+  time you are in touch.
+- **Extended invites:** with Nostr, email, Matrix or Tor on, your invite
+  (QR code, text and Beam) also lists those addresses, signed. Someone with
+  only that network in common (no relay, no shared Wi-Fi) can add you and
+  chat. A long invite is shown as Beam (an animated QR) first; the
+  codephrase works as before.
+- On email and Tor the sender of a request cannot be verified by the
+  network; as with any request, the signed invite decides who it is.
 
-- **Settings → Connectivity → Meshtastic:** attach your Meshtastic radio by
-  USB, or reach one on your network (its TCP API, port 4403).
-- Conest sends its messages as direct messages on a private application
-  port, which current Meshtastic firmware encrypts with the two radios'
-  keys; inside, they stay end-to-end encrypted by Conest. Your Meshtastic
-  apps do not show them.
-- Contacts learn your radio's node number automatically. Messages that came
-  this way carry a green **Meshtastic** route mark.
-- Not yet: Meshtastic radios over Bluetooth.
+### Saved messages
 
-### MeshCore (new)
+- A chat with yourself, pinned at the top of every chat list: notes,
+  files, photos and voice notes, kept only on this device.
+- **Forward** any message or file into it (it is first in the forward
+  list), including group messages and group files.
 
-- **Settings → Connectivity → MeshCore:** attach your MeshCore companion
-  radio by USB, or on Android over Bluetooth.
-- Conest adds your contacts' radios to your radio's contact list (named
-  "Conest …"), since MeshCore radios only accept messages from contacts.
-  Messages travel as MeshCore's encrypted command data, which the radio does
-  not show on its screen.
-- Messages that came this way carry a yellow-green **MeshCore** route mark.
+### Groups
 
-### All radios
+- A contact who removed you, or who has not accepted you yet, still
+  reaches you in groups you share.
+- **Group files:**
+  - the sender sees who has the file: each member's device confirms when
+    it has it;
+  - files you already have open straight away after a restart, even when
+    nobody else is online;
+  - downloaded photos show a preview;
+  - group files can be forwarded.
+- Members who are not each other's contacts can reach each other over
+  Nostr and Tor too. Email and Matrix addresses name you, so they are
+  shared with group members only if you turn on Settings → Connectivity
+  → **Share email and Matrix addresses with group members**.
+- When a member turns on a new route or changes a setting, the other
+  members learn it (before, only a change to the member list did that).
+- Two members who meet in a group can add each other as contacts over a
+  carrier, even when the group already knows a route to them.
+- Your own group messages show the route that carried them.
 
-- Over LoRa only messages and small updates go (up to 4 KiB each), paced
-  for airtime; files never do. Long messages take a while on slow settings.
+### Files and photos
 
-### Qualification
+- **Albums no longer hang at 100%** with a pause button after the other
+  side has them. A lost "received" notice is sent again, and older
+  versions are recognised too.
+- **Photo picker:**
+  - scrolls through your whole library (it stopped at 60 items before);
+  - lets you switch albums;
+  - shows thumbnails faster;
+  - prepares the photos you send in parallel, with a counter;
+  - on Android 14, when you shared only some photos, offers "Select more" or
+    "Allow all";
+  - also opens in group chats.
+- Files on slow Iroh routes move in 1 MiB blocks, so progress is smoother.
 
-- The full local test suite passed, including new tests:
-  - Reticulum framing, packets, encryption, announces (freshness, replays),
-    path requests and answers, overlapping sends;
-  - the RNode protocol against simulated radios (detection, settings, other
-    channels unheard);
-  - two devices talking over a Reticulum network, after a restart, and
-    with Reticulum turned off again;
-  - the Meshtastic client protocol (protobuf, framing among debug text,
-    configuration handshake) and two devices talking over a simulated mesh;
-  - the MeshCore companion protocol, radios refusing unknown senders until
-    Conest adds the contact, and two devices talking over a simulated mesh.
-- Interoperability with the official Reticulum (Python RNS 1.5.6): announces
-  and encrypted packets both ways, and two Conest devices reaching each other
-  through a Python transport node; also in the remote debug workflow.
-- The Meshtastic client against the real firmware (meshtasticd 2.7.26 in
-  simulation) in the remote debug workflow.
-- Independent reviews of the Reticulum, Meshtastic, MeshCore and Android
-  radio code were done and their findings fixed.
-- Not yet tested on real devices:
-  - Reticulum through a real node and over RNode radios on USB and
-    Bluetooth; Meshtastic and MeshCore radios;
-  - Nostr and email from the previous nightlies, and everything still
-    pending from earlier nightlies.
+### Passing messages on through a contact
 
-This nightly is prerelease software; keep important data backed up and
-report failures with the build identifier and a debug snapshot.
+- When you cannot reach someone but a mutual contact can, that contact can
+  carry your messages on, if they turned on **Carry their messages** for you
+  in your contact's connectivity settings. They see only that a message for
+  that person passed through, never what it says.
+
+### Networks
+
+- **Nostr:** relays that ask to sign in are now read correctly. A relay
+  turns green only while it actually delivers your messages. Damus
+  currently refuses every sign-in on its side, and its row says so.
+  relay.0xchat.com no longer exists: new setups use nos.lol,
+  relay.primal.net and nostr.mom, and setups that listed 0xchat move to
+  relay.primal.net.
+- **Email:** turning email on retries when the network drops the
+  connection.
+- **Tor:** bridge lines must start with their type ("obfs4 …", webtunnel,
+  snowflake, meek_lite) or be a plain address and fingerprint; a wrong line
+  is refused with its number.
+- Network errors are shown in plain words instead of raw socket messages.
+
+### Security
+
+- Retried messages reuse the first encrypted copy, and an identical late
+  copy is acknowledged without being decrypted again. Before, a duplicate
+  arriving after a restart could reset the forward-secret session.
+
+### Updates
+
+- Settings → **Receive unstable updates** decides whether a stable install
+  is offered nightlies; a nightly can always move back to stable.
+
+### Not tested on devices yet
+
+- Pairing and chatting over Nostr, email and Tor alone; contact recovery
+  between phones; the photo picker on Android 14 and Android 10; group
+  receipts and previews on real phones.
