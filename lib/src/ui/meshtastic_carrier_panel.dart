@@ -6,6 +6,7 @@ import '../meshtastic_carrier.dart';
 import '../messenger_controller.dart';
 import '../network_errors.dart';
 import '../radio/android_radio_link.dart';
+import 'radio_chats_screen.dart';
 
 /// The Meshtastic carrier in Settings: the radio to use and its state.
 class MeshtasticCarrierPanel extends StatefulWidget {
@@ -211,6 +212,45 @@ class _MeshtasticCarrierPanelState extends State<MeshtasticCarrierPanel> {
             child: FilledButton.tonal(
               onPressed: _busy ? null : () => _run(_save),
               child: const Text('Save'),
+            ),
+          ),
+        if (config != null)
+          SwitchListTile.adaptive(
+            key: const ValueKey('meshtastic-app-messages'),
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Messages with Meshtastic app users'),
+            subtitle: const Text(
+              'Read and write the Meshtastic apps\' own messages through this '
+              'radio: direct ones, and its channels as group chats. They are '
+              'protected only as Meshtastic protects them.',
+            ),
+            value: widget.controller.meshtasticAppMessages,
+            onChanged: _busy
+                ? null
+                : (value) => _run(
+                    () => widget.controller.setMeshtasticAppMessages(value),
+                  ),
+          ),
+        if (config != null && widget.controller.meshtasticAppMessages)
+          ListTile(
+            key: const ValueKey('meshtastic-chats'),
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.forum_outlined),
+            title: const Text('Meshtastic chats'),
+            trailing: widget.controller.meshtasticChats.totalUnread == 0
+                ? const Icon(Icons.chevron_right)
+                : Badge(
+                    label: Text(
+                      '${widget.controller.meshtasticChats.totalUnread}',
+                    ),
+                  ),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => RadioChatsScreen(
+                  controller: widget.controller,
+                  access: meshtasticChatsAccess(widget.controller),
+                ),
+              ),
             ),
           ),
         if (_error != null)

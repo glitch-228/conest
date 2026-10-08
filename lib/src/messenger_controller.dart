@@ -33,6 +33,7 @@ import 'nostr/nip17.dart';
 import 'nostr/nip19.dart';
 import 'nostr_chats.dart';
 import 'nostr_direct.dart';
+import 'radio_chats.dart';
 import 'carrier.dart';
 import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
@@ -4823,6 +4824,7 @@ class MessengerController extends ChangeNotifier {
       link: link,
       host: trimmed,
       publicKeyHex: previous?.publicKeyHex,
+      appMessages: previous?.appMessages ?? false,
     );
     if (_carrierTransports.containsKey(TransportKind.meshCore)) {
       await _detachCarrier(TransportKind.meshCore);
@@ -4861,6 +4863,8 @@ class MessengerController extends ChangeNotifier {
       onFrame: adapter.receiveFrame,
       onStatusChanged: notifyListeners,
       onPublicKey: _saveMeshCorePublicKey,
+      onText: _onMeshCoreText,
+      onAck: _onMeshCoreAck,
     );
     await adapter.detach();
     adapter.attach(channel);
@@ -4923,6 +4927,7 @@ class MessengerController extends ChangeNotifier {
       port: port,
       // The same radio keeps its number; another one reports its own.
       nodeNum: previous?.nodeNum,
+      appMessages: previous?.appMessages ?? false,
     );
     if (_carrierTransports.containsKey(TransportKind.meshtastic)) {
       await _detachCarrier(TransportKind.meshtastic);
@@ -4960,11 +4965,358 @@ class MessengerController extends ChangeNotifier {
       onFrame: adapter.receiveFrame,
       onStatusChanged: notifyListeners,
       onNodeNum: _saveMeshtasticNodeNum,
+      onText: _onMeshtasticText,
+      onAck: _onMeshtasticAck,
     );
     await adapter.detach();
     adapter.attach(channel);
     _meshtasticChannel = channel;
     await registerCarrierTransport(adapter, advertise: advertise);
+  }
+
+  // Messages with Meshtastic app users: direct, and the radio's channels.
+
+  /// Whether the Meshtastic apps' messages are read and written here.
+  bool get meshtasticAppMessages =>
+      meshtasticCarrierConfig?.appMessages ?? false;
+
+  Future<void> setMeshtasticAppMessages(bool enabled) async {
+    final config = meshtasticCarrierConfig;
+    if (config == null) throw StateError('Set up the Meshtastic radio first.');
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.meshtastic.name: config.withAppMessages(enabled).toJson(),
+      },
+    );
+    _meshtasticChannel?.appMessages = enabled;
+    await _persist(
+      enabled ? 'Meshtastic app messages on.' : 'Meshtastic app messages off.',
+    );
+  }
+
+  (Map<String, dynamic>?, RadioChats)? _meshtasticChatsCache;
+
+  RadioChats get meshtasticChats {
+    final json = _snapshot.networkChats[TransportKind.meshtastic.name];
+    final cached = _meshtasticChatsCache;
+    if (cached != null && identical(cached.$1, json)) return cached.$2;
+    final chats = RadioChats.fromJson(json);
+    _meshtasticChatsCache = (json, chats);
+    return chats;
+  }
+
+  /// A node's name as it calls itself, or its number.
+  String meshtasticNodeName(String node) {
+    final number = int.tryParse(node, radix: 16);
+    return (number == null ? null : _meshtasticChannel?.nodeName(number)) ??
+        '!$node';
+  }
+
+  /// Nodes the radio knows, by address, with their names.
+  Map<String, String> get meshtasticNodes => {
+    for (final node in _meshtasticChannel?.knownNodes ?? const <int>[])
+      if (node != _meshtasticChannel?.nodeNum)
+        meshtasticAddress(node): meshtasticNodeName(meshtasticAddress(node)),
+  };
+
+  /// Writes [text] in chat [key] (a node or a channel).
+  Future<void> sendMeshtasticMessage(String key, String text) async {
+    final channel = _meshtasticChannel;
+    final trimmed = text.trim();
+    if (channel == null || !meshtasticAppMessages) {
+      throw StateError('Turn on Meshtastic app messages first.');
+    }
+    if (trimmed.isEmpty) return;
+    final isChannel = RadioChats.isChannel(key);
+    final target = key.substring(3);
+    final id = await channel.sendText(
+      trimmed,
+      to: isChannel ? null : int.parse(target, radix: 16),
+      channel: isChannel ? int.parse(target) : 0,
+    );
+    await _saveRadioChats(
+      TransportKind.meshtastic,
+      meshtasticChats.add(
+        key,
+        RadioChatMessage(
+          id: '$id',
+          from: meshtasticAddress(channel.nodeNum ?? 0),
+          name: 'You',
+          text: trimmed,
+          at: _now().toUtc(),
+          outgoing: true,
+        ),
+      ),
+    );
+  }
+
+  /// Starts a direct chat with [node] (8 hex digits); returns its key.
+  Future<String> startMeshtasticChat(String node) async {
+    final cleaned = node.trim().replaceFirst('!', '').toLowerCase();
+    if (!isValidMeshtasticAddress(cleaned)) {
+      throw ArgumentError('Not a Meshtastic node number: $node');
+    }
+    final key = RadioChats.direct(cleaned);
+    await _saveRadioChats(TransportKind.meshtastic, meshtasticChats.start(key));
+    return key;
+  }
+
+  Future<void> markMeshtasticChatRead(String key) =>
+      _saveRadioChats(TransportKind.meshtastic, meshtasticChats.markRead(key));
+
+  Future<void> deleteMeshtasticChat(String key) => _saveRadioChats(
+    TransportKind.meshtastic,
+    meshtasticChats.withoutChat(key),
+  );
+
+  void _onMeshtasticText(MeshtasticText text) {
+    final from = meshtasticAddress(text.from);
+    try {
+      final chats = meshtasticChats.add(
+        text.direct
+            ? RadioChats.direct(from)
+            : RadioChats.channel(text.channel),
+        RadioChatMessage(
+          id: '${text.from}:${text.id}',
+          from: from,
+          name: meshtasticNodeName(from),
+          text: text.text,
+          at: _now().toUtc(),
+          outgoing: false,
+          // Only a direct message under both radios' keys is surely from
+          // that node.
+          authentic: text.direct && text.pki,
+        ),
+      );
+      unawaited(
+        _saveRadioChats(
+          TransportKind.meshtastic,
+          chats,
+        ).catchError((Object _) {}),
+      );
+    } catch (error) {
+      appendDebugLog('A Meshtastic message was not kept: $error');
+    }
+  }
+
+  void _onMeshtasticAck(int from, int requestId, {required bool ok}) {
+    final key = RadioChats.direct(meshtasticAddress(from));
+    final chats = meshtasticChats;
+    if (!(chats.chats[key]?.any(
+          (m) =>
+              m.outgoing &&
+              m.id == '$requestId' &&
+              m.state == RadioMessageState.sent,
+        ) ??
+        false)) {
+      return;
+    }
+    unawaited(
+      _saveRadioChats(
+        TransportKind.meshtastic,
+        chats.markDelivered(key, '$requestId', failed: !ok),
+      ).catchError((Object _) {}),
+    );
+  }
+
+  Future<void> _saveRadioChats(TransportKind kind, RadioChats chats) async {
+    final json = chats.toJson();
+    _snapshot = _snapshot.copyWith(
+      networkChats: {..._snapshot.networkChats, kind.name: json},
+    );
+    if (kind == TransportKind.meshtastic) _meshtasticChatsCache = (json, chats);
+    if (kind == TransportKind.meshCore) _meshCoreChatsCache = (json, chats);
+    await _saveSnapshotSilently(notify: true, debounce: true);
+  }
+
+  // Messages with MeshCore app users: direct (to the radio's contacts) and
+  // the radio's channels.
+
+  bool get meshCoreAppMessages => meshCoreCarrierConfig?.appMessages ?? false;
+
+  Future<void> setMeshCoreAppMessages(bool enabled) async {
+    final config = meshCoreCarrierConfig;
+    if (config == null) throw StateError('Set up the MeshCore radio first.');
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.meshCore.name: config.withAppMessages(enabled).toJson(),
+      },
+    );
+    _meshCoreChannel?.appMessages = enabled;
+    await _persist(
+      enabled ? 'MeshCore app messages on.' : 'MeshCore app messages off.',
+    );
+    if (enabled) unawaited(refreshMeshCoreContacts().catchError((Object _) {}));
+  }
+
+  (Map<String, dynamic>?, RadioChats)? _meshCoreChatsCache;
+
+  /// The radio's contacts (people), by key (hex), as last read.
+  Map<String, String> _meshCoreContacts = const {};
+
+  RadioChats get meshCoreChats {
+    final json = _snapshot.networkChats[TransportKind.meshCore.name];
+    final cached = _meshCoreChatsCache;
+    if (cached != null && identical(cached.$1, json)) return cached.$2;
+    final chats = RadioChats.fromJson(json);
+    _meshCoreChatsCache = (json, chats);
+    return chats;
+  }
+
+  /// Reads the radio's contacts again (people it heard adverts from).
+  Future<void> refreshMeshCoreContacts() async {
+    final channel = _meshCoreChannel;
+    if (channel == null) return;
+    final contacts = await channel.contacts();
+    // Not connected: the names read before stay.
+    if (contacts == null) return;
+    _meshCoreContacts = contacts;
+    notifyListeners();
+  }
+
+  /// Contacts to start a chat with, by key prefix (the chat's id), with
+  /// names.
+  Map<String, String> get meshCoreNodes => {
+    for (final MapEntry(:key, :value) in _meshCoreContacts.entries)
+      key.substring(0, 12): value,
+  };
+
+  /// A contact's name, by key prefix.
+  String meshCoreName(String prefix) =>
+      _meshCoreContacts.entries
+          .where((entry) => entry.key.startsWith(prefix))
+          .map((entry) => entry.value)
+          .firstOrNull ??
+      prefix;
+
+  /// Starts a direct chat with the radio's contact [prefix] (or its key).
+  Future<String> startMeshCoreChat(String prefix) async {
+    final cleaned = prefix.trim().toLowerCase();
+    if (!RegExp(r'^[0-9a-f]{12,64}$').hasMatch(cleaned)) {
+      throw ArgumentError('Not a MeshCore contact: $prefix');
+    }
+    final key = RadioChats.direct(cleaned.substring(0, 12));
+    await _saveRadioChats(TransportKind.meshCore, meshCoreChats.start(key));
+    return key;
+  }
+
+  Future<void> sendMeshCoreMessage(String key, String text) async {
+    final channel = _meshCoreChannel;
+    final trimmed = text.trim();
+    if (channel == null || !meshCoreAppMessages) {
+      throw StateError('Turn on MeshCore app messages first.');
+    }
+    if (trimmed.isEmpty) return;
+    final target = key.substring(3);
+    final String id;
+    if (RadioChats.isChannel(key)) {
+      await channel.sendText(trimmed, channel: int.parse(target));
+      id = 'out:${_now().microsecondsSinceEpoch}';
+    } else {
+      if (!_meshCoreContacts.keys.any((k) => k.startsWith(target))) {
+        await refreshMeshCoreContacts();
+      }
+      final contact = _meshCoreContacts.keys
+          .where((k) => k.startsWith(target))
+          .firstOrNull;
+      if (contact == null) {
+        throw StateError(
+          'The radio does not know this contact (yet): it learns contacts '
+          'from their adverts.',
+        );
+      }
+      final code = await channel.sendText(trimmed, publicKeyHex: contact);
+      // The code repeats for the same text in the same second: the time
+      // keeps each message apart.
+      id = 'ack:$code:${_now().microsecondsSinceEpoch}';
+    }
+    await _saveRadioChats(
+      TransportKind.meshCore,
+      meshCoreChats.add(
+        key,
+        RadioChatMessage(
+          id: id,
+          from: 'me',
+          name: 'You',
+          text: trimmed,
+          at: _now().toUtc(),
+          outgoing: true,
+        ),
+      ),
+    );
+  }
+
+  Future<void> markMeshCoreChatRead(String key) =>
+      _saveRadioChats(TransportKind.meshCore, meshCoreChats.markRead(key));
+
+  Future<void> deleteMeshCoreChat(String key) =>
+      _saveRadioChats(TransportKind.meshCore, meshCoreChats.withoutChat(key));
+
+  void _onMeshCoreText(MeshCoreText text) {
+    final channel = text.channel;
+    // Channel messages carry "name: text".
+    final separator = channel == null ? -1 : text.text.indexOf(': ');
+    final name = separator > 0
+        ? text.text.substring(0, separator)
+        : meshCoreName(text.from);
+    final body = separator > 0 ? text.text.substring(separator + 2) : text.text;
+    final now = _now().toUtc();
+    final sent = DateTime.fromMillisecondsSinceEpoch(
+      text.timestamp * 1000,
+      isUtc: true,
+    );
+    try {
+      final chats = meshCoreChats.add(
+        channel == null
+            ? RadioChats.direct(text.from)
+            : RadioChats.channel(channel),
+        RadioChatMessage(
+          id: '${text.from}:${channel ?? ''}:${text.timestamp}:${body.hashCode}',
+          from: text.from,
+          name: name,
+          text: body,
+          // The radio's clock may be anything.
+          at: sent.isAfter(now) || now.difference(sent).inDays > 7 ? now : sent,
+          outgoing: false,
+          // MeshCore reads direct messages only from contacts, with their
+          // keys; a channel's sender names itself.
+          authentic: channel == null,
+        ),
+      );
+      unawaited(
+        _saveRadioChats(
+          TransportKind.meshCore,
+          chats,
+        ).catchError((Object _) {}),
+      );
+    } catch (error) {
+      appendDebugLog('A MeshCore message was not kept: $error');
+    }
+  }
+
+  void _onMeshCoreAck(int code) {
+    final chats = meshCoreChats;
+    for (final MapEntry(key: key, value: messages) in chats.chats.entries) {
+      final waiting = messages
+          .where(
+            (m) =>
+                m.outgoing &&
+                m.state == RadioMessageState.sent &&
+                m.id.startsWith('ack:$code:'),
+          )
+          .firstOrNull;
+      if (waiting != null) {
+        unawaited(
+          _saveRadioChats(
+            TransportKind.meshCore,
+            chats.markDelivered(key, waiting.id),
+          ).catchError((Object _) {}),
+        );
+        return;
+      }
+    }
   }
 
   /// The radio's node number is its address: save it, and tell contacts

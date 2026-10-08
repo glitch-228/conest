@@ -67,6 +67,9 @@ of them.
 - Nostr private messages (NIP-17) with anyone on Nostr (0xchat, Amethyst
   and others), one to one or in groups, under a Nostr account of their
   own.
+- Messages with Meshtastic and MeshCore app users through your radio,
+  directly and on the radio's channels.
+- Verifying Matrix users in direct chats, as Element does.
 
 **bitchat users nearby** (Android, with the Bluetooth mesh on)
 - Read bitchat's mesh chat; with "Reachable by bitchat users", chat
@@ -83,9 +86,8 @@ of them.
 
 - Several devices on one account (planned: per-device keys under an account
   key, linking through Matrix or a QR code, optional sync).
-- Talking to other apps' users: verifying Matrix users (Element X),
-  Meshtastic and MeshCore app messages, Delta Chat, Telegram and Discord
-  are planned.
+- Talking to other apps' users: Delta Chat, Telegram and Discord are
+  planned.
 - Sending one message over several routes at once, and files over several
   routes in parallel.
 - Relay protocol v2 with registration for large files and call relaying.

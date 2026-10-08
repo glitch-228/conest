@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -87,6 +88,8 @@ class MeshtasticPacket {
     required this.payload,
     required this.id,
     this.pkiEncrypted = false,
+    this.channel = 0,
+    this.requestId,
   });
 
   final int from;
@@ -94,6 +97,12 @@ class MeshtasticPacket {
   final int portnum;
   final Uint8List payload;
   final int id;
+
+  /// The channel's index on the radio (0 is the primary channel).
+  final int channel;
+
+  /// For an acknowledgement: the id of the packet it answers.
+  final int? requestId;
 
   /// Encrypted with the nodes' public keys (a direct message), not only
   /// the channel key.
@@ -115,6 +124,7 @@ abstract final class _Field {
   // MeshPacket
   static const from = 1;
   static const to = 2;
+  static const channel = 3;
   static const decoded = 4;
   static const id = 6;
   static const hopLimit = 9;
@@ -123,6 +133,7 @@ abstract final class _Field {
   // Data
   static const portnum = 1;
   static const payload = 2;
+  static const requestId = 6;
   // MyNodeInfo
   static const myNodeNum = 1;
   // NodeInfo
@@ -208,14 +219,19 @@ class MeshtasticRadio {
   /// This radio's own public key, if the firmware has one (2.5 and later).
   Uint8List? get myPublicKey => nodes[myNodeNum]?.publicKey;
 
+  /// Everyone on a channel, as a packet's destination.
+  static const int broadcast = 0xffffffff;
+
   /// Sends [payload] on application port [portnum] to node [to] (a direct
-  /// message, which current firmware encrypts with the nodes' keys).
-  Future<void> send({
+  /// message, which current firmware encrypts with the nodes' keys), or to
+  /// everyone on [channel] ([broadcast]); returns the packet's id.
+  Future<int> send({
     required int to,
     required int portnum,
     required List<int> payload,
     bool wantAck = true,
     int hopLimit = 3,
+    int channel = 0,
     Random? random,
   }) async {
     if (_closed.isCompleted) throw StateError('The Meshtastic radio is gone.');
@@ -223,13 +239,15 @@ class MeshtasticRadio {
     final data = ProtoWriter()
       ..uint(_Field.portnum, portnum)
       ..bytes(_Field.payload, payload);
-    final packet = ProtoWriter()
-      ..fixed32(_Field.to, to)
+    final packet = ProtoWriter()..fixed32(_Field.to, to);
+    if (channel != 0) packet.uint(_Field.channel, channel);
+    packet
       ..message(_Field.decoded, data)
       ..fixed32(_Field.id, id)
       ..uint(_Field.hopLimit, hopLimit)
       ..boolean(_Field.wantAck, wantAck);
     await _sendToRadio(ProtoWriter()..message(_Field.toRadioPacket, packet));
+    return id;
   }
 
   Future<void> _askConfig([Random? random]) {
@@ -269,7 +287,9 @@ class MeshtasticRadio {
         final name = user[_Field.longName];
         nodes[num] = MeshtasticNode(
           num: num,
-          longName: name is Uint8List ? String.fromCharCodes(name) : null,
+          longName: name is Uint8List
+              ? utf8.decode(name, allowMalformed: true)
+              : null,
           publicKey: key is Uint8List && key.length == 32
               ? Uint8List.fromList(key)
               : null,
@@ -297,6 +317,12 @@ class MeshtasticRadio {
           payload: Uint8List.fromList(payload),
           id: packet[_Field.id] is int ? packet[_Field.id]! as int : 0,
           pkiEncrypted: packet[_Field.pkiEncrypted] == 1,
+          channel: packet[_Field.channel] is int
+              ? packet[_Field.channel]! as int
+              : 0,
+          requestId: data[_Field.requestId] is int
+              ? data[_Field.requestId]! as int
+              : null,
         ),
       );
     }

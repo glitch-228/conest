@@ -114,17 +114,80 @@ class FakeMeshCoreRadio implements ByteLink {
           _reply([MeshCoreCode.error, 2]);
           return;
         }
-        _reply([MeshCoreCode.sent, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+        final ack = ++_acks;
+        _reply([
+          MeshCoreCode.sent,
+          1,
+          ack & 0xff,
+          (ack >> 8) & 0xff,
+          (ack >> 16) & 0xff,
+          (ack >> 24) & 0xff,
+          0,
+          0,
+          0,
+          0,
+        ]);
         for (final radio in _mesh.radios) {
           if (_hex(radio.publicKey.sublist(0, 6)) == _hex(prefix)) {
-            radio._deliver(
+            final delivered = radio._deliver(
               publicKey,
               frame[1],
               frame.sublist(3, 7),
               frame.sublist(13),
             );
+            // A plain message is acknowledged over the air.
+            if (delivered && frame[1] == MeshCoreCode.textPlain) {
+              scheduleMicrotask(
+                () => _reply([
+                  MeshCoreCode.pushSendConfirmed,
+                  ack & 0xff,
+                  (ack >> 8) & 0xff,
+                  (ack >> 16) & 0xff,
+                  (ack >> 24) & 0xff,
+                  0,
+                  0,
+                  0,
+                  0,
+                ]),
+              );
+            }
           }
         }
+      case MeshCoreCode.sendChannelTextMessage:
+        _reply([MeshCoreCode.ok]);
+        for (final radio in _mesh.radios) {
+          if (!identical(radio, this)) {
+            radio._channel(frame[2], frame.sublist(3, 7), [
+              ...'Radio ${_hex(publicKey.sublist(0, 2))}: '.codeUnits,
+              ...frame.sublist(7),
+            ]);
+          }
+        }
+        channelSent.add((frame[2], String.fromCharCodes(frame.sublist(7))));
+      case MeshCoreCode.getContacts:
+        _reply([MeshCoreCode.contactsStart, contacts.length, 0, 0, 0]);
+        for (final MapEntry(key: prefix, value: key) in contacts.entries) {
+          final name = Uint8List(32)
+            ..setRange(
+              0,
+              (names[prefix] ?? '').length.clamp(0, 31),
+              (names[prefix] ?? '').codeUnits,
+            );
+          _reply([
+            MeshCoreCode.contact,
+            ...key,
+            MeshCoreCode.advertTypeChat,
+            0,
+            0xff,
+            ...List.filled(64, 0),
+            ...name,
+            0,
+            0,
+            0,
+            0,
+          ]);
+        }
+        _reply([MeshCoreCode.endOfContacts, 0, 0, 0, 0]);
       case MeshCoreCode.syncNextMessage:
         _reply(
           _offline.isEmpty
@@ -134,10 +197,54 @@ class FakeMeshCoreRadio implements ByteLink {
     }
   }
 
-  void _deliver(Uint8List from, int type, List<int> timestamp, List<int> text) {
+  int _acks = 0;
+
+  /// Channel messages this radio sent, as (channel, text).
+  final List<(int, String)> channelSent = [];
+
+  /// A MeshCore app user on this radio writes [text] to [to].
+  void writeAsApp(FakeMeshCoreRadio to, String text) => to._deliver(
+    publicKey,
+    MeshCoreCode.textPlain,
+    [0x10, 0x20, 0x30, 0x40],
+    text.codeUnits,
+  );
+
+  /// A MeshCore app user on this radio writes on [channel] as [name].
+  void broadcastAsApp(int channel, String name, String text) {
+    for (final radio in _mesh.radios) {
+      if (!identical(radio, this)) {
+        radio._channel(channel, [
+          0x10,
+          0x20,
+          0x30,
+          0x40,
+        ], '$name: $text'.codeUnits);
+      }
+    }
+  }
+
+  void _channel(int channel, List<int> timestamp, List<int> text) {
+    _offline.add(
+      Uint8List.fromList([
+        MeshCoreCode.channelMessageV3,
+        12,
+        0,
+        0,
+        channel,
+        0xff,
+        MeshCoreCode.textPlain,
+        ...timestamp,
+        ...text,
+      ]),
+    );
+    _reply([MeshCoreCode.pushMessageWaiting]);
+  }
+
+  bool _deliver(Uint8List from, int type, List<int> timestamp, List<int> text) {
     if (!contacts.containsKey(_hex(from.sublist(0, 6)))) {
       _mesh.refused++;
-      return;
+      return false;
     }
     _offline.add(
       Uint8List.fromList([
@@ -153,6 +260,7 @@ class FakeMeshCoreRadio implements ByteLink {
       ]),
     );
     _reply([MeshCoreCode.pushMessageWaiting]);
+    return true;
   }
 
   @override

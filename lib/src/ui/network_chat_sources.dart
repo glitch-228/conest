@@ -9,6 +9,8 @@ import '../models.dart';
 import 'bitchat_chats_screen.dart';
 import 'matrix_room_screen.dart';
 import 'nostr_chats_screen.dart';
+import 'radio_chats_screen.dart';
+import '../radio_chats.dart';
 
 /// A chat on another network, as the chat list shows it.
 class NetworkChat {
@@ -72,7 +74,56 @@ List<NetworkChatSource> networkChatSources(
   MatrixChatSource(controller, palette),
   NostrChatSource(controller),
   BitchatChatSource(controller),
+  RadioChatSource(
+    'meshcore',
+    meshCoreChatsAccess(controller),
+    () => controller.meshCoreAppMessages,
+    controller,
+  ),
+  RadioChatSource(
+    'meshtastic',
+    meshtasticChatsAccess(controller),
+    () => controller.meshtasticAppMessages,
+    controller,
+  ),
 ];
+
+/// A radio's app chats (Meshtastic, MeshCore).
+class RadioChatSource extends NetworkChatSource {
+  const RadioChatSource(this.id, this.access, this._active, this.controller);
+
+  @override
+  final String id;
+  final RadioChatsAccess access;
+  final bool Function() _active;
+  final MessengerController controller;
+
+  @override
+  String get label => access.network;
+
+  @override
+  bool get active => _active();
+
+  @override
+  List<NetworkChat> chats() {
+    if (!active) return const [];
+    final chats = access.chats();
+    return [
+      for (final MapEntry(key: key, value: messages) in chats.chats.entries)
+        NetworkChat(
+          network: id,
+          id: key,
+          title: access.title(key),
+          preview: messages.lastOrNull?.text ?? 'New chat',
+          at: messages.lastOrNull?.at.toLocal(),
+          unread: chats.unread[key] ?? 0,
+          isGroup: RadioChats.isChannel(key),
+          searchText: () => messages.map((message) => message.text).join('\n'),
+          open: (context) => openRadioChat(context, controller, access, key),
+        ),
+    ];
+  }
+}
 
 /// Nostr private chats (NIP-17).
 class NostrChatSource extends NetworkChatSource {

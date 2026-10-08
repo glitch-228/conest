@@ -37,6 +37,7 @@ import 'src/iroh_ffi_bridge.dart';
 import 'src/iroh_transport.dart';
 import 'src/media_picker_sheet.dart';
 import 'src/network_errors.dart';
+import 'src/matrix_service.dart';
 import 'src/messenger_controller.dart';
 import 'src/models.dart';
 import 'src/platform_bridge.dart';
@@ -1462,16 +1463,42 @@ class _HomeScreenState extends State<HomeScreen> {
         !mounted) {
       return;
     }
-    // Only this account's own sessions verify each other here; requests
-    // from other users are left to time out.
-    if (userId != client.userId) return;
+    // One request at a time, each once: more while a dialog is open are
+    // left to time out.
+    if (_verificationDialogOpen || !_verificationFlowsSeen.add(flowId)) return;
+    if (_verificationFlowsSeen.length > 64) {
+      _verificationFlowsSeen.remove(_verificationFlowsSeen.first);
+    }
+    _verificationDialogOpen = true;
+    try {
+      await _answerMatrixVerificationRequest(client, event, userId, flowId);
+    } finally {
+      _verificationDialogOpen = false;
+    }
+  }
+
+  bool _verificationDialogOpen = false;
+  final LinkedHashSet<String> _verificationFlowsSeen = LinkedHashSet();
+
+  Future<void> _answerMatrixVerificationRequest(
+    MatrixClientService client,
+    Map<String, dynamic> event,
+    String userId,
+    String flowId,
+  ) async {
+    final own = userId == client.userId;
     final accept = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Verification request'),
         content: Text(
-          'Your Matrix session ${event['fromDevice'] ?? ''} wants to verify '
-          'this one. Accept only if you started it.',
+          own
+              ? 'Your Matrix session ${event['fromDevice'] ?? ''} wants to '
+                    'verify this one. Accept only if you started it.'
+              : '$userId wants to verify you, comparing emojis. Check the '
+                    'whole address: look-alike ones exist. Accept only if you '
+                    'can compare with them in person or on a call; verifying '
+                    'marks their keys as trusted.',
         ),
         actions: [
           TextButton(
@@ -1511,6 +1538,7 @@ class _HomeScreenState extends State<HomeScreen> {
         userId: userId,
         flowId: flowId,
         weStarted: false,
+        otherName: own ? null : userId,
       ),
     );
   }

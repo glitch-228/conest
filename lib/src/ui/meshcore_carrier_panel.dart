@@ -6,6 +6,7 @@ import '../meshcore_carrier.dart';
 import '../messenger_controller.dart';
 import '../network_errors.dart';
 import '../radio/android_radio_link.dart';
+import 'radio_chats_screen.dart';
 
 /// The MeshCore carrier in Settings: the companion radio and its state.
 class MeshCoreCarrierPanel extends StatefulWidget {
@@ -179,6 +180,40 @@ class _MeshCoreCarrierPanelState extends State<MeshCoreCarrierPanel> {
             child: FilledButton.tonal(
               onPressed: _busy ? null : () => _run(_save),
               child: const Text('Save'),
+            ),
+          ),
+        if (config != null)
+          SwitchListTile.adaptive(
+            key: const ValueKey('meshcore-app-messages'),
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Messages with MeshCore app users'),
+            subtitle: const Text(
+              'Read and write the MeshCore apps\' own messages through this '
+              'radio: with its contacts, and on its channels as group chats. '
+              'They are protected only as MeshCore protects them.',
+            ),
+            value: controller.meshCoreAppMessages,
+            onChanged: _busy
+                ? null
+                : (value) =>
+                      _run(() => controller.setMeshCoreAppMessages(value)),
+          ),
+        if (config != null && controller.meshCoreAppMessages)
+          ListTile(
+            key: const ValueKey('meshcore-chats'),
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.forum_outlined),
+            title: const Text('MeshCore chats'),
+            trailing: controller.meshCoreChats.totalUnread == 0
+                ? const Icon(Icons.chevron_right)
+                : Badge(label: Text('${controller.meshCoreChats.totalUnread}')),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => RadioChatsScreen(
+                  controller: controller,
+                  access: meshCoreChatsAccess(controller),
+                ),
+              ),
             ),
           ),
         if (_error != null)

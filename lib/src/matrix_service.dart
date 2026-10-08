@@ -28,6 +28,7 @@ class MatrixRoom {
     required this.unread,
     required this.highlight,
     this.members = 0,
+    this.directTargets = const [],
   });
 
   factory MatrixRoom.fromJson(Map<String, dynamic> json) => MatrixRoom(
@@ -41,6 +42,10 @@ class MatrixRoom {
     unread: (json['unread'] as num?)?.toInt() ?? 0,
     highlight: (json['highlight'] as num?)?.toInt() ?? 0,
     members: (json['members'] as num?)?.toInt() ?? 0,
+    directTargets: [
+      for (final target in json['directTargets'] as List? ?? const [])
+        if (target is String) target,
+    ],
   );
 
   final String roomId;
@@ -53,6 +58,9 @@ class MatrixRoom {
 
   /// Joined members, as the homeserver last reported.
   final int members;
+
+  /// Who a direct chat is with (Matrix user ids).
+  final List<String> directTargets;
 }
 
 enum MatrixClientState { signedOut, signingIn, ready, error }
@@ -544,6 +552,26 @@ class MatrixClientService extends ChangeNotifier {
   Future<String> verifyOwnSession() async {
     final result = await _api.request('verify_own_session');
     return result['flowId'] as String;
+  }
+
+  /// Starts verifying another user [userId] (in a direct chat with them,
+  /// as Element does); returns the flow id to follow on
+  /// [verificationEvents].
+  Future<String> verifyUser(String userId) async {
+    final reply = await _api.request('verify_user', {'userId': userId});
+    return reply['flowId'] as String;
+  }
+
+  /// Whether [userId] is verified, and whether they can be (they have set
+  /// up cross-signing).
+  Future<({bool verified, bool crossSigning})> userVerification(
+    String userId,
+  ) async {
+    final reply = await _api.request('user_verified', {'userId': userId});
+    return (
+      verified: reply['verified'] == true,
+      crossSigning: reply['crossSigning'] == true,
+    );
   }
 
   Future<void> acceptVerification(String userId, String flowId) =>

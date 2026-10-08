@@ -90,4 +90,34 @@ void main() {
     expect(api.ops, contains('verification_start_sas'));
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets('verifying another person names them', (tester) async {
+    api = _Api();
+    client = MatrixClientService(
+      api: api,
+      store: () async => (path: '/store', passphrase: 'p'),
+      onSession: (_) async {},
+    );
+    addTearDown(client.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MatrixVerificationDialog(
+          client: client,
+          userId: '@bob:x',
+          flowId: 'flow',
+          weStarted: true,
+          otherName: 'Bob',
+        ),
+      ),
+    );
+    expect(find.text('Verify Bob'), findsOneWidget);
+    expect(find.text('Waiting for Bob…'), findsOneWidget);
+    api.emit(state('done'));
+    await tester.pump();
+    expect(
+      find.textContaining('Your chats with Bob show as verified'),
+      findsOneWidget,
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 }

@@ -16,9 +16,60 @@ class FakeMesh {
   /// Every packet sent on the mesh, as (from, to, portnum, payload).
   final List<(int, int, int, Uint8List)> sent = [];
 
-  void _deliver(int from, int to, int portnum, Uint8List payload) {
+  /// Channels of broadcasts sent, in order.
+  final List<int> broadcastChannels = [];
+
+  /// A packet from node [from] (an app user's radio, say): to one node, or
+  /// to everyone on [channel] when [to] is [MeshtasticRadio.broadcast].
+  void inject(
+    int from,
+    int to,
+    int portnum,
+    List<int> payload, {
+    int channel = 0,
+    int id = 4242,
+    int? requestId,
+    bool pki = true,
+  }) => _deliver(
+    from,
+    to,
+    portnum,
+    Uint8List.fromList(payload),
+    channel: channel,
+    id: id,
+    requestId: requestId,
+    pki: pki,
+  );
+
+  void _deliver(
+    int from,
+    int to,
+    int portnum,
+    Uint8List payload, {
+    int channel = 0,
+    int id = 77,
+    bool wantAck = false,
+    int? requestId,
+    bool pki = true,
+  }) {
     sent.add((from, to, portnum, payload));
-    _devices[to]?._receive(from, to, portnum, payload);
+    if (to == MeshtasticRadio.broadcast) {
+      broadcastChannels.add(channel);
+      for (final device in _devices.values) {
+        if (device.nodeNum != from) {
+          device._receive(from, to, portnum, payload, channel, id, requestId);
+        }
+      }
+      return;
+    }
+    final target = _devices[to];
+    target?._receive(from, to, portnum, payload, channel, id, requestId, pki);
+    // The receiving radio acknowledges what asked for it.
+    if (target != null && wantAck) {
+      scheduleMicrotask(
+        () => _deliver(to, from, 5, Uint8List(0), requestId: id, id: id + 1),
+      );
+    }
   }
 }
 
@@ -88,29 +139,38 @@ class FakeMeshtasticDevice implements ByteLink {
             mesh[2]! as int,
             data[1]! as int,
             Uint8List.fromList(data[2]! as Uint8List),
+            channel: mesh[3] is int ? mesh[3]! as int : 0,
+            id: mesh[6] is int ? mesh[6]! as int : 77,
+            wantAck: mesh[10] == 1,
           ),
         );
       }
     }
   }
 
-  void _receive(int from, int to, int portnum, Uint8List payload) {
-    _fromRadio(
-      ProtoWriter()..message(
-        2,
-        ProtoWriter()
-          ..fixed32(1, from)
-          ..fixed32(2, to)
-          ..message(
-            4,
-            ProtoWriter()
-              ..uint(1, portnum)
-              ..bytes(2, payload),
-          )
-          ..fixed32(6, 77)
-          ..boolean(17, true),
-      ),
-    );
+  void _receive(
+    int from,
+    int to,
+    int portnum,
+    Uint8List payload, [
+    int channel = 0,
+    int id = 77,
+    int? requestId,
+    bool pki = true,
+  ]) {
+    final data = ProtoWriter()
+      ..uint(1, portnum)
+      ..bytes(2, payload);
+    if (requestId != null) data.fixed32(6, requestId);
+    final packet = ProtoWriter()
+      ..fixed32(1, from)
+      ..fixed32(2, to);
+    if (channel != 0) packet.uint(3, channel);
+    packet
+      ..message(4, data)
+      ..fixed32(6, id)
+      ..boolean(17, pki && to != MeshtasticRadio.broadcast);
+    _fromRadio(ProtoWriter()..message(2, packet));
   }
 
   @override

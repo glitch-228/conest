@@ -33,6 +33,8 @@ import 'package:conest/src/local_relay_node.dart';
 import 'package:conest/src/matrix_carrier.dart';
 import 'package:conest/src/meshcore_carrier.dart';
 import 'package:conest/src/meshtastic_carrier.dart';
+import 'package:conest/src/meshtastic/radio.dart';
+import 'package:conest/src/radio_chats.dart';
 import 'package:conest/src/matrix_client.dart';
 import 'package:conest/src/matrix_service.dart';
 import 'package:conest/src/messenger_controller.dart';
@@ -14751,10 +14753,139 @@ void main() {
           .messagesFor(bobId)
           .singleWhere((m) => m.body == 'by mesh');
       expect(received.route, MessageRoute.meshtastic);
+      // Only Conest's port, and the radios' acknowledgements.
       expect(
-        mesh.sent.every((packet) => packet.$3 == meshtasticConestPort),
+        mesh.sent.every(
+          (packet) =>
+              packet.$3 == meshtasticConestPort ||
+              packet.$3 == meshtasticRoutingPort,
+        ),
         isTrue,
       );
+    });
+
+    test('Meshtastic app users chat directly and on channels', () async {
+      final mesh = FakeMesh();
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        meshtasticConnector: (_) async => mesh.device(0xa11ce001),
+      );
+      addTearDown(alice.dispose);
+      // Someone with the Meshtastic app on their phone and radio.
+      final appUser = mesh.device(0xc0ffee03);
+      await alice.enableMeshtasticCarrier(
+        link: MeshtasticLink.serial,
+        host: '/dev/ttyACM0',
+      );
+      await until(
+        () => alice.meshtasticChannel?.state == MeshtasticCarrierState.connected,
+      );
+      // Off by default: the apps' messages are left alone.
+      mesh.inject(0xc0ffee03, 0xa11ce001, meshtasticTextPort, utf8.encode('psst'));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(alice.meshtasticChats.chats, isEmpty);
+
+      await alice.setMeshtasticAppMessages(true);
+      mesh.inject(
+        0xc0ffee03,
+        0xa11ce001,
+        meshtasticTextPort,
+        utf8.encode('hi from the app'),
+        id: 5001,
+      );
+      mesh.inject(
+        0xc0ffee03,
+        MeshtasticRadio.broadcast,
+        meshtasticTextPort,
+        utf8.encode('hello channel'),
+        id: 5002,
+      );
+      await until(() => alice.meshtasticChats.chats.length == 2);
+      final direct = RadioChats.direct('c0ffee03');
+      final primary = RadioChats.channel(0);
+      expect(alice.meshtasticChats.chats[direct]!.single.text, 'hi from the app');
+      expect(alice.meshtasticChats.chats[primary]!.single.text, 'hello channel');
+      expect(alice.meshtasticChats.unread[direct], 1);
+
+      await alice.sendMeshtasticMessage(direct, 'hi back');
+      await until(
+        () =>
+            alice.meshtasticChats.chats[direct]!.last.state ==
+            RadioMessageState.delivered,
+      );
+      expect(
+        mesh.sent.any(
+          (packet) =>
+              packet.$1 == 0xa11ce001 &&
+              packet.$2 == 0xc0ffee03 &&
+              packet.$3 == meshtasticTextPort &&
+              utf8.decode(packet.$4) == 'hi back',
+        ),
+        isTrue,
+      );
+      await alice.sendMeshtasticMessage(primary, 'hello all');
+      await until(
+        () => mesh.sent.any(
+          (packet) =>
+              packet.$2 == MeshtasticRadio.broadcast &&
+              utf8.decode(packet.$4) == 'hello all',
+        ),
+      );
+      expect(mesh.broadcastChannels.last, 0);
+      expect(
+        () => alice.sendMeshtasticMessage(direct, 'x' * 300),
+        throwsArgumentError,
+      );
+      expect(appUser.nodeNum, 0xc0ffee03);
+      // A direct message under both radios' keys is from that node; one
+      // under the channel key could be from anyone.
+      expect(alice.meshtasticChats.chats[direct]!.first.authentic, isTrue);
+      mesh.inject(
+        0xc0ffee03,
+        0xa11ce001,
+        meshtasticTextPort,
+        utf8.encode('trust me'),
+        id: 5003,
+        pki: false,
+      );
+      await until(
+        () => alice.meshtasticChats.chats[direct]!.any((m) => m.text == 'trust me'),
+      );
+      expect(
+        alice.meshtasticChats.chats[direct]!
+            .singleWhere((m) => m.text == 'trust me')
+            .authentic,
+        isFalse,
+      );
+      // Their radio could not read one (it has no key for us yet): not
+      // shown as delivered.
+      final far = await alice.startMeshtasticChat('!dead0004');
+      await alice.sendMeshtasticMessage(far, 'are you there?');
+      final second = alice.meshtasticChats.chats[far]!.last;
+      mesh.inject(
+        0xdead0004,
+        0xa11ce001,
+        meshtasticRoutingPort,
+        [0x18, 35],
+        id: 5004,
+        requestId: int.parse(second.id),
+      );
+      await until(
+        () =>
+            alice.meshtasticChats.chats[far]!.last.state !=
+            RadioMessageState.sent,
+      );
+      expect(
+        alice.meshtasticChats.chats[far]!.last.state,
+        RadioMessageState.failed,
+      );
+      // Saving the radio again keeps app messages on.
+      await alice.enableMeshtasticCarrier(
+        link: MeshtasticLink.serial,
+        host: '/dev/ttyACM1',
+      );
+      expect(alice.meshtasticAppMessages, isTrue);
     });
 
     test('radio settings are checked', () async {
@@ -14782,6 +14913,78 @@ void main() {
   });
 
   group('MeshCore carrier', () {
+    test('MeshCore app users chat directly and on channels', () async {
+      final mesh = FakeMeshCoreMesh();
+      final aliceRadio = mesh.radio(1);
+      final appRadio = mesh.radio(9);
+      String hex(List<int> bytes) =>
+          bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      // The radios heard each other's adverts.
+      aliceRadio.contacts[hex(appRadio.publicKey.sublist(0, 6))] =
+          appRadio.publicKey;
+      aliceRadio.names[hex(appRadio.publicKey.sublist(0, 6))] = 'Dana';
+      appRadio.contacts[hex(aliceRadio.publicKey.sublist(0, 6))] =
+          aliceRadio.publicKey;
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        meshCoreConnector: (_) async => aliceRadio,
+      );
+      addTearDown(alice.dispose);
+      await alice.enableMeshCoreCarrier(
+        link: MeshCoreLink.serial,
+        host: '/dev/ttyACM0',
+      );
+      Future<void> until(bool Function() done) async {
+        final deadline = DateTime.now().add(const Duration(seconds: 15));
+        while (!done() && DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      }
+
+      await until(
+        () => alice.meshCoreChannel?.state == MeshCoreCarrierState.connected,
+      );
+      // Off by default.
+      appRadio.writeAsApp(aliceRadio, 'psst');
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(alice.meshCoreChats.chats, isEmpty);
+
+      await alice.setMeshCoreAppMessages(true);
+      appRadio.writeAsApp(aliceRadio, 'hi from the MeshCore app');
+      appRadio.broadcastAsApp(0, 'Dana', 'hello public');
+      await until(() => alice.meshCoreChats.chats.length == 2);
+      final prefix = hex(appRadio.publicKey.sublist(0, 6));
+      final direct = RadioChats.direct(prefix);
+      final public = RadioChats.channel(0);
+      expect(
+        alice.meshCoreChats.chats[direct]!.single.text,
+        'hi from the MeshCore app',
+      );
+      expect(alice.meshCoreChats.chats[public]!.single.name, 'Dana');
+      expect(alice.meshCoreChats.chats[public]!.single.text, 'hello public');
+      await alice.refreshMeshCoreContacts();
+      expect(alice.meshCoreName(prefix), 'Dana');
+      expect(alice.meshCoreNodes, {prefix: 'Dana'});
+
+      await alice.sendMeshCoreMessage(direct, 'hi Dana');
+      await until(
+        () =>
+            alice.meshCoreChats.chats[direct]!.last.state ==
+            RadioMessageState.delivered,
+      );
+      expect(
+        alice.meshCoreChats.chats[direct]!.last.state,
+        RadioMessageState.delivered,
+      );
+      await alice.sendMeshCoreMessage(public, 'hello everyone');
+      expect(aliceRadio.channelSent.last, (0, 'hello everyone'));
+      expect(
+        () => alice.sendMeshCoreMessage(direct, 'x' * 200),
+        throwsArgumentError,
+      );
+    });
+
     test('two devices talk once their radios know each other', () async {
       final mesh = FakeMeshCoreMesh();
       final relay = _FakeRelayClient();

@@ -20,6 +20,13 @@ class FakeMatrixNative implements MatrixNativeApi {
   /// What the `rooms` op lists.
   List<Map<String, dynamic>> rooms = [];
 
+  /// Users whose identity is verified, and users with cross-signing.
+  final Set<String> verifiedUsers = {};
+  final Set<String> crossSigningUsers = {};
+
+  /// Users a verification was started with.
+  final List<String> verificationsStarted = [];
+
   /// Room messages sent through `send_raw`.
   final List<({String roomId, Map<String, Object?> content})> sentMessages = [];
   Map<String, dynamic>? _session;
@@ -59,6 +66,19 @@ class FakeMatrixNative implements MatrixNativeApi {
           content: Map<String, Object?>.from(parameters['content'] as Map),
         ));
         return {'eventId': '\$sent${sentMessages.length}'};
+      case 'verify_user':
+        final user = parameters['userId'] as String;
+        if (!crossSigningUsers.contains(user)) {
+          throw StateError('this user has not set up cross-signing yet');
+        }
+        verificationsStarted.add(user);
+        return {'flowId': 'flow-$user'};
+      case 'user_verified':
+        final user = parameters['userId'] as String;
+        return {
+          'verified': verifiedUsers.contains(user),
+          'crossSigning': crossSigningUsers.contains(user),
+        };
       case 'logout':
         final session = _session;
         if (session != null) {

@@ -44,7 +44,11 @@ use matrix_sdk::{
         events::{
             ToDeviceEventType,
             receipt::ReceiptThread,
-            room::{MediaSource, member::MembershipState, message::RoomMessageEventContent},
+            room::{
+                MediaSource,
+                member::MembershipState,
+                message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
+            },
         },
         serde::Raw,
         to_device::DeviceIdOrAllDevices,
@@ -209,8 +213,12 @@ fn install(client: Client, store: String) -> Result<()> {
     *STORE_NAME
         .lock()
         .map_err(|_| anyhow!("Matrix store lock poisoned"))? = store;
-    // Another of the user's sessions asks to verify this one.
-    client.add_event_handler(|event: ToDeviceKeyVerificationRequestEvent| async move {
+    // Another of the user's sessions asks to verify this one. Other people
+    // ask in a direct chat (below), never this way.
+    client.add_event_handler(|event: ToDeviceKeyVerificationRequestEvent, client: Client| async move {
+        if client.user_id() != Some(&*event.sender) {
+            return;
+        }
         push_event(json!({
             "type": "verification_request",
             "userId": event.sender.to_string(),
@@ -218,6 +226,45 @@ fn install(client: Client, store: String) -> Result<()> {
             "fromDevice": event.content.from_device.to_string(),
         }));
     });
+    // Another user asks to verify us, in a direct chat (as Element does):
+    // only in a chat with just the two of us, and only while the request
+    // is still open (old ones come back with history after a sign-in).
+    client.add_event_handler(
+        |event: OriginalSyncRoomMessageEvent, room: matrix_sdk::Room, client: Client| async move {
+            let MessageType::VerificationRequest(content) = &event.content.msgtype else {
+                return;
+            };
+            let own = client.user_id();
+            if own == Some(&*event.sender) || own != Some(&*content.to) {
+                return;
+            }
+            let sender = event.sender.to_string();
+            let direct_with_sender = room.is_direct().await.unwrap_or(false)
+                && room.joined_members_count() <= 2
+                && room
+                    .direct_targets()
+                    .iter()
+                    .any(|target| target.to_string() == sender);
+            if !direct_with_sender {
+                return;
+            }
+            let open = client
+                .encryption()
+                .get_verification_request(&event.sender, event.event_id.as_str())
+                .await
+                .is_some_and(|request| !request.is_done() && !request.is_cancelled());
+            if !open {
+                return;
+            }
+            push_event(json!({
+                "type": "verification_request",
+                "userId": event.sender.to_string(),
+                "flowId": event.event_id.to_string(),
+                "fromDevice": content.from_device.to_string(),
+                "roomId": room.room_id().to_string(),
+            }));
+        },
+    );
     // Refreshed tokens must reach the vault copy, or a restart would restore
     // a dead token; a refused refresh means the session is gone.
     let mut changes = client.subscribe_to_session_changes();
@@ -302,6 +349,12 @@ async fn room_summary(room: &matrix_sdk::Room, invited: bool) -> Value {
         "unread": counts.notification_count,
         "highlight": counts.highlight_count,
         "members": room.joined_members_count(),
+        // Who a direct chat is with, for verifying them.
+        "directTargets": room
+            .direct_targets()
+            .into_iter()
+            .map(|target| target.to_string())
+            .collect::<Vec<_>>(),
     })
 }
 
@@ -591,6 +644,34 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
             let flow_id = request.flow_id().to_owned();
             RUNTIME.spawn(watch_request(request));
             Ok(json!({"flowId": flow_id}))
+        }
+        "verify_user" => {
+            // Verify another user (in a direct chat with them, created if
+            // needed), as Element X does.
+            let client = client()?;
+            let user_id: OwnedUserId = text(request, "userId")?.parse()?;
+            let identity = match client.encryption().get_user_identity(&user_id).await? {
+                Some(identity) => Some(identity),
+                // Not known here yet (no encrypted chat with them so far).
+                None => client.encryption().request_user_identity(&user_id).await?,
+            }
+            .context("this user has not set up cross-signing yet")?;
+            let request = identity.request_verification().await?;
+            let flow_id = request.flow_id().to_owned();
+            RUNTIME.spawn(watch_request(request));
+            Ok(json!({"flowId": flow_id}))
+        }
+        "user_verified" => {
+            let client = client()?;
+            let user_id: OwnedUserId = text(request, "userId")?.parse()?;
+            let identity = match client.encryption().get_user_identity(&user_id).await? {
+                Some(identity) => Some(identity),
+                None => client.encryption().request_user_identity(&user_id).await?,
+            };
+            Ok(json!({
+                "verified": identity.as_ref().is_some_and(|identity| identity.is_verified()),
+                "crossSigning": identity.is_some(),
+            }))
         }
         "verification_accept" => {
             let request = verification_request(request).await?;

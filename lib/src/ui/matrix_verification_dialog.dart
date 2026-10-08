@@ -15,7 +15,12 @@ class MatrixVerificationDialog extends StatefulWidget {
     required this.flowId,
     required this.weStarted,
     this.startDelay = const Duration(seconds: 2),
+    this.otherName,
   });
+
+  /// Set when verifying another person (their name), rather than another
+  /// session of this account.
+  final String? otherName;
 
   final MatrixClientService client;
   final String userId;
@@ -37,7 +42,9 @@ class MatrixVerificationDialog extends StatefulWidget {
 class _MatrixVerificationDialogState extends State<MatrixVerificationDialog> {
   StreamSubscription<Map<String, dynamic>>? _events;
   List<({String symbol, String description})> _emojis = const [];
-  String _status = 'Waiting for your other session…';
+  late String _status = 'Waiting for $_other…';
+
+  String get _other => widget.otherName ?? 'your other session';
   bool _finished = false;
   bool _busy = false;
   bool _confirmed = false;
@@ -81,16 +88,18 @@ class _MatrixVerificationDialogState extends State<MatrixVerificationDialog> {
                 ),
           ];
           _status =
-              'Do these emojis appear on your other session, in the '
+              'Do these emojis appear on the screen of $_other, in the '
               'same order?';
         });
       case 'done':
         setState(() {
           _finished = true;
           _emojis = const [];
-          _status =
-              'Verified. This session can now read your encrypted '
-              'messages and is trusted by your other sessions.';
+          _status = widget.otherName == null
+              ? 'Verified. This session can now read your encrypted '
+                    'messages and is trusted by your other sessions.'
+              : 'Verified. Your chats with ${widget.otherName} show as '
+                    'verified, and a change of their keys will be flagged.';
         });
       case 'cancelled':
         _fail(event['reason'] as String? ?? 'Verification was cancelled.');
@@ -119,7 +128,7 @@ class _MatrixVerificationDialogState extends State<MatrixVerificationDialog> {
         // The other side may never confirm: Cancel stays available.
         setState(() {
           _confirmed = true;
-          _status = 'Waiting for your other session to confirm…';
+          _status = 'Waiting for $_other to confirm…';
         });
       }
     } catch (error) {
@@ -145,7 +154,11 @@ class _MatrixVerificationDialogState extends State<MatrixVerificationDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Verify this session'),
+      title: Text(
+        widget.otherName == null
+            ? 'Verify this session'
+            : 'Verify ${widget.otherName}',
+      ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [

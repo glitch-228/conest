@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import '../conest_theme.dart';
 import '../matrix_service.dart';
 import '../matrix_timeline.dart';
+import 'matrix_verification_dialog.dart';
 
 /// Asks for a Matrix ID, opens (or creates) the direct chat with it and
 /// shows the room.
@@ -94,10 +95,56 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
 
   MatrixClientService get _client => widget.client;
 
+  /// The other person of a direct chat, and whether they are verified.
+  String? get _partner {
+    final room = _client.room(widget.roomId);
+    if (room == null || !room.direct || room.directTargets.length != 1) {
+      return null;
+    }
+    return room.directTargets.single;
+  }
+
+  ({bool verified, bool crossSigning})? _partnerState;
+
+  Future<void> _checkPartner() async {
+    final partner = _partner;
+    if (partner == null) return;
+    try {
+      final state = await _client.userVerification(partner);
+      if (mounted) setState(() => _partnerState = state);
+    } catch (_) {
+      // Unknown for now; the action stays available.
+    }
+  }
+
+  Future<void> _verifyPartner() async {
+    final partner = _partner;
+    if (partner == null) return;
+    try {
+      final flowId = await _client.verifyUser(partner);
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => MatrixVerificationDialog(
+          client: _client,
+          userId: partner,
+          flowId: flowId,
+          weStarted: true,
+          otherName: _client.room(widget.roomId)?.name ?? partner,
+        ),
+      );
+    } catch (error) {
+      _show('Could not verify: $error');
+    }
+    await _checkPartner();
+  }
+
   @override
   void initState() {
     super.initState();
     _client.addListener(_changed);
+    unawaited(_checkPartner());
     if (_client.timeline(widget.roomId).items.isEmpty) {
       unawaited(_loadOlder());
     }
@@ -318,9 +365,40 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
             ],
           ],
         ),
+        actions: [
+          if (_partner != null)
+            _partnerState?.verified == true
+                ? Tooltip(
+                    key: const ValueKey('matrix-partner-verified'),
+                    message: 'Verified',
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Icon(Icons.verified_user, color: palette.success),
+                    ),
+                  )
+                : IconButton(
+                    key: const ValueKey('matrix-verify-partner'),
+                    tooltip: 'Verify ${room?.name ?? _partner}',
+                    icon: const Icon(Icons.gpp_maybe_outlined),
+                    onPressed: _verifyPartner,
+                  ),
+        ],
       ),
       body: Column(
         children: [
+          if (_partner != null && _partnerState?.verified != true)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Text(
+                room?.encrypted == true
+                    ? 'Messages are end-to-end encrypted, but your homeserver '
+                          'and theirs see who talks to whom and when. Verify '
+                          '${room?.name ?? _partner} to be sure it is them.'
+                    : 'This chat is not encrypted: your homeserver and theirs '
+                          'can read it.',
+                style: TextStyle(color: palette.textMuted, fontSize: 12),
+              ),
+            ),
           if (room?.invited == true)
             _InviteBanner(
               palette: palette,

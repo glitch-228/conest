@@ -56,6 +56,8 @@ class MeshCoreDeframer {
 abstract final class MeshCoreCode {
   static const int appStart = 1;
   static const int sendTextMessage = 2;
+  static const int sendChannelTextMessage = 3;
+  static const int getContacts = 4;
   static const int setDeviceTime = 6;
   static const int addUpdateContact = 9;
   static const int getContactByKey = 30;
@@ -64,15 +66,20 @@ abstract final class MeshCoreCode {
 
   static const int ok = 0;
   static const int error = 1;
+  static const int contactsStart = 2;
   static const int contact = 3;
+  static const int endOfContacts = 4;
   static const int selfInfo = 5;
   static const int sent = 6;
   static const int contactMessage = 7;
   static const int noMoreMessages = 10;
   static const int deviceInfo = 13;
   static const int contactMessageV3 = 16;
+  static const int channelMessage = 8;
+  static const int channelMessageV3 = 17;
 
   static const int pushMessageWaiting = 0x83;
+  static const int pushSendConfirmed = 0x82;
 
   static const int textPlain = 0;
 
@@ -84,20 +91,40 @@ abstract final class MeshCoreCode {
   static const int pathUnknown = 0xff;
 }
 
-/// A text message the radio received from a contact.
+/// A text message the radio received from a contact, or on a channel.
 class MeshCoreMessage {
   const MeshCoreMessage({
     required this.senderPrefix,
     required this.textType,
     required this.timestamp,
     required this.text,
+    this.channel,
   });
 
-  /// The first six bytes of the sender's public key.
+  /// The first six bytes of the sender's public key (empty for a channel
+  /// message, which names its sender in the text).
   final Uint8List senderPrefix;
+
+  /// The channel's index for a channel message; null for a direct one.
+  final int? channel;
   final int textType;
   final int timestamp;
   final Uint8List text;
+}
+
+/// A contact the radio knows (from adverts, or added).
+class MeshCoreContact {
+  const MeshCoreContact({
+    required this.publicKey,
+    required this.name,
+    required this.type,
+  });
+
+  final Uint8List publicKey;
+  final String name;
+
+  /// 1 is a chat node (a person); others are repeaters and rooms.
+  final int type;
 }
 
 /// A MeshCore companion radio on a serial or Bluetooth link.
@@ -223,15 +250,16 @@ class MeshCoreRadio {
     );
   }
 
-  /// Sends [text] to the contact whose key starts with [prefix] (6 bytes).
-  Future<void> sendText(
+  /// Sends [text] to the contact whose key starts with [prefix] (6 bytes);
+  /// returns the code its acknowledgement will carry (see [confirmed]).
+  Future<int> sendText(
     List<int> prefix,
     List<int> text, {
     int type = MeshCoreCode.textCliData,
     required int timestamp,
   }) async {
     if (prefix.length != 6) throw ArgumentError('Prefixes are 6 bytes.');
-    await _request(
+    final reply = await _request(
       [
         MeshCoreCode.sendTextMessage,
         type,
@@ -245,7 +273,57 @@ class MeshCoreRadio {
       ],
       {MeshCoreCode.sent},
     );
+    // Sent: type (flood or direct), expected acknowledgement, timeout.
+    return reply.length >= 6
+        ? ByteData.sublistView(reply, 2, 6).getUint32(0, Endian.little)
+        : 0;
   }
+
+  /// Sends [text] to everyone on channel [index].
+  Future<void> sendChannelText(
+    int index,
+    List<int> text, {
+    required int timestamp,
+  }) => _request(
+    [
+      MeshCoreCode.sendChannelTextMessage,
+      MeshCoreCode.textPlain,
+      index,
+      timestamp & 0xff,
+      (timestamp >> 8) & 0xff,
+      (timestamp >> 16) & 0xff,
+      (timestamp >> 24) & 0xff,
+      ...text,
+    ],
+    {MeshCoreCode.ok},
+  );
+
+  /// The radio's contacts.
+  Future<List<MeshCoreContact>> contacts() async {
+    final frames = await _requestMany(
+      [MeshCoreCode.getContacts],
+      start: MeshCoreCode.contactsStart,
+      item: MeshCoreCode.contact,
+      end: MeshCoreCode.endOfContacts,
+    );
+    return [
+      for (final frame in frames)
+        // Key (32), type, flags, path length, path (64), name (32), ...
+        if (frame.length >= 1 + 32 + 3 + 64 + 32)
+          MeshCoreContact(
+            publicKey: Uint8List.fromList(frame.sublist(1, 33)),
+            type: frame[33],
+            name: utf8.decode(
+              frame.sublist(100, 132).takeWhile((byte) => byte != 0).toList(),
+              allowMalformed: true,
+            ),
+          ),
+    ];
+  }
+
+  /// Acknowledgement codes of messages that reached their contact.
+  Stream<int> get confirmed => _confirmed.stream;
+  final _confirmed = StreamController<int>.broadcast();
 
   /// Fetches every message the radio holds.
   Future<void> syncMessages() async {
@@ -259,9 +337,8 @@ class MeshCoreRadio {
             MeshCoreCode.contactMessageV3,
             MeshCoreCode.contactMessage,
             MeshCoreCode.noMoreMessages,
-            // Channel messages are answered too; they are not Conest's.
-            8,
-            17,
+            MeshCoreCode.channelMessage,
+            MeshCoreCode.channelMessageV3,
             27,
           },
         );
@@ -326,6 +403,19 @@ class MeshCoreRadio {
       unawaited(syncMessages().catchError((Object _) {}));
       return;
     }
+    if (frame[0] == MeshCoreCode.pushSendConfirmed) {
+      if (frame.length >= 5 && !_confirmed.isClosed) {
+        _confirmed.add(
+          ByteData.sublistView(frame, 1, 5).getUint32(0, Endian.little),
+        );
+      }
+      return;
+    }
+    final many = _many;
+    if (many != null && many.$1.contains(frame[0])) {
+      many.$2(frame);
+      return;
+    }
     final pending = _pending;
     if (pending != null &&
         !pending.isCompleted &&
@@ -334,7 +424,78 @@ class MeshCoreRadio {
     }
   }
 
+  /// The command in progress that answers with many frames: its codes, and
+  /// where each frame goes.
+  (Set<int>, void Function(Uint8List))? _many;
+  Completer<List<Uint8List>>? _manyDone;
+
+  /// Sends [command] and collects the [item] frames between [start] and
+  /// [end].
+  Future<List<Uint8List>> _requestMany(
+    List<int> command, {
+    required int start,
+    required int item,
+    required int end,
+  }) {
+    final result = _commands.then((_) async {
+      if (_closed.isCompleted) throw StateError('The MeshCore radio is gone.');
+      final items = <Uint8List>[];
+      final done = Completer<List<Uint8List>>();
+      _manyDone = done;
+      _many = (
+        {start, item, end, MeshCoreCode.error},
+        (frame) {
+          if (frame[0] == item) items.add(frame);
+          if (frame[0] == end && !done.isCompleted) done.complete(items);
+          if (frame[0] == MeshCoreCode.error && !done.isCompleted) {
+            done.completeError(StateError('The MeshCore radio refused.'));
+          }
+        },
+      );
+      try {
+        await _queue.run(
+          () => _link.write(
+            _link.keepsMessages ? command : MeshCoreFraming.frame(command),
+          ),
+        );
+        try {
+          return await done.future.timeout(const Duration(seconds: 15));
+        } on TimeoutException {
+          // The radio may still be sending: its late frames would be taken
+          // for the next command's answer. Drop the link, as for one reply.
+          unawaited(close());
+          rethrow;
+        }
+      } finally {
+        _many = null;
+      }
+    });
+    _commands = result.then((_) {}, onError: (Object _) {});
+    return result;
+  }
+
   static MeshCoreMessage? _parseMessage(Uint8List frame) {
+    // Channel: (V3: code, snr, 2 reserved; older: code), then index, path
+    // length, text type, timestamp (4), text ("name: text").
+    final channelOffset = switch (frame[0]) {
+      MeshCoreCode.channelMessageV3 => 4,
+      MeshCoreCode.channelMessage => 1,
+      _ => -1,
+    };
+    if (channelOffset >= 0) {
+      if (frame.length < channelOffset + 3 + 4) return null;
+      return MeshCoreMessage(
+        senderPrefix: Uint8List(0),
+        channel: frame[channelOffset],
+        textType: frame[channelOffset + 2],
+        timestamp: ByteData.sublistView(
+          frame,
+          channelOffset + 3,
+          channelOffset + 7,
+        ).getUint32(0, Endian.little),
+        text: Uint8List.fromList(frame.sublist(channelOffset + 7)),
+      );
+    }
     // V3: code, snr, 2 reserved; older: code only. Then prefix (6), path
     // length, text type, timestamp (4, little-endian), text.
     final offset = switch (frame[0]) {
@@ -365,6 +526,11 @@ class MeshCoreRadio {
     if (pending != null && !pending.isCompleted) {
       pending.completeError(StateError('The MeshCore radio disconnected.'));
     }
+    final many = _manyDone;
+    if (many != null && !many.isCompleted) {
+      many.completeError(StateError('The MeshCore radio disconnected.'));
+    }
     unawaited(_messages.close());
+    unawaited(_confirmed.close());
   }
 }

@@ -65,9 +65,14 @@ class MeshCoreCarrierConfig {
     required this.link,
     required this.host,
     this.publicKeyHex,
+    this.appMessages = false,
   });
 
   final MeshCoreLink link;
+
+  /// Reads and writes the MeshCore apps' own text messages (direct ones
+  /// and the radio's channels), besides carrying Conest's.
+  final bool appMessages;
 
   /// Device path or USB device, or the Bluetooth address.
   final String host;
@@ -76,13 +81,25 @@ class MeshCoreCarrierConfig {
   /// radio connects again.
   final String? publicKeyHex;
 
-  MeshCoreCarrierConfig withPublicKey(String key) =>
-      MeshCoreCarrierConfig(link: link, host: host, publicKeyHex: key);
+  MeshCoreCarrierConfig withPublicKey(String key) => MeshCoreCarrierConfig(
+    link: link,
+    host: host,
+    publicKeyHex: key,
+    appMessages: appMessages,
+  );
+
+  MeshCoreCarrierConfig withAppMessages(bool enabled) => MeshCoreCarrierConfig(
+    link: link,
+    host: host,
+    publicKeyHex: publicKeyHex,
+    appMessages: enabled,
+  );
 
   Map<String, Object?> toJson() => {
     'link': link.name,
     'host': host,
     if (publicKeyHex != null) 'publicKey': publicKeyHex,
+    if (appMessages) 'appMessages': true,
   };
 
   static MeshCoreCarrierConfig? fromJson(Object? json) {
@@ -95,6 +112,7 @@ class MeshCoreCarrierConfig {
       link: link,
       host: host,
       publicKeyHex: key is String && hexDecode(key)?.length == 32 ? key : null,
+      appMessages: json['appMessages'] == true,
     );
   }
 }
@@ -117,6 +135,28 @@ Future<ByteLink> connectMeshCore(MeshCoreCarrierConfig config) async =>
 
 enum MeshCoreCarrierState { stopped, connecting, connected, failed }
 
+/// Longest text the MeshCore apps send in one message.
+const int meshCoreMaxTextBytes = 140;
+
+/// A text message from a MeshCore app user.
+class MeshCoreText {
+  const MeshCoreText({
+    required this.from,
+    required this.channel,
+    required this.text,
+    required this.timestamp,
+  });
+
+  /// The sender's key prefix (hex) for a direct message; empty on a
+  /// channel, where the text starts with the sender's name.
+  final String from;
+
+  /// The channel's index, or null for a direct message.
+  final int? channel;
+  final String text;
+  final int timestamp;
+}
+
 /// The MeshCore side of the carrier: a companion radio carrying each frame
 /// as a direct "command data" message (encrypted by MeshCore with the two
 /// radios' keys, and not shown on their screens).
@@ -127,6 +167,8 @@ class MeshCoreCarrierChannel
     required this.onFrame,
     this.onStatusChanged,
     this.onPublicKey,
+    this.onText,
+    this.onAck,
     MeshCoreConnector? connector,
     DateTime Function()? now,
   }) : _connector = connector ?? connectMeshCore,
@@ -143,6 +185,62 @@ class MeshCoreCarrierChannel
   final void Function(String sender, Uint8List frame) onFrame;
   final void Function()? onStatusChanged;
   final void Function(String publicKeyHex)? onPublicKey;
+
+  /// A text message from a MeshCore app user, while [appMessages].
+  final void Function(MeshCoreText text)? onText;
+
+  /// A message we sent with this acknowledgement code arrived.
+  final void Function(int code)? onAck;
+
+  /// Whether the apps' messages are read (from the config, and changed
+  /// without reconnecting).
+  late bool appMessages = config.appMessages;
+
+  /// The radio's contacts that are people, by key (hex), with names; null
+  /// while the radio is not connected.
+  Future<Map<String, String>?> contacts() async {
+    final radio = _radio;
+    if (radio == null) return null;
+    return {
+      for (final contact in await radio.contacts())
+        if (contact.type == MeshCoreCode.advertTypeChat)
+          hexEncode(contact.publicKey): contact.name,
+    };
+  }
+
+  /// Sends [text] to the contact with key [publicKeyHex], or to everyone
+  /// on [channel]; returns the acknowledgement code to wait for (direct
+  /// only).
+  Future<int?> sendText(
+    String text, {
+    String? publicKeyHex,
+    int channel = 0,
+  }) async {
+    final radio = _radio;
+    if (!_started || radio == null) {
+      throw StateError('The MeshCore radio is not connected.');
+    }
+    final bytes = utf8.encode(text);
+    if (bytes.length > meshCoreMaxTextBytes) {
+      throw ArgumentError(
+        'Too long for one MeshCore message ($meshCoreMaxTextBytes bytes at '
+        'most).',
+      );
+    }
+    final timestamp = _now().millisecondsSinceEpoch ~/ 1000;
+    if (publicKeyHex == null) {
+      await radio.sendChannelText(channel, bytes, timestamp: timestamp);
+      return null;
+    }
+    final key = hexDecode(publicKeyHex);
+    if (key == null || key.length < 6) throw ArgumentError('Not a key.');
+    return radio.sendText(
+      key.sublist(0, 6),
+      bytes,
+      type: MeshCoreCode.textPlain,
+      timestamp: timestamp,
+    );
+  }
 
   MeshCoreRadio? _radio;
   Uint8List? _publicKey;
@@ -247,6 +345,7 @@ class MeshCoreCarrierChannel
         radio = await MeshCoreRadio.open(link);
         if (!current()) break;
         final subscription = radio.messages.listen(_receive);
+        final acks = radio.confirmed.listen((code) => onAck?.call(code));
         _radio = radio;
         _onRadio.clear();
         final key = radio.publicKey;
@@ -265,6 +364,7 @@ class MeshCoreCarrierChannel
         _wake = wake;
         await Future.any([radio.closed, wake.future]);
         await subscription.cancel();
+        await acks.cancel();
         if (current()) throw StateError('The MeshCore radio disconnected.');
       } catch (error) {
         if (current()) {
@@ -291,7 +391,29 @@ class MeshCoreCarrierChannel
   }
 
   void _receive(MeshCoreMessage message) {
-    if (message.textType != MeshCoreCode.textCliData) return;
+    if (message.textType == MeshCoreCode.textPlain) {
+      if (!appMessages) return;
+      final String text;
+      try {
+        text = utf8.decode(message.text);
+      } on FormatException {
+        return;
+      }
+      if (text.trim().isEmpty) return;
+      onText?.call(
+        MeshCoreText(
+          from: hexEncode(message.senderPrefix),
+          channel: message.channel,
+          text: text,
+          timestamp: message.timestamp,
+        ),
+      );
+      return;
+    }
+    if (message.textType != MeshCoreCode.textCliData ||
+        message.channel != null) {
+      return;
+    }
     final Uint8List payload;
     try {
       payload = base64Decode(ascii.decode(message.text));

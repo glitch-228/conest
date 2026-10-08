@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'carrier.dart';
+import 'meshtastic/protobuf.dart';
 import 'meshtastic/radio.dart';
 import 'radio/android_radio_link.dart';
 import 'radio/byte_link.dart';
@@ -57,6 +59,7 @@ class MeshtasticCarrierConfig {
     required this.host,
     this.port = defaultMeshtasticPort,
     this.nodeNum,
+    this.appMessages = false,
   });
 
   final MeshtasticLink link;
@@ -65,12 +68,26 @@ class MeshtasticCarrierConfig {
   /// known before the radio connects again.
   final int? nodeNum;
 
+  /// Reads and writes the Meshtastic apps' own text messages (direct ones
+  /// and the radio's channels), besides carrying Conest's.
+  final bool appMessages;
+
   MeshtasticCarrierConfig withNodeNum(int nodeNum) => MeshtasticCarrierConfig(
     link: link,
     host: host,
     port: port,
     nodeNum: nodeNum,
+    appMessages: appMessages,
   );
+
+  MeshtasticCarrierConfig withAppMessages(bool enabled) =>
+      MeshtasticCarrierConfig(
+        link: link,
+        host: host,
+        port: port,
+        nodeNum: nodeNum,
+        appMessages: enabled,
+      );
 
   /// Device path or USB device for [MeshtasticLink.serial], else the host.
   final String host;
@@ -83,6 +100,7 @@ class MeshtasticCarrierConfig {
     'host': host,
     'port': port,
     if (nodeNum != null) 'nodeNum': nodeNum,
+    if (appMessages) 'appMessages': true,
   };
 
   static MeshtasticCarrierConfig? fromJson(Object? json) {
@@ -104,6 +122,7 @@ class MeshtasticCarrierConfig {
       host: host,
       port: port,
       nodeNum: nodeNum is int ? nodeNum : null,
+      appMessages: json['appMessages'] == true,
     );
   }
 }
@@ -121,6 +140,39 @@ Future<ByteLink> connectMeshtastic(MeshtasticCarrierConfig config) async =>
 
 enum MeshtasticCarrierState { stopped, connecting, connected, failed }
 
+/// The Meshtastic apps' text messages.
+const int meshtasticTextPort = 1;
+
+/// Acknowledgements (and routing errors).
+const int meshtasticRoutingPort = 5;
+
+/// Longest text the apps send in one message.
+const int meshtasticMaxTextBytes = 200;
+
+/// A text message from a Meshtastic app user.
+class MeshtasticText {
+  const MeshtasticText({
+    required this.from,
+    required this.direct,
+    required this.channel,
+    required this.text,
+    required this.id,
+    this.pki = false,
+  });
+
+  final int from;
+
+  /// Encrypted with the two radios' keys: it is from [from]. Otherwise
+  /// (the channel key) anyone on the channel could have written it.
+  final bool pki;
+
+  /// To this radio alone; otherwise to everyone on [channel].
+  final bool direct;
+  final int channel;
+  final String text;
+  final int id;
+}
+
 /// The Meshtastic side of the carrier: a radio driven through its client
 /// API, carrying each frame as a direct message on Conest's private port.
 class MeshtasticCarrierChannel implements ManagedCarrierChannel {
@@ -129,9 +181,19 @@ class MeshtasticCarrierChannel implements ManagedCarrierChannel {
     required this.onFrame,
     this.onStatusChanged,
     this.onNodeNum,
+    this.onText,
+    this.onAck,
     MeshtasticConnector? connector,
   }) : _connector = connector ?? connectMeshtastic,
        _nodeNum = config.nodeNum;
+
+  /// A text message from a Meshtastic app user (port 1), when
+  /// [MeshtasticCarrierConfig.appMessages] is on.
+  final void Function(MeshtasticText text)? onText;
+
+  /// The radio [from] answered our packet [requestId]: received ([ok]), or
+  /// refused (it could not read it, for example without our key yet).
+  final void Function(int from, int requestId, {required bool ok})? onAck;
 
   final MeshtasticCarrierConfig config;
   final MeshtasticConnector _connector;
@@ -180,6 +242,39 @@ class MeshtasticCarrierChannel implements ManagedCarrierChannel {
     _wake?.complete();
     _wake = null;
     _setState(MeshtasticCarrierState.stopped);
+  }
+
+  /// Whether the apps' text messages are read (set from the config, and
+  /// changed without reconnecting).
+  late bool appMessages = config.appMessages;
+
+  /// Nodes in the radio's database.
+  Iterable<int> get knownNodes => _radio?.nodes.keys ?? const <int>[];
+
+  /// The name a node gave itself, if the radio knows it.
+  String? nodeName(int node) => _radio?.nodes[node]?.longName;
+
+  /// Sends [text] to node [to], or to everyone on [channel] when [to] is
+  /// null; returns the packet id.
+  Future<int> sendText(String text, {int? to, int channel = 0}) async {
+    final radio = _radio;
+    if (!_started || radio == null) {
+      throw StateError('The Meshtastic radio is not connected.');
+    }
+    final bytes = utf8.encode(text);
+    if (bytes.length > meshtasticMaxTextBytes) {
+      throw ArgumentError(
+        'Too long for one Meshtastic message ($meshtasticMaxTextBytes '
+        'bytes at most).',
+      );
+    }
+    return radio.send(
+      to: to ?? MeshtasticRadio.broadcast,
+      portnum: meshtasticTextPort,
+      payload: bytes,
+      wantAck: to != null,
+      channel: channel,
+    );
   }
 
   @override
@@ -252,6 +347,43 @@ class MeshtasticCarrierChannel implements ManagedCarrierChannel {
   }
 
   void _receive(MeshtasticPacket packet) {
+    if (packet.portnum == meshtasticRoutingPort && packet.requestId != null) {
+      // Routing { error_reason = 3 }: none (0, often left out) is an
+      // acknowledgement; anything else is a refusal.
+      final Object? reason;
+      try {
+        reason = ProtoReader.fields(packet.payload)[3];
+      } catch (_) {
+        return;
+      }
+      onAck?.call(
+        packet.from,
+        packet.requestId!,
+        ok: reason == null || reason == 0,
+      );
+      return;
+    }
+    if (packet.portnum == meshtasticTextPort) {
+      if (!appMessages || packet.from == _nodeNum) return;
+      final String text;
+      try {
+        text = utf8.decode(packet.payload);
+      } on FormatException {
+        return;
+      }
+      if (text.trim().isEmpty) return;
+      onText?.call(
+        MeshtasticText(
+          from: packet.from,
+          direct: packet.to == _nodeNum,
+          channel: packet.channel,
+          text: text,
+          id: packet.id,
+          pki: packet.pkiEncrypted,
+        ),
+      );
+      return;
+    }
     if (packet.portnum != meshtasticConestPort ||
         packet.payload.length < 2 ||
         packet.payload[0] != _payloadVersion) {
