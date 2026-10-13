@@ -25,6 +25,7 @@ abstract final class SmtpSender {
     required String from,
     required String to,
     required String message,
+    List<String> moreRecipients = const [],
     bool tls = true,
     MailConnector? connector,
   }) async {
@@ -57,7 +58,9 @@ abstract final class SmtpSender {
         'AUTH PLAIN ${base64Encode(utf8.encode('\u0000$user\u0000$password'))}',
       );
       await expect(250, 'MAIL FROM:<$from>');
-      await expect(250, 'RCPT TO:<$to>');
+      for (final recipient in {to, ...moreRecipients}) {
+        await expect(250, 'RCPT TO:<$recipient>');
+      }
       await expect(354, 'DATA');
       final body = message
           .replaceAll('\r\n', '\n')

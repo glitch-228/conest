@@ -376,16 +376,38 @@ class PgpSecretKey {
 
 /// A decrypted message.
 class PgpDecrypted {
-  const PgpDecrypted(this.data, {this.signer, this.signed = false});
+  PgpDecrypted._(this.data, this._signatures, this._now);
 
   final Uint8List data;
+  final List<_Signature> _signatures;
+  final DateTime _now;
 
   /// The key whose good signature the message carries (one of the keys
   /// given to [Pgp.decrypt]), or null.
-  final PgpPublicKey? signer;
+  PgpPublicKey? signer;
 
   /// It carried a signature, good or not, from a known key or not.
-  final bool signed;
+  bool get signed => _signatures.isNotEmpty;
+
+  /// The first of [keys] that made a good signature on it, or null.
+  Future<PgpPublicKey?> verify(List<PgpPublicKey> keys) async {
+    for (final signature in _signatures) {
+      if (signature.type != 0x00 && signature.type != 0x01) continue;
+      final hashed = signature.type == 0x01 ? _canonicalText(data) : data;
+      for (final key in keys) {
+        if (!signature.mayBeFrom(key.fingerprint)) continue;
+        if (await signature.verify(
+          key.signingKey,
+          [hashed],
+          key.fingerprint,
+          _now,
+        )) {
+          return key;
+        }
+      }
+    }
+    return null;
+  }
 }
 
 /// Encrypting to, and decrypting from, OpenPGP keys.
@@ -671,25 +693,9 @@ abstract final class Pgp {
     if (content == null) {
       throw const FormatException('OpenPGP message holds no literal data.');
     }
-    PgpPublicKey? signer;
-    for (final signature in signatures) {
-      if (signature.type != 0x00 && signature.type != 0x01) continue;
-      final hashed = signature.type == 0x01 ? _canonicalText(content) : content;
-      for (final sender in senders) {
-        if (!signature.mayBeFrom(sender.fingerprint)) continue;
-        if (await signature.verify(
-          sender.signingKey,
-          [hashed],
-          sender.fingerprint,
-          now,
-        )) {
-          signer = sender;
-          break;
-        }
-      }
-      if (signer != null) break;
-    }
-    return PgpDecrypted(content, signer: signer, signed: signatures.isNotEmpty);
+    final decrypted = PgpDecrypted._(content, signatures, now);
+    decrypted.signer = await decrypted.verify(senders);
+    return decrypted;
   }
 
   static Uint8List _decompress(Uint8List body) {
