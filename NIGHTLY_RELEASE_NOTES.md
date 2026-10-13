@@ -30,6 +30,16 @@ nightlies is included.
   note for now; such mail stays on the server, so you can open it in Delta
   Chat or another mail app.
 
+### Files you send (new)
+
+- Location, camera, author and date details are now removed from photos,
+  videos, PDFs and office documents before they are sent, one to one and
+  in groups. Photos are not re-compressed and keep their orientation.
+  Your own files are not changed. Turn it off in Settings → Personal if
+  you want to send files as they are.
+- Settings → Personal → **Send files under random names** replaces file
+  names with random letters (the type, such as .jpg, stays).
+
 ### Other fixes
 
 - Release builds no longer fail when the Tor project's code server is
@@ -39,3 +49,4 @@ nightlies is included.
 
 - Delta Chat with the Delta Chat apps (Android, iOS, desktop): invites both
   ways, messages, read marks and groups.
+- Metadata removal on photos and videos from real phones.
