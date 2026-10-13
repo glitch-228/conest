@@ -1339,6 +1339,7 @@ class MessengerController extends ChangeNotifier {
         (summary) => summary.callId,
       ),
       onTerminal: _persistVoiceCallSummary,
+      noiseSuppressionEnabled: me.voiceNoiseSuppressionEnabled,
     );
     _voiceCallChanges = _voiceCallService!.changes.listen((session) {
       if (_disposed) return;
@@ -1381,6 +1382,16 @@ class MessengerController extends ChangeNotifier {
       }
       notifyListeners();
     });
+  }
+
+  Future<void> setVoiceNoiseSuppression(bool enabled) async {
+    final me = identity;
+    if (me == null) return;
+    await _voiceCallService?.setNoiseSuppression(enabled);
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(voiceNoiseSuppressionEnabled: enabled),
+    );
+    await _saveSnapshotSilently(notify: true);
   }
 
   Future<void> _persistVoiceCallSummary(VoiceCallSummary summary) async {

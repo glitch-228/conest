@@ -3479,6 +3479,21 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                             ),
                             label: Text(call.muted ? 'Unmute' : 'Mute'),
                           ),
+                        if (connected)
+                          FilterChip(
+                            label: const Text('Noise suppression'),
+                            selected:
+                                widget
+                                    .controller
+                                    .identity
+                                    ?.voiceNoiseSuppressionEnabled ??
+                                true,
+                            onSelected: (enabled) => _run(
+                              () => widget.controller.setVoiceNoiseSuppression(
+                                enabled,
+                              ),
+                            ),
+                          ),
                         if (connected && !kIsWeb && Platform.isAndroid)
                           OutlinedButton.icon(
                             onPressed: () => _run(

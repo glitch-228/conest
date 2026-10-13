@@ -29,7 +29,6 @@ const CAPTURE_QUEUE_SAMPLES: usize = FRAME_SAMPLES * 6;
 const PLAYBACK_QUEUE_SAMPLES: usize = FRAME_SAMPLES * 8;
 const OPUS_PACKET_QUEUE: usize = 12;
 const ECHO_REFERENCE_QUEUE_SAMPLES: usize = VOICE_RATE as usize;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
 const APM_FRAME_SAMPLES: usize = VOICE_RATE as usize / 100; // AEC3 runs on 10 ms.
 const FRAME_PERIOD_NANOS: i128 = 20_000_000;
 const MIN_JITTER_WAIT: Duration = Duration::from_millis(20);
@@ -87,7 +86,6 @@ impl AdaptiveBitrate {
 /// WebRTC-based voice stacks such as Discord's and Telegram's. AEC3 estimates
 /// the speaker-to-microphone delay itself and handles double-talk, so device
 /// latency does not need to match a fixed constant.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
 struct EchoProcessor {
     apm: sonora::AudioProcessing,
     render: Vec<f32>,
@@ -95,11 +93,12 @@ struct EchoProcessor {
     capture_out: Vec<f32>,
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
 impl EchoProcessor {
     fn new() -> Self {
         let config = sonora::Config {
-            echo_canceller: Some(sonora::config::EchoCanceller::default()),
+            echo_canceller: if cfg!(target_os = "android") { None } else {
+                Some(sonora::config::EchoCanceller::default())
+            },
             ..Default::default()
         };
         let stream = sonora::StreamConfig::new(VOICE_RATE, 1);
@@ -113,6 +112,19 @@ impl EchoProcessor {
             render_out: vec![0.0; APM_FRAME_SAMPLES],
             capture_out: vec![0.0; APM_FRAME_SAMPLES],
         }
+    }
+
+    fn set_noise_suppression(&mut self, enabled: bool) {
+        if self.apm.config().noise_suppression.is_some() == enabled {
+            return;
+        }
+        let mut config = self.apm.config().clone();
+        config.noise_suppression = enabled.then(|| sonora::config::NoiseSuppression {
+            level: sonora::config::NoiseSuppressionLevel::High,
+            ..Default::default()
+        });
+        // Changing only NS keeps the echo canceller's convergence state.
+        self.apm.apply_config(config);
     }
 
     /// Cancels echo in one capture frame in place. Every rendered sample is
@@ -156,31 +168,6 @@ impl EchoProcessor {
     }
 }
 
-/// Android captures with `VOICE_COMMUNICATION`, which enables the platform
-/// echo canceller. Like WebRTC on Android, skip software AEC on top of it.
-#[cfg(target_os = "android")]
-struct EchoProcessor;
-
-#[cfg(target_os = "android")]
-impl EchoProcessor {
-    fn new() -> Self {
-        Self
-    }
-
-    fn process_frame(
-        &mut self,
-        frame: &mut [f32],
-        render_reference: &ArrayQueue<f32>,
-        _capture_backlog_samples: usize,
-        muted: bool,
-    ) {
-        while render_reference.pop().is_some() {}
-        if muted {
-            frame.fill(0.0);
-        }
-    }
-}
-
 fn push_render_reference(queue: &ArrayQueue<f32>, sample: f32) {
     if queue.push(sample).is_err() {
         let _ = queue.pop();
@@ -192,6 +179,8 @@ pub struct VoiceAudioSession {
     running: Arc<AtomicBool>,
     muted: Arc<AtomicBool>,
     network_congested: Arc<AtomicBool>,
+    noise_suppression: Arc<AtomicBool>,
+    platform_noise_suppression: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
     encoded: Arc<ArrayQueue<Vec<u8>>>,
     incoming: Arc<ArrayQueue<(u64, Vec<u8>, Instant)>>,
@@ -310,6 +299,8 @@ impl VoiceAudioSession {
         let running = Arc::new(AtomicBool::new(true));
         let muted = Arc::new(AtomicBool::new(false));
         let network_congested = Arc::new(AtomicBool::new(false));
+        let noise_suppression = Arc::new(AtomicBool::new(true));
+        let platform_noise_suppression = Arc::new(AtomicBool::new(false));
         let failed = Arc::new(AtomicBool::new(false));
         let capture = Arc::new(ArrayQueue::new(CAPTURE_QUEUE_SAMPLES));
         let playback = Arc::new(ArrayQueue::new(PLAYBACK_QUEUE_SAMPLES));
@@ -333,6 +324,8 @@ impl VoiceAudioSession {
                 let render_reference = render_reference.clone();
                 let muted = muted.clone();
                 let network_congested = network_congested.clone();
+                let noise_suppression = noise_suppression.clone();
+                let platform_noise_suppression = platform_noise_suppression.clone();
                 move || {
                     encode_loop(
                         running,
@@ -342,6 +335,8 @@ impl VoiceAudioSession {
                         muted,
                         encoder,
                         network_congested,
+                        noise_suppression,
+                        platform_noise_suppression,
                     )
                 }
             })
@@ -366,6 +361,8 @@ impl VoiceAudioSession {
             running,
             muted,
             network_congested,
+            noise_suppression,
+            platform_noise_suppression,
             failed,
             encoded,
             incoming,
@@ -382,6 +379,20 @@ impl VoiceAudioSession {
 
     pub fn set_muted(&self, muted: bool) {
         self.muted.store(muted, Ordering::Relaxed);
+    }
+
+    pub fn set_noise_suppression(&self, enabled: bool) {
+        self.noise_suppression.store(enabled, Ordering::Relaxed);
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn noise_suppression_enabled(&self) -> bool {
+        self.noise_suppression.load(Ordering::Relaxed)
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn set_platform_noise_suppression(&self, enabled: bool) {
+        self.platform_noise_suppression.store(enabled, Ordering::Relaxed);
     }
 
     pub fn set_network_congested(&self, congested: bool) {
@@ -707,6 +718,8 @@ fn encode_loop(
     muted: Arc<AtomicBool>,
     mut encoder: Encoder,
     network_congested: Arc<AtomicBool>,
+    noise_suppression: Arc<AtomicBool>,
+    platform_noise_suppression: Arc<AtomicBool>,
 ) {
     let mut frame = vec![0.0_f32; FRAME_SAMPLES];
     let mut bitrate = AdaptiveBitrate::default();
@@ -724,6 +737,8 @@ fn encode_loop(
                 }
             }
         }
+        echo.set_noise_suppression(noise_suppression.load(Ordering::Relaxed)
+            && !platform_noise_suppression.load(Ordering::Relaxed));
         echo.process_frame(
             &mut frame,
             &render_reference,
@@ -884,6 +899,39 @@ mod tests {
             .map(|sample| sample * sample)
             .sum::<f32>();
         assert!(signal_energy > 0.01);
+    }
+
+    #[test]
+    fn noise_suppression_reduces_noise_and_preserves_changing_voiced_signal() {
+        use super::{EchoProcessor, FRAME_SAMPLES, VOICE_RATE};
+        use crossbeam_queue::ArrayQueue;
+        let render = ArrayQueue::new(FRAME_SAMPLES);
+        let mut processor = EchoProcessor::new();
+        processor.set_noise_suppression(true);
+        let mut seed = 0x193a_b723_u32;
+        let (mut input_noise, mut output_noise) = (0.0_f64, 0.0_f64);
+        let (mut input_voice, mut output_voice) = (0.0_f64, 0.0_f64);
+        for frame_number in 0..500 {
+            let voiced = frame_number >= 250;
+            let mut frame: Vec<f32> = (0..FRAME_SAMPLES).map(|i| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let noise = ((seed >> 8) as f32 / 16777215.0 - 0.5) * 0.04;
+                let t = (frame_number * FRAME_SAMPLES + i) as f32 / VOICE_RATE as f32;
+                let frequency = 140.0 + 30.0 * (t * 2.3).sin();
+                let voice = (std::f32::consts::TAU * frequency * t).sin() * 0.25
+                    + (std::f32::consts::TAU * frequency * 2.0 * t).sin() * 0.08;
+                noise + if voiced { voice * (0.7 + 0.3 * (t * 6.0).sin()) } else { 0.0 }
+            }).collect();
+            let input = frame.iter().map(|x| f64::from(x * x)).sum::<f64>();
+            processor.process_frame(&mut frame, &render, 0, false);
+            let output = frame.iter().map(|x| f64::from(x * x)).sum::<f64>();
+            if (150..250).contains(&frame_number) { input_noise += input; output_noise += output; }
+            if frame_number >= 350 { input_voice += input; output_voice += output; }
+        }
+        assert!(output_noise < input_noise * 0.1, "noise {output_noise}/{input_noise}");
+        assert!(output_voice > input_voice * 0.5, "voice {output_voice}/{input_voice}");
+        processor.set_noise_suppression(false);
+        assert!(processor.apm.config().noise_suppression.is_none());
     }
 
     #[test]

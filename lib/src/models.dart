@@ -959,6 +959,7 @@ class IdentityRecord {
     // Calls exist only in builds compiled with call media (nightly/debug);
     // there they are on unless the user opts out.
     this.experimentalVoiceCallsEnabled = true,
+    this.voiceNoiseSuppressionEnabled = true,
     this.advertisedFeatureCapabilities,
     required this.suppressReadReceipts,
     this.connectivity = const GlobalConnectivityPreferences(),
@@ -986,6 +987,7 @@ class IdentityRecord {
   final bool androidBackgroundRuntimeEnabled;
   final bool androidBackgroundCallsEnabled;
   final bool experimentalVoiceCallsEnabled;
+  final bool voiceNoiseSuppressionEnabled;
 
   /// Capability names last sent to contacts. When this build's capabilities
   /// differ (an update added or removed one), contacts are told again.
@@ -1043,6 +1045,7 @@ class IdentityRecord {
     bool? androidBackgroundRuntimeEnabled,
     bool? androidBackgroundCallsEnabled,
     bool? experimentalVoiceCallsEnabled,
+    bool? voiceNoiseSuppressionEnabled,
     List<String>? advertisedFeatureCapabilities,
     bool? suppressReadReceipts,
     GlobalConnectivityPreferences? connectivity,
@@ -1072,6 +1075,8 @@ class IdentityRecord {
           androidBackgroundCallsEnabled ?? this.androidBackgroundCallsEnabled,
       experimentalVoiceCallsEnabled:
           experimentalVoiceCallsEnabled ?? this.experimentalVoiceCallsEnabled,
+      voiceNoiseSuppressionEnabled:
+          voiceNoiseSuppressionEnabled ?? this.voiceNoiseSuppressionEnabled,
       advertisedFeatureCapabilities:
           advertisedFeatureCapabilities ?? this.advertisedFeatureCapabilities,
       suppressReadReceipts: suppressReadReceipts ?? this.suppressReadReceipts,
@@ -1107,6 +1112,7 @@ class IdentityRecord {
       'androidBackgroundRuntimeEnabled': androidBackgroundRuntimeEnabled,
       'androidBackgroundCallsEnabled': androidBackgroundCallsEnabled,
       'experimentalVoiceCallsEnabled': experimentalVoiceCallsEnabled,
+      'voiceNoiseSuppressionEnabled': voiceNoiseSuppressionEnabled,
       if (advertisedFeatureCapabilities != null)
         'advertisedFeatureCapabilities': advertisedFeatureCapabilities,
       'suppressReadReceipts': suppressReadReceipts,
@@ -1175,6 +1181,8 @@ class IdentityRecord {
           json['androidBackgroundCallsEnabled'] as bool? ?? false,
       experimentalVoiceCallsEnabled:
           json['experimentalVoiceCallsEnabled'] as bool? ?? true,
+      voiceNoiseSuppressionEnabled:
+          json['voiceNoiseSuppressionEnabled'] as bool? ?? true,
       advertisedFeatureCapabilities:
           (json['advertisedFeatureCapabilities'] as List?)
               ?.whereType<String>()

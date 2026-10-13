@@ -7,6 +7,9 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
+import android.media.audiofx.NoiseSuppressor
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AudioEffect
 import android.media.MediaRecorder
 import android.media.AudioTrack.MODE_STREAM
 import android.media.AudioManager.STREAM_VOICE_CALL
@@ -23,6 +26,8 @@ internal class VoiceCallAudioEngine(
     private val handle: Long,
     private val pushCapture: (Long, ShortArray, Int) -> Boolean,
     private val readPlayback: (Long, ShortArray, Int) -> Int,
+    private val noiseEnabled: (Long) -> Boolean,
+    private val platformNoise: (Long, Boolean) -> Unit,
     private val markFailed: (Long) -> Unit,
     private val onFailure: (String) -> Unit,
 ) {
@@ -51,6 +56,9 @@ internal class VoiceCallAudioEngine(
             }
         }
     }
+    private var noiseSuppressor: NoiseSuppressor? = null
+    private var echoCanceler: AcousticEchoCanceler? = null
+    private var requestedNoise: Boolean? = null
     private var recorder: AudioRecord? = null
     private var track: AudioTrack? = null
     private var captureThread: Thread? = null
@@ -98,6 +106,15 @@ internal class VoiceCallAudioEngine(
                 "Android could not initialize voice playback."
             }
 
+            // Effects are optional even when the device advertises them.
+            noiseSuppressor = try {
+                if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(input.audioSessionId) else null
+            } catch (_: RuntimeException) { null }
+            echoCanceler = try {
+                if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(input.audioSessionId) else null
+            } catch (_: RuntimeException) { null }
+            try { echoCanceler?.enabled = true } catch (_: RuntimeException) {}
+            updateNoiseSuppression()
             recorder = input
             track = output
             priorAudioMode = audioManager.mode
@@ -162,6 +179,12 @@ internal class VoiceCallAudioEngine(
         join(playbackThread)
         captureThread = null
         playbackThread = null
+        noiseSuppressor?.release()
+        echoCanceler?.release()
+        noiseSuppressor = null
+        echoCanceler = null
+        requestedNoise = null
+        platformNoise(handle, false)
         recorder?.release()
         track?.release()
         recorder = null
@@ -209,10 +232,23 @@ internal class VoiceCallAudioEngine(
         }
     }
 
+    private fun updateNoiseSuppression() {
+        val enabled = noiseEnabled(handle)
+        if (requestedNoise == enabled) return
+        requestedNoise = enabled
+        val effect = noiseSuppressor
+        val applied = try {
+            effect != null && effect.setEnabled(enabled) == AudioEffect.SUCCESS && effect.enabled
+        } catch (_: RuntimeException) { false }
+        // The Rust chain provides NS if creation/enabling the effect fails.
+        platformNoise(handle, applied)
+    }
+
     private fun captureLoop() {
         val input = recorder ?: return
         val pcm = ShortArray(FRAME_SAMPLES)
         while (running.get()) {
+            updateNoiseSuppression()
             val count = input.read(pcm, 0, pcm.size)
             if (count > 0) {
                 if (focusHeld.get() && !pushCapture(handle, pcm, count)) {

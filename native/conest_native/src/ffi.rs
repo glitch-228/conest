@@ -216,6 +216,15 @@ pub extern "C" fn conest_voice_audio_set_muted(handle: u64, muted: bool) -> bool
 
 #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
 #[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_audio_set_noise_suppression(handle: u64, enabled: bool) -> bool {
+    let Ok(sessions) = VOICE_AUDIO_SESSIONS.lock() else { return false; };
+    let Some(session) = sessions.get(&handle) else { return false; };
+    session.set_noise_suppression(enabled);
+    true
+}
+
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
 pub extern "C" fn conest_voice_audio_set_network_congested(handle: u64, congested: bool) -> bool {
     let Ok(sessions) = VOICE_AUDIO_SESSIONS.lock() else {
         record_error("voice audio session registry lock poisoned");
@@ -483,6 +492,29 @@ pub extern "system" fn Java_dev_conest_conest_ConestBackgroundService_nativeVoic
     if let Ok(sessions) = VOICE_AUDIO_SESSIONS.lock() {
         if let Some(session) = sessions.get(&(handle as u64)) {
             session.mark_failed();
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_conest_conest_ConestBackgroundService_nativeVoiceAudioNoiseEnabled(
+    _env: EnvUnowned<'_>, _this: JObject<'_>, handle: jlong,
+) -> jboolean {
+    let enabled = VOICE_AUDIO_SESSIONS.lock().ok()
+        .and_then(|sessions| sessions.get(&(handle as u64))
+            .map(VoiceAudioSession::noise_suppression_enabled)).unwrap_or(false);
+    if enabled { JNI_TRUE } else { JNI_FALSE }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_conest_conest_ConestBackgroundService_nativeVoiceAudioPlatformNoise(
+    _env: EnvUnowned<'_>, _this: JObject<'_>, handle: jlong, enabled: jboolean,
+) {
+    if let Ok(sessions) = VOICE_AUDIO_SESSIONS.lock() {
+        if let Some(session) = sessions.get(&(handle as u64)) {
+            session.set_platform_noise_suppression(enabled != JNI_FALSE);
         }
     }
 }

@@ -45,6 +45,10 @@ class _NativeVoiceAudioBindings {
       setMuted = library.lookupFunction<_SetMutedNative, _SetMutedDart>(
         'conest_voice_audio_set_muted',
       ),
+      setNoiseSuppression = library
+          .lookupFunction<_SetMutedNative, _SetMutedDart>(
+            'conest_voice_audio_set_noise_suppression',
+          ),
       setNetworkCongested = library
           .lookupFunction<_SetCongestedNative, _SetCongestedDart>(
             'conest_voice_audio_set_network_congested',
@@ -93,6 +97,7 @@ class _NativeVoiceAudioBindings {
 
   final _OpenDart open;
   final _SetMutedDart setMuted;
+  final _SetMutedDart setNoiseSuppression;
   final _SetCongestedDart setNetworkCongested;
   final _HealthyDart isHealthy;
   final _NextDart nextPacket;
@@ -245,6 +250,11 @@ class NativeVoiceCallAudio {
   bool setMuted(bool muted) {
     final handle = _handle;
     return handle != null && _bindings.setMuted(handle, muted);
+  }
+
+  bool setNoiseSuppression(bool enabled) {
+    final handle = _handle;
+    return handle != null && _bindings.setNoiseSuppression(handle, enabled);
   }
 
   bool setNetworkCongested(bool congested) {

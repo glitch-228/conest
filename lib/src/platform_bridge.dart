@@ -273,6 +273,12 @@ class PlatformBridge {
     }
   }
 
+  Future<void> setVoiceCallNoiseSuppression(bool enabled) async {
+    if (!(_voiceAudio?.setNoiseSuppression(enabled) ?? false)) {
+      throw StateError('Could not update noise suppression.');
+    }
+  }
+
   void setVoiceCallNetworkCongested(bool congested) {
     _voiceAudio?.setNetworkCongested(congested);
   }

@@ -75,6 +75,7 @@ abstract interface class VoiceCallMediaEngine {
   Future<void> prepare();
   Future<void> open({required String peerDeviceId, required bool outgoing});
   Future<void> setMuted(bool muted);
+  Future<void> setNoiseSuppression(bool enabled);
   Future<bool> setSpeakerphoneEnabled(bool enabled);
   Future<List<String>> availableOutputDevices();
   Future<void> selectOutputDevice(String name);
@@ -97,6 +98,9 @@ class UnavailableVoiceCallMediaEngine implements VoiceCallMediaEngine {
 
   @override
   Future<void> setMuted(bool muted) async {}
+
+  @override
+  Future<void> setNoiseSuppression(bool enabled) async {}
 
   @override
   Future<bool> setSpeakerphoneEnabled(bool enabled) async => false;
@@ -143,6 +147,10 @@ class PlatformVoiceCallMediaEngine implements VoiceCallMediaEngine {
   Future<void> setMuted(bool muted) => bridge.setVoiceCallMuted(muted);
 
   @override
+  Future<void> setNoiseSuppression(bool enabled) =>
+      bridge.setVoiceCallNoiseSuppression(enabled);
+
+  @override
   Future<bool> setSpeakerphoneEnabled(bool enabled) =>
       bridge.setVoiceCallSpeakerphoneEnabled(enabled);
 
@@ -169,6 +177,7 @@ class VoiceCallService {
     required this.localDeviceId,
     required this.transport,
     VoiceCallMediaEngine? media,
+    this.noiseSuppressionEnabled = true,
     DateTime Function()? now,
     Duration connectionTimeout = const Duration(seconds: 15),
     Duration mediaInactivityTimeout = const Duration(seconds: 5),
@@ -184,6 +193,7 @@ class VoiceCallService {
   final String localDeviceId;
   final VoiceCallSignalTransport transport;
   final VoiceCallMediaEngine media;
+  bool noiseSuppressionEnabled;
   final DateTime Function() _now;
   final Duration _connectionTimeout;
   final Duration _mediaInactivityTimeout;
@@ -359,6 +369,8 @@ class VoiceCallService {
         media.open(peerDeviceId: session.peerDeviceId, outgoing: false),
       ).timeout(_connectionTimeout);
       if (!_isConnecting(connecting.callId)) return;
+      await media.setNoiseSuppression(noiseSuppressionEnabled);
+      if (!_isConnecting(connecting.callId)) return;
       _markConnected(connecting.callId);
     } catch (error) {
       if (_active?.callId == connecting.callId) {
@@ -386,12 +398,19 @@ class VoiceCallService {
         media.open(peerDeviceId: session.peerDeviceId, outgoing: true),
       ).timeout(_connectionTimeout);
       if (!_isConnecting(connecting.callId)) return;
+      await media.setNoiseSuppression(noiseSuppressionEnabled);
+      if (!_isConnecting(connecting.callId)) return;
       _markConnected(connecting.callId);
     } catch (error) {
       if (_active?.callId == connecting.callId) {
         await end(reason: 'Could not establish voice media: $error');
       }
     }
+  }
+
+  Future<void> setNoiseSuppression(bool enabled) async {
+    if (_mediaOwnerCallId != null) await media.setNoiseSuppression(enabled);
+    noiseSuppressionEnabled = enabled;
   }
 
   Future<void> toggleMute() async {

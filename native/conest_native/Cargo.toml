@@ -51,14 +51,13 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 [target.'cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))'.dependencies]
 crossbeam-queue = "0.3"
 opus = "0.4"
+# WebRTC AEC3 and noise suppression; Android uses NS when its effect is absent.
+sonora = "0.2"
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 cpal = "0.18.2"
 nokhwa = { version = "0.10.11", features = ["input-native"] }
 rxing = { version = "0.9.1", default-features = false, features = ["decoders", "encoding_rs", "qrcode"] }
-# Pure-Rust port of WebRTC audio processing (AEC3), the echo canceller used
-# by WebRTC-based voice stacks such as Discord's and Telegram's.
-sonora = "0.2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.22.4"
