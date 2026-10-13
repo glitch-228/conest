@@ -6,6 +6,7 @@ import 'group_call_crypto.dart';
 import 'group_call_media.dart';
 import 'group_call_models.dart';
 import 'group_call_policy.dart';
+import 'group_call_topology.dart';
 
 abstract interface class GroupCallTransport {
   /// A single pairwise authenticated envelope, including for group-only peers.
@@ -56,6 +57,12 @@ class GroupCallRoom {
   int measuredRttMs = 0;
   double measuredLoss = 0;
   DateTime? lastStatsSent;
+  DateTime? lastPingAt;
+  int? pendingPing;
+  final Map<String, DateTime> mediaSeen = {};
+  final Map<String, DateTime> failedForwarders = {};
+  final Map<String, int> rtts = {};
+  DateTime? lastTopologySent;
   DateTime? lastJoinSent;
   bool get connected =>
       joined &&
@@ -114,6 +121,9 @@ class GroupCallService {
   bool get mediaBusy => _activeGroup != null || _pendingMediaClose != null;
   int _outboundFrames = 0;
   int _inboundFrames = 0;
+  int _controlJobs = 0;
+  Future<void>? _tickJob;
+  final Map<String, int> _datagramJobs = {};
   Stream<void> get changes => _changes.stream;
   List<GroupCallRoom> get rooms =>
       List.unmodifiable(_rooms.values.where((r) => !r.ended));
@@ -167,17 +177,19 @@ class GroupCallService {
     Map<String, dynamic> payload = const {},
   ]) async {
     final signal = _signal(room, action, payload);
-    for (final peer in _members(room.groupId)) {
-      if (peer.deviceId != localDeviceId && peer.canJoin) {
-        try {
-          await transport
-              .sendSignal(signal, peer.deviceId)
-              .timeout(const Duration(seconds: 3));
-        } catch (_) {
-          /* Call controls are repeated while the call is live. */
-        }
-      }
-    }
+    await Future.wait(
+      _members(room.groupId)
+          .where((peer) => peer.deviceId != localDeviceId && peer.canJoin)
+          .map((peer) async {
+            try {
+              await transport
+                  .sendSignal(signal, peer.deviceId)
+                  .timeout(const Duration(seconds: 3));
+            } catch (_) {
+              /* Repeated live controls recover a lost route. */
+            }
+          }),
+    );
   }
 
   Map<String, dynamic> _rosterPayload(GroupCallRoom room) => {
@@ -310,7 +322,12 @@ class GroupCallService {
     final key = GroupCallCipher.randomKey();
     try {
       await room.cipher.install(room.epoch, key, room.participants);
-      room.allParticipants.addAll(room.participants.map((p) => p.deviceId));
+      room.allParticipants.addAll(
+        room.participants
+            .map((p) => p.deviceId)
+            .where((id) => !room.allParticipants.contains(id))
+            .take(128 - room.allParticipants.length),
+      );
       final payload = _rosterPayload(room);
       if (announce) await _fanout(room, 'roster', payload);
       // The key is addressed individually, never published as a group event.
@@ -340,6 +357,20 @@ class GroupCallService {
   }
 
   Future<bool> receiveSignal(
+    GroupCallSignal signal, {
+    required String authenticatedSender,
+  }) {
+    if (_disposed || _controlJobs >= 32) return Future.value(false);
+    _controlJobs++;
+    return _receiveSignal(
+      signal,
+      authenticatedSender: authenticatedSender,
+    ).whenComplete(() {
+      _controlJobs--;
+    });
+  }
+
+  Future<bool> _receiveSignal(
     GroupCallSignal signal, {
     required String authenticatedSender,
   }) => _serial(() async {
@@ -387,7 +418,7 @@ class GroupCallService {
       if (room == null || room.callId != signal.callId) return false;
       if (!room.signalRates
           .putIfAbsent(authenticatedSender, GroupCallRateLimit.new)
-          .accept(now(), 12)) {
+          .accept(now(), authenticatedSender == room.coordinator ? 48 : 12)) {
         return false;
       }
       if (room.participants.any((p) => p.deviceId == authenticatedSender)) {
@@ -470,8 +501,47 @@ class GroupCallService {
           }
           room.stats[authenticatedSender] = stats;
           room.statsIssued[authenticatedSender] = signal.issuedAt;
+          final silent = signal.payload['silentForwarder'];
+          if (silent is String && silent == room.forwarder) {
+            room.failedForwarders[silent] = now().add(
+              const Duration(seconds: 5),
+            );
+          }
         case 'topology':
-          return false; // Phase D installs the shared election snapshot.
+          if (authenticatedSender != room.coordinator ||
+              signal.payload['rosterVersion'] != room.version) {
+            return false;
+          }
+          final revision = signal.payload['version'];
+          if (revision is! int ||
+              revision <= room.topologyVersion ||
+              revision > 0x7fffffff) {
+            return false;
+          }
+          final snapshot = parseGroupCallStatsSnapshot(
+            signal.payload['stats'],
+            room.participants,
+          );
+          final excluded = _parseExcluded(room, signal.payload['excluded']);
+          final forwarder = signal.payload['forwarder'];
+          if (forwarder != null &&
+              (forwarder is! String ||
+                  forwarder !=
+                      electGroupCallForwarder(
+                        room.participants
+                            .where((p) => !excluded.contains(p.deviceId))
+                            .toList(),
+                        snapshot,
+                      ))) {
+            return false;
+          }
+          if (forwarder == null &&
+              room.participants.length > policy.meshLimit) {
+            return false;
+          }
+          room.topologyVersion = revision;
+          _setForwarder(room, forwarder as String?);
+          room.stats.addAll(snapshot);
         default:
           return false;
       }
@@ -529,8 +599,22 @@ class GroupCallService {
     room.participants = roster;
     room.version = version;
     room.epoch = epoch;
-    room.allParticipants.addAll(roster.map((p) => p.deviceId));
-    room.seen.removeWhere((id, _) => !roster.any((p) => p.deviceId == id));
+    room.allParticipants.addAll(
+      roster
+          .map((p) => p.deviceId)
+          .where((id) => !room.allParticipants.contains(id))
+          .take(128 - room.allParticipants.length),
+    );
+    bool gone(String id) => !roster.any((p) => p.deviceId == id);
+    room.seen.removeWhere((id, _) => gone(id));
+    room.stats.removeWhere((id, _) => gone(id));
+    room.statsIssued.removeWhere((id, _) => gone(id));
+    room.signalRates.removeWhere((id, _) => gone(id));
+    room.frameRates.removeWhere((id, _) => gone(id));
+    room.audioSequences.removeWhere((id, _) => gone(id));
+    room.mediaSeen.removeWhere((id, _) => gone(id));
+    room.failedForwarders.removeWhere((id, _) => gone(id));
+    room.rtts.removeWhere((id, _) => gone(id));
     for (final peer in roster) {
       room.seen.putIfAbsent(peer.deviceId, now);
     }
@@ -545,6 +629,9 @@ class GroupCallService {
     room.stats.remove(sender);
     room.statsIssued.remove(sender);
     room.audioSequences.remove(sender);
+    room.mediaSeen.remove(sender);
+    room.failedForwarders.remove(sender);
+    room.rtts.remove(sender);
     room.frameRates.remove(sender);
     room.signalRates.remove(sender);
     _syncMedia(room, previous);
@@ -556,7 +643,10 @@ class GroupCallService {
       room.coordinator =
           (room.participants.map((p) => p.deviceId).toList()..sort()).first;
     }
-    if (room.coordinator == localDeviceId) await _rotate(room);
+    if (room.coordinator == localDeviceId) {
+      await _rotate(room);
+      await _updateTopology(room);
+    }
   }
 
   Future<void> leave() => _serial(() async {
@@ -671,21 +761,58 @@ class GroupCallService {
     try {
       final frame = await room.cipher.encrypt(payload);
       if (frame == null || room.ended || !identical(active, room)) return;
-      for (final peer in room.participants) {
-        if (peer.deviceId == localDeviceId ||
-            _member(room.groupId, peer.deviceId)?.directRoute != true) {
-          continue;
-        }
-        try {
-          await transport
-              .sendDatagram(room.groupId, peer.deviceId, frame)
-              .timeout(const Duration(milliseconds: 250));
-        } catch (_) {
-          /* Bounded lossy media, never the persistent queue. */
-        }
-      }
+      final overlap = room.overlapUntil?.isAfter(now()) == true;
+      final recipients =
+          room.forwarder == null || room.forwarder == localDeviceId
+          ? room.participants.map((p) => p.deviceId).toSet()
+          : {
+              room.forwarder!,
+              if (overlap && room.previousForwarder != null)
+                room.previousForwarder!,
+            };
+      _dispatchFrame(room, recipients, frame);
     } finally {
       _outboundFrames--;
+    }
+  }
+
+  void _dispatchFrame(
+    GroupCallRoom room,
+    Set<String> recipients,
+    Uint8List frame,
+  ) {
+    for (final peer in recipients.take(groupCallMaxParticipants)) {
+      if (peer == localDeviceId ||
+          _member(room.groupId, peer)?.directRoute != true ||
+          !room.participants.any((p) => p.deviceId == peer)) {
+        continue;
+      }
+      final count = _datagramJobs[peer] ?? 0;
+      if (count >= 3 ||
+          (count == 0 && _datagramJobs.length >= groupCallMaxParticipants)) {
+        continue;
+      }
+      _datagramJobs[peer] = count + 1;
+      void release() {
+        final remaining = (_datagramJobs[peer] ?? 1) - 1;
+        if (remaining == 0) {
+          _datagramJobs.remove(peer);
+        } else {
+          _datagramJobs[peer] = remaining;
+        }
+      }
+
+      // Even a failed dial owns its slot until its native operation ends.
+      // No persistent media queue and no retransmission of old audio.
+      try {
+        unawaited(
+          transport
+              .sendDatagram(room.groupId, peer, frame)
+              .then((_) => release(), onError: (Object _) => release()),
+        );
+      } catch (_) {
+        release();
+      }
     }
   }
 
@@ -706,7 +833,10 @@ class GroupCallService {
     }
     final claimed = room.cipher.claimedSender(bytes);
     if (claimed == null ||
-        claimed != authenticatedSender ||
+        (claimed != authenticatedSender &&
+            authenticatedSender != room.forwarder &&
+            !(authenticatedSender == room.previousForwarder &&
+                room.overlapUntil?.isAfter(now()) == true)) ||
         claimed == localDeviceId ||
         _member(groupId, claimed)?.canJoin != true ||
         !room.frameRates
@@ -723,23 +853,192 @@ class GroupCallService {
           _member(groupId, frame.sender)?.canJoin != true) {
         return;
       }
+      if (!room.participants.any((p) => p.deviceId == frame.sender)) return;
       room.seen[frame.sender] = now();
+      room.mediaSeen[authenticatedSender] = now();
+      room.failedForwarders.remove(authenticatedSender);
+      final forwarding =
+          room.forwarder == localDeviceId ||
+          (room.previousForwarder == localDeviceId &&
+              room.overlapUntil?.isAfter(now()) == true);
+      if (forwarding && authenticatedSender == frame.sender) {
+        // Forward the original authenticated ciphertext without re-encrypting.
+        _dispatchFrame(
+          room,
+          room.participants
+              .map((p) => p.deviceId)
+              .where((id) => id != frame.sender)
+              .toSet(),
+          bytes,
+        );
+      }
       final payload = frame.payload;
+      if (payload[0] == 1 && payload.length == 9) {
+        final pong = Uint8List(10)
+          ..[0] = 2
+          ..[1] = frame.index
+          ..setRange(2, 10, payload.sublist(1));
+        await _sendPayload(room, pong);
+        return;
+      }
+      if (payload[0] == 2 && payload.length == 10) {
+        final me = room.participants
+            .where((p) => p.deviceId == localDeviceId)
+            .firstOrNull;
+        final sent = ByteData.sublistView(payload).getUint64(2, Endian.big);
+        if (me == null || payload[1] != me.index || sent != room.pendingPing) {
+          return;
+        }
+        final elapsed = now().millisecondsSinceEpoch - sent;
+        if (elapsed >= 0 && elapsed <= 60000) {
+          room.rtts[frame.sender] = elapsed;
+          room.measuredRttMs = room.rtts.values.fold<int>(
+            0,
+            (a, b) => a > b ? a : b,
+          );
+        }
+        return;
+      }
       if (payload.length < 6 || payload[0] != 0) return;
       final sequence = ByteData.sublistView(payload).getUint32(1, Endian.big);
       if (sequence == 0) return;
+      final previous = room.audioSequences[frame.sender] ?? 0;
+      if (sequence > previous) {
+        if (previous > 0) {
+          final delta = sequence - previous;
+          room.measuredLoss =
+              (room.measuredLoss * 0.9 + (delta - 1) / delta * 0.1).clamp(
+                0.0,
+                1.0,
+              );
+        }
+        room.audioSequences[frame.sender] = sequence;
+      }
       media.play(frame.index, sequence, Uint8List.sublistView(payload, 5));
     } finally {
       _inboundFrames--;
     }
   }
 
-  Future<void> tick() => _serial(() async {
+  Set<String> _parseExcluded(GroupCallRoom room, Object? value) {
+    if (value is! List ||
+        value.length > groupCallMaxParticipants ||
+        value.any(
+          (id) =>
+              id is! String || !room.participants.any((p) => p.deviceId == id),
+        )) {
+      throw const FormatException('Invalid forwarder exclusions.');
+    }
+    return value.cast<String>().toSet();
+  }
+
+  void _setForwarder(GroupCallRoom room, String? forwarder) {
+    if (room.forwarder == forwarder) return;
+    room.previousForwarder = room.forwarder;
+    room.forwarder = forwarder;
+    room.overlapUntil = now().add(const Duration(milliseconds: 600));
+    if (forwarder != null) room.mediaSeen.putIfAbsent(forwarder, now);
+  }
+
+  Future<void> _updateTopology(GroupCallRoom room) async {
+    if (room.coordinator != localDeviceId || !room.connected) return;
+    room.failedForwarders.removeWhere((_, until) => !until.isAfter(now()));
+    final poor = room.stats.values.any((s) => s.poor);
+    if (poor) {
+      room.poorSince ??= now();
+    } else {
+      room.poorSince = null;
+    }
+    final needsForwarder =
+        room.participants.length > policy.meshLimit ||
+        (room.poorSince != null &&
+            now().difference(room.poorSince!) >= const Duration(seconds: 3));
+    final selected = needsForwarder
+        ? electGroupCallForwarder(
+            room.participants
+                .where((p) => !room.failedForwarders.containsKey(p.deviceId))
+                .toList(),
+            room.stats,
+          )
+        : null;
+    if (room.forwarder != selected ||
+        room.lastTopologySent == null ||
+        now().difference(room.lastTopologySent!) >=
+            const Duration(seconds: 1)) {
+      _setForwarder(room, selected);
+      room.topologyVersion++;
+      await _fanout(room, 'topology', {
+        'version': room.topologyVersion,
+        'rosterVersion': room.version,
+        'forwarder': selected,
+        'stats': {
+          for (final entry in room.stats.entries)
+            if (room.participants.any((p) => p.deviceId == entry.key))
+              entry.key: entry.value.toJson(),
+        },
+        'excluded': room.failedForwarders.keys
+            .where((id) => room.participants.any((p) => p.deviceId == id))
+            .toList(),
+      });
+      room.lastTopologySent = now();
+    }
+  }
+
+  Future<void> _ping(GroupCallRoom room) async {
+    if (!room.connected ||
+        (room.lastPingAt != null &&
+            now().difference(room.lastPingAt!) < const Duration(seconds: 1))) {
+      return;
+    }
+    room.lastPingAt = now();
+    room.pendingPing = now().millisecondsSinceEpoch;
+    final ping = Uint8List(9)..[0] = 1;
+    ByteData.sublistView(ping).setUint64(1, room.pendingPing!, Endian.big);
+    await _sendPayload(room, ping);
+  }
+
+  Future<void> tick() {
+    if (_tickJob != null) return _tickJob!;
+    final job = _serial(_tick);
+    _tickJob = job;
+    return job.whenComplete(() {
+      if (identical(_tickJob, job)) _tickJob = null;
+    });
+  }
+
+  Future<void> _tick() async {
     if (_disposed) return;
     for (final room in List<GroupCallRoom>.of(rooms)) {
       if (_member(room.groupId, localDeviceId)?.canJoin != true) {
         await _finish(room);
         continue;
+      }
+      final currentForwarder = room.forwarder;
+      if (currentForwarder != null &&
+          currentForwarder != localDeviceId &&
+          now().difference(room.mediaSeen[currentForwarder] ?? room.startedAt) >
+              const Duration(milliseconds: 1500)) {
+        room.failedForwarders[currentForwarder] = now().add(
+          const Duration(seconds: 5),
+        );
+        room.lastStatsSent = null;
+      }
+      final silent = room.participants
+          .where(
+            (p) =>
+                p.deviceId != localDeviceId &&
+                now().difference(room.seen[p.deviceId] ?? room.startedAt) >
+                    Duration(
+                      milliseconds:
+                          p.deviceId == room.coordinator ||
+                              p.deviceId == room.forwarder
+                          ? 1500
+                          : 5000,
+                    ),
+          )
+          .toList();
+      for (final peer in silent) {
+        await _remove(room, peer.deviceId);
       }
       final removed = room.participants
           .where((p) => _member(room.groupId, p.deviceId)?.canJoin != true)
@@ -763,12 +1062,20 @@ class GroupCallService {
         );
         room.stats[localDeviceId] = stats;
         room.seen[localDeviceId] = now();
-        await _fanout(room, 'stats', stats.toJson());
+        await _fanout(room, 'stats', {
+          ...stats.toJson(),
+          if (currentForwarder != null &&
+              room.failedForwarders.containsKey(currentForwarder))
+            'silentForwarder': currentForwarder,
+        });
         room.lastStatsSent = now();
       }
+      await _ping(room);
+      await _updateTopology(room);
     }
     _notify();
-  });
+  }
+
   double level(String deviceId) {
     final peer = active?.participants
         .where((p) => p.deviceId == deviceId)

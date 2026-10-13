@@ -52,3 +52,17 @@ check('lib/src/messenger_controller.dart', lambda s: s.replace(
       '      featureCapabilityVersion: profile.featureCapabilityVersion,\n', '', 1),
       'group-only members join encrypted voice calls over Iroh',
       'test/messenger_controller_test.dart')
+
+check('lib/src/group_call/group_call_topology.dart',
+      lambda s: s.replace('return candidates.first;', 'return candidates.last;', 1),
+      'election preference and tie break are deterministic', 'test/group_call_topology_test.dart')
+check('lib/src/group_call/group_call_service.dart',
+      lambda s: s.replace('if (forwarding && authenticatedSender == frame.sender)',
+      'if (false && forwarding && authenticatedSender == frame.sender)', 1),
+      'seven participants agree on one forwarder and hear every sender', 'test/group_call_topology_test.dart')
+check('lib/src/group_call/group_call_service.dart',
+      lambda s: s.replace('? 1500', '? 15000', 1),
+      'dropped forwarder is replaced within two seconds with lasting audio', 'test/group_call_topology_test.dart')
+check('lib/src/group_call/group_call_service.dart',
+      lambda s: s.replace('now().difference(room.poorSince!) >= const Duration(seconds: 3)', 'now().difference(room.poorSince!) >= const Duration(seconds: 300)', 1),
+      'poor mesh links held for three seconds select a forwarder', 'test/group_call_topology_test.dart')
