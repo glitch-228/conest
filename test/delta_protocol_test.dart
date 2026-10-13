@@ -842,6 +842,24 @@ void main() {
       expect(bob.chats.chats[created.chatKey!]!.members, [alice.fingerprint]);
       expect(bob.chats.chats[created.chatKey!]!.name, 'Real');
     });
+    test('requests without the invite do not use up answers', () async {
+      for (var index = 0; index < 40; index++) {
+        await receiveAs(
+          alice,
+          DeltaMail.buildRequest(
+            key: mallory.protocol.key,
+            from: mallory.addr,
+            to: alice.addr,
+            step: 'vc-request',
+            invitenumber: 'guess$index',
+            messageId: 'Mr.spam$index@example.org',
+            date: clock,
+          ),
+        );
+      }
+      await introduce(bob, alice, v3: false);
+      expect(alice.chats.peers[bob.fingerprint]?.verified, isTrue);
+    });
   });
 }
 

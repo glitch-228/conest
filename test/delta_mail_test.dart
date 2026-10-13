@@ -158,6 +158,23 @@ void main() {
       expect(await DeltaMail.read(bytes(forged), bob), isNull);
     });
 
+    test('gossip about people the mail is not to is not read', () async {
+      final mail = await DeltaMail.build(
+        key: alice,
+        from: 'alice@example.org',
+        to: [(addr: 'bob@example.org', key: bob.publicKey)],
+        gossip: [
+          (addr: 'bob@example.org', key: bob.publicKey),
+          (addr: 'eve@example.org', key: eve.publicKey),
+        ],
+        text: 'hi',
+        messageId: 'Mr.6@example.org',
+        date: date,
+      );
+      final read = await DeltaMail.read(bytes(mail), bob);
+      expect(read!.gossip.keys, ['bob@example.org']);
+    });
+
     test('a key claiming someone\'s address signs only as itself', () async {
       final mail = await DeltaMail.build(
         key: eve,

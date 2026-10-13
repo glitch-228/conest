@@ -157,6 +157,9 @@ abstract final class DeltaMail {
   /// Largest mail read as a Delta Chat message.
   static const int maxBytes = 2 * 1024 * 1024;
 
+  /// Most gossiped keys read from one mail.
+  static const int maxGossip = 64;
+
   /// A new Message-ID (without brackets) at [domain].
   static String newMessageId(String domain, Random random) {
     const alphabet =
@@ -567,9 +570,23 @@ abstract final class DeltaMail {
         ...?knownKeys?.call(from),
       ]);
       if (signer != null) {
+        // Only keys of the mail's own recipients, and not too many: each
+        // costs two signature checks.
+        final recipients = {
+          for (final address in splitAddressList(
+            headers.raw('to').firstOrNull ?? '',
+          ))
+            ?parseMailAddress(address),
+        };
+        var parsed = 0;
         for (final value in content.headers.raw('autocrypt-gossip')) {
           final header = AutocryptHeader.parse(value);
-          if (header == null) continue;
+          if (header == null ||
+              !recipients.contains(header.addr) ||
+              gossip.containsKey(header.addr)) {
+            continue;
+          }
+          if (++parsed > maxGossip) break;
           try {
             gossip[header.addr] = await PgpPublicKey.parse(
               header.keydata,

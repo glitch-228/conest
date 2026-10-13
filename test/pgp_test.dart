@@ -254,4 +254,37 @@ void main() {
       expect(decrypted.signed, isFalse);
     });
   });
+
+  test('many packets for no key do not hide the one for this key', () async {
+    final message = await Pgp.encrypt(
+      Uint8List.fromList(utf8.encode('found')),
+      [bob.publicKey],
+      signer: alice,
+    );
+    final packets = OpenPgpSymmetric.readPackets(message);
+    final forBob = packets.firstWhere(
+      (packet) =>
+          packet.$1 == 1 &&
+          _sameBytes(
+            packet.$2.sublist(1, 9),
+            bob.publicKey.encryptionSubkey.keyId,
+          ),
+    );
+    final anonymous = Uint8List.fromList(forBob.$2)..fillRange(1, 9, 0);
+    final crowded = Uint8List.fromList([
+      for (var index = 0; index < 50; index++)
+        ...OpenPgpSymmetric.packet(1, anonymous..[20] ^= 1),
+      for (final (tag, body) in packets) ...OpenPgpSymmetric.packet(tag, body),
+    ]);
+    final read = await Pgp.decrypt(crowded, bob);
+    expect(utf8.decode(read.data), 'found');
+  });
+}
+
+bool _sameBytes(List<int> a, List<int> b) {
+  if (a.length != b.length) return false;
+  for (var index = 0; index < a.length; index++) {
+    if (a[index] != b[index]) return false;
+  }
+  return true;
 }

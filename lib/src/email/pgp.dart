@@ -573,9 +573,19 @@ abstract final class Pgp {
     final subkey = key.publicKey.encryptionSubkey;
     (int, Uint8List)? session;
     Uint8List? data;
+    final named = <Uint8List>[];
+    final anonymous = <Uint8List>[];
     for (final (tag, body) in packets) {
       if (tag == 1) {
-        session ??= await _unwrapSessionKey(body, key, subkey);
+        // Each try costs a key agreement: packets naming this key first,
+        // and only a few that name no key (a big group has many packets,
+        // a hostile mail could have thousands).
+        if (body.length >= 9 && _same(body.sublist(1, 9), subkey.keyId)) {
+          if (named.length < 4) named.add(body);
+        } else if (body.length >= 9 &&
+            body.sublist(1, 9).every((b) => b == 0)) {
+          if (anonymous.length < 4) anonymous.add(body);
+        }
       } else if (tag == 18) {
         data = body;
       } else if (tag == 20) {
@@ -583,6 +593,9 @@ abstract final class Pgp {
       } else if (tag != 3 && tag != 10) {
         throw const FormatException('Unexpected OpenPGP packet.');
       }
+    }
+    for (final body in [...named, ...anonymous]) {
+      session ??= await _unwrapSessionKey(body, key, subkey);
     }
     if (session == null) {
       throw const FormatException('This OpenPGP message is not for this key.');

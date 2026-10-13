@@ -690,16 +690,14 @@ class DeltaProtocol {
   ) async {
     final invitenumber = read.header('secure-join-invitenumber')?.trim();
     final bobKey = read.autocryptKey;
-    if (invitenumber == null ||
-        bobKey == null ||
-        !read.to.contains(self) ||
-        !_answerAllowed()) {
+    if (invitenumber == null || bobKey == null || !read.to.contains(self)) {
       return DeltaStep(chats);
     }
     final matches =
         _same(invitenumber, tokens.invitenumber) ||
         tokens.groups.values.any((group) => _same(invitenumber, group.$1));
-    if (!matches) return DeltaStep(chats);
+    // Only requests with the invite count toward the answer budget.
+    if (!matches || !_answerAllowed()) return DeltaStep(chats);
     _remember(bobKey);
     // An unsigned request says nothing of whose key it is: someone known
     // keeps their address (the answer goes to the requester only).
@@ -745,14 +743,14 @@ class DeltaProtocol {
     final password = read.password;
     // Delta Chat writes these with hidden recipients: the secret, not the
     // To header, says it is for this account.
-    if (auth == null || password == null || !_answerAllowed()) {
-      return DeltaStep(chats);
-    }
+    if (auth == null || password == null) return DeltaStep(chats);
     final known =
         _same(auth, tokens.auth) ||
         tokens.groups.values.any((group) => _same(auth, group.$2));
     // The secret it came with must be the one of that same auth code.
-    if (!known || !_same(password, _secret(fingerprint, auth))) {
+    if (!known ||
+        !_same(password, _secret(fingerprint, auth)) ||
+        !_answerAllowed()) {
       return DeltaStep(chats);
     }
     final mail = await DeltaMail.buildSecureJoinV3(
