@@ -86,10 +86,12 @@ void main() {
     );
     // The sample stretches the password over 65 MB; mail is refused that.
     expect(OpenPgpAead.decrypt(message, [utf8.encode('password')]), isNull);
-    final (inner, password) = OpenPgpAead.decrypt(message, [
-      utf8.encode('wrong'),
-      utf8.encode('password'),
-    ], maxS2kBytes: 65011712)!;
+    final (inner, password) = OpenPgpAead.decrypt(
+      message,
+      [utf8.encode('wrong'), utf8.encode('password')],
+      maxS2kBytes: 65011712,
+      iteratedS2k: true,
+    )!;
     expect(utf8.decode(password), 'password');
     expect(
       inner,
@@ -117,5 +119,23 @@ void main() {
     );
     final empty = OpenPgpAead.encrypt(Uint8List(0), utf8.encode('secret'));
     expect(OpenPgpAead.decrypt(empty, [utf8.encode('secret')])!.$1, isEmpty);
+  });
+
+  test('a mail full of password packets is not tried', () {
+    final message = OpenPgpAead.encrypt(
+      Uint8List.fromList([1, 2, 3]),
+      utf8.encode('secret'),
+    );
+    final packets = OpenPgpSymmetric.readPackets(message);
+    final skesk = OpenPgpSymmetric.packet(3, packets.first.$2);
+    Uint8List withSkesks(int count) => Uint8List.fromList([
+      for (var index = 0; index < count; index++) ...skesk,
+      ...OpenPgpSymmetric.packet(18, packets.last.$2),
+    ]);
+    expect(OpenPgpAead.decrypt(withSkesks(5), [utf8.encode('secret')]), isNull);
+    expect(
+      OpenPgpAead.decrypt(withSkesks(4), [utf8.encode('secret')]),
+      isNotNull,
+    );
   });
 }

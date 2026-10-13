@@ -174,14 +174,18 @@ class DeltaTokens {
   /// By group id: (invitenumber, auth).
   final Map<String, (String, String)> groups;
 
-  DeltaTokens withGroup(String groupId, Random random) =>
-      groups.containsKey(groupId)
-      ? this
-      : DeltaTokens(
-          invitenumber: invitenumber,
-          auth: auth,
-          groups: {...groups, groupId: (_token(random), _token(random))},
-        );
+  /// Most groups with invites of their own; the oldest invite stops
+  /// working past it (each one is a secret tried on incoming mail).
+  static const int maxGroups = 50;
+
+  DeltaTokens withGroup(String groupId, Random random) {
+    if (groups.containsKey(groupId)) return this;
+    final next = {...groups, groupId: (_token(random), _token(random))};
+    while (next.length > maxGroups) {
+      next.remove(next.keys.first);
+    }
+    return DeltaTokens(invitenumber: invitenumber, auth: auth, groups: next);
+  }
 
   Map<String, dynamic> toJson() => {
     'invitenumber': invitenumber,
@@ -247,6 +251,19 @@ class DeltaProtocol {
 
   /// Keys read before, by fingerprint (reading one checks signatures).
   final Map<String, PgpPublicKey> _keys = {};
+
+  /// When this account answered invite requests lately (whoever has an
+  /// invite can make it send mail): at most [maxAnswersPerHour].
+  final List<DateTime> _answers = [];
+  static const int maxAnswersPerHour = 30;
+
+  bool _answerAllowed() {
+    final now = _now();
+    _answers.removeWhere((at) => now.difference(at) > const Duration(hours: 1));
+    if (_answers.length >= maxAnswersPerHour) return false;
+    _answers.add(now);
+    return true;
+  }
 
   /// Longest text kept from a message.
   static const int maxTextChars = 10000;
@@ -470,8 +487,11 @@ class DeltaProtocol {
     // Membership follows the newest change: an older message (reordered,
     // or replayed by a removed member) does not undo a later one.
     final date = _clamp(read.date);
+    final now = _now().toUtc();
+    // A date ahead of this clock must not freeze the member list.
+    final stamp = date.isAfter(now) ? now : date;
     final membersAt = existing?.membersAt;
-    final fresh = membersAt == null || !date.isBefore(membersAt);
+    final fresh = membersAt == null || !stamp.isBefore(membersAt);
     // To and Chat-Group-Member-Fpr in the same order.
     final fingerprints = (read.header('chat-group-member-fpr') ?? '')
         .split(RegExp(r'\s+'))
@@ -572,7 +592,7 @@ class DeltaProtocol {
               members: members,
               name: senderIsMember && fresh ? name : null,
               left: left,
-              membersAt: changed ? date : null,
+              membersAt: changed ? stamp : null,
               kept:
                   kept ||
                   chats.chats.values.any(
@@ -610,7 +630,12 @@ class DeltaProtocol {
         create: () => chat,
       );
     }
-    return DeltaStep(next, consumed: true, chatKey: chatKey);
+    // Files cannot be shown here yet: such mail stays on the server.
+    return DeltaStep(
+      next,
+      consumed: read.attachments.isEmpty,
+      chatKey: chatKey,
+    );
   }
 
   String _nameOf(DeltaChats chats, String fingerprint) {
@@ -665,7 +690,10 @@ class DeltaProtocol {
   ) async {
     final invitenumber = read.header('secure-join-invitenumber')?.trim();
     final bobKey = read.autocryptKey;
-    if (invitenumber == null || bobKey == null || !read.to.contains(self)) {
+    if (invitenumber == null ||
+        bobKey == null ||
+        !read.to.contains(self) ||
+        !_answerAllowed()) {
       return DeltaStep(chats);
     }
     final matches =
@@ -715,7 +743,9 @@ class DeltaProtocol {
   ) async {
     final auth = read.header('secure-join-auth')?.trim();
     final password = read.password;
-    if (auth == null || password == null || !read.to.contains(self)) {
+    // Delta Chat writes these with hidden recipients: the secret, not the
+    // To header, says it is for this account.
+    if (auth == null || password == null || !_answerAllowed()) {
       return DeltaStep(chats);
     }
     final known =
@@ -754,7 +784,9 @@ class DeltaProtocol {
     bool v3 = false,
   }) async {
     final signer = read.signer;
-    if (!read.encrypted || signer == null || !_forMe(read)) {
+    // v3 answers come with hidden recipients; the invite's secret and the
+    // invite's key binding them stand in for the To check.
+    if (!read.encrypted || signer == null || (!v3 && !_forMe(read))) {
       return DeltaStep(chats);
     }
     final join = chats.joins
@@ -919,8 +951,12 @@ class DeltaProtocol {
         : DeltaChat.groupKey(invite.groupId!);
     // A group chat someone else made here before the user joined is not
     // trusted: joining starts it afresh from the inviter.
-    final existing = next.chats[chatKey]?.kept ?? false
-        ? next.chats[chatKey]
+    final known = next.chats[chatKey];
+    final existing =
+        known != null &&
+            known.kept &&
+            (!invite.isGroup || known.members.contains(invite.fingerprint))
+        ? known
         : null;
     next = next.withChat(
       (existing ??

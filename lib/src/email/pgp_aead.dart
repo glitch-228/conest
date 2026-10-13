@@ -102,6 +102,7 @@ abstract final class OpenPgpAead {
     Uint8List message,
     List<List<int>> passwords, {
     int maxS2kBytes = _maxS2kBytes,
+    bool iteratedS2k = false,
   }) {
     final packets = OpenPgpSymmetric.readPackets(message);
     Uint8List? seipd;
@@ -116,7 +117,13 @@ abstract final class OpenPgpAead {
       }
     }
     if (seipd == null || seipd.isEmpty || seipd[0] != 2) return null;
+    // Each try costs a key derivation: a mail full of password packets
+    // must not tie the app up.
+    if (skesks.length > 4) return null;
     for (final skesk in skesks) {
+      // Only salted S2K (as Delta Chat writes and accepts), unless asked:
+      // an iterated count is the sender's to choose, and costly.
+      if (!iteratedS2k && (skesk.length < 6 || skesk[5] != 1)) continue;
       for (final password in passwords) {
         final sessionKey = _openSkesk(skesk, password, maxS2kBytes);
         if (sessionKey != null) {

@@ -683,5 +683,180 @@ void main() {
         expect(chat.name, 'Real');
       },
     );
+
+    /// A Securejoin v3 mail shaped as Delta Chat core writes it
+    /// (`symm_encrypted_securejoin_message`): hidden recipients, only the
+    /// Securejoin headers inside, Autocrypt and a signature on vc-pubkey.
+    Future<String> deltaV3(
+      Party from, {
+      required String step,
+      required String auth,
+      required String secret,
+    }) async {
+      final sign = step == 'vc-pubkey';
+      final inner = [
+        'Content-Type: text/plain; charset="utf-8"; protected-headers="v1"; '
+            'hp="cipher"',
+        'To: "hidden-recipients": ;',
+        'Date: Tue, 13 Oct 2026 09:00:00 +0000',
+        'Subject: Secure-Join',
+        'Secure-Join: $step',
+        'Secure-Join-Auth: $auth',
+        if (sign)
+          foldedHeader(
+            'Autocrypt',
+            AutocryptHeader(
+              addr: from.addr,
+              keydata: from.protocol.key.publicKey.bytes,
+              mutual: true,
+            ).encode(),
+          ),
+        '',
+        'Secure-Join',
+        '',
+      ].join('\r\n');
+      final encrypted = await Pgp.encryptWithPassword(
+        Uint8List.fromList(utf8.encode(inner)),
+        utf8.encode(secret),
+        signer: sign ? from.protocol.key : null,
+      );
+      return wrap(from.addr, 'Mr.v3.$step@example.org', encrypted);
+    }
+
+    test('v3 as Delta Chat writes it works on both sides', () async {
+      // Delta Chat (on Mallory's device here) asks Alice for her key.
+      final auth = alice.protocol.tokens.auth;
+      final request = await deltaV3(
+        mallory,
+        step: 'vc-request-pubkey',
+        auth: auth,
+        secret: 'securejoin/${alice.fingerprint}/$auth',
+      );
+      final answered = await receiveAs(alice, request);
+      expect(answered.mails, hasLength(1));
+      expect(answered.mails.single.to, [mallory.addr]);
+
+      // And Alice, as Delta Chat would, answers Bob who joined her invite.
+      final invite = DeltaInvite.parse(alice.protocol.invite.toLink())!;
+      final joining = await bob.protocol.join(bob.chats, invite);
+      bob.apply(joining);
+      final pubkey = await deltaV3(
+        alice,
+        step: 'vc-pubkey',
+        auth: invite.auth,
+        secret: 'securejoin/${alice.fingerprint}/${invite.auth}',
+      );
+      final proof = await receiveAs(bob, pubkey);
+      expect(proof.mails, hasLength(1), reason: 'vc-request-with-auth');
+      expect(bob.chats.peers[alice.fingerprint]?.verified, isTrue);
+      await deliver(proof.mails);
+      expect(alice.chats.peers[bob.fingerprint]?.verified, isTrue);
+    });
+
+    test('group mail with files stays on the server', () async {
+      await introduce(bob, alice);
+      final created = await alice.protocol.createGroup(alice.chats, 'Files', [
+        bob.fingerprint,
+      ]);
+      alice.apply(created);
+      await deliver(created.mails);
+      final groupId = alice.chats.chats[created.chatKey!]!.groupId!;
+      final inner = [
+        'Content-Type: multipart/mixed; boundary="m"; protected-headers="v1"',
+        'From: <${alice.addr}>',
+        'To: <${bob.addr}>',
+        'Message-ID: <Mr.file@example.org>',
+        'Chat-Version: 1.0',
+        'Chat-Group-ID: $groupId',
+        'Chat-Group-Name: Files',
+        foldedHeader(
+          'Autocrypt',
+          AutocryptHeader(
+            addr: alice.addr,
+            keydata: alice.protocol.key.publicKey.bytes,
+            mutual: true,
+          ).encode(),
+        ),
+        '',
+        '--m',
+        'Content-Type: text/plain; charset="utf-8"',
+        '',
+        'see attached',
+        '--m',
+        'Content-Type: image/jpeg',
+        'Content-Disposition: attachment; filename="p.jpg"',
+        'Content-Transfer-Encoding: base64',
+        '',
+        'AAAA',
+        '--m--',
+        '',
+      ].join('\r\n');
+      final encrypted = await Pgp.encrypt(
+        Uint8List.fromList(utf8.encode(inner)),
+        [bob.protocol.key.publicKey],
+        signer: alice.protocol.key,
+      );
+      final step = await receiveAs(
+        bob,
+        wrap(alice.addr, 'Mr.file@example.org', encrypted),
+      );
+      expect(step.consumed, isFalse);
+      expect(
+        bob.chats.chats[created.chatKey!]!.messages.map((m) => m.text),
+        contains(contains('p.jpg')),
+      );
+    });
+
+    test('a contact\'s made-up group is replaced when joining', () async {
+      await introduce(bob, alice);
+      await introduce(bob, mallory);
+      final created = await alice.protocol.createGroup(
+        alice.chats,
+        'Real',
+        const [],
+      );
+      alice.apply(created);
+      final invite = alice.protocol.groupInvite(
+        alice.chats.chats[created.chatKey!]!,
+      );
+      final fake = await DeltaMail.build(
+        key: mallory.protocol.key,
+        from: mallory.addr,
+        to: [(addr: bob.addr, key: bob.protocol.key.publicKey)],
+        text: 'welcome',
+        messageId: 'Mr.fake@example.org',
+        date: clock,
+        extraHeaders: [
+          ('Chat-Group-ID', invite.groupId!),
+          ('Chat-Group-Name', 'Fake'),
+        ],
+      );
+      await receiveAs(bob, fake);
+      expect(bob.chats.chats[created.chatKey!]!.kept, isTrue);
+      final joining = await bob.protocol.join(
+        bob.chats,
+        DeltaInvite.parse(invite.toLink())!,
+      );
+      bob.apply(joining);
+      await deliver(joining.mails);
+      expect(bob.chats.chats[created.chatKey!]!.members, [alice.fingerprint]);
+      expect(bob.chats.chats[created.chatKey!]!.name, 'Real');
+    });
   });
 }
+
+/// [encrypted] as PGP/MIME mail from [from].
+String wrap(String from, String messageId, Uint8List encrypted) =>
+    'From: <$from>\r\n'
+    'To: "hidden-recipients": ;\r\n'
+    'Subject: [...]\r\n'
+    'Date: Tue, 13 Oct 2026 09:00:00 +0000\r\n'
+    'Message-ID: <$messageId>\r\n'
+    'Chat-Version: 1.0\r\n'
+    'MIME-Version: 1.0\r\n'
+    'Content-Type: multipart/encrypted; '
+    'protocol="application/pgp-encrypted"; boundary="b"\r\n'
+    '\r\n--b\r\nContent-Type: application/pgp-encrypted\r\n\r\n'
+    'Version: 1\r\n'
+    '--b\r\nContent-Type: application/octet-stream\r\n\r\n'
+    '${OpenPgpArmor.encode(encrypted)}\r\n--b--\r\n';
