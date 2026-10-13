@@ -191,6 +191,8 @@ Commit and push after each phase, with the tests green.
 
 - Phase E checkpoint: 73 focused new/existing call tests pass; all 12 protocol/topology and 19 recovery/UI sabotage checks pass. Analysis has the same 25 pre-existing diagnostics, no new issues. Separate reviewer confirmed all 13 findings resolved and no new confirmed findings in restored E source. Qualified debug workflow now runs the group, ownership, UI and actual controller regressions.
 
+- Phase F research complete: notes/GROUP-CALLS-MATRIX.md documents legacy/current MatrixRTC, focus discovery, OpenID/JWT authorization, encrypted media-key transport and a future migration/vote/dual-path design. Upstream prebuilt libwebrtc archives are 114–163 MB compressed; this is build/download cost, not final binary growth. The <25 MB shipped-size gate is unmeasured; MatrixRTC media/to-device APIs and linked-group room mapping are absent. Stop at the design note as explicitly permitted; no Matrix-call UI or transport settings are advertised.
+
 ## Handoff
 
 - Branch and final commit:
