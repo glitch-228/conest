@@ -4755,6 +4755,22 @@ enum AppMode {
   matrixOnly,
 }
 
+/// How much of Conest a user sees. Append only.
+enum UserMode {
+  /// One chat list, large text, the fewest settings: for people who just
+  /// want to message.
+  minimal,
+
+  /// Like the popular messengers: delivered and read ticks, no routes.
+  normal,
+
+  /// Everything: routes, transports, diagnostics.
+  advanced;
+
+  /// Whether routes, transports and other network detail show.
+  bool get showsNetworkDetail => this == advanced;
+}
+
 class VaultSnapshot {
   VaultSnapshot({
     required this.identity,
@@ -4793,6 +4809,8 @@ class VaultSnapshot {
     this.hiddenChatNetworks = const <String>[],
     this.keepFileMetadata = false,
     this.randomFileNames = false,
+    this.userMode,
+    this.userModeChosen = true,
   });
 
   final IdentityRecord? identity;
@@ -4902,6 +4920,12 @@ class VaultSnapshot {
   /// removed before sending.
   final bool keepFileMetadata;
 
+  /// How much the app shows (null: advanced, as before modes existed).
+  final UserMode? userMode;
+
+  /// False only between creating a new identity and choosing a mode.
+  final bool userModeChosen;
+
   /// Send files under random names (the extension kept).
   final bool randomFileNames;
 
@@ -4979,6 +5003,8 @@ class VaultSnapshot {
     List<String>? hiddenChatNetworks,
     bool? keepFileMetadata,
     bool? randomFileNames,
+    UserMode? userMode,
+    bool? userModeChosen,
     bool clearMatrixSession = false,
     bool clearIdentity = false,
   }) {
@@ -5033,6 +5059,8 @@ class VaultSnapshot {
       hiddenChatNetworks: hiddenChatNetworks ?? this.hiddenChatNetworks,
       keepFileMetadata: keepFileMetadata ?? this.keepFileMetadata,
       randomFileNames: randomFileNames ?? this.randomFileNames,
+      userMode: userMode ?? this.userMode,
+      userModeChosen: userModeChosen ?? this.userModeChosen,
     );
   }
 
@@ -5108,6 +5136,8 @@ class VaultSnapshot {
         'hiddenChatNetworks': hiddenChatNetworks,
       if (keepFileMetadata) 'keepFileMetadata': true,
       if (randomFileNames) 'randomFileNames': true,
+      if (userMode != null) 'userMode': userMode!.name,
+      if (!userModeChosen) 'userModeChosen': false,
     };
   }
 
@@ -5168,6 +5198,8 @@ class VaultSnapshot {
       ],
       keepFileMetadata: json['keepFileMetadata'] == true,
       randomFileNames: json['randomFileNames'] == true,
+      userMode: UserMode.values.asNameMap()[json['userMode']],
+      userModeChosen: json['userModeChosen'] != false,
       contacts: (json['contacts'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>()
           .map(ContactRecord.fromJson)

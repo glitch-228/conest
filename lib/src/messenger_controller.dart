@@ -4637,6 +4637,18 @@ class MessengerController extends ChangeNotifier {
     await _saveSnapshotSilently(notify: true);
   }
 
+  /// How much of the app shows (advanced for vaults from before modes).
+  UserMode get userMode => _snapshot.userMode ?? UserMode.advanced;
+
+  /// A new identity has not chosen a mode yet.
+  bool get needsUserModeChoice =>
+      _snapshot.identity != null && !_snapshot.userModeChosen;
+
+  Future<void> setUserMode(UserMode mode) async {
+    _snapshot = _snapshot.copyWith(userMode: mode, userModeChosen: true);
+    await _saveSnapshotSilently(notify: true);
+  }
+
   Future<void> setRandomizesFileNames(bool value) async {
     _snapshot = _snapshot.copyWith(randomFileNames: value);
     await _saveSnapshotSilently(notify: true);
@@ -9212,7 +9224,8 @@ class MessengerController extends ChangeNotifier {
         signingIdentity.publicKeyBase64,
       ),
     );
-    _snapshot = _snapshot.copyWith(identity: created);
+    // A new identity chooses how much of the app it sees.
+    _snapshot = _snapshot.copyWith(identity: created, userModeChosen: false);
     // A new device has told nobody anything yet; every later exchange
     // carries the current list.
     _snapshot = _snapshot.copyWith(

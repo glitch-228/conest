@@ -11,7 +11,12 @@ class MessageInfoDialog extends StatelessWidget {
     required this.message,
     this.memberLabel,
     this.timestamp,
+    this.showRoutes = true,
   });
+
+  /// Routes and transports show only in advanced mode; otherwise the
+  /// details are times and states.
+  final bool showRoutes;
 
   final ChatMessage message;
 
@@ -26,12 +31,14 @@ class MessageInfoDialog extends StatelessWidget {
     required ChatMessage message,
     String Function(String deviceId)? memberLabel,
     String Function(DateTime time)? timestamp,
+    bool showRoutes = true,
   }) => showDialog<void>(
     context: context,
     builder: (context) => MessageInfoDialog(
       message: message,
       memberLabel: memberLabel,
       timestamp: timestamp,
+      showRoutes: showRoutes,
     ),
   );
 
@@ -59,6 +66,16 @@ class MessageInfoDialog extends StatelessWidget {
         MessageRouteMark.reachedDevice => 'reached their device',
         MessageRouteMark.confirmed => outbound ? 'delivered' : 'received',
       };
+
+  /// When it first reached them (their receipt, or their radio).
+  static DateTime? _deliveredAt(Iterable<RouteTrace> traces) {
+    DateTime? first;
+    for (final trace in traces) {
+      if (trace.mark.index < MessageRouteMark.reachedDevice.index) continue;
+      if (first == null || trace.at.isBefore(first)) first = trace.at;
+    }
+    return first;
+  }
 
   List<Widget> _routeLines(
     BuildContext context,
@@ -102,7 +119,14 @@ class MessageInfoDialog extends StatelessWidget {
             trace.deviceId == null ||
             trace.deviceId == message.senderDeviceId,
       );
-      if (traces.isNotEmpty) {
+      if (!showRoutes) {
+        final deliveredAt = outbound ? _deliveredAt(traces) : null;
+        if (deliveredAt != null) {
+          children
+            ..add(const SizedBox(height: 8))
+            ..add(Text('Delivered ${_time(deliveredAt)}'));
+        }
+      } else if (traces.isNotEmpty) {
         children
           ..add(const SizedBox(height: 12))
           ..add(Text(outbound ? 'Routes' : 'Arrived by', style: heading))
@@ -128,6 +152,10 @@ class MessageInfoDialog extends StatelessWidget {
       for (final deviceId in memberIds) {
         final state = message.recipientStates[deviceId];
         final readAt = message.recipientReadAt[deviceId];
+        final memberTraces = message.routeTrace.where(
+          (trace) => trace.deviceId == deviceId,
+        );
+        final deliveredAt = showRoutes ? null : _deliveredAt(memberTraces);
         children
           ..add(const SizedBox(height: 12))
           ..add(
@@ -141,16 +169,15 @@ class MessageInfoDialog extends StatelessWidget {
             Text(
               [
                 if (state != null) state.label,
+                if (deliveredAt != null) 'delivered ${_time(deliveredAt)}',
                 if (readAt != null) 'read ${_time(readAt)}',
               ].join(', '),
             ),
           )
           ..addAll(
-            _routeLines(
-              context,
-              message.routeTrace.where((trace) => trace.deviceId == deviceId),
-              outbound: true,
-            ),
+            showRoutes
+                ? _routeLines(context, memberTraces, outbound: true)
+                : const <Widget>[],
           );
       }
     }

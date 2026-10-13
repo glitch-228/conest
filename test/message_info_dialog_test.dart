@@ -112,6 +112,36 @@ void main() {
     expect(find.textContaining('read 12:01:00'), findsOneWidget);
   });
 
+  testWidgets('without routes the details give times only', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageInfoDialog(
+            message: message(
+              outbound: true,
+              states: {'bob': DeliveryState.read},
+              traces: [
+                RouteTrace(
+                  route: MessageRoute.irohDirect,
+                  mark: MessageRouteMark.confirmed,
+                  at: at.add(const Duration(seconds: 2)),
+                  deviceId: 'bob',
+                ),
+              ],
+              readAt: {'bob': at.add(const Duration(minutes: 1))},
+            ),
+            memberLabel: (_) => 'Bob',
+            timestamp: time,
+            showRoutes: false,
+          ),
+        ),
+      ),
+    );
+    expect(find.textContaining('Iroh'), findsNothing);
+    expect(find.textContaining('delivered 12:00:02'), findsOneWidget);
+    expect(find.textContaining('read 12:01:00'), findsOneWidget);
+  });
+
   test('receipts naming only unknown routes say nothing about routes', () {
     expect(MessageRoute.namedInReceipt(null), isNull);
     expect(MessageRoute.namedInReceipt(['warpDrive']), isNull);

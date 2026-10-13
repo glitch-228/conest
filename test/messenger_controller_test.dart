@@ -25,6 +25,7 @@ import 'package:conest/src/crypto_service.dart';
 import 'package:conest/src/feature_models.dart';
 import 'package:conest/src/email/mail_socket.dart';
 import 'package:conest/src/energy_policy.dart';
+import 'package:conest/src/ui/user_mode_screen.dart';
 import 'package:conest/src/group_file_crypto.dart';
 import 'package:conest/src/group_file_download.dart';
 import 'package:conest/src/group_history_event.dart';
@@ -15076,6 +15077,101 @@ void main() {
             );
         return families(traces).length >= 2;
       }, reason: 'the group receipt did not name two routes');
+    });
+  });
+
+  group('User modes', () {
+    test('a new identity chooses a mode; older vaults stay advanced', () async {
+      final vault = _MemoryVaultStore();
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        vaultStore: vault,
+      );
+      addTearDown(alice.dispose);
+      expect(alice.needsUserModeChoice, isTrue);
+      await alice.setUserMode(UserMode.minimal);
+      expect(alice.needsUserModeChoice, isFalse);
+      expect(alice.userMode, UserMode.minimal);
+      expect((await vault.load()).userMode, UserMode.minimal);
+
+      // A vault from before modes: advanced, nothing to choose.
+      final old = VaultSnapshot.fromJson(
+        (await vault.load()).toJson()
+          ..remove('userMode')
+          ..remove('userModeChosen'),
+      );
+      expect(old.userMode, isNull);
+      expect(old.userModeChosen, isTrue);
+    });
+
+    testWidgets('the choice screen sets the mode', (tester) async {
+      final alice = (await tester.runAsync(
+        () => _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+        ),
+      ))!;
+      addTearDown(alice.dispose);
+      await tester.pumpWidget(
+        MaterialApp(home: UserModeScreen(controller: alice)),
+      );
+      await tester.tap(find.byKey(const ValueKey('user-mode-advanced')));
+      await tester.pump();
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('user-mode-continue')),
+        200,
+      );
+      await tester.tap(find.byKey(const ValueKey('user-mode-continue')));
+      await tester.pump();
+      expect(
+        find.textContaining('Each is off until you turn it on'),
+        findsOneWidget,
+      );
+      await tester.ensureVisible(find.byKey(const ValueKey('user-mode-start')));
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const ValueKey('user-mode-start')));
+        await _waitForIroh(() => !alice.needsUserModeChoice);
+      });
+      expect(alice.userMode, UserMode.advanced);
+    });
+
+    testWidgets('simple mode shows only personal settings until asked', (
+      tester,
+    ) async {
+      final alice = (await tester.runAsync(
+        () => _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+        ),
+      ))!;
+      addTearDown(alice.dispose);
+      await tester.runAsync(() => alice.setUserMode(UserMode.minimal));
+      final updates = _createUpdateService();
+      final theme = app.ConestThemeController.memory();
+      addTearDown(updates.dispose);
+      addTearDown(theme.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: app.SettingsDialog(
+              controller: alice,
+              updateService: updates,
+              themeController: theme,
+              palette: app.ConestPalette(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('// CONNECTIVITY'), findsNothing);
+      expect(find.text('// PERSONAL / PREFERENCES'), findsOneWidget);
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('show-all-settings')),
+      );
+      await tester.tap(find.byKey(const ValueKey('show-all-settings')));
+      await tester.pump();
+      expect(find.text('// CONNECTIVITY'), findsOneWidget);
     });
   });
 
