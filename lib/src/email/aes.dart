@@ -1,7 +1,8 @@
 import 'dart:typed_data';
 
-/// AES (FIPS-197) block encryption, the only direction OpenPGP's CFB mode
-/// needs. Table-free and synchronous; mail frames are small.
+/// AES (FIPS-197) block encryption (all OpenPGP's CFB mode needs) and
+/// decryption (for unwrapping keys). Table-free and synchronous; mail
+/// frames are small.
 class AesBlockCipher {
   AesBlockCipher(Uint8List key)
     : assert(key.length == 16 || key.length == 24 || key.length == 32),
@@ -31,6 +32,92 @@ class AesBlockCipher {
     _shiftRows(state);
     _addRoundKey(state, _rounds);
     output.setRange(outOffset, outOffset + 16, state);
+  }
+
+  /// Decrypts one 16-byte block of [input] at [inOffset] into [output] at
+  /// [outOffset].
+  void decryptBlock(
+    Uint8List input,
+    int inOffset,
+    Uint8List output,
+    int outOffset,
+  ) {
+    final state = Uint8List(16)..setRange(0, 16, input, inOffset);
+    _addRoundKey(state, _rounds);
+    for (var round = _rounds - 1; round > 0; round--) {
+      _invShiftRows(state);
+      _invSubBytes(state);
+      _addRoundKey(state, round);
+      _invMixColumns(state);
+    }
+    _invShiftRows(state);
+    _invSubBytes(state);
+    _addRoundKey(state, 0);
+    output.setRange(outOffset, outOffset + 16, state);
+  }
+
+  static void _invSubBytes(Uint8List state) {
+    for (var index = 0; index < 16; index++) {
+      state[index] = _invSbox[state[index]];
+    }
+  }
+
+  static void _invShiftRows(Uint8List s) {
+    var t = s[13];
+    s[13] = s[9];
+    s[9] = s[5];
+    s[5] = s[1];
+    s[1] = t;
+    t = s[2];
+    s[2] = s[10];
+    s[10] = t;
+    t = s[6];
+    s[6] = s[14];
+    s[14] = t;
+    t = s[3];
+    s[3] = s[7];
+    s[7] = s[11];
+    s[11] = s[15];
+    s[15] = t;
+  }
+
+  static int _multiply(int a, int b) {
+    var result = 0;
+    var x = a;
+    var y = b;
+    while (y != 0) {
+      if ((y & 1) != 0) result ^= x;
+      x = _xtime(x);
+      y >>= 1;
+    }
+    return result;
+  }
+
+  static void _invMixColumns(Uint8List s) {
+    for (var column = 0; column < 4; column++) {
+      final i = column * 4;
+      final a0 = s[i], a1 = s[i + 1], a2 = s[i + 2], a3 = s[i + 3];
+      s[i] =
+          _multiply(a0, 14) ^
+          _multiply(a1, 11) ^
+          _multiply(a2, 13) ^
+          _multiply(a3, 9);
+      s[i + 1] =
+          _multiply(a0, 9) ^
+          _multiply(a1, 14) ^
+          _multiply(a2, 11) ^
+          _multiply(a3, 13);
+      s[i + 2] =
+          _multiply(a0, 13) ^
+          _multiply(a1, 9) ^
+          _multiply(a2, 14) ^
+          _multiply(a3, 11);
+      s[i + 3] =
+          _multiply(a0, 11) ^
+          _multiply(a1, 13) ^
+          _multiply(a2, 9) ^
+          _multiply(a3, 14);
+    }
   }
 
   void _addRoundKey(Uint8List state, int round) {
@@ -107,6 +194,13 @@ class AesBlockCipher {
   }
 
   static final Uint8List _sbox = _buildSbox();
+  static final Uint8List _invSbox = () {
+    final inverse = Uint8List(256);
+    for (var index = 0; index < 256; index++) {
+      inverse[_sbox[index]] = index;
+    }
+    return inverse;
+  }();
 
   static Uint8List _buildSbox() {
     final sbox = Uint8List(256);

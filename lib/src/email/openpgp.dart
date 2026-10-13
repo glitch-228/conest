@@ -32,9 +32,9 @@ abstract final class OpenPgpSymmetric {
         List<int>.generate(length, (_) => source.nextInt(256));
     final salt = randomBytes(8);
     final key = _s2k(password, salt, _countBytes(_s2kCount));
-    final skesk = _packet(3, [4, _aes256, 3, _sha256, ...salt, _s2kCount]);
+    final skesk = packet(3, [4, _aes256, 3, _sha256, ...salt, _s2kCount]);
 
-    final literal = _packet(11, [
+    final literal = packet(11, [
       0x62, // 'b': binary
       0, // no file name
       0, 0, 0, 0, // no date
@@ -49,15 +49,15 @@ abstract final class OpenPgpSymmetric {
     final mdcInput = clear.toBytes();
     final mdc = sha1.convert(mdcInput).bytes;
     final plaintext = Uint8List.fromList([...mdcInput, ...mdc]);
-    final encrypted = _cfb(AesBlockCipher(key), plaintext, encrypt: true);
-    final seipd = _packet(18, [1, ...encrypted]);
+    final encrypted = cfb(AesBlockCipher(key), plaintext, encrypt: true);
+    final seipd = packet(18, [1, ...encrypted]);
     return Uint8List.fromList([...skesk, ...seipd]);
   }
 
   /// Decrypts a message made by [encrypt] (or by `gpg --symmetric` with
   /// AES-256, SHA-256 S2K and MDC); throws [FormatException] otherwise.
   static Uint8List decrypt(Uint8List message, List<int> password) {
-    final packets = _readPackets(message);
+    final packets = readPackets(message);
     if (packets.length != 2 || packets[0].$1 != 3 || packets[1].$1 != 18) {
       throw const FormatException('Not a password-encrypted OpenPGP message.');
     }
@@ -79,7 +79,7 @@ abstract final class OpenPgpSymmetric {
     if (seipd.isEmpty || seipd[0] != 1 || seipd.length < 1 + 18 + 22) {
       throw const FormatException('Unsupported OpenPGP data packet.');
     }
-    final plain = _cfb(
+    final plain = cfb(
       AesBlockCipher(key),
       Uint8List.sublistView(seipd, 1),
       encrypt: false,
@@ -99,7 +99,7 @@ abstract final class OpenPgpSymmetric {
         body[body.length - 1] != 0x14) {
       throw const FormatException('OpenPGP integrity check failed.');
     }
-    final inner = _readPackets(
+    final inner = readPackets(
       Uint8List.sublistView(body, 18, body.length - 2),
     );
     if (inner.length != 1 || inner.single.$1 != 11) {
@@ -137,7 +137,7 @@ abstract final class OpenPgpSymmetric {
   }
 
   /// OpenPGP CFB (no resynchronisation) with a zero IV.
-  static Uint8List _cfb(
+  static Uint8List cfb(
     AesBlockCipher cipher,
     Uint8List input, {
     required bool encrypt,
@@ -159,7 +159,8 @@ abstract final class OpenPgpSymmetric {
     return output;
   }
 
-  static List<int> _packet(int tag, List<int> body) {
+  /// A new-format packet with tag [tag].
+  static List<int> packet(int tag, List<int> body) {
     final length = body.length;
     final header = <int>[0xc0 | tag];
     if (length < 192) {
@@ -182,7 +183,7 @@ abstract final class OpenPgpSymmetric {
 
   /// Reads new- and old-format packets with definite lengths, and new-format
   /// partial lengths (gpg writes those for data it streams).
-  static List<(int, Uint8List)> _readPackets(Uint8List data) {
+  static List<(int, Uint8List)> readPackets(Uint8List data) {
     final packets = <(int, Uint8List)>[];
     var offset = 0;
     while (offset < data.length) {
