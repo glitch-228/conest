@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 const groupCallMaxParticipants = 16;
 const groupCallMeshLimit = 5;
@@ -17,10 +18,17 @@ class GroupCallMember {
 }
 
 class GroupCallParticipant {
-  const GroupCallParticipant(this.deviceId, this.index);
+  const GroupCallParticipant(this.deviceId, this.index, [this.version = 1]);
   final String deviceId;
   final int index;
-  Map<String, Object> toJson() => {'deviceId': deviceId, 'index': index};
+
+  /// A fresh admission resets the receiver's decoder and audio sequence state.
+  final int version;
+  Map<String, Object> toJson() => {
+    'deviceId': deviceId,
+    'index': index,
+    'version': version,
+  };
 
   static List<GroupCallParticipant> parse(Object? value) {
     if (value is! List ||
@@ -37,6 +45,10 @@ class GroupCallParticipant {
               entry['index'] is! int ||
               (entry['index'] as int) < 0 ||
               (entry['index'] as int) >= groupCallMaxParticipants ||
+              (entry['version'] != null &&
+                  (entry['version'] is! int ||
+                      entry['version'] < 1 ||
+                      entry['version'] > 0x7fffffff)) ||
               !ids.add(entry['deviceId'] as String) ||
               !indices.add(entry['index'] as int)) {
             throw const FormatException('Invalid call participant.');
@@ -44,11 +56,29 @@ class GroupCallParticipant {
           return GroupCallParticipant(
             entry['deviceId'] as String,
             entry['index'] as int,
+            entry['version'] as int? ?? 1,
           );
         })
         .toList(growable: false);
   }
 }
+
+Uint8List groupCallStartBytes(
+  String groupId,
+  String callId,
+  String startedBy,
+  DateTime startedAt,
+) => Uint8List.fromList(
+  utf8.encode(
+    jsonEncode([
+      'conest.group.call.start.v1',
+      groupId,
+      callId,
+      startedBy,
+      startedAt.toUtc().toIso8601String(),
+    ]),
+  ),
+);
 
 bool validGroupCallId(Object? id) =>
     id is String &&
@@ -132,6 +162,7 @@ class GroupCallSummary {
     required this.startedAt,
     required this.endedAt,
     required this.participants,
+    this.callEnded = true,
   });
   final String groupId;
   final String callId;
@@ -139,6 +170,7 @@ class GroupCallSummary {
   final DateTime startedAt;
   final DateTime endedAt;
   final List<String> participants;
+  final bool callEnded;
   Duration get duration => endedAt.difference(startedAt);
   Map<String, dynamic> toJson() => {
     'groupId': groupId,
@@ -147,13 +179,14 @@ class GroupCallSummary {
     'startedAt': startedAt.toUtc().toIso8601String(),
     'endedAt': endedAt.toUtc().toIso8601String(),
     'participants': participants,
+    'callEnded': callEnded,
   };
   factory GroupCallSummary.fromJson(Map<String, dynamic> json) {
     if (!validGroupCallId(json['groupId']) ||
         !validGroupCallId(json['callId']) ||
         !validGroupCallId(json['startedBy']) ||
         json['participants'] is! List ||
-        (json['participants'] as List).length > groupCallMaxParticipants) {
+        (json['participants'] as List).length > 128) {
       throw const FormatException('Invalid call summary.');
     }
     return GroupCallSummary(
@@ -166,6 +199,7 @@ class GroupCallSummary {
           .whereType<String>()
           .where(validGroupCallId)
           .toList(),
+      callEnded: json['callEnded'] as bool? ?? true,
     );
   }
 }

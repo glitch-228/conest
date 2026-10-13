@@ -181,6 +181,16 @@ Commit and push after each phase, with the tests green.
 - Phase D tests: 7 participants agree and everyone hears every sender; forwarding preserves ciphertext/signature; a dropped forwarder/leader recovers within 2 seconds and audio stays working; 3-second poor mesh switches; RTT responds to latency/loss; deterministic preference/tie tests. All 15 protocol/topology tests green. Sabotage removes each forwarding/election/takeover/poor-link behavior and the matching test fails (12 total Dart negative checks, all pass).
 - Initial debug run 38449547803: Android, Linux and all live-carrier jobs green; Windows still running at this checkpoint.
 
+- Independent reviewer m36_security_review started on 3929653...556916c. Confirmed findings being fixed before final handoff: P1 reverse-direction microphone teardown race; P1 one-sided coordinator outage never reconciles; P1 serialized slow controls delay mute/PTT/leave; P1 empty group ticks publish Android idle during 1:1; P2 cross-group bare-call-id tombstone collision; P2 lost leave + rejoin resets audio counters without resetting retained native jitter. Regression tests and final re-review pending.
+
+- Phase A debug CI 38449547803 completed green on Android/Linux/Windows and all real-carrier qualifications.
+- Phase E: group header buttons in both layouts, incoming/return banner, shared notification path, participant levels/quality/update/no-route status, mute, pointer/Space push-to-talk, immediate saved NS, Leave, and chronological persisted call summaries. Widget tests cover pointer cancel/key release/disposal, Leave, levels/routes, noise and summaries.
+- Independent review confirmed 13 lifecycle/protocol findings in two passes. Fixed immediate privacy gates and post-encryption checks, bounded real-completion control dispatch, term/domain binding and deterministic partition reconciliation, authenticated discovery beacons, observer expiry without local authority, atomic key validation, original-starter rejoin, group-scoped tombstones, admission generations/audio counters, late 1:1 ownership, aggregate group teardown across replacements, Android owner foreground state, and post-decrypt admission checks. Added controlled negative network/sign/verify/close tests; 14 recovery, 3 ownership and controller integration tests pass.
+- Phase E sabotage: 18 initial review/UI mutations each produced a behavioral failure and were restored; the receive-race check also passed (19 review/UI negative checks total). No compiler failure counts as proof.
+
+
+- Phase E checkpoint: 73 focused new/existing call tests pass; all 12 protocol/topology and 19 recovery/UI sabotage checks pass. Analysis has the same 25 pre-existing diagnostics, no new issues. Separate reviewer confirmed all 13 findings resolved and no new confirmed findings in restored E source. Qualified debug workflow now runs the group, ownership, UI and actual controller regressions.
+
 ## Handoff
 
 - Branch and final commit:

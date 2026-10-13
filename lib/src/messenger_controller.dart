@@ -847,6 +847,7 @@ class MessengerController extends ChangeNotifier {
   final GroupCallMediaEngine? _groupCallMediaOverride;
   final GroupCallLinkPolicy? _groupCallLinkPolicy;
   VoiceCallService? _voiceCallService;
+  VoiceCallService? _retiredVoiceMedia;
   late final VoiceMessageService voiceMessageService;
   late final VoiceCallSoundCues _voiceCallSoundCues;
   StreamSubscription<VoiceCallSession?>? _voiceCallChanges;
@@ -1346,6 +1347,9 @@ class MessengerController extends ChangeNotifier {
       unawaited(_voiceCallChanges?.cancel());
       _voiceCallChanges = null;
       if (_voiceCallService != null) _voiceCallSoundCues.reset();
+      if (_voiceCallService?.mediaBusy == true) {
+        _retiredVoiceMedia = _voiceCallService;
+      }
       unawaited(_voiceCallService?.dispose());
       _voiceCallService = null;
       _disposeGroupCalls();
@@ -1354,6 +1358,9 @@ class MessengerController extends ChangeNotifier {
     if (_voiceCallService?.localDeviceId == me.deviceId) return;
     unawaited(_voiceCallChanges?.cancel());
     if (_voiceCallService != null) _voiceCallSoundCues.reset();
+    if (_voiceCallService?.mediaBusy == true) {
+      _retiredVoiceMedia = _voiceCallService;
+    }
     unawaited(_voiceCallService?.dispose());
     _voiceCallService = VoiceCallService(
       localDeviceId: me.deviceId,
@@ -1366,7 +1373,9 @@ class MessengerController extends ChangeNotifier {
       onTerminal: _persistVoiceCallSummary,
       noiseSuppressionEnabled: me.voiceNoiseSuppressionEnabled,
       canOpenMedia: () =>
-          _groupCallService?.mediaBusy != true && _groupCallTeardown == null,
+          _groupCallService?.mediaBusy != true &&
+          _groupCallTeardown == null &&
+          _retiredVoiceMedia?.mediaBusy != true,
     );
     _voiceCallChanges = _voiceCallService!.changes.listen((session) {
       if (_disposed) return;
@@ -9089,6 +9098,9 @@ class MessengerController extends ChangeNotifier {
     unawaited(_voiceCallChanges?.cancel());
     _voiceCallChanges = null;
     _voiceCallSoundCues.reset();
+    if (_voiceCallService?.mediaBusy == true) {
+      _retiredVoiceMedia = _voiceCallService;
+    }
     unawaited(_voiceCallService?.dispose());
     _voiceCallService = null;
     _disposeGroupCalls();
@@ -29428,6 +29440,9 @@ class MessengerController extends ChangeNotifier {
     unawaited(_voiceCallChanges?.cancel());
     _voiceCallChanges = null;
     unawaited(_voiceCallSoundCues.dispose());
+    if (_voiceCallService?.mediaBusy == true) {
+      _retiredVoiceMedia = _voiceCallService;
+    }
     unawaited(_voiceCallService?.dispose());
     _voiceCallService = null;
     _disposeGroupCalls();

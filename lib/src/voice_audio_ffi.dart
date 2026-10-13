@@ -322,8 +322,9 @@ class NativeVoiceCallAudio {
         participant >= 16 ||
         sequence <= 0 ||
         bytes.isEmpty ||
-        bytes.length > _maximumPacketBytes)
+        bytes.length > _maximumPacketBytes) {
       return false;
+    }
     final pointer = calloc<Uint8>(bytes.length);
     try {
       pointer.asTypedList(bytes.length).setAll(0, bytes);

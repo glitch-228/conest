@@ -88,6 +88,12 @@ jobs:
       - name: Verify channel identity and automatic transfer handshake
         run: |
           flutter test test/build_info_test.dart test/transport_test.dart test/feature_models_test.dart test/voice_call_sound_cues_test.dart
+      - name: Verify encrypted group calls and shared audio ownership
+        run: |
+          flutter test test/group_call_test.dart test/group_call_topology_test.dart test/group_call_recovery_test.dart test/group_call_media_ownership_test.dart test/group_call_screen_test.dart test/voice_noise_suppression_test.dart
+          flutter test test/messenger_controller_test.dart --plain-name 'group-only members join encrypted voice calls over Iroh'
+          flutter test test/messenger_controller_test.dart --plain-name 'empty group ticks preserve a live Android 1:1 foreground call'
+          flutter test test/messenger_controller_test.dart --plain-name 'repeated group service replacements retain every pending hardware cleanup'
           flutter test test/group_history_test.dart test/group_history_sync_test.dart test/group_history_wire_test.dart test/group_membership_history_test.dart test/storage_test.dart test/group_file_crypto_test.dart test/ratchet_test.dart test/matrix_carrier_test.dart
           flutter test test/storage_capacity_test.dart test/lan_direct_test.dart test/attachment_file_io_test.dart test/attachment_block_worker_test.dart test/tor_carrier_test.dart test/bitchat_test.dart
           flutter test test/messenger_controller_test.dart \

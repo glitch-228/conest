@@ -12,6 +12,8 @@ class FakeCallMedia implements GroupCallMediaEngine {
   final noise = <bool>[];
   bool opened = false;
   bool muted = false;
+  bool enforceJitterSequences = false;
+  final _highest = <int, int>{};
   @override
   bool get available => true;
   @override
@@ -32,10 +34,13 @@ class FakeCallMedia implements GroupCallMediaEngine {
   @override
   void setParticipant(int index, bool active) {
     active ? participants.add(index) : participants.remove(index);
+    if (!active) _highest.remove(index);
   }
 
   @override
   void play(int index, int sequence, Uint8List opus) {
+    if (enforceJitterSequences && sequence <= (_highest[index] ?? 0)) return;
+    _highest[index] = sequence;
     played.add((index, sequence, Uint8List.fromList(opus)));
   }
 
@@ -45,6 +50,7 @@ class FakeCallMedia implements GroupCallMediaEngine {
   Future<void> close() async {
     opened = false;
     participants.clear();
+    _highest.clear();
   }
 }
 
@@ -98,6 +104,12 @@ class FakeCallNetwork {
   final noRoute = <String>{};
   final dropped = <String>{};
   final blockedLinks = <(String, String)>{};
+  final droppedSignals = <(String, String, String)>{};
+  final signalGates = <(String, String, String), Future<void>>{};
+  final signingGates = <String, Future<void>>{};
+  final verificationGates = <(String, String), Future<void>>{};
+  final incoming = <(String, String)>[];
+  final summaries = <GroupCallSummary>[];
   final datagrams = <FakeCallDatagram>[];
   final signals = <(String, String, GroupCallSignal)>[];
   final _pending = <_Delivery>[];
@@ -112,9 +124,13 @@ class FakeCallNetwork {
       )
       .toList();
 
-  Future<FakeCallPeer> add(String id) async {
+  Future<FakeCallPeer> add(
+    String id, {
+    bool Function()? canOpenMedia,
+    FakeCallMedia? mediaOverride,
+  }) async {
     final key = await Ed25519().newKeyPair();
-    final media = FakeCallMedia();
+    final media = mediaOverride ?? FakeCallMedia();
     final policy = FakeCallPolicy();
     currentMembers.add(id);
     final service = GroupCallService(
@@ -125,9 +141,21 @@ class FakeCallNetwork {
       policy: policy,
       now: () => time,
       autoTick: false,
-      sign: (bytes) async =>
-          Uint8List.fromList((await Ed25519().sign(bytes, keyPair: key)).bytes),
+      canOpenMedia: canOpenMedia,
+      onIncoming: (room) async {
+        incoming.add((id, room.groupId));
+      },
+      onSummary: (summary) async {
+        summaries.add(summary);
+      },
+      sign: (bytes) async {
+        await signingGates[id];
+        return Uint8List.fromList(
+          (await Ed25519().sign(bytes, keyPair: key)).bytes,
+        );
+      },
       verify: (sender, bytes, signature) async {
+        await verificationGates[(id, sender)];
         final peer = peers[sender];
         if (peer == null) return false;
         return Ed25519().verify(
@@ -208,12 +236,19 @@ class _Transport implements GroupCallTransport {
     String recipientDeviceId,
   ) async {
     network.signals.add((sender, recipientDeviceId, signal));
+    await network.signalGates[(sender, recipientDeviceId, signal.action)];
     network.enqueue(() async {
-      if (network._reachable(sender, recipientDeviceId))
+      if (network._reachable(sender, recipientDeviceId) &&
+          !network.droppedSignals.contains((
+            sender,
+            recipientDeviceId,
+            signal.action,
+          ))) {
         await network.peers[recipientDeviceId]?.service.receiveSignal(
           signal,
           authenticatedSender: sender,
         );
+      }
     });
   }
 
@@ -226,12 +261,13 @@ class _Transport implements GroupCallTransport {
     final copied = Uint8List.fromList(bytes);
     network.datagrams.add(FakeCallDatagram(sender, recipientDeviceId, copied));
     network.enqueue(() async {
-      if (network._reachable(sender, recipientDeviceId))
+      if (network._reachable(sender, recipientDeviceId)) {
         await network.peers[recipientDeviceId]?.service.receiveDatagram(
           groupId,
           sender,
           copied,
         );
+      }
     }, datagram: true);
   }
 }

@@ -26,13 +26,22 @@ class GroupCallRoom {
     required this.startedAt,
     required this.coordinator,
     required this.cipher,
+    this.term = 0,
+    this.startSignature = '',
   });
   final String groupId;
   final String callId;
   final String startedBy;
   final DateTime startedAt;
   String coordinator;
-  final GroupCallCipher cipher;
+  GroupCallCipher cipher;
+  int term;
+  final String startSignature;
+  Uint8List? distributionKey;
+  String? admission;
+  final Map<String, String> admissions = {};
+  bool needsAdmission = false;
+  bool leaving = false;
   List<GroupCallParticipant> participants = [];
   final Set<String> allParticipants = {};
   final Map<String, GroupCallLinkStats> stats = {};
@@ -64,15 +73,18 @@ class GroupCallRoom {
   final Map<String, int> rtts = {};
   DateTime? lastTopologySent;
   DateTime? lastJoinSent;
+  DateTime? lastStartSent;
   bool get connected =>
       joined &&
+      !leaving &&
+      !needsAdmission &&
       cipher.epoch == epoch &&
       participants.any((p) => p.deviceId == cipher.localDeviceId);
   bool get microphoneMuted => muted || (pushToTalk && !holdingToTalk);
 }
 
 /// Bounded foreground call actor. Roster/key authority belongs to the starter
-/// until it leaves; only that authority may commit a new roster and epoch.
+/// until it leaves or fails. Authenticated terms reconcile asymmetric outages.
 /// All network entry points independently check current group membership.
 class GroupCallService {
   GroupCallService({
@@ -82,16 +94,19 @@ class GroupCallService {
     required this.members,
     required this.sign,
     required this.verify,
+    this.verifyStart,
     required this.policy,
     DateTime Function()? now,
     this.noiseSuppressionEnabled = true,
     this.canOpenMedia,
     this.onIncoming,
     this.onSummary,
-    Iterable<String> terminalCallIds = const [],
+    Iterable<(String, String)> terminalCalls = const [],
     bool autoTick = true,
   }) : now = now ?? DateTime.now {
-    _terminal.addAll(terminalCallIds.take(128));
+    _terminal.addAll(
+      terminalCalls.take(128).map((c) => _callIdentity(c.$1, c.$2)),
+    );
     if (autoTick) {
       _timer = Timer.periodic(const Duration(milliseconds: 500), (_) {
         unawaited(tick().catchError((Object _) {}));
@@ -105,6 +120,13 @@ class GroupCallService {
   final List<GroupCallMember> Function(String groupId) members;
   final GroupCallSign sign;
   final GroupCallVerify verify;
+  final Future<bool> Function(
+    String groupId,
+    String sender,
+    Uint8List bytes,
+    Uint8List signature,
+  )?
+  verifyStart;
   final GroupCallLinkPolicy policy;
   final DateTime Function() now;
   final Future<void> Function(GroupCallRoom room)? onIncoming;
@@ -124,6 +146,8 @@ class GroupCallService {
   int _controlJobs = 0;
   Future<void>? _tickJob;
   final Map<String, int> _datagramJobs = {};
+  final Map<String, int> _signalJobs = {};
+  final _startRate = GroupCallRateLimit();
   Stream<void> get changes => _changes.stream;
   List<GroupCallRoom> get rooms =>
       List.unmodifiable(_rooms.values.where((r) => !r.ended));
@@ -149,13 +173,21 @@ class GroupCallService {
       members(groupId).take(groupCallMaxParticipants).toList();
   GroupCallMember? _member(String groupId, String id) =>
       _members(groupId).where((m) => m.deviceId == id).firstOrNull;
-  GroupCallCipher _cipher(String groupId, String callId) => GroupCallCipher(
+  static String _callIdentity(String groupId, String callId) =>
+      jsonEncode([groupId, callId]);
+  GroupCallCipher _cipher(
+    String groupId,
+    String callId, {
+    int term = 0,
+    String? coordinator,
+  }) => GroupCallCipher(
     groupId: groupId,
     callId: callId,
     localDeviceId: localDeviceId,
     sign: sign,
     verify: verify,
     now: now,
+    authority: term == 0 ? '' : jsonEncode([term, coordinator]),
   );
 
   GroupCallSignal _signal(
@@ -168,7 +200,7 @@ class GroupCallService {
     senderDeviceId: localDeviceId,
     action: action,
     issuedAt: now().toUtc(),
-    payload: payload,
+    payload: {'term': room.term, ...payload},
   );
 
   Future<void> _fanout(
@@ -177,27 +209,105 @@ class GroupCallService {
     Map<String, dynamic> payload = const {},
   ]) async {
     final signal = _signal(room, action, payload);
-    await Future.wait(
-      _members(room.groupId)
-          .where((peer) => peer.deviceId != localDeviceId && peer.canJoin)
-          .map((peer) async {
-            try {
-              await transport
-                  .sendSignal(signal, peer.deviceId)
-                  .timeout(const Duration(seconds: 3));
-            } catch (_) {
-              /* Repeated live controls recover a lost route. */
-            }
-          }),
-    );
+    for (final peer in _members(room.groupId)) {
+      if (peer.deviceId != localDeviceId && peer.canJoin) {
+        _dispatchSignal(signal, peer.deviceId);
+      }
+    }
+  }
+
+  void _dispatchSignal(GroupCallSignal signal, String recipient) {
+    final count = _signalJobs[recipient] ?? 0;
+    if (_disposed ||
+        count >= 4 ||
+        (count == 0 && _signalJobs.length >= groupCallMaxParticipants)) {
+      return;
+    }
+    _signalJobs[recipient] = count + 1;
+    void release() {
+      final remaining = (_signalJobs[recipient] ?? 1) - 1;
+      remaining == 0
+          ? _signalJobs.remove(recipient)
+          : _signalJobs[recipient] = remaining;
+    }
+
+    // Keep each slot until the actual send finishes. Hung routes cannot hold
+    // the call actor or build an unlimited timed-out backlog.
+    try {
+      unawaited(
+        transport
+            .sendSignal(signal, recipient)
+            .then((_) => release(), onError: (Object _) => release()),
+      );
+    } catch (_) {
+      release();
+    }
   }
 
   Map<String, dynamic> _rosterPayload(GroupCallRoom room) => {
     'version': room.version,
     'epoch': room.epoch,
     'coordinator': room.coordinator,
+    'term': room.term,
     'participants': room.participants.map((p) => p.toJson()).toList(),
   };
+
+  Future<void> _announceStart(GroupCallRoom room) async {
+    if (room.coordinator != localDeviceId || !room.connected) return;
+    await _fanout(room, 'start', {
+      ..._rosterPayload(room),
+      'startedBy': room.startedBy,
+      'startedAt': room.startedAt.toUtc().toIso8601String(),
+      'startSignature': room.startSignature,
+    });
+    room.lastStartSent = now();
+  }
+
+  Map<String, dynamic> _joinPayload(GroupCallRoom room) => {
+    'admission': room.admission,
+  };
+
+  bool _considerAuthority(GroupCallRoom room, GroupCallSignal signal) {
+    final term = signal.payload['term'] ?? 0;
+    if (term is! int || term < 0 || term > 0x7fffffff) return false;
+    final sender = signal.senderDeviceId;
+    if (term == room.term && sender == room.coordinator) return true;
+    final wins =
+        term > room.term ||
+        (term == room.term &&
+            term > 0 &&
+            sender.compareTo(room.coordinator) < 0);
+    if (!wins ||
+        term > room.term + 128 ||
+        !room.allParticipants.contains(sender) ||
+        !_validRoster(room, signal.payload, coordinator: sender)) {
+      return false;
+    }
+    _adoptAuthority(room, term, sender);
+    return true;
+  }
+
+  void _adoptAuthority(GroupCallRoom room, int term, String coordinator) {
+    room.cipher.close();
+    room.distributionKey?.fillRange(0, room.distributionKey!.length, 0);
+    room.distributionKey = null;
+    room.term = term;
+    room.coordinator = coordinator;
+    room.cipher = _cipher(
+      room.groupId,
+      room.callId,
+      term: term,
+      coordinator: coordinator,
+    );
+    room.version = 0;
+    room.epoch = 0;
+    room.topologyVersion = 0;
+    room.needsAdmission = room.joined && coordinator != localDeviceId;
+    room.lastJoinSent = null;
+    room.lastTopologySent = null;
+    room.lastStartSent = null;
+    _setForwarder(room, null);
+  }
 
   Future<GroupCallRoom> start(String groupId) => _serial(() async {
     if (_disposed ||
@@ -209,24 +319,26 @@ class GroupCallService {
     if (roomFor(groupId) != null) return _join(groupId);
     final id =
         'gcall_${base64UrlEncode(GroupCallCipher.randomKey().take(16).toList()).replaceAll('=', '')}';
+    final startedAt = now();
     final room = GroupCallRoom(
       groupId: groupId,
       callId: id,
       startedBy: localDeviceId,
-      startedAt: now(),
+      startedAt: startedAt,
       coordinator: localDeviceId,
       cipher: _cipher(groupId, id),
+      startSignature: base64Encode(
+        await sign(groupCallStartBytes(groupId, id, localDeviceId, startedAt)),
+      ),
     );
     _reserveRoom(room);
     try {
       await _open(room);
       room.participants = [GroupCallParticipant(localDeviceId, 0)];
+      room.admissions[localDeviceId] = room.admission!;
       room.seen[localDeviceId] = now();
       await _rotate(room, announce: false);
-      await _fanout(room, 'start', {
-        ..._rosterPayload(room),
-        'startedAt': room.startedAt.toUtc().toIso8601String(),
-      });
+      await _announceStart(room);
       _notify();
       return room;
     } catch (_) {
@@ -251,6 +363,10 @@ class GroupCallService {
       throw StateError('Another call is active.');
     }
     _activeGroup = room.groupId;
+    room.admission = base64UrlEncode(
+      GroupCallCipher.randomKey().take(16).toList(),
+    ).replaceAll('=', '');
+    room.leaving = false;
     try {
       // Serialize through a late open too: a timed-out engine cannot become
       // the owner of a later call's microphone.
@@ -273,12 +389,13 @@ class GroupCallService {
         rethrow;
       }
       await media.setNoiseSuppression(noiseSuppressionEnabled);
+      if (room.leaving) throw StateError('Call cancelled.');
       room.joined = true;
       await media.setMuted(room.microphoneMuted);
       _syncMedia(room, const []);
     } catch (_) {
-      _activeGroup = null;
       await media.close();
+      _activeGroup = null;
       rethrow;
     }
   }
@@ -293,7 +410,7 @@ class GroupCallService {
     }
     if (room.joined) return room;
     await _open(room);
-    await _fanout(room, 'join');
+    await _fanout(room, 'join', _joinPayload(room));
     room.lastJoinSent = now();
     _notify();
     return room;
@@ -303,7 +420,10 @@ class GroupCallService {
     if (!room.joined) return;
     for (final peer in previous) {
       if (!room.participants.any(
-        (p) => p.deviceId == peer.deviceId && p.index == peer.index,
+        (p) =>
+            p.deviceId == peer.deviceId &&
+            p.index == peer.index &&
+            p.version == peer.version,
       )) {
         media.setParticipant(peer.index, false);
       }
@@ -322,6 +442,9 @@ class GroupCallService {
     final key = GroupCallCipher.randomKey();
     try {
       await room.cipher.install(room.epoch, key, room.participants);
+      room.distributionKey?.fillRange(0, room.distributionKey!.length, 0);
+      room.distributionKey = Uint8List.fromList(key);
+      room.needsAdmission = false;
       room.allParticipants.addAll(
         room.participants
             .map((p) => p.deviceId)
@@ -336,24 +459,26 @@ class GroupCallService {
             _member(room.groupId, peer.deviceId)?.canJoin != true) {
           continue;
         }
-        try {
-          await transport
-              .sendSignal(
-                _signal(room, 'key', {
-                  ...payload,
-                  'recipient': peer.deviceId,
-                  'key': base64Encode(key),
-                }),
-                peer.deviceId,
-              )
-              .timeout(const Duration(seconds: 3));
-        } catch (_) {
-          /* A repeated join requests a fresh epoch/key. */
-        }
+        _sendKey(room, peer.deviceId);
       }
     } finally {
       key.fillRange(0, key.length, 0);
     }
+  }
+
+  void _sendKey(GroupCallRoom room, String recipient) {
+    final key = room.distributionKey;
+    if (key == null || !room.participants.any((p) => p.deviceId == recipient)) {
+      return;
+    }
+    _dispatchSignal(
+      _signal(room, 'key', {
+        ..._rosterPayload(room),
+        'recipient': recipient,
+        'key': base64Encode(key),
+      }),
+      recipient,
+    );
   }
 
   Future<bool> receiveSignal(
@@ -381,38 +506,81 @@ class GroupCallService {
         _member(signal.groupId, authenticatedSender)?.canJoin != true ||
         now().difference(signal.issuedAt).abs() > const Duration(seconds: 15) ||
         signal.issuedAt.isAfter(now().add(const Duration(seconds: 2))) ||
-        _terminal.contains(signal.callId)) {
+        _terminal.contains(_callIdentity(signal.groupId, signal.callId))) {
       return false;
     }
     var room = roomFor(signal.groupId);
     try {
       if (signal.action == 'start') {
-        if (room != null) return room.callId == signal.callId;
+        // Count before allocation or existing-room early returns. Evicting an
+        // idle room cannot reset this global discovery/notification budget.
+        if (!_startRate.accept(now(), 8)) return false;
+        if (room != null && room.callId != signal.callId) return false;
         final started = DateTime.tryParse(
           signal.payload['startedAt'] as String? ?? '',
         );
+        final startedBy = signal.payload['startedBy'];
+        final signature = signal.payload['startSignature'];
+        final term = signal.payload['term'] ?? 0;
         if (started == null ||
-            now().difference(started).abs() > const Duration(seconds: 15) ||
-            signal.payload['coordinator'] != authenticatedSender) {
+            now().difference(started) > const Duration(hours: 24) ||
+            started.isAfter(now().add(const Duration(seconds: 2))) ||
+            !validGroupCallId(startedBy) ||
+            signature is! String ||
+            signature.length != 88 ||
+            term is! int ||
+            term < 0 ||
+            term > 0x7fffffff ||
+            signal.payload['coordinator'] != authenticatedSender ||
+            (room != null &&
+                (room.startedBy != startedBy ||
+                    room.startedAt != started ||
+                    room.startSignature != signature))) {
           return false;
         }
-        room = GroupCallRoom(
-          groupId: signal.groupId,
-          callId: signal.callId,
-          startedBy: authenticatedSender,
-          startedAt: started,
-          coordinator: authenticatedSender,
-          cipher: _cipher(signal.groupId, signal.callId),
-        );
-        if (!_applyRoster(room, signal.payload)) return false;
-        if (room.participants.length != 1 ||
-            room.participants.single.deviceId != authenticatedSender) {
+        if (room == null) {
+          final proof = base64Decode(signature);
+          final bytes = groupCallStartBytes(
+            signal.groupId,
+            signal.callId,
+            startedBy as String,
+            started,
+          );
+          if (proof.length != 64 ||
+              !(await (verifyStart == null
+                  ? verify(startedBy, bytes, proof)
+                  : verifyStart!(signal.groupId, startedBy, bytes, proof)))) {
+            return false;
+          }
+          room = GroupCallRoom(
+            groupId: signal.groupId,
+            callId: signal.callId,
+            startedBy: startedBy,
+            startedAt: started,
+            coordinator: authenticatedSender,
+            term: term,
+            startSignature: signature,
+            cipher: _cipher(
+              signal.groupId,
+              signal.callId,
+              term: term,
+              coordinator: authenticatedSender,
+            ),
+          );
+          if (!_applyRoster(room, signal.payload)) return false;
+          _reserveRoom(room);
+          room.seen[authenticatedSender] = now();
+          _notify();
+          await onIncoming?.call(room);
+          return true;
+        }
+        if (!_considerAuthority(room, signal) ||
+            !_applyRoster(room, signal.payload, allowSame: true)) {
           return false;
         }
-        _reserveRoom(room);
         room.seen[authenticatedSender] = now();
+        if (room.joined && !room.connected) room.lastJoinSent = null;
         _notify();
-        await onIncoming?.call(room);
         return true;
       }
       if (room == null || room.callId != signal.callId) return false;
@@ -421,16 +589,40 @@ class GroupCallService {
           .accept(now(), authenticatedSender == room.coordinator ? 48 : 12)) {
         return false;
       }
+      if (signal.action != 'join' &&
+          signal.action != 'roster' &&
+          signal.action != 'key' &&
+          (signal.payload['term'] ?? 0) != room.term) {
+        return false;
+      }
       if (room.participants.any((p) => p.deviceId == authenticatedSender)) {
         room.seen[authenticatedSender] = now();
       }
       switch (signal.action) {
         case 'join':
+          final admission = signal.payload['admission'];
+          if (admission is! String ||
+              !RegExp(r'^[A-Za-z0-9_-]{22}$').hasMatch(admission)) {
+            return false;
+          }
+          final existing = room.participants
+              .where((p) => p.deviceId == authenticatedSender)
+              .firstOrNull;
+          final previousAdmission = room.admissions[authenticatedSender];
+          if (existing != null || room.coordinator == localDeviceId) {
+            room.admissions[authenticatedSender] = admission;
+          }
           if (room.coordinator != localDeviceId || !room.joined) return true;
+          if (existing != null && previousAdmission == admission) {
+            _dispatchSignal(
+              _signal(room, 'roster', _rosterPayload(room)),
+              authenticatedSender,
+            );
+            _sendKey(room, authenticatedSender);
+            return true;
+          }
           final old = List<GroupCallParticipant>.of(room.participants);
-          if (!room.participants.any(
-            (p) => p.deviceId == authenticatedSender,
-          )) {
+          if (existing == null) {
             if (room.participants.length >= groupCallMaxParticipants) {
               return false;
             }
@@ -442,6 +634,15 @@ class GroupCallService {
               ...room.participants,
               GroupCallParticipant(authenticatedSender, index),
             ];
+          } else {
+            if (existing.version >= 0x7fffffff) return false;
+            room.participants = room.participants
+                .map(
+                  (p) => p.deviceId == authenticatedSender
+                      ? GroupCallParticipant(p.deviceId, p.index, p.version + 1)
+                      : p,
+                )
+                .toList();
           }
           room.seen[authenticatedSender] = now();
           _syncMedia(room, old);
@@ -456,7 +657,6 @@ class GroupCallService {
           await _remove(room, authenticatedSender);
         case 'roster':
         case 'key':
-          if (authenticatedSender != room.coordinator) return false;
           if (signal.action == 'key') {
             if (!room.joined ||
                 signal.payload['recipient'] != localDeviceId ||
@@ -467,25 +667,37 @@ class GroupCallService {
             final key = base64Decode(signal.payload['key'] as String);
             try {
               if (key.length != 32 ||
-                  !_validRoster(room, signal.payload) ||
-                  signal.payload['epoch'] as int <= room.cipher.epoch ||
+                  !_validRoster(
+                    room,
+                    signal.payload,
+                    coordinator: authenticatedSender,
+                  ) ||
+                  ((signal.payload['term'] ?? 0) == room.term &&
+                      authenticatedSender == room.coordinator &&
+                      signal.payload['epoch'] as int <= room.cipher.epoch) ||
                   !GroupCallParticipant.parse(
                     signal.payload['participants'],
                   ).any((p) => p.deviceId == localDeviceId)) {
                 return false;
               }
+              // Rejected key messages must not close the current cipher or
+              // advance leadership. Validate the entire key action first.
+              if (!_considerAuthority(room, signal)) return false;
               if (!_applyRoster(room, signal.payload, allowSame: true)) {
                 return false;
               }
               await room.cipher.install(room.epoch, key, room.participants);
+              room.needsAdmission = false;
             } finally {
               key.fillRange(0, key.length, 0);
             }
           } else {
+            if (!_considerAuthority(room, signal)) return false;
             if (!_applyRoster(room, signal.payload)) return false;
             if (room.joined &&
                 !room.participants.any((p) => p.deviceId == localDeviceId)) {
-              await _finish(room);
+              room.needsAdmission = true;
+              room.lastJoinSent = null;
             }
           }
         case 'stats':
@@ -556,7 +768,11 @@ class GroupCallService {
     }
   });
 
-  bool _validRoster(GroupCallRoom room, Map<String, dynamic> payload) {
+  bool _validRoster(
+    GroupCallRoom room,
+    Map<String, dynamic> payload, {
+    String? coordinator,
+  }) {
     final version = payload['version'];
     final epoch = payload['epoch'];
     if (version is! int ||
@@ -565,14 +781,14 @@ class GroupCallService {
         epoch is! int ||
         epoch < 1 ||
         epoch > 0xffffffff ||
-        payload['coordinator'] != room.coordinator) {
+        payload['coordinator'] != (coordinator ?? room.coordinator)) {
       return false;
     }
     final roster = GroupCallParticipant.parse(payload['participants']);
     return roster.every(
           (p) => _member(room.groupId, p.deviceId)?.canJoin == true,
         ) &&
-        roster.any((p) => p.deviceId == room.coordinator);
+        roster.any((p) => p.deviceId == (coordinator ?? room.coordinator));
   }
 
   bool _applyRoster(
@@ -611,7 +827,19 @@ class GroupCallService {
     room.statsIssued.removeWhere((id, _) => gone(id));
     room.signalRates.removeWhere((id, _) => gone(id));
     room.frameRates.removeWhere((id, _) => gone(id));
-    room.audioSequences.removeWhere((id, _) => gone(id));
+    bool resetStream(String id) =>
+        gone(id) ||
+        previous.any(
+          (p) =>
+              p.deviceId == id &&
+              roster.any(
+                (n) =>
+                    n.deviceId == id &&
+                    (n.version != p.version || n.index != p.index),
+              ),
+        );
+    room.audioSequences.removeWhere((id, _) => resetStream(id));
+    room.admissions.removeWhere((id, _) => gone(id));
     room.mediaSeen.removeWhere((id, _) => gone(id));
     room.failedForwarders.removeWhere((id, _) => gone(id));
     room.rtts.removeWhere((id, _) => gone(id));
@@ -634,14 +862,20 @@ class GroupCallService {
     room.rtts.remove(sender);
     room.frameRates.remove(sender);
     room.signalRates.remove(sender);
+    room.admissions.remove(sender);
     _syncMedia(room, previous);
     if (room.participants.isEmpty) {
       await _finish(room);
       return;
     }
     if (room.coordinator == sender) {
-      room.coordinator =
+      final coordinator =
           (room.participants.map((p) => p.deviceId).toList()..sort()).first;
+      if (room.term >= 0x7fffffff) {
+        await _finish(room);
+        return;
+      }
+      _adoptAuthority(room, room.term + 1, coordinator);
     }
     if (room.coordinator == localDeviceId) {
       await _rotate(room);
@@ -649,52 +883,76 @@ class GroupCallService {
     }
   }
 
-  Future<void> leave() => _serial(() async {
-    final room = active;
-    if (room == null) return;
-    room.muted = true;
-    await media.setMuted(true);
-    await _fanout(room, 'leave', {'epoch': room.epoch});
-    final remaining = room.participants
-        .where((p) => p.deviceId != localDeviceId)
-        .toList();
-    await _finish(room, terminal: remaining.isEmpty);
-    if (remaining.isNotEmpty) {
-      final coordinator = room.coordinator == localDeviceId
-          ? (remaining.map((p) => p.deviceId).toList()..sort()).first
-          : room.coordinator;
-      final idle = GroupCallRoom(
-        groupId: room.groupId,
-        callId: room.callId,
-        startedBy: room.startedBy,
-        startedAt: room.startedAt,
-        coordinator: coordinator,
-        cipher: _cipher(room.groupId, room.callId),
-      );
-      idle.participants = remaining;
-      idle.version = room.version;
-      idle.epoch = room.epoch;
-      idle.allParticipants.addAll(room.allParticipants);
-      idle.seen.addAll(room.seen);
-      _rooms[room.groupId] = idle;
+  Future<void> leave() {
+    final requested = active;
+    if (requested != null) {
+      requested.leaving = true;
+      requested.muted = true;
+      requested.holdingToTalk = false;
+      unawaited(media.setMuted(true).catchError((Object _) {}));
+      _notify();
     }
-    _notify();
-  });
+    return _serial(() async {
+      final room = requested;
+      if (room == null || room.ended) return;
+      room.muted = true;
+      await media.setMuted(true);
+      await _fanout(room, 'leave', {'epoch': room.epoch});
+      final remaining = room.participants
+          .where((p) => p.deviceId != localDeviceId)
+          .toList();
+      await _finish(room, terminal: remaining.isEmpty);
+      if (remaining.isNotEmpty) {
+        final coordinator = room.coordinator == localDeviceId
+            ? (remaining.map((p) => p.deviceId).toList()..sort()).first
+            : room.coordinator;
+        final idle = GroupCallRoom(
+          groupId: room.groupId,
+          callId: room.callId,
+          startedBy: room.startedBy,
+          startedAt: room.startedAt,
+          coordinator: coordinator,
+          term: room.term + (room.coordinator == localDeviceId ? 1 : 0),
+          startSignature: room.startSignature,
+          cipher: _cipher(
+            room.groupId,
+            room.callId,
+            term: room.term + (room.coordinator == localDeviceId ? 1 : 0),
+            coordinator: coordinator,
+          ),
+        );
+        idle.participants = remaining;
+        idle.version = room.coordinator == localDeviceId ? 0 : room.version;
+        idle.epoch = room.coordinator == localDeviceId ? 0 : room.epoch;
+        idle.allParticipants.addAll(room.allParticipants);
+        idle.seen.addAll(room.seen);
+        idle.admissions.addAll(room.admissions);
+        idle.admissions.remove(localDeviceId);
+        idle.outgoingAudioSequence = room.outgoingAudioSequence;
+        _rooms[room.groupId] = idle;
+      }
+      _notify();
+    });
+  }
+
   Future<void> _finish(GroupCallRoom room, {bool terminal = true}) async {
     if (room.ended) return;
     final wasJoined = room.joined;
     room.ended = true;
     room.joined = false;
     room.cipher.close();
-    if (terminal) _terminal.add(room.callId);
+    room.distributionKey?.fillRange(0, room.distributionKey!.length, 0);
+    room.distributionKey = null;
+    if (terminal) _terminal.add(_callIdentity(room.groupId, room.callId));
     while (_terminal.length > 128) {
       _terminal.remove(_terminal.first);
     }
     if (_activeGroup == room.groupId) {
-      _activeGroup = null;
       await media.close();
+      _activeGroup = null;
     }
-    if (wasJoined) {
+    if (wasJoined ||
+        (terminal && room.allParticipants.contains(localDeviceId))) {
       await onSummary?.call(
         GroupCallSummary(
           groupId: room.groupId,
@@ -703,34 +961,38 @@ class GroupCallService {
           startedAt: room.startedAt,
           endedAt: now(),
           participants: (room.allParticipants.toList()..sort())
-              .take(groupCallMaxParticipants)
+              .take(128)
               .toList(),
+          callEnded: terminal,
         ),
       );
     }
   }
 
-  Future<void> setMuted(bool value) => _serial(() async {
+  Future<void> setMuted(bool value) async {
     final room = active;
     if (room == null) return;
-    await media.setMuted(value || (room.pushToTalk && !room.holdingToTalk));
     room.muted = value;
     _notify();
-  });
+    await media.setMuted(room.microphoneMuted);
+  }
+
   Future<void> setPushToTalk(bool enabled, {bool held = false}) =>
-      _serial(() async {
-        final room = active;
-        if (room == null) return;
-        room.pushToTalk = enabled;
-        room.holdingToTalk = enabled && held;
-        await media.setMuted(room.microphoneMuted);
-        _notify();
-      });
-  Future<void> setNoiseSuppression(bool enabled) => _serial(() async {
-    if (active != null) await media.setNoiseSuppression(enabled);
+      _setPushToTalk(enabled, held);
+  Future<void> _setPushToTalk(bool enabled, bool held) async {
+    final room = active;
+    if (room == null) return;
+    room.pushToTalk = enabled;
+    room.holdingToTalk = enabled && held;
+    _notify();
+    await media.setMuted(room.microphoneMuted);
+  }
+
+  Future<void> setNoiseSuppression(bool enabled) async {
     noiseSuppressionEnabled = enabled;
     _notify();
-  });
+    if (active != null) await media.setNoiseSuppression(enabled);
+  }
 
   Future<void> sendAudio(Uint8List opus) async {
     final room = active;
@@ -738,6 +1000,7 @@ class GroupCallService {
         room == null ||
         !room.connected ||
         room.microphoneMuted ||
+        _member(room.groupId, localDeviceId)?.canJoin != true ||
         opus.isEmpty ||
         opus.length > 1096 ||
         _outboundFrames >= 3) {
@@ -760,7 +1023,14 @@ class GroupCallService {
     _outboundFrames++;
     try {
       final frame = await room.cipher.encrypt(payload);
-      if (frame == null || room.ended || !identical(active, room)) return;
+      if (frame == null ||
+          room.ended ||
+          !room.connected ||
+          !identical(active, room) ||
+          (payload[0] == 0 && room.microphoneMuted) ||
+          _member(room.groupId, localDeviceId)?.canJoin != true) {
+        return;
+      }
       final overlap = room.overlapUntil?.isAfter(now()) == true;
       final recipients =
           room.forwarder == null || room.forwarder == localDeviceId
@@ -828,6 +1098,7 @@ class GroupCallService {
         !room.connected ||
         bytes.length > GroupCallCipher.maxFrameBytes ||
         _inboundFrames >= 32 ||
+        _member(groupId, localDeviceId)?.canJoin != true ||
         _member(groupId, authenticatedSender)?.directRoute != true) {
       return;
     }
@@ -849,11 +1120,20 @@ class GroupCallService {
       final frame = await room.cipher.decrypt(bytes);
       if (frame == null ||
           room.ended ||
+          !room.connected ||
           !identical(active, room) ||
+          _member(groupId, localDeviceId)?.canJoin != true ||
           _member(groupId, frame.sender)?.canJoin != true) {
         return;
       }
-      if (!room.participants.any((p) => p.deviceId == frame.sender)) return;
+      if (!room.participants.any(
+        (p) =>
+            p.deviceId == frame.sender &&
+            p.index == frame.index &&
+            p.version == frame.version,
+      )) {
+        return;
+      }
       room.seen[frame.sender] = now();
       room.mediaSeen[authenticatedSender] = now();
       room.failedForwarders.remove(authenticatedSender);
@@ -1010,7 +1290,19 @@ class GroupCallService {
     if (_disposed) return;
     for (final room in List<GroupCallRoom>.of(rooms)) {
       if (_member(room.groupId, localDeviceId)?.canJoin != true) {
-        await _finish(room);
+        await _finish(
+          room,
+          terminal: room.participants.every((p) => p.deviceId == localDeviceId),
+        );
+        continue;
+      }
+      // An observer has no media heartbeat and no authority to lead a call.
+      // Forget stale discovery locally; a fresh signed beacon can recreate it.
+      if (!room.joined) {
+        if (now().difference(room.seen[room.coordinator] ?? room.startedAt) >
+            const Duration(seconds: 15)) {
+          await _finish(room, terminal: false);
+        }
         continue;
       }
       final currentForwarder = room.forwarder;
@@ -1051,7 +1343,7 @@ class GroupCallService {
           (room.lastJoinSent == null ||
               now().difference(room.lastJoinSent!) >=
                   const Duration(seconds: 2))) {
-        await _fanout(room, 'join');
+        await _fanout(room, 'join', _joinPayload(room));
         room.lastJoinSent = now();
       }
       if (room.lastStatsSent == null ||
@@ -1072,6 +1364,10 @@ class GroupCallService {
       }
       await _ping(room);
       await _updateTopology(room);
+      if (room.lastStartSent == null ||
+          now().difference(room.lastStartSent!) >= const Duration(seconds: 5)) {
+        await _announceStart(room);
+      }
     }
     _notify();
   }
@@ -1092,6 +1388,7 @@ class GroupCallService {
     await _pendingMediaClose;
     for (final room in _rooms.values) {
       room.cipher.close();
+      room.distributionKey?.fillRange(0, room.distributionKey!.length, 0);
     }
     _rooms.clear();
     await _changes.close();

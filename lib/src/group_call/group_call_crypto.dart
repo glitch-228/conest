@@ -9,11 +9,18 @@ typedef GroupCallVerify =
     Future<bool> Function(String sender, Uint8List bytes, Uint8List signature);
 
 class GroupCallFrame {
-  const GroupCallFrame(this.sender, this.index, this.sequence, this.payload);
+  const GroupCallFrame(
+    this.sender,
+    this.index,
+    this.sequence,
+    this.payload,
+    this.version,
+  );
   final String sender;
   final int index;
   final int sequence;
   final Uint8List payload;
+  final int version;
 }
 
 class _Epoch {
@@ -42,6 +49,7 @@ class GroupCallCipher {
     required this.sign,
     required this.verify,
     required this.now,
+    this.authority = '',
   });
   static const marker = 0x36;
   static const maxFrameBytes = 1200;
@@ -50,6 +58,9 @@ class GroupCallCipher {
   final String groupId;
   final String callId;
   final String localDeviceId;
+
+  /// Separates epochs belonging to different elected coordinator terms.
+  final String authority;
   final GroupCallSign sign;
   final GroupCallVerify verify;
   final DateTime Function() now;
@@ -85,7 +96,9 @@ class GroupCallCipher {
     _sequence = 0;
     _tag ??= Uint8List.fromList(
       (await Sha256().hash(
-        utf8.encode(jsonEncode(['conest.group.call.tag.v1', groupId, callId])),
+        utf8.encode(
+          jsonEncode(['conest.group.call.tag.v1', groupId, callId, authority]),
+        ),
       )).bytes.take(8).toList(),
     );
   }
@@ -94,7 +107,9 @@ class GroupCallCipher {
     sender,
     () => Hkdf(hmac: Hmac.sha256(), outputLength: 32).deriveKey(
       secretKey: SecretKey(epoch.bytes),
-      nonce: utf8.encode(jsonEncode([groupId, callId, epoch.number])),
+      nonce: utf8.encode(
+        jsonEncode([groupId, callId, authority, epoch.number]),
+      ),
       info: utf8.encode(jsonEncode(['conest.group.call.sender.v1', sender])),
     ),
   );
@@ -185,7 +200,10 @@ class GroupCallCipher {
     if (state == null ||
         sender == null ||
         _current?.roster.any(
-              (p) => p.deviceId == sender.deviceId && p.index == sender.index,
+              (p) =>
+                  p.deviceId == sender.deviceId &&
+                  p.index == sender.index &&
+                  p.version == sender.version,
             ) !=
             true) {
       return null;
@@ -215,7 +233,10 @@ class GroupCallCipher {
           (state != _current &&
               (state != _previous || !now().isBefore(state.expires!))) ||
           _current?.roster.any(
-                (p) => p.deviceId == sender.deviceId && p.index == sender.index,
+                (p) =>
+                    p.deviceId == sender.deviceId &&
+                    p.index == sender.index &&
+                    p.version == sender.version,
               ) !=
               true ||
           !replay.accept(sequence)) {
@@ -226,6 +247,7 @@ class GroupCallCipher {
         sender.index,
         sequence,
         Uint8List.fromList(clear),
+        sender.version,
       );
     } catch (_) {
       return null;

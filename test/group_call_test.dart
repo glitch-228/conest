@@ -131,6 +131,7 @@ void main() {
         senderDeviceId: sender,
         action: 'join',
         issuedAt: net.time,
+        payload: const {'admission': 'abcdefghijklmnopqrstuv'},
       );
       expect(
         await net.peers['p0']!.service.receiveSignal(

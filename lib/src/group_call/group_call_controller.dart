@@ -81,9 +81,11 @@ extension GroupCallController on MessengerController {
       noiseSuppressionEnabled: me.voiceNoiseSuppressionEnabled,
       canOpenMedia: () =>
           _groupCallTeardown == null &&
-          (_voiceCallService?.active == null ||
-              _voiceCallService?.active?.state == VoiceCallState.ended),
-      terminalCallIds: _snapshot.groupCallSummaries.map((s) => s.callId),
+          _voiceCallService?.mediaBusy != true &&
+          _retiredVoiceMedia?.mediaBusy != true,
+      terminalCalls: _snapshot.groupCallSummaries
+          .where((s) => s.callEnded)
+          .map((s) => (s.groupId, s.callId)),
       sign: (bytes) async => Uint8List.fromList(
         base64Decode(await _crypto.signInstallationBytes(bytes)),
       ),
@@ -101,6 +103,16 @@ extension GroupCallController on MessengerController {
             !group!.hasActiveMember(sender)) {
           return false;
         }
+        return _crypto.verifyInstallationBytes(
+          bytes: bytes,
+          signatureBase64: base64Encode(signature),
+          publicKeyBase64: key,
+        );
+      },
+      verifyStart: (groupId, sender, bytes, signature) async {
+        final group = _groupById(groupId);
+        final key = group?.memberProfileFor(sender)?.signingPublicKeyBase64;
+        if (key == null) return false;
         return _crypto.verifyInstallationBytes(
           bytes: bytes,
           signatureBase64: base64Encode(signature),
@@ -133,7 +145,7 @@ extension GroupCallController on MessengerController {
         }
         final entries = [
           ..._snapshot.groupCallSummaries.where(
-            (s) => s.callId != summary.callId,
+            (s) => s.groupId != summary.groupId || s.callId != summary.callId,
           ),
           summary,
         ];
@@ -150,6 +162,10 @@ extension GroupCallController on MessengerController {
         return;
       }
       final room = _groupCallService?.active;
+      if (room == null && _voiceCallService?.mediaBusy == true) {
+        notifyListeners();
+        return;
+      }
       if (room != null) {
         unawaited(voiceMessageService.stopPlayback());
         unawaited(voiceMessageService.stopForInterruption());
@@ -267,7 +283,11 @@ extension GroupCallController on MessengerController {
     final service = _groupCallService;
     _groupCallService = null;
     if (service != null) {
-      final cleanup = service.dispose();
+      final previous = _groupCallTeardown;
+      final disposal = service.dispose().catchError((Object _) {});
+      final cleanup = previous == null
+          ? disposal
+          : Future.wait<void>([previous, disposal]).then<void>((_) {});
       _groupCallTeardown = cleanup;
       unawaited(
         cleanup

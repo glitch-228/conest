@@ -4618,6 +4618,129 @@ void main() {
     },
   );
 
+  test(
+    'repeated group service replacements retain every pending hardware cleanup',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final media = _HeldGroupCloseMedia();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+        groupCallMedia: media,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+        groupCallMedia: FakeCallMedia(),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await _pairControllers(alice, bob);
+      final original = await alice.createGroup(
+        title: 'Original',
+        members: alice.contacts,
+      );
+      await alice.joinOrStartGroupCall(original.groupId);
+      final first = alice.groupCallService!;
+      media.closeGate = Completer<void>();
+      addTearDown(() {
+        if (!media.closeGate!.isCompleted) media.closeGate!.complete();
+      });
+      await alice.resetIdentity();
+      await alice.createIdentity(
+        displayName: 'Idle replacement',
+        internetRelayHost: null,
+        internetRelayPort: defaultRelayPort,
+        localRelayPort: defaultRelayPort,
+      );
+      final idle = alice.groupCallService!;
+      expect(identical(first, idle), false);
+      expect(first.mediaBusy, true);
+      await alice.resetIdentity();
+      await alice.createIdentity(
+        displayName: 'Newest',
+        internetRelayHost: null,
+        internetRelayPort: defaultRelayPort,
+        localRelayPort: defaultRelayPort,
+      );
+      await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await _pairControllers(alice, bob);
+      final newest = await alice.createGroup(
+        title: 'Newest',
+        members: alice.contacts,
+      );
+      await Future<void>.delayed(Duration.zero);
+      await expectLater(
+        alice.joinOrStartGroupCall(newest.groupId),
+        throwsStateError,
+      );
+      expect(media.opened, true, reason: 'Original close still owns hardware');
+      media.closeGate!.complete();
+      await _waitForIroh(() => !first.mediaBusy);
+      await alice.joinOrStartGroupCall(newest.groupId);
+      expect(media.opened, true);
+      await Future<void>.delayed(Duration.zero);
+      expect(alice.groupCallService!.active, isNotNull);
+      expect(
+        media.opened,
+        true,
+        reason: 'No previous cleanup can close the new call',
+      );
+    },
+  );
+
+  test(
+    'empty group ticks preserve a live Android 1:1 foreground call',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final bridge = _VoiceRecordingBridge();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        platformBridge: bridge,
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        platformBridge: _VoiceRecordingBridge(),
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await _pairControllers(alice, bob);
+      await _waitForIroh(
+        () => alice.contacts.single.featureCapabilities.contains(
+          ApplicationCapability.voiceCallsV1,
+        ),
+      );
+      final call = await alice.voiceCallService!.startOutgoing(
+        bob.identity!.deviceId,
+      );
+      await alice.voiceCallService!.onAccepted(callId: call.callId);
+      await Future<void>.delayed(Duration.zero);
+      expect(bridge.foreground.last, 'connected');
+      final before = bridge.foreground.length;
+      await alice.groupCallService!.tick();
+      await Future<void>.delayed(Duration.zero);
+      expect(bridge.foreground.skip(before), isNot(contains('idle')));
+      expect(bridge.foreground.last, 'connected');
+      expect(alice.voiceCallService!.mediaBusy, true);
+    },
+  );
+
   test('group-only members join encrypted voice calls over Iroh', () async {
     final network = _InProcessIrohNetwork();
     final relay = _FakeRelayClient();
@@ -19050,6 +19173,42 @@ void main() {
       );
     });
   });
+}
+
+class _HeldGroupCloseMedia extends FakeCallMedia {
+  Completer<void>? closeGate;
+  @override
+  Future<void> close() async {
+    await closeGate?.future;
+    await super.close();
+  }
+}
+
+class _VoiceRecordingBridge extends _RecordingPlatformBridge {
+  final foreground = <String>[];
+  @override
+  bool get supportsVoiceCallMedia => true;
+  @override
+  Future<void> prepareVoiceCallMedia() async {}
+  @override
+  Future<bool> openVoiceCallMedia({
+    required String peerDeviceId,
+    required bool outgoing,
+  }) async => true;
+  @override
+  Future<void> closeVoiceCallMedia() async {}
+  @override
+  Future<void> setVoiceCallNoiseSuppression(bool enabled) async {}
+  @override
+  Future<void> updateAndroidVoiceCallForeground({
+    required bool runtimeEnabled,
+    required bool callsEnabled,
+    required String? peerName,
+    required String callState,
+    required bool incoming,
+  }) async {
+    foreground.add(callState);
+  }
 }
 
 class _RecordingPlatformBridge extends PlatformBridge {
