@@ -1295,8 +1295,10 @@ class MessengerController extends ChangeNotifier {
   /// Wraps `_processEnvelopes` so the notifier-batching ref-count is
   /// exercised in tests without needing to drive the long-poll loop.
   @visibleForTesting
-  Future<int> processEnvelopesForTesting(List<RelayEnvelope> envelopes) =>
-      _processEnvelopes(envelopes);
+  Future<int> processEnvelopesForTesting(
+    List<RelayEnvelope> envelopes, {
+    MessageRoute? route,
+  }) => _processEnvelopes(envelopes, route: route);
 
   /// Marks an outgoing contact request as accepted, as if the peer's
   /// authenticated acceptance had arrived. Waits for the in-flight pairing
@@ -6017,6 +6019,8 @@ class MessengerController extends ChangeNotifier {
   final Map<TransportKind, CarrierTransportAdapter> _carrierTransports = {};
   final Map<TransportKind, StreamSubscription<TransportInboundEnvelope>>
   _carrierInboundSubscriptions = {};
+  final Map<TransportKind, StreamSubscription<CarrierDeliveryReceipt>>
+  _carrierReceiptSubscriptions = {};
 
   /// Seals for every carrier with keys derived from each contact's pairwise
   /// key; new carrier adapters are built with it.
@@ -6042,6 +6046,9 @@ class MessengerController extends ChangeNotifier {
       await _carrierInboundSubscriptions.remove(carrier.kind)?.cancel();
     }
     _carrierTransports[carrier.kind] = carrier;
+    await _carrierReceiptSubscriptions.remove(carrier.kind)?.cancel();
+    _carrierReceiptSubscriptions[carrier.kind] = carrier.deliveryReceipts
+        .listen(_onCarrierDeliveryReceipt);
     await _attachCarrier(carrier.kind);
     _syncCarrierPeers();
     // Contacts learn the address to reach this device on the carrier.
@@ -6052,10 +6059,44 @@ class MessengerController extends ChangeNotifier {
   Future<void> unregisterCarrierTransport(TransportKind kind) async {
     await _detachCarrier(kind);
     await _carrierInboundSubscriptions.remove(kind)?.cancel();
+    await _carrierReceiptSubscriptions.remove(kind)?.cancel();
     final carrier = _carrierTransports.remove(kind);
     if (carrier != null) {
       await carrier.detach();
       _advertiseProfileToContacts();
+    }
+  }
+
+  /// The other device's radio confirmed a message: it reached their
+  /// device (not yet necessarily their app).
+  void _onCarrierDeliveryReceipt(CarrierDeliveryReceipt receipt) {
+    final route = MessageRoute.forCarrier(receipt.kind);
+    if (route == null || _disposed) return;
+    final at = _now().toUtc();
+    if (_messageById(receipt.deviceId, receipt.envelopeId)?.outbound ?? false) {
+      _traceMessage(
+        receipt.deviceId,
+        receipt.envelopeId,
+        RouteTrace(route: route, mark: MessageRouteMark.reachedDevice, at: at),
+      );
+      return;
+    }
+    for (final group in groups) {
+      if (!group.hasActiveMember(receipt.deviceId)) continue;
+      final message = _groupMessageById(group.groupId, receipt.envelopeId);
+      if (message == null || !message.outbound) continue;
+      _traceMessage(
+        receipt.deviceId,
+        receipt.envelopeId,
+        RouteTrace(
+          route: route,
+          mark: MessageRouteMark.reachedDevice,
+          at: at,
+          deviceId: receipt.deviceId,
+        ),
+        group: group,
+      );
+      return;
     }
   }
 
@@ -15388,13 +15429,19 @@ class MessengerController extends ChangeNotifier {
   PeerEndpoint? pickPrimaryRelayForLongPollForTesting(IdentityRecord me) =>
       _pickPrimaryRelayForLongPoll(me);
 
-  PeerEndpoint? _pickPrimaryRelayForLongPoll(IdentityRecord me) {
+  PeerEndpoint? _pickPrimaryRelayForLongPoll(
+    IdentityRecord me, {
+    int slot = 0,
+  }) {
+    // Each watcher takes a different relay (by host: one relay's addresses
+    // over TCP, UDP and HTTP are the same mailbox).
+    final hosts = <String>{};
     for (final relay in me.configuredRelays) {
       if (relay.kind != PeerRouteKind.relay) {
         continue;
       }
-      if (_routeHealthTracker.isEligibleNow(relay)) {
-        return relay;
+      if (_routeHealthTracker.isEligibleNow(relay) && hosts.add(relay.host)) {
+        if (hosts.length == slot + 1) return relay;
       }
     }
     return null;
@@ -15408,8 +15455,16 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     _longPollRunning = true;
-    unawaited(_runLongPollLoop());
+    final generation = ++_longPollGeneration;
+    unawaited(_runLongPollLoop(generation: generation));
+    // A second relay too, while this device can afford it: a contact may
+    // have left a message on either.
+    unawaited(_runLongPollLoop(slot: 1, generation: generation));
   }
+
+  /// Bumped on each start: a loop from an earlier start (asleep when it was
+  /// stopped and started again) ends instead of running twice.
+  int _longPollGeneration = 0;
 
   void _stopLongPoll() {
     _longPollRunning = false;
@@ -15423,13 +15478,22 @@ class MessengerController extends ChangeNotifier {
   /// in practice). Old relays that ignore `wait_ms` return immediately
   /// empty; the elapsed-time guard at the bottom of the loop keeps that
   /// case from busy-looping the CPU.
-  Future<void> _runLongPollLoop() async {
-    while (_longPollRunning && hasIdentity) {
+  Future<void> _runLongPollLoop({int slot = 0, int? generation}) async {
+    while (_longPollRunning &&
+        hasIdentity &&
+        (generation == null || generation == _longPollGeneration)) {
       final me = identity;
       if (me == null) {
         break;
       }
-      final route = _pickPrimaryRelayForLongPoll(me);
+      if (slot > 0 &&
+          _energyPolicy.modeFor(_networkCostClass) !=
+              EnergyMode.unconstrained) {
+        unawaited(_energyPolicy.refresh());
+        await Future<void>.delayed(const Duration(seconds: 30));
+        continue;
+      }
+      final route = _pickPrimaryRelayForLongPoll(me, slot: slot);
       if (route == null) {
         await Future<void>.delayed(const Duration(seconds: 5));
         continue;
@@ -21650,6 +21714,7 @@ class MessengerController extends ChangeNotifier {
     // of the routes it used work.
     final isMessage =
         envelope.kind == 'direct_message' || envelope.kind == 'group_message';
+    if (isMessage) messageReceiptsSent++;
     if (isMessage && _noteArrival(envelope.messageId)) {
       _traceArrival(contact, envelope);
     }
@@ -23350,11 +23415,49 @@ class MessengerController extends ChangeNotifier {
           reportFailure: false,
         );
       }
+      // A copy by a new route, after the message was already answered:
+      // copies arriving together get one receipt naming all their routes.
+      final alreadyAnswered =
+          _arrivals[envelope.messageId]?.acked.isNotEmpty ?? false;
+      if (alreadyAnswered && _noteArrival(envelope.messageId)) {
+        _traceArrival(contact, envelope);
+        _scheduleRouteReceipt(contact, envelope);
+        return;
+      }
       await _sendAck(contact: contact, envelope: envelope);
     } catch (_) {
       // Duplicate deliveries are retried best-effort; missing the replayed ack
       // only delays sender-side confirmation until the next duplicate.
     }
+  }
+
+  /// Receipts sent for messages (tests count them).
+  @visibleForTesting
+  int messageReceiptsSent = 0;
+
+  /// One receipt per message for the copies arriving close together, by
+  /// message id.
+  final Map<String, Timer> _routeReceiptTimers = {};
+
+  void _scheduleRouteReceipt(ContactRecord contact, RelayEnvelope envelope) {
+    if (_routeReceiptTimers.containsKey(envelope.messageId) ||
+        _routeReceiptTimers.length >= 256) {
+      return;
+    }
+    // In battery saver this device waits longer, gathering more routes.
+    final wait = _energyPolicy.modeFor(_networkCostClass) == EnergyMode.saver
+        ? const Duration(seconds: 3)
+        : const Duration(seconds: 1);
+    _routeReceiptTimers[envelope.messageId] = Timer(wait, () {
+      _routeReceiptTimers.remove(envelope.messageId);
+      if (_disposed) return;
+      unawaited(
+        _sendAck(
+          contact: contact,
+          envelope: envelope,
+        ).catchError((Object _) {}),
+      );
+    });
   }
 
   bool _shouldRetryUnacknowledgedMessage(
@@ -23441,6 +23544,10 @@ class MessengerController extends ChangeNotifier {
     final key = _outboundAttemptKey(deviceId, messageId);
     final copies = _copyRuns[key];
     if (copies != null && !copies.isCompleted) copies.complete();
+    // Copies still going out frame by frame (radios) can stop.
+    for (final carrier in _carrierTransports.values) {
+      unawaited(carrier.cancel(carrierSendId(deviceId, messageId)));
+    }
     // A copy's hand-off can be noted after its receipt came: remembered,
     // that route is not then left unconfirmed.
     final families = _confirmedFamilies.remove(key) ?? <MessageRoute>{};
@@ -23536,6 +23643,17 @@ class MessengerController extends ChangeNotifier {
       groupSize: group?.activeMemberDeviceIds.length,
     );
     if (fanout is SingleRouteFanout) return;
+    // A slow first route gets its time before the next copy goes.
+    final paced = fanout is EscalatingFanout
+        ? EscalatingFanout(
+            escalationInterval(
+              fanout.interval,
+              _transportRegistry
+                  ?.statsFor(contact.deviceId, first.transportKind)
+                  ?.latencyMs,
+            ),
+          )
+        : fanout;
     final key = _outboundAttemptKey(contact.deviceId, envelope.messageId);
     if (_copyRuns.containsKey(key) || _copyRuns.length >= _maxCopyRuns) return;
     final receipt = Completer<void>();
@@ -23545,7 +23663,7 @@ class MessengerController extends ChangeNotifier {
         contact: contact,
         envelope: envelope,
         first: first,
-        fanout: fanout,
+        fanout: paced,
         receipt: receipt,
         group: group,
       ).catchError((_) {}).whenComplete(() {
@@ -29973,10 +30091,21 @@ class MessengerController extends ChangeNotifier {
         recipientDeviceId != _lanLobbyMailboxId) {
       return;
     }
-    unawaited(_processLocalStoredEnvelope(envelope));
+    final peer = _localRelayNode.storingPeer;
+    unawaited(
+      _processLocalStoredEnvelope(
+        envelope,
+        // Anyone holding a copy could store it here from afar: only one
+        // stored from this network counts as having come by LAN.
+        fromLocalNetwork: peer == null || isLocalNetworkAddress(peer),
+      ),
+    );
   }
 
-  Future<void> _processLocalStoredEnvelope(RelayEnvelope envelope) async {
+  Future<void> _processLocalStoredEnvelope(
+    RelayEnvelope envelope, {
+    bool fromLocalNetwork = true,
+  }) async {
     if (!hasIdentity) {
       return;
     }
@@ -29984,7 +30113,7 @@ class MessengerController extends ChangeNotifier {
     final processed = await _processEnvelopes(
       [envelope],
       ingressKind: PeerRouteKind.lan,
-      route: MessageRoute.lanDirect,
+      route: fromLocalNetwork ? MessageRoute.lanDirect : null,
     );
     if (processed > 0) {
       if (!highFrequencyTransfer) {
@@ -30095,12 +30224,20 @@ class MessengerController extends ChangeNotifier {
   @override
   void dispose() {
     _matrixClient?.dispose();
+    for (final subscription in _carrierReceiptSubscriptions.values) {
+      unawaited(subscription.cancel());
+    }
+    _carrierReceiptSubscriptions.clear();
     for (final carrier in _carrierTransports.values) {
       unawaited(carrier.detach());
     }
     unawaited(_userNotices.close());
     _scheduledMessageTimer?.cancel();
     _scheduledMessageTimer = null;
+    for (final timer in _routeReceiptTimers.values) {
+      timer.cancel();
+    }
+    _routeReceiptTimers.clear();
     _lanAdvertiseTimer?.cancel();
     for (final timer in _lanRecheckTimers) {
       timer.cancel();

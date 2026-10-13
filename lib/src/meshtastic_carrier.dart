@@ -175,7 +175,8 @@ class MeshtasticText {
 
 /// The Meshtastic side of the carrier: a radio driven through its client
 /// API, carrying each frame as a direct message on Conest's private port.
-class MeshtasticCarrierChannel implements ManagedCarrierChannel {
+class MeshtasticCarrierChannel
+    implements ManagedCarrierChannel, AcknowledgingCarrierChannel {
   MeshtasticCarrierChannel({
     required this.config,
     required this.onFrame,
@@ -278,19 +279,28 @@ class MeshtasticCarrierChannel implements ManagedCarrierChannel {
   }
 
   @override
-  Future<void> sendFrame(String address, Uint8List frame) async {
+  Future<void> sendFrame(String address, Uint8List frame) =>
+      sendTrackedFrame(address, frame);
+
+  @override
+  Future<int> sendTrackedFrame(String address, Uint8List frame) async {
     final radio = _radio;
     if (!_started || radio == null) {
       throw StateError('The Meshtastic radio is not connected.');
     }
     final to = parseMeshtasticAddress(address);
     if (to == null) throw ArgumentError('Not a Meshtastic node address.');
-    await radio.send(
+    return radio.send(
       to: to,
       portnum: meshtasticConestPort,
       payload: [_payloadVersion, ...frame],
     );
   }
+
+  final _frameAcks = StreamController<({int frameId, bool ok})>.broadcast();
+
+  @override
+  Stream<({int frameId, bool ok})> get frameAcks => _frameAcks.stream;
 
   Future<void> _run(int generation) async {
     bool current() => _started && generation == _generation;
@@ -361,6 +371,10 @@ class MeshtasticCarrierChannel implements ManagedCarrierChannel {
         packet.requestId!,
         ok: reason == null || reason == 0,
       );
+      _frameAcks.add((
+        frameId: packet.requestId!,
+        ok: reason == null || reason == 0,
+      ));
       return;
     }
     if (packet.portnum == meshtasticTextPort) {

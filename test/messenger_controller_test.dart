@@ -424,6 +424,9 @@ class _FakeRelayClient extends RelayClient {
   shouldFailStore;
   final List<String> storeAttempts = <String>[];
   final List<String> fetchAttempts = <String>[];
+
+  /// Hosts asked with a wait (long polls).
+  final List<String> waitingFetchHosts = <String>[];
   final List<String> inspectHealthAttempts = <String>[];
   final List<RelayEnvelope> storedEnvelopes = <RelayEnvelope>[];
   final Map<String, List<RelayEnvelope>> _queues =
@@ -441,16 +444,19 @@ class _FakeRelayClient extends RelayClient {
     Duration leaseFor = const Duration(seconds: 60),
     String? expectedIdentityPublicKeyBase64,
   }) async => RelayFetchBatch(
-    envelopes: await fetchEnvelopes(
-      host: host,
-      port: port,
-      protocol: protocol,
-      recipientDeviceId: recipientDeviceId,
-      limit: limit,
-      timeout: timeout,
-      waitFor: waitFor,
-      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
-    ),
+    envelopes: await (() {
+      if (waitFor > Duration.zero) waitingFetchHosts.add(host);
+      return fetchEnvelopes(
+        host: host,
+        port: port,
+        protocol: protocol,
+        recipientDeviceId: recipientDeviceId,
+        limit: limit,
+        timeout: timeout,
+        waitFor: waitFor,
+        expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+      );
+    })(),
   );
 
   @override
@@ -14937,6 +14943,46 @@ void main() {
       }, reason: 'no copy went on another route');
     });
 
+    test('copies arriving together get one receipt', () async {
+      final (alice, bob, relay, _) = await pair(
+        alicePolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      final aliceId = alice.identity!.deviceId;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'thrice');
+      final id = alice
+          .messagesFor(bob.identity!.deviceId)
+          .singleWhere((m) => m.body == 'thrice')
+          .id;
+      // The copies left on the relay and the LAN queue wait for one poll.
+      await _waitForIroh(
+        () => relay.storedEnvelopes.where((e) => e.messageId == id).length >= 2,
+        reason: 'the copies did not go out',
+      );
+      await _waitForIroh(
+        () => bob.messagesFor(aliceId).any((m) => m.body == 'thrice'),
+      );
+      // Two more copies come by two other routes, one right after the
+      // other: one more receipt names both.
+      final copy = relay.storedEnvelopes.firstWhere((e) => e.messageId == id);
+      final before = bob.messageReceiptsSent;
+      await bob.processEnvelopesForTesting([
+        copy,
+      ], route: MessageRoute.nostrCarrier);
+      await bob.processEnvelopesForTesting([
+        copy,
+      ], route: MessageRoute.emailCarrier);
+      // Bob is in battery saver (the test default): it gathers for 3 s.
+      await Future<void>.delayed(const Duration(milliseconds: 3500));
+      final received = bob
+          .messagesFor(aliceId)
+          .singleWhere((m) => m.body == 'thrice');
+      expect(
+        received.routeTrace.map((trace) => trace.route),
+        containsAll([MessageRoute.nostrCarrier, MessageRoute.emailCarrier]),
+      );
+      expect(bob.messageReceiptsSent - before, 1);
+    });
+
     test('retries do not send the same copies again', () async {
       var now = DateTime.now().toUtc();
       final network = _InProcessIrohNetwork();
@@ -15024,6 +15070,35 @@ void main() {
             );
         return families(traces).length >= 2;
       }, reason: 'the group receipt did not name two routes');
+    });
+  });
+
+  group('Watching relays', () {
+    Future<Set<String>> watchedHosts(EnergyMode mode) async {
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        enableLongPoll: true,
+        energyPolicy: EnergyPolicy.fixed(mode),
+      );
+      addTearDown(alice.dispose);
+      await alice.addRelay(host: 'relay-two.example', port: 7667);
+      relay.waitingFetchHosts.clear();
+      // The watchers look for relays every 5 s.
+      await Future<void>.delayed(const Duration(seconds: 7));
+      return relay.waitingFetchHosts.toSet();
+    }
+
+    test('on mains power a second relay is watched too', () async {
+      expect(
+        await watchedHosts(EnergyMode.unconstrained),
+        containsAll(['relay.example', 'relay-two.example']),
+      );
+    });
+
+    test('in battery saver one relay is watched', () async {
+      expect((await watchedHosts(EnergyMode.saver)).length, 1);
     });
   });
 
@@ -15191,6 +15266,14 @@ void main() {
         (await LinuxPowerStateSource(root: root.path).read()).charging,
         isTrue,
       );
+    });
+
+    test('a slow first route gets longer before the next copy', () {
+      const base = Duration(milliseconds: 2500);
+      expect(escalationInterval(base, null), base);
+      expect(escalationInterval(base, 40), base);
+      expect(escalationInterval(base, 4000), const Duration(seconds: 6));
+      expect(escalationInterval(base, 90000), const Duration(seconds: 30));
     });
 
     test('Windows power status flags are read', () {

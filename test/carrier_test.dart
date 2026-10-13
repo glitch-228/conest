@@ -277,6 +277,91 @@ void main() {
       expect(channel.sent.length, lessThan(5));
     });
 
+    test('a radio receipt comes once every frame is confirmed', () async {
+      final radio = _AckingChannel('npub-me|wss://relay.one');
+      final tracked = CarrierTransportAdapter(
+        kind: TransportKind.nostr,
+        sealer: sealer,
+        framing: CarrierFraming.nostr,
+      )..attach(radio);
+      await tracked.start();
+      final receipts = <CarrierDeliveryReceipt>[];
+      final subscription = tracked.deliveryReceipts.listen(receipts.add);
+      addTearDown(subscription.cancel);
+      final route = (await tracked.discoverRoutes(peer)).single;
+      Future<void> send(String id) => tracked.sendEnvelope(
+        peer: peer,
+        route: route,
+        envelope: TransportEnvelope(
+          id: id,
+          recipientDeviceId: 'dev-bob',
+          bytes: pattern(50 * 1024),
+          createdAt: DateTime.utc(2026),
+        ),
+      );
+      await send('m1');
+      final frames = List.of(radio.sentIds);
+      expect(frames.length, greaterThan(1));
+      for (final id in frames.take(frames.length - 1)) {
+        radio.ack(id);
+      }
+      await Future<void>.delayed(Duration.zero);
+      expect(receipts, isEmpty, reason: 'one frame still unconfirmed');
+      radio.ack(frames.last);
+      await Future<void>.delayed(Duration.zero);
+      expect(receipts.single.envelopeId, 'm1');
+      expect(receipts.single.deviceId, 'dev-bob');
+
+      // A refused frame never makes a receipt.
+      radio.sentIds.clear();
+      await send('m2');
+      for (final id in radio.sentIds) {
+        radio.ack(id, ok: id != radio.sentIds.first);
+      }
+      await Future<void>.delayed(Duration.zero);
+      expect(receipts.length, 1);
+    });
+
+    test('a cancelled send puts no more frames on air', () async {
+      final slow = CarrierTransportAdapter(
+        kind: TransportKind.nostr,
+        sealer: sealer,
+        framing: CarrierFraming.nostr,
+        frameSpacing: const Duration(milliseconds: 100),
+      )..attach(channel);
+      await slow.start();
+      final route = (await slow.discoverRoutes(peer)).single;
+      final sending = slow.sendEnvelope(
+        peer: peer,
+        route: route,
+        envelope: TransportEnvelope(
+          id: 'm',
+          recipientDeviceId: 'dev-bob',
+          bytes: pattern(100 * 1024),
+          createdAt: DateTime.utc(2026),
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      // Its receipt came by another route.
+      await slow.cancel(carrierSendId('dev-bob', 'm'));
+      await expectLater(sending, throwsStateError);
+      expect(channel.sent.length, lessThan(4));
+      // Another device's copy of the same message still goes.
+      channel.sent.clear();
+      await slow.cancel(carrierSendId('dev-carol', 'm2'));
+      await slow.sendEnvelope(
+        peer: peer,
+        route: route,
+        envelope: TransportEnvelope(
+          id: 'm2',
+          recipientDeviceId: 'dev-bob',
+          bytes: pattern(1024),
+          createdAt: DateTime.utc(2026),
+        ),
+      );
+      expect(channel.sent, isNotEmpty);
+    });
+
     test('file streams are refused', () async {
       final route = (await adapter.discoverRoutes(peer)).single;
       final receipt = await adapter.sendAttachmentRange(
@@ -558,6 +643,36 @@ class _XorSealer implements CarrierSealer {
       envelope: Uint8List.fromList([for (final byte in sealed) byte ^ 0x5a]),
     );
   }
+}
+
+class _AckingChannel implements AcknowledgingCarrierChannel {
+  _AckingChannel(this.localAddress);
+
+  final List<int> sentIds = [];
+  final _acks = StreamController<({int frameId, bool ok})>.broadcast();
+  var _next = 100;
+
+  @override
+  final String localAddress;
+
+  @override
+  String get routeLabel => 'fake radio';
+
+  @override
+  Future<void> sendFrame(String address, Uint8List frame) =>
+      sendTrackedFrame(address, frame);
+
+  @override
+  Future<int> sendTrackedFrame(String address, Uint8List frame) async {
+    final id = _next++;
+    sentIds.add(id);
+    return id;
+  }
+
+  @override
+  Stream<({int frameId, bool ok})> get frameAcks => _acks.stream;
+
+  void ack(int id, {bool ok = true}) => _acks.add((frameId: id, ok: ok));
 }
 
 class _RecordingChannel implements CarrierChannel {

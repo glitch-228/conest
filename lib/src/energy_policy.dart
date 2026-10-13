@@ -172,6 +172,17 @@ class EnergyPolicy {
   }
 }
 
+/// The wait before another copy: no shorter than [base], and long enough
+/// for the first route's measured round trip ([latencyMs]) with room to
+/// spare; never over 30 s.
+Duration escalationInterval(Duration base, double? latencyMs) {
+  if (latencyMs == null || latencyMs.isNaN || latencyMs <= 0) return base;
+  final wanted = Duration(milliseconds: (latencyMs * 1.5).round());
+  const cap = Duration(seconds: 30);
+  if (wanted <= base) return base;
+  return wanted > cap ? cap : wanted;
+}
+
 class _FixedPowerSource implements PowerStateSource {
   const _FixedPowerSource();
   @override
