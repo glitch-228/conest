@@ -15,6 +15,7 @@ import 'package:cryptography/cryptography.dart' hide Hash;
 import 'aes.dart';
 import 'aes_key_wrap.dart';
 import 'openpgp.dart';
+import 'pgp_aead.dart';
 
 const int _ecdh = 18;
 const int _eddsaLegacy = 22;
@@ -30,7 +31,7 @@ const List<int> _cv25519Oid = [
 ];
 
 /// Most a decrypted message may expand to (compressed data included).
-const int maxPgpPlaintextBytes = 64 * 1024 * 1024;
+const int maxPgpPlaintextBytes = 8 * 1024 * 1024;
 
 /// A Cv25519 encryption subkey of a [PgpPublicKey].
 class PgpEncryptionSubkey {
@@ -389,6 +390,10 @@ class PgpDecrypted {
   /// It carried a signature, good or not, from a known key or not.
   bool get signed => _signatures.isNotEmpty;
 
+  /// Fingerprints the good signature found by [verify] names as intended
+  /// recipients (empty when it names none).
+  List<Uint8List> intendedRecipients = const [];
+
   /// The first of [keys] that made a good signature on it, or null.
   Future<PgpPublicKey?> verify(List<PgpPublicKey> keys) async {
     for (final signature in _signatures) {
@@ -402,6 +407,11 @@ class PgpDecrypted {
           key.fingerprint,
           _now,
         )) {
+          intendedRecipients = [
+            for (final value in signature.hashed[35] ?? const <Uint8List>[])
+              if (value.length == 21 && value[0] == 4)
+                Uint8List.sublistView(value, 1),
+          ];
           return key;
         }
       }
@@ -446,43 +456,18 @@ abstract final class Pgp {
       );
     }
 
-    final signing = await Ed25519().newKeyPairFromSeed(signer._signingSeed);
-    final signerKey = signer.publicKey;
-    final literal = OpenPgpSymmetric.packet(11, [
-      0x62, // 'b': binary
-      0,
-      ..._be32(created),
-      ...data,
-    ]);
-    final signature = await _sign(
-      signing,
-      0x00,
-      [data],
-      signerKey.fingerprint,
+    final inner = await _literal(
+      data,
       created,
-      [
-        for (final key in recipients) _subpacket(35, [4, ...key.fingerprint]),
-      ],
+      signer: signer,
+      recipients: recipients,
     );
-    final inner = BytesBuilder(copy: false)
-      ..add(
-        OpenPgpSymmetric.packet(4, [
-          3,
-          0x00,
-          _sha256Id,
-          _eddsaLegacy,
-          ...signerKey.keyId,
-          1,
-        ]),
-      )
-      ..add(literal)
-      ..add(OpenPgpSymmetric.packet(2, signature));
 
     final prefix = randomBytes(16);
     final clear = BytesBuilder(copy: false)
       ..add(prefix)
       ..add(prefix.sublist(14))
-      ..add(inner.takeBytes())
+      ..add(inner)
       ..add([0xd3, 0x14]);
     final mdcInput = clear.takeBytes();
     final plaintext = Uint8List.fromList([
@@ -496,6 +481,83 @@ abstract final class Pgp {
     );
     keys.add(OpenPgpSymmetric.packet(18, [1, ...encrypted]));
     return keys.takeBytes();
+  }
+
+  /// [data] as a literal packet, signed by [signer] (one-pass) if given.
+  static Future<Uint8List> _literal(
+    Uint8List data,
+    int created, {
+    PgpSecretKey? signer,
+    List<PgpPublicKey> recipients = const [],
+  }) async {
+    final literal = OpenPgpSymmetric.packet(11, [
+      0x62, // 'b': binary
+      0,
+      ..._be32(created),
+      ...data,
+    ]);
+    if (signer == null) return Uint8List.fromList(literal);
+    final signing = await Ed25519().newKeyPairFromSeed(signer._signingSeed);
+    final signerKey = signer.publicKey;
+    final signature = await _sign(
+      signing,
+      0x00,
+      [data],
+      signerKey.fingerprint,
+      created,
+      [
+        for (final key in recipients) _subpacket(35, [4, ...key.fingerprint]),
+      ],
+    );
+    return (BytesBuilder(copy: false)
+          ..add(
+            OpenPgpSymmetric.packet(4, [
+              3,
+              0x00,
+              _sha256Id,
+              _eddsaLegacy,
+              ...signerKey.keyId,
+              1,
+            ]),
+          )
+          ..add(literal)
+          ..add(OpenPgpSymmetric.packet(2, signature)))
+        .takeBytes();
+  }
+
+  /// [data] encrypted with [password] as an OpenPGP v6 message (v6 SKESK,
+  /// v2 SEIPD with AES-OCB), signed by [signer] if given.
+  static Future<Uint8List> encryptWithPassword(
+    Uint8List data,
+    List<int> password, {
+    PgpSecretKey? signer,
+    Random? random,
+    DateTime? now,
+  }) async {
+    final created = (now ?? DateTime.now()).millisecondsSinceEpoch ~/ 1000;
+    return OpenPgpAead.encrypt(
+      await _literal(data, created, signer: signer),
+      password,
+      random: random,
+    );
+  }
+
+  /// Decrypts a password-encrypted v6 message with one of [passwords],
+  /// checking its signature against [senders]: the message and the
+  /// password that opened it, or null when none does.
+  static Future<(PgpDecrypted, List<int>)?> decryptWithPasswords(
+    Uint8List message,
+    List<List<int>> passwords, {
+    List<PgpPublicKey> senders = const [],
+    DateTime? now,
+  }) async {
+    final opened = OpenPgpAead.decrypt(message, passwords);
+    if (opened == null) return null;
+    final (inner, password) = opened;
+    return (
+      await _readSigned(inner, senders, now ?? DateTime.now(), depth: 0),
+      password,
+    );
   }
 
   /// Decrypts [message] with [key], checking its signature against
@@ -675,6 +737,8 @@ abstract final class Pgp {
       switch (tag) {
         case 4: // one-pass signature: the signature follows
           break;
+        case 21: // padding (RFC 9580)
+          break;
         case 11:
           if (content != null) {
             throw const FormatException('Several OpenPGP literal packets.');
@@ -796,8 +860,9 @@ class _Signature {
       if (reader.byte() != _eddsaLegacy) return null;
       final hashAlgorithm = reader.byte();
       final hashedLength = reader.be16();
+      final hashedBytes = reader.take(hashedLength);
       final hashedArea = Uint8List.sublistView(body, 0, 6 + hashedLength);
-      final hashed = _subpackets(reader.take(hashedLength), strict: true);
+      final hashed = _subpackets(hashedBytes, strict: true);
       if (hashed == null) return null;
       final unhashed = _subpackets(reader.take(reader.be16()), strict: false);
       final left16 = reader.take(2);
@@ -816,6 +881,8 @@ class _Signature {
         _leftPad(s, 32),
       );
     } on FormatException {
+      return null;
+    } on RangeError {
       return null;
     }
   }
@@ -851,7 +918,8 @@ class _Signature {
   /// The issuer subpackets do not rule out [fingerprint].
   bool mayBeFrom(Uint8List fingerprint) {
     for (final issuer in [...?hashed[33], ...?unhashed[33]]) {
-      if (issuer.length == 21 &&
+      if (issuer.length != 21 ||
+          issuer[0] != 4 ||
           !_same(Uint8List.sublistView(issuer, 1), fingerprint)) {
         return false;
       }
@@ -875,6 +943,13 @@ class _Signature {
     if (!mayBeFrom(fingerprint)) return false;
     final hash = _hash(hashAlgorithm);
     if (hash == null) return false;
+    // A signature says when it was made, and not far in the future.
+    final made = hashed[2]?.firstOrNull;
+    if (made == null ||
+        made.length != 4 ||
+        created > now.millisecondsSinceEpoch ~/ 1000 + 24 * 3600) {
+      return false;
+    }
     final expiry = hashed[3]?.firstOrNull;
     if (expiry != null &&
         expiry.length == 4 &&

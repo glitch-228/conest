@@ -185,6 +185,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     required this.onFrame,
     this.onCursor,
     this.onStatusChanged,
+    this.onOtherMail,
     MailConnector? connector,
     this.tls = true,
     this.idleTimeout = const Duration(minutes: 25),
@@ -209,6 +210,10 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
   /// The folder position after mail was read, to resume after a restart.
   final void Function(int uidValidity, int lastUid)? onCursor;
   final void Function()? onStatusChanged;
+
+  /// Mail that is not carrier mail (Delta Chat's, say): true when it was
+  /// handled and may be deleted. Without it such mail is left alone.
+  final Future<bool> Function(Uint8List raw)? onOtherMail;
 
   EmailCarrierState _state = EmailCarrierState.stopped;
   String? _lastError;
@@ -287,6 +292,24 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     );
   }
 
+  /// Sends [message] (RFC 5322 text) from this account to [to].
+  Future<void> sendMail(List<String> to, String message) async {
+    if (!_started) throw StateError('The email carrier is stopped.');
+    if (to.isEmpty) return;
+    await SmtpSender.send(
+      host: _config.smtpHost,
+      port: _config.smtpPort,
+      user: _config.mail,
+      password: _config.password,
+      from: _config.mail,
+      to: to.first,
+      moreRecipients: to.skip(1).toList(),
+      tls: tls,
+      connector: _connector,
+      message: message,
+    );
+  }
+
   Future<void> _readLoop(int generation) async {
     bool current() => _started && generation == _generation;
     var backoff = const Duration(seconds: 2);
@@ -360,10 +383,21 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
         final mail = raw == null
             ? null
             : CarrierMail.read(raw, _config.mailboxKey);
+        var handled = false;
         if (mail != null) {
           // Delivered before deleting: a duplicate after a crash is dropped
           // by the receiver, a lost frame would not come back.
           onFrame(mail.from, mail.frame);
+          handled = true;
+        } else if (raw != null && onOtherMail != null) {
+          try {
+            handled = await onOtherMail!(raw);
+          } catch (_) {
+            // Not read: left on the server.
+          }
+          if (!current()) return;
+        }
+        if (handled) {
           try {
             await client.delete(uid);
           } on ImapException {

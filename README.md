@@ -62,11 +62,13 @@ of them.
   recovery, rooms with replies, edits, reactions, files and invites.
 
 **Other networks in one chat list**
-- Matrix, Nostr and bitchat chats sit beside Conest chats, each with a
-  filter of its own; any network can be hidden from the list.
+- Matrix, Nostr, Delta Chat and bitchat chats sit beside Conest chats,
+  each with a filter of its own; any network can be hidden from the list.
 - Nostr private messages (NIP-17) with anyone on Nostr (0xchat, Amethyst
   and others), one to one or in groups, under a Nostr account of their
   own.
+- Delta Chat chats through your email account: verified by invite QR or
+  link (both ways), one to one and in groups, with read receipts.
 - Messages with Meshtastic and MeshCore app users through your radio,
   directly and on the radio's channels.
 - Verifying Matrix users in direct chats, as Element does.
@@ -86,8 +88,8 @@ of them.
 
 - Several devices on one account (planned: per-device keys under an account
   key, linking through Matrix or a QR code, optional sync).
-- Talking to other apps' users: Delta Chat, Telegram and Discord are
-  planned.
+- Talking to other apps' users: Telegram and Discord are planned; Delta
+  Chat files, reactions and its newest invite form are next.
 - Sending one message over several routes at once, and files over several
   routes in parallel.
 - Relay protocol v2 with registration for large files and call relaying.

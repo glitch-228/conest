@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'delta_chats.dart';
 import 'email/carrier_mail.dart' show isPlausibleMailAddress;
 import 'email/delta_mail.dart';
+import 'email/mime.dart' show encodeMimeWord;
 import 'email/pgp.dart';
 
 /// Mail to send: its recipients' addresses and the message text.
@@ -58,12 +59,17 @@ class DeltaInvite {
     this.invitenumber,
     this.groupId,
     this.groupName,
+    this.v3 = true,
   });
 
   final String fingerprint;
   final String addr;
   final String auth;
   final String? name;
+
+  /// Securejoin v3 (`v=3`, or no invite number): the first message is
+  /// encrypted with a secret from the invite instead of sent in the clear.
+  final bool v3;
 
   /// Absent in invites that only work with Securejoin v3.
   final String? invitenumber;
@@ -113,14 +119,14 @@ class DeltaInvite {
     if (auth == null || !_validToken(auth)) return null;
     final invitenumber = parameters['i'] ?? parameters['j'];
     final groupId = parameters['x'];
+    final validNumber = invitenumber != null && _validToken(invitenumber);
     return DeltaInvite(
+      v3: parameters['v'] == '3' || !validNumber,
       fingerprint: fingerprint,
       addr: addr,
       auth: auth,
       name: _shortName(parameters['n']),
-      invitenumber: invitenumber != null && _validToken(invitenumber)
-          ? invitenumber
-          : null,
+      invitenumber: validNumber ? invitenumber : null,
       groupId: groupId != null && _validToken(groupId) ? groupId : null,
       groupName: _shortName(parameters['g']),
     );
@@ -133,6 +139,7 @@ class DeltaInvite {
         Uri.encodeComponent(value).replaceAll('%20', '+');
     return [
       'https://i.delta.chat/#$fingerprint',
+      if (v3) 'v=3',
       if (groupId != null) 'x=$groupId',
       if (invitenumber != null) 'i=$invitenumber',
       's=$auth',
@@ -147,12 +154,7 @@ class DeltaInvite {
       value.length <= 64 &&
       RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(value);
 
-  static String? _shortName(String? name) {
-    final trimmed = name?.trim();
-    if (trimmed == null || trimmed.isEmpty) return null;
-    final runes = trimmed.runes.take(64);
-    return String.fromCharCodes(runes);
-  }
+  static String? _shortName(String? name) => _cleanName(name);
 }
 
 /// Invite secrets of this account: one pair for contacts, one per group.
@@ -291,7 +293,10 @@ class DeltaProtocol {
     }
   }
 
-  void _remember(PgpPublicKey key) => _keys[key.fingerprintHex] = key;
+  void _remember(PgpPublicKey key) {
+    if (_keys.length > 4000) _keys.clear();
+    _keys[key.fingerprintHex] = key;
+  }
 
   DateTime _clamp(DateTime? date) {
     final now = _now().toUtc();
@@ -302,6 +307,10 @@ class DeltaProtocol {
   }
 
   String _newMessageId() => DeltaMail.newMessageId(_domain, _random);
+
+  /// The shared secret of Securejoin v3 for an invite by [inviter].
+  static String _secret(String inviter, String auth) =>
+      'securejoin/$inviter/$auth';
 
   // Reading mail.
 
@@ -317,6 +326,12 @@ class DeltaProtocol {
       raw,
       key,
       knownKeys: (addr) => known[addr] ?? const [],
+      passwords: [
+        for (final join in chats.joins) _secret(join.fingerprint, join.auth),
+        _secret(fingerprint, tokens.auth),
+        for (final (_, auth) in tokens.groups.values)
+          _secret(fingerprint, auth),
+      ],
       now: _now(),
     );
     if (read == null || read.from == self) return DeltaStep(chats);
@@ -325,9 +340,14 @@ class DeltaProtocol {
       return _handshake(chats, read, step);
     }
     final signer = read.signer;
-    if (!read.encrypted || signer == null) {
-      // Delta Chat writes encrypted and signed; anything else is not a
-      // chat message (and may be the user's own mail).
+    // Chat messages are encrypted to this account's key (a secret from an
+    // invite is known to whoever has the invite), signed, and say so with
+    // Chat-Version; other mail (the user's own, say) is left alone.
+    if (!read.encrypted ||
+        signer == null ||
+        read.password != null ||
+        !read.isChat ||
+        !_forMe(read)) {
       return DeltaStep(chats);
     }
     _remember(signer);
@@ -346,7 +366,9 @@ class DeltaProtocol {
     if (groupId != null && groupId.isNotEmpty && groupId.length <= 64) {
       return _groupMessage(next, read, signer, groupId);
     }
-    final peer = next.peers[signer.fingerprintHex]!;
+    final peer =
+        next.peers[signer.fingerprintHex] ??
+        DeltaPeer(fingerprint: signer.fingerprintHex, addr: read.from);
     final chatKey = signer.fingerprintHex;
     next = next.add(
       chatKey,
@@ -359,8 +381,20 @@ class DeltaProtocol {
         kept: peer.verified,
       ),
     );
-    return DeltaStep(next, consumed: true, chatKey: chatKey);
+    // Files cannot be shown here yet: such mail stays on the server.
+    return DeltaStep(
+      next,
+      consumed: read.attachments.isEmpty,
+      chatKey: chatKey,
+    );
   }
+
+  /// Mail meant for this account: it is in the signed To, and the signature
+  /// names it if it names anyone. A signed message forwarded to someone
+  /// else is not theirs to take as written to them.
+  bool _forMe(DeltaIncoming read) =>
+      read.to.contains(self) &&
+      (read.intendedFor.isEmpty || read.intendedFor.contains(fingerprint));
 
   /// The sender's key and gossiped keys remembered.
   DeltaChats _learn(DeltaChats chats, DeltaIncoming read, PgpPublicKey signer) {
@@ -372,15 +406,30 @@ class DeltaProtocol {
         name: _shortName(read.fromName),
       ),
     );
+    // Gossip only for the message's own recipients, and only about people
+    // not known yet: a gossiped key never moves someone to another address.
+    var added = 0;
     for (final MapEntry(key: addr, value: gossiped) in read.gossip.entries) {
-      if (addr == self || gossiped.fingerprintHex == fingerprint) continue;
-      _remember(gossiped);
+      if (addr == self ||
+          gossiped.fingerprintHex == fingerprint ||
+          !read.to.contains(addr)) {
+        continue;
+      }
       final known = next.peers[gossiped.fingerprintHex];
+      if (known != null) {
+        if (known.key == null) {
+          _remember(gossiped);
+          next = next.withPeer(known.copyWith(key: gossiped.bytes));
+        }
+        continue;
+      }
+      if (++added > 100 || next.peers.length >= DeltaChats.maxPeers) break;
+      _remember(gossiped);
       next = next.withPeer(
         DeltaPeer(
           fingerprint: gossiped.fingerprintHex,
           addr: addr,
-          key: known?.key ?? gossiped.bytes,
+          key: gossiped.bytes,
         ),
       );
     }
@@ -418,6 +467,11 @@ class DeltaProtocol {
     final existing = chats.chats[chatKey];
     final senderIsMember =
         existing == null || existing.members.contains(sender);
+    // Membership follows the newest change: an older message (reordered,
+    // or replayed by a removed member) does not undo a later one.
+    final date = _clamp(read.date);
+    final membersAt = existing?.membersAt;
+    final fresh = membersAt == null || !date.isBefore(membersAt);
     // To and Chat-Group-Member-Fpr in the same order.
     final fingerprints = (read.header('chat-group-member-fpr') ?? '')
         .split(RegExp(r'\s+'))
@@ -451,8 +505,10 @@ class DeltaProtocol {
     var members = existing?.members ?? const <String>[];
     var left = existing?.left ?? false;
     var kept = existing?.kept ?? false;
+    var changed = false;
     final notes = <String>[];
-    if (senderIsMember) {
+    if (senderIsMember && fresh) {
+      changed = true;
       if (removedSelf) {
         left = true;
         notes.add(sender == fingerprint ? 'You left.' : 'You were removed.');
@@ -474,7 +530,14 @@ class DeltaProtocol {
           }
         }
         if (addedAddr != null && !addedSelf) {
-          final added = read.gossip[addedAddr]?.fingerprintHex;
+          final named = read
+              .header('chat-group-member-added-fpr')
+              ?.trim()
+              .toUpperCase();
+          final added =
+              named != null && RegExp(r'^[0-9A-F]{40}$').hasMatch(named)
+              ? named
+              : read.gossip[addedAddr]?.fingerprintHex;
           if (added != null) notes.add('${_nameOf(next, added)} joined.');
         }
         if (addedSelf) {
@@ -482,7 +545,9 @@ class DeltaProtocol {
           // Being added after joining by invite, or by someone verified.
           kept =
               kept ||
-              chats.joins.any((join) => join.groupId == groupId) ||
+              chats.joins.any(
+                (join) => join.groupId == groupId && join.fingerprint == sender,
+              ) ||
               (chats.peers[sender]?.verified ?? false);
           next = next.copyWith(
             joins: [
@@ -505,8 +570,9 @@ class DeltaProtocol {
                 ))
             .copyWith(
               members: members,
-              name: senderIsMember ? name : null,
+              name: senderIsMember && fresh ? name : null,
               left: left,
+              membersAt: changed ? date : null,
               kept:
                   kept ||
                   chats.chats.values.any(
@@ -522,7 +588,7 @@ class DeltaProtocol {
           id: '${read.messageId}#$index',
           author: sender,
           text: note,
-          at: _clamp(read.date),
+          at: date,
           info: true,
         ),
         create: () => chat,
@@ -553,11 +619,7 @@ class DeltaProtocol {
     return peer?.name ?? peer?.addr ?? fingerprint.substring(0, 8);
   }
 
-  static String? _shortName(String? name) {
-    final trimmed = name?.trim();
-    if (trimmed == null || trimmed.isEmpty) return null;
-    return String.fromCharCodes(trimmed.runes.take(64));
-  }
+  static String? _shortName(String? name) => _cleanName(name);
 
   // Securejoin.
 
@@ -571,11 +633,17 @@ class DeltaProtocol {
         return _onRequest(chats, read, step);
       case 'vc-auth-required' || 'vg-auth-required':
         return _onAuthRequired(chats, read);
+      case 'vc-request-pubkey':
+        return _onRequestPubkey(chats, read);
+      case 'vc-pubkey':
+        return _onAuthRequired(chats, read, v3: true);
       case 'vc-request-with-auth' || 'vg-request-with-auth':
         return _onRequestWithAuth(chats, read, step);
       case 'vc-contact-confirm':
         final signer = read.signer;
-        if (!read.encrypted || signer == null) return DeltaStep(chats);
+        if (!read.encrypted || signer == null || !_forMe(read)) {
+          return DeltaStep(chats);
+        }
         final peer = chats.peers[signer.fingerprintHex];
         if (peer == null || !peer.verified) return DeltaStep(chats);
         return DeltaStep(
@@ -597,19 +665,25 @@ class DeltaProtocol {
   ) async {
     final invitenumber = read.header('secure-join-invitenumber')?.trim();
     final bobKey = read.autocryptKey;
-    if (invitenumber == null || bobKey == null) return DeltaStep(chats);
+    if (invitenumber == null || bobKey == null || !read.to.contains(self)) {
+      return DeltaStep(chats);
+    }
     final matches =
         _same(invitenumber, tokens.invitenumber) ||
         tokens.groups.values.any((group) => _same(invitenumber, group.$1));
     if (!matches) return DeltaStep(chats);
     _remember(bobKey);
-    final next = chats.withPeer(
-      DeltaPeer(
-        fingerprint: bobKey.fingerprintHex,
-        addr: read.from,
-        key: bobKey.bytes,
-      ),
-    );
+    // An unsigned request says nothing of whose key it is: someone known
+    // keeps their address (the answer goes to the requester only).
+    final next = chats.peers.containsKey(bobKey.fingerprintHex)
+        ? chats
+        : chats.withPeer(
+            DeltaPeer(
+              fingerprint: bobKey.fingerprintHex,
+              addr: read.from,
+              key: bobKey.bytes,
+            ),
+          );
     final messageId = _newMessageId();
     final recipient = (addr: read.from, key: bobKey);
     final mail = await DeltaMail.build(
@@ -633,15 +707,67 @@ class DeltaProtocol {
     );
   }
 
-  /// Bob: the inviter answered with their key; it must be the invite's.
-  Future<DeltaStep> _onAuthRequired(
+  /// Alice (v3): someone with an invite asks for this account's key, in a
+  /// mail encrypted with the invite's secret.
+  Future<DeltaStep> _onRequestPubkey(
     DeltaChats chats,
     DeltaIncoming read,
   ) async {
+    final auth = read.header('secure-join-auth')?.trim();
+    final password = read.password;
+    if (auth == null || password == null || !read.to.contains(self)) {
+      return DeltaStep(chats);
+    }
+    final known =
+        _same(auth, tokens.auth) ||
+        tokens.groups.values.any((group) => _same(auth, group.$2));
+    // The secret it came with must be the one of that same auth code.
+    if (!known || !_same(password, _secret(fingerprint, auth))) {
+      return DeltaStep(chats);
+    }
+    final mail = await DeltaMail.buildSecureJoinV3(
+      key: key,
+      from: self,
+      to: read.from,
+      step: 'vc-pubkey',
+      auth: auth,
+      password: password,
+      attachKey: true,
+      messageId: _newMessageId(),
+      date: _now(),
+      random: _random,
+    );
+    return DeltaStep(
+      chats,
+      consumed: true,
+      mails: [
+        DeltaOutgoingMail(to: [read.from], mail: mail),
+      ],
+    );
+  }
+
+  /// Bob: the inviter answered with their key; it must be the invite's
+  /// (for v3, in a mail with the invite's secret, signed by that key).
+  Future<DeltaStep> _onAuthRequired(
+    DeltaChats chats,
+    DeltaIncoming read, {
+    bool v3 = false,
+  }) async {
     final signer = read.signer;
-    if (!read.encrypted || signer == null) return DeltaStep(chats);
+    if (!read.encrypted || signer == null || !_forMe(read)) {
+      return DeltaStep(chats);
+    }
     final join = chats.joins
-        .where((join) => join.fingerprint == signer.fingerprintHex)
+        .where(
+          (join) =>
+              join.fingerprint == signer.fingerprintHex &&
+              (!v3 ||
+                  (read.password != null &&
+                      _same(
+                        read.password!,
+                        _secret(join.fingerprint, join.auth),
+                      ))),
+        )
         .firstOrNull;
     if (join == null) return DeltaStep(chats);
     _remember(signer);
@@ -714,7 +840,8 @@ class DeltaProtocol {
     if (!read.encrypted ||
         signer == null ||
         auth == null ||
-        claimed != signer.fingerprintHex) {
+        claimed != signer.fingerprintHex ||
+        !_forMe(read)) {
       return DeltaStep(chats);
     }
     // Delta Chat's guard against a forwarded request: it carries this
@@ -790,7 +917,11 @@ class DeltaProtocol {
     final chatKey = invite.groupId == null
         ? invite.fingerprint
         : DeltaChat.groupKey(invite.groupId!);
-    final existing = next.chats[chatKey];
+    // A group chat someone else made here before the user joined is not
+    // trusted: joining starts it afresh from the inviter.
+    final existing = next.chats[chatKey]?.kept ?? false
+        ? next.chats[chatKey]
+        : null;
     next = next.withChat(
       (existing ??
               DeltaChat(
@@ -813,20 +944,39 @@ class DeltaProtocol {
     // The inviter's key already known: straight to the proof.
     final alice = await _keyOf(next.peers[invite.fingerprint]);
     if (alice != null) {
+      // The key known already is the invite's: verified by it.
+      next = next.withPeer(
+        next.peers[invite.fingerprint]!.copyWith(verified: true),
+      );
       return DeltaStep(
         invite.isGroup ? next.withJoin(join) : next,
         chatKey: chatKey,
         mails: [await _requestWithAuth(join, alice, invite.addr)],
       );
     }
-    final invitenumber = invite.invitenumber;
-    if (invitenumber == null) {
-      throw UnsupportedError(
-        'This invite needs a newer Delta Chat handshake that Conest does '
-        'not speak yet. Ask them to send a message first, or share your '
-        'invite with them instead.',
+    if (invite.v3) {
+      // Encrypted with the invite's secret: nothing goes in the clear.
+      final mail = await DeltaMail.buildSecureJoinV3(
+        key: key,
+        from: self,
+        to: invite.addr,
+        step: 'vc-request-pubkey',
+        auth: invite.auth,
+        password: _secret(invite.fingerprint, invite.auth),
+        attachKey: false,
+        messageId: _newMessageId(),
+        date: _now(),
+        random: _random,
+      );
+      return DeltaStep(
+        next.withJoin(join),
+        chatKey: chatKey,
+        mails: [
+          DeltaOutgoingMail(to: [invite.addr], mail: mail),
+        ],
       );
     }
+    final invitenumber = invite.invitenumber!;
     final mail = DeltaMail.buildRequest(
       key: key,
       from: self,
@@ -936,7 +1086,7 @@ class DeltaProtocol {
     List<DeltaRecipient> recipients,
   ) => [
     ('Chat-Group-ID', chat.groupId!),
-    ('Chat-Group-Name', chat.name ?? 'Group'),
+    ('Chat-Group-Name', encodeMimeWord(chat.name ?? 'Group')),
     (
       'Chat-Group-Member-Fpr',
       recipients.map((recipient) => recipient.key.fingerprintHex).join(' '),
@@ -960,6 +1110,7 @@ class DeltaProtocol {
       groupId: groupId,
       name: _shortName(name) ?? 'Group',
       kept: true,
+      membersAt: _now().toUtc(),
     );
     var next = chats.withChat(chat);
     if (chat.members.isEmpty) return DeltaStep(next, chatKey: chat.key);
@@ -986,6 +1137,7 @@ class DeltaProtocol {
     }
     final updated = chat.copyWith(
       members: {...chat.members, member}.toList()..sort(),
+      membersAt: _now().toUtc(),
     );
     final next = chats.withChat(updated);
     return _systemMessage(
@@ -1030,12 +1182,13 @@ class DeltaProtocol {
     return DeltaStep(
       step.chats.withChat(
         leaving
-            ? after.copyWith(left: true)
+            ? after.copyWith(left: true, membersAt: _now().toUtc())
             : after.copyWith(
                 members: [
                   for (final existing in after.members)
                     if (existing != member) existing,
                 ],
+                membersAt: _now().toUtc(),
               ),
       ),
       mails: step.mails,
@@ -1139,4 +1292,14 @@ bool _same(String a, String b) {
     difference |= a.codeUnitAt(index) ^ b.codeUnitAt(index);
   }
   return difference == 0;
+}
+
+/// A name from someone else (display name, group name): control
+/// characters (line breaks above all) gone, at most 64 characters.
+String? _cleanName(String? name) {
+  final cleaned = name
+      ?.replaceAll(RegExp(r'[\x00-\x1f\x7f\u0085\u2028\u2029]'), ' ')
+      .trim();
+  if (cleaned == null || cleaned.isEmpty) return null;
+  return String.fromCharCodes(cleaned.runes.take(64));
 }

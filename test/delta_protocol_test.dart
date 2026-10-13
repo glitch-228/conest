@@ -5,6 +5,8 @@ import 'dart:typed_data';
 import 'package:conest/src/delta_chats.dart';
 import 'package:conest/src/delta_protocol.dart';
 import 'package:conest/src/email/delta_mail.dart';
+import 'package:conest/src/email/mime.dart';
+import 'package:conest/src/email/openpgp.dart';
 import 'package:conest/src/email/pgp.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -19,6 +21,18 @@ class Party {
 
   void apply(DeltaStep step) => chats = step.chats;
 }
+
+/// [invite] as a classic or a v3 one.
+DeltaInvite version(DeltaInvite invite, bool v3) => DeltaInvite(
+  fingerprint: invite.fingerprint,
+  addr: invite.addr,
+  auth: invite.auth,
+  name: invite.name,
+  invitenumber: invite.invitenumber,
+  groupId: invite.groupId,
+  groupName: invite.groupName,
+  v3: v3,
+);
 
 void main() {
   late Party alice;
@@ -73,8 +87,11 @@ void main() {
     await deliver(step.mails);
   }
 
-  Future<void> introduce(Party joiner, Party inviter) async {
-    final invite = DeltaInvite.parse(inviter.protocol.invite.toLink())!;
+  Future<void> introduce(Party joiner, Party inviter, {bool v3 = true}) async {
+    final invite = version(
+      DeltaInvite.parse(inviter.protocol.invite.toLink())!,
+      v3,
+    );
     final step = await joiner.protocol.join(joiner.chats, invite);
     joiner.apply(step);
     await deliver(step.mails);
@@ -116,61 +133,121 @@ void main() {
     );
   });
 
-  test(
-    'Securejoin verifies both sides, then they chat with receipts',
-    () async {
-      await introduce(bob, alice);
+  for (final v3 in [true, false]) {
+    group(v3 ? 'Securejoin v3' : 'classic Securejoin', () {
+      test(
+        'Securejoin verifies both sides, then they chat with receipts',
+        () async {
+          await introduce(bob, alice, v3: v3);
 
-      expect(alice.chats.peers[bob.fingerprint]?.verified, isTrue);
-      expect(bob.chats.peers[alice.fingerprint]?.verified, isTrue);
-      expect(alice.chats.chats[bob.fingerprint]?.kept, isTrue);
-      expect(bob.chats.chats[alice.fingerprint]?.kept, isTrue);
-      expect(bob.chats.joins, isEmpty);
+          expect(alice.chats.peers[bob.fingerprint]?.verified, isTrue);
+          expect(bob.chats.peers[alice.fingerprint]?.verified, isTrue);
+          expect(alice.chats.chats[bob.fingerprint]?.kept, isTrue);
+          expect(bob.chats.chats[alice.fingerprint]?.kept, isTrue);
+          expect(bob.chats.joins, isEmpty);
 
-      await send(bob, alice.fingerprint, 'Hi Alice');
-      final atAlice = alice.chats.chats[bob.fingerprint]!.messages.single;
-      expect(atAlice.text, 'Hi Alice');
-      expect(atAlice.author, bob.fingerprint);
-      expect(atAlice.wantsReceipt, isTrue);
-      expect(alice.chats.chats[bob.fingerprint]!.unread, 1);
+          await send(bob, alice.fingerprint, 'Hi Alice');
+          final atAlice = alice.chats.chats[bob.fingerprint]!.messages.single;
+          expect(atAlice.text, 'Hi Alice');
+          expect(atAlice.author, bob.fingerprint);
+          expect(atAlice.wantsReceipt, isTrue);
+          expect(alice.chats.chats[bob.fingerprint]!.unread, 1);
 
-      await send(alice, bob.fingerprint, 'Hi Bob');
-      expect(bob.chats.chats[alice.fingerprint]!.messages.last.text, 'Hi Bob');
+          await send(alice, bob.fingerprint, 'Hi Bob');
+          expect(
+            bob.chats.chats[alice.fingerprint]!.messages.last.text,
+            'Hi Bob',
+          );
 
-      // Alice reads: Bob's message shows read.
-      final read = await alice.protocol.markRead(alice.chats, bob.fingerprint);
-      alice.apply(read);
-      expect(read.mails, hasLength(1));
-      await deliver(read.mails);
-      final bobsOwn = bob.chats.chats[alice.fingerprint]!.messages.firstWhere(
-        (message) => message.outgoing,
+          // Alice reads: Bob's message shows read.
+          final read = await alice.protocol.markRead(
+            alice.chats,
+            bob.fingerprint,
+          );
+          alice.apply(read);
+          expect(read.mails, hasLength(1));
+          await deliver(read.mails);
+          final bobsOwn = bob.chats.chats[alice.fingerprint]!.messages
+              .firstWhere((message) => message.outgoing);
+          expect(bobsOwn.state, DeltaMessageState.read);
+          expect(alice.chats.chats[bob.fingerprint]!.unread, 0);
+        },
       );
-      expect(bobsOwn.state, DeltaMessageState.read);
-      expect(alice.chats.chats[bob.fingerprint]!.unread, 0);
-    },
-  );
 
-  test('a wrong auth code gets nowhere', () async {
-    final real = DeltaInvite.parse(alice.protocol.invite.toLink())!;
-    final forged = DeltaInvite(
-      fingerprint: real.fingerprint,
-      addr: real.addr,
-      invitenumber: real.invitenumber,
-      auth: 'guessed',
-    );
-    final step = await bob.protocol.join(bob.chats, forged);
-    bob.apply(step);
-    await deliver(step.mails);
-    expect(alice.chats.peers[bob.fingerprint]?.verified ?? false, isFalse);
-    expect(alice.chats.chats, isEmpty);
-  });
+      test('a wrong auth code gets nowhere', () async {
+        final real = DeltaInvite.parse(alice.protocol.invite.toLink())!;
+        final forged = DeltaInvite(
+          fingerprint: real.fingerprint,
+          addr: real.addr,
+          invitenumber: real.invitenumber,
+          auth: 'guessed',
+          v3: v3,
+        );
+        final step = await bob.protocol.join(bob.chats, forged);
+        bob.apply(step);
+        await deliver(step.mails);
+        expect(alice.chats.peers[bob.fingerprint]?.verified ?? false, isFalse);
+        expect(alice.chats.chats, isEmpty);
+      });
+
+      test('a proof without the inviter\'s key gossiped is ignored', () async {
+        final invite = version(
+          DeltaInvite.parse(alice.protocol.invite.toLink())!,
+          v3,
+        );
+        final joining = await bob.protocol.join(bob.chats, invite);
+        bob.apply(joining);
+        final atAlice = await alice.protocol.receive(
+          alice.chats,
+          Uint8List.fromList(utf8.encode(joining.mails.single.mail)),
+        );
+        alice.apply(atAlice);
+        final atBob = await bob.protocol.receive(
+          bob.chats,
+          Uint8List.fromList(utf8.encode(atAlice.mails.single.mail)),
+        );
+        bob.apply(atBob);
+
+        // The same proof, as if forwarded: no gossip of Alice's key.
+        final forwarded = await DeltaMail.build(
+          key: bob.protocol.key,
+          from: bob.addr,
+          to: [(addr: alice.addr, key: alice.protocol.key.publicKey)],
+          text: 'Secure-Join: vc-request-with-auth',
+          messageId: 'Mr.forwarded@example.org',
+          date: clock,
+          extraHeaders: [
+            ('Secure-Join', 'vc-request-with-auth'),
+            ('Secure-Join-Auth', invite.auth),
+            ('Secure-Join-Fingerprint', bob.fingerprint),
+          ],
+        );
+        final refused = await alice.protocol.receive(
+          alice.chats,
+          Uint8List.fromList(utf8.encode(forwarded)),
+        );
+        expect(refused.mails, isEmpty);
+        expect(
+          refused.chats.peers[bob.fingerprint]?.verified ?? false,
+          isFalse,
+        );
+
+        // Bob's own proof carries the gossip and goes through.
+        await deliver(atBob.mails);
+        expect(alice.chats.peers[bob.fingerprint]?.verified, isTrue);
+      });
+    });
+  }
 
   test(
     'an answer signed by another key than the invite\'s is ignored',
     () async {
       // Mallory intercepts and answers as alice@ with her own key.
       final mallory = await party('mallory', 9);
-      final invite = DeltaInvite.parse(alice.protocol.invite.toLink())!;
+      final invite = version(
+        DeltaInvite.parse(alice.protocol.invite.toLink())!,
+        false,
+      );
       final step = await bob.protocol.join(bob.chats, invite);
       bob.apply(step);
       final malloryAsAlice = DeltaProtocol(
@@ -192,45 +269,59 @@ void main() {
     },
   );
 
-  test('a proof without the inviter\'s key gossiped is ignored', () async {
+  test('v3: an answer by another key, even with the invite\'s secret, '
+      'is ignored', () async {
+    final mallory = await party('mallory', 9);
     final invite = DeltaInvite.parse(alice.protocol.invite.toLink())!;
-    final joining = await bob.protocol.join(bob.chats, invite);
-    bob.apply(joining);
-    final atAlice = await alice.protocol.receive(
-      alice.chats,
-      Uint8List.fromList(utf8.encode(joining.mails.single.mail)),
+    expect(invite.v3, isTrue);
+    final step = await bob.protocol.join(bob.chats, invite);
+    bob.apply(step);
+    // Mallory saw the invite: she knows the secret, not Alice's key.
+    final forged = await DeltaMail.buildSecureJoinV3(
+      key: mallory.protocol.key,
+      from: alice.addr,
+      to: bob.addr,
+      step: 'vc-pubkey',
+      auth: invite.auth,
+      password: 'securejoin/${invite.fingerprint}/${invite.auth}',
+      attachKey: true,
+      messageId: 'Mr.mallory@example.org',
+      date: clock,
     );
-    alice.apply(atAlice);
     final atBob = await bob.protocol.receive(
       bob.chats,
-      Uint8List.fromList(utf8.encode(atAlice.mails.single.mail)),
+      Uint8List.fromList(utf8.encode(forged)),
     );
-    bob.apply(atBob);
+    expect(atBob.mails, isEmpty);
+    expect(atBob.chats.peers[alice.fingerprint]?.verified ?? false, isFalse);
 
-    // The same proof, as if forwarded: no gossip of Alice's key.
-    final forwarded = await DeltaMail.build(
-      key: bob.protocol.key,
-      from: bob.addr,
-      to: [(addr: alice.addr, key: alice.protocol.key.publicKey)],
-      text: 'Secure-Join: vc-request-with-auth',
-      messageId: 'Mr.forwarded@example.org',
-      date: clock,
-      extraHeaders: [
-        ('Secure-Join', 'vc-request-with-auth'),
-        ('Secure-Join-Auth', invite.auth),
-        ('Secure-Join-Fingerprint', bob.fingerprint),
-      ],
+    // Nor does a chat message sent with that secret land anywhere.
+    final secret = 'securejoin/${invite.fingerprint}/${invite.auth}';
+    final inner =
+        'Content-Type: text/plain; charset="utf-8"; protected-headers="v1"\r\n'
+        'From: <${mallory.addr}>\r\n'
+        'Message-ID: <Mr.mallory2@example.org>\r\n'
+        'Chat-Version: 1.0\r\n'
+        '${foldedHeader('Autocrypt', AutocryptHeader(addr: mallory.addr, keydata: mallory.protocol.key.publicKey.bytes, mutual: true).encode())}\r\n'
+        '\r\nhello from the secret\r\n';
+    final encrypted = await Pgp.encryptWithPassword(
+      Uint8List.fromList(utf8.encode(inner)),
+      utf8.encode(secret),
+      signer: mallory.protocol.key,
     );
-    final refused = await alice.protocol.receive(
-      alice.chats,
-      Uint8List.fromList(utf8.encode(forwarded)),
+    final chatMail =
+        'From: <${mallory.addr}>\r\n'
+        'Message-ID: <Mr.mallory2@example.org>\r\n'
+        'Content-Type: multipart/encrypted; protocol="application/pgp-encrypted"; boundary="x"\r\n'
+        '\r\n--x\r\nContent-Type: application/pgp-encrypted\r\n\r\nVersion: 1\r\n'
+        '--x\r\nContent-Type: application/octet-stream\r\n\r\n'
+        '${OpenPgpArmor.encode(encrypted)}\r\n--x--\r\n';
+    final stillNothing = await bob.protocol.receive(
+      atBob.chats,
+      Uint8List.fromList(utf8.encode(chatMail)),
     );
-    expect(refused.mails, isEmpty);
-    expect(refused.chats.peers[bob.fingerprint]?.verified ?? false, isFalse);
-
-    // Bob's own proof carries the gossip and goes through.
-    await deliver(atBob.mails);
-    expect(alice.chats.peers[bob.fingerprint]?.verified, isTrue);
+    expect(stillNothing.consumed, isFalse);
+    expect(stillNothing.chats.chats.keys, [alice.fingerprint]);
   });
 
   test(
@@ -360,5 +451,237 @@ void main() {
     // Reading a request sends no receipt.
     final read = await alice.protocol.markRead(alice.chats, carol.fingerprint);
     expect(read.mails, isEmpty);
+  });
+
+  group('review findings', () {
+    late Party mallory;
+
+    setUp(() async {
+      mallory = await party('mallory', 9);
+      byAddr[mallory.addr] = mallory;
+    });
+
+    Future<DeltaStep> receiveAs(Party party, String mail) async {
+      final step = await party.protocol.receive(
+        party.chats,
+        Uint8List.fromList(utf8.encode(mail)),
+      );
+      party.apply(step);
+      return step;
+    }
+
+    test('gossip never moves a known person to another address', () async {
+      await introduce(bob, alice);
+      final aliceKey = alice.protocol.key.publicKey;
+      final gossiping = await DeltaMail.build(
+        key: mallory.protocol.key,
+        from: mallory.addr,
+        to: [
+          (addr: bob.addr, key: bob.protocol.key.publicKey),
+          (addr: 'evil@attacker.org', key: aliceKey),
+        ],
+        gossip: [(addr: 'evil@attacker.org', key: aliceKey)],
+        text: 'hi',
+        messageId: 'Mr.gossip@example.org',
+        date: clock,
+      );
+      await receiveAs(bob, gossiping);
+      expect(bob.chats.peers[alice.fingerprint]!.addr, alice.addr);
+      expect(bob.chats.peers[alice.fingerprint]!.verified, isTrue);
+
+      // Nor does an unsigned request carrying Alice's key.
+      final request = DeltaMail.buildRequest(
+        key: alice.protocol.key,
+        from: mallory.addr,
+        to: bob.addr,
+        step: 'vc-request',
+        invitenumber: bob.protocol.tokens.invitenumber,
+        messageId: 'Mr.request@example.org',
+        date: clock,
+      ).replaceAll('addr=${alice.addr}', 'addr=${mallory.addr}');
+      await receiveAs(bob, request);
+      expect(bob.chats.peers[alice.fingerprint]!.addr, alice.addr);
+    });
+
+    test('names cannot inject headers into mail sent later', () async {
+      await introduce(bob, mallory);
+      final evil = 'Team\r\nX-Injected: yes';
+      final mail = await DeltaMail.build(
+        key: mallory.protocol.key,
+        from: mallory.addr,
+        to: [(addr: bob.addr, key: bob.protocol.key.publicKey)],
+        text: 'join us',
+        messageId: 'Mr.inject@example.org',
+        date: clock,
+        extraHeaders: [
+          ('Chat-Group-ID', 'group1'),
+          ('Chat-Group-Name', encodeMimeWord(evil)),
+        ],
+      );
+      await receiveAs(bob, mail);
+      final chat = bob.chats.chats['g:group1']!;
+      expect(chat.name, isNot(contains('\n')));
+      final sent = await bob.protocol.send(bob.chats, chat.key, 'hello');
+      final read = await DeltaMail.read(
+        Uint8List.fromList(utf8.encode(sent.mails.single.mail)),
+        mallory.protocol.key,
+      );
+      expect(read!.header('x-injected'), isNull);
+      expect(read.header('chat-group-name'), isNot(contains('\n')));
+    });
+
+    test('a replayed old group mail does not undo a removal', () async {
+      await introduce(bob, alice);
+      await introduce(carol, alice);
+      final created = await alice.protocol.createGroup(alice.chats, 'Team', [
+        bob.fingerprint,
+        carol.fingerprint,
+      ]);
+      alice.apply(created);
+      await deliver(created.mails);
+      final groupKey = created.chatKey!;
+      final removed = await alice.protocol.removeMember(
+        alice.chats,
+        groupKey,
+        carol.fingerprint,
+      );
+      alice.apply(removed);
+      await deliver(removed.mails);
+      expect(bob.chats.chats[groupKey]!.members, [alice.fingerprint]);
+      // Carol re-sends Alice's first mail to Bob.
+      await receiveAs(bob, created.mails.single.mail);
+      expect(bob.chats.chats[groupKey]!.members, [alice.fingerprint]);
+    });
+
+    test('a signed message written to someone else is not taken', () async {
+      await introduce(bob, alice);
+      final forwarded = await DeltaMail.build(
+        key: alice.protocol.key,
+        from: alice.addr,
+        // Written to Mallory; Bob holds a copy encrypted to him.
+        to: [(addr: mallory.addr, key: bob.protocol.key.publicKey)],
+        text: 'for Mallory only',
+        messageId: 'Mr.forwarded@example.org',
+        date: clock,
+      );
+      final step = await receiveAs(bob, forwarded);
+      expect(step.consumed, isFalse);
+      expect(bob.chats.chats[alice.fingerprint]!.messages, isEmpty);
+    });
+
+    test('joining with a key known already verifies the inviter', () async {
+      await introduce(bob, carol);
+      await introduce(alice, carol);
+      final group = await carol.protocol.createGroup(carol.chats, 'Shared', [
+        alice.fingerprint,
+        bob.fingerprint,
+      ]);
+      carol.apply(group);
+      await deliver(group.mails);
+      expect(bob.chats.peers[alice.fingerprint]?.key, isNotNull);
+      expect(bob.chats.peers[alice.fingerprint]?.verified, isFalse);
+      await introduce(bob, alice);
+      expect(bob.chats.peers[alice.fingerprint]?.verified, isTrue);
+      expect(alice.chats.peers[bob.fingerprint]?.verified, isTrue);
+    });
+
+    test('malformed signatures are refused, not thrown', () async {
+      final packets = OpenPgpSymmetric.readPackets(
+        alice.protocol.key.publicKey.bytes,
+      );
+      final patched = Uint8List.fromList([
+        for (final (tag, body) in packets)
+          ...OpenPgpSymmetric.packet(
+            tag,
+            tag == 2
+                ? (Uint8List.fromList(body)
+                    ..[4] = 0xff
+                    ..[5] = 0xf0)
+                : body,
+          ),
+      ]);
+      await expectLater(PgpPublicKey.parse(patched), throwsFormatException);
+    });
+
+    test('encrypted mail that is not a chat message is left alone', () async {
+      await introduce(bob, alice);
+      final mail = await DeltaMail.build(
+        key: alice.protocol.key,
+        from: alice.addr,
+        to: [(addr: bob.addr, key: bob.protocol.key.publicKey)],
+        text: 'from a mail app',
+        messageId: 'Mr.plain@example.org',
+        date: clock,
+      );
+      // As an Autocrypt mail app would write it: no Chat-Version inside.
+      final inner = await Pgp.decrypt(
+        OpenPgpArmor.decode(
+          mail.substring(
+            mail.indexOf('-----BEGIN'),
+            mail.indexOf('-----END') + 25,
+          ),
+        ),
+        bob.protocol.key,
+      );
+      final stripped = utf8
+          .decode(inner.data)
+          .replaceAll('Chat-Version: 1.0\r\n', '');
+      final reencrypted = await Pgp.encrypt(
+        Uint8List.fromList(utf8.encode(stripped)),
+        [bob.protocol.key.publicKey],
+        signer: alice.protocol.key,
+      );
+      final armored = OpenPgpArmor.encode(reencrypted);
+      final rebuilt = mail
+          .replaceRange(
+            mail.indexOf('-----BEGIN'),
+            mail.indexOf('-----END') + 25,
+            armored.trimRight(),
+          )
+          .replaceAll('Chat-Version: 1.0\r\n', '');
+      final step = await receiveAs(bob, rebuilt);
+      expect(step.consumed, isFalse);
+      expect(bob.chats.chats[alice.fingerprint]!.messages, isEmpty);
+    });
+
+    test(
+      'a group made up before joining is replaced by the inviter\'s',
+      () async {
+        await introduce(bob, alice);
+        final created = await alice.protocol.createGroup(
+          alice.chats,
+          'Real',
+          const [],
+        );
+        alice.apply(created);
+        final groupKey = created.chatKey!;
+        final invite = alice.protocol.groupInvite(alice.chats.chats[groupKey]!);
+        // Mallory knows the group id from the link and gets in first.
+        final early = await DeltaMail.build(
+          key: mallory.protocol.key,
+          from: mallory.addr,
+          to: [(addr: bob.addr, key: bob.protocol.key.publicKey)],
+          text: 'welcome',
+          messageId: 'Mr.early@example.org',
+          date: clock,
+          extraHeaders: [
+            ('Chat-Group-ID', invite.groupId!),
+            ('Chat-Group-Name', 'Fake'),
+          ],
+        );
+        await receiveAs(bob, early);
+        expect(bob.chats.chats[groupKey]!.members, [mallory.fingerprint]);
+        final joining = await bob.protocol.join(
+          bob.chats,
+          DeltaInvite.parse(invite.toLink())!,
+        );
+        bob.apply(joining);
+        await deliver(joining.mails);
+        final chat = bob.chats.chats[groupKey]!;
+        expect(chat.left, isFalse);
+        expect(chat.members, [alice.fingerprint]);
+        expect(chat.name, 'Real');
+      },
+    );
   });
 }

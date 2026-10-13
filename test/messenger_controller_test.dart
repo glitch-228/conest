@@ -38,6 +38,7 @@ import 'package:conest/src/radio_chats.dart';
 import 'package:conest/src/matrix_client.dart';
 import 'package:conest/src/matrix_service.dart';
 import 'package:conest/src/messenger_controller.dart';
+import 'package:conest/src/delta_chats.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/native_attachment_crypto.dart';
 import 'package:conest/src/nostr/event.dart';
@@ -14684,6 +14685,124 @@ void main() {
       expect(saved.link, ReticulumLink.rnodeSerial);
       expect(saved.radio?.frequency, RnodeConfig.eu869.frequency);
       expect(saved.label, '/dev/ttyACM0');
+    });
+  });
+
+  group('Delta Chat', () {
+    Future<void> until(bool Function() condition) async {
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (!condition() && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+    }
+
+    test('Delta Chat: an invite, a verified chat with receipts, a group, '
+        'and other mail left alone', () async {
+      final server = await FakeMailServer.start();
+      addTearDown(server.close);
+      final relay = _FakeRelayClient();
+      final aliceVault = _MemoryVaultStore();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: aliceVault,
+        mailConnector: server.connect,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        mailConnector: server.connect,
+      );
+      addTearDown(bob.dispose);
+      await expectLater(alice.enableDeltaChat(), throwsStateError);
+      await alice.enableChatmailCarrier('chat.test');
+      await bob.enableChatmailCarrier('chat.test');
+      await alice.enableDeltaChat();
+      await bob.enableDeltaChat();
+      final aliceFp = alice.deltaFingerprint!;
+      final bobFp = bob.deltaFingerprint!;
+      final aliceMail = alice.emailCarrierConfig!.mail;
+
+      // Someone's ordinary mail in the same inbox stays there.
+      server.deliver(
+        aliceMail,
+        'From: <friend@example.org>\r\nTo: <$aliceMail>\r\n'
+        'Subject: lunch?\r\nMessage-ID: <plain@example.org>\r\n\r\nat noon\r\n',
+      );
+
+      final chatKey = await bob.joinDeltaChat(alice.deltaInviteLink!);
+      expect(chatKey, aliceFp);
+      await until(
+        () =>
+            (alice.deltaChats.peers[bobFp]?.verified ?? false) &&
+            (bob.deltaChats.peers[aliceFp]?.verified ?? false),
+      );
+      expect(alice.deltaChats.peers[bobFp]?.verified, isTrue);
+      expect(bob.deltaChats.peers[aliceFp]?.verified, isTrue);
+
+      await bob.sendDeltaMessage(aliceFp, 'Hello over Delta Chat');
+      await until(
+        () => alice.deltaChats.chats[bobFp]?.messages.isNotEmpty ?? false,
+      );
+      expect(
+        alice.deltaChats.chats[bobFp]!.messages.single.text,
+        'Hello over Delta Chat',
+      );
+      await alice.markDeltaChatRead(bobFp);
+      await until(
+        () =>
+            bob.deltaChats.chats[aliceFp]?.messages.any(
+              (message) =>
+                  message.outgoing && message.state == DeltaMessageState.read,
+            ) ??
+            false,
+      );
+      expect(
+        bob.deltaChats.chats[aliceFp]!.messages.single.state,
+        DeltaMessageState.read,
+      );
+
+      final groupKey = await alice.createDeltaGroup('Team', [bobFp]);
+      await until(() => bob.deltaChats.chats.containsKey(groupKey));
+      await bob.sendDeltaMessage(groupKey, 'team hello');
+      await until(
+        () =>
+            alice.deltaChats.chats[groupKey]?.messages.any(
+              (message) => message.text == 'team hello',
+            ) ??
+            false,
+      );
+      expect(bob.deltaChats.chats[groupKey]!.name, 'Team');
+
+      // Delta Chat mail was read and deleted; the ordinary mail was not.
+      Iterable<FakeMail> kept() =>
+          server.mailboxes[aliceMail]!.where((mail) => !mail.deleted);
+      await until(() => kept().length == 1);
+      final left = kept();
+      expect(left, hasLength(1));
+      expect(latin1.decode(left.single.raw), contains('lunch?'));
+
+      // The key and the chats survive a restart.
+      alice.dispose();
+      final restarted = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: aliceVault,
+        createIdentity: false,
+        mailConnector: server.connect,
+      );
+      addTearDown(restarted.dispose);
+      await until(() => restarted.deltaFingerprint != null);
+      expect(restarted.deltaFingerprint, aliceFp);
+      expect(restarted.deltaChats.chats[groupKey]?.members, [bobFp]);
+      await bob.sendDeltaMessage(aliceFp, 'after restart');
+      await until(
+        () =>
+            restarted.deltaChats.chats[bobFp]?.messages.any(
+              (message) => message.text == 'after restart',
+            ) ??
+            false,
+      );
     });
   });
 

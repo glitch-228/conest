@@ -160,6 +160,7 @@ class DeltaChat {
     this.unread = 0,
     this.kept = false,
     this.left = false,
+    this.membersAt,
   });
 
   /// A peer's fingerprint for a one-to-one chat, `g:<id>` for a group.
@@ -182,6 +183,9 @@ class DeltaChat {
   /// This account left the group (or was removed).
   final bool left;
 
+  /// When the member list was last set: older messages do not change it.
+  final DateTime? membersAt;
+
   bool get isGroup => groupId != null;
 
   static String groupKey(String groupId) => 'g:$groupId';
@@ -193,6 +197,7 @@ class DeltaChat {
     int? unread,
     bool? kept,
     bool? left,
+    DateTime? membersAt,
   }) => DeltaChat(
     key: key,
     members: members ?? this.members,
@@ -202,6 +207,7 @@ class DeltaChat {
     unread: unread ?? this.unread,
     kept: kept ?? this.kept,
     left: left ?? this.left,
+    membersAt: membersAt ?? this.membersAt,
   );
 
   Map<String, dynamic> toJson() => {
@@ -213,6 +219,7 @@ class DeltaChat {
     if (unread > 0) 'unread': unread,
     if (kept) 'kept': true,
     if (left) 'left': true,
+    if (membersAt != null) 'membersAt': membersAt!.toUtc().toIso8601String(),
   };
 
   static DeltaChat? fromJson(Object? json) {
@@ -234,6 +241,7 @@ class DeltaChat {
       unread: json['unread'] as int? ?? 0,
       kept: json['kept'] == true,
       left: json['left'] == true,
+      membersAt: DateTime.tryParse(json['membersAt'] as String? ?? '')?.toUtc(),
     );
   }
 }
@@ -343,11 +351,14 @@ class DeltaChats {
           );
     final next = {...peers, peer.fingerprint: merged};
     if (next.length > maxPeers) {
-      // People in no chat go first.
+      // People in no chat go first; verified ones never.
       final inChats = {for (final chat in chats.values) ...chat.members};
-      for (final fingerprint in next.keys.toList()) {
+      for (final MapEntry(key: fingerprint, value: known)
+          in next.entries.toList()) {
         if (next.length <= maxPeers) break;
-        if (!inChats.contains(fingerprint) && fingerprint != peer.fingerprint) {
+        if (!inChats.contains(fingerprint) &&
+            !known.verified &&
+            fingerprint != peer.fingerprint) {
           next.remove(fingerprint);
         }
       }

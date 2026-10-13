@@ -99,9 +99,7 @@ abstract final class OpenPgpSymmetric {
         body[body.length - 1] != 0x14) {
       throw const FormatException('OpenPGP integrity check failed.');
     }
-    final inner = readPackets(
-      Uint8List.sublistView(body, 18, body.length - 2),
-    );
+    final inner = readPackets(Uint8List.sublistView(body, 18, body.length - 2));
     if (inner.length != 1 || inner.single.$1 != 11) {
       throw const FormatException('OpenPGP message holds no literal data.');
     }

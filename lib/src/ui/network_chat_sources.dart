@@ -7,6 +7,7 @@ import '../messenger_controller.dart';
 import '../conest_theme.dart';
 import '../models.dart';
 import 'bitchat_chats_screen.dart';
+import 'delta_chats_screen.dart';
 import 'matrix_room_screen.dart';
 import 'nostr_chats_screen.dart';
 import 'radio_chats_screen.dart';
@@ -73,6 +74,7 @@ List<NetworkChatSource> networkChatSources(
 ) => [
   MatrixChatSource(controller, palette),
   NostrChatSource(controller),
+  DeltaChatSource(controller),
   BitchatChatSource(controller),
   RadioChatSource(
     'meshcore',
@@ -157,6 +159,41 @@ class NostrChatSource extends NetworkChatSource {
           searchText: () =>
               chat.messages.map((message) => message.text).join('\n'),
           open: (context) => openNostrChat(context, controller, chat.key),
+        ),
+  ];
+}
+
+/// Delta Chat chats over the email account.
+class DeltaChatSource extends NetworkChatSource {
+  const DeltaChatSource(this.controller);
+
+  final MessengerController controller;
+
+  @override
+  String get id => 'deltaChat';
+
+  @override
+  String get label => 'Delta Chat';
+
+  @override
+  bool get active => controller.conestActive && controller.deltaChatEnabled;
+
+  @override
+  List<NetworkChat> chats() => [
+    if (active)
+      for (final chat in controller.deltaChats.chats.values)
+        NetworkChat(
+          network: id,
+          id: chat.key,
+          title: deltaChatTitle(controller, chat),
+          preview: chat.messages.lastOrNull?.text ?? 'New chat',
+          at: chat.messages.lastOrNull?.at.toLocal(),
+          unread: chat.unread,
+          isGroup: chat.isGroup,
+          memberCount: chat.isGroup ? chat.members.length + 1 : 0,
+          searchText: () =>
+              chat.messages.map((message) => message.text).join('\n'),
+          open: (context) => openDeltaChat(context, controller, chat.key),
         ),
   ];
 }

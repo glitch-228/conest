@@ -32,6 +32,9 @@ import 'bitchat_gateway_relays.dart';
 import 'nostr/nip17.dart';
 import 'nostr/nip19.dart';
 import 'nostr_chats.dart';
+import 'delta_chats.dart';
+import 'delta_protocol.dart';
+import 'email/pgp.dart';
 import 'nostr_direct.dart';
 import 'radio_chats.dart';
 import 'carrier.dart';
@@ -3729,6 +3732,8 @@ class MessengerController extends ChangeNotifier {
   /// already have their addresses.
   Future<void> _restoreCarrierAccounts() async {
     if (nostrDirectConfig != null && _nostrDirect == null) _startNostrDirect();
+    // Before the email carrier reads mail that may be Delta Chat's.
+    unawaited(_startDeltaChat());
     if (nostrCarrierConfig case final nostr?
         when !_carrierTransports.containsKey(TransportKind.nostr)) {
       // A relay that shut down is swapped for its replacement, and
@@ -4298,6 +4303,268 @@ class MessengerController extends ChangeNotifier {
     );
     _nostrChatsCache = (json, chats);
     await _saveSnapshotSilently(notify: true, debounce: true);
+  }
+
+  // Delta Chat chats over the email carrier's account.
+
+  Map<String, dynamic>? get _deltaConfig {
+    final json = _snapshot.carrierAccounts['deltaChats'];
+    return json is Map<String, dynamic> ? json : null;
+  }
+
+  /// Delta Chat chats are on, for the email account they were set up with.
+  bool get deltaChatEnabled {
+    final config = _deltaConfig;
+    final email = emailCarrierConfig;
+    return config != null &&
+        config['enabled'] == true &&
+        email != null &&
+        config['addr'] == email.mail;
+  }
+
+  DeltaProtocol? _deltaProtocol;
+  Future<DeltaProtocol?>? _deltaStarting;
+  Future<void> _deltaQueue = Future.value();
+  (Object?, DeltaChats)? _deltaChatsCache;
+
+  DeltaChats get deltaChats {
+    final json = _snapshot.networkChats['deltaChat'];
+    final cached = _deltaChatsCache;
+    if (cached != null && identical(cached.$1, json)) return cached.$2;
+    final chats = DeltaChats.fromJson(json);
+    _deltaChatsCache = (json, chats);
+    return chats;
+  }
+
+  /// This account's Delta Chat invite link, while on.
+  String? get deltaInviteLink =>
+      deltaChatEnabled ? _deltaProtocol?.invite.toLink() : null;
+
+  /// This account's key fingerprint, while on.
+  String? get deltaFingerprint =>
+      deltaChatEnabled ? _deltaProtocol?.fingerprint : null;
+
+  /// Turns Delta Chat chats on for the email carrier's account: a key of
+  /// its own for that address (kept while the address stays).
+  Future<void> enableDeltaChat() async {
+    _requireIdentity();
+    final email = emailCarrierConfig;
+    if (email == null) {
+      throw StateError(
+        'Set up an email account first (Connectivity → Email); Delta Chat '
+        'uses it.',
+      );
+    }
+    final existing = _deltaConfig;
+    final Map<String, dynamic> config;
+    if (existing != null && existing['addr'] == email.mail) {
+      config = {...existing, 'enabled': true};
+    } else {
+      final key = await PgpSecretKey.generate('<${email.mail}>');
+      config = {
+        'enabled': true,
+        'addr': email.mail,
+        'key': key.toJson(),
+        'tokens': DeltaTokens.create(Random.secure()).toJson(),
+      };
+    }
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts, 'deltaChats': config},
+    );
+    _deltaProtocol = null;
+    _deltaStarting = null;
+    await _persist('Delta Chat on.');
+    await _startDeltaChat();
+  }
+
+  /// Turns Delta Chat chats off; the key and the chats are kept.
+  Future<void> disableDeltaChat() async {
+    final config = _deltaConfig;
+    _deltaProtocol = null;
+    _deltaStarting = null;
+    if (config == null) return;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        'deltaChats': {...config, 'enabled': false},
+      },
+    );
+    await _persist('Delta Chat off.');
+  }
+
+  /// The protocol for the saved key, made once.
+  Future<DeltaProtocol?> _startDeltaChat() {
+    if (!deltaChatEnabled) return Future.value(null);
+    return _deltaStarting ??= () async {
+      final config = _deltaConfig!;
+      try {
+        final key = await PgpSecretKey.fromJson(
+          config['key'] as Map<String, dynamic>,
+        );
+        final protocol = DeltaProtocol(
+          key: key,
+          self: config['addr'] as String,
+          selfName: _snapshot.identity?.displayName,
+          tokens:
+              DeltaTokens.fromJson(config['tokens']) ??
+              DeltaTokens.create(Random.secure()),
+          now: _now,
+        );
+        if (deltaChatEnabled) _deltaProtocol = protocol;
+        notifyListeners();
+        return _deltaProtocol;
+      } catch (_) {
+        _deltaStarting = null;
+        return null;
+      }
+    }();
+  }
+
+  /// Runs [change] on the Delta Chat chats, one change at a time, then
+  /// sends its mail.
+  Future<DeltaStep?> _deltaRun(
+    Future<DeltaStep> Function(DeltaProtocol protocol, DeltaChats chats) change,
+  ) {
+    final result = _deltaQueue.then((_) async {
+      final protocol = await _startDeltaChat();
+      if (protocol == null) return null;
+      final tokens = protocol.tokens;
+      final step = await change(protocol, deltaChats);
+      await _saveDeltaChats(
+        step.chats,
+        tokens: protocol.tokens == tokens ? null : protocol.tokens,
+      );
+      unawaited(_sendDeltaMails(step.mails));
+      return step;
+    });
+    _deltaQueue = result.then((_) {}, onError: (Object _) {});
+    return result;
+  }
+
+  /// Mail from the email account that is not carrier mail: Delta Chat's,
+  /// read and then deleted; anything else is left alone.
+  Future<bool> _onOtherMail(Uint8List raw) async {
+    if (!deltaChatEnabled) return false;
+    final step = await _deltaRun(
+      (protocol, chats) => protocol.receive(chats, raw),
+    );
+    return step?.consumed ?? false;
+  }
+
+  Future<void> _sendDeltaMails(List<DeltaOutgoingMail> mails) async {
+    for (final mail in mails) {
+      try {
+        final channel = _emailChannel;
+        if (channel == null) throw StateError('Email is off.');
+        await channel.sendMail(mail.to, mail.mail);
+      } catch (_) {
+        final chatKey = mail.chatKey;
+        final messageId = mail.messageId;
+        if (chatKey != null && messageId != null) {
+          unawaited(
+            _deltaRun(
+              (_, chats) async =>
+                  DeltaStep(chats.markFailed(chatKey, messageId)),
+            ).catchError((Object _) => null),
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _saveDeltaChats(DeltaChats chats, {DeltaTokens? tokens}) async {
+    final json = chats.toJson();
+    final config = _deltaConfig;
+    _snapshot = _snapshot.copyWith(
+      networkChats: {..._snapshot.networkChats, 'deltaChat': json},
+      carrierAccounts: tokens == null || config == null
+          ? null
+          : {
+              ..._snapshot.carrierAccounts,
+              'deltaChats': {...config, 'tokens': tokens.toJson()},
+            },
+    );
+    _deltaChatsCache = (json, chats);
+    await _saveSnapshotSilently(notify: true, debounce: true);
+  }
+
+  Future<DeltaStep> _deltaRequired(
+    Future<DeltaStep> Function(DeltaProtocol protocol, DeltaChats chats) change,
+  ) async {
+    if (!deltaChatEnabled) throw StateError('Turn on Delta Chat first.');
+    final step = await _deltaRun(change);
+    if (step == null) throw StateError('Delta Chat could not start.');
+    return step;
+  }
+
+  /// Starts a chat (or joins a group) from a Delta Chat invite link or QR
+  /// text; returns the chat's key.
+  Future<String> joinDeltaChat(String invite) async {
+    final parsed = DeltaInvite.parse(invite);
+    if (parsed == null) {
+      throw ArgumentError(
+        'Not a Delta Chat invite (https://i.delta.chat/#… or OPENPGP4FPR:).',
+      );
+    }
+    final step = await _deltaRequired(
+      (protocol, chats) => protocol.join(chats, parsed),
+    );
+    return step.chatKey!;
+  }
+
+  /// Writes [text] in Delta Chat chat [key].
+  Future<void> sendDeltaMessage(String key, String text) =>
+      _deltaRequired((protocol, chats) => protocol.send(chats, key, text));
+
+  /// Chat [key] read, with read receipts to those who asked.
+  Future<void> markDeltaChatRead(String key) =>
+      _deltaRequired((protocol, chats) => protocol.markRead(chats, key));
+
+  Future<void> deleteDeltaChat(String key) => _deltaRequired(
+    (_, chats) async => DeltaStep(chats.withoutChat(key, _now().toUtc())),
+  );
+
+  /// A new Delta Chat group with [members] (fingerprints); returns its key.
+  Future<String> createDeltaGroup(String name, List<String> members) async {
+    final step = await _deltaRequired(
+      (protocol, chats) => protocol.createGroup(chats, name, members),
+    );
+    return step.chatKey!;
+  }
+
+  Future<void> addDeltaGroupMember(String key, String member) => _deltaRequired(
+    (protocol, chats) => protocol.addMember(chats, key, member),
+  );
+
+  Future<void> removeDeltaGroupMember(String key, String member) =>
+      _deltaRequired(
+        (protocol, chats) => protocol.removeMember(chats, key, member),
+      );
+
+  Future<void> leaveDeltaGroup(String key) => _deltaRequired(
+    (protocol, chats) =>
+        protocol.removeMember(chats, key, protocol.fingerprint),
+  );
+
+  /// The invite link to Delta Chat group [key].
+  Future<String> deltaGroupInviteLink(String key) async {
+    String? link;
+    await _deltaRequired((protocol, chats) async {
+      final chat = chats.chats[key];
+      if (chat == null || !chat.isGroup || chat.left) {
+        throw StateError('Not a group you are in.');
+      }
+      link = protocol.groupInvite(chat).toLink();
+      return DeltaStep(chats);
+    });
+    return link!;
+  }
+
+  /// What to call Delta Chat peer [fingerprint].
+  String deltaName(String fingerprint) {
+    if (fingerprint == _deltaProtocol?.fingerprint) return 'You';
+    final peer = deltaChats.peers[fingerprint];
+    return peer?.name ?? peer?.addr ?? fingerprint.substring(0, 8);
   }
 
   /// Whether the chat list shows [network]'s chats (all networks are shown
@@ -5553,6 +5820,7 @@ class MessengerController extends ChangeNotifier {
       onFrame: adapter.receiveFrame,
       onCursor: (validity, uid) => _saveEmailCursor(config.mail, validity, uid),
       onStatusChanged: notifyListeners,
+      onOtherMail: _onOtherMail,
     );
     await adapter.detach();
     adapter.attach(channel);

@@ -82,7 +82,7 @@ class FakeMailServer {
     _open.add(socket);
     socket.done.catchError((Object _) {});
     String? user;
-    String? to;
+    final to = <String>[];
     var inData = false;
     final data = StringBuffer();
     void reply(String line) => socket.write('$line\r\n');
@@ -93,12 +93,17 @@ class FakeMailServer {
           inData = false;
           final message = data.toString();
           data.clear();
-          if (requireEncryption && !_encrypted(message)) {
+          if (requireEncryption &&
+              !_encrypted(message) &&
+              !_secureJoinRequest(message)) {
             reply('523 Encryption Needed: Invalid Unencrypted Mail');
           } else {
-            deliver(to!, message);
+            for (final recipient in to) {
+              deliver(recipient, message);
+            }
             reply('250 OK queued');
           }
+          to.clear();
         } else {
           data.write('${line.startsWith('..') ? line.substring(1) : line}\r\n');
         }
@@ -122,7 +127,8 @@ class FakeMailServer {
         final from = RegExp(r'<([^>]*)>').firstMatch(line)?.group(1);
         reply(user != null && from == user ? '250 OK' : '553 not yours');
       } else if (upper.startsWith('RCPT TO:')) {
-        to = RegExp(r'<([^>]*)>').firstMatch(line)?.group(1);
+        final recipient = RegExp(r'<([^>]*)>').firstMatch(line)?.group(1);
+        if (recipient != null) to.add(recipient);
         reply('250 OK');
       } else if (upper == 'DATA') {
         inData = true;
@@ -134,6 +140,30 @@ class FakeMailServer {
         reply('502 unknown');
       }
     }, onError: (Object _) {});
+  }
+
+  /// Chatmail's one exception (filtermail `is_securejoin`): a Securejoin
+  /// request, as a multipart with a single text/plain part saying the step.
+  static bool _secureJoinRequest(String message) {
+    final step = RegExp(
+      r'^Secure-Join: (vc-request|vg-request)\r?$',
+      multiLine: true,
+      caseSensitive: false,
+    ).firstMatch(message)?.group(1);
+    final boundary = RegExp(
+      r'boundary="?([^";\r\n]+)"?',
+    ).firstMatch(message)?.group(1);
+    if (step == null || boundary == null) return false;
+    final parts = message.split('--$boundary');
+    // Preamble, one part, closing "--".
+    if (parts.length != 3 || !parts[2].startsWith('--')) return false;
+    final part = parts[1];
+    final split = part.indexOf('\r\n\r\n');
+    if (split < 0) return false;
+    final headers = part.substring(0, split).toLowerCase();
+    final body = part.substring(split + 4).trim().toLowerCase();
+    return headers.contains('content-type: text/plain') &&
+        body == 'secure-join: $step';
   }
 
   /// Chatmail's check: PGP/MIME whose payload is an encrypted OpenPGP
@@ -182,11 +212,14 @@ class FakeMailServer {
     String? user;
     String? idleTag;
     StreamSubscription<String>? idleWatch;
-    // Mail count last reported to this client. As real servers do, mail
-    // that arrived since is announced when IDLE starts.
+    // The newest UID this client was told of. As real servers do, mail
+    // that arrived since is announced when IDLE starts (by UID: a count
+    // would miss mail arriving after a deletion).
     var reported = 0;
     void reply(String line) => socket.write('$line\r\n');
     List<FakeMail> box() => mailboxes[user] ?? const [];
+    int newest() => box().isEmpty ? 0 : box().last.uid;
+    bool unannounced() => box().any((mail) => mail.uid > reported);
     reply('* OK fake IMAP ready');
     _lines(socket).listen(
       (line) {
@@ -218,13 +251,13 @@ class FakeMailServer {
           reply('* CAPABILITY IMAP4rev1 UIDPLUS${idle ? ' IDLE' : ''}');
           reply('$tag OK');
         } else if (upper.startsWith('SELECT')) {
-          reported = box().length;
+          reported = newest();
           reply('* ${box().length} EXISTS');
           reply('* OK [UIDVALIDITY 7] ok');
           reply('* OK [UIDNEXT $_nextUid] ok');
           reply('$tag OK [READ-WRITE] selected');
         } else if (upper.startsWith('UID SEARCH UID ')) {
-          reported = box().length;
+          reported = newest();
           final from = int.parse(command.substring(15).split(':').first);
           final encryptedOnly = upper.contains(
             'HEADER CONTENT-TYPE "MULTIPART/ENCRYPTED"',
@@ -276,14 +309,14 @@ class FakeMailServer {
         } else if (upper == 'IDLE' && idle) {
           idleTag = tag;
           reply('+ idling');
-          if (box().length > reported) {
-            reported = box().length;
-            reply('* $reported EXISTS');
+          if (unannounced()) {
+            reported = newest();
+            reply('* ${box().length} EXISTS');
           }
           idleWatch = _arrivals.stream.where((to) => to == user).listen((_) {
-            if (box().length > reported) {
-              reported = box().length;
-              reply('* $reported EXISTS');
+            if (unannounced()) {
+              reported = newest();
+              reply('* ${box().length} EXISTS');
             }
           });
         } else if (upper == 'LOGOUT') {

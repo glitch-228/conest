@@ -88,6 +88,8 @@ class DeltaIncoming {
     required this.gossip,
     required this.headers,
     required this.text,
+    required this.password,
+    required this.intendedFor,
     required this.receiptsFor,
     required this.attachments,
     required this.reaction,
@@ -125,6 +127,13 @@ class DeltaIncoming {
 
   /// The message text, empty when there is none.
   final String text;
+
+  /// The shared secret it was encrypted with (Securejoin v3), if any.
+  final String? password;
+
+  /// Fingerprints the signer named as intended recipients (upper-case
+  /// hex); empty when the signature names none.
+  final List<String> intendedFor;
 
   /// For a read receipt (MDN): the Message-IDs it is about.
   final List<String> receiptsFor;
@@ -320,6 +329,62 @@ abstract final class DeltaMail {
     ].join('\r\n');
   }
 
+  /// A Securejoin v3 message ([step] `vc-request-pubkey` or `vc-pubkey`)
+  /// encrypted with the invite's shared secret [password]; `vc-pubkey`
+  /// carries and is signed by [key], `vc-request-pubkey` is not.
+  static Future<String> buildSecureJoinV3({
+    required PgpSecretKey key,
+    required String from,
+    required String to,
+    required String step,
+    required String auth,
+    required String password,
+    required bool attachKey,
+    required String messageId,
+    required DateTime date,
+    Random? random,
+  }) async {
+    final source = random ?? Random.secure();
+    final inner = [
+      'Content-Type: text/plain; charset="utf-8"; protected-headers="v1"; '
+          'hp="cipher"',
+      'From: <$from>',
+      'To: <$to>',
+      'Subject: Secure-Join',
+      'Date: ${rfc5322Date(date)}',
+      'Message-ID: <$messageId>',
+      'Chat-Version: 1.0',
+      'Secure-Join: $step',
+      'Secure-Join-Auth: $auth',
+      if (attachKey)
+        foldedHeader(
+          'Autocrypt',
+          AutocryptHeader(
+            addr: from,
+            keydata: key.publicKey.bytes,
+            mutual: true,
+          ).encode(),
+        ),
+      '',
+      'Secure-Join',
+      '',
+    ].join('\r\n');
+    final encrypted = await Pgp.encryptWithPassword(
+      Uint8List.fromList(utf8.encode(inner)),
+      utf8.encode(password),
+      signer: attachKey ? key : null,
+      random: random,
+      now: date,
+    );
+    return _encryptedEnvelope(
+      from: from,
+      messageId: messageId,
+      date: date,
+      armored: OpenPgpArmor.encode(encrypted),
+      random: source,
+    );
+  }
+
   /// A read receipt (MDN, RFC 8098) for [original], encrypted like a chat
   /// message.
   static Future<String> buildReadReceipt({
@@ -394,8 +459,25 @@ abstract final class DeltaMail {
     Uint8List raw,
     PgpSecretKey key, {
     List<PgpPublicKey> Function(String addr)? knownKeys,
+    List<String> passwords = const [],
     DateTime? now,
   }) async {
+    try {
+      return await _read(raw, key, knownKeys, passwords, now);
+    } on RangeError {
+      return null; // damaged beyond what the parsers check
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  static Future<DeltaIncoming?> _read(
+    Uint8List raw,
+    PgpSecretKey key,
+    List<PgpPublicKey> Function(String addr)? knownKeys,
+    List<String> passwords,
+    DateTime? now,
+  ) async {
     if (raw.length > maxBytes) return null;
     final MimeEntity outer;
     try {
@@ -410,6 +492,7 @@ abstract final class DeltaMail {
     var content = outer;
     var encrypted = false;
     PgpDecrypted? decrypted;
+    String? password;
     if (outer.mimeType == 'multipart/encrypted') {
       final armored = outer.parts
           .map((part) => latin1.decode(part.body))
@@ -417,11 +500,19 @@ abstract final class DeltaMail {
           .firstOrNull;
       if (armored == null) return null;
       try {
-        decrypted = await Pgp.decrypt(
-          OpenPgpArmor.decode(armored),
-          key,
-          now: now,
-        );
+        final bytes = OpenPgpArmor.decode(armored);
+        final packets = OpenPgpSymmetric.readPackets(bytes);
+        if (packets.any((packet) => packet.$1 == 3)) {
+          // Encrypted with a shared secret (Securejoin v3).
+          final opened = await Pgp.decryptWithPasswords(bytes, [
+            for (final secret in passwords) utf8.encode(secret),
+          ], now: now);
+          if (opened == null) return null;
+          decrypted = opened.$1;
+          password = utf8.decode(opened.$2);
+        } else {
+          decrypted = await Pgp.decrypt(bytes, key, now: now);
+        }
         content = MimeEntity.parse(decrypted.data);
       } on FormatException {
         return null;
@@ -529,8 +620,17 @@ abstract final class DeltaMail {
       from: from,
       fromName: _displayName(headers['from']),
       to: [
-        for (final address in (headers['to'] ?? '').split(','))
+        for (final address in splitAddressList(
+          headers.raw('to').firstOrNull ?? '',
+        ))
           ?parseMailAddress(address),
+      ],
+      intendedFor: [
+        for (final fingerprint in decrypted?.intendedRecipients ?? const [])
+          fingerprint
+              .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+              .join()
+              .toUpperCase(),
       ],
       messageId: messageId,
       date: parseRfc5322Date(headers['date']),
@@ -540,6 +640,7 @@ abstract final class DeltaMail {
       gossip: gossip,
       headers: headers,
       text: receiptsFor.isEmpty && !reaction ? _text(content) : '',
+      password: password,
       receiptsFor: receiptsFor.take(100).toList(),
       attachments: attachments.take(20).toList(),
       reaction: reaction,

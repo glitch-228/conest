@@ -339,6 +339,38 @@ List<int> _percentDecode(String text) {
   return out;
 }
 
+/// Splits an address list header at commas outside quotes and angle
+/// brackets, each part decoded.
+List<String> splitAddressList(String value) {
+  final parts = <String>[];
+  final current = StringBuffer();
+  var quoted = false;
+  var angle = 0;
+  for (var index = 0; index < value.length; index++) {
+    final char = value[index];
+    if (char == '\\' && quoted && index + 1 < value.length) {
+      current
+        ..write(char)
+        ..write(value[++index]);
+      continue;
+    }
+    if (char == '"') quoted = !quoted;
+    if (!quoted && char == '<') angle++;
+    if (!quoted && char == '>' && angle > 0) angle--;
+    if (char == ',' && !quoted && angle == 0) {
+      parts.add(current.toString());
+      current.clear();
+    } else {
+      current.write(char);
+    }
+  }
+  parts.add(current.toString());
+  return [
+    for (final part in parts)
+      if (part.trim().isNotEmpty) decodeMimeWords(part.trim()),
+  ];
+}
+
 /// Decodes RFC 2047 encoded words (`=?utf-8?b?...?=`) in a header value.
 String decodeMimeWords(String value) {
   final pattern = RegExp(r'=\?([^?\s]+)\?([bBqQ])\?([^?\s]*)\?=');
@@ -441,7 +473,8 @@ String base64Lines(List<int> data) {
 /// `Name: value`, folded at spaces so no line is longer than 78
 /// characters where it can be helped.
 String foldedHeader(String name, String value) {
-  final words = value.split(' ');
+  // No line breaks or other control characters: they would start headers.
+  final words = value.replaceAll(RegExp(r'[\x00-\x1f\x7f]'), ' ').split(' ');
   final lines = <String>[];
   var line = StringBuffer('$name:');
   for (final word in words) {

@@ -50,6 +50,7 @@ import 'src/ui/meshcore_carrier_panel.dart';
 import 'src/ui/meshtastic_carrier_panel.dart';
 import 'src/ui/nostr_carrier_panel.dart';
 import 'src/ui/nostr_chats_screen.dart';
+import 'src/ui/delta_chats_screen.dart';
 import 'src/ui/reticulum_carrier_panel.dart';
 import 'src/ui/matrix_home_screen.dart';
 import 'src/ui/matrix_room_screen.dart';
@@ -14227,6 +14228,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             NostrDirectPanel(controller: widget.controller),
                             const SizedBox(height: 12),
                             EmailCarrierPanel(controller: widget.controller),
+                            const SizedBox(height: 12),
+                            DeltaChatPanel(controller: widget.controller),
                             const SizedBox(height: 12),
                             ReticulumCarrierPanel(
                               controller: widget.controller,
