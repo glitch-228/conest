@@ -219,11 +219,12 @@ void main() {
         from: 'bob@example.org',
         to: (addr: 'alice@example.org', key: alice.publicKey),
         original: 'Mr.1@example.org',
+        additional: ['Mr.0@example.org'],
         messageId: 'Mr.4@example.org',
         date: date,
       );
       final read = await DeltaMail.read(bytes(mail), alice);
-      expect(read!.receiptFor, 'Mr.1@example.org');
+      expect(read!.receiptsFor, ['Mr.1@example.org', 'Mr.0@example.org']);
       expect(read.text, isEmpty);
       expect(read.signer?.fingerprintHex, bob.publicKey.fingerprintHex);
     });

@@ -88,7 +88,9 @@ class DeltaIncoming {
     required this.gossip,
     required this.headers,
     required this.text,
-    required this.receiptFor,
+    required this.receiptsFor,
+    required this.attachments,
+    required this.reaction,
   });
 
   /// The sender's address (lower case).
@@ -124,8 +126,14 @@ class DeltaIncoming {
   /// The message text, empty when there is none.
   final String text;
 
-  /// For a read receipt (MDN): the Message-ID it is about.
-  final String? receiptFor;
+  /// For a read receipt (MDN): the Message-IDs it is about.
+  final List<String> receiptsFor;
+
+  /// Names of attached files (not read into Conest yet).
+  final List<String> attachments;
+
+  /// A reaction (an emoji on another message), not a message to show.
+  final bool reaction;
 
   String? header(String name) => headers[name];
 
@@ -319,6 +327,7 @@ abstract final class DeltaMail {
     required String from,
     required DeltaRecipient to,
     required String original,
+    List<String> additional = const [],
     required String messageId,
     required DateTime date,
     Random? random,
@@ -352,6 +361,11 @@ abstract final class DeltaMail {
       '',
       'Original-Message-ID: <$original>',
       'Disposition: manual-action/MDN-sent-automatically; displayed',
+      if (additional.isNotEmpty)
+        foldedHeader(
+          'Additional-Message-IDs',
+          additional.map((id) => '<$id>').join(' '),
+        ),
       '',
       '--$boundary--',
       '',
@@ -477,15 +491,37 @@ abstract final class DeltaMail {
       }
     }
 
-    String? receiptFor;
+    final receiptsFor = <String>[];
     if (content.mimeType == 'multipart/report' &&
         content.parameters['report-type'] == 'disposition-notification') {
       for (final part in content.parts) {
         if (part.mimeType != 'message/disposition-notification') continue;
         final fields = MimeHeaders.parse(latin1.decode(part.body));
-        receiptFor = _bareMessageId(fields['original-message-id']);
+        receiptsFor.addAll([
+          ?_bareMessageId(fields['original-message-id']),
+          for (final match in RegExp(
+            r'<([^<>\s]+)>',
+          ).allMatches(fields['additional-message-ids'] ?? ''))
+            match.group(1)!,
+        ]);
       }
     }
+    final attachments = <String>[];
+    var reaction = false;
+    void walk(MimeEntity entity) {
+      if (entity.isMultipart) {
+        entity.parts.forEach(walk);
+        return;
+      }
+      if (entity.disposition == 'reaction') reaction = true;
+      final name = entity.fileName;
+      if (entity.disposition == 'attachment' ||
+          (name != null && entity.mimeType != 'text/plain')) {
+        attachments.add(name ?? entity.mimeType);
+      }
+    }
+
+    if (receiptsFor.isEmpty) walk(content);
 
     final messageId = _bareMessageId(headers['message-id']);
     if (messageId == null) return null;
@@ -503,8 +539,10 @@ abstract final class DeltaMail {
       autocryptKey: autocryptKey,
       gossip: gossip,
       headers: headers,
-      text: receiptFor == null ? _text(content) : '',
-      receiptFor: receiptFor,
+      text: receiptsFor.isEmpty && !reaction ? _text(content) : '',
+      receiptsFor: receiptsFor.take(100).toList(),
+      attachments: attachments.take(20).toList(),
+      reaction: reaction,
     );
   }
 
@@ -517,7 +555,9 @@ abstract final class DeltaMail {
       }
       return '';
     }
-    if (entity.mimeType != 'text/plain' || entity.disposition == 'attachment') {
+    if (entity.mimeType != 'text/plain' ||
+        entity.disposition == 'attachment' ||
+        entity.disposition == 'reaction') {
       return '';
     }
     var text = entity.text.replaceAll('\r\n', '\n');
