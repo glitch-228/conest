@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
@@ -2495,6 +2496,28 @@ enum MessageRoute {
   };
 
   /// Routes recorded before [MessageRoute] existed.
+  /// The routes a receipt names, or null when it names none this build
+  /// knows (an older app, or only a newer app's routes): then the receipt
+  /// says nothing about routes.
+  static Set<MessageRoute>? namedInReceipt(Object? value) {
+    if (value is! List) return null;
+    final names = MessageRoute.values.asNameMap();
+    final named = {
+      for (final name in value.take(MessageRoute.values.length))
+        if (names[name] case final route?) route,
+    };
+    return named.isEmpty ? null : named;
+  }
+
+  /// Routes the two ends may name differently (a LAN or Iroh connection
+  /// one side sees as direct and the other as relayed) share a family.
+  MessageRoute get family => switch (this) {
+    lanDirect || lanRelay || lanLobby || internetDirect => lanDirect,
+    irohDirect || irohRelay => irohDirect,
+    matrixCarrier || plainMatrix => matrixCarrier,
+    _ => this,
+  };
+
   static MessageRoute? fromTransport(
     TransportKind? kind,
     TransportPathKind? path,
@@ -2545,7 +2568,13 @@ class ChatMessage {
     Map<String, DeliveryState>? recipientStates,
     Map<String, Set<String>>? reactions,
     Map<String, DateTime>? reactionClocks,
-  }) : recipientStates = Map.unmodifiable(
+    List<RouteTrace>? routeTrace,
+    Map<String, DateTime>? recipientReadAt,
+  }) : routeTrace = List.unmodifiable(routeTrace ?? const <RouteTrace>[]),
+       recipientReadAt = Map.unmodifiable(
+         recipientReadAt ?? const <String, DateTime>{},
+       ),
+       recipientStates = Map.unmodifiable(
          recipientStates ?? const <String, DeliveryState>{},
        ),
        reactions = Map.unmodifiable({
@@ -2629,6 +2658,52 @@ class ChatMessage {
   /// restart without relying on wall-clock arrival order.
   final Map<String, DateTime> reactionClocks;
 
+  /// Every route this message took, with how far it got on each: for an
+  /// incoming message the routes its copies arrived by; for an outgoing one
+  /// the routes it was sent on, per group member in a group.
+  final List<RouteTrace> routeTrace;
+
+  /// When each recipient read it (outgoing), by device id.
+  final Map<String, DateTime> recipientReadAt;
+
+  /// [routeTrace] with [trace] merged in: a route's mark only goes up, and
+  /// keeps the time it was first reached.
+  List<RouteTrace> tracedWith(RouteTrace trace) {
+    final merged = <RouteTrace>[];
+    var found = false;
+    for (final existing in routeTrace) {
+      if (existing.route == trace.route &&
+          existing.deviceId == trace.deviceId) {
+        found = true;
+        merged.add(
+          trace.mark.index > existing.mark.index
+              ? RouteTrace(
+                  route: trace.route,
+                  mark: trace.mark,
+                  at: trace.at,
+                  deviceId: trace.deviceId,
+                  bytes: max(existing.bytes ?? 0, trace.bytes ?? 0) > 0
+                      ? max(existing.bytes ?? 0, trace.bytes ?? 0)
+                      : null,
+                )
+              : (trace.bytes ?? 0) > (existing.bytes ?? 0)
+              ? RouteTrace(
+                  route: existing.route,
+                  mark: existing.mark,
+                  at: existing.at,
+                  deviceId: existing.deviceId,
+                  bytes: trace.bytes,
+                )
+              : existing,
+        );
+      } else {
+        merged.add(existing);
+      }
+    }
+    if (!found && merged.length < RouteTrace.maxPerMessage) merged.add(trace);
+    return merged;
+  }
+
   String get bodyPreview => body.replaceAll('\n', ' ');
   bool get isEdited => editedAt != null;
   bool get hasRecipientStates => recipientStates.isNotEmpty;
@@ -2667,6 +2742,8 @@ class ChatMessage {
     Map<String, DeliveryState>? recipientStates,
     Map<String, Set<String>>? reactions,
     Map<String, DateTime>? reactionClocks,
+    List<RouteTrace>? routeTrace,
+    Map<String, DateTime>? recipientReadAt,
   }) {
     return ChatMessage(
       id: id,
@@ -2705,6 +2782,8 @@ class ChatMessage {
       recipientStates: recipientStates ?? this.recipientStates,
       reactions: reactions ?? this.reactions,
       reactionClocks: reactionClocks ?? this.reactionClocks,
+      routeTrace: routeTrace ?? this.routeTrace,
+      recipientReadAt: recipientReadAt ?? this.recipientReadAt,
     );
   }
 
@@ -2757,6 +2836,13 @@ class ChatMessage {
       if (reactionClocks.isNotEmpty)
         'reactionClocks': {
           for (final entry in reactionClocks.entries)
+            entry.key: entry.value.toIso8601String(),
+        },
+      if (routeTrace.isNotEmpty)
+        'routeTrace': [for (final trace in routeTrace) trace.toJson()],
+      if (recipientReadAt.isNotEmpty)
+        'recipientReadAt': {
+          for (final entry in recipientReadAt.entries)
             entry.key: entry.value.toIso8601String(),
         },
     };
@@ -2836,8 +2922,89 @@ class ChatMessage {
           entry.key: (entry.value as List).cast<String>().toSet(),
       },
       reactionClocks: reactionClocks,
+      routeTrace: RouteTrace.listFromJson(json['routeTrace']),
+      recipientReadAt: {
+        if (json['recipientReadAt'] case final Map<String, dynamic> raw)
+          for (final entry in raw.entries)
+            if (entry.value is String &&
+                DateTime.tryParse(entry.value as String) != null)
+              entry.key: DateTime.parse(entry.value as String).toUtc(),
+      },
     );
   }
+}
+
+/// How far a message got on one route. Append only.
+enum MessageRouteMark {
+  /// Handed to the route (a live connection took it).
+  sent,
+
+  /// Left on a relay or carrier that keeps it until they fetch it.
+  stored,
+
+  /// The route itself reported it reached their device (a radio ack).
+  reachedDevice,
+
+  /// Their receipt names this route: it arrived this way. For an incoming
+  /// message: a copy arrived this way.
+  confirmed,
+}
+
+/// One route of a message, how far it got, and when.
+class RouteTrace {
+  const RouteTrace({
+    required this.route,
+    required this.mark,
+    required this.at,
+    this.deviceId,
+    this.bytes,
+  });
+
+  /// Routes kept per message (members × routes in a group).
+  static const int maxPerMessage = 64;
+
+  final MessageRoute route;
+  final MessageRouteMark mark;
+  final DateTime at;
+
+  /// The group member this is about; null in a direct chat.
+  final String? deviceId;
+
+  /// For a file: how much of it went this way.
+  final int? bytes;
+
+  Map<String, dynamic> toJson() => {
+    'route': route.name,
+    'mark': mark.name,
+    'at': at.toUtc().toIso8601String(),
+    if (deviceId != null) 'deviceId': deviceId,
+    if (bytes != null) 'bytes': bytes,
+  };
+
+  static RouteTrace? fromJson(Object? json) {
+    if (json is! Map) return null;
+    final route = MessageRoute.values.asNameMap()[json['route']];
+    final mark = MessageRouteMark.values.asNameMap()[json['mark']];
+    final at = json['at'] is String
+        ? DateTime.tryParse(json['at'] as String)?.toUtc()
+        : null;
+    final deviceId = json['deviceId'];
+    final bytes = json['bytes'];
+    if (route == null || mark == null || at == null) return null;
+    return RouteTrace(
+      route: route,
+      mark: mark,
+      at: at,
+      deviceId: deviceId is String ? deviceId : null,
+      bytes: bytes is int && bytes >= 0 ? bytes : null,
+    );
+  }
+
+  static List<RouteTrace> listFromJson(Object? json) => [
+    if (json is List)
+      for (final entry in json.take(maxPerMessage))
+        if (fromJson(entry) case final RouteTrace trace) trace,
+  ];
 }
 
 class GroupMemberProfile {

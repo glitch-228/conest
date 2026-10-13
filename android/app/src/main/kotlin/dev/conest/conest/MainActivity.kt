@@ -11,10 +11,13 @@ import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
+import android.os.PowerManager
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.widget.Toast
@@ -42,6 +45,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         FlutterEngineCache.getInstance().put(ENGINE_CACHE_ID, flutterEngine)
+        Thread { clearOldSharedCopies() }.start()
         val channel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             CHANNEL
@@ -287,11 +291,28 @@ class MainActivity : FlutterActivity() {
                     result.success(pendingShare)
                     pendingShare = null
                 }
+                "powerState" -> result.success(powerState())
                 else -> result.notImplemented()
             }
         }
         dispatchTransferControl(intent)
         dispatchShare(intent)
+    }
+
+    /** Battery, charging and battery saver, for how many routes messages use. */
+    private fun powerState(): Map<String, Any?> {
+        val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val present = battery?.getBooleanExtra(BatteryManager.EXTRA_PRESENT, true) ?: true
+        val plugged = battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1) ?: -1
+        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+        val power = getSystemService(Context.POWER_SERVICE) as PowerManager
+        return mapOf(
+            "hasBattery" to present,
+            "charging" to if (battery == null) null else plugged > 0,
+            "batteryPercent" to if (level >= 0 && scale > 0) level * 100 / scale else null,
+            "batterySaver" to power.isPowerSaveMode,
+        )
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -329,9 +350,10 @@ class MainActivity : FlutterActivity() {
             val folder = File(cacheDir, "shared/${System.currentTimeMillis()}")
             folder.mkdirs()
             val files = mutableListOf<Map<String, Any?>>()
+            val budget = longArrayOf(MAX_SHARED_TOTAL_BYTES)
             for ((index, uri) in uris.take(MAX_SHARED_FILES).withIndex()) {
                 // An item that cannot be read is left out; the rest still go.
-                copySharedUri(uri, folder, index)?.let { files.add(it) }
+                copySharedUri(uri, folder, index, budget)?.let { files.add(it) }
             }
             runOnUiThread {
                 if (files.isEmpty() && text.isNullOrEmpty()) return@runOnUiThread
@@ -341,9 +363,30 @@ class MainActivity : FlutterActivity() {
         }.start()
     }
 
+    /// Shared and pasted copies older than a day were staged long ago (or
+    /// never): they go.
+    private fun clearOldSharedCopies() {
+        val cutoff = System.currentTimeMillis() - 24L * 60 * 60 * 1000
+        for (name in listOf("shared", "pasted")) {
+            File(cacheDir, name).listFiles()?.forEach { entry ->
+                if (entry.lastModified() < cutoff) entry.deleteRecursively()
+            }
+        }
+    }
+
     /// Copies [uri] (another app's content) into [folder]: its path, name
     /// and type, or null when it cannot be read.
-    private fun copySharedUri(uri: Uri, folder: File, index: Int): Map<String, Any?>? {
+    private fun copySharedUri(
+        uri: Uri,
+        folder: File,
+        index: Int,
+        budget: LongArray = longArrayOf(MAX_SHARED_FILE_BYTES),
+    ): Map<String, Any?>? {
+        // Only other apps' content: a file:// path or our own provider would
+        // read Conest's private files with Conest's permissions.
+        if (uri.scheme != "content") return null
+        val authority = uri.authority ?: return null
+        if (authority == packageName || authority.startsWith("$packageName.")) return null
         return try {
             folder.mkdirs()
             var name = "shared-$index"
@@ -361,9 +404,24 @@ class MainActivity : FlutterActivity() {
             val safe = name.replace(Regex("[/\\\\:*?\"<>|\\u0000]"), "_")
                 .take(120).ifBlank { "shared-$index" }
             val target = File(folder, "$index-$safe")
+            val limit = minOf(budget[0], MAX_SHARED_FILE_BYTES)
             val copied = contentResolver.openInputStream(uri)?.use { input ->
-                target.outputStream().use { output -> input.copyTo(output) }
+                target.outputStream().use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > limit) {
+                            throw java.io.IOException("Shared item too large")
+                        }
+                        output.write(buffer, 0, read)
+                    }
+                    total
+                }
             }
+            if (copied != null) budget[0] -= copied
             if (copied == null) {
                 null
             } else {
@@ -374,6 +432,8 @@ class MainActivity : FlutterActivity() {
                 )
             }
         } catch (error: Exception) {
+            // A partial copy (too large, unreadable) is not left behind.
+            folder.listFiles()?.filter { it.name.startsWith("$index-") }?.forEach { it.delete() }
             null
         }
     }
@@ -935,6 +995,8 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val MAX_SHARED_FILES = 50
+        private const val MAX_SHARED_FILE_BYTES = 2L * 1024 * 1024 * 1024
+        private const val MAX_SHARED_TOTAL_BYTES = 4L * 1024 * 1024 * 1024
         @Volatile
         private var activeSystemChannel: MethodChannel? = null
 

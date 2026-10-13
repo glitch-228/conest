@@ -52,6 +52,8 @@ import 'src/ui/meshtastic_carrier_panel.dart';
 import 'src/ui/nostr_carrier_panel.dart';
 import 'src/ui/nostr_chats_screen.dart';
 import 'src/ui/delta_chats_screen.dart';
+import 'src/ui/message_info_dialog.dart';
+import 'src/ui/route_test_panel.dart';
 import 'src/windows_firewall.dart';
 import 'src/ui/reticulum_carrier_panel.dart';
 import 'src/ui/matrix_home_screen.dart';
@@ -9027,7 +9029,14 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     padding: EdgeInsets.zero,
                     child: const SizedBox.shrink(),
                     onSelected: (value) async {
-                      if (value == 'copy') {
+                      if (value == 'details') {
+                        await MessageInfoDialog.show(
+                          context,
+                          message: message,
+                          memberLabel: controller.groupMemberLabel,
+                          timestamp: formatTimestamp,
+                        );
+                      } else if (value == 'copy') {
                         await _copyMessage(message);
                       } else if (value == 'forward') {
                         await _forwardTextMessage(
@@ -9115,6 +9124,10 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       }
                     },
                     itemBuilder: (context) => [
+                      const PopupMenuItem(
+                        value: 'details',
+                        child: Text('Message details'),
+                      ),
                       const PopupMenuItem(value: 'reply', child: Text('Reply')),
                       if (!message.hasAttachment &&
                           message.groupFile == null &&
@@ -10838,33 +10851,10 @@ class _ChatPanelState extends State<_ChatPanel> {
                         if (value == 'copy') {
                           await _copyMessage(message);
                         } else if (value == 'details') {
-                          await showDialog<void>(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                              title: const Text('Message details'),
-                              content: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(formatTimestamp(message.createdAt)),
-                                  const SizedBox(height: 8),
-                                  Text(message.state.label),
-                                  if (message.effectiveRoute
-                                      case final route?) ...[
-                                    const SizedBox(height: 12),
-                                    _MessageRouteChip(message: message),
-                                    const SizedBox(height: 6),
-                                    Text(route.description),
-                                  ],
-                                ],
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context),
-                                  child: const Text('Close'),
-                                ),
-                              ],
-                            ),
+                          await MessageInfoDialog.show(
+                            context,
+                            message: message,
+                            timestamp: formatTimestamp,
                           );
                         } else if (value == 'forward') {
                           await _forwardTextMessage(
@@ -12234,6 +12224,11 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
                       ),
                   ],
                 ),
+              const SizedBox(height: 12),
+              RouteTestPanel(
+                controller: widget.controller,
+                contact: currentContact,
+              ),
               if (_error != null) ...[
                 const SizedBox(height: 12),
                 Text(
@@ -20554,23 +20549,53 @@ class _MessageRouteChip extends StatelessWidget {
     final route = message.effectiveRoute;
     if (route == null) return const SizedBox.shrink();
     final detail = message.transportDetail;
+    // Every route it took (all members together, in a group), with the
+    // furthest each got: a filled dot arrived, a hollow one is on its way.
+    final reached = <MessageRoute, MessageRouteMark>{};
+    for (final trace in message.routeTrace) {
+      final mark = reached[trace.route];
+      if (mark == null || trace.mark.index > mark.index) {
+        reached[trace.route] = trace.mark;
+      }
+    }
+    final dots = reached.length > 1
+        ? reached.entries.toList()
+        : [MapEntry(route, MessageRouteMark.confirmed)];
+    final tooltip = reached.length > 1
+        ? [
+            for (final entry in reached.entries)
+              '${entry.key.label}: ${MessageInfoDialog.markLabel(entry.value, outbound: message.outbound)}',
+          ].join('\n')
+        : '${route.label}: ${route.description}'
+              '${detail == null || detail.isEmpty ? '' : '\n$detail'}';
     return Tooltip(
-      message:
-          '${route.label}: ${route.description}'
-          '${detail == null || detail.isEmpty ? '' : '\n$detail'}',
+      message: tooltip,
       child: compact
           ? Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  width: 7,
-                  height: 7,
-                  decoration: BoxDecoration(
-                    color: route.color,
-                    shape: BoxShape.circle,
+                for (final entry in dots.take(4)) ...[
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color:
+                          entry.value.index >=
+                              MessageRouteMark.reachedDevice.index
+                          ? entry.key.color
+                          : null,
+                      border: Border.all(color: entry.key.color, width: 1.2),
+                      shape: BoxShape.circle,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 3),
+                  const SizedBox(width: 2),
+                ],
+                if (dots.length > 4)
+                  Text(
+                    '+${dots.length - 4}',
+                    style: TextStyle(fontSize: 9, color: route.color),
+                  ),
+                const SizedBox(width: 1),
                 Text(
                   route.shortLabel,
                   style: TextStyle(
@@ -21434,7 +21459,6 @@ class UserActivityForeground extends StatelessWidget {
   Widget build(BuildContext context) => Listener(
     behavior: HitTestBehavior.translucent,
     onPointerDown: _seen,
-    onPointerHover: _seen,
     onPointerSignal: _seen,
     child: child,
   );
@@ -21475,7 +21499,8 @@ class _WindowsFirewallTileState extends State<_WindowsFirewallTile> {
       _result ??
           'If messages and files from a phone on the same network never '
               'arrive (but yours reach it), Windows Firewall is blocking '
-              'them. This adds a rule for Conest; Windows asks to confirm.',
+              'them. This lets other devices on any network reach Conest '
+              'on this PC; Windows asks to confirm.',
     ),
     trailing: _busy
         ? const SizedBox(

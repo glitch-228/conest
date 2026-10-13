@@ -186,6 +186,15 @@ abstract interface class TransportAdapter {
 
 /// What the registry has seen of one transport to one contact: how fast
 /// sends complete and whether it has been failing.
+/// A send stopped on purpose (its message arrived another way): not a
+/// failure of the route, and no other route should take over.
+class TransportSendCancelled implements Exception {
+  const TransportSendCancelled(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
 class TransportRouteStats {
   /// Moving average of accepted sends of small envelopes, in milliseconds.
   double? latencyMs;
@@ -359,6 +368,8 @@ class TransportRegistry {
         }
         lastError = receipt.detail ?? 'Transport rejected the envelope.';
         _recordFailure(peer.deviceId, route.transport);
+      } on TransportSendCancelled {
+        rethrow;
       } catch (error) {
         lastError = error;
         _recordFailure(peer.deviceId, route.transport);
@@ -378,6 +389,10 @@ class TransportRegistry {
           : 'All transport routes failed: ${lastError ?? 'unknown error'}',
     );
   }
+
+  /// A round trip measured outside a delivery (a route test).
+  void noteRoundTrip(String deviceId, TransportKind kind, Duration took) =>
+      _recordSuccess(deviceId, kind, took);
 
   void _recordSuccess(String deviceId, TransportKind kind, Duration? took) {
     final stats = _statsEntry(deviceId, kind)

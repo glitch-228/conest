@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import 'energy_policy.dart';
 import 'voice_audio_ffi.dart';
 
 class PlatformBridge {
@@ -60,6 +61,31 @@ class PlatformBridge {
       return SharedContent.fromPlatform({
         'files': [value],
       })?.files.firstOrNull;
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  /// Battery, charging and battery saver (Android); null elsewhere or
+  /// when unknown.
+  Future<PowerState?> powerState() async {
+    if (kIsWeb || !Platform.isAndroid) return null;
+    try {
+      final value = await _channel.invokeMethod<Object?>('powerState');
+      if (value is! Map) return null;
+      final percent = value['batteryPercent'];
+      return PowerState(
+        hasBattery: value['hasBattery'] is bool
+            ? value['hasBattery'] as bool
+            : null,
+        charging: value['charging'] is bool ? value['charging'] as bool : null,
+        batteryPercent: percent is int && percent >= 0 && percent <= 100
+            ? percent
+            : null,
+        batterySaver: value['batterySaver'] == true,
+      );
     } on PlatformException {
       return null;
     } on MissingPluginException {
@@ -606,4 +632,15 @@ class SharedContent {
     );
     return content.isEmpty ? null : content;
   }
+}
+
+/// Android's power state, through the platform channel.
+class PlatformBridgePowerSource implements PowerStateSource {
+  const PlatformBridgePowerSource(this.bridge);
+
+  final PlatformBridge bridge;
+
+  @override
+  Future<PowerState> read() async =>
+      await bridge.powerState() ?? PowerState.unknown;
 }

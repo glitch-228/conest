@@ -50,11 +50,12 @@ abstract final class MediaSanitizer {
       final kind = _kind(head);
       if (kind == null) return SanitizeStatus.unsupported;
       if (length > maxInMemoryBytes) {
-        // A zip this large is an archive or an app, not a document: there
-        // is nothing to remove, so nothing failed.
-        return kind == 'zip'
-            ? SanitizeStatus.unsupported
-            : SanitizeStatus.failed;
+        // Too large to rewrite. A plain archive has nothing to remove; an
+        // office document does, so the user is asked.
+        if (kind == 'zip' && !await _zipLooksLikeDocument(handle, length)) {
+          return SanitizeStatus.unsupported;
+        }
+        return SanitizeStatus.failed;
       }
       await handle.setPosition(0);
       final data = await handle.read(length);
@@ -75,6 +76,53 @@ abstract final class MediaSanitizer {
     } finally {
       await handle.close();
     }
+  }
+
+  /// Reads only a large zip's central directory (from the end of the
+  /// file): whether it holds an office document's metadata parts. Unsure
+  /// (damaged, or a directory too large to read) counts as a document.
+  static Future<bool> _zipLooksLikeDocument(
+    RandomAccessFile handle,
+    int length,
+  ) async {
+    const endRecordMax = 22 + 0xffff;
+    final tailLength = length < endRecordMax ? length : endRecordMax;
+    await handle.setPosition(length - tailLength);
+    final tail = await handle.read(tailLength);
+    var end = -1;
+    for (var i = tail.length - 22; i >= 0; i--) {
+      if (tail[i] == 0x50 &&
+          tail[i + 1] == 0x4b &&
+          tail[i + 2] == 0x05 &&
+          tail[i + 3] == 0x06) {
+        end = i;
+        break;
+      }
+    }
+    if (end < 0) return true;
+    int u32(List<int> b, int o) =>
+        b[o] | b[o + 1] << 8 | b[o + 2] << 16 | b[o + 3] << 24;
+    final directorySize = u32(tail, end + 12);
+    final directoryOffset = u32(tail, end + 16);
+    // Zip64 (0xffffffff) or an implausible directory: assume a document.
+    if (directorySize <= 0 ||
+        directorySize > 16 * 1024 * 1024 ||
+        directoryOffset + directorySize > length) {
+      return true;
+    }
+    await handle.setPosition(directoryOffset);
+    final directory = await handle.read(directorySize);
+    final names = latin1.decode(directory, allowInvalid: true);
+    const markers = [
+      'docProps/',
+      '[Content_Types].xml',
+      'meta.xml',
+      'mimetype',
+      'word/',
+      'xl/',
+      'ppt/',
+    ];
+    return markers.any(names.contains);
   }
 
   /// Whether [path] is of a type whose metadata this removes (judged by

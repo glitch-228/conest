@@ -24,6 +24,7 @@ import 'package:conest/src/carrier.dart';
 import 'package:conest/src/crypto_service.dart';
 import 'package:conest/src/feature_models.dart';
 import 'package:conest/src/email/mail_socket.dart';
+import 'package:conest/src/energy_policy.dart';
 import 'package:conest/src/group_file_crypto.dart';
 import 'package:conest/src/group_call/group_call_media.dart';
 import 'support/fake_call_network.dart' show FakeCallMedia;
@@ -425,6 +426,9 @@ class _FakeRelayClient extends RelayClient {
   shouldFailStore;
   final List<String> storeAttempts = <String>[];
   final List<String> fetchAttempts = <String>[];
+
+  /// Hosts asked with a wait (long polls).
+  final List<String> waitingFetchHosts = <String>[];
   final List<String> inspectHealthAttempts = <String>[];
   final List<RelayEnvelope> storedEnvelopes = <RelayEnvelope>[];
   final Map<String, List<RelayEnvelope>> _queues =
@@ -442,16 +446,19 @@ class _FakeRelayClient extends RelayClient {
     Duration leaseFor = const Duration(seconds: 60),
     String? expectedIdentityPublicKeyBase64,
   }) async => RelayFetchBatch(
-    envelopes: await fetchEnvelopes(
-      host: host,
-      port: port,
-      protocol: protocol,
-      recipientDeviceId: recipientDeviceId,
-      limit: limit,
-      timeout: timeout,
-      waitFor: waitFor,
-      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
-    ),
+    envelopes: await (() {
+      if (waitFor > Duration.zero) waitingFetchHosts.add(host);
+      return fetchEnvelopes(
+        host: host,
+        port: port,
+        protocol: protocol,
+        recipientDeviceId: recipientDeviceId,
+        limit: limit,
+        timeout: timeout,
+        waitFor: waitFor,
+        expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+      );
+    })(),
   );
 
   @override
@@ -1009,8 +1016,10 @@ Future<MessengerController> _createController({
   MeshCoreConnector? meshCoreConnector,
   BitchatConnector? bitchatConnector,
   TorApi? torApi,
+  EnergyPolicy? energyPolicy,
 }) async {
   final controller = MessengerController(
+    energyPolicy: energyPolicy,
     torApi: torApi,
     bitchatConnector: bitchatConnector,
     meshCoreConnector: meshCoreConnector,
@@ -15007,6 +15016,535 @@ void main() {
     },
   );
 
+  group('Several routes', () {
+    Future<
+      (
+        MessengerController,
+        MessengerController,
+        _FakeRelayClient,
+        _InProcessIrohNetwork,
+      )
+    >
+    pair({EnergyPolicy? alicePolicy}) async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        energyPolicy: alicePolicy,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      return (alice, bob, relay, network);
+    }
+
+    Set<MessageRoute> families(Iterable<RouteTrace> traces) => {
+      for (final trace in traces) trace.route.family,
+    };
+
+    test('on mains power a message goes on every route, and the receipt '
+        'names each one', () async {
+      final (alice, bob, relay, _) = await pair(
+        alicePolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'twice');
+      final sent = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'twice');
+      // The copy went to the relay as well as straight to Bob.
+      await _waitForIroh(
+        () => relay.storedEnvelopes.any((e) => e.messageId == sent.id),
+        reason: 'no copy went to the relay',
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        final received = bob
+            .messagesFor(aliceId)
+            .where((m) => m.body == 'twice')
+            .firstOrNull;
+        return received != null && received.routeTrace.length >= 2;
+      }, reason: 'Bob did not list both routes');
+      final received = bob
+          .messagesFor(aliceId)
+          .singleWhere((m) => m.body == 'twice');
+      final arrivedBy = families(received.routeTrace);
+      expect(arrivedBy, contains(MessageRoute.irohDirect));
+      expect(arrivedBy.length, greaterThanOrEqualTo(2));
+      expect(
+        received.routeTrace.every(
+          (trace) => trace.mark == MessageRouteMark.confirmed,
+        ),
+        isTrue,
+      );
+      // Alice learns that both routes reached Bob.
+      await _waitForIroh(() {
+        final traces = alice
+            .messagesFor(bobId)
+            .singleWhere((m) => m.body == 'twice')
+            .routeTrace
+            .where((trace) => trace.mark == MessageRouteMark.confirmed);
+        return families(traces).containsAll(arrivedBy);
+      }, reason: 'the receipts did not name every route');
+      // One message, however many copies.
+      expect(
+        bob.messagesFor(aliceId).where((m) => m.body == 'twice').length,
+        1,
+      );
+    });
+
+    test('in battery saver a message goes on one route, as before', () async {
+      final (alice, bob, relay, _) = await pair(
+        alicePolicy: EnergyPolicy.fixed(EnergyMode.saver),
+      );
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'once');
+      final sent = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'once');
+      await _waitForIroh(
+        () => bob.messagesFor(aliceId).any((m) => m.body == 'once'),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(
+        relay.storedEnvelopes.where((e) => e.messageId == sent.id),
+        isEmpty,
+      );
+    });
+
+    test('on battery a copy waits for the receipt first', () async {
+      final (alice, bob, relay, _) = await pair(
+        alicePolicy: EnergyPolicy.fixed(
+          EnergyMode.limited,
+          escalateInterval: const Duration(seconds: 30),
+        ),
+      );
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'patient');
+      final sent = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'patient');
+      await _waitForIroh(
+        () => {DeliveryState.delivered, DeliveryState.read}.contains(
+          alice.messagesFor(bobId).singleWhere((m) => m.id == sent.id).state,
+        ),
+      );
+      // The receipt came within the interval: no copy went anywhere.
+      expect(
+        relay.storedEnvelopes.where((e) => e.messageId == sent.id),
+        isEmpty,
+      );
+      expect(
+        alice
+            .messagesFor(bobId)
+            .singleWhere((m) => m.id == sent.id)
+            .routeTrace
+            .map((trace) => trace.route.family)
+            .toSet(),
+        {MessageRoute.irohDirect},
+      );
+      expect(
+        bob.messagesFor(aliceId).where((m) => m.body == 'patient').length,
+        1,
+      );
+    });
+
+    test('on battery, no receipt within the interval sends a copy on the '
+        'next route', () async {
+      final (alice, bob, _, network) = await pair(
+        alicePolicy: EnergyPolicy.fixed(
+          EnergyMode.limited,
+          escalateInterval: const Duration(seconds: 1),
+        ),
+      );
+      // What Alice sends straight to Bob is lost on the way.
+      network.droppedPairs.add((
+        alice.identity!.irohEndpointId!,
+        bob.identity!.irohEndpointId!,
+      ));
+      final aliceId = alice.identity!.deviceId;
+      await alice.sendMessage(
+        contact: alice.contacts.single,
+        body: 'lost once',
+      );
+      // No retry pass: the copy alone gets it there.
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.messagesFor(aliceId).any((m) => m.body == 'lost once');
+      }, reason: 'no copy went on another route');
+    });
+
+    test('copies arriving together get one receipt', () async {
+      final (alice, bob, relay, _) = await pair(
+        alicePolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      final aliceId = alice.identity!.deviceId;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'thrice');
+      final id = alice
+          .messagesFor(bob.identity!.deviceId)
+          .singleWhere((m) => m.body == 'thrice')
+          .id;
+      // The copies left on the relay and the LAN queue wait for one poll.
+      await _waitForIroh(
+        () => relay.storedEnvelopes.where((e) => e.messageId == id).length >= 2,
+        reason: 'the copies did not go out',
+      );
+      await _waitForIroh(
+        () => bob.messagesFor(aliceId).any((m) => m.body == 'thrice'),
+      );
+      // Two more copies come by two other routes, one right after the
+      // other: one more receipt names both.
+      final copy = relay.storedEnvelopes.firstWhere((e) => e.messageId == id);
+      final before = bob.messageReceiptsSent;
+      await bob.processEnvelopesForTesting([
+        copy,
+      ], route: MessageRoute.nostrCarrier);
+      await bob.processEnvelopesForTesting([
+        copy,
+      ], route: MessageRoute.emailCarrier);
+      // The same copy again from the other relay, same route: no extra.
+      await bob.processEnvelopesForTesting([
+        copy,
+      ], route: MessageRoute.emailCarrier);
+      // Bob is in battery saver (the test default): it gathers for 3 s.
+      await Future<void>.delayed(const Duration(milliseconds: 3500));
+      final received = bob
+          .messagesFor(aliceId)
+          .singleWhere((m) => m.body == 'thrice');
+      expect(
+        received.routeTrace.map((trace) => trace.route),
+        containsAll([MessageRoute.nostrCarrier, MessageRoute.emailCarrier]),
+      );
+      expect(bob.messageReceiptsSent - before, 1);
+    });
+
+    test('retries do not send the same copies again', () async {
+      var now = DateTime.now().toUtc();
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        nowProvider: () => now,
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        nowProvider: () => now,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobId = bob.identity!.deviceId;
+      // Bob is away: nothing reaches him, nothing comes back.
+      network.droppedPairs.add((
+        alice.identity!.irohEndpointId!,
+        bob.identity!.irohEndpointId!,
+      ));
+      await alice.sendMessage(contact: alice.contacts.single, body: 'away');
+      final id = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'away')
+          .id;
+      int stores() =>
+          relay.storedEnvelopes.where((e) => e.messageId == id).length;
+      await Future<void>.delayed(const Duration(seconds: 2));
+      final afterFirst = stores();
+      for (var pass = 0; pass < 3; pass++) {
+        now = now.add(const Duration(minutes: 6));
+        await alice.retryUnacknowledgedMessagesNow();
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+      // Each retry may hand the message to one route again; copies to the
+      // other routes went once, on the first pass.
+      final perRetry = (stores() - afterFirst) / 3;
+      expect(perRetry, lessThan(2));
+      expect(id, isNotEmpty);
+    });
+
+    test('copies reach every member of a group', () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        // Answers copies after 1 s (3 s in battery saver).
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Both ways',
+        members: [alice.contacts.single],
+      );
+      await _waitForIroh(
+        () => bob.groups.any((g) => g.groupId == group.groupId),
+        reason: 'Bob did not join',
+      );
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'all routes');
+      final bobId = bob.identity!.deviceId;
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        final traces = alice
+            .messagesForGroup(group.groupId)
+            .singleWhere((m) => m.body == 'all routes')
+            .routeTrace
+            .where(
+              (trace) =>
+                  trace.deviceId == bobId &&
+                  trace.mark == MessageRouteMark.confirmed,
+            );
+        return families(traces).length >= 2;
+      }, reason: 'the group receipt did not name two routes');
+    });
+  });
+
+  group('Watching relays', () {
+    Future<Set<String>> watchedHosts(EnergyMode mode) async {
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        enableLongPoll: true,
+        energyPolicy: EnergyPolicy.fixed(mode),
+      );
+      addTearDown(alice.dispose);
+      await alice.addRelay(host: 'relay-two.example', port: 7667);
+      relay.waitingFetchHosts.clear();
+      // The watchers look for relays every 5 s.
+      await Future<void>.delayed(const Duration(seconds: 7));
+      return relay.waitingFetchHosts.toSet();
+    }
+
+    test('on mains power a second relay is watched too', () async {
+      expect(
+        await watchedHosts(EnergyMode.unconstrained),
+        containsAll(['relay.example', 'relay-two.example']),
+      );
+    });
+
+    test('in battery saver one relay is watched', () async {
+      expect((await watchedHosts(EnergyMode.saver)).length, 1);
+    });
+  });
+
+  group('Route tests', () {
+    test(
+      'each route is timed both ways, and a silent one is flagged',
+      () async {
+        final network = _InProcessIrohNetwork();
+        final relay = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          transportRegistryFactory: network.registry,
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          transportRegistryFactory: network.registry,
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final contact = alice.contacts.single;
+        expect(alice.canTestRoutes(contact), isTrue);
+        // Both keep reading their queues, as running apps do.
+        var polling = true;
+        addTearDown(() => polling = false);
+        unawaited(() async {
+          while (polling) {
+            await Future.wait([
+              alice.pollNow(),
+              bob.pollNow(),
+            ]).catchError((_) => const <void>[]);
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+          }
+        }());
+
+        final healthy = await alice.testContactRoutes(contact);
+        final iroh = healthy.results.firstWhere(
+          (result) => result.route?.family == MessageRoute.irohDirect,
+        );
+        expect(iroh.answered, isTrue);
+        expect(healthy.results.length, greaterThanOrEqualTo(2));
+        expect(
+          alice.routeTestReportFor(contact.deviceId)?.results,
+          same(healthy.results),
+        );
+
+        // Bob's side now drops what Alice sends straight to him.
+        network.droppedPairs.add((
+          alice.identity!.irohEndpointId!,
+          bob.identity!.irohEndpointId!,
+        ));
+        final broken = await alice.testContactRoutes(
+          contact,
+          replyTimeout: const Duration(seconds: 3),
+        );
+        final silent = broken.results.firstWhere(
+          (result) => result.route?.family == MessageRoute.irohDirect,
+        );
+        expect(silent.answered, isFalse);
+        expect(silent.stored, isFalse);
+        expect(
+          broken.results.where((result) => result.answered),
+          isNotEmpty,
+          reason: 'another route still answers',
+        );
+      },
+    );
+  });
+
+  group('Energy policy', () {
+    test('mains power and unmetered networks send on every route', () {
+      const plugged = PowerState(hasBattery: true, charging: true);
+      const desktop = PowerState(hasBattery: false);
+      const onBattery = PowerState(
+        hasBattery: true,
+        charging: false,
+        batteryPercent: 80,
+      );
+      const low = PowerState(
+        hasBattery: true,
+        charging: false,
+        batteryPercent: 12,
+      );
+      const saver = PowerState(charging: true, batterySaver: true);
+      expect(
+        EnergyPolicy.modeOf(desktop, NetworkCostClass.unmetered),
+        EnergyMode.unconstrained,
+      );
+      expect(
+        EnergyPolicy.modeOf(plugged, NetworkCostClass.unmetered),
+        EnergyMode.unconstrained,
+      );
+      expect(
+        EnergyPolicy.modeOf(plugged, NetworkCostClass.metered),
+        EnergyMode.limited,
+      );
+      expect(
+        EnergyPolicy.modeOf(onBattery, NetworkCostClass.unmetered),
+        EnergyMode.limited,
+      );
+      expect(
+        EnergyPolicy.modeOf(low, NetworkCostClass.unmetered),
+        EnergyMode.saver,
+      );
+      expect(
+        EnergyPolicy.modeOf(saver, NetworkCostClass.unmetered),
+        EnergyMode.saver,
+      );
+      expect(
+        EnergyPolicy.modeOf(PowerState.unknown, NetworkCostClass.unmetered),
+        EnergyMode.limited,
+      );
+    });
+
+    test('contacts on older apps and large groups get fewer copies', () {
+      final policy = EnergyPolicy.fixed(EnergyMode.unconstrained);
+      expect(
+        policy.fanoutFor(NetworkCostClass.unmetered, copiesAllowed: false),
+        isA<SingleRouteFanout>(),
+      );
+      expect(
+        policy.fanoutFor(NetworkCostClass.unmetered, copiesAllowed: true),
+        isA<AllRoutesFanout>(),
+      );
+      expect(
+        policy.fanoutFor(
+          NetworkCostClass.unmetered,
+          copiesAllowed: true,
+          groupSize: 20,
+        ),
+        isA<EscalatingFanout>(),
+      );
+    });
+
+    test('Linux power supplies are read, device batteries ignored', () async {
+      final root = await Directory.systemTemp.createTemp('conest_power-');
+      addTearDown(() => root.delete(recursive: true));
+      Future<void> supply(String name, Map<String, String> values) async {
+        final dir = Directory('${root.path}/$name')..createSync();
+        for (final entry in values.entries) {
+          await File('${dir.path}/${entry.key}').writeAsString(entry.value);
+        }
+      }
+
+      await supply('AC', {'type': 'Mains\n', 'online': '0\n'});
+      await supply('BAT0', {
+        'type': 'Battery\n',
+        'status': 'Discharging\n',
+        'capacity': '55\n',
+      });
+      await supply('hid-mouse', {
+        'type': 'Battery\n',
+        'scope': 'Device\n',
+        'status': 'Charging\n',
+        'capacity': '5\n',
+      });
+      final power = await LinuxPowerStateSource(root: root.path).read();
+      expect(power.hasBattery, isTrue);
+      expect(power.charging, isFalse);
+      expect(power.batteryPercent, 55);
+      await File('${root.path}/AC/online').writeAsString('1\n');
+      expect(
+        (await LinuxPowerStateSource(root: root.path).read()).charging,
+        isTrue,
+      );
+    });
+
+    test('a slow first route gets longer before the next copy', () {
+      const base = Duration(milliseconds: 2500);
+      expect(escalationInterval(base, null), base);
+      expect(escalationInterval(base, 40), base);
+      expect(escalationInterval(base, 4000), const Duration(seconds: 6));
+      expect(escalationInterval(base, 90000), const Duration(seconds: 30));
+    });
+
+    test('Windows power status flags are read', () {
+      final desktop = windowsPowerState(
+        acLineStatus: 1,
+        batteryFlag: 128,
+        batteryLifePercent: 255,
+        systemStatusFlag: 0,
+      );
+      expect(desktop.hasBattery, isFalse);
+      expect(desktop.charging, isTrue);
+      final laptop = windowsPowerState(
+        acLineStatus: 0,
+        batteryFlag: 1,
+        batteryLifePercent: 70,
+        systemStatusFlag: 1,
+      );
+      expect(laptop.hasBattery, isTrue);
+      expect(laptop.charging, isFalse);
+      expect(laptop.batteryPercent, 70);
+      expect(laptop.batterySaver, isTrue);
+    });
+  });
+
   group('File privacy', () {
     /// A small JPEG carrying a GPS marker in an EXIF segment.
     Uint8List photoWithLocation() {
@@ -15087,6 +15625,50 @@ void main() {
       final path = await bob.attachmentCachePathFor(message!.attachment!.id);
       return (message!.attachment!.fileName, await File(path!).readAsBytes());
     }
+
+    test('a file records how much of it each route carried, on both '
+        'sides', () async {
+      final (alice, bob, root) = await pair();
+      final data = Uint8List.fromList(
+        List<int>.generate(300 * 1024, (i) => i % 251),
+      );
+      final source = await File('${root.path}/data.bin').writeAsBytes(data);
+      await alice.sendAttachmentSource(
+        contact: alice.contacts.single,
+        source: StagedAttachment(
+          id: 'routes-${DateTime.now().microsecondsSinceEpoch}',
+          fileName: 'data.bin',
+          mimeType: 'application/octet-stream',
+          sizeBytes: data.length,
+          filePath: source.path,
+        ),
+      );
+      await received(alice, bob, 1);
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      final inbound = bob
+          .messagesFor(aliceId)
+          .singleWhere((m) => m.attachment != null);
+      final inboundBytes = inbound.routeTrace
+          .where((trace) => trace.bytes != null)
+          .fold<int>(0, (sum, trace) => sum + trace.bytes!);
+      expect(inboundBytes, data.length);
+      expect(
+        inbound.routeTrace.map((trace) => trace.route.family),
+        contains(MessageRoute.irohDirect),
+      );
+      await _waitForIroh(() {
+        final outbound = alice
+            .messagesFor(bobId)
+            .singleWhere((m) => m.attachment != null);
+        return outbound.routeTrace.any(
+          (trace) =>
+              trace.bytes != null &&
+              trace.bytes! > 0 &&
+              trace.mark == MessageRouteMark.confirmed,
+        );
+      }, reason: 'the sender did not record the file\'s routes');
+    });
 
     test('photos go without their location unless the user keeps it, '
         'under random names when asked', () async {

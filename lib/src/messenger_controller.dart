@@ -73,6 +73,8 @@ import 'radio/byte_link.dart';
 import 'ratchet.dart';
 import 'reachability_tracker.dart';
 import 'staged_attachment.dart';
+import 'energy_policy.dart';
+import 'route_test.dart';
 import 'voice_call_service.dart';
 import 'voice_call_sound_cues.dart';
 import 'voice_message_service.dart';
@@ -324,6 +326,8 @@ const Set<String> _v2PairwiseKinds = <String>{
   'debug_file_test_result',
   'voice_call_signal',
   'forward_request',
+  'route_probe',
+  'route_probe_reply',
 };
 
 /// Outcome of a [`MessengerController.refreshDefaultRelays`] call.
@@ -544,9 +548,11 @@ class MessengerController extends ChangeNotifier {
     MeshCoreConnector? meshCoreConnector,
     BitchatConnector? bitchatConnector,
     TorApi? torApi,
+    EnergyPolicy? energyPolicy,
   }) : _groupCallMediaOverride = groupCallMedia,
        _groupCallLinkPolicy = groupCallLinkPolicy,
        _vaultStore = vaultStore,
+       _injectedEnergyPolicy = energyPolicy,
        _torApi = torApi,
        _torApiResolved = torApi != null,
        _bitchatConnector = bitchatConnector,
@@ -585,6 +591,17 @@ class MessengerController extends ChangeNotifier {
       onAttempt: _recordRelayAttemptFromShim,
       nowProvider: () => (nowProvider ?? DateTime.now)(),
     );
+    _energyPolicy =
+        _injectedEnergyPolicy ??
+        (Platform.environment.containsKey('FLUTTER_TEST')
+            // Tests see one route at a time, as before, unless they give a
+            // policy: their route counts stay exact.
+            ? EnergyPolicy.fixed(EnergyMode.saver)
+            : EnergyPolicy(
+                source: !kIsWeb && Platform.isAndroid
+                    ? PlatformBridgePowerSource(_platformBridge)
+                    : null,
+              ));
     voiceMessageService = VoiceMessageService(platformBridge: _platformBridge);
     _voiceCallSoundCues = VoiceCallSoundCues(
       voiceCallCuePlayer ??
@@ -1302,8 +1319,10 @@ class MessengerController extends ChangeNotifier {
   /// Wraps `_processEnvelopes` so the notifier-batching ref-count is
   /// exercised in tests without needing to drive the long-poll loop.
   @visibleForTesting
-  Future<int> processEnvelopesForTesting(List<RelayEnvelope> envelopes) =>
-      _processEnvelopes(envelopes);
+  Future<int> processEnvelopesForTesting(
+    List<RelayEnvelope> envelopes, {
+    MessageRoute? route,
+  }) => _processEnvelopes(envelopes, route: route);
 
   /// Marks an outgoing contact request as accepted, as if the peer's
   /// authenticated acceptance had arrived. Waits for the in-flight pairing
@@ -6053,6 +6072,8 @@ class MessengerController extends ChangeNotifier {
   final Map<TransportKind, CarrierTransportAdapter> _carrierTransports = {};
   final Map<TransportKind, StreamSubscription<TransportInboundEnvelope>>
   _carrierInboundSubscriptions = {};
+  final Map<TransportKind, StreamSubscription<CarrierDeliveryReceipt>>
+  _carrierReceiptSubscriptions = {};
 
   /// Seals for every carrier with keys derived from each contact's pairwise
   /// key; new carrier adapters are built with it.
@@ -6078,6 +6099,9 @@ class MessengerController extends ChangeNotifier {
       await _carrierInboundSubscriptions.remove(carrier.kind)?.cancel();
     }
     _carrierTransports[carrier.kind] = carrier;
+    await _carrierReceiptSubscriptions.remove(carrier.kind)?.cancel();
+    _carrierReceiptSubscriptions[carrier.kind] = carrier.deliveryReceipts
+        .listen(_onCarrierDeliveryReceipt);
     await _attachCarrier(carrier.kind);
     _syncCarrierPeers();
     // Contacts learn the address to reach this device on the carrier.
@@ -6088,10 +6112,44 @@ class MessengerController extends ChangeNotifier {
   Future<void> unregisterCarrierTransport(TransportKind kind) async {
     await _detachCarrier(kind);
     await _carrierInboundSubscriptions.remove(kind)?.cancel();
+    await _carrierReceiptSubscriptions.remove(kind)?.cancel();
     final carrier = _carrierTransports.remove(kind);
     if (carrier != null) {
       await carrier.detach();
       _advertiseProfileToContacts();
+    }
+  }
+
+  /// The other device's radio confirmed a message: it reached their
+  /// device (not yet necessarily their app).
+  void _onCarrierDeliveryReceipt(CarrierDeliveryReceipt receipt) {
+    final route = MessageRoute.forCarrier(receipt.kind);
+    if (route == null || _disposed) return;
+    final at = _now().toUtc();
+    if (_messageById(receipt.deviceId, receipt.envelopeId)?.outbound ?? false) {
+      _traceMessage(
+        receipt.deviceId,
+        receipt.envelopeId,
+        RouteTrace(route: route, mark: MessageRouteMark.reachedDevice, at: at),
+      );
+      return;
+    }
+    for (final group in groups) {
+      if (!group.hasActiveMember(receipt.deviceId)) continue;
+      final message = _groupMessageById(group.groupId, receipt.envelopeId);
+      if (message == null || !message.outbound) continue;
+      _traceMessage(
+        receipt.deviceId,
+        receipt.envelopeId,
+        RouteTrace(
+          route: route,
+          mark: MessageRouteMark.reachedDevice,
+          at: at,
+          deviceId: receipt.deviceId,
+        ),
+        group: group,
+      );
+      return;
     }
   }
 
@@ -6415,6 +6473,9 @@ class MessengerController extends ChangeNotifier {
           index: range.offset ~/ state.descriptor.chunkSize,
           packedBytes: range.bytes,
           expectedHash: range.sha256,
+          route: inbound.path == TransportPathKind.direct
+              ? MessageRoute.irohDirect
+              : MessageRoute.irohRelay,
         );
         _reachability.noteAvailablePath(contact.deviceId);
         return;
@@ -15427,13 +15488,19 @@ class MessengerController extends ChangeNotifier {
   PeerEndpoint? pickPrimaryRelayForLongPollForTesting(IdentityRecord me) =>
       _pickPrimaryRelayForLongPoll(me);
 
-  PeerEndpoint? _pickPrimaryRelayForLongPoll(IdentityRecord me) {
+  PeerEndpoint? _pickPrimaryRelayForLongPoll(
+    IdentityRecord me, {
+    int slot = 0,
+  }) {
+    // Each watcher takes a different relay (by host: one relay's addresses
+    // over TCP, UDP and HTTP are the same mailbox).
+    final hosts = <String>{};
     for (final relay in me.configuredRelays) {
       if (relay.kind != PeerRouteKind.relay) {
         continue;
       }
-      if (_routeHealthTracker.isEligibleNow(relay)) {
-        return relay;
+      if (_routeHealthTracker.isEligibleNow(relay) && hosts.add(relay.host)) {
+        if (hosts.length == slot + 1) return relay;
       }
     }
     return null;
@@ -15447,8 +15514,16 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     _longPollRunning = true;
-    unawaited(_runLongPollLoop());
+    final generation = ++_longPollGeneration;
+    unawaited(_runLongPollLoop(generation: generation));
+    // A second relay too, while this device can afford it: a contact may
+    // have left a message on either.
+    unawaited(_runLongPollLoop(slot: 1, generation: generation));
   }
+
+  /// Bumped on each start: a loop from an earlier start (asleep when it was
+  /// stopped and started again) ends instead of running twice.
+  int _longPollGeneration = 0;
 
   void _stopLongPoll() {
     _longPollRunning = false;
@@ -15462,13 +15537,22 @@ class MessengerController extends ChangeNotifier {
   /// in practice). Old relays that ignore `wait_ms` return immediately
   /// empty; the elapsed-time guard at the bottom of the loop keeps that
   /// case from busy-looping the CPU.
-  Future<void> _runLongPollLoop() async {
-    while (_longPollRunning && hasIdentity) {
+  Future<void> _runLongPollLoop({int slot = 0, int? generation}) async {
+    while (_longPollRunning &&
+        hasIdentity &&
+        (generation == null || generation == _longPollGeneration)) {
       final me = identity;
       if (me == null) {
         break;
       }
-      final route = _pickPrimaryRelayForLongPoll(me);
+      if (slot > 0 &&
+          _energyPolicy.modeFor(_networkCostClass) !=
+              EnergyMode.unconstrained) {
+        unawaited(_energyPolicy.refresh());
+        await Future<void>.delayed(const Duration(seconds: 30));
+        continue;
+      }
+      final route = _pickPrimaryRelayForLongPoll(me, slot: slot);
       if (route == null) {
         await Future<void>.delayed(const Duration(seconds: 5));
         continue;
@@ -16937,13 +17021,33 @@ class MessengerController extends ChangeNotifier {
             }
           } catch (_) {}
         }
+        // A copy on a route the user turned off is not answered either:
+        // its receipt would name that route as working.
+        final seenSender = _contactByDeviceId(envelope.senderDeviceId);
+        if (seenSender != null &&
+            _droppedByIngressMode(seenSender, ingressKind)) {
+          continue;
+        }
         await _replayAckForSeenEnvelope(envelope);
         continue;
       }
       if (!_inFlightEnvelopeIds.add(envelope.messageId)) {
         // An overlapping _processEnvelopes run (the same envelope arriving
-        // via a second transport) is already dispatching this id; its ack
-        // and side effects cover this copy too.
+        // via a second transport) is already dispatching this id; its side
+        // effects cover this copy too. The route this copy came by is
+        // answered once that run is done.
+        final route = _ingressRoute;
+        final copySender = _contactByDeviceId(envelope.senderDeviceId);
+        if (route != null &&
+            !(copySender != null &&
+                _droppedByIngressMode(copySender, ingressKind)) &&
+            (envelope.kind == 'direct_message' ||
+                envelope.kind == 'group_message')) {
+          final waiting = _overlappingCopies[envelope.messageId] ??= [];
+          if (waiting.length < 8 && _overlappingCopies.length <= 256) {
+            waiting.add((envelope: envelope, route: route));
+          }
+        }
         continue;
       }
       try {
@@ -17132,6 +17236,18 @@ class MessengerController extends ChangeNotifier {
           continue;
         }
 
+        if (envelope.kind == 'route_probe') {
+          await _handleRouteProbe(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'route_probe_reply') {
+          await _handleRouteProbeReply(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
         if (envelope.kind == 'debug_probe_ack') {
           await _handleDebugAcknowledgement(envelope, twoWay: false);
           _markSeen(envelope.messageId);
@@ -17234,6 +17350,17 @@ class MessengerController extends ChangeNotifier {
         );
       } finally {
         _inFlightEnvelopeIds.remove(envelope.messageId);
+        final copies = _overlappingCopies.remove(envelope.messageId);
+        for (final copy
+            in copies ??
+                const <({RelayEnvelope envelope, MessageRoute route})>[]) {
+          unawaited(
+            runZoned(
+              () => _replayAckForSeenEnvelope(copy.envelope),
+              zoneValues: {_ingressRouteKey: copy.route},
+            ).catchError((_) {}),
+          );
+        }
       }
     }
     return _EnvelopeProcessingOutcome(processed: processed, failed: failed);
@@ -17265,6 +17392,8 @@ class MessengerController extends ChangeNotifier {
         return 3;
       case 'ack':
         return 1;
+      case 'route_probe':
+      case 'route_probe_reply':
       case 'debug_probe':
       case 'debug_probe_ack':
       case 'debug_two_way_message':
@@ -17397,7 +17526,23 @@ class MessengerController extends ChangeNotifier {
         target != envelope.acknowledgedMessageId) {
       return;
     }
-    _noteConfirmed(contact.deviceId, target);
+    // The routes copies of it arrived by (newer apps name them).
+    final namedRoutes = decoded['routes'];
+    final arrivedBy = MessageRoute.namedInReceipt(namedRoutes);
+    _noteConfirmed(contact.deviceId, target, arrivedBy: arrivedBy);
+    final ackedAt = envelope.createdAt.toUtc().isAfter(_now().toUtc())
+        ? _now().toUtc()
+        : envelope.createdAt.toUtc();
+    if (group == null || group.hasActiveMember(contact.deviceId)) {
+      _recordReceipt(
+        contact.deviceId,
+        target,
+        read: receipt == 'read',
+        at: ackedAt,
+        arrivedBy: arrivedBy,
+        group: group,
+      );
+    }
     if (group != null) {
       if (!group.hasActiveMember(contact.deviceId)) return;
       _updateGroupRecipientState(
@@ -18217,6 +18362,7 @@ class MessengerController extends ChangeNotifier {
           state.lastChunkAt = DateTime.now().toUtc();
           state.consecutiveChunkFailures = 0;
           state.lastDeliveryRoute = OutboundDeliveryRoute.lanDirect;
+          _countServedBlock(state, index, MessageRoute.lanDirect);
           _armOutboundStallTimer(requester, attachmentId: attachmentId);
           _notifyTransferProgress();
         }
@@ -18274,6 +18420,13 @@ class MessengerController extends ChangeNotifier {
                 receipt.route.path == TransportPathKind.relayed
                 ? OutboundDeliveryRoute.irohRelay
                 : OutboundDeliveryRoute.irohDirect;
+            _countServedBlock(
+              state,
+              index,
+              receipt.route.path == TransportPathKind.relayed
+                  ? MessageRoute.irohRelay
+                  : MessageRoute.irohDirect,
+            );
             _armOutboundStallTimer(requester, attachmentId: attachmentId);
             _notifyTransferProgress();
           }
@@ -18361,6 +18514,7 @@ class MessengerController extends ChangeNotifier {
           state.lastChunkAt = DateTime.now().toUtc();
           state.consecutiveChunkFailures = 0;
           state.lastDeliveryRoute = OutboundDeliveryRoute.lanDirect;
+          _countServedBlock(state, index, MessageRoute.lanDirect);
           _armOutboundStallTimer(requester, attachmentId: attachmentId);
           _notifyTransferProgress();
         }
@@ -18421,6 +18575,7 @@ class MessengerController extends ChangeNotifier {
             OutboundDeliveryRoute.irohRelay,
           _ => OutboundDeliveryRoute.conestRelay,
         };
+        _countServedBlock(state, index, deliveredVia.messageRoute);
         // If the delivered route is NOT the preferred primary, surface
         // "Rerouting · X%" on the bubble for the next few seconds so the
         // user sees the fallback is working.
@@ -18555,6 +18710,8 @@ class MessengerController extends ChangeNotifier {
     required int index,
     required Uint8List packedBytes,
     required Uint8List expectedHash,
+    // The route the block came by; the envelope's route when null.
+    MessageRoute? route,
   }) async {
     final key = '${sender.deviceId}|$attachmentId|$index';
     if (!_receivingAttachmentBlocks.add(key)) return;
@@ -18565,6 +18722,7 @@ class MessengerController extends ChangeNotifier {
         index: index,
         packedBytes: packedBytes,
         expectedHash: expectedHash,
+        route: route ?? _ingressRoute,
       );
     } finally {
       _receivingAttachmentBlocks.remove(key);
@@ -18577,6 +18735,7 @@ class MessengerController extends ChangeNotifier {
     required int index,
     required Uint8List packedBytes,
     required Uint8List expectedHash,
+    MessageRoute? route,
   }) async {
     if (attachmentId.isEmpty ||
         attachmentId.length > 160 ||
@@ -18646,6 +18805,9 @@ class MessengerController extends ChangeNotifier {
       await state.writeChunk(offset, bytes);
       if (!identical(_inboundAttachments[attachmentId], state)) return;
       state.received.add(index);
+      if (route != null) {
+        state.routeBytes[route] = (state.routeBytes[route] ?? 0) + bytes.length;
+      }
       state.recordProgress();
       // Persist only crash-safe checkpoints. The old path flushed, closed and
       // rewrote the encrypted vault for every block, which made large files
@@ -18756,6 +18918,19 @@ class MessengerController extends ChangeNotifier {
         state.messageId,
         DeliveryState.delivered,
       );
+      for (final MapEntry(key: route, value: bytes)
+          in state.routeBytes.entries) {
+        _traceMessage(
+          sender.deviceId,
+          state.messageId,
+          RouteTrace(
+            route: route,
+            mark: MessageRouteMark.confirmed,
+            at: _now().toUtc(),
+            bytes: bytes,
+          ),
+        );
+      }
       await _sendAttachmentComplete(sender, attachmentId);
       if (state.debugTest != null) {
         Object? resultError;
@@ -19391,6 +19566,19 @@ class MessengerController extends ChangeNotifier {
     _outboundAttachments.remove(attachmentId);
     _outboundRetryTimers.remove(attachmentId)?.cancel();
     _outboundQueueByContact[sender.deviceId]?.remove(attachmentId);
+    // They have it all: each route that carried part of it worked.
+    for (final MapEntry(key: route, value: bytes) in state.routeBytes.entries) {
+      _traceMessage(
+        sender.deviceId,
+        state.messageId,
+        RouteTrace(
+          route: route,
+          mark: MessageRouteMark.confirmed,
+          at: _now().toUtc(),
+          bytes: min(bytes, state.descriptor.sizeBytes),
+        ),
+      );
+    }
     final session = _transferSessionById(attachmentId);
     await state.closeFile();
     if (state.sourceKind == TransferSourceKind.privateSpool) {
@@ -21587,6 +21775,15 @@ class MessengerController extends ChangeNotifier {
     required RelayEnvelope envelope,
   }) async {
     final me = _requireIdentity();
+    // Every route a copy of the message came by, so the sender knows which
+    // of the routes it used work.
+    final isMessage =
+        envelope.kind == 'direct_message' || envelope.kind == 'group_message';
+    if (isMessage) messageReceiptsSent++;
+    if (isMessage && _noteArrival(envelope.messageId)) {
+      _traceArrival(contact, envelope);
+    }
+    final arrivals = isMessage ? _arrivals[envelope.messageId] : null;
     final ack = await _crypto.encryptPayloadEnvelope(
       kind: 'ack',
       messageId: _randomId('ack'),
@@ -21598,10 +21795,13 @@ class MessengerController extends ChangeNotifier {
       plaintext: jsonEncode({
         'receipt': 'delivered',
         'acknowledgedMessageId': envelope.messageId,
+        if (arrivals != null && arrivals.arrived.isNotEmpty)
+          'routes': [for (final route in arrivals.arrived.keys) route.name],
       }),
       createdAt: _now().toUtc(),
       acknowledgedMessageId: envelope.messageId,
     );
+    arrivals?.acked.addAll(arrivals.arrived.keys);
     // Enqueue first so a crash mid-send doesn't lose the obligation; the
     // happy-path delivery clears the entry immediately. Retries are
     // independent of the original message-retry pass.
@@ -21655,6 +21855,9 @@ class MessengerController extends ChangeNotifier {
       plaintext: jsonEncode({
         'receipt': 'read',
         'acknowledgedMessageId': acknowledgedMessageId,
+        if (_arrivals[acknowledgedMessageId]?.arrived.keys case final routes?
+            when routes.isNotEmpty)
+          'routes': [for (final route in routes) route.name],
       }),
       createdAt: _now().toUtc(),
       acknowledgedMessageId: acknowledgedMessageId,
@@ -22993,6 +23196,8 @@ class MessengerController extends ChangeNotifier {
           ? DeliveryState.local
           : DeliveryState.relayed;
       _updateMessageState(contact.deviceId, message.id, state, route: route);
+      _traceOutbound(contact.deviceId, message.id, route);
+      _sendExtraCopies(contact: contact, envelope: envelope, first: route);
       _lastRelayStatus = '${route.label} accepted';
       await _persist(
         route.path == TransportPathKind.storeForward
@@ -23055,6 +23260,13 @@ class MessengerController extends ChangeNotifier {
         message.id,
         contact.deviceId,
         state,
+      );
+      _traceOutbound(contact.deviceId, message.id, route, group: group);
+      _sendExtraCopies(
+        contact: contact,
+        envelope: envelope,
+        first: route,
+        group: group,
       );
       // The first route that carried it to a member marks the message, as
       // in a direct chat (per-member routes come with route marks, M25).
@@ -23241,7 +23453,15 @@ class MessengerController extends ChangeNotifier {
     if (sameBytes) {
       final now = _now();
       final last = _duplicateAckedAt[envelope.messageId];
-      if (last != null && now.difference(last) < const Duration(seconds: 10)) {
+      // A copy by a route no receipt named yet is always answered: the
+      // sender learns that route works.
+      final route = _ingressRoute;
+      final newRoute =
+          route != null &&
+          !(_arrivals[envelope.messageId]?.acked.contains(route) ?? false);
+      if (!newRoute &&
+          last != null &&
+          now.difference(last) < const Duration(seconds: 10)) {
         return;
       }
       _duplicateAckedAt.remove(envelope.messageId);
@@ -23260,11 +23480,64 @@ class MessengerController extends ChangeNotifier {
           reportFailure: false,
         );
       }
+      // A copy by a new route, after the message was already answered:
+      // copies arriving together get one receipt naming all their routes.
+      final alreadyAnswered =
+          _arrivals[envelope.messageId]?.acked.isNotEmpty ?? false;
+      if (alreadyAnswered) {
+        final newRoute = _noteArrival(envelope.messageId);
+        if (newRoute) _traceArrival(contact, envelope);
+        // A receipt is on its way already: it will name this route too.
+        if (_routeReceiptTimers.containsKey(envelope.messageId)) return;
+        if (newRoute) {
+          _scheduleRouteReceipt(contact, envelope);
+          return;
+        }
+      }
       await _sendAck(contact: contact, envelope: envelope);
     } catch (_) {
       // Duplicate deliveries are retried best-effort; missing the replayed ack
       // only delays sender-side confirmation until the next duplicate.
     }
+  }
+
+  /// Receipts sent for messages (tests count them).
+  @visibleForTesting
+  int messageReceiptsSent = 0;
+
+  /// One receipt per message for the copies arriving close together, by
+  /// message id.
+  final Map<String, Timer> _routeReceiptTimers = {};
+
+  void _scheduleRouteReceipt(ContactRecord contact, RelayEnvelope envelope) {
+    if (_routeReceiptTimers.containsKey(envelope.messageId)) return;
+    if (_routeReceiptTimers.length >= 256) {
+      // Too many waiting: answered at once rather than not at all.
+      unawaited(
+        _sendAck(
+          contact: contact,
+          envelope: envelope,
+        ).catchError((Object _) {}),
+      );
+      return;
+    }
+    // In battery saver this device waits longer, gathering more routes.
+    final wait = _energyPolicy.modeFor(_networkCostClass) == EnergyMode.saver
+        ? const Duration(seconds: 3)
+        : const Duration(seconds: 1);
+    _routeReceiptTimers[envelope.messageId] = Timer(wait, () {
+      _routeReceiptTimers.remove(envelope.messageId);
+      if (_disposed) return;
+      // The contact as it is now (it may have been removed meanwhile).
+      final current = _contactByDeviceId(contact.deviceId) ?? contact;
+      if (!current.canSendOutbound) return;
+      unawaited(
+        _sendAck(
+          contact: current,
+          envelope: envelope,
+        ).catchError((Object _) {}),
+      );
+    });
   }
 
   bool _shouldRetryUnacknowledgedMessage(
@@ -23303,8 +23576,13 @@ class MessengerController extends ChangeNotifier {
   /// firewall can drop what arrives while the other way works.
   final Map<String, Map<String, DateTime>> _unconfirmedRoutes = {};
 
-  /// The route each message last went on, by [_outboundAttemptKey].
-  final Map<String, String> _sentRouteKeys = {};
+  /// Route families receipts have named, per message (bounded).
+  final LinkedHashMap<String, Set<MessageRoute>> _confirmedFamilies =
+      LinkedHashMap();
+
+  /// The routes each message went on and no receipt has named yet, by
+  /// [_outboundAttemptKey], then route key.
+  final Map<String, Map<String, MessageRoute?>> _sentRouteKeys = {};
 
   /// How long a route has to bring back a receipt before others go first.
   static const Duration _routeAckTimeout = Duration(seconds: 8);
@@ -23317,25 +23595,64 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final key = _outboundAttemptKey(deviceId, messageId);
-    _sentRouteKeys.remove(key);
+    final confirmedFamily = route.messageRoute?.family;
+    if (confirmedFamily != null &&
+        (_confirmedFamilies[key]?.contains(confirmedFamily) ?? false)) {
+      return; // Its receipt already came.
+    }
+    final sent = _sentRouteKeys.remove(key) ?? <String, MessageRoute?>{};
     while (_sentRouteKeys.length >= 4096) {
       _sentRouteKeys.remove(_sentRouteKeys.keys.first);
     }
-    _sentRouteKeys[key] = route.routeKey;
-    (_unconfirmedRoutes[deviceId] ??= {}).putIfAbsent(
-      route.routeKey,
-      () => _now().toUtc(),
-    );
+    if (sent.length < 16) sent[route.routeKey] = route.messageRoute;
+    _sentRouteKeys[key] = sent;
+    final unconfirmed = _unconfirmedRoutes[deviceId] ??= {};
+    if (unconfirmed.length < 64) {
+      unconfirmed.putIfAbsent(route.routeKey, () => _now().toUtc());
+    }
   }
 
-  /// A receipt for [messageId] arrived: its route works.
-  void _noteConfirmed(String deviceId, String messageId) {
-    final routeKey = _sentRouteKeys.remove(
-      _outboundAttemptKey(deviceId, messageId),
-    );
-    if (routeKey == null) return;
+  /// A receipt for [messageId] arrived. The routes it names ([arrivedBy];
+  /// null from apps that do not name them: then every route it went on)
+  /// work; a route it went on that the receipt leaves out stays
+  /// unconfirmed, and goes last after [_routeAckTimeout].
+  void _noteConfirmed(
+    String deviceId,
+    String messageId, {
+    Set<MessageRoute>? arrivedBy,
+  }) {
+    final key = _outboundAttemptKey(deviceId, messageId);
+    final copies = _copyRuns[key];
+    if (copies != null && !copies.isCompleted) copies.complete();
+    // Copies still going out frame by frame (radios) can stop.
+    for (final carrier in _carrierTransports.values) {
+      unawaited(carrier.cancel(carrierSendId(deviceId, messageId)));
+    }
+    // A copy's hand-off can be noted after its receipt came: remembered,
+    // that route is not then left unconfirmed.
+    final families = _confirmedFamilies.remove(key) ?? <MessageRoute>{};
+    if (arrivedBy == null) {
+      families.addAll(MessageRoute.values.map((route) => route.family));
+    } else {
+      families.addAll(arrivedBy.map((route) => route.family));
+    }
+    _confirmedFamilies[key] = families;
+    while (_confirmedFamilies.length > 2048) {
+      _confirmedFamilies.remove(_confirmedFamilies.keys.first);
+    }
+    final sent = _sentRouteKeys[key];
+    if (sent == null) return;
     final routes = _unconfirmedRoutes[deviceId];
-    routes?.remove(routeKey);
+    for (final MapEntry(key: routeKey, value: route) in sent.entries.toList()) {
+      if (arrivedBy != null &&
+          route != null &&
+          !arrivedBy.any((arrived) => arrived.family == route.family)) {
+        continue;
+      }
+      sent.remove(routeKey);
+      routes?.remove(routeKey);
+    }
+    if (sent.isEmpty) _sentRouteKeys.remove(key);
     if (routes != null && routes.isEmpty) _unconfirmedRoutes.remove(deviceId);
   }
 
@@ -23354,6 +23671,555 @@ class MessengerController extends ChangeNotifier {
     };
   }
 
+  final EnergyPolicy? _injectedEnergyPolicy;
+
+  /// What this device can afford: how many routes a message goes on.
+  late final EnergyPolicy _energyPolicy;
+
+  /// Extra copies of a message on its way, by [_outboundAttemptKey]; its
+  /// receipt completes them.
+  final Map<String, Completer<void>> _copyRuns = {};
+  static const int _maxCopyRuns = 256;
+  static const int _maxExtraCopies = 4;
+
+  /// Copies already sent per message, by [_outboundAttemptKey].
+  final LinkedHashMap<String, _CopyState> _copyStates = LinkedHashMap();
+  static const int _maxCopyStates = 2048;
+
+  /// Carriers that keep a message until it is fetched: one is enough.
+  static const Set<TransportKind> _storingCarriers = {
+    TransportKind.matrix,
+    TransportKind.nostr,
+    TransportKind.deltaChat,
+  };
+
+  /// Radios with little airtime: a copy goes by radio only when nothing
+  /// else has reached the contact lately, and only a small one.
+  static const Set<TransportKind> _radioKinds = {
+    TransportKind.meshtastic,
+    TransportKind.meshCore,
+    TransportKind.reticulum,
+  };
+  static const int _maxRadioCopyBytes = 600;
+
+  /// After the first route took [envelope], copies go out on the others as
+  /// this device can afford ([EnergyPolicy]): all at once, or one more every
+  /// few seconds while no receipt comes. A copy is the same ciphertext, so
+  /// the contact recognises it without decrypting it again; contacts whose
+  /// app cannot ([ApplicationCapability.multiRouteMessagesV1]) get none.
+  void _sendExtraCopies({
+    required ContactRecord contact,
+    required RelayEnvelope envelope,
+    required _DeliveryRoute first,
+    GroupRecord? group,
+  }) {
+    if (first.forwarded || _disposed) return;
+    unawaited(_energyPolicy.refresh());
+    final fanout = _energyPolicy.fanoutFor(
+      _networkCostClass,
+      copiesAllowed: contact.featureCapabilities.contains(
+        ApplicationCapability.multiRouteMessagesV1,
+      ),
+      groupSize: group?.activeMemberDeviceIds.length,
+    );
+    if (fanout is SingleRouteFanout) return;
+    // A slow first route gets its time before the next copy goes.
+    final paced = fanout is EscalatingFanout
+        ? EscalatingFanout(
+            escalationInterval(
+              fanout.interval,
+              _transportRegistry
+                  ?.statsFor(contact.deviceId, first.transportKind)
+                  ?.latencyMs,
+            ),
+          )
+        : fanout;
+    final key = _outboundAttemptKey(contact.deviceId, envelope.messageId);
+    if (_copyRuns.containsKey(key) || _copyRuns.length >= _maxCopyRuns) return;
+    final receipt = Completer<void>();
+    _copyRuns[key] = receipt;
+    unawaited(
+      _runExtraCopies(
+        contact: contact,
+        envelope: envelope,
+        first: first,
+        fanout: paced,
+        receipt: receipt,
+        group: group,
+      ).catchError((_) {}).whenComplete(() {
+        if (identical(_copyRuns[key], receipt)) _copyRuns.remove(key);
+      }),
+    );
+  }
+
+  Future<void> _runExtraCopies({
+    required ContactRecord contact,
+    required RelayEnvelope envelope,
+    required _DeliveryRoute first,
+    required MessageFanout fanout,
+    required Completer<void> receipt,
+    GroupRecord? group,
+  }) async {
+    // What earlier passes already sent survives retries: each route, a
+    // storing carrier and a radio get at most one copy of a message.
+    final key = _outboundAttemptKey(contact.deviceId, envelope.messageId);
+    final state = _copyStates.remove(key) ?? _CopyState();
+    _copyStates[key] = state;
+    while (_copyStates.length > _maxCopyStates) {
+      _copyStates.remove(_copyStates.keys.first);
+    }
+    state.note(first, storing: _storingCarriers.contains(first.transportKind));
+    final used = state.routeKeys;
+    final usedKinds = state.kinds;
+    final usedLegacyKinds = state.legacyKinds;
+    final radioSized =
+        utf8.encode(jsonEncode(envelope.toJson())).length <= _maxRadioCopyBytes;
+    for (var copy = 0; copy < _maxExtraCopies; copy++) {
+      if (fanout case EscalatingFanout(:final interval)) {
+        await Future.any([receipt.future, Future<void>.delayed(interval)]);
+      }
+      if (receipt.isCompleted || _disposed) return;
+      if (!_awaitsReceipt(contact.deviceId, envelope.messageId, group)) return;
+      final lastTwoWay = _reachability
+          .recordByDeviceId(contact.deviceId)
+          ?.lastTwoWaySuccessAt;
+      final radiosAllowed =
+          radioSized &&
+          !state.radioUsed &&
+          (lastTwoWay == null ||
+              _now().difference(lastTwoWay) > const Duration(minutes: 5));
+      final allowed = <TransportKind>{
+        for (final kind in TransportKind.values)
+          if (!usedKinds.contains(kind) &&
+              !(state.storedOnCarrier && _storingCarriers.contains(kind)) &&
+              (radiosAllowed || !_radioKinds.contains(kind)))
+            kind,
+      };
+      final _DeliveryRoute route;
+      try {
+        route = await _deliverToContact(
+          contact: contact,
+          recipientDeviceId: contact.deviceId,
+          envelope: envelope,
+          background: true,
+          allowForwarding: false,
+          allowedUnifiedKinds: allowed,
+          excludeRouteKeys: used,
+          skipLegacyKinds: usedLegacyKinds,
+          extraCopy: true,
+        );
+      } catch (_) {
+        return; // No route left.
+      }
+      if (used.contains(route.routeKey)) return;
+      state.note(
+        route,
+        storing: _storingCarriers.contains(route.transportKind),
+      );
+      if (_radioKinds.contains(route.transportKind)) state.radioUsed = true;
+      _noteHandedOff(contact.deviceId, envelope.messageId, route);
+      _traceOutbound(contact.deviceId, envelope.messageId, route, group: group);
+    }
+  }
+
+  /// Probes waiting for their answer, by probe id.
+  final Map<String, Completer<void>> _routeProbeWaiters = {};
+  static const int _maxRouteProbeWaiters = 64;
+  static const int _maxRouteTestRoutes = 8;
+
+  /// When this device answered each contact's probes lately (a bound).
+  final Map<String, List<DateTime>> _routeProbesAnswered = {};
+  static const int _maxRouteProbesPerMinute = 30;
+
+  final Map<String, RouteTestReport> _routeTestReports = {};
+
+  /// The last route test with [deviceId], if any.
+  RouteTestReport? routeTestReportFor(String deviceId) =>
+      _routeTestReports[deviceId];
+
+  /// Whether [contact]'s app answers route tests.
+  bool canTestRoutes(ContactRecord contact) =>
+      contact.featureCapabilities.contains(ApplicationCapability.routeProbeV1);
+
+  /// Sends a small probe on each route to [contact] in turn and times the
+  /// answer. A route that takes probes but never answers goes last for
+  /// messages (as one that loses messages does); one that answers moves up.
+  Future<RouteTestReport> testContactRoutes(
+    ContactRecord contact, {
+    Duration replyTimeout = const Duration(seconds: 15),
+  }) async {
+    final current = _contactByDeviceId(contact.deviceId) ?? contact;
+    if (!current.canSendOutbound || !canTestRoutes(current)) {
+      throw StateError(
+        '${current.alias} cannot answer route tests yet (their app needs an '
+        'update).',
+      );
+    }
+    final me = _requireIdentity();
+    final used = <String>{};
+    // One route of each kind: one LAN address answers for the others.
+    final usedKinds = <TransportKind>{};
+    final usedLegacyKinds = <PeerRouteKind>{};
+    final probes =
+        <({_DeliveryRoute route, Stopwatch clock, Future<Duration?> answer})>[];
+    for (var index = 0; index < _maxRouteTestRoutes; index++) {
+      if (_routeProbeWaiters.length >= _maxRouteProbeWaiters) break;
+      final probeId = _randomId('rprobe');
+      final envelope = await _crypto.encryptPayloadEnvelope(
+        kind: 'route_probe',
+        messageId: probeId,
+        conversationId: _crypto.conversationIdFor(current.deviceId),
+        senderAccountId: me.accountId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: current.deviceId,
+        contact: current,
+        plaintext: jsonEncode({'probeId': probeId}),
+        createdAt: _now().toUtc(),
+      );
+      final waiter = Completer<void>();
+      _routeProbeWaiters[probeId] = waiter;
+      final clock = Stopwatch()..start();
+      final _DeliveryRoute route;
+      try {
+        route = await _deliverToContact(
+          contact: current,
+          recipientDeviceId: current.deviceId,
+          envelope: envelope,
+          background: true,
+          allowForwarding: false,
+          excludeRouteKeys: used,
+          allowedUnifiedKinds: {
+            for (final kind in TransportKind.values)
+              if (!usedKinds.contains(kind)) kind,
+          },
+          skipLegacyKinds: usedLegacyKinds,
+          extraCopy: true,
+        );
+      } catch (_) {
+        _routeProbeWaiters.remove(probeId);
+        break; // No route left.
+      }
+      if (!used.add(route.routeKey)) {
+        _routeProbeWaiters.remove(probeId);
+        break;
+      }
+      usedKinds.add(route.transportKind);
+      if (route.endpoint?.kind case final kind?) usedLegacyKinds.add(kind);
+      probes.add((
+        route: route,
+        clock: clock,
+        answer: waiter.future
+            .then<Duration?>((_) => clock.elapsed)
+            .timeout(replyTimeout, onTimeout: () => null)
+            .whenComplete(() => _routeProbeWaiters.remove(probeId)),
+      ));
+    }
+    final answers = await Future.wait([
+      for (final probe in probes) probe.answer,
+    ]);
+    final results = <RouteTestResult>[];
+    final now = _now().toUtc();
+    for (var index = 0; index < probes.length; index++) {
+      final route = probes[index].route;
+      final roundTrip = answers[index];
+      final stored = route.path == TransportPathKind.storeForward;
+      results.add(
+        RouteTestResult(
+          label: route.label,
+          route: route.messageRoute,
+          roundTrip: roundTrip,
+          stored: stored && roundTrip == null,
+        ),
+      );
+      final unconfirmed = _unconfirmedRoutes[current.deviceId];
+      if (roundTrip != null) {
+        unconfirmed?.remove(route.routeKey);
+        if (route.endpoint == null) {
+          _transportRegistry?.noteRoundTrip(
+            current.deviceId,
+            route.transportKind,
+            roundTrip,
+          );
+        }
+      } else if (!stored &&
+          !route.forwarded &&
+          !_radioKinds.contains(route.transportKind)) {
+        // (A radio may answer later than the test waits.)
+        // Took the probe, never answered: suspect at once.
+        final routes = _unconfirmedRoutes[current.deviceId] ??= {};
+        if (routes.length < 64) {
+          routes[route.routeKey] = now.subtract(_routeAckTimeout);
+        }
+      }
+    }
+    if (_noUnconfirmedRoutes(current.deviceId)) {
+      _unconfirmedRoutes.remove(current.deviceId);
+    }
+    if (results.any((result) => result.answered)) {
+      _reachability.noteTwoWaySuccess(current.deviceId);
+    }
+    final report = RouteTestReport(measuredAt: now, results: results);
+    _routeTestReports.remove(current.deviceId);
+    while (_routeTestReports.length >= 256) {
+      _routeTestReports.remove(_routeTestReports.keys.first);
+    }
+    _routeTestReports[current.deviceId] = report;
+    notifyListeners();
+    return report;
+  }
+
+  bool _noUnconfirmedRoutes(String deviceId) =>
+      _unconfirmedRoutes[deviceId]?.isEmpty ?? true;
+
+  /// A contact's probe: answered with the route it came by, within a bound.
+  Future<void> _handleRouteProbe(RelayEnvelope envelope) async {
+    final contact = _contactByDeviceId(envelope.senderDeviceId);
+    if (contact == null ||
+        !contact.canSendOutbound ||
+        contact.accountId != envelope.senderAccountId ||
+        envelope.conversationId !=
+            _crypto.conversationIdFor(contact.deviceId)) {
+      return;
+    }
+    final now = _now().toUtc();
+    final answered = _routeProbesAnswered[contact.deviceId] ??= [];
+    answered.removeWhere(
+      (at) => now.difference(at) > const Duration(minutes: 1),
+    );
+    if (answered.length >= _maxRouteProbesPerMinute) return;
+    final decoded = jsonDecode(
+      await _crypto.decryptMessage(contact: contact, envelope: envelope),
+    );
+    if (decoded is! Map<String, dynamic> ||
+        decoded['probeId'] != envelope.messageId) {
+      return;
+    }
+    answered.add(now);
+    final me = _requireIdentity();
+    final reply = await _crypto.encryptPayloadEnvelope(
+      kind: 'route_probe_reply',
+      messageId: _randomId('rprobe-reply'),
+      conversationId: envelope.conversationId,
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: contact.deviceId,
+      contact: contact,
+      plaintext: jsonEncode({
+        'probeId': envelope.messageId,
+        if (_ingressRoute case final route?) 'arrivedBy': route.name,
+      }),
+      createdAt: now,
+      acknowledgedMessageId: envelope.messageId,
+    );
+    // Not awaited: a slow way back must not hold up what else came in.
+    unawaited(
+      _deliverToContact(
+        contact: contact,
+        recipientDeviceId: contact.deviceId,
+        envelope: reply,
+        background: true,
+        allowForwarding: false,
+      ).then<void>((_) {}, onError: (_) {}),
+    );
+  }
+
+  Future<void> _handleRouteProbeReply(RelayEnvelope envelope) async {
+    final contact = _contactByDeviceId(envelope.senderDeviceId);
+    if (contact == null ||
+        contact.accountId != envelope.senderAccountId ||
+        envelope.conversationId !=
+            _crypto.conversationIdFor(contact.deviceId)) {
+      return;
+    }
+    final probeId = envelope.acknowledgedMessageId;
+    if (probeId == null || !_routeProbeWaiters.containsKey(probeId)) return;
+    final decoded = jsonDecode(
+      await _crypto.decryptMessage(contact: contact, envelope: envelope),
+    );
+    if (decoded is! Map<String, dynamic> || decoded['probeId'] != probeId) {
+      return;
+    }
+    final waiter = _routeProbeWaiters.remove(probeId);
+    if (waiter != null && !waiter.isCompleted) waiter.complete();
+    _reachability.noteTwoWaySuccess(contact.deviceId);
+  }
+
+  /// Counts a file block sent on [route] (bytes per route, for the message
+  /// details).
+  void _countServedBlock(
+    _OutboundAttachmentState state,
+    int index,
+    MessageRoute? route,
+  ) {
+    if (route == null) return;
+    final descriptor = state.descriptor;
+    final bytes = max(
+      0,
+      min(
+        descriptor.chunkSize,
+        descriptor.sizeBytes - index * descriptor.chunkSize,
+      ),
+    );
+    state.routeBytes[route] = (state.routeBytes[route] ?? 0) + bytes;
+  }
+
+  /// Whether [messageId] to [deviceId] still waits for its receipt.
+  bool _awaitsReceipt(String deviceId, String messageId, GroupRecord? group) {
+    if (group == null) {
+      return _messageById(deviceId, messageId)?.state.awaitsRecipientAck ??
+          false;
+    }
+    final message = _groupMessageById(group.groupId, messageId);
+    if (message == null || message.deleted) return false;
+    return message.recipientStates[deviceId]?.awaitsRecipientAck ?? true;
+  }
+
+  /// Records on the message that [route] took it (to [deviceId], in a
+  /// group).
+  void _traceOutbound(
+    String deviceId,
+    String messageId,
+    _DeliveryRoute route, {
+    GroupRecord? group,
+  }) {
+    final messageRoute = route.messageRoute;
+    if (messageRoute == null) return;
+    _traceMessage(
+      deviceId,
+      messageId,
+      RouteTrace(
+        route: messageRoute,
+        mark: route.path == TransportPathKind.storeForward
+            ? MessageRouteMark.stored
+            : MessageRouteMark.sent,
+        at: _now().toUtc(),
+        deviceId: group == null ? null : deviceId,
+      ),
+      group: group,
+    );
+  }
+
+  void _traceMessage(
+    String deviceId,
+    String messageId,
+    RouteTrace trace, {
+    GroupRecord? group,
+  }) {
+    if (group == null) {
+      final message = _messageById(deviceId, messageId);
+      if (message == null) return;
+      final traced = message.tracedWith(trace);
+      if (_sameTrace(traced, message.routeTrace)) return;
+      _upsertMessage(deviceId, message.copyWith(routeTrace: traced));
+    } else {
+      final message = _groupMessageById(group.groupId, messageId);
+      if (message == null) return;
+      final traced = message.tracedWith(trace);
+      if (_sameTrace(traced, message.routeTrace)) return;
+      _upsertGroupMessage(group.groupId, message.copyWith(routeTrace: traced));
+    }
+  }
+
+  static bool _sameTrace(List<RouteTrace> left, List<RouteTrace> right) {
+    if (left.length != right.length) return false;
+    for (var index = 0; index < left.length; index++) {
+      if (!identical(left[index], right[index])) return false;
+    }
+    return true;
+  }
+
+  /// The routes each recent incoming message arrived by (copies included),
+  /// first arrival first, and those already named in a receipt.
+  final LinkedHashMap<
+    String,
+    ({Map<MessageRoute, DateTime> arrived, Set<MessageRoute> acked})
+  >
+  _arrivals = LinkedHashMap();
+  static const int _maxArrivals = 2048;
+
+  /// Notes that [messageId] (authenticated) came by the route this batch
+  /// arrived on; true when that route is new for it.
+  bool _noteArrival(String messageId) {
+    final route = _ingressRoute;
+    if (route == null) return false;
+    var entry = _arrivals.remove(messageId);
+    entry ??= (arrived: <MessageRoute, DateTime>{}, acked: <MessageRoute>{});
+    _arrivals[messageId] = entry;
+    while (_arrivals.length > _maxArrivals) {
+      _arrivals.remove(_arrivals.keys.first);
+    }
+    if (entry.arrived.containsKey(route)) return false;
+    entry.arrived[route] = _now().toUtc();
+    return true;
+  }
+
+  /// Records on an outgoing message what a receipt from [deviceId] says:
+  /// the routes that reached them, and when they read it.
+  void _recordReceipt(
+    String deviceId,
+    String messageId, {
+    required bool read,
+    required DateTime at,
+    Set<MessageRoute>? arrivedBy,
+    GroupRecord? group,
+  }) {
+    final message = group == null
+        ? _messageById(deviceId, messageId)
+        : _groupMessageById(group.groupId, messageId);
+    if (message == null || !message.outbound) return;
+    var traced = message.routeTrace;
+    for (final route in arrivedBy ?? const <MessageRoute>{}) {
+      traced = message
+          .copyWith(routeTrace: traced)
+          .tracedWith(
+            RouteTrace(
+              route: route,
+              mark: MessageRouteMark.confirmed,
+              at: at,
+              deviceId: group == null ? null : deviceId,
+            ),
+          );
+    }
+    final readAt = read && !message.recipientReadAt.containsKey(deviceId)
+        ? {...message.recipientReadAt, deviceId: at}
+        : null;
+    if (_sameTrace(traced, message.routeTrace) && readAt == null) return;
+    final updated = message.copyWith(
+      routeTrace: traced,
+      recipientReadAt: readAt,
+    );
+    if (group == null) {
+      _upsertMessage(deviceId, updated);
+    } else {
+      _upsertGroupMessage(group.groupId, updated);
+    }
+  }
+
+  /// Shows on the incoming message that a copy came by this batch's route.
+  void _traceArrival(ContactRecord contact, RelayEnvelope envelope) {
+    final route = _ingressRoute;
+    if (route == null) return;
+    final group = envelope.kind == 'group_message'
+        ? _groupById(envelope.conversationId)
+        : null;
+    if (envelope.kind == 'group_message' && group == null) return;
+    _traceMessage(
+      contact.deviceId,
+      envelope.messageId,
+      RouteTrace(
+        route: route,
+        mark: MessageRouteMark.confirmed,
+        at: _now().toUtc(),
+      ),
+      group: group,
+    );
+  }
+
+  /// Copies that arrived while the first was still being read, by message
+  /// id, with the route each came by.
+  final Map<String, List<({RelayEnvelope envelope, MessageRoute route})>>
+  _overlappingCopies = {};
+
   String _outboundAttemptKey(String peerDeviceId, String messageId) {
     return '$peerDeviceId|$messageId';
   }
@@ -23366,6 +24232,7 @@ class MessengerController extends ChangeNotifier {
 
   void _clearOutboundAttempt(String peerDeviceId, String messageId) {
     final key = _outboundAttemptKey(peerDeviceId, messageId);
+    _copyStates.remove(key);
     _outboundAttemptedAt.remove(key);
     _outboundAttemptCount.remove(key);
     _envelopeOutbox.remove(key);
@@ -23475,6 +24342,13 @@ class MessengerController extends ChangeNotifier {
     bool irohFirst = false,
     bool background = false,
     bool allowForwarding = true,
+    // Routes this message already went on (an extra copy takes another).
+    Set<String> excludeRouteKeys = const {},
+    // An extra copy: the caller notes the route itself.
+    bool extraCopy = false,
+    // Kinds of direct routes to leave out (one LAN address is as good as
+    // another for a copy).
+    Set<PeerRouteKind> skipLegacyKinds = const {},
   }) async {
     // Defense in depth: the crypto layer already can't derive a shared
     // secret for a pending or archived contact (publicKeyBase64 is empty
@@ -23503,6 +24377,7 @@ class MessengerController extends ChangeNotifier {
             .where(
               (route) => allowRelayedPaths || route.kind != PeerRouteKind.relay,
             )
+            .where((route) => !skipLegacyKinds.contains(route.kind))
             .toList(growable: false);
     final canTryRegistry =
         _transportRegistry != null &&
@@ -23524,7 +24399,7 @@ class MessengerController extends ChangeNotifier {
         .toList(growable: false);
     Object? lastError;
     _DeliveryRoute? deliveredVia;
-    final attemptedRouteKeys = <String>{};
+    final attemptedRouteKeys = <String>{...excludeRouteKeys};
     // Routes that took messages no receipt confirmed (a one-way link: a
     // firewall dropping what arrives, say) go last, after every other.
     final suspects = _suspectRoutes(contact.deviceId);
@@ -23593,11 +24468,16 @@ class MessengerController extends ChangeNotifier {
           envelope: envelope,
           policies: registryPolicies,
           allowRelay: allowRelayedPaths,
-          skipRouteIds: suspectsToo ? const {} : suspects,
+          skipRouteIds: suspectsToo
+              ? excludeRouteKeys
+              : {...suspects, ...excludeRouteKeys},
         );
         if (deliveredVia?.transportKind == TransportKind.iroh) {
           _irohSkipUntil.remove(contact.deviceId);
         }
+      } on TransportSendCancelled {
+        // It arrived another way: no other route takes over.
+        rethrow;
       } catch (error) {
         lastError = error;
         if (!skipIroh && _canUseIrohForContact(contact)) {
@@ -23731,7 +24611,9 @@ class MessengerController extends ChangeNotifier {
       }
       throw lastError ?? StateError('No reachable route for recipient.');
     }
-    if (envelope.kind == 'direct_message' || envelope.kind == 'group_message') {
+    if (!extraCopy &&
+        (envelope.kind == 'direct_message' ||
+            envelope.kind == 'group_message')) {
       _noteHandedOff(contact.deviceId, envelope.messageId, result);
     }
     final deliveredEndpoint = result.endpoint;
@@ -25812,6 +26694,7 @@ class MessengerController extends ChangeNotifier {
     }
     await _handleAttachmentChunkBytes(
       sender,
+      route: MessageRoute.lanDirect,
       attachmentId: block.attachmentId,
       index: block.index,
       packedBytes: block.ciphertext,
@@ -28038,6 +28921,8 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.groupFileCaptionsV2,
       ApplicationCapability.irohBlock1MiBV1,
       ApplicationCapability.attachmentCompleteRetryV1,
+      ApplicationCapability.multiRouteMessagesV1,
+      ApplicationCapability.routeProbeV1,
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,
@@ -29296,10 +30181,21 @@ class MessengerController extends ChangeNotifier {
         recipientDeviceId != _lanLobbyMailboxId) {
       return;
     }
-    unawaited(_processLocalStoredEnvelope(envelope));
+    final peer = _localRelayNode.storingPeer;
+    unawaited(
+      _processLocalStoredEnvelope(
+        envelope,
+        // Anyone holding a copy could store it here from afar: only one
+        // stored from this network counts as having come by LAN.
+        fromLocalNetwork: peer == null || isLocalNetworkAddress(peer),
+      ),
+    );
   }
 
-  Future<void> _processLocalStoredEnvelope(RelayEnvelope envelope) async {
+  Future<void> _processLocalStoredEnvelope(
+    RelayEnvelope envelope, {
+    bool fromLocalNetwork = true,
+  }) async {
     if (!hasIdentity) {
       return;
     }
@@ -29307,7 +30203,9 @@ class MessengerController extends ChangeNotifier {
     final processed = await _processEnvelopes(
       [envelope],
       ingressKind: PeerRouteKind.lan,
-      route: MessageRoute.lanDirect,
+      route: fromLocalNetwork
+          ? MessageRoute.lanDirect
+          : MessageRoute.internetDirect,
     );
     if (processed > 0) {
       if (!highFrequencyTransfer) {
@@ -29418,12 +30316,20 @@ class MessengerController extends ChangeNotifier {
   @override
   void dispose() {
     _matrixClient?.dispose();
+    for (final subscription in _carrierReceiptSubscriptions.values) {
+      unawaited(subscription.cancel());
+    }
+    _carrierReceiptSubscriptions.clear();
     for (final carrier in _carrierTransports.values) {
       unawaited(carrier.detach());
     }
     unawaited(_userNotices.close());
     _scheduledMessageTimer?.cancel();
     _scheduledMessageTimer = null;
+    for (final timer in _routeReceiptTimers.values) {
+      timer.cancel();
+    }
+    _routeReceiptTimers.clear();
     _lanAdvertiseTimer?.cancel();
     for (final timer in _lanRecheckTimers) {
       timer.cancel();
@@ -29617,6 +30523,9 @@ class _HeartbeatPassResult {
 }
 
 class _OutboundAttachmentState {
+  /// Bytes sent per route (blocks sent again count again).
+  final Map<MessageRoute, int> routeBytes = {};
+
   _OutboundAttachmentState({
     required this.messageId,
     required this.peerDeviceId,
@@ -29777,7 +30686,26 @@ enum OutboundDeliveryRoute {
   conestRelay,
 }
 
+/// The routes a message's copies already went on, across retries.
+class _CopyState {
+  final Set<String> routeKeys = {};
+  final Set<TransportKind> kinds = {};
+  final Set<PeerRouteKind> legacyKinds = {};
+  bool storedOnCarrier = false;
+  bool radioUsed = false;
+
+  void note(_DeliveryRoute route, {required bool storing}) {
+    routeKeys.add(route.routeKey);
+    kinds.add(route.transportKind);
+    if (route.endpoint?.kind case final kind?) legacyKinds.add(kind);
+    if (storing) storedOnCarrier = true;
+  }
+}
+
 class _InboundAttachmentState {
+  /// Bytes received per route.
+  final Map<MessageRoute, int> routeBytes = {};
+
   _InboundAttachmentState({
     required this.messageId,
     required this.peerDeviceId,

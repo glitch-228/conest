@@ -48,6 +48,11 @@ class LocalRelayNode {
   final DateTime Function() _nowProvider;
   void Function(String recipientDeviceId, RelayEnvelope envelope)?
   onEnvelopeStored;
+
+  /// The address that stored the envelope [onEnvelopeStored] is reporting,
+  /// while it runs (null when this device stored it itself).
+  String? get storingPeer => _storingPeer;
+  String? _storingPeer;
   final Map<String, Queue<_QueueEntry>> _queues = {};
   final Map<String, _RateBucket> _rateBuckets = {};
   ServerSocket? _server;
@@ -490,7 +495,12 @@ class LocalRelayNode {
           final envelope = RelayEnvelope.fromJson(
             request['envelope'] as Map<String, dynamic>,
           );
-          _store(recipientDeviceId, envelope);
+          _storingPeer = peer;
+          try {
+            _store(recipientDeviceId, envelope);
+          } finally {
+            _storingPeer = null;
+          }
           return {'ok': true, 'stored': true, 'messages': const []};
         case 'fetch':
           final recipientDeviceId = request['recipient_device_id'] as String;
@@ -766,4 +776,19 @@ bool isLanDiscoveryAddress(String address) {
     }
   }
   return false;
+}
+
+/// Whether [address] is on this device or its local network (loopback,
+/// link-local, private IPv4 ranges, IPv6 unique local).
+bool isLocalNetworkAddress(String address) {
+  final parsed = InternetAddress.tryParse(address);
+  if (parsed == null) return false;
+  if (parsed.isLoopback || parsed.isLinkLocal) return true;
+  final bytes = parsed.rawAddress;
+  if (parsed.type == InternetAddressType.IPv4) {
+    return bytes[0] == 10 ||
+        (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] < 32) ||
+        (bytes[0] == 192 && bytes[1] == 168);
+  }
+  return (bytes[0] & 0xfe) == 0xfc;
 }
