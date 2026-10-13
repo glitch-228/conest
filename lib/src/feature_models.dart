@@ -21,6 +21,9 @@ enum ApplicationCapability {
   /// Re-sends "file verified" until it lands and answers a repeated offer
   /// for a file it has: the sender waits for it instead of guessing.
   attachmentCompleteRetryV1,
+
+  /// Encrypted group voice calls over authenticated Iroh datagrams.
+  groupVoiceCallsV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

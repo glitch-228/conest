@@ -25,6 +25,8 @@ import 'package:conest/src/crypto_service.dart';
 import 'package:conest/src/feature_models.dart';
 import 'package:conest/src/email/mail_socket.dart';
 import 'package:conest/src/group_file_crypto.dart';
+import 'package:conest/src/group_call/group_call_media.dart';
+import 'support/fake_call_network.dart' show FakeCallMedia;
 import 'package:conest/src/group_file_download.dart';
 import 'package:conest/src/group_history_event.dart';
 import 'package:conest/src/iroh_ffi_bridge.dart';
@@ -990,6 +992,7 @@ Future<MessengerController> _createController({
   LocalRelayNode? localRelayNode,
   Future<Directory> Function()? attachmentRootProvider,
   PlatformBridge? platformBridge,
+  GroupCallMediaEngine? groupCallMedia,
   LanDirectChannel? lanDirectChannel,
   StorageCapacityProvider? storageCapacityProvider,
   Future<TransportRegistry?> Function(IdentityRecord identity)?
@@ -1024,6 +1027,7 @@ Future<MessengerController> _createController({
     enableLongPoll: enableLongPoll,
     enablePairingBeacon: false,
     platformBridge: platformBridge,
+    groupCallMedia: groupCallMedia,
     lanDirectChannel: lanDirectChannel,
     transportRegistryFactory: transportRegistryFactory,
     debugBuildId: debugBuildId,
@@ -1209,11 +1213,14 @@ class _InProcessIrohNetwork {
   }
 }
 
-class _InProcessIrohBridge implements NativeIrohBridge {
+class _InProcessIrohBridge implements NativeIrohDatagramBridge {
   _InProcessIrohBridge(this.network, this.endpointId);
   final _InProcessIrohNetwork network;
   final String endpointId;
   final _inbound = StreamController<IrohBridgeInbound>.broadcast();
+  final _datagrams = StreamController<IrohBridgeDatagram>.broadcast();
+  @override
+  Stream<IrohBridgeDatagram> get datagrams => _datagrams.stream;
   @override
   Stream<IrohBridgeInbound> get inbound => _inbound.stream;
   @override
@@ -1226,6 +1233,33 @@ class _InProcessIrohBridge implements NativeIrohBridge {
     directAddresses: const [],
     relayEnabled: relayEnabled,
   );
+  @override
+  Future<IrohBridgeReceipt> sendDatagram({
+    required String remoteEndpointId,
+    required Uint8List bytes,
+    required bool allowRelay,
+  }) async {
+    final recipient = network.bridges[remoteEndpointId];
+    if (recipient == null ||
+        (network.relayed && !allowRelay) ||
+        network.blockedPairs.contains((endpointId, remoteEndpointId))) {
+      throw StateError('Peer unreachable');
+    }
+    if (!network.droppedPairs.contains((endpointId, remoteEndpointId))) {
+      recipient._datagrams.add(
+        IrohBridgeDatagram(
+          senderEndpointId: endpointId,
+          bytes: Uint8List.fromList(bytes),
+          relayed: network.relayed,
+        ),
+      );
+    }
+    return IrohBridgeReceipt(
+      endpointId: remoteEndpointId,
+      relayed: network.relayed,
+      accepted: true,
+    );
+  }
   @override
   Future<IrohBridgeReceipt> sendEnvelope({
     required String remoteEndpointId,
@@ -4583,6 +4617,90 @@ void main() {
       );
     },
   );
+
+  test('group-only members join encrypted voice calls over Iroh', () async {
+    final network = _InProcessIrohNetwork();
+    final relay = _FakeRelayClient();
+    final media = <FakeCallMedia>[];
+    final peers = <MessengerController>[];
+    for (final name in ['Alice', 'Bob', 'Carol']) {
+      final audio = FakeCallMedia();
+      media.add(audio);
+      final peer = await _createController(
+        relayClient: relay,
+        displayName: name,
+        internetRelayHost: null,
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+        groupCallMedia: audio,
+      );
+      peers.add(peer);
+      addTearDown(peer.dispose);
+      await peer.updateGlobalConnectivity(_irohOnlyConnectivity);
+    }
+    final [alice, bob, carol] = peers;
+    for (final peer in [bob, carol]) {
+      await alice.addContactFromInvite(
+        alias: peer.identity!.displayName,
+        payload: (await peer.buildInvite()).encodePayload(),
+        codephrase: '',
+      );
+      await _waitForIroh(() => peer.pendingContactRequests.isNotEmpty);
+      await peer.approvePendingContactRequest(
+        peer.pendingContactRequests.single.id,
+      );
+    }
+    final group = await alice.createGroup(
+      title: 'Voice group',
+      members: alice.contacts,
+    );
+    await _waitForIroh(() => bob.groups.isNotEmpty && carol.groups.isNotEmpty);
+    await _waitForIroh(
+      () => peers.every(
+        (p) => p.groupCallMembersFor(group.groupId).every((m) => m.canJoin),
+      ),
+      reason: 'group call capabilities arrived',
+    );
+    expect(bob.contactByDeviceId(carol.identity!.deviceId), isNull);
+    expect(carol.contactByDeviceId(bob.identity!.deviceId), isNull);
+    await alice.joinOrStartGroupCall(group.groupId);
+    await _waitForIroh(
+      () =>
+          bob.groupCallService?.roomFor(group.groupId) != null &&
+          carol.groupCallService?.roomFor(group.groupId) != null,
+    );
+    await bob.joinOrStartGroupCall(group.groupId);
+    await carol.joinOrStartGroupCall(group.groupId);
+    await _waitForIroh(
+      () => peers.every(
+        (p) =>
+            p.groupCallService?.active?.connected == true &&
+            p.groupCallService!.active!.participants.length == 3,
+      ),
+      reason: 'group-only call keys arrived',
+    );
+    await carol.groupCallService!.sendAudio(Uint8List.fromList([36, 42]));
+    await _waitForIroh(
+      () => media[1].played.isNotEmpty,
+      reason: 'group-only audio arrived',
+    );
+    final packet = media[1].played.single;
+    expect(packet.$3, [36, 42]);
+    expect(
+      bob.groupCallService!.active!.participants
+          .singleWhere((p) => p.index == packet.$1)
+          .deviceId,
+      carol.identity!.deviceId,
+    );
+    final keys = network.envelopes.where(
+      (e) => e.kind == 'group_call_signal' && e.protocolVersion == 3,
+    );
+    expect(keys, isNotEmpty);
+    await bob.setVoiceNoiseSuppression(false);
+    expect(media[1].noise.last, false);
+    await bob.groupCallService!.leave();
+    expect(bob.groupCallSummariesFor(group.groupId), hasLength(1));
+  });
 
   for (final native in [false, true]) {
     for (final relayed in native ? [false] : [false, true]) {

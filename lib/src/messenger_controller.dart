@@ -12,6 +12,11 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart' as path_provider;
 
 import 'crypto_service.dart';
+import 'group_call/group_call_service.dart';
+import 'group_call/group_call_models.dart';
+import 'group_call/group_call_crypto.dart';
+import 'group_call/group_call_media.dart';
+import 'group_call/group_call_policy.dart';
 import 'group_history_coordinator.dart';
 import 'group_history_event.dart';
 import 'group_file_manifest.dart';
@@ -92,6 +97,8 @@ import 'storage.dart';
 import 'storage_capacity.dart';
 import 'tor_carrier.dart';
 import 'transport.dart';
+
+part 'group_call/group_call_controller.dart';
 
 const bool experimentalAndroidBackgroundRuntimeAvailable = bool.fromEnvironment(
   'CONEST_EXPERIMENTAL_ANDROID_BACKGROUND_RUNTIME',
@@ -288,6 +295,7 @@ const String _ratchetBundleKind = 'ratchet_bundle';
 const Set<String> _v2PairwiseKinds = <String>{
   _ratchetBundleKind,
   'group_history',
+  'group_call_signal',
   'direct_message',
   'ack',
   'contact_exchange',
@@ -522,6 +530,8 @@ class MessengerController extends ChangeNotifier {
     Future<TransportRegistry?> Function(IdentityRecord identity)?
     transportRegistryFactory,
     VoiceCallCuePlayer? voiceCallCuePlayer,
+    GroupCallMediaEngine? groupCallMedia,
+    GroupCallLinkPolicy? groupCallLinkPolicy,
     RatchetEngine? ratchetEngine,
     bool? matrixCarrierEnabled,
     MatrixHttp Function()? matrixHttpFactory,
@@ -534,7 +544,9 @@ class MessengerController extends ChangeNotifier {
     MeshCoreConnector? meshCoreConnector,
     BitchatConnector? bitchatConnector,
     TorApi? torApi,
-  }) : _vaultStore = vaultStore,
+  }) : _groupCallMediaOverride = groupCallMedia,
+       _groupCallLinkPolicy = groupCallLinkPolicy,
+       _vaultStore = vaultStore,
        _torApi = torApi,
        _torApiResolved = torApi != null,
        _bitchatConnector = bitchatConnector,
@@ -590,9 +602,14 @@ class MessengerController extends ChangeNotifier {
           if (!_disposed) unawaited(_pumpScheduledMessages());
         });
     _voiceCallAudioSubscription = _platformBridge.voiceCallAudioFrames.listen(
-      (frame) => unawaited(_sendVoiceCallAudioFrame(frame)),
+      (frame) => unawaited(
+        _groupCallService?.active != null
+            ? _groupCallService!.sendAudio(frame)
+            : _sendVoiceCallAudioFrame(frame),
+      ),
       onError: (Object error, StackTrace stackTrace) {
         appendDebugLog('Voice audio device stopped: $error');
+        unawaited(_groupCallService?.leave());
         unawaited(
           _voiceCallService?.end(reason: 'Voice audio device stopped.'),
         );
@@ -667,6 +684,7 @@ class MessengerController extends ChangeNotifier {
   /// entering Matrix-only mode stops it (an identity stays, dormant), and
   /// leaving it starts it again. Refused during a call.
   Future<void> setAppMode(AppMode mode) async {
+    if (mode == AppMode.matrixOnly) unawaited(_groupCallService?.leave());
     if (mode == AppMode.matrixOnly && _voiceCallService?.active != null) {
       throw StateError('End the call before switching to Matrix only.');
     }
@@ -823,6 +841,11 @@ class MessengerController extends ChangeNotifier {
   /// between contacts doesn't lose the staged items.
   final Map<String, List<StagedAttachment>> _stagedAttachments = {};
   VaultSnapshot _snapshot = VaultSnapshot.empty();
+  GroupCallService? _groupCallService;
+  StreamSubscription<void>? _groupCallChanges;
+  Future<void>? _groupCallTeardown;
+  final GroupCallMediaEngine? _groupCallMediaOverride;
+  final GroupCallLinkPolicy? _groupCallLinkPolicy;
   VoiceCallService? _voiceCallService;
   late final VoiceMessageService voiceMessageService;
   late final VoiceCallSoundCues _voiceCallSoundCues;
@@ -1317,6 +1340,7 @@ class MessengerController extends ChangeNotifier {
   DateTime _now() => _nowProvider().toUtc();
 
   void _ensureVoiceCallService() {
+    _ensureGroupCallService();
     final me = _snapshot.identity;
     if (me == null) {
       unawaited(_voiceCallChanges?.cancel());
@@ -1324,6 +1348,7 @@ class MessengerController extends ChangeNotifier {
       if (_voiceCallService != null) _voiceCallSoundCues.reset();
       unawaited(_voiceCallService?.dispose());
       _voiceCallService = null;
+      _disposeGroupCalls();
       return;
     }
     if (_voiceCallService?.localDeviceId == me.deviceId) return;
@@ -1340,6 +1365,8 @@ class MessengerController extends ChangeNotifier {
       ),
       onTerminal: _persistVoiceCallSummary,
       noiseSuppressionEnabled: me.voiceNoiseSuppressionEnabled,
+      canOpenMedia: () =>
+          _groupCallService?.mediaBusy != true && _groupCallTeardown == null,
     );
     _voiceCallChanges = _voiceCallService!.changes.listen((session) {
       if (_disposed) return;
@@ -1388,6 +1415,7 @@ class MessengerController extends ChangeNotifier {
     final me = identity;
     if (me == null) return;
     await _voiceCallService?.setNoiseSuppression(enabled);
+    await _groupCallService?.setNoiseSuppression(enabled);
     _snapshot = _snapshot.copyWith(
       identity: me.copyWith(voiceNoiseSuppressionEnabled: enabled),
     );
@@ -1635,6 +1663,11 @@ class MessengerController extends ChangeNotifier {
       );
 
   Future<void> _handleVoiceCallDatagram(IrohMediaDatagram datagram) async {
+    if (datagram.bytes.isNotEmpty &&
+        datagram.bytes.first == GroupCallCipher.marker) {
+      await _handleGroupCallDatagram(datagram);
+      return;
+    }
     final session = _voiceCallService?.active;
     final me = identity;
     if (_disposed ||
@@ -6421,6 +6454,7 @@ class MessengerController extends ChangeNotifier {
   /// What a member of a shared group who is not a contact may send us.
   static const Set<String> _groupOnlyKinds = {
     'group_history',
+    'group_call_signal',
     'group_message',
     'group_membership',
     'group_membership_ack',
@@ -8340,6 +8374,7 @@ class MessengerController extends ChangeNotifier {
     if (enabled && !_platformBridge.supportsVoiceCallMedia) {
       throw StateError('Voice-call audio is unavailable in this build.');
     }
+    if (!enabled) await _groupCallService?.leave();
     if (!enabled && _voiceCallService?.active != null) {
       await _voiceCallService!.end(reason: 'Voice calls were disabled.');
     }
@@ -9056,6 +9091,7 @@ class MessengerController extends ChangeNotifier {
     _voiceCallSoundCues.reset();
     unawaited(_voiceCallService?.dispose());
     _voiceCallService = null;
+    _disposeGroupCalls();
     _rebuildSeenEnvelopeIdSet();
     _pairingSessionActiveUntil = null;
     _lastPairingBeaconSentAt = null;
@@ -17012,6 +17048,12 @@ class MessengerController extends ChangeNotifier {
 
         if (envelope.kind == 'group_leave') {
           await _handleGroupLeave(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'group_call_signal') {
+          await _handleGroupCallSignal(envelope);
           _markSeen(envelope.messageId);
           continue;
         }
@@ -27987,6 +28029,11 @@ class MessengerController extends ChangeNotifier {
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,
+      if (_ratchet != null &&
+          (_groupCallMediaOverride?.available ??
+              _platformBridge.supportsVoiceCallMedia) &&
+          me?.experimentalVoiceCallsEnabled == true)
+        ApplicationCapability.groupVoiceCallsV1,
       if (_ratchet != null) ApplicationCapability.ratchetV1,
     };
     return ApplicationCapability.values
@@ -28341,6 +28388,8 @@ class MessengerController extends ChangeNotifier {
       signingPublicKeyBase64: profile.signingPublicKeyBase64,
       irohEndpointId: profile.irohEndpointId,
       capabilities: profile.capabilities,
+      featureCapabilities: profile.featureCapabilities,
+      featureCapabilityVersion: profile.featureCapabilityVersion,
       routeHints: profile.routeHints,
       safetyNumber: 'group-${_shortId(profile.publicKeyBase64)}',
       trustedAt: group.createdAt,
@@ -29381,6 +29430,7 @@ class MessengerController extends ChangeNotifier {
     unawaited(_voiceCallSoundCues.dispose());
     unawaited(_voiceCallService?.dispose());
     _voiceCallService = null;
+    _disposeGroupCalls();
     unawaited(_voiceCallAudioSubscription?.cancel());
     _voiceCallAudioSubscription = null;
     unawaited(voiceMessageService.dispose());

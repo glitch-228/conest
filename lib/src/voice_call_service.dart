@@ -178,6 +178,7 @@ class VoiceCallService {
     required this.transport,
     VoiceCallMediaEngine? media,
     this.noiseSuppressionEnabled = true,
+    this.canOpenMedia,
     DateTime Function()? now,
     Duration connectionTimeout = const Duration(seconds: 15),
     Duration mediaInactivityTimeout = const Duration(seconds: 5),
@@ -194,6 +195,7 @@ class VoiceCallService {
   final VoiceCallSignalTransport transport;
   final VoiceCallMediaEngine media;
   bool noiseSuppressionEnabled;
+  final bool Function()? canOpenMedia;
   final DateTime Function() _now;
   final Duration _connectionTimeout;
   final Duration _mediaInactivityTimeout;
@@ -221,7 +223,7 @@ class VoiceCallService {
     if (_active != null && _active!.state != VoiceCallState.ended) {
       throw StateError('Only one voice call can be active on this device.');
     }
-    if (!media.available) {
+    if (!media.available || canOpenMedia?.call() == false) {
       throw StateError('Voice calls are not available on this build yet.');
     }
     final callId =
@@ -298,7 +300,7 @@ class VoiceCallService {
         _terminalCallIds.contains(signal.callId)) {
       return false;
     }
-    if (!media.available) {
+    if (!media.available || canOpenMedia?.call() == false) {
       await transport.send(
         VoiceCallSignal(
           callId: signal.callId,

@@ -6,8 +6,10 @@ import 'package:flutter/material.dart';
 import 'transport_models.dart';
 import 'group_file_manifest.dart';
 import 'feature_models.dart';
+import 'group_call/group_call_models.dart';
 
 export 'feature_models.dart';
+export 'group_call/group_call_models.dart' show GroupCallSummary;
 
 export 'transport_models.dart';
 
@@ -4625,6 +4627,7 @@ class VaultSnapshot {
     this.chatFolders = const <ChatFolder>[],
     this.scheduledMessages = const <ScheduledMessage>[],
     this.voiceCallSummaries = const <VoiceCallSummary>[],
+    this.groupCallSummaries = const <GroupCallSummary>[],
     this.matrixSession,
     this.matrixSyncToken,
     this.appMode,
@@ -4721,6 +4724,7 @@ class VaultSnapshot {
   final List<ChatFolder> chatFolders;
   final List<ScheduledMessage> scheduledMessages;
   final List<VoiceCallSummary> voiceCallSummaries;
+  final List<GroupCallSummary> groupCallSummaries;
 
   /// The signed-in Conest Matrix device (`MatrixSession.toJson`), if any.
   final Map<String, dynamic>? matrixSession;
@@ -4811,6 +4815,7 @@ class VaultSnapshot {
     List<ChatFolder>? chatFolders,
     List<ScheduledMessage>? scheduledMessages,
     List<VoiceCallSummary>? voiceCallSummaries,
+    List<GroupCallSummary>? groupCallSummaries,
     Map<String, dynamic>? matrixSession,
     String? matrixSyncToken,
     AppMode? appMode,
@@ -4861,6 +4866,7 @@ class VaultSnapshot {
       chatFolders: chatFolders ?? this.chatFolders,
       scheduledMessages: scheduledMessages ?? this.scheduledMessages,
       voiceCallSummaries: voiceCallSummaries ?? this.voiceCallSummaries,
+      groupCallSummaries: groupCallSummaries ?? this.groupCallSummaries,
       matrixSession: clearMatrixSession
           ? null
           : matrixSession ?? this.matrixSession,
@@ -4936,6 +4942,10 @@ class VaultSnapshot {
       'scheduledMessages': scheduledMessages
           .map((entry) => entry.toJson())
           .toList(),
+      'groupCallSummaries': groupCallSummaries
+          .take(128)
+          .map((s) => s.toJson())
+          .toList(),
       'voiceCallSummaries': voiceCallSummaries
           .map((entry) => entry.toJson())
           .toList(),
@@ -4978,6 +4988,12 @@ class VaultSnapshot {
           (json['scheduledMessages'] as List<dynamic>? ?? const [])
               .whereType<Map<String, dynamic>>()
               .map(ScheduledMessage.fromJson)
+              .toList(),
+      groupCallSummaries:
+          (json['groupCallSummaries'] as List<dynamic>? ?? const [])
+              .take(128)
+              .whereType<Map<String, dynamic>>()
+              .map(GroupCallSummary.fromJson)
               .toList(),
       voiceCallSummaries:
           (json['voiceCallSummaries'] as List<dynamic>? ?? const [])

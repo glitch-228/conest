@@ -22,8 +22,10 @@ typedef _PushNative = Bool Function(Uint64, Uint64, Pointer<Uint8>, UintPtr);
 typedef _PushDart = bool Function(int, int, Pointer<Uint8>, int);
 typedef _ParticipantNative = Bool Function(Uint64, Uint16, Bool);
 typedef _ParticipantDart = bool Function(int, int, bool);
-typedef _PushParticipantNative = Bool Function(Uint64, Uint16, Uint64, Pointer<Uint8>, UintPtr);
-typedef _PushParticipantDart = bool Function(int, int, int, Pointer<Uint8>, int);
+typedef _PushParticipantNative =
+    Bool Function(Uint64, Uint16, Uint64, Pointer<Uint8>, UintPtr);
+typedef _PushParticipantDart =
+    bool Function(int, int, int, Pointer<Uint8>, int);
 typedef _ParticipantLevelNative = Float Function(Uint64, Uint16);
 typedef _ParticipantLevelDart = double Function(int, int);
 typedef _CloseNative = Void Function(Uint64);
@@ -68,15 +70,18 @@ class _NativeVoiceAudioBindings {
       pushPacket = library.lookupFunction<_PushNative, _PushDart>(
         'conest_voice_audio_push_packet',
       ),
-      setParticipant = library.lookupFunction<_ParticipantNative, _ParticipantDart>(
-        'conest_voice_audio_set_participant',
-      ),
-      pushParticipant = library.lookupFunction<_PushParticipantNative, _PushParticipantDart>(
-        'conest_voice_audio_push_participant_packet',
-      ),
-      participantLevel = library.lookupFunction<_ParticipantLevelNative, _ParticipantLevelDart>(
-        'conest_voice_audio_participant_level',
-      ),
+      setParticipant = library
+          .lookupFunction<_ParticipantNative, _ParticipantDart>(
+            'conest_voice_audio_set_participant',
+          ),
+      pushParticipant = library
+          .lookupFunction<_PushParticipantNative, _PushParticipantDart>(
+            'conest_voice_audio_push_participant_packet',
+          ),
+      participantLevel = library
+          .lookupFunction<_ParticipantLevelNative, _ParticipantLevelDart>(
+            'conest_voice_audio_participant_level',
+          ),
       close = library.lookupFunction<_CloseNative, _CloseDart>(
         'conest_voice_audio_close',
       ),
@@ -298,7 +303,9 @@ class NativeVoiceCallAudio {
 
   bool setParticipant(int participant, bool active) {
     final handle = _handle;
-    return handle != null && participant >= 0 && participant < 16 &&
+    return handle != null &&
+        participant >= 0 &&
+        participant < 16 &&
         _bindings.setParticipant(handle, participant, active);
   }
 
@@ -310,13 +317,26 @@ class NativeVoiceCallAudio {
 
   bool playParticipantPacket(int participant, int sequence, Uint8List bytes) {
     final handle = _handle;
-    if (handle == null || participant < 0 || participant >= 16 ||
-        sequence <= 0 || bytes.isEmpty || bytes.length > _maximumPacketBytes) return false;
+    if (handle == null ||
+        participant < 0 ||
+        participant >= 16 ||
+        sequence <= 0 ||
+        bytes.isEmpty ||
+        bytes.length > _maximumPacketBytes)
+      return false;
     final pointer = calloc<Uint8>(bytes.length);
     try {
       pointer.asTypedList(bytes.length).setAll(0, bytes);
-      return _bindings.pushParticipant(handle, participant, sequence, pointer, bytes.length);
-    } finally { calloc.free(pointer); }
+      return _bindings.pushParticipant(
+        handle,
+        participant,
+        sequence,
+        pointer,
+        bytes.length,
+      );
+    } finally {
+      calloc.free(pointer);
+    }
   }
 
   Future<void> close() async {
