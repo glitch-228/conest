@@ -1,52 +1,59 @@
-## Conest 0.3.12 nightly (October 13)
+## Conest 0.3.12 nightly (October 13, second)
 
-This nightly lets you chat with Delta Chat users through your email
-account, one to one and in groups. Everything from the October 8
-nightlies is included.
+This nightly can send each message on several routes at once, and fixes
+messages that went only one way. Everything from the first October 13
+nightly (Delta Chat, files without metadata) is included.
 
 ### Before you update
 
-- Nothing changes until you turn Delta Chat on. Ordinary mail in your
-  inbox is never touched.
+- Messages go on several routes only to contacts who have this nightly
+  too. With everyone else, Conest sends as before.
 
-### Delta Chat (new)
+### Messages on several routes (new)
 
-- With an email account set up (Settings → Connectivity → Email, for
-  example a chatmail server), turn on **Delta Chat** just below it.
-- Your Delta Chat invite is a QR code or a link: a Delta Chat user scans
-  or opens it, and you are both verified, as in Delta Chat itself. To
-  reach a Delta Chat user, paste their invite link in Delta Chat chats →
-  Join with an invite (this works for their group invites too).
-- Chats one to one and in groups, with read receipts both ways. In a
-  group you can see and change the members, share the group's invite, or
-  leave.
-- Delta Chat chats sit in the chat list with a filter of their own.
-- Messages are end-to-end encrypted with OpenPGP, as Delta Chat does,
-  without forward secrecy; the mail servers see who writes to whom and
-  when.
-- Chats from people you have not chatted with are requests until you
-  reply.
-- Files, voice messages and reactions sent from Delta Chat show as a short
-  note for now; such mail stays on the server, so you can open it in Delta
-  Chat or another mail app.
+- On mains power and an unmetered network, a message goes out on every
+  route at once, for example LAN, Iroh and a relay. Your contact sees it
+  once, whichever copy arrives first.
+- On battery, Conest sends on the best route first and adds another every
+  few seconds until the message is delivered. In battery saver it uses one
+  route at a time, as before.
+- Message details (in the message menu, now in groups too) list every
+  route a message took or arrived by, with times. In a group they show each
+  member, the routes that reached them and when they read it. For files,
+  they show how much came over each route.
+- Message bubbles show a dot for each route: filled when the message
+  arrived that way, hollow while it is still on its way.
+- In a contact's profile, Test Routes sends a small test over each route
+  and times the answer. Routes that do not answer are used last.
+- On mains power Conest also watches a second relay, so a message left on
+  either one arrives quickly.
+- Meshtastic: message details show when the other device's radio
+  confirmed the message, and copies still going out by radio stop once the
+  message has arrived another way.
 
-### Files you send (new)
+### Fixes
 
-- Location, camera, author and date details are now removed from photos,
-  videos, PDFs and office documents before they are sent, one to one and
-  in groups. Photos are not re-compressed and keep their orientation.
-  Your own files are not changed. Turn it off in Settings → Personal if
-  you want to send files as they are.
-- Settings → Personal → **Send files under random names** replaces file
-  names with random letters (the type, such as .jpg, stays).
-
-### Other fixes
-
-- Release builds no longer fail when the Tor project's code server is
-  down.
+- Messages that went only one way (seen between Windows and a phone's
+  hotspot): a route that takes messages but never brings back a receipt
+  now gives way to another after about 8 seconds.
+- Windows: Settings → Connectivity → Let devices on this network reach this
+  PC adds a Windows Firewall rule for Conest (Windows asks first).
+- Invites always include an internet route when one is on, and say so when
+  none is.
+- Android: Conest is in the share menu (files, photos, text). Images can be
+  pasted into a chat, including images and GIFs from the keyboard.
+- The gallery no longer shows hidden folders, or folders marked to stay out
+  of galleries.
+- Scrollbars in chats keep their size while you scroll.
+- Using the window now counts as reading the chat, which should fix
+  messages not being marked read on Linux.
+- Photos in Saved messages are kept exactly as they are.
+- Meshtastic: messages to Meshtastic app users now show as delivered when
+  the other radio confirms them (those confirmations were being missed).
 
 ### Not tested on devices yet
 
-- Delta Chat with the Delta Chat apps (Android, iOS, desktop): invites both
-  ways, messages, read marks and groups.
-- Metadata removal on photos and videos from real phones.
+- The share menu and pasting on Android.
+- The Windows Firewall rule.
+- Messages on several routes between phones on battery.
+- Read marks on Linux.
