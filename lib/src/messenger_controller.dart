@@ -349,13 +349,37 @@ class DefaultRelaysRefreshResult {
 }
 
 class AttachmentSpoolException implements Exception {
-  AttachmentSpoolException(this.message, {this.canUseOriginal = false});
+  AttachmentSpoolException(
+    this.message, {
+    this.canUseOriginal = false,
+    this.keepsMetadata = false,
+  });
 
   final String message;
   final bool canUseOriginal;
 
+  /// Sending the original would send its metadata (location, camera,
+  /// author), which the user asked to have removed.
+  final bool keepsMetadata;
+
   @override
   String toString() => message;
+}
+
+/// Metadata could not be removed from a file the user asked to send
+/// without it; sending it anyway needs their consent.
+class FileMetadataException implements Exception {
+  const FileMetadataException(this.fileName);
+
+  final String fileName;
+
+  @override
+  String toString() =>
+      'Location and other details could not be removed from $fileName.';
+}
+
+class _MetadataNotRemoved implements Exception {
+  const _MetadataNotRemoved();
 }
 
 enum DefaultRelaysRefreshStatus { upToDate, updated, error }
@@ -4602,7 +4626,9 @@ class MessengerController extends ChangeNotifier {
   /// A private copy of [path] with its metadata removed, or null when the
   /// user keeps metadata, the type has none Conest can remove, or there was
   /// nothing to remove. The caller deletes the copy.
-  Future<String?> _withoutFileMetadata(String path) async {
+  /// Throws [FileMetadataException] when metadata could not be removed
+  /// from a type that has some.
+  Future<String?> _withoutFileMetadata(String path, String fileName) async {
     if (!removesFileMetadata) return null;
     final root = await _attachmentRoot();
     final copy = File(p.join(root.path, 'spool', '${_randomId('clean')}.tmp'));
@@ -4610,17 +4636,33 @@ class MessengerController extends ChangeNotifier {
       await copy.parent.create(recursive: true);
       await File(path).copy(copy.path);
       await restrictFileToOwner(copy);
-      if (await MediaSanitizer.sanitizeFile(copy.path) ==
-          SanitizeStatus.cleaned) {
-        return copy.path;
+      switch (await MediaSanitizer.sanitizeFile(copy.path)) {
+        case SanitizeStatus.cleaned:
+          return copy.path;
+        case SanitizeStatus.failed:
+          throw FileMetadataException(fileName);
+        case SanitizeStatus.clean || SanitizeStatus.unsupported:
+          break;
       }
+    } on FileMetadataException {
+      await _deleteQuietly(copy);
+      rethrow;
     } catch (_) {
-      // Sent as it is.
+      // No copy could be made: ask before sending the original as it is.
+      await _deleteQuietly(copy);
+      if (await MediaSanitizer.handles(path)) {
+        throw FileMetadataException(fileName);
+      }
+      return null;
     }
-    try {
-      await copy.delete();
-    } catch (_) {}
+    await _deleteQuietly(copy);
     return null;
+  }
+
+  static Future<void> _deleteQuietly(File file) async {
+    try {
+      if (await file.exists()) await file.delete();
+    } catch (_) {}
   }
 
   /// Whether the chat list shows [network]'s chats (all networks are shown
@@ -10448,6 +10490,8 @@ class MessengerController extends ChangeNotifier {
       fileName: 'voice-message.ogg',
       mimeType: 'audio/ogg; codecs=opus',
       voiceMetadata: recording.metadata,
+      // Recorded by the app: nothing personal in it.
+      keepMetadata: true,
     );
     await voiceMessageService.completePreview();
   }
@@ -11009,10 +11053,16 @@ class MessengerController extends ChangeNotifier {
           temporary.path,
           onProgress: onProgress,
         );
-        if (removesFileMetadata &&
-            await MediaSanitizer.sanitizeFile(temporary.path) ==
-                SanitizeStatus.cleaned) {
-          digest = await hashAttachmentFile(temporary.path);
+        if (removesFileMetadata) {
+          switch (await MediaSanitizer.sanitizeFile(temporary.path)) {
+            case SanitizeStatus.cleaned:
+              digest = await hashAttachmentFile(temporary.path);
+            case SanitizeStatus.failed:
+              // Never sent with its metadata without the user's say.
+              throw const _MetadataNotRemoved();
+            case SanitizeStatus.clean || SanitizeStatus.unsupported:
+              break;
+          }
         }
         await temporary.rename(target.path);
         return _PreparedAttachmentSource(
@@ -11030,14 +11080,25 @@ class MessengerController extends ChangeNotifier {
         } catch (_) {}
       }
     }
+    final metadataFailed = spoolError is _MetadataNotRemoved;
+    // The original goes as it is: with its metadata, if it has any to
+    // remove.
+    final keepsMetadata =
+        removesFileMetadata &&
+        originalPath != null &&
+        (metadataFailed || await MediaSanitizer.handles(originalPath));
     if (!allowOriginalFallback || originalPath == null) {
       throw AttachmentSpoolException(
-        canSpool
+        metadataFailed
+            ? 'Location and other details could not be removed from this '
+                  'file.'
+            : canSpool
             ? 'Could not create a private attachment spool: $spoolError'
             : _storageReserveFraction > 0
             ? 'Not enough storage to keep the required 10% free-space reserve.'
             : 'Not enough free storage to prepare this file.',
         canUseOriginal: originalPath != null,
+        keepsMetadata: keepsMetadata,
       );
     }
     final original = File(originalPath);
@@ -13436,6 +13497,7 @@ class MessengerController extends ChangeNotifier {
     String caption = '',
     String? scheduledOperationId,
     VoiceMessageMetadata? voiceMetadata,
+    bool keepMetadata = false,
   }) async {
     final group = _requireGroup(groupId);
     final captionSupported = _groupSupportsFeatureForAllOtherMembers(
@@ -13454,7 +13516,9 @@ class MessengerController extends ChangeNotifier {
     );
     final manifestVoiceMetadata = voiceMetadataSupported ? voiceMetadata : null;
     // Metadata goes from a private copy; the user's file stays as it is.
-    final cleaned = await _withoutFileMetadata(path);
+    final cleaned = keepMetadata
+        ? null
+        : await _withoutFileMetadata(path, fileName);
     try {
       return await _publishGroupFile(
         groupId: groupId,

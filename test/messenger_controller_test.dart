@@ -14809,6 +14809,68 @@ void main() {
       expect(hasLocation(kept), isTrue);
     });
 
+    test(
+      'a file whose details cannot be removed is not sent without asking',
+      () async {
+        final (alice, _, root) = await pair();
+        // A JPEG damaged after its start: it cannot be cleaned.
+        final broken = await File('${root.path}/broken.jpg').writeAsBytes([
+          0xff,
+          0xd8,
+          0xff,
+          0xe1,
+          0x00,
+          0x40,
+          ...latin1.encode('GPSLatitude'),
+        ]);
+        Object? error;
+        try {
+          await alice.sendAttachmentSource(
+            contact: alice.contacts.single,
+            source: StagedAttachment(
+              id: 'broken',
+              fileName: 'broken.jpg',
+              mimeType: 'image/jpeg',
+              sizeBytes: await broken.length(),
+              filePath: broken.path,
+            ),
+          );
+        } catch (caught) {
+          error = caught;
+        }
+        expect(error, isA<AttachmentSpoolException>());
+        expect((error! as AttachmentSpoolException).keepsMetadata, isTrue);
+
+        final group = await alice.createGroup(
+          title: 'Damaged',
+          members: [alice.contacts.single],
+        );
+        await expectLater(
+          alice.publishGroupFile(
+            groupId: group.groupId,
+            path: broken.path,
+            fileName: 'broken.jpg',
+            mimeType: 'image/jpeg',
+          ),
+          throwsA(isA<FileMetadataException>()),
+        );
+        // With the user's consent it goes as it is.
+        await alice.publishGroupFile(
+          groupId: group.groupId,
+          path: broken.path,
+          fileName: 'broken.jpg',
+          mimeType: 'image/jpeg',
+          keepMetadata: true,
+        );
+        expect(
+          alice
+              .messagesForGroup(group.groupId)
+              .where((message) => message.groupFile != null),
+          hasLength(1),
+        );
+      },
+    );
+
     test('group photos go without their location too', () async {
       final (alice, bob, root) = await pair();
       final group = await alice.createGroup(

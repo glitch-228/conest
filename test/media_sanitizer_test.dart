@@ -450,7 +450,7 @@ void main() {
       ..addFile(ArchiveFile.bytes('a.txt', utf8.encode('x')));
     expect(
       (await run(ZipEncoder().encodeBytes(plain))).$1,
-      SanitizeStatus.failed,
+      SanitizeStatus.unsupported,
     );
   });
 
@@ -467,6 +467,39 @@ void main() {
     expect(text, isNot(contains('4A616E65')));
     expect(text, contains('/Author ('));
     expect(text, contains('endstream'));
+  });
+
+  test('damaged files report a failure instead of throwing', () async {
+    // A HEIF with an Exif item whose locations are cut short.
+    final brokenHeic = [
+      ...box('ftyp', latin1.encode('heic\u0000\u0000\u0000\u0000mif1heic')),
+      ...box('meta', [
+        0,
+        0,
+        0,
+        0,
+        ...box('iinf', [
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          ...box('infe', [2, 0, 0, 0, 0, 1, 0, 0, ...latin1.encode('Exif'), 0]),
+        ]),
+        ...box('iloc', [0, 0, 0, 0, 0x44, 0x00, 0, 1, 0, 1]),
+      ]),
+    ];
+    expect((await run(brokenHeic)).$1, SanitizeStatus.failed);
+    final brokenZip = [0x50, 0x4b, 0x03, 0x04, ...List.filled(40, 7)];
+    // Not even a readable zip: whatever it is, nothing was cleaned.
+    expect(
+      (await run(brokenZip)).$1,
+      isIn([SanitizeStatus.failed, SanitizeStatus.unsupported]),
+    );
+    // A JPEG whose first segment claims more than there is.
+    final brokenJpeg = [0xff, 0xd8, 0xff, 0xe1, 0x00, 0x40, 0x45, 0x78];
+    expect((await run(brokenJpeg)).$1, SanitizeStatus.failed);
   });
 
   test('unknown files are left alone', () async {

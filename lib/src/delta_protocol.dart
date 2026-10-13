@@ -352,10 +352,13 @@ class DeltaProtocol {
       raw,
       key,
       // Only the sender's keys are read, and only when needed.
+      // At most a few, verified ones first: anyone can gossip keys under
+      // any address.
       knownKeys: (addr) async => [
-        for (final peer in chats.peers.values.where(
-          (peer) => peer.addr == addr,
-        ))
+        for (final peer
+            in (chats.peers.values.where((peer) => peer.addr == addr).toList()
+                  ..sort((a, b) => (b.verified ? 1 : 0) - (a.verified ? 1 : 0)))
+                .take(4))
           ?await _keyOf(peer),
       ],
       passwords: [

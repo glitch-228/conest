@@ -1000,10 +1000,11 @@ class _Signature {
 
   /// It says who made it (issuer fingerprint or key id).
   bool get namesIssuer =>
-      hashed.containsKey(33) ||
-      unhashed.containsKey(33) ||
-      hashed.containsKey(16) ||
-      unhashed.containsKey(16);
+      [
+        ...?hashed[33],
+        ...?unhashed[33],
+      ].any((issuer) => issuer.length == 21 && issuer[0] == 4) ||
+      [...?hashed[16], ...?unhashed[16]].any((issuer) => issuer.length == 8);
 
   /// The issuer subpackets do not rule out [fingerprint].
   bool mayBeFrom(Uint8List fingerprint) {
@@ -1015,7 +1016,7 @@ class _Signature {
       }
     }
     for (final issuer in [...?hashed[16], ...?unhashed[16]]) {
-      if (issuer.length == 8 &&
+      if (issuer.length != 8 ||
           !_same(issuer, Uint8List.sublistView(fingerprint, 12))) {
         return false;
       }

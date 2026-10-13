@@ -52,18 +52,42 @@ abstract final class MediaSanitizer {
       await handle.setPosition(0);
       final data = await handle.read(length);
       final cleaned = sanitizeBytes(data);
+      if (identical(cleaned, _notApplicable)) {
+        return SanitizeStatus.unsupported;
+      }
       if (cleaned == null) return SanitizeStatus.failed;
       if (identical(cleaned, data)) return SanitizeStatus.clean;
       await handle.setPosition(0);
       await handle.writeFrom(cleaned);
       await handle.truncate(cleaned.length);
       return SanitizeStatus.cleaned;
-    } on FileSystemException {
+    } catch (_) {
+      // Damaged or unusual files (and anything this does not foresee)
+      // are reported, never thrown: the caller decides what to send.
       return SanitizeStatus.failed;
     } finally {
       await handle.close();
     }
   }
+
+  /// Whether [path] is of a type whose metadata this removes (judged by
+  /// its first bytes; a zip may still turn out not to be a document).
+  static Future<bool> handles(String path) async {
+    try {
+      final handle = await File(path).open();
+      try {
+        final head = await handle.read(64);
+        return _isIsoMedia(head) || _kind(head) != null;
+      } finally {
+        await handle.close();
+      }
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// A zip that is not a document: nothing to remove, nothing failed.
+  static final Uint8List _notApplicable = Uint8List(0);
 
   static String? _kind(List<int> head) {
     bool starts(List<int> magic, [int at = 0]) {
@@ -114,9 +138,7 @@ abstract final class MediaSanitizer {
         'pdf' => _pdf(data),
         _ => null,
       };
-    } on RangeError {
-      return null;
-    } on FormatException {
+    } catch (_) {
       return null;
     }
   }
@@ -374,7 +396,7 @@ abstract final class MediaSanitizer {
     final names = {for (final file in archive.files) file.name};
     final office = names.contains('[Content_Types].xml');
     final open = names.contains('mimetype') && names.contains('meta.xml');
-    if (!office && !open) return null;
+    if (!office && !open) return _notApplicable;
     var removed = false;
     final cleaned = Archive();
     for (final file in archive.files) {

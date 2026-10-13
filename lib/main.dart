@@ -2074,12 +2074,18 @@ class _HomeScreenState extends State<HomeScreen> {
     return await showDialog<bool>(
           context: context,
           builder: (dialogContext) => AlertDialog(
-            title: const Text('Send without resumable copy?'),
+            title: Text(
+              error.keepsMetadata
+                  ? 'Send with its details?'
+                  : 'Send without resumable copy?',
+            ),
             content: Text(
               '${attachment.fileName} could not be copied into private '
               'transfer storage.\n\n$error\n\nThe app can read the original '
               'file directly, but the transfer cannot resume after restart '
-              'if that file moves or its permission expires.',
+              'if that file moves or its permission expires.'
+              '${error.keepsMetadata ? '\n\nIts location, camera, author and '
+                        'date details will be sent with it.' : ''}',
             ),
             actions: [
               TextButton(
@@ -2297,7 +2303,9 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             );
           } else {
-            await widget.controller.publishGroupFile(
+            await publishGroupFileAsking(
+              context,
+              widget.controller,
               groupId: group!.groupId,
               path: file.path,
               fileName: name,
@@ -2323,7 +2331,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final path = p.join(temp.path, fileName);
     try {
       await File(path).writeAsBytes(bytes, flush: true);
-      await widget.controller.publishGroupFile(
+      await publishGroupFileAsking(
+        context,
+        widget.controller,
         groupId: group.groupId,
         path: path,
         fileName: fileName,
@@ -2355,7 +2365,9 @@ class _HomeScreenState extends State<HomeScreen> {
           continue;
         }
         try {
-          await widget.controller.publishGroupFile(
+          await publishGroupFileAsking(
+            context,
+            widget.controller,
             groupId: group.groupId,
             path: path,
             fileName: file.name,
@@ -2433,7 +2445,9 @@ class _HomeScreenState extends State<HomeScreen> {
       try {
         if (item.filePath case final path?) {
           try {
-            await widget.controller.publishGroupFile(
+            await publishGroupFileAsking(
+              context,
+              widget.controller,
               groupId: group.groupId,
               path: path,
               fileName: item.fileName,
@@ -2444,7 +2458,9 @@ class _HomeScreenState extends State<HomeScreen> {
             // Some members cannot show captions: share it without one.
             if (item.caption.isEmpty) rethrow;
             widget.controller.setStatus('${error.message} Sent without it.');
-            await widget.controller.publishGroupFile(
+            await publishGroupFileAsking(
+              context,
+              widget.controller,
               groupId: group.groupId,
               path: path,
               fileName: item.fileName,
@@ -2483,7 +2499,9 @@ class _HomeScreenState extends State<HomeScreen> {
         continue;
       }
       try {
-        await widget.controller.publishGroupFile(
+        await publishGroupFileAsking(
+          context,
+          widget.controller,
           groupId: group.groupId,
           path: path,
           fileName: file.name,
@@ -7158,7 +7176,9 @@ Future<void> _forwardFile(
           ),
         );
       case GroupRecord group:
-        await controller.publishGroupFile(
+        await publishGroupFileAsking(
+          context,
+          controller,
           groupId: group.groupId,
           path: path,
           fileName: fileName,
@@ -20986,3 +21006,68 @@ class _ScheduledMessagesScreen extends StatelessWidget {
     );
   }
 }
+
+/// Shares a file with a group; when its metadata (location, camera,
+/// author) cannot be removed, asks before sending it with it. False when
+/// the user would rather not.
+Future<bool> publishGroupFileAsking(
+  BuildContext context,
+  MessengerController controller, {
+  required String groupId,
+  required String path,
+  required String fileName,
+  required String mimeType,
+  String caption = '',
+}) async {
+  try {
+    await controller.publishGroupFile(
+      groupId: groupId,
+      path: path,
+      fileName: fileName,
+      mimeType: mimeType,
+      caption: caption,
+    );
+    return true;
+  } on FileMetadataException {
+    if (!context.mounted || !await confirmSendingMetadata(context, fileName)) {
+      return false;
+    }
+    await controller.publishGroupFile(
+      groupId: groupId,
+      path: path,
+      fileName: fileName,
+      mimeType: mimeType,
+      caption: caption,
+      keepMetadata: true,
+    );
+    return true;
+  }
+}
+
+/// Asks whether to send [fileName] with the metadata that could not be
+/// removed.
+Future<bool> confirmSendingMetadata(
+  BuildContext context,
+  String fileName,
+) async =>
+    await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Send with its details?'),
+        content: Text(
+          'The location, camera, author and date details of $fileName '
+          'could not be removed. Send it with them?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Send anyway'),
+          ),
+        ],
+      ),
+    ) ??
+    false;
