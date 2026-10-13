@@ -33,9 +33,23 @@ const List<int> _cv25519Oid = [
 /// Largest OpenPGP key read.
 const int maxKeyBytes = 64 * 1024;
 
-/// User ids and subkeys read from one key, and signatures checked on each.
+/// User ids read from one key, subkeys checked, and signatures checked on
+/// each; at most [_maxChecksPerKey] checks in all. An honest key costs
+/// about two.
 const int _maxComponents = 8;
+const int _maxSubkeysChecked = 2;
 const int _maxSignaturesEach = 4;
+const int _maxChecksPerKey = 12;
+
+/// Signature checks left for reading keys; one budget can be shared by all
+/// the keys in one mail.
+class PgpCheckBudget {
+  PgpCheckBudget(this.remaining);
+
+  int remaining;
+
+  bool take() => remaining-- > 0;
+}
 
 /// Most a decrypted message may expand to (compressed data included).
 const int maxPgpPlaintextBytes = 8 * 1024 * 1024;
@@ -100,7 +114,11 @@ class PgpPublicKey {
   /// Reads a transferable public key (binary), keeping only what its own
   /// signatures vouch for. Throws [FormatException] for keys Conest cannot
   /// use: other algorithms, revoked or expired keys, no encryption subkey.
-  static Future<PgpPublicKey> parse(Uint8List data, {DateTime? now}) async {
+  static Future<PgpPublicKey> parse(
+    Uint8List data, {
+    DateTime? now,
+    PgpCheckBudget? budget,
+  }) async {
     final at = now ?? DateTime.now();
     // Keys come from strangers (Autocrypt headers, gossip), and every
     // signature costs a check: large keys, and more than a few user ids,
@@ -131,18 +149,41 @@ class PgpPublicKey {
 
     var index = 1;
     // Direct-key signatures and revocations straight after the key.
+    final checks = budget ?? PgpCheckBudget(_maxChecksPerKey);
+    Future<bool> check(_Signature signature, List<List<int>> parts) {
+      if (!checks.take()) {
+        throw const FormatException('Too many OpenPGP signatures to check.');
+      }
+      return signature.verify(signingKey, parts, fingerprint, at);
+    }
+
     var revocationChecks = 0;
     while (index < packets.length && packets[index].$1 == 2) {
       final signature = _Signature.tryRead(packets[index].$2);
       if (signature != null &&
           signature.type == 0x20 &&
-          ++revocationChecks <= _maxSignaturesEach &&
-          await signature.verify(signingKey, [keyMaterial], fingerprint, at)) {
+          signature.mayBeFrom(fingerprint) &&
+          ++revocationChecks <= 2 &&
+          await check(signature, [keyMaterial])) {
         throw const FormatException('This OpenPGP key was revoked.');
       }
       index++;
     }
-    var components = 0;
+    // Signatures that may be the key's own, newest first, a few at most.
+    List<_Signature> own(List<_Signature> signatures, Set<int> types) =>
+        (signatures
+                .where(
+                  (signature) =>
+                      types.contains(signature.type) &&
+                      signature.mayBeFrom(fingerprint),
+                )
+                .toList()
+              ..sort((a, b) => b.created.compareTo(a.created)))
+            .take(_maxSignaturesEach)
+            .toList();
+
+    final subkeys = <(Uint8List, (Uint8List, int), int, List<_Signature>)>[];
+    var userIdCount = 0;
     while (index < packets.length) {
       final (tag, packetBody) = packets[index++];
       final signatures = <_Signature>[];
@@ -150,27 +191,20 @@ class PgpPublicKey {
         final signature = _Signature.tryRead(packets[index++].$2);
         if (signature != null) signatures.add(signature);
       }
-      if ((tag == 13 || tag == 14) && ++components > _maxComponents) break;
-      // The newest few only.
-      signatures.sort((a, b) => b.created.compareTo(a.created));
-      if (signatures.length > _maxSignaturesEach) {
-        signatures.removeRange(_maxSignaturesEach, signatures.length);
-      }
       if (tag == 13) {
+        if (++userIdCount > _maxComponents) continue;
         final userId = [0xb4, ..._be32(packetBody.length), ...packetBody];
         _Signature? best;
-        for (final signature in signatures) {
-          if (signature.type < 0x10 || signature.type > 0x13) continue;
-          if (!await signature.verify(
-            signingKey,
-            [keyMaterial, userId],
-            fingerprint,
-            at,
-          )) {
-            continue;
-          }
-          if (best == null || signature.created > best.created) {
+        // The newest good one is enough.
+        for (final signature in own(signatures, const {
+          0x10,
+          0x11,
+          0x12,
+          0x13,
+        })) {
+          if (await check(signature, [keyMaterial, userId])) {
             best = signature;
+            break;
           }
         }
         if (best == null) continue;
@@ -187,47 +221,47 @@ class PgpPublicKey {
               : _readBe32(expiry, 0);
         }
       } else if (tag == 14) {
+        // Collected for now (reading one costs nothing); the newest are
+        // checked below.
         final material = _KeyMaterial.tryRead(packetBody);
         if (material == null || material.algorithm != _ecdh) continue;
         final cv25519 = material.cv25519Key();
         if (cv25519 == null) continue;
-        final subkeyMaterial = _hashedKey(packetBody);
-        _Signature? binding;
-        var revoked = false;
-        for (final signature in signatures) {
-          if (signature.type != 0x18 && signature.type != 0x28) continue;
-          if (!await signature.verify(
-            signingKey,
-            [keyMaterial, subkeyMaterial],
-            fingerprint,
-            at,
-          )) {
-            continue;
-          }
-          if (signature.type == 0x28) {
-            revoked = true;
-          } else if (binding == null || signature.created > binding.created) {
-            binding = signature;
-          }
-        }
-        if (revoked || binding == null) continue;
-        final flags = binding.hashed[27]?.firstOrNull;
-        if (flags != null && flags.isNotEmpty && flags[0] & 0x0c == 0) {
-          continue;
-        }
-        final expiry = binding.hashed[9]?.firstOrNull;
-        if (expiry != null &&
-            expiry.length == 4 &&
-            _readBe32(expiry, 0) != 0 &&
-            material.created + _readBe32(expiry, 0) <=
-                at.millisecondsSinceEpoch ~/ 1000) {
-          continue;
-        }
-        if (subkey == null || material.created > subkey.$4) {
-          subkey = (packetBody, cv25519, binding, material.created);
-        }
+        subkeys.add((
+          packetBody,
+          cv25519,
+          material.created,
+          own(signatures, const {0x18, 0x28}),
+        ));
       }
       // Other packets (attributes, trust, unknown) are left out.
+    }
+    subkeys.sort((a, b) => b.$3.compareTo(a.$3));
+    for (final (packetBody, cv25519, created, signatures) in subkeys.take(
+      _maxSubkeysChecked,
+    )) {
+      final subkeyMaterial = _hashedKey(packetBody);
+      _Signature? binding;
+      for (final signature in signatures) {
+        if (!await check(signature, [keyMaterial, subkeyMaterial])) continue;
+        // Newest first: a revocation newer than any binding ends it.
+        if (signature.type == 0x18) binding = signature;
+        break;
+      }
+      if (binding == null) continue;
+      final flags = binding.hashed[27]?.firstOrNull;
+      if (flags != null && flags.isNotEmpty && flags[0] & 0x0c == 0) {
+        continue;
+      }
+      final expiry = binding.hashed[9]?.firstOrNull;
+      if (expiry != null &&
+          expiry.length == 4 &&
+          _readBe32(expiry, 0) != 0 &&
+          created + _readBe32(expiry, 0) <= at.millisecondsSinceEpoch ~/ 1000) {
+        continue;
+      }
+      subkey = (packetBody, cv25519, binding, created);
+      break;
     }
     if (userIds.isEmpty) {
       throw const FormatException('The OpenPGP key has no signed user id.');

@@ -160,6 +160,10 @@ abstract final class DeltaMail {
   /// Most gossiped keys read from one mail.
   static const int maxGossip = 64;
 
+  /// Signature checks spent reading the keys in one mail (an honest key
+  /// costs two).
+  static const int maxKeyChecks = 160;
+
   /// A new Message-ID (without brackets) at [domain].
   static String newMessageId(String domain, Random random) {
     const alphabet =
@@ -551,13 +555,20 @@ abstract final class DeltaMail {
     final from = parseMailAddress(headers['from']);
     if (from == null || from != outerFrom) return null;
 
+    // One budget of signature checks for every key this mail carries: a
+    // stranger's mail full of keys costs bounded time.
+    final checks = PgpCheckBudget(maxKeyChecks);
     PgpPublicKey? autocryptKey;
     // The last two at most: each is a key to read.
     for (final value in headers.raw('autocrypt').reversed.take(2)) {
       final header = AutocryptHeader.parse(value);
       if (header == null || header.addr != from) continue;
       try {
-        autocryptKey = await PgpPublicKey.parse(header.keydata, now: now);
+        autocryptKey = await PgpPublicKey.parse(
+          header.keydata,
+          now: now,
+          budget: checks,
+        );
         break;
       } on FormatException {
         continue;
@@ -592,6 +603,7 @@ abstract final class DeltaMail {
             gossip[header.addr] = await PgpPublicKey.parse(
               header.keydata,
               now: now,
+              budget: checks,
             );
           } on FormatException {
             continue;

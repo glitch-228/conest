@@ -282,6 +282,35 @@ void main() {
     },
   );
 
+  test('others\' certifications do not hide the key\'s own', () async {
+    final eveCertification = OpenPgpSymmetric.readPackets(
+      (await PgpSecretKey.generate('<eve@example.org>')).publicKey.bytes,
+    )[2];
+    final packets = OpenPgpSymmetric.readPackets(alice.publicKey.bytes);
+    final withOthers = Uint8List.fromList([
+      for (final (index, (tag, body)) in packets.indexed) ...[
+        ...OpenPgpSymmetric.packet(tag, body),
+        if (index == 1)
+          for (var copy = 0; copy < 6; copy++)
+            ...OpenPgpSymmetric.packet(2, eveCertification.$2),
+      ],
+    ]);
+    final parsed = await PgpPublicKey.parse(withOthers);
+    expect(parsed.userIds, ['<alice@example.org>']);
+    // An honest key costs two checks; a budget of one is not enough.
+    await expectLater(
+      PgpPublicKey.parse(alice.publicKey.bytes, budget: PgpCheckBudget(1)),
+      throwsFormatException,
+    );
+    expect(
+      (await PgpPublicKey.parse(
+        alice.publicKey.bytes,
+        budget: PgpCheckBudget(2),
+      )).fingerprintHex,
+      alice.publicKey.fingerprintHex,
+    );
+  });
+
   test('many packets for no key do not hide the one for this key', () async {
     final message = await Pgp.encrypt(
       Uint8List.fromList(utf8.encode('found')),
