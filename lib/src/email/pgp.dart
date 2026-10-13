@@ -37,6 +37,7 @@ const int maxKeyBytes = 64 * 1024;
 /// each; at most [_maxChecksPerKey] checks in all. An honest key costs
 /// about two.
 const int _maxComponents = 8;
+const int _maxUserIdBytes = 256;
 const int _maxSubkeysChecked = 2;
 const int _maxSignaturesEach = 4;
 const int _maxChecksPerKey = 12;
@@ -192,7 +193,11 @@ class PgpPublicKey {
         if (signature != null) signatures.add(signature);
       }
       if (tag == 13) {
-        if (++userIdCount > _maxComponents) continue;
+        // Long user ids (and many) are not read: keys are stored.
+        if (packetBody.length > _maxUserIdBytes ||
+            ++userIdCount > _maxComponents) {
+          continue;
+        }
         final userId = [0xb4, ..._be32(packetBody.length), ...packetBody];
         _Signature? best;
         // The newest good one is enough.
@@ -209,9 +214,12 @@ class PgpPublicKey {
         }
         if (best == null) continue;
         userIds.add(utf8.decode(packetBody, allowMalformed: true));
-        kept
-          ..add(OpenPgpSymmetric.packet(13, packetBody))
-          ..add(OpenPgpSymmetric.packet(2, best.raw));
+        // The kept key carries one user id: it is what gets stored.
+        if (userIds.length == 1) {
+          kept
+            ..add(OpenPgpSymmetric.packet(13, packetBody))
+            ..add(OpenPgpSymmetric.packet(2, best.raw));
+        }
         if (best.created > preferenceTime) {
           preferenceTime = best.created;
           preferences = best.hashed[11]?.firstOrNull ?? const [];
@@ -817,8 +825,14 @@ abstract final class Pgp {
           }
           content = Uint8List.sublistView(body, 2 + body[1] + 4);
         case 2:
+          // A few, naming their signer: each check hashes the whole
+          // message.
           final signature = _Signature.tryRead(body);
-          if (signature != null) signatures.add(signature);
+          if (signature != null &&
+              signatures.length < 4 &&
+              signature.namesIssuer) {
+            signatures.add(signature);
+          }
         default:
           throw const FormatException('Unexpected packet in OpenPGP message.');
       }
@@ -983,6 +997,13 @@ class _Signature {
     }
     return result;
   }
+
+  /// It says who made it (issuer fingerprint or key id).
+  bool get namesIssuer =>
+      hashed.containsKey(33) ||
+      unhashed.containsKey(33) ||
+      hashed.containsKey(16) ||
+      unhashed.containsKey(16);
 
   /// The issuer subpackets do not rule out [fingerprint].
   bool mayBeFrom(Uint8List fingerprint) {

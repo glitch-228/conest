@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:conest/src/email/openpgp.dart';
 import 'package:conest/src/email/pgp.dart';
+import 'package:conest/src/email/pgp_aead.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -308,6 +309,48 @@ void main() {
         budget: PgpCheckBudget(2),
       )).fingerprintHex,
       alice.publicKey.fingerprintHex,
+    );
+  });
+
+  test('a message stuffed with signatures is read quickly', () async {
+    final signed = await Pgp.encryptWithPassword(
+      Uint8List.fromList(utf8.encode('hello')),
+      utf8.encode('pw'),
+      signer: alice,
+    );
+    final inner = OpenPgpAead.decrypt(signed, [utf8.encode('pw')])!.$1;
+    final packets = OpenPgpSymmetric.readPackets(inner);
+    final signature = packets.last;
+    // Broken copies (only the final check fails them) ahead of the good
+    // one: past the first few nothing more is read.
+    final broken = Uint8List.fromList(signature.$2);
+    broken[broken.length - 1] ^= 1;
+    final stuffed = OpenPgpAead.encrypt(
+      Uint8List.fromList([
+        for (final (tag, body) in packets.take(packets.length - 1))
+          ...OpenPgpSymmetric.packet(tag, body),
+        for (var copy = 0; copy < 3000; copy++)
+          ...OpenPgpSymmetric.packet(2, broken),
+        ...OpenPgpSymmetric.packet(2, signature.$2),
+      ]),
+      utf8.encode('pw'),
+    );
+    final watch = Stopwatch()..start();
+    final (read, _) = (await Pgp.decryptWithPasswords(
+      stuffed,
+      [utf8.encode('pw')],
+      senders: [bob.publicKey, alice.publicKey],
+    ))!;
+    expect(watch.elapsedMilliseconds, lessThan(1500));
+    expect(read.signed, isTrue);
+    expect(utf8.decode(read.data), 'hello');
+  });
+
+  test('keys with long user ids are not read', () async {
+    final long = await PgpSecretKey.generate('<${'x' * 300}@example.org>');
+    await expectLater(
+      PgpPublicKey.parse(long.publicKey.bytes),
+      throwsFormatException,
     );
   });
 
