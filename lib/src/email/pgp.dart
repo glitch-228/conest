@@ -30,6 +30,13 @@ const List<int> _cv25519Oid = [
   0x2b, 0x06, 0x01, 0x04, 0x01, 0x97, 0x55, 0x01, 0x05, 0x01, //
 ];
 
+/// Largest OpenPGP key read.
+const int maxKeyBytes = 64 * 1024;
+
+/// User ids and subkeys read from one key, and signatures checked on each.
+const int _maxComponents = 8;
+const int _maxSignaturesEach = 4;
+
 /// Most a decrypted message may expand to (compressed data included).
 const int maxPgpPlaintextBytes = 8 * 1024 * 1024;
 
@@ -95,6 +102,12 @@ class PgpPublicKey {
   /// use: other algorithms, revoked or expired keys, no encryption subkey.
   static Future<PgpPublicKey> parse(Uint8List data, {DateTime? now}) async {
     final at = now ?? DateTime.now();
+    // Keys come from strangers (Autocrypt headers, gossip), and every
+    // signature costs a check: large keys, and more than a few user ids,
+    // subkeys and signatures each, are not read.
+    if (data.length > maxKeyBytes) {
+      throw const FormatException('OpenPGP key too large.');
+    }
     final packets = OpenPgpSymmetric.readPackets(data);
     if (packets.isEmpty || packets.first.$1 != 6) {
       throw const FormatException('Not an OpenPGP public key.');
@@ -118,21 +131,30 @@ class PgpPublicKey {
 
     var index = 1;
     // Direct-key signatures and revocations straight after the key.
+    var revocationChecks = 0;
     while (index < packets.length && packets[index].$1 == 2) {
       final signature = _Signature.tryRead(packets[index].$2);
       if (signature != null &&
           signature.type == 0x20 &&
+          ++revocationChecks <= _maxSignaturesEach &&
           await signature.verify(signingKey, [keyMaterial], fingerprint, at)) {
         throw const FormatException('This OpenPGP key was revoked.');
       }
       index++;
     }
+    var components = 0;
     while (index < packets.length) {
       final (tag, packetBody) = packets[index++];
       final signatures = <_Signature>[];
       while (index < packets.length && packets[index].$1 == 2) {
         final signature = _Signature.tryRead(packets[index++].$2);
         if (signature != null) signatures.add(signature);
+      }
+      if ((tag == 13 || tag == 14) && ++components > _maxComponents) break;
+      // The newest few only.
+      signatures.sort((a, b) => b.created.compareTo(a.created));
+      if (signatures.length > _maxSignaturesEach) {
+        signatures.removeRange(_maxSignaturesEach, signatures.length);
       }
       if (tag == 13) {
         final userId = [0xb4, ..._be32(packetBody.length), ...packetBody];

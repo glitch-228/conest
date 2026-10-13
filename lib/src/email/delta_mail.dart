@@ -552,7 +552,8 @@ abstract final class DeltaMail {
     if (from == null || from != outerFrom) return null;
 
     PgpPublicKey? autocryptKey;
-    for (final value in headers.raw('autocrypt').reversed) {
+    // The last two at most: each is a key to read.
+    for (final value in headers.raw('autocrypt').reversed.take(2)) {
       final header = AutocryptHeader.parse(value);
       if (header == null || header.addr != from) continue;
       try {

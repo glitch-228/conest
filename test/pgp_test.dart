@@ -255,6 +255,33 @@ void main() {
     });
   });
 
+  test(
+    'a key stuffed with signatures is read quickly, a huge one not',
+    () async {
+      final packets = OpenPgpSymmetric.readPackets(alice.publicKey.bytes);
+      final certification = packets[2];
+      final stuffed = Uint8List.fromList([
+        for (final (index, (tag, body)) in packets.indexed) ...[
+          ...OpenPgpSymmetric.packet(tag, body),
+          if (index == 2)
+            for (var copy = 0; copy < 400; copy++)
+              ...OpenPgpSymmetric.packet(2, certification.$2),
+        ],
+      ]);
+      expect(stuffed.length, lessThan(maxKeyBytes));
+      final watch = Stopwatch()..start();
+      final parsed = await PgpPublicKey.parse(stuffed);
+      expect(watch.elapsedMilliseconds, lessThan(500));
+      expect(parsed.fingerprintHex, alice.publicKey.fingerprintHex);
+      final huge = Uint8List.fromList([
+        ...stuffed,
+        for (var copy = 0; copy < 200; copy++)
+          ...OpenPgpSymmetric.packet(2, certification.$2),
+      ]);
+      await expectLater(PgpPublicKey.parse(huge), throwsFormatException);
+    },
+  );
+
   test('many packets for no key do not hide the one for this key', () async {
     final message = await Pgp.encrypt(
       Uint8List.fromList(utf8.encode('found')),
