@@ -40,6 +40,7 @@ import 'radio_chats.dart';
 import 'carrier.dart';
 import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
+import 'media_sanitizer.dart';
 import 'attachment_block_worker.dart';
 import 'iroh_transport.dart';
 import 'lan_direct.dart';
@@ -4565,6 +4566,61 @@ class MessengerController extends ChangeNotifier {
     if (fingerprint == _deltaProtocol?.fingerprint) return 'You';
     final peer = deltaChats.peers[fingerprint];
     return peer?.name ?? peer?.addr ?? fingerprint.substring(0, 8);
+  }
+
+  /// Files are sent without their metadata (EXIF, location, authors).
+  bool get removesFileMetadata => !_snapshot.keepFileMetadata;
+
+  /// Files are sent under random names.
+  bool get randomizesFileNames => _snapshot.randomFileNames;
+
+  Future<void> setRemovesFileMetadata(bool value) async {
+    _snapshot = _snapshot.copyWith(keepFileMetadata: !value);
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  Future<void> setRandomizesFileNames(bool value) async {
+    _snapshot = _snapshot.copyWith(randomFileNames: value);
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  /// [name] as it is sent: random (with its extension) when asked for.
+  String _outgoingFileName(String name) {
+    if (!randomizesFileNames) return name;
+    final extension = p.extension(name).toLowerCase();
+    const alphabet = 'abcdefghijklmnopqrstuvwxyz234567';
+    final random = Random.secure();
+    final stem = List.generate(
+      16,
+      (_) => alphabet[random.nextInt(alphabet.length)],
+    ).join();
+    return RegExp(r'^\.[a-z0-9]{1,10}$').hasMatch(extension)
+        ? '$stem$extension'
+        : stem;
+  }
+
+  /// A private copy of [path] with its metadata removed, or null when the
+  /// user keeps metadata, the type has none Conest can remove, or there was
+  /// nothing to remove. The caller deletes the copy.
+  Future<String?> _withoutFileMetadata(String path) async {
+    if (!removesFileMetadata) return null;
+    final root = await _attachmentRoot();
+    final copy = File(p.join(root.path, 'spool', '${_randomId('clean')}.tmp'));
+    try {
+      await copy.parent.create(recursive: true);
+      await File(path).copy(copy.path);
+      await restrictFileToOwner(copy);
+      if (await MediaSanitizer.sanitizeFile(copy.path) ==
+          SanitizeStatus.cleaned) {
+        return copy.path;
+      }
+    } catch (_) {
+      // Sent as it is.
+    }
+    try {
+      await copy.delete();
+    } catch (_) {}
+    return null;
   }
 
   /// Whether the chat list shows [network]'s chats (all networks are shown
@@ -10461,7 +10517,7 @@ class MessengerController extends ChangeNotifier {
     final createdAt = DateTime.now().toUtc();
     final provisionalDescriptor = AttachmentDescriptor(
       id: attachmentId,
-      fileName: sanitizeAttachmentFileName(source.fileName),
+      fileName: sanitizeAttachmentFileName(_outgoingFileName(source.fileName)),
       mimeType: sanitizeAttachmentMimeType(source.mimeType),
       sizeBytes: source.sizeBytes,
       chunkSize: chunkSize,
@@ -10576,7 +10632,10 @@ class MessengerController extends ChangeNotifier {
       sizeBytes: prepared.sizeBytes,
       chunkSize: provisionalDescriptor.chunkSize,
       chunkHashes: const <ChunkHash>[],
-      chunkCount: provisionalDescriptor.chunkCount,
+      // Removing metadata can change the size.
+      chunkCount:
+          (prepared.sizeBytes + provisionalDescriptor.chunkSize - 1) ~/
+          provisionalDescriptor.chunkSize,
       fileHashBase64: prepared.fileHashBase64,
       encryptionKeyBase64: provisionalDescriptor.encryptionKeyBase64,
       protocolVersion: 2,
@@ -10945,11 +11004,16 @@ class MessengerController extends ChangeNotifier {
       try {
         await temporary.create(recursive: true);
         await restrictFileToOwner(temporary);
-        final digest = await copyAndHashAttachment(
+        var digest = await copyAndHashAttachment(
           source,
           temporary.path,
           onProgress: onProgress,
         );
+        if (removesFileMetadata &&
+            await MediaSanitizer.sanitizeFile(temporary.path) ==
+                SanitizeStatus.cleaned) {
+          digest = await hashAttachmentFile(temporary.path);
+        }
         await temporary.rename(target.path);
         return _PreparedAttachmentSource(
           path: target.path,
@@ -13389,6 +13453,42 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.voiceMessageAttachmentsV1,
     );
     final manifestVoiceMetadata = voiceMetadataSupported ? voiceMetadata : null;
+    // Metadata goes from a private copy; the user's file stays as it is.
+    final cleaned = await _withoutFileMetadata(path);
+    try {
+      return await _publishGroupFile(
+        groupId: groupId,
+        group: group,
+        path: cleaned ?? path,
+        fileName: _outgoingFileName(fileName),
+        mimeType: mimeType,
+        caption: caption,
+        scheduledOperationId: scheduledOperationId,
+        voiceMetadata: voiceMetadata,
+        manifestVoiceMetadata: manifestVoiceMetadata,
+        voiceMetadataSupported: voiceMetadataSupported,
+      );
+    } finally {
+      if (cleaned != null) {
+        try {
+          await File(cleaned).delete();
+        } catch (_) {}
+      }
+    }
+  }
+
+  Future<String> _publishGroupFile({
+    required String groupId,
+    required GroupRecord group,
+    required String path,
+    required String fileName,
+    required String mimeType,
+    required String caption,
+    required String? scheduledOperationId,
+    required VoiceMessageMetadata? voiceMetadata,
+    required VoiceMessageMetadata? manifestVoiceMetadata,
+    required bool voiceMetadataSupported,
+  }) async {
     final manifest = await hashGroupFile(
       path: path,
       fileName: fileName,

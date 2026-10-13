@@ -7,6 +7,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 
 import 'package:conest/main.dart' as app;
@@ -14685,6 +14686,156 @@ void main() {
       expect(saved.link, ReticulumLink.rnodeSerial);
       expect(saved.radio?.frequency, RnodeConfig.eu869.frequency);
       expect(saved.label, '/dev/ttyACM0');
+    });
+  });
+
+  group('File privacy', () {
+    /// A small JPEG carrying a GPS marker in an EXIF segment.
+    Uint8List photoWithLocation() {
+      final jpeg = img.encodeJpg(img.Image(width: 4, height: 4));
+      final exif = [
+        ...latin1.encode('Exif\u0000\u0000'),
+        ...latin1.encode('MM\u0000*\u0000\u0000\u0000\u0008\u0000\u0000'),
+        ...latin1.encode('GPSLatitude 52.52'),
+      ];
+      return Uint8List.fromList([
+        0xff,
+        0xd8,
+        0xff,
+        0xe1,
+        (exif.length + 2) >> 8,
+        (exif.length + 2) & 0xff,
+        ...exif,
+        ...jpeg.sublist(2),
+      ]);
+    }
+
+    bool hasLocation(List<int> data) =>
+        latin1.decode(data).contains('GPSLatitude');
+
+    Future<(MessengerController, MessengerController, Directory)> pair() async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final roots = [
+        await Directory.systemTemp.createTemp('conest_priv_a-'),
+        await Directory.systemTemp.createTemp('conest_priv_b-'),
+      ];
+      addTearDown(() async {
+        for (final root in roots) {
+          if (await root.exists()) await root.delete(recursive: true);
+        }
+      });
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        internetRelayHost: null,
+        transportRegistryFactory: network.registry,
+        attachmentRootProvider: () async => roots[0],
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        internetRelayHost: null,
+        transportRegistryFactory: network.registry,
+        attachmentRootProvider: () async => roots[1],
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await _pairControllers(alice, bob);
+      return (alice, bob, roots[0]);
+    }
+
+    Future<(String, List<int>)> received(
+      MessengerController alice,
+      MessengerController bob,
+      int count,
+    ) async {
+      ChatMessage? message;
+      await _waitForIroh(() {
+        final files = bob
+            .messagesFor(alice.identity!.deviceId)
+            .where((m) => m.attachment != null)
+            .toList();
+        if (files.length < count) return false;
+        message = files[count - 1];
+        final id = message!.attachment!.id;
+        if (bob.attachmentAwaitingAcceptance(id)) {
+          unawaited(bob.acceptIncomingAttachment(id));
+        }
+        return bob.attachmentAvailableLocally(id);
+      }, reason: 'the photo arrives');
+      final path = await bob.attachmentCachePathFor(message!.attachment!.id);
+      return (message!.attachment!.fileName, await File(path!).readAsBytes());
+    }
+
+    test('photos go without their location unless the user keeps it, '
+        'under random names when asked', () async {
+      final (alice, bob, root) = await pair();
+      expect(alice.removesFileMetadata, isTrue);
+      final photo = photoWithLocation();
+      final source = await File('${root.path}/holiday.jpg').writeAsBytes(photo);
+      Future<void> send() => alice.sendAttachmentSource(
+        contact: alice.contacts.single,
+        source: StagedAttachment(
+          id: 'photo-${DateTime.now().microsecondsSinceEpoch}',
+          fileName: 'holiday.jpg',
+          mimeType: 'image/jpeg',
+          sizeBytes: photo.length,
+          filePath: source.path,
+        ),
+      );
+
+      await send();
+      final (name, cleaned) = await received(alice, bob, 1);
+      expect(name, 'holiday.jpg');
+      expect(hasLocation(cleaned), isFalse);
+      expect(
+        hasLocation(await source.readAsBytes()),
+        isTrue,
+        reason: 'the user\'s own file is not changed',
+      );
+
+      await alice.setRandomizesFileNames(true);
+      await send();
+      final (randomName, _) = await received(alice, bob, 2);
+      expect(randomName, matches(RegExp(r'^[a-z2-7]{16}\.jpg$')));
+
+      await alice.setRemovesFileMetadata(false);
+      await alice.setRandomizesFileNames(false);
+      await send();
+      final (_, kept) = await received(alice, bob, 3);
+      expect(hasLocation(kept), isTrue);
+    });
+
+    test('group photos go without their location too', () async {
+      final (alice, bob, root) = await pair();
+      final group = await alice.createGroup(
+        title: 'Trip',
+        members: [alice.contacts.single],
+      );
+      await _waitForIroh(() => bob.groups.isNotEmpty);
+      final source = await File(
+        '${root.path}/group.jpg',
+      ).writeAsBytes(photoWithLocation());
+      await alice.publishGroupFile(
+        groupId: group.groupId,
+        path: source.path,
+        fileName: 'group.jpg',
+        mimeType: 'image/jpeg',
+      );
+      final eventId = alice
+          .messagesForGroup(group.groupId)
+          .singleWhere((message) => message.groupFile != null)
+          .id;
+      await _waitForIroh(
+        () => bob.groupFileSession(eventId)?.download.completedFile != null,
+        reason: 'the group photo arrives',
+      );
+      final file = bob.groupFileSession(eventId)!.download.completedFile!;
+      expect(hasLocation(await file.readAsBytes()), isFalse);
+      expect(hasLocation(await source.readAsBytes()), isTrue);
     });
   });
 

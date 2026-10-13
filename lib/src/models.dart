@@ -4624,6 +4624,8 @@ class VaultSnapshot {
     this.carrierAccounts = const <String, Map<String, dynamic>>{},
     this.networkChats = const <String, Map<String, dynamic>>{},
     this.hiddenChatNetworks = const <String>[],
+    this.keepFileMetadata = false,
+    this.randomFileNames = false,
   });
 
   final IdentityRecord? identity;
@@ -4729,6 +4731,13 @@ class VaultSnapshot {
   /// Networks whose chats the chat list leaves out (for example "bitchat").
   final List<String> hiddenChatNetworks;
 
+  /// Send files with their metadata (EXIF, location, authors). Off: it is
+  /// removed before sending.
+  final bool keepFileMetadata;
+
+  /// Send files under random names (the extension kept).
+  final bool randomFileNames;
+
   /// What the app is used as; null until chosen (an identity from before
   /// app modes reads as [AppMode.both] where Matrix exists).
   final AppMode? appMode;
@@ -4801,6 +4810,8 @@ class VaultSnapshot {
     Map<String, Map<String, dynamic>>? carrierAccounts,
     Map<String, Map<String, dynamic>>? networkChats,
     List<String>? hiddenChatNetworks,
+    bool? keepFileMetadata,
+    bool? randomFileNames,
     bool clearMatrixSession = false,
     bool clearIdentity = false,
   }) {
@@ -4853,6 +4864,8 @@ class VaultSnapshot {
       carrierAccounts: carrierAccounts ?? this.carrierAccounts,
       networkChats: networkChats ?? this.networkChats,
       hiddenChatNetworks: hiddenChatNetworks ?? this.hiddenChatNetworks,
+      keepFileMetadata: keepFileMetadata ?? this.keepFileMetadata,
+      randomFileNames: randomFileNames ?? this.randomFileNames,
     );
   }
 
@@ -4926,6 +4939,8 @@ class VaultSnapshot {
       if (networkChats.isNotEmpty) 'networkChats': networkChats,
       if (hiddenChatNetworks.isNotEmpty)
         'hiddenChatNetworks': hiddenChatNetworks,
+      if (keepFileMetadata) 'keepFileMetadata': true,
+      if (randomFileNames) 'randomFileNames': true,
     };
   }
 
@@ -4984,6 +4999,8 @@ class VaultSnapshot {
             in json['hiddenChatNetworks'] as List<dynamic>? ?? const [])
           if (network is String) network,
       ],
+      keepFileMetadata: json['keepFileMetadata'] == true,
+      randomFileNames: json['randomFileNames'] == true,
       contacts: (json['contacts'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>()
           .map(ContactRecord.fromJson)

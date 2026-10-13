@@ -80,6 +80,11 @@ of them.
 - "Share internet with bitchat users" lets phones nearby without internet
   use bitchat's location channels through yours.
 
+**Files you send**
+- Location, camera, author and date details are removed from photos,
+  videos, PDFs and office documents before sending (without re-encoding);
+  file names can be replaced by random ones. Both in Settings → Personal.
+
 **Updates**
 - Signed in-app updates on a stable or nightly channel ("Receive unstable
   updates" in Settings); a nightly device can always move back to stable.

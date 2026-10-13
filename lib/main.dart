@@ -13978,6 +13978,50 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 ),
                               ),
                             const SizedBox(height: 12),
+                            Text(
+                              'Privacy of files you send',
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            SwitchListTile.adaptive(
+                              key: const ValueKey('strip-file-metadata'),
+                              contentPadding: EdgeInsets.zero,
+                              value: widget.controller.removesFileMetadata,
+                              title: const Text('Remove metadata from files'),
+                              subtitle: const Text(
+                                'Before sending, removes location, camera, '
+                                'author and date details from photos, videos, '
+                                'PDFs and office documents. Pictures are not '
+                                're-compressed. Other files are sent as they are.',
+                              ),
+                              onChanged: (value) => unawaited(
+                                widget.controller
+                                    .setRemovesFileMetadata(value)
+                                    .then((_) {
+                                      if (mounted) setState(() {});
+                                    }),
+                              ),
+                            ),
+                            SwitchListTile.adaptive(
+                              key: const ValueKey('random-file-names'),
+                              contentPadding: EdgeInsets.zero,
+                              value: widget.controller.randomizesFileNames,
+                              title: const Text(
+                                'Send files under random names',
+                              ),
+                              subtitle: const Text(
+                                'Replaces file names with random letters (the '
+                                'type, such as .jpg, stays), for you and the '
+                                'recipient.',
+                              ),
+                              onChanged: (value) => unawaited(
+                                widget.controller
+                                    .setRandomizesFileNames(value)
+                                    .then((_) {
+                                      if (mounted) setState(() {});
+                                    }),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
                             SelectableText(
                               'account ${identity.accountId}\ndevice ${identity.deviceId}\nsafety ${identity.safetyNumber}',
                               style: Theme.of(context).textTheme.bodySmall
