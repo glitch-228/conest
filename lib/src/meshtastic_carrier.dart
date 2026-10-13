@@ -290,12 +290,29 @@ class MeshtasticCarrierChannel
     }
     final to = parseMeshtasticAddress(address);
     if (to == null) throw ArgumentError('Not a Meshtastic node address.');
-    return radio.send(
-      to: to,
-      portnum: meshtasticConestPort,
-      payload: [_payloadVersion, ...frame],
-    );
+    // Recorded before sending: the answer can come before send returns.
+    final id = MeshtasticRadio.newPacketId();
+    _frameDestinations[id] = to;
+    while (_frameDestinations.length > 512) {
+      _frameDestinations.remove(_frameDestinations.keys.first);
+    }
+    try {
+      return await radio.send(
+        to: to,
+        portnum: meshtasticConestPort,
+        payload: [_payloadVersion, ...frame],
+        id: id,
+      );
+    } catch (_) {
+      _frameDestinations.remove(id);
+      rethrow;
+    }
   }
+
+  /// Where each tracked frame went: only that node's acknowledgement
+  /// confirms it. Relays acknowledge a rebroadcast too (an implicit ack,
+  /// from our own node), and the packet id travels in the clear.
+  final Map<int, int> _frameDestinations = {};
 
   final _frameAcks = StreamController<({int frameId, bool ok})>.broadcast();
 
@@ -371,10 +388,16 @@ class MeshtasticCarrierChannel
         packet.requestId!,
         ok: reason == null || reason == 0,
       );
-      _frameAcks.add((
-        frameId: packet.requestId!,
-        ok: reason == null || reason == 0,
-      ));
+      final destination = _frameDestinations[packet.requestId!];
+      if (destination != null &&
+          packet.from == destination &&
+          packet.from != _nodeNum) {
+        _frameDestinations.remove(packet.requestId!);
+        _frameAcks.add((
+          frameId: packet.requestId!,
+          ok: reason == null || reason == 0,
+        ));
+      }
       return;
     }
     if (packet.portnum == meshtasticTextPort) {

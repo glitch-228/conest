@@ -344,7 +344,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 150));
       // Its receipt came by another route.
       await slow.cancel(carrierSendId('dev-bob', 'm'));
-      await expectLater(sending, throwsStateError);
+      await expectLater(sending, throwsA(isA<TransportSendCancelled>()));
       expect(channel.sent.length, lessThan(4));
       // Another device's copy of the same message still goes.
       channel.sent.clear();
@@ -360,6 +360,73 @@ void main() {
         ),
       );
       expect(channel.sent, isNotEmpty);
+      // A send of the stopped message started later still goes.
+      channel.sent.clear();
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await slow.sendEnvelope(
+        peer: peer,
+        route: route,
+        envelope: TransportEnvelope(
+          id: 'm',
+          recipientDeviceId: 'dev-bob',
+          bytes: pattern(1024),
+          createdAt: DateTime.utc(2026),
+        ),
+      );
+      expect(channel.sent, isNotEmpty);
+    });
+
+    test(
+      'confirmations of early frames count while later ones go out',
+      () async {
+        final radio = _AckingChannel(
+          'npub-me|wss://relay.one',
+          ackAtOnce: true,
+        );
+        final tracked = CarrierTransportAdapter(
+          kind: TransportKind.nostr,
+          sealer: sealer,
+          framing: CarrierFraming.nostr,
+          frameSpacing: const Duration(milliseconds: 20),
+        )..attach(radio);
+        await tracked.start();
+        final receipts = <CarrierDeliveryReceipt>[];
+        final subscription = tracked.deliveryReceipts.listen(receipts.add);
+        addTearDown(subscription.cancel);
+        final route = (await tracked.discoverRoutes(peer)).single;
+        await tracked.sendEnvelope(
+          peer: peer,
+          route: route,
+          envelope: TransportEnvelope(
+            id: 'early',
+            recipientDeviceId: 'dev-bob',
+            bytes: pattern(50 * 1024),
+            createdAt: DateTime.utc(2026),
+          ),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(radio.sentIds.length, greaterThan(1));
+        expect(receipts.single.envelopeId, 'early');
+      },
+    );
+
+    test('a channel that does not confirm frames makes no receipts', () async {
+      await adapter.start();
+      final receipts = <CarrierDeliveryReceipt>[];
+      final subscription = adapter.deliveryReceipts.listen(receipts.add);
+      addTearDown(subscription.cancel);
+      await adapter.sendEnvelope(
+        peer: peer,
+        route: (await adapter.discoverRoutes(peer)).single,
+        envelope: TransportEnvelope(
+          id: 'plain',
+          recipientDeviceId: 'dev-bob',
+          bytes: pattern(1024),
+          createdAt: DateTime.utc(2026),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(receipts, isEmpty);
     });
 
     test('file streams are refused', () async {
@@ -646,7 +713,10 @@ class _XorSealer implements CarrierSealer {
 }
 
 class _AckingChannel implements AcknowledgingCarrierChannel {
-  _AckingChannel(this.localAddress);
+  _AckingChannel(this.localAddress, {this.ackAtOnce = false});
+
+  /// The far radio confirms each frame as soon as it is sent.
+  final bool ackAtOnce;
 
   final List<int> sentIds = [];
   final _acks = StreamController<({int frameId, bool ok})>.broadcast();
@@ -666,6 +736,7 @@ class _AckingChannel implements AcknowledgingCarrierChannel {
   Future<int> sendTrackedFrame(String address, Uint8List frame) async {
     final id = _next++;
     sentIds.add(id);
+    if (ackAtOnce) scheduleMicrotask(() => ack(id));
     return id;
   }
 

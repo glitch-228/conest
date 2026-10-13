@@ -23419,10 +23419,15 @@ class MessengerController extends ChangeNotifier {
       // copies arriving together get one receipt naming all their routes.
       final alreadyAnswered =
           _arrivals[envelope.messageId]?.acked.isNotEmpty ?? false;
-      if (alreadyAnswered && _noteArrival(envelope.messageId)) {
-        _traceArrival(contact, envelope);
-        _scheduleRouteReceipt(contact, envelope);
-        return;
+      if (alreadyAnswered) {
+        final newRoute = _noteArrival(envelope.messageId);
+        if (newRoute) _traceArrival(contact, envelope);
+        // A receipt is on its way already: it will name this route too.
+        if (_routeReceiptTimers.containsKey(envelope.messageId)) return;
+        if (newRoute) {
+          _scheduleRouteReceipt(contact, envelope);
+          return;
+        }
       }
       await _sendAck(contact: contact, envelope: envelope);
     } catch (_) {
@@ -23440,8 +23445,15 @@ class MessengerController extends ChangeNotifier {
   final Map<String, Timer> _routeReceiptTimers = {};
 
   void _scheduleRouteReceipt(ContactRecord contact, RelayEnvelope envelope) {
-    if (_routeReceiptTimers.containsKey(envelope.messageId) ||
-        _routeReceiptTimers.length >= 256) {
+    if (_routeReceiptTimers.containsKey(envelope.messageId)) return;
+    if (_routeReceiptTimers.length >= 256) {
+      // Too many waiting: answered at once rather than not at all.
+      unawaited(
+        _sendAck(
+          contact: contact,
+          envelope: envelope,
+        ).catchError((Object _) {}),
+      );
       return;
     }
     // In battery saver this device waits longer, gathering more routes.
@@ -23451,9 +23463,12 @@ class MessengerController extends ChangeNotifier {
     _routeReceiptTimers[envelope.messageId] = Timer(wait, () {
       _routeReceiptTimers.remove(envelope.messageId);
       if (_disposed) return;
+      // The contact as it is now (it may have been removed meanwhile).
+      final current = _contactByDeviceId(contact.deviceId) ?? contact;
+      if (!current.canSendOutbound) return;
       unawaited(
         _sendAck(
-          contact: contact,
+          contact: current,
           envelope: envelope,
         ).catchError((Object _) {}),
       );
@@ -24395,6 +24410,9 @@ class MessengerController extends ChangeNotifier {
         if (deliveredVia?.transportKind == TransportKind.iroh) {
           _irohSkipUntil.remove(contact.deviceId);
         }
+      } on TransportSendCancelled {
+        // It arrived another way: no other route takes over.
+        rethrow;
       } catch (error) {
         lastError = error;
         if (!skipIroh && _canUseIrohForContact(contact)) {
@@ -30113,7 +30131,9 @@ class MessengerController extends ChangeNotifier {
     final processed = await _processEnvelopes(
       [envelope],
       ingressKind: PeerRouteKind.lan,
-      route: fromLocalNetwork ? MessageRoute.lanDirect : null,
+      route: fromLocalNetwork
+          ? MessageRoute.lanDirect
+          : MessageRoute.internetDirect,
     );
     if (processed > 0) {
       if (!highFrequencyTransfer) {

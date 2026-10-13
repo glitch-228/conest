@@ -14971,6 +14971,10 @@ void main() {
       await bob.processEnvelopesForTesting([
         copy,
       ], route: MessageRoute.emailCarrier);
+      // The same copy again from the other relay, same route: no extra.
+      await bob.processEnvelopesForTesting([
+        copy,
+      ], route: MessageRoute.emailCarrier);
       // Bob is in battery saver (the test default): it gathers for 3 s.
       await Future<void>.delayed(const Duration(milliseconds: 3500));
       final received = bob
@@ -15043,6 +15047,8 @@ void main() {
         relayClient: relay,
         displayName: 'Bob',
         transportRegistryFactory: network.registry,
+        // Answers copies after 1 s (3 s in battery saver).
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
       );
       addTearDown(alice.dispose);
       addTearDown(bob.dispose);

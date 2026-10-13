@@ -281,6 +281,21 @@ abstract interface class AcknowledgingCarrierChannel implements CarrierChannel {
   Stream<({int frameId, bool ok})> get frameAcks;
 }
 
+/// One envelope going out frame by frame on a channel that confirms frames.
+class _RadioEnvelope {
+  _RadioEnvelope(this.envelopeId, this.deviceId);
+
+  final String envelopeId;
+  final String deviceId;
+
+  /// Frames sent and not yet confirmed.
+  final Set<int> waiting = {};
+  bool tracked = false;
+  bool allSent = false;
+  bool refused = false;
+  bool reported = false;
+}
+
 /// What [CarrierTransportAdapter.cancel] takes: one envelope to one device
 /// (a group message goes to each member separately).
 String carrierSendId(String deviceId, String envelopeId) =>
@@ -370,15 +385,14 @@ class CarrierTransportAdapter implements TransportAdapter {
   /// Envelopes the other device's radio confirmed (channels that report it).
   Stream<CarrierDeliveryReceipt> get deliveryReceipts => _receipts.stream;
 
-  /// Frames sent and not yet confirmed, by frame id: the envelope, its
-  /// device, and the frames of it still unconfirmed.
-  final Map<int, ({String envelopeId, String deviceId, Set<int> waiting})>
-  _unconfirmedFrames = {};
+  /// Frames sent and not yet confirmed, by frame id.
+  final Map<int, _RadioEnvelope> _unconfirmedFrames = {};
   static const int _maxUnconfirmedFrames = 512;
   StreamSubscription<({int frameId, bool ok})>? _frameAckSubscription;
 
-  /// Envelopes no longer worth sending (their receipt came), by id.
-  final Set<String> _cancelled = {};
+  /// When each envelope stopped being worth sending (its receipt came), by
+  /// [carrierSendId]: sends that started before then stop.
+  final Map<String, DateTime> _cancelled = {};
   static const int _maxCancelled = 256;
 
   /// Frames received while stopped: the channel has already taken them off
@@ -526,9 +540,13 @@ class CarrierTransportAdapter implements TransportAdapter {
       throw StateError('${kind.label} is not available for this contact.');
     }
     final generation = _generation;
+    final startedAt = _now();
+    final sendId = carrierSendId(peer.deviceId, envelope.id);
     final sealed = await _sealer.seal(kind, peer.deviceId, envelope.bytes);
     final frames = carrierBinaryFrames(framing, sealed, random: _random);
-    final frameIds = <int>{};
+    // Registered before the first frame: confirmations of early frames
+    // can come while later ones are still going out.
+    final pending = _RadioEnvelope(envelope.id, peer.deviceId);
     for (var index = 0; index < frames.length; index++) {
       if (index > 0 && frameSpacing > Duration.zero) {
         await Future<void>.delayed(frameSpacing);
@@ -539,29 +557,25 @@ class CarrierTransportAdapter implements TransportAdapter {
       }
       // Its receipt came by another route: the rest of the airtime is
       // saved.
-      if (_cancelled.contains(carrierSendId(peer.deviceId, envelope.id))) {
-        throw StateError('${kind.label}: no longer needed.');
+      if (_cancelled[sendId] case final cancelledAt?
+          when !cancelledAt.isBefore(startedAt)) {
+        throw TransportSendCancelled('${kind.label}: no longer needed.');
       }
       if (channel is AcknowledgingCarrierChannel) {
-        frameIds.add(await channel.sendTrackedFrame(address, frames[index]));
+        final id = await channel.sendTrackedFrame(address, frames[index]);
+        pending.tracked = true;
+        pending.waiting.add(id);
+        _unconfirmedFrames.remove(id);
+        _unconfirmedFrames[id] = pending;
+        while (_unconfirmedFrames.length > _maxUnconfirmedFrames) {
+          _unconfirmedFrames.remove(_unconfirmedFrames.keys.first);
+        }
       } else {
         await channel.sendFrame(address, frames[index]);
       }
     }
-    if (frameIds.isNotEmpty) {
-      final entry = (
-        envelopeId: envelope.id,
-        deviceId: peer.deviceId,
-        waiting: frameIds,
-      );
-      for (final id in frameIds) {
-        _unconfirmedFrames.remove(id);
-        _unconfirmedFrames[id] = entry;
-      }
-      while (_unconfirmedFrames.length > _maxUnconfirmedFrames) {
-        _unconfirmedFrames.remove(_unconfirmedFrames.keys.first);
-      }
-    }
+    pending.allSent = true;
+    _maybeReceipt(pending);
     return DeliveryReceipt(
       state: path == TransportPathKind.storeForward
           ? DeliveryReceiptState.storedForPeer
@@ -586,17 +600,33 @@ class CarrierTransportAdapter implements TransportAdapter {
   @override
   Future<void> cancel(String operationId) async {
     _cancelled.remove(operationId);
-    _cancelled.add(operationId);
+    _cancelled[operationId] = _now();
     while (_cancelled.length > _maxCancelled) {
-      _cancelled.remove(_cancelled.first);
+      _cancelled.remove(_cancelled.keys.first);
     }
   }
 
   void _onFrameAck(({int frameId, bool ok}) ack) {
     final entry = _unconfirmedFrames.remove(ack.frameId);
-    if (entry == null || !ack.ok) return;
+    if (entry == null) return;
+    if (!ack.ok) {
+      entry.refused = true;
+      return;
+    }
     entry.waiting.remove(ack.frameId);
-    if (entry.waiting.isNotEmpty) return;
+    _maybeReceipt(entry);
+  }
+
+  void _maybeReceipt(_RadioEnvelope entry) {
+    // Untracked: a channel that does not confirm frames.
+    if (!entry.tracked ||
+        !entry.allSent ||
+        entry.refused ||
+        entry.reported ||
+        entry.waiting.isNotEmpty) {
+      return;
+    }
+    entry.reported = true;
     _receipts.add(
       CarrierDeliveryReceipt(
         kind: kind,
