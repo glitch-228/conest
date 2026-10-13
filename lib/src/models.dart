@@ -2486,6 +2486,19 @@ enum MessageRoute {
   };
 
   /// Routes recorded before [MessageRoute] existed.
+  /// The routes a receipt names, or null when it names none this build
+  /// knows (an older app, or only a newer app's routes): then the receipt
+  /// says nothing about routes.
+  static Set<MessageRoute>? namedInReceipt(Object? value) {
+    if (value is! List) return null;
+    final names = MessageRoute.values.asNameMap();
+    final named = {
+      for (final name in value.take(MessageRoute.values.length))
+        if (names[name] case final route?) route,
+    };
+    return named.isEmpty ? null : named;
+  }
+
   /// Routes the two ends may name differently (a LAN or Iroh connection
   /// one side sees as direct and the other as relayed) share a family.
   MessageRoute get family => switch (this) {

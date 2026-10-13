@@ -21411,7 +21411,6 @@ class UserActivityForeground extends StatelessWidget {
   Widget build(BuildContext context) => Listener(
     behavior: HitTestBehavior.translucent,
     onPointerDown: _seen,
-    onPointerHover: _seen,
     onPointerSignal: _seen,
     child: child,
   );
@@ -21452,7 +21451,8 @@ class _WindowsFirewallTileState extends State<_WindowsFirewallTile> {
       _result ??
           'If messages and files from a phone on the same network never '
               'arrive (but yours reach it), Windows Firewall is blocking '
-              'them. This adds a rule for Conest; Windows asks to confirm.',
+              'them. This lets other devices on any network reach Conest '
+              'on this PC; Windows asks to confirm.',
     ),
     trailing: _busy
         ? const SizedBox(

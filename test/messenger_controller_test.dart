@@ -14937,6 +14937,53 @@ void main() {
       }, reason: 'no copy went on another route');
     });
 
+    test('retries do not send the same copies again', () async {
+      var now = DateTime.now().toUtc();
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        nowProvider: () => now,
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        nowProvider: () => now,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobId = bob.identity!.deviceId;
+      // Bob is away: nothing reaches him, nothing comes back.
+      network.droppedPairs.add((
+        alice.identity!.irohEndpointId!,
+        bob.identity!.irohEndpointId!,
+      ));
+      await alice.sendMessage(contact: alice.contacts.single, body: 'away');
+      final id = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'away')
+          .id;
+      int stores() =>
+          relay.storedEnvelopes.where((e) => e.messageId == id).length;
+      await Future<void>.delayed(const Duration(seconds: 2));
+      final afterFirst = stores();
+      for (var pass = 0; pass < 3; pass++) {
+        now = now.add(const Duration(minutes: 6));
+        await alice.retryUnacknowledgedMessagesNow();
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+      // Each retry may hand the message to one route again; copies to the
+      // other routes went once, on the first pass.
+      final perRetry = (stores() - afterFirst) / 3;
+      expect(perRetry, lessThan(2));
+      expect(id, isNotEmpty);
+    });
+
     test('copies reach every member of a group', () async {
       final network = _InProcessIrohNetwork();
       final relay = _FakeRelayClient();

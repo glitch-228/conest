@@ -16898,6 +16898,13 @@ class MessengerController extends ChangeNotifier {
             }
           } catch (_) {}
         }
+        // A copy on a route the user turned off is not answered either:
+        // its receipt would name that route as working.
+        final seenSender = _contactByDeviceId(envelope.senderDeviceId);
+        if (seenSender != null &&
+            _droppedByIngressMode(seenSender, ingressKind)) {
+          continue;
+        }
         await _replayAckForSeenEnvelope(envelope);
         continue;
       }
@@ -16907,7 +16914,10 @@ class MessengerController extends ChangeNotifier {
         // effects cover this copy too. The route this copy came by is
         // answered once that run is done.
         final route = _ingressRoute;
+        final copySender = _contactByDeviceId(envelope.senderDeviceId);
         if (route != null &&
+            !(copySender != null &&
+                _droppedByIngressMode(copySender, ingressKind)) &&
             (envelope.kind == 'direct_message' ||
                 envelope.kind == 'group_message')) {
           final waiting = _overlappingCopies[envelope.messageId] ??= [];
@@ -17389,13 +17399,7 @@ class MessengerController extends ChangeNotifier {
     }
     // The routes copies of it arrived by (newer apps name them).
     final namedRoutes = decoded['routes'];
-    final arrivedBy = namedRoutes is List
-        ? {
-            for (final name in namedRoutes.take(MessageRoute.values.length))
-              if (MessageRoute.values.asNameMap()[name] case final route?)
-                route,
-          }
-        : null;
+    final arrivedBy = MessageRoute.namedInReceipt(namedRoutes);
     _noteConfirmed(contact.deviceId, target, arrivedBy: arrivedBy);
     final ackedAt = envelope.createdAt.toUtc().isAfter(_now().toUtc())
         ? _now().toUtc()
@@ -23389,6 +23393,10 @@ class MessengerController extends ChangeNotifier {
   /// firewall can drop what arrives while the other way works.
   final Map<String, Map<String, DateTime>> _unconfirmedRoutes = {};
 
+  /// Route families receipts have named, per message (bounded).
+  final LinkedHashMap<String, Set<MessageRoute>> _confirmedFamilies =
+      LinkedHashMap();
+
   /// The routes each message went on and no receipt has named yet, by
   /// [_outboundAttemptKey], then route key.
   final Map<String, Map<String, MessageRoute?>> _sentRouteKeys = {};
@@ -23404,6 +23412,11 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final key = _outboundAttemptKey(deviceId, messageId);
+    final confirmedFamily = route.messageRoute?.family;
+    if (confirmedFamily != null &&
+        (_confirmedFamilies[key]?.contains(confirmedFamily) ?? false)) {
+      return; // Its receipt already came.
+    }
     final sent = _sentRouteKeys.remove(key) ?? <String, MessageRoute?>{};
     while (_sentRouteKeys.length >= 4096) {
       _sentRouteKeys.remove(_sentRouteKeys.keys.first);
@@ -23428,6 +23441,18 @@ class MessengerController extends ChangeNotifier {
     final key = _outboundAttemptKey(deviceId, messageId);
     final copies = _copyRuns[key];
     if (copies != null && !copies.isCompleted) copies.complete();
+    // A copy's hand-off can be noted after its receipt came: remembered,
+    // that route is not then left unconfirmed.
+    final families = _confirmedFamilies.remove(key) ?? <MessageRoute>{};
+    if (arrivedBy == null) {
+      families.addAll(MessageRoute.values.map((route) => route.family));
+    } else {
+      families.addAll(arrivedBy.map((route) => route.family));
+    }
+    _confirmedFamilies[key] = families;
+    while (_confirmedFamilies.length > 2048) {
+      _confirmedFamilies.remove(_confirmedFamilies.keys.first);
+    }
     final sent = _sentRouteKeys[key];
     if (sent == null) return;
     final routes = _unconfirmedRoutes[deviceId];
@@ -23469,6 +23494,10 @@ class MessengerController extends ChangeNotifier {
   final Map<String, Completer<void>> _copyRuns = {};
   static const int _maxCopyRuns = 256;
   static const int _maxExtraCopies = 4;
+
+  /// Copies already sent per message, by [_outboundAttemptKey].
+  final LinkedHashMap<String, _CopyState> _copyStates = LinkedHashMap();
+  static const int _maxCopyStates = 2048;
 
   /// Carriers that keep a message until it is fetched: one is enough.
   static const Set<TransportKind> _storingCarriers = {
@@ -23533,10 +23562,18 @@ class MessengerController extends ChangeNotifier {
     required Completer<void> receipt,
     GroupRecord? group,
   }) async {
-    final used = <String>{first.routeKey};
-    final usedKinds = <TransportKind>{first.transportKind};
-    final usedLegacyKinds = <PeerRouteKind>{?first.endpoint?.kind};
-    var storedOnCarrier = _storingCarriers.contains(first.transportKind);
+    // What earlier passes already sent survives retries: each route, a
+    // storing carrier and a radio get at most one copy of a message.
+    final key = _outboundAttemptKey(contact.deviceId, envelope.messageId);
+    final state = _copyStates.remove(key) ?? _CopyState();
+    _copyStates[key] = state;
+    while (_copyStates.length > _maxCopyStates) {
+      _copyStates.remove(_copyStates.keys.first);
+    }
+    state.note(first, storing: _storingCarriers.contains(first.transportKind));
+    final used = state.routeKeys;
+    final usedKinds = state.kinds;
+    final usedLegacyKinds = state.legacyKinds;
     final radioSized =
         utf8.encode(jsonEncode(envelope.toJson())).length <= _maxRadioCopyBytes;
     for (var copy = 0; copy < _maxExtraCopies; copy++) {
@@ -23550,12 +23587,13 @@ class MessengerController extends ChangeNotifier {
           ?.lastTwoWaySuccessAt;
       final radiosAllowed =
           radioSized &&
+          !state.radioUsed &&
           (lastTwoWay == null ||
               _now().difference(lastTwoWay) > const Duration(minutes: 5));
       final allowed = <TransportKind>{
         for (final kind in TransportKind.values)
           if (!usedKinds.contains(kind) &&
-              !(storedOnCarrier && _storingCarriers.contains(kind)) &&
+              !(state.storedOnCarrier && _storingCarriers.contains(kind)) &&
               (radiosAllowed || !_radioKinds.contains(kind)))
             kind,
       };
@@ -23575,12 +23613,12 @@ class MessengerController extends ChangeNotifier {
       } catch (_) {
         return; // No route left.
       }
-      if (!used.add(route.routeKey)) return;
-      usedKinds.add(route.transportKind);
-      if (route.endpoint?.kind case final kind?) usedLegacyKinds.add(kind);
-      if (_storingCarriers.contains(route.transportKind)) {
-        storedOnCarrier = true;
-      }
+      if (used.contains(route.routeKey)) return;
+      state.note(
+        route,
+        storing: _storingCarriers.contains(route.transportKind),
+      );
+      if (_radioKinds.contains(route.transportKind)) state.radioUsed = true;
       _noteHandedOff(contact.deviceId, envelope.messageId, route);
       _traceOutbound(contact.deviceId, envelope.messageId, route, group: group);
     }
@@ -23705,7 +23743,10 @@ class MessengerController extends ChangeNotifier {
             roundTrip,
           );
         }
-      } else if (!stored && !route.forwarded) {
+      } else if (!stored &&
+          !route.forwarded &&
+          !_radioKinds.contains(route.transportKind)) {
+        // (A radio may answer later than the test waits.)
         // Took the probe, never answered: suspect at once.
         final routes = _unconfirmedRoutes[current.deviceId] ??= {};
         if (routes.length < 64) {
@@ -23993,6 +24034,7 @@ class MessengerController extends ChangeNotifier {
 
   void _clearOutboundAttempt(String peerDeviceId, String messageId) {
     final key = _outboundAttemptKey(peerDeviceId, messageId);
+    _copyStates.remove(key);
     _outboundAttemptedAt.remove(key);
     _outboundAttemptCount.remove(key);
     _envelopeOutbox.remove(key);
@@ -30409,6 +30451,22 @@ enum OutboundDeliveryRoute {
   irohDirect,
   irohRelay,
   conestRelay,
+}
+
+/// The routes a message's copies already went on, across retries.
+class _CopyState {
+  final Set<String> routeKeys = {};
+  final Set<TransportKind> kinds = {};
+  final Set<PeerRouteKind> legacyKinds = {};
+  bool storedOnCarrier = false;
+  bool radioUsed = false;
+
+  void note(_DeliveryRoute route, {required bool storing}) {
+    routeKeys.add(route.routeKey);
+    kinds.add(route.transportKind);
+    if (route.endpoint?.kind case final kind?) legacyKinds.add(kind);
+    if (storing) storedOnCarrier = true;
+  }
 }
 
 class _InboundAttachmentState {

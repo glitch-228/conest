@@ -112,6 +112,15 @@ void main() {
     expect(find.textContaining('read 12:01:00'), findsOneWidget);
   });
 
+  test('receipts naming only unknown routes say nothing about routes', () {
+    expect(MessageRoute.namedInReceipt(null), isNull);
+    expect(MessageRoute.namedInReceipt(['warpDrive']), isNull);
+    expect(MessageRoute.namedInReceipt(<String>[]), isNull);
+    expect(MessageRoute.namedInReceipt(['warpDrive', 'irohRelay', 7]), {
+      MessageRoute.irohRelay,
+    });
+  });
+
   test('route marks only go up, and keep their first time', () {
     final first = message(
       outbound: true,
