@@ -21,6 +21,15 @@ enum ApplicationCapability {
   /// Re-sends "file verified" until it lands and answers a repeated offer
   /// for a file it has: the sender waits for it instead of guessing.
   attachmentCompleteRetryV1,
+
+  /// Recognises a copy of a message that came on another route (by its
+  /// digest, without decrypting it again), so messages may go out on
+  /// several routes at once.
+  multiRouteMessagesV1,
+
+  /// Answers route probes (route_probe), so "Test routes" can time each
+  /// route both ways.
+  routeProbeV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

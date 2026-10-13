@@ -11,10 +11,13 @@ import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
+import android.os.PowerManager
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.widget.Toast
@@ -287,11 +290,28 @@ class MainActivity : FlutterActivity() {
                     result.success(pendingShare)
                     pendingShare = null
                 }
+                "powerState" -> result.success(powerState())
                 else -> result.notImplemented()
             }
         }
         dispatchTransferControl(intent)
         dispatchShare(intent)
+    }
+
+    /** Battery, charging and battery saver, for how many routes messages use. */
+    private fun powerState(): Map<String, Any?> {
+        val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val present = battery?.getBooleanExtra(BatteryManager.EXTRA_PRESENT, true) ?: true
+        val plugged = battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1) ?: -1
+        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+        val power = getSystemService(Context.POWER_SERVICE) as PowerManager
+        return mapOf(
+            "hasBattery" to present,
+            "charging" to if (battery == null) null else plugged > 0,
+            "batteryPercent" to if (level >= 0 && scale > 0) level * 100 / scale else null,
+            "batterySaver" to power.isPowerSaveMode,
+        )
     }
 
     override fun onNewIntent(intent: Intent) {

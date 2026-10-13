@@ -379,6 +379,10 @@ class TransportRegistry {
     );
   }
 
+  /// A round trip measured outside a delivery (a route test).
+  void noteRoundTrip(String deviceId, TransportKind kind, Duration took) =>
+      _recordSuccess(deviceId, kind, took);
+
   void _recordSuccess(String deviceId, TransportKind kind, Duration? took) {
     final stats = _statsEntry(deviceId, kind)
       ..failureStreak = 0
