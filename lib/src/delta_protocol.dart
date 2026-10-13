@@ -296,22 +296,36 @@ class DeltaProtocol {
     );
   }
 
+  /// Keys that did not read (expired, damaged), not read again.
+  final Set<String> _unreadable = {};
+
   Future<PgpPublicKey?> _keyOf(DeltaPeer? peer) async {
     final bytes = peer?.key;
     if (peer == null || bytes == null) return null;
     final cached = _keys[peer.fingerprint];
     if (cached != null) return cached;
+    if (_unreadable.contains(peer.fingerprint)) return null;
     try {
-      final parsed = await PgpPublicKey.parse(bytes);
-      if (parsed.fingerprintHex != peer.fingerprint) return null;
-      return _keys[peer.fingerprint] = parsed;
+      final parsed = await PgpPublicKey.parse(bytes, now: _now());
+      if (parsed.fingerprintHex == peer.fingerprint) {
+        _remember(parsed);
+        return parsed;
+      }
     } on FormatException {
-      return null;
+      // Remembered below.
     }
+    if (_unreadable.length > 4000) _unreadable.remove(_unreadable.first);
+    _unreadable.add(peer.fingerprint);
+    return null;
   }
 
   void _remember(PgpPublicKey key) {
-    if (_keys.length > 4000) _keys.clear();
+    _unreadable.remove(key.fingerprintHex);
+    _keys.remove(key.fingerprintHex);
+    // The longest unused go first.
+    while (_keys.length >= 4000) {
+      _keys.remove(_keys.keys.first);
+    }
     _keys[key.fingerprintHex] = key;
   }
 
@@ -334,15 +348,16 @@ class DeltaProtocol {
   /// Reads one mail from the inbox. Mail that is not Delta Chat's (or not
   /// for this key) is left alone: `consumed` false.
   Future<DeltaStep> receive(DeltaChats chats, Uint8List raw) async {
-    final known = <String, List<PgpPublicKey>>{};
-    for (final peer in chats.peers.values) {
-      final parsed = await _keyOf(peer);
-      if (parsed != null) (known[peer.addr] ??= []).add(parsed);
-    }
     final read = await DeltaMail.read(
       raw,
       key,
-      knownKeys: (addr) => known[addr] ?? const [],
+      // Only the sender's keys are read, and only when needed.
+      knownKeys: (addr) async => [
+        for (final peer in chats.peers.values.where(
+          (peer) => peer.addr == addr,
+        ))
+          ?await _keyOf(peer),
+      ],
       passwords: [
         for (final join in chats.joins) _secret(join.fingerprint, join.auth),
         _secret(fingerprint, tokens.auth),

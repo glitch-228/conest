@@ -465,7 +465,7 @@ abstract final class DeltaMail {
   static Future<DeltaIncoming?> read(
     Uint8List raw,
     PgpSecretKey key, {
-    List<PgpPublicKey> Function(String addr)? knownKeys,
+    Future<List<PgpPublicKey>> Function(String addr)? knownKeys,
     List<String> passwords = const [],
     DateTime? now,
   }) async {
@@ -481,7 +481,7 @@ abstract final class DeltaMail {
   static Future<DeltaIncoming?> _read(
     Uint8List raw,
     PgpSecretKey key,
-    List<PgpPublicKey> Function(String addr)? knownKeys,
+    Future<List<PgpPublicKey>> Function(String addr)? knownKeys,
     List<String> passwords,
     DateTime? now,
   ) async {
@@ -579,7 +579,7 @@ abstract final class DeltaMail {
     if (decrypted != null && decrypted.signed) {
       signer = await decrypted.verify([
         ?autocryptKey,
-        ...?knownKeys?.call(from),
+        ...?await knownKeys?.call(from),
       ]);
       if (signer != null) {
         // Only keys of the mail's own recipients, and not too many: each

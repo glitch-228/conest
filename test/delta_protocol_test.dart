@@ -860,6 +860,43 @@ void main() {
       await introduce(bob, alice, v3: false);
       expect(alice.chats.peers[bob.fingerprint]?.verified, isTrue);
     });
+
+    test('keys that do not read are not read again for every mail', () async {
+      // 300 peers at Mallory's address with keys that check out but are
+      // not theirs: each costs signature checks, once.
+      final key = mallory.protocol.key.publicKey.bytes;
+      var chats = bob.chats;
+      for (var index = 0; index < 300; index++) {
+        chats = chats.withPeer(
+          DeltaPeer(
+            fingerprint: index.toRadixString(16).padLeft(40, '0').toUpperCase(),
+            addr: mallory.addr,
+            key: key,
+          ),
+        );
+      }
+      bob.chats = chats;
+      final plain =
+          'From: <${mallory.addr}>\r\nTo: <${bob.addr}>\r\n'
+          'Message-ID: <Mr.plain@example.org>\r\n'
+          'Content-Type: multipart/encrypted; boundary=x\r\n\r\n'
+          '--x\r\n\r\nnothing\r\n--x--\r\n';
+      final mail = await DeltaMail.build(
+        key: mallory.protocol.key,
+        from: mallory.addr,
+        to: [(addr: bob.addr, key: bob.protocol.key.publicKey)],
+        text: 'hi',
+        messageId: 'Mr.first@example.org',
+        date: clock,
+      );
+      await receiveAs(bob, mail);
+      final watch = Stopwatch()..start();
+      for (var index = 0; index < 10; index++) {
+        await receiveAs(bob, plain);
+        await receiveAs(bob, mail.replaceAll('Mr.first', 'Mr.again$index'));
+      }
+      expect(watch.elapsedMilliseconds, lessThan(1500));
+    });
   });
 }
 

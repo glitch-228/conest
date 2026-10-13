@@ -187,7 +187,7 @@ void main() {
       final read = await DeltaMail.read(
         bytes(mail),
         bob,
-        knownKeys: (addr) => [alice.publicKey],
+        knownKeys: (addr) async => [alice.publicKey],
       );
       expect(read!.signer?.fingerprintHex, eve.publicKey.fingerprintHex);
       expect(
