@@ -1,0 +1,47 @@
+name: Rust tests
+
+# Runs the Rust workspace tests on agent and feature branches, which the
+# CI workflow (main and pull requests only) does not cover. Formatting and
+# clippy are reported but do not fail the run: older code is not yet
+# rustfmt-clean.
+
+on:
+  push:
+    branches: ["agent/**", "feature/**"]
+    paths:
+      - "native/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/rust-tests.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: rust-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libasound2-dev libdbus-1-dev libssl-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rust-tests
+      - run: cargo test --workspace --locked
+      - name: Formatting of changed files (report only)
+        continue-on-error: true
+        run: |
+          git fetch --no-tags --depth=200 origin feature/matrix-client || true
+          changed=$(git diff --name-only --diff-filter=AM origin/feature/matrix-client...HEAD -- '*.rs' || true)
+          if [ -n "$changed" ]; then rustfmt --edition 2024 --check $changed; fi
+      - name: Clippy (report only)
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets

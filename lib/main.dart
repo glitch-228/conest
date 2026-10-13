@@ -51,6 +51,7 @@ import 'src/ui/meshtastic_carrier_panel.dart';
 import 'src/ui/nostr_carrier_panel.dart';
 import 'src/ui/nostr_chats_screen.dart';
 import 'src/ui/delta_chats_screen.dart';
+import 'src/windows_firewall.dart';
 import 'src/ui/reticulum_carrier_panel.dart';
 import 'src/ui/matrix_home_screen.dart';
 import 'src/ui/matrix_room_screen.dart';
@@ -952,6 +953,14 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    return UserActivityForeground(
+      isForeground: () => widget.controller.isAppForeground,
+      onForeground: () => widget.controller.setAppForegroundState(true),
+      child: _buildApp(context),
+    );
+  }
+
+  Widget _buildApp(BuildContext context) {
     return DynamicColorBuilder(
       builder: (lightDynamic, darkDynamic) {
         return AnimatedBuilder(
@@ -1604,9 +1613,122 @@ class _HomeScreenState extends State<HomeScreen> {
     _userNoticeSubscription = widget.controller.userNotices.listen(
       _showUserNotice,
     );
+    // Shared from another app's share menu: now, or at a cold start.
+    _shareSubscription = widget.controller.shareAvailableEvents.listen(
+      (_) => unawaited(_takeShare()),
+    );
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => unawaited(_takeShare()),
+    );
   }
 
   StreamSubscription<String>? _userNoticeSubscription;
+  StreamSubscription<void>? _shareSubscription;
+
+  /// Stages [files] in the selected chat: one to one into the composer,
+  /// in a group shared at once (asking first if their details stay).
+  Future<void> _stageFilesIntoSelected(
+    List<({String path, String name, String mimeType})> files,
+  ) async {
+    if (files.isEmpty || !mounted) return;
+    final contact = _selectedContact;
+    final group = _selectedGroup;
+    if (contact != null) {
+      final items =
+          <
+            ({
+              Uint8List? bytes,
+              String? filePath,
+              int sizeBytes,
+              String fileName,
+              String mimeType,
+              String caption,
+              Uint8List? poster,
+            })
+          >[];
+      for (final file in files) {
+        try {
+          items.add((
+            bytes: null,
+            filePath: file.path,
+            sizeBytes: await File(file.path).length(),
+            fileName: file.name,
+            mimeType: file.mimeType,
+            caption: '',
+            poster: null,
+          ));
+        } catch (error) {
+          widget.controller.setStatus('Could not read ${file.name}: $error');
+        }
+      }
+      if (items.isNotEmpty) {
+        await _stageMultipleAttachments(contact: contact, items: items);
+      }
+    } else if (group != null) {
+      for (final file in files) {
+        if (!mounted) return;
+        try {
+          await publishGroupFileAsking(
+            context,
+            widget.controller,
+            groupId: group.groupId,
+            path: file.path,
+            fileName: file.name,
+            mimeType: file.mimeType,
+          );
+        } catch (error) {
+          widget.controller.setStatus('Could not share ${file.name}: $error');
+        }
+      }
+    }
+  }
+
+  /// An image or GIF the keyboard inserted (Android): staged like a paste.
+  Future<void> _stageInsertedContent(KeyboardInsertedContent content) async {
+    final data = content.data;
+    if (data == null || data.isEmpty) return;
+    final extension = switch (content.mimeType) {
+      'image/png' => 'png',
+      'image/gif' => 'gif',
+      'image/webp' => 'webp',
+      _ => 'jpg',
+    };
+    final folder = await Directory.systemTemp.createTemp('conest-inserted-');
+    final file = File('${folder.path}/keyboard.$extension');
+    await file.writeAsBytes(data);
+    await _stageFilesIntoSelected([
+      (
+        path: file.path,
+        name: 'keyboard.$extension',
+        mimeType: content.mimeType,
+      ),
+    ]);
+  }
+
+  /// Takes what another app shared: the user picks a chat, the files are
+  /// staged (one to one) or shared (groups), and text goes into the
+  /// composer.
+  Future<void> _takeShare() async {
+    final shared = await widget.controller.takePendingShare();
+    if (shared == null || !mounted) return;
+    final target = await showDialog<Object>(
+      context: context,
+      builder: (context) =>
+          _ShareTargetDialog(controller: widget.controller, shared: shared),
+    );
+    if (target == null || !mounted) return;
+    switch (target) {
+      case ContactRecord contact:
+        _selectHomeContact(contact);
+      case GroupRecord group:
+        _selectHomeGroup(group);
+    }
+    await _stageFilesIntoSelected(shared.files);
+    final text = shared.text;
+    if (mounted && text != null && text.isNotEmpty) {
+      _composerController.text = text;
+    }
+  }
 
   /// Only the Signature sidebar renders [MessengerController.statusMessage];
   /// other shells would otherwise swallow errors from the action just taken.
@@ -1713,6 +1835,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     unawaited(_userNoticeSubscription?.cancel());
+    unawaited(_shareSubscription?.cancel());
     unawaited(_matrixVerificationRequests?.cancel());
     _terminalCallTimer?.cancel();
     widget.controller.removeListener(_handleControllerChanged);
@@ -2218,6 +2341,14 @@ class _HomeScreenState extends State<HomeScreen> {
     final contact = _selectedContact;
     final group = _selectedGroup;
     if (contact == null && group == null) return false;
+    if (Platform.isAndroid) {
+      // super_clipboard cannot read images on Android: the system
+      // clipboard's content item, copied by the platform side.
+      final file = await widget.controller.takeClipboardMedia();
+      if (file == null) return false;
+      await _stageFilesIntoSelected([file]);
+      return true;
+    }
     final clipboard = SystemClipboard.instance;
     if (clipboard == null) return false;
     final DataReader reader;
@@ -2914,6 +3045,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           onAttach: _openMediaPicker,
                           onDropFiles: _handleDroppedFiles,
                           onSmartPaste: () => unawaited(_handleSmartPaste()),
+                          onContentInserted: (content) =>
+                              unawaited(_stageInsertedContent(content)),
                         );
                       }
                       if (!isWide && selectedGroup != null) {
@@ -2941,6 +3074,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           onAttach: _openMediaPicker,
                           onScheduleAttachment: _scheduleGroupAttachment,
                           onSmartPaste: () => unawaited(_handleSmartPaste()),
+                          onContentInserted: (content) =>
+                              unawaited(_stageInsertedContent(content)),
                         );
                       }
                       if (!isWide && lanLobbySelected) {
@@ -3084,6 +3219,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                           _scheduleGroupAttachment,
                                       onSmartPaste: () =>
                                           unawaited(_handleSmartPaste()),
+                                      onContentInserted: (content) => unawaited(
+                                        _stageInsertedContent(content),
+                                      ),
                                     )
                                   : selectedContact == null
                                   ? _EmptyChatState(palette: palette)
@@ -3111,6 +3249,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                       onDropFiles: _handleDroppedFiles,
                                       onSmartPaste: () =>
                                           unawaited(_handleSmartPaste()),
+                                      onContentInserted: (content) => unawaited(
+                                        _stageInsertedContent(content),
+                                      ),
                                     ),
                             ),
                           if (showDetailsPane && selectedContact != null)
@@ -5660,370 +5801,233 @@ class _Sidebar extends StatelessWidget {
     final lanSummary = identity.lanAddresses.isEmpty
         ? 'no LAN address detected'
         : 'LAN ${identity.lanAddresses.take(2).join(', ')}';
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        StatusStrip(
-          palette: palette,
-          title: 'Node · online',
-          detail:
-              '$lanSummary · '
-              '${identity.hasInternetRelay ? 'relay ✓' : 'relay optional'} · '
-              'vault unlocked',
-          dotColor: controller.localRelayRunning
-              ? palette.success
-              : palette.warning,
-          margin: const EdgeInsets.only(bottom: 14),
-        ),
-        Card(
-          elevation: 0,
-          color: palette.paperStrong,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
-            side: BorderSide(color: palette.stroke),
+    return StableScrollbar(
+      child: ListView(
+        padding: const EdgeInsets.all(18),
+        children: [
+          StatusStrip(
+            palette: palette,
+            title: 'Node · online',
+            detail:
+                '$lanSummary · '
+                '${identity.hasInternetRelay ? 'relay ✓' : 'relay optional'} · '
+                'vault unlocked',
+            dotColor: controller.localRelayRunning
+                ? palette.success
+                : palette.warning,
+            margin: const EdgeInsets.only(bottom: 14),
           ),
-          child: Padding(
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    SealAvatar(
-                      seed: identity.deviceId,
-                      palette: palette,
-                      size: 44,
-                      animate: true,
-                      label: identity.displayName,
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            identity.displayName,
-                            style: Theme.of(context).textTheme.titleLarge
-                                ?.copyWith(fontWeight: FontWeight.w700),
-                          ),
-                          Text(
-                            'device ${identity.deviceIdShort}',
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: palette.inkSoft),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (onShowDebug != null)
-                      IconButton(
-                        onPressed: onShowDebug,
-                        icon: const Icon(Icons.bug_report_outlined),
-                        tooltip: 'Debug',
-                      ),
-                    IconButton(
-                      onPressed: onShowSettings,
-                      icon: const Icon(Icons.settings_outlined),
-                      tooltip: 'Settings',
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                _StatusChip(
-                  label: controller.lastRelayStatus,
-                  palette: palette,
-                  icon: Icons.route,
-                  expand: true,
-                ),
-                const SizedBox(height: 8),
-                _StatusChip(
-                  label: localRelayLabel,
-                  palette: palette,
-                  icon: Icons.lan_outlined,
-                  expand: true,
-                ),
-                const SizedBox(height: 8),
-                _StatusChip(
-                  label: internetRelayLabel,
-                  palette: palette,
-                  icon: Icons.cloud_outlined,
-                  expand: true,
-                ),
-                const SizedBox(height: 8),
-                _StatusChip(
-                  label: lanSummary,
-                  palette: palette,
-                  icon: Icons.wifi_tethering,
-                  expand: true,
-                ),
-                const SizedBox(height: 8),
-                _StatusChip(
-                  label: 'safety ${identity.shortSafetyNumber}',
-                  palette: palette,
-                  icon: Icons.verified_user_outlined,
-                  expand: true,
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: onShowInvite,
-                        icon: const Icon(Icons.qr_code_2),
-                        label: const Text('My invite'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: onAddContact,
-                        icon: const Icon(Icons.person_add_alt_1),
-                        label: const Text('Add'),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: onShowBeam,
-                    icon: const Icon(Icons.center_focus_strong),
-                    label: const Text('Conest Beam'),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                TextButton.icon(
-                  onPressed: onPoll,
-                  icon: const Icon(Icons.sync),
-                  label: const Text('Poll routes now'),
-                ),
-              ],
+          Card(
+            elevation: 0,
+            color: palette.paperStrong,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+              side: BorderSide(color: palette.stroke),
             ),
-          ),
-        ),
-        const SizedBox(height: 16),
-        if (controller.savedMessagesContact != null) ...[
-          _savedMessagesRow(
-            controller,
-            palette,
-            selectedContactId: selectedContactId,
-            onSelected: onContactSelected,
-          ),
-          const SizedBox(height: 8),
-        ],
-        InkWell(
-          borderRadius: BorderRadius.circular(18),
-          onTap: onLanLobbySelected,
-          child: Ink(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: lanLobbySelected ? palette.selection : palette.paperStrong,
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(
-                color: lanLobbySelected ? palette.primary : palette.stroke,
-              ),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: palette.primary.withValues(alpha: 0.16),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Icon(Icons.forum_outlined, color: palette.primary),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
                     children: [
-                      Text(
-                        'LAN lobby',
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w700),
+                      SealAvatar(
+                        seed: identity.deviceId,
+                        palette: palette,
+                        size: 44,
+                        animate: true,
+                        label: identity.displayName,
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Free-for-all local chat • untrusted',
-                        style: Theme.of(
-                          context,
-                        ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
-                      ),
-                    ],
-                  ),
-                ),
-                if (lanLobbyUnreadCount > 0) ...[
-                  const SizedBox(width: 8),
-                  _UnreadBadge(count: lanLobbyUnreadCount, palette: palette),
-                ],
-                Text(
-                  '${controller.lanLobbyMessages.length}',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            Text(
-              'Groups',
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const Spacer(),
-            IconButton(
-              onPressed: controller.contacts.isEmpty ? null : onCreateGroup,
-              icon: const Icon(Icons.group_add_outlined),
-              tooltip: 'Create group',
-            ),
-            Text(
-              '${controller.visibleGroups.length}',
-              style: Theme.of(
-                context,
-              ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        if (controller.visibleGroups.isEmpty)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Text(
-              controller.contacts.isEmpty
-                  ? 'Add trusted contacts before creating a group.'
-                  : 'No groups yet.',
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
-            ),
-          )
-        else
-          for (
-            var index = 0;
-            index < controller.visibleGroups.length;
-            index++
-          ) ...[
-            if (index > 0) const SizedBox(height: 8),
-            Builder(
-              // Stable identity so a reorder/insert can't transiently hand
-              // this slot another group's element.
-              key: ValueKey(controller.visibleGroups[index].groupId),
-              builder: (context) {
-                final group = controller.visibleGroups[index];
-                final preview = controller.lastGroupMessageFor(group.groupId);
-                final unreadCount = controller.unreadGroupCountFor(
-                  group.groupId,
-                );
-                final selected = selectedGroupId == group.groupId;
-                final myDeviceId = controller.identity?.deviceId ?? '';
-                final hasLeft =
-                    myDeviceId.isNotEmpty && !group.hasActiveMember(myDeviceId);
-                return InkWell(
-                  borderRadius: BorderRadius.circular(18),
-                  onTap: () => onGroupSelected(group),
-                  child: Ink(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: selected ? palette.selection : palette.paperStrong,
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(
-                        color: selected ? palette.primary : palette.stroke,
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Expanded(
-                              child: Text(
-                                group.title,
-                                style: Theme.of(context).textTheme.titleMedium
-                                    ?.copyWith(fontWeight: FontWeight.w700),
-                              ),
+                            Text(
+                              identity.displayName,
+                              style: Theme.of(context).textTheme.titleLarge
+                                  ?.copyWith(fontWeight: FontWeight.w700),
                             ),
-                            if (hasLeft) ...[
-                              const SizedBox(width: 8),
-                              _GroupLeftBadge(palette: palette),
-                            ],
-                            if (unreadCount > 0) ...[
-                              const SizedBox(width: 8),
-                              _UnreadBadge(
-                                count: unreadCount,
-                                palette: palette,
-                                compact: true,
-                              ),
-                            ],
-                            IconButton(
-                              visualDensity: VisualDensity.compact,
-                              onPressed: () => onGroupDetails(group),
-                              icon: const Icon(Icons.groups_2_outlined),
-                              tooltip: 'Group details',
+                            Text(
+                              'device ${identity.deviceIdShort}',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: palette.inkSoft),
                             ),
                           ],
                         ),
+                      ),
+                      if (onShowDebug != null)
+                        IconButton(
+                          onPressed: onShowDebug,
+                          icon: const Icon(Icons.bug_report_outlined),
+                          tooltip: 'Debug',
+                        ),
+                      IconButton(
+                        onPressed: onShowSettings,
+                        icon: const Icon(Icons.settings_outlined),
+                        tooltip: 'Settings',
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  _StatusChip(
+                    label: controller.lastRelayStatus,
+                    palette: palette,
+                    icon: Icons.route,
+                    expand: true,
+                  ),
+                  const SizedBox(height: 8),
+                  _StatusChip(
+                    label: localRelayLabel,
+                    palette: palette,
+                    icon: Icons.lan_outlined,
+                    expand: true,
+                  ),
+                  const SizedBox(height: 8),
+                  _StatusChip(
+                    label: internetRelayLabel,
+                    palette: palette,
+                    icon: Icons.cloud_outlined,
+                    expand: true,
+                  ),
+                  const SizedBox(height: 8),
+                  _StatusChip(
+                    label: lanSummary,
+                    palette: palette,
+                    icon: Icons.wifi_tethering,
+                    expand: true,
+                  ),
+                  const SizedBox(height: 8),
+                  _StatusChip(
+                    label: 'safety ${identity.shortSafetyNumber}',
+                    palette: palette,
+                    icon: Icons.verified_user_outlined,
+                    expand: true,
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: onShowInvite,
+                          icon: const Icon(Icons.qr_code_2),
+                          label: const Text('My invite'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: onAddContact,
+                          icon: const Icon(Icons.person_add_alt_1),
+                          label: const Text('Add'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: onShowBeam,
+                      icon: const Icon(Icons.center_focus_strong),
+                      label: const Text('Conest Beam'),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  TextButton.icon(
+                    onPressed: onPoll,
+                    icon: const Icon(Icons.sync),
+                    label: const Text('Poll routes now'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          if (controller.savedMessagesContact != null) ...[
+            _savedMessagesRow(
+              controller,
+              palette,
+              selectedContactId: selectedContactId,
+              onSelected: onContactSelected,
+            ),
+            const SizedBox(height: 8),
+          ],
+          InkWell(
+            borderRadius: BorderRadius.circular(18),
+            onTap: onLanLobbySelected,
+            child: Ink(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: lanLobbySelected
+                    ? palette.selection
+                    : palette.paperStrong,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(
+                  color: lanLobbySelected ? palette.primary : palette.stroke,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: palette.primary.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Icon(Icons.forum_outlined, color: palette.primary),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'LAN lobby',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
                         const SizedBox(height: 4),
                         Text(
-                          '${group.activeMemberDeviceIds.length} member(s)',
+                          'Free-for-all local chat • untrusted',
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(color: palette.inkSoft),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          preview == null
-                              ? 'No messages yet'
-                              : preview.bodyPreview,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                fontWeight: unreadCount > 0
-                                    ? FontWeight.w700
-                                    : FontWeight.w400,
-                              ),
                         ),
                       ],
                     ),
                   ),
-                );
-              },
+                  if (lanLobbyUnreadCount > 0) ...[
+                    const SizedBox(width: 8),
+                    _UnreadBadge(count: lanLobbyUnreadCount, palette: palette),
+                  ],
+                  Text(
+                    '${controller.lanLobbyMessages.length}',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
+                  ),
+                ],
+              ),
             ),
-          ],
-        const SizedBox(height: 16),
-        for (final request in controller.pendingContactRequests) ...[
-          _PendingContactRequestCard(
-            controller: controller,
-            palette: palette,
-            request: request,
           ),
-          const SizedBox(height: 10),
-        ],
-        // The "Contacts · 0" header above an empty-state card is redundant —
-        // show the header only when there is something to count.
-        if (controller.contacts.isEmpty)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: _EmptyContactsState(palette: palette),
-          )
-        else ...[
+          const SizedBox(height: 16),
           Row(
             children: [
               Text(
-                'Contacts',
+                'Groups',
                 style: Theme.of(
                   context,
                 ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
               ),
               const Spacer(),
+              IconButton(
+                onPressed: controller.contacts.isEmpty ? null : onCreateGroup,
+                icon: const Icon(Icons.group_add_outlined),
+                tooltip: 'Create group',
+              ),
               Text(
-                '${controller.contacts.length}',
+                '${controller.visibleGroups.length}',
                 style: Theme.of(
                   context,
                 ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
@@ -6031,32 +6035,43 @@ class _Sidebar extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          if (homeLayout == ConestHomeLayout.classic)
-            ..._buildClassicRows(context)
-          else if (homeLayout == ConestHomeLayout.stationFeed)
-            ..._buildStationFeed(context)
+          if (controller.visibleGroups.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                controller.contacts.isEmpty
+                    ? 'Add trusted contacts before creating a group.'
+                    : 'No groups yet.',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+              ),
+            )
           else
             for (
               var index = 0;
-              index < controller.contacts.length;
+              index < controller.visibleGroups.length;
               index++
             ) ...[
               if (index > 0) const SizedBox(height: 8),
               Builder(
-                key: ValueKey(controller.contacts[index].deviceId),
+                // Stable identity so a reorder/insert can't transiently hand
+                // this slot another group's element.
+                key: ValueKey(controller.visibleGroups[index].groupId),
                 builder: (context) {
-                  final contact = controller.contacts[index];
-                  final preview = controller.lastMessageFor(contact.deviceId);
-                  final unreadCount = controller.unreadCountFor(
-                    contact.deviceId,
+                  final group = controller.visibleGroups[index];
+                  final preview = controller.lastGroupMessageFor(group.groupId);
+                  final unreadCount = controller.unreadGroupCountFor(
+                    group.groupId,
                   );
-                  final reachabilityState = controller.reachabilityStateFor(
-                    contact.deviceId,
-                  );
-                  final selected = selectedContactId == contact.deviceId;
+                  final selected = selectedGroupId == group.groupId;
+                  final myDeviceId = controller.identity?.deviceId ?? '';
+                  final hasLeft =
+                      myDeviceId.isNotEmpty &&
+                      !group.hasActiveMember(myDeviceId);
                   return InkWell(
                     borderRadius: BorderRadius.circular(18),
-                    onTap: () => onContactSelected(contact),
+                    onTap: () => onGroupSelected(group),
                     child: Ink(
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
@@ -6068,94 +6083,57 @@ class _Sidebar extends StatelessWidget {
                           color: selected ? palette.primary : palette.stroke,
                         ),
                       ),
-                      child: Row(
+                      child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          SealAvatar(
-                            seed: contact.deviceId,
-                            palette: palette,
-                            size: 44,
-                            label: contact.alias,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        contact.alias,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .titleMedium
-                                            ?.copyWith(
-                                              fontWeight: FontWeight.w700,
-                                            ),
-                                      ),
-                                    ),
-                                    TrustChip(
-                                      palette: palette,
-                                      kind: TrustChipKind.e2ee,
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      contact.shortSafetyNumber,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .labelSmall
-                                          ?.copyWith(
-                                            fontFamily: ConestPalette.monoFont,
-                                            color: palette.inkSoft,
-                                          ),
-                                    ),
-                                    if (unreadCount > 0) ...[
-                                      const SizedBox(width: 8),
-                                      _UnreadBadge(
-                                        count: unreadCount,
-                                        palette: palette,
-                                        compact: true,
-                                      ),
-                                    ],
-                                    IconButton(
-                                      visualDensity: VisualDensity.compact,
-                                      onPressed: () =>
-                                          onContactProfile(contact),
-                                      icon: const Icon(Icons.badge_outlined),
-                                      tooltip: 'Contact profile',
-                                    ),
-                                  ],
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  group.title,
+                                  style: Theme.of(context).textTheme.titleMedium
+                                      ?.copyWith(fontWeight: FontWeight.w700),
                                 ),
-                                const SizedBox(height: 4),
-                                _ReachabilityChip(
-                                  state: reachabilityState,
+                              ),
+                              if (hasLeft) ...[
+                                const SizedBox(width: 8),
+                                _GroupLeftBadge(palette: palette),
+                              ],
+                              if (unreadCount > 0) ...[
+                                const SizedBox(width: 8),
+                                _UnreadBadge(
+                                  count: unreadCount,
                                   palette: palette,
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  contact.routeSummary,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(context).textTheme.bodySmall
-                                      ?.copyWith(color: palette.inkSoft),
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  preview == null
-                                      ? 'No messages yet'
-                                      : preview.bodyPreview,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(context).textTheme.bodySmall
-                                      ?.copyWith(
-                                        fontWeight: unreadCount > 0
-                                            ? FontWeight.w700
-                                            : FontWeight.w400,
-                                      ),
+                                  compact: true,
                                 ),
                               ],
-                            ),
+                              IconButton(
+                                visualDensity: VisualDensity.compact,
+                                onPressed: () => onGroupDetails(group),
+                                icon: const Icon(Icons.groups_2_outlined),
+                                tooltip: 'Group details',
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${group.activeMemberDeviceIds.length} member(s)',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: palette.inkSoft),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            preview == null
+                                ? 'No messages yet'
+                                : preview.bodyPreview,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  fontWeight: unreadCount > 0
+                                      ? FontWeight.w700
+                                      : FontWeight.w400,
+                                ),
                           ),
                         ],
                       ),
@@ -6164,21 +6142,191 @@ class _Sidebar extends StatelessWidget {
                 },
               ),
             ],
-        ],
-        if (controller.statusMessage != null) ...[
-          const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              controller.statusMessage!,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+          const SizedBox(height: 16),
+          for (final request in controller.pendingContactRequests) ...[
+            _PendingContactRequestCard(
+              controller: controller,
+              palette: palette,
+              request: request,
             ),
-          ),
+            const SizedBox(height: 10),
+          ],
+          // The "Contacts · 0" header above an empty-state card is redundant —
+          // show the header only when there is something to count.
+          if (controller.contacts.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _EmptyContactsState(palette: palette),
+            )
+          else ...[
+            Row(
+              children: [
+                Text(
+                  'Contacts',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                const Spacer(),
+                Text(
+                  '${controller.contacts.length}',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (homeLayout == ConestHomeLayout.classic)
+              ..._buildClassicRows(context)
+            else if (homeLayout == ConestHomeLayout.stationFeed)
+              ..._buildStationFeed(context)
+            else
+              for (
+                var index = 0;
+                index < controller.contacts.length;
+                index++
+              ) ...[
+                if (index > 0) const SizedBox(height: 8),
+                Builder(
+                  key: ValueKey(controller.contacts[index].deviceId),
+                  builder: (context) {
+                    final contact = controller.contacts[index];
+                    final preview = controller.lastMessageFor(contact.deviceId);
+                    final unreadCount = controller.unreadCountFor(
+                      contact.deviceId,
+                    );
+                    final reachabilityState = controller.reachabilityStateFor(
+                      contact.deviceId,
+                    );
+                    final selected = selectedContactId == contact.deviceId;
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(18),
+                      onTap: () => onContactSelected(contact),
+                      child: Ink(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? palette.selection
+                              : palette.paperStrong,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: selected ? palette.primary : palette.stroke,
+                          ),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SealAvatar(
+                              seed: contact.deviceId,
+                              palette: palette,
+                              size: 44,
+                              label: contact.alias,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          contact.alias,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleMedium
+                                              ?.copyWith(
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                        ),
+                                      ),
+                                      TrustChip(
+                                        palette: palette,
+                                        kind: TrustChipKind.e2ee,
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        contact.shortSafetyNumber,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelSmall
+                                            ?.copyWith(
+                                              fontFamily:
+                                                  ConestPalette.monoFont,
+                                              color: palette.inkSoft,
+                                            ),
+                                      ),
+                                      if (unreadCount > 0) ...[
+                                        const SizedBox(width: 8),
+                                        _UnreadBadge(
+                                          count: unreadCount,
+                                          palette: palette,
+                                          compact: true,
+                                        ),
+                                      ],
+                                      IconButton(
+                                        visualDensity: VisualDensity.compact,
+                                        onPressed: () =>
+                                            onContactProfile(contact),
+                                        icon: const Icon(Icons.badge_outlined),
+                                        tooltip: 'Contact profile',
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  _ReachabilityChip(
+                                    state: reachabilityState,
+                                    palette: palette,
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    contact.routeSummary,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(color: palette.inkSoft),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    preview == null
+                                        ? 'No messages yet'
+                                        : preview.bodyPreview,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(
+                                          fontWeight: unreadCount > 0
+                                              ? FontWeight.w700
+                                              : FontWeight.w400,
+                                        ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ],
+          ],
+          if (controller.statusMessage != null) ...[
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                controller.statusMessage!,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
+              ),
+            ),
+          ],
+          const SizedBox(height: 18),
         ],
-        const SizedBox(height: 18),
-      ],
+      ),
     );
   }
 }
@@ -7327,6 +7475,7 @@ class _GroupChatPanel extends StatefulWidget {
     this.onScheduleAttachment,
     this.onBack,
     this.onSmartPaste,
+    this.onContentInserted,
   });
 
   final bool telegramLayout;
@@ -7344,6 +7493,9 @@ class _GroupChatPanel extends StatefulWidget {
   final VoidCallback? onScheduleAttachment;
   final VoidCallback? onBack;
   final VoidCallback? onSmartPaste;
+
+  /// An image or GIF from the keyboard (Android).
+  final ValueChanged<KeyboardInsertedContent>? onContentInserted;
 
   @override
   State<_GroupChatPanel> createState() => _GroupChatPanelState();
@@ -9147,84 +9299,87 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           return !m.outbound &&
                               controller.isUnreadGroupMessage(group.groupId, m);
                         }).length;
-                  return ListView.builder(
-                    key: _messageListKey,
-                    reverse: true,
+                  return StableScrollbar(
                     controller: _scrollController,
-                    padding: const EdgeInsets.all(18),
-                    itemCount: messages.length + (_historyExhausted ? 0 : 1),
-                    itemBuilder: (context, index) {
-                      if (index == messages.length) {
-                        return Center(
-                          child: TextButton.icon(
-                            onPressed: _loadingHistory
-                                ? null
-                                : _loadOlderHistory,
-                            icon: const Icon(Icons.history),
-                            label: Text(
-                              _loadingHistory
-                                  ? 'Loading history…'
-                                  : 'Load older messages',
+                    child: ListView.builder(
+                      key: _messageListKey,
+                      reverse: true,
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(18),
+                      itemCount: messages.length + (_historyExhausted ? 0 : 1),
+                      itemBuilder: (context, index) {
+                        if (index == messages.length) {
+                          return Center(
+                            child: TextButton.icon(
+                              onPressed: _loadingHistory
+                                  ? null
+                                  : _loadOlderHistory,
+                              icon: const Icon(Icons.history),
+                              label: Text(
+                                _loadingHistory
+                                    ? 'Loading history…'
+                                    : 'Load older messages',
+                              ),
                             ),
-                          ),
-                        );
-                      }
-                      final chronoIndex = messages.length - 1 - index;
-                      final message = messages[chronoIndex];
-                      if (_isAlbumContinuation(messages, chronoIndex)) {
-                        return const SizedBox.shrink();
-                      }
-                      final messageBubble =
-                          _isAlbumAnchor(messages, chronoIndex)
-                          ? _buildAlbumBubble(
-                              context,
-                              _collectAlbumFrom(messages, chronoIndex),
-                            )
-                          : _buildMessageBubble(context, message);
-                      final replyBubble = widget.telegramLayout
-                          ? SwipeToReply(
-                              key: ValueKey('reply-swipe-${message.id}'),
-                              enabled: !_selectionMode,
-                              color: palette.primary,
-                              onReply: () => widget.onReplyToMessage(message),
-                              child: messageBubble,
-                            )
-                          : messageBubble;
-                      final startsDay =
-                          chronoIndex == 0 ||
-                          !sameChatDay(
-                            messages[chronoIndex - 1].createdAt,
-                            message.createdAt,
                           );
-                      final bubble = widget.telegramLayout && startsDay
-                          ? Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                ChatDaySeparator(
-                                  timestamp: message.createdAt,
-                                  background: palette.panel2,
-                                  foreground: palette.inkSoft,
-                                ),
-                                replyBubble,
-                              ],
-                            )
-                          : replyBubble;
-                      final showDivider =
-                          anchor != null && message.id == anchor;
-                      if (!showDivider) {
-                        return bubble;
-                      }
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _NewMessagesDivider(
-                            palette: palette,
-                            count: unreadCount,
-                          ),
-                          bubble,
-                        ],
-                      );
-                    },
+                        }
+                        final chronoIndex = messages.length - 1 - index;
+                        final message = messages[chronoIndex];
+                        if (_isAlbumContinuation(messages, chronoIndex)) {
+                          return const SizedBox.shrink();
+                        }
+                        final messageBubble =
+                            _isAlbumAnchor(messages, chronoIndex)
+                            ? _buildAlbumBubble(
+                                context,
+                                _collectAlbumFrom(messages, chronoIndex),
+                              )
+                            : _buildMessageBubble(context, message);
+                        final replyBubble = widget.telegramLayout
+                            ? SwipeToReply(
+                                key: ValueKey('reply-swipe-${message.id}'),
+                                enabled: !_selectionMode,
+                                color: palette.primary,
+                                onReply: () => widget.onReplyToMessage(message),
+                                child: messageBubble,
+                              )
+                            : messageBubble;
+                        final startsDay =
+                            chronoIndex == 0 ||
+                            !sameChatDay(
+                              messages[chronoIndex - 1].createdAt,
+                              message.createdAt,
+                            );
+                        final bubble = widget.telegramLayout && startsDay
+                            ? Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  ChatDaySeparator(
+                                    timestamp: message.createdAt,
+                                    background: palette.panel2,
+                                    foreground: palette.inkSoft,
+                                  ),
+                                  replyBubble,
+                                ],
+                              )
+                            : replyBubble;
+                        final showDivider =
+                            anchor != null && message.id == anchor;
+                        if (!showDivider) {
+                          return bubble;
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _NewMessagesDivider(
+                              palette: palette,
+                              count: unreadCount,
+                            ),
+                            bubble,
+                          ],
+                        );
+                      },
+                    ),
                   );
                 },
               ),
@@ -9400,6 +9555,13 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                             },
                             child: TextField(
                               controller: widget.composerController,
+                              contentInsertionConfiguration:
+                                  widget.onContentInserted == null
+                                  ? null
+                                  : ContentInsertionConfiguration(
+                                      onContentInserted:
+                                          widget.onContentInserted!,
+                                    ),
                               minLines: 1,
                               maxLines: 5,
                               enabled: canSend,
@@ -9742,6 +9904,7 @@ class _ChatPanel extends StatefulWidget {
     required this.onDropFiles,
     this.onBack,
     this.onSmartPaste,
+    this.onContentInserted,
   });
 
   final bool telegramLayout;
@@ -9758,6 +9921,9 @@ class _ChatPanel extends StatefulWidget {
   final ValueChanged<List<XFile>> onDropFiles;
   final VoidCallback? onBack;
   final VoidCallback? onSmartPaste;
+
+  /// An image or GIF from the keyboard (Android).
+  final ValueChanged<KeyboardInsertedContent>? onContentInserted;
 
   @override
   State<_ChatPanel> createState() => _ChatPanelState();
@@ -11093,69 +11259,72 @@ class _ChatPanelState extends State<_ChatPanel> {
                           return !m.outbound &&
                               controller.isUnreadMessage(contact.deviceId, m);
                         }).length;
-                  return ListView.builder(
-                    key: _messageListKey,
-                    reverse: true,
+                  return StableScrollbar(
                     controller: _scrollController,
-                    padding: const EdgeInsets.all(18),
-                    itemCount: messages.length,
-                    itemBuilder: (context, index) {
-                      final chronoIndex = messages.length - 1 - index;
-                      final message = messages[chronoIndex];
-                      if (_isAlbumContinuation(messages, chronoIndex)) {
-                        return const SizedBox.shrink();
-                      }
-                      final messageBubble =
-                          _isAlbumAnchor(messages, chronoIndex)
-                          ? _buildAlbumBubble(
-                              context,
-                              _collectAlbumFrom(messages, chronoIndex),
-                            )
-                          : _buildMessageBubble(context, message);
-                      final replyBubble = widget.telegramLayout
-                          ? SwipeToReply(
-                              key: ValueKey('reply-swipe-${message.id}'),
-                              enabled: !_selectionMode,
-                              color: palette.primary,
-                              onReply: () => widget.onReplyToMessage(message),
-                              child: messageBubble,
-                            )
-                          : messageBubble;
-                      final startsDay =
-                          chronoIndex == 0 ||
-                          !sameChatDay(
-                            messages[chronoIndex - 1].createdAt,
-                            message.createdAt,
-                          );
-                      final bubble = widget.telegramLayout && startsDay
-                          ? Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                ChatDaySeparator(
-                                  timestamp: message.createdAt,
-                                  background: palette.panel2,
-                                  foreground: palette.inkSoft,
-                                ),
-                                replyBubble,
-                              ],
-                            )
-                          : replyBubble;
-                      final showDivider =
-                          anchor != null && message.id == anchor;
-                      if (!showDivider) {
-                        return bubble;
-                      }
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _NewMessagesDivider(
-                            palette: palette,
-                            count: unreadCount,
-                          ),
-                          bubble,
-                        ],
-                      );
-                    },
+                    child: ListView.builder(
+                      key: _messageListKey,
+                      reverse: true,
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(18),
+                      itemCount: messages.length,
+                      itemBuilder: (context, index) {
+                        final chronoIndex = messages.length - 1 - index;
+                        final message = messages[chronoIndex];
+                        if (_isAlbumContinuation(messages, chronoIndex)) {
+                          return const SizedBox.shrink();
+                        }
+                        final messageBubble =
+                            _isAlbumAnchor(messages, chronoIndex)
+                            ? _buildAlbumBubble(
+                                context,
+                                _collectAlbumFrom(messages, chronoIndex),
+                              )
+                            : _buildMessageBubble(context, message);
+                        final replyBubble = widget.telegramLayout
+                            ? SwipeToReply(
+                                key: ValueKey('reply-swipe-${message.id}'),
+                                enabled: !_selectionMode,
+                                color: palette.primary,
+                                onReply: () => widget.onReplyToMessage(message),
+                                child: messageBubble,
+                              )
+                            : messageBubble;
+                        final startsDay =
+                            chronoIndex == 0 ||
+                            !sameChatDay(
+                              messages[chronoIndex - 1].createdAt,
+                              message.createdAt,
+                            );
+                        final bubble = widget.telegramLayout && startsDay
+                            ? Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  ChatDaySeparator(
+                                    timestamp: message.createdAt,
+                                    background: palette.panel2,
+                                    foreground: palette.inkSoft,
+                                  ),
+                                  replyBubble,
+                                ],
+                              )
+                            : replyBubble;
+                        final showDivider =
+                            anchor != null && message.id == anchor;
+                        if (!showDivider) {
+                          return bubble;
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _NewMessagesDivider(
+                              palette: palette,
+                              count: unreadCount,
+                            ),
+                            bubble,
+                          ],
+                        );
+                      },
+                    ),
                   );
                 },
               ),
@@ -11233,6 +11402,13 @@ class _ChatPanelState extends State<_ChatPanel> {
                             },
                             child: TextField(
                               controller: widget.composerController,
+                              contentInsertionConfiguration:
+                                  widget.onContentInserted == null
+                                  ? null
+                                  : ContentInsertionConfiguration(
+                                      onContentInserted:
+                                          widget.onContentInserted!,
+                                    ),
                               minLines: 1,
                               maxLines: 5,
                               enabled: contact.canComposeOutbound,
@@ -12470,6 +12646,21 @@ class _InviteScreenState extends State<InviteScreen> {
                           message:
                               'Connectivity is off. Turn on LAN or Online before sharing this invite.',
                         ),
+                        if (!widget.controller.invitesReachOverInternet)
+                          Padding(
+                            key: const ValueKey('invite-lan-only'),
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Text(
+                              'This invite works only on the same network: '
+                              'no internet route is on. Turn on Iroh relays, '
+                              'a Conest relay or a carrier (Nostr, email) in '
+                              'Settings → Connectivity so contacts can add you '
+                              'from anywhere.',
+                              style: TextStyle(
+                                color: Theme.of(context).colorScheme.error,
+                              ),
+                            ),
+                          ),
                         if (_tooBigForQr)
                           Container(
                             key: const ValueKey('invite-beam-first'),
@@ -14279,6 +14470,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               const SizedBox(height: 16),
                               AppModeSelector(controller: widget.controller),
                             ],
+                            if (Platform.isWindows) const _WindowsFirewallTile(),
                             NetworkChatsSettings(
                               controller: widget.controller,
                               palette: widget.palette,
@@ -21071,3 +21263,178 @@ Future<bool> confirmSendingMetadata(
       ),
     ) ??
     false;
+
+/// Picks the chat to put something shared from another app into.
+class _ShareTargetDialog extends StatelessWidget {
+  const _ShareTargetDialog({required this.controller, required this.shared});
+
+  final MessengerController controller;
+  final SharedContent shared;
+
+  @override
+  Widget build(BuildContext context) {
+    final me = controller.identity?.deviceId;
+    final contacts = [
+      for (final contact in controller.contacts)
+        if (contact.canSendOutbound && contact.deviceId != me) contact,
+    ]..sort((a, b) => a.alias.compareTo(b.alias));
+    final groups = [
+      for (final group in controller.groups)
+        if (me != null && group.hasActiveMember(me)) group,
+    ]..sort((a, b) => a.title.compareTo(b.title));
+    final count = shared.files.length;
+    return AlertDialog(
+      title: Text(
+        count == 0
+            ? 'Share text to…'
+            : count == 1
+            ? 'Share ${shared.files.single.name} to…'
+            : 'Share $count files to…',
+      ),
+      content: SizedBox(
+        width: 380,
+        child: contacts.isEmpty && groups.isEmpty
+            ? const Text('No chats to share into yet.')
+            : ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final contact in contacts)
+                    ListTile(
+                      leading: const Icon(Icons.person_outline),
+                      title: Text(contact.alias),
+                      onTap: () => Navigator.of(context).pop(contact),
+                    ),
+                  for (final group in groups)
+                    ListTile(
+                      leading: const Icon(Icons.group_outlined),
+                      title: Text(group.title),
+                      onTap: () => Navigator.of(context).pop(group),
+                    ),
+                ],
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+      ],
+    );
+  }
+}
+
+/// A scrollbar whose thumb keeps its size while scrolling: lists of
+/// messages have estimated heights, so the default thumb kept resizing as
+/// items were laid out. The thumb is never shorter than [minThumbLength],
+/// which on any long list is its size.
+class StableScrollbar extends StatelessWidget {
+  const StableScrollbar({
+    super.key,
+    this.controller,
+    this.thumbVisibility,
+    required this.child,
+  });
+
+  final ScrollController? controller;
+
+  /// Always shown (true), or only while scrolling (null: the default).
+  final bool? thumbVisibility;
+  final Widget child;
+
+  static const double minThumbLength = 64;
+
+  @override
+  Widget build(BuildContext context) {
+    return ScrollConfiguration(
+      behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+      child: RawScrollbar(
+        controller: controller,
+        thumbVisibility: thumbVisibility,
+        thickness: 6,
+        radius: const Radius.circular(3),
+        minThumbLength: minThumbLength,
+        interactive: controller != null,
+        thumbColor: Theme.of(
+          context,
+        ).colorScheme.onSurface.withValues(alpha: 0.35),
+        child: child,
+      ),
+    );
+  }
+}
+
+/// Pointer activity on the window proves the app is in front, whatever the
+/// platform last reported: some Linux desktops report a window in use as
+/// hidden, and then chats stopped marking what was on screen read.
+class UserActivityForeground extends StatelessWidget {
+  const UserActivityForeground({
+    super.key,
+    required this.isForeground,
+    required this.onForeground,
+    required this.child,
+  });
+
+  final bool Function() isForeground;
+  final VoidCallback onForeground;
+  final Widget child;
+
+  void _seen(PointerEvent _) {
+    if (!isForeground()) onForeground();
+  }
+
+  @override
+  Widget build(BuildContext context) => Listener(
+    behavior: HitTestBehavior.translucent,
+    onPointerDown: _seen,
+    onPointerHover: _seen,
+    onPointerSignal: _seen,
+    child: child,
+  );
+}
+
+/// Windows: lets devices on the same network reach this PC (the firewall
+/// blocks them on public networks such as a phone's hotspot).
+class _WindowsFirewallTile extends StatefulWidget {
+  const _WindowsFirewallTile();
+
+  @override
+  State<_WindowsFirewallTile> createState() => _WindowsFirewallTileState();
+}
+
+class _WindowsFirewallTileState extends State<_WindowsFirewallTile> {
+  bool _busy = false;
+  String? _result;
+
+  Future<void> _allow() async {
+    setState(() => _busy = true);
+    final allowed = await WindowsFirewall.allowIncoming();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _result = allowed
+          ? 'Done: devices on this network can reach this PC.'
+          : 'Not changed (Windows did not confirm).';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+    key: const ValueKey('windows-firewall'),
+    contentPadding: EdgeInsets.zero,
+    leading: const Icon(Icons.shield_outlined),
+    title: const Text('Let devices on this network reach this PC'),
+    subtitle: Text(
+      _result ??
+          'If messages and files from a phone on the same network never '
+              'arrive (but yours reach it), Windows Firewall is blocking '
+              'them. This adds a rule for Conest; Windows asks to confirm.',
+    ),
+    trailing: _busy
+        ? const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
+        : TextButton(onPressed: _allow, child: const Text('Allow')),
+  );
+}

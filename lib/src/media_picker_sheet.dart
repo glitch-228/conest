@@ -101,6 +101,28 @@ abstract interface class MediaLibrary {
   Future<void> openSettings();
   void addChangeListener(VoidCallback listener);
   void removeChangeListener(VoidCallback listener);
+
+  /// Items the gallery leaves out: those in hidden folders or folders
+  /// marked with `.nomedia`, as the system gallery does.
+  bool isHidden(AssetEntity asset);
+}
+
+/// Whether a folder ([relativePath], like `Pictures/App/.cache/`) is
+/// hidden: a segment starting with a dot, or the folder or one above it
+/// holding `.nomedia` (asked of [hasNomedia], by relative folder path).
+bool isHiddenMediaFolder(
+  String relativePath,
+  bool Function(String folder) hasNomedia,
+) {
+  final segments = relativePath
+      .split('/')
+      .where((segment) => segment.isNotEmpty)
+      .toList();
+  if (segments.any((segment) => segment.startsWith('.'))) return true;
+  for (var depth = segments.length; depth > 0; depth--) {
+    if (hasNomedia('${segments.take(depth).join('/')}/')) return true;
+  }
+  return false;
 }
 
 /// [MediaLibrary] over photo_manager (Android and iOS).
@@ -123,7 +145,32 @@ class PhotoManagerLibrary implements MediaLibrary {
         ],
       ),
     );
-    return [...albums.where((a) => a.isAll), ...albums.where((a) => !a.isAll)];
+    // Hidden albums (".thumbnails", ".Statuses") are not offered.
+    final shown = albums.where((album) => !album.name.startsWith('.'));
+    return [...shown.where((a) => a.isAll), ...shown.where((a) => !a.isAll)];
+  }
+
+  /// `.nomedia` checks by relative folder, remembered for the session.
+  final Map<String, bool> _nomedia = {};
+
+  @override
+  bool isHidden(AssetEntity asset) {
+    final relative = asset.relativePath;
+    if (relative == null || relative.isEmpty) return false;
+    return isHiddenMediaFolder(
+      relative,
+      (folder) => _nomedia[folder] ??= _hasNomedia(folder),
+    );
+  }
+
+  /// Shared storage may be unreadable here (Android 13 and later without
+  /// broad access): then only hidden folder names count.
+  static bool _hasNomedia(String folder) {
+    try {
+      return File('/storage/emulated/0/$folder.nomedia').existsSync();
+    } catch (_) {
+      return false;
+    }
   }
 
   @override
@@ -252,6 +299,10 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
   List<AssetPathEntity> _albums = const [];
   AssetPathEntity? _album;
   final List<AssetEntity> _assets = [];
+
+  /// Items read from the album so far, hidden ones included: paging goes by
+  /// these, not by what is shown.
+  int _loadedRaw = 0;
   int _total = 0;
   int _nextPage = 0;
   bool _loadingMore = false;
@@ -355,6 +406,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
       if (album == null) {
         setState(() {
           _assets.clear();
+          _loadedRaw = 0;
           _total = 0;
           _loading = false;
         });
@@ -373,6 +425,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
     setState(() {
       _album = album;
       _assets.clear();
+      _loadedRaw = 0;
       _total = 0;
       _nextPage = 0;
       _loadingMore = false;
@@ -396,24 +449,34 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
 
   Future<void> _loadMore() async {
     final album = _album;
-    if (album == null || _loadingMore || _assets.length >= _total) return;
+    if (album == null || _loadingMore || _loadedRaw >= _total) return;
     final generation = _generation;
     _loadingMore = true;
+    var nothingShown = false;
     try {
       final page = await _library.page(album, page: _nextPage, size: _pageSize);
       if (!mounted || generation != _generation || album != _album) return;
+      final shown = page.where((asset) => !_library.isHidden(asset)).toList();
+      nothingShown = page.isNotEmpty && shown.isEmpty;
       setState(() {
-        _assets.addAll(page);
+        _assets.addAll(shown);
+        _loadedRaw += page.length;
         _nextPage++;
         // A library that shrank while paging ends here.
-        if (page.isEmpty) _total = _assets.length;
+        if (page.isEmpty) _total = _loadedRaw;
       });
     } catch (_) {
       if (mounted && generation == _generation) {
-        setState(() => _total = _assets.length);
+        setState(() => _total = _loadedRaw);
       }
     } finally {
       if (generation == _generation) _loadingMore = false;
+    }
+    // A page of hidden items only: the next one, without waiting for a
+    // scroll that cannot happen over an empty grid.
+    if (nothingShown && mounted && generation == _generation) {
+      await _loadMore();
+      return;
     }
     // A short first page may not fill the screen.
     if (mounted) {

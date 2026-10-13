@@ -311,8 +311,14 @@ class TransportRegistry {
     // direct hint and retry endpoint-only, so thirty seconds can cut off the
     // recovery path while the native send is still healthy.
     Duration? attemptTimeout,
+    // Routes not to use this time (they took earlier messages no receipt
+    // confirmed); the caller tries them last.
+    Set<String> skipRouteIds = const {},
   }) async {
-    final routes = await routesFor(peer, policies: policies);
+    final routes = [
+      for (final route in await routesFor(peer, policies: policies))
+        if (!skipRouteIds.contains(route.routeId)) route,
+    ];
     final attempts = <DeliveryAttempt>[];
     Object? lastError;
     for (final route in routes) {

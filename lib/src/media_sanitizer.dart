@@ -47,8 +47,15 @@ abstract final class MediaSanitizer {
             ? SanitizeStatus.cleaned
             : SanitizeStatus.clean;
       }
-      if (_kind(head) == null) return SanitizeStatus.unsupported;
-      if (length > maxInMemoryBytes) return SanitizeStatus.failed;
+      final kind = _kind(head);
+      if (kind == null) return SanitizeStatus.unsupported;
+      if (length > maxInMemoryBytes) {
+        // A zip this large is an archive or an app, not a document: there
+        // is nothing to remove, so nothing failed.
+        return kind == 'zip'
+            ? SanitizeStatus.unsupported
+            : SanitizeStatus.failed;
+      }
       await handle.setPosition(0);
       final data = await handle.read(length);
       final cleaned = sanitizeBytes(data);

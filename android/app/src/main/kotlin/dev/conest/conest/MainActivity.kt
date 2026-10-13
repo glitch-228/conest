@@ -16,6 +16,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
@@ -27,6 +28,9 @@ import java.io.File
 
 class MainActivity : FlutterActivity() {
     private var systemChannel: MethodChannel? = null
+
+    /// What another app shared, copied into the cache, until Dart takes it.
+    private var pendingShare: Map<String, Any?>? = null
     private var voiceCallPermissionResult: MethodChannel.Result? = null
 
     override fun provideFlutterEngine(context: Context): FlutterEngine? =
@@ -265,16 +269,113 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                 }
+                "takeClipboardMedia" -> {
+                    val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    val uri = cm.primaryClip?.let { clip ->
+                        (0 until clip.itemCount).firstNotNullOfOrNull { clip.getItemAt(it).uri }
+                    }
+                    if (uri == null) {
+                        result.success(null)
+                    } else {
+                        Thread {
+                            val copied = copySharedUri(uri, File(cacheDir, "pasted/${System.currentTimeMillis()}"), 0)
+                            runOnUiThread { result.success(copied) }
+                        }.start()
+                    }
+                }
+                "takePendingShare" -> {
+                    result.success(pendingShare)
+                    pendingShare = null
+                }
                 else -> result.notImplemented()
             }
         }
         dispatchTransferControl(intent)
+        dispatchShare(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         dispatchTransferControl(intent)
+        dispatchShare(intent)
+    }
+
+    /// Copies what another app shared (files, images, text) into the cache
+    /// off the main thread, then tells Dart to take it.
+    private fun dispatchShare(intent: Intent?) {
+        val action = intent?.action ?: return
+        if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) {
+            return
+        }
+        // Handled once, also after a rotation re-delivers the intent.
+        intent.action = null
+        val uris = mutableListOf<Uri>()
+        if (action == Intent.ACTION_SEND) {
+            @Suppress("DEPRECATION")
+            (intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))?.let { uris.add(it) }
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
+        }
+        val clip = intent.clipData
+        if (uris.isEmpty() && clip != null) {
+            for (index in 0 until clip.itemCount) {
+                clip.getItemAt(index).uri?.let { uris.add(it) }
+            }
+        }
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+        Thread {
+            val folder = File(cacheDir, "shared/${System.currentTimeMillis()}")
+            folder.mkdirs()
+            val files = mutableListOf<Map<String, Any?>>()
+            for ((index, uri) in uris.take(MAX_SHARED_FILES).withIndex()) {
+                // An item that cannot be read is left out; the rest still go.
+                copySharedUri(uri, folder, index)?.let { files.add(it) }
+            }
+            runOnUiThread {
+                if (files.isEmpty() && text.isNullOrEmpty()) return@runOnUiThread
+                pendingShare = mapOf("files" to files, "text" to text)
+                systemChannel?.invokeMethod("shareAvailable", null)
+            }
+        }.start()
+    }
+
+    /// Copies [uri] (another app's content) into [folder]: its path, name
+    /// and type, or null when it cannot be read.
+    private fun copySharedUri(uri: Uri, folder: File, index: Int): Map<String, Any?>? {
+        return try {
+            folder.mkdirs()
+            var name = "shared-$index"
+            contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    cursor.getString(0)?.let { name = it }
+                }
+            }
+            val safe = name.replace(Regex("[/\\\\:*?\"<>|\\u0000]"), "_")
+                .take(120).ifBlank { "shared-$index" }
+            val target = File(folder, "$index-$safe")
+            val copied = contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+            if (copied == null) {
+                null
+            } else {
+                mapOf(
+                    "path" to target.absolutePath,
+                    "name" to safe,
+                    "mimeType" to (contentResolver.getType(uri) ?: "application/octet-stream"),
+                )
+            }
+        } catch (error: Exception) {
+            null
+        }
     }
 
     private fun dispatchTransferControl(intent: Intent?) {
@@ -833,6 +934,7 @@ class MainActivity : FlutterActivity() {
     }
 
     companion object {
+        private const val MAX_SHARED_FILES = 50
         @Volatile
         private var activeSystemChannel: MethodChannel? = null
 

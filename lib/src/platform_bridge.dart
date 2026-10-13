@@ -29,6 +29,8 @@ class PlatformBridge {
           );
         } else if (call.method == 'scheduledMessageDue') {
           _scheduledMessageWakeups.add(1);
+        } else if (call.method == 'shareAvailable') {
+          _shareAvailable.add(null);
         }
       });
     } on AssertionError {
@@ -41,6 +43,44 @@ class PlatformBridge {
       StreamController<String>.broadcast();
   final StreamController<int> _scheduledMessageWakeups =
       StreamController<int>.broadcast();
+  final StreamController<void> _shareAvailable =
+      StreamController<void>.broadcast();
+
+  /// Another app shared something with Conest (Android): take it with
+  /// [takePendingShare].
+  Stream<void> get shareAvailableEvents => _shareAvailable.stream;
+
+  /// The clipboard's image or file (Android), copied into the cache; null
+  /// when it holds only text, or nothing.
+  Future<({String path, String name, String mimeType})?>
+  takeClipboardMedia() async {
+    if (kIsWeb || !Platform.isAndroid) return null;
+    try {
+      final value = await _channel.invokeMethod<Object?>('takeClipboardMedia');
+      return SharedContent.fromPlatform({
+        'files': [value],
+      })?.files.firstOrNull;
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  /// What another app shared, copied into the cache; null when nothing
+  /// waits (or not on Android).
+  Future<SharedContent?> takePendingShare() async {
+    if (kIsWeb || !Platform.isAndroid) return null;
+    try {
+      final value = await _channel.invokeMethod<Object?>('takePendingShare');
+      return SharedContent.fromPlatform(value);
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
   final NativeVoiceCallAudio? _voiceAudio = NativeVoiceCallAudio.tryCreate();
 
   Stream<String> get transferControlEvents => _transferControls.stream;
@@ -518,5 +558,37 @@ class PlatformBridge {
     } on MissingPluginException {
       return;
     }
+  }
+}
+
+/// Files and text another app shared with Conest.
+class SharedContent {
+  const SharedContent({this.files = const [], this.text});
+
+  final List<({String path, String name, String mimeType})> files;
+  final String? text;
+
+  bool get isEmpty => files.isEmpty && (text == null || text!.isEmpty);
+
+  static SharedContent? fromPlatform(Object? value) {
+    if (value is! Map) return null;
+    final files = <({String path, String name, String mimeType})>[];
+    for (final file in value['files'] as List? ?? const []) {
+      if (file is! Map) continue;
+      final path = file['path'];
+      final name = file['name'];
+      if (path is! String || name is! String) continue;
+      files.add((
+        path: path,
+        name: name,
+        mimeType: file['mimeType'] as String? ?? 'application/octet-stream',
+      ));
+    }
+    final text = value['text'];
+    final content = SharedContent(
+      files: files,
+      text: text is String ? text : null,
+    );
+    return content.isEmpty ? null : content;
   }
 }

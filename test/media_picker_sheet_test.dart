@@ -87,6 +87,12 @@ class _FakeLibrary implements MediaLibrary {
   @override
   void removeChangeListener(VoidCallback listener) =>
       listeners.remove(listener);
+
+  /// Items in hidden or .nomedia folders.
+  final Set<String> hiddenIds = {};
+
+  @override
+  bool isHidden(AssetEntity asset) => hiddenIds.contains(asset.id);
 }
 
 void main() {
@@ -148,6 +154,31 @@ void main() {
     expect(tiles(tester), 300);
     expect(library.fileCalls, 0);
     expect(library.listeners, hasLength(1));
+  });
+
+  testWidgets('leaves out hidden items, even a whole page of them', (
+    tester,
+  ) async {
+    library.hiddenIds.addAll([for (var i = 0; i < 90; i++) 'r$i']);
+    await open(tester);
+    for (var i = 0; i < 20 && tiles(tester) < 210; i++) {
+      await tester.drag(
+        find.byKey(const ValueKey('media-grid')),
+        const Offset(0, -3000),
+      );
+      await tester.pumpAndSettle();
+    }
+    expect(tiles(tester), 210);
+  });
+
+  test('hidden and .nomedia folders are hidden', () {
+    final marked = {'Pictures/App/'};
+    bool hasNomedia(String folder) => marked.contains(folder);
+    expect(isHiddenMediaFolder('DCIM/Camera/', hasNomedia), isFalse);
+    expect(isHiddenMediaFolder('Pictures/.thumbnails/', hasNomedia), isTrue);
+    expect(isHiddenMediaFolder('Pictures/App/', hasNomedia), isTrue);
+    expect(isHiddenMediaFolder('Pictures/App/Sub/', hasNomedia), isTrue);
+    expect(isHiddenMediaFolder('Pictures/Apps/', hasNomedia), isFalse);
   });
 
   testWidgets('switches albums', (tester) async {

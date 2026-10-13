@@ -1175,6 +1175,10 @@ class _InProcessIrohNetwork {
   /// (sender, recipient) endpoint pairs that cannot reach each other.
   final blockedPairs = <(String, String)>{};
 
+  /// Pairs whose sends are accepted and lost (a firewall dropping what
+  /// arrives while the other way works).
+  final droppedPairs = <(String, String)>{};
+
   Future<TransportRegistry?> registry(IdentityRecord identity) async {
     final bridge = _InProcessIrohBridge(this, identity.irohEndpointId!);
     bridges[bridge.endpointId] = bridge;
@@ -1237,6 +1241,13 @@ class _InProcessIrohBridge implements NativeIrohBridge {
     if (recipient == null) throw StateError('Peer offline');
     if (network.blockedPairs.contains((endpointId, remoteEndpointId))) {
       throw StateError('Peer unreachable');
+    }
+    if (network.droppedPairs.contains((endpointId, remoteEndpointId))) {
+      return IrohBridgeReceipt(
+        endpointId: remoteEndpointId,
+        relayed: network.relayed,
+        accepted: true,
+      );
     }
     final range = decodeIrohAttachmentRangeFrame(bytes);
     if (range != null && isGroupFileBinary(range.bytes)) {
@@ -5455,14 +5466,26 @@ void main() {
       '10.0.0.20',
       '172.16.0.20',
     });
+    // A way in from another network always makes it.
     expect(
       invite.routeHints.where((route) => route.kind == PeerRouteKind.relay),
-      hasLength(lessThanOrEqualTo(2)),
+      hasLength(inInclusiveRange(1, 2)),
     );
+    expect(controller.invitesReachOverInternet, isTrue);
     expect(payload.length, lessThan(900));
     expect(payload, startsWith('ci6|'));
     expect(invite.usesSignedFormat, isTrue);
     expect(invite.irohEndpointId, isNotEmpty);
+  });
+
+  test('an invite with no internet route says so', () async {
+    final controller = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Alice',
+      internetRelayHost: null,
+    );
+    addTearDown(controller.dispose);
+    expect(controller.invitesReachOverInternet, isFalse);
   });
 
   test('hotspot gateway addresses are treated as LAN discovery addresses', () {
@@ -14689,6 +14712,60 @@ void main() {
     });
   });
 
+  test(
+    'a route that takes messages but never delivers them gives way',
+    () async {
+      var now = DateTime.utc(2026, 10, 13, 12);
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        nowProvider: () => now,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        nowProvider: () => now,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      // Bob's firewall drops what Alice sends directly; Bob to Alice works.
+      network.droppedPairs.add((
+        alice.identity!.irohEndpointId!,
+        bob.identity!.irohEndpointId!,
+      ));
+      await alice.sendMessage(contact: alice.contacts.single, body: 'one way');
+      final aliceId = alice.identity!.deviceId;
+      await bob.pollNow();
+      expect(
+        bob.messagesFor(aliceId).where((m) => m.body == 'one way'),
+        isEmpty,
+      );
+
+      // No receipt within the timeout: the next try takes another route.
+      now = now.add(const Duration(seconds: 9));
+      await alice.retryUnacknowledgedMessagesNow();
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.messagesFor(aliceId).any((m) => m.body == 'one way');
+      }, reason: 'the message did not take another route');
+      final bobId = bob.identity!.deviceId;
+      await _waitForIroh(
+        () => {DeliveryState.delivered, DeliveryState.read}.contains(
+          alice
+              .messagesFor(bobId)
+              .singleWhere((m) => m.body == 'one way')
+              .state,
+        ),
+        reason: 'the receipt did not come back',
+      );
+    },
+  );
+
   group('File privacy', () {
     /// A small JPEG carrying a GPS marker in an EXIF segment.
     Uint8List photoWithLocation() {
@@ -14870,6 +14947,28 @@ void main() {
         );
       },
     );
+
+    test('Saved messages keep a photo as it is', () async {
+      final (alice, _, root) = await pair();
+      final photo = photoWithLocation();
+      final source = await File('${root.path}/mine.jpg').writeAsBytes(photo);
+      final saved = alice.savedMessagesContact!;
+      await alice.sendAttachmentSource(
+        contact: saved,
+        source: StagedAttachment(
+          id: 'mine',
+          fileName: 'mine.jpg',
+          mimeType: 'image/jpeg',
+          sizeBytes: photo.length,
+          filePath: source.path,
+        ),
+      );
+      final message = alice
+          .messagesFor(saved.deviceId)
+          .singleWhere((m) => m.attachment != null);
+      final path = await alice.attachmentCachePathFor(message.attachment!.id);
+      expect(hasLocation(await File(path!).readAsBytes()), isTrue);
+    });
 
     test('group photos go without their location too', () async {
       final (alice, bob, root) = await pair();

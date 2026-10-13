@@ -1734,6 +1734,10 @@ class MessengerController extends ChangeNotifier {
     }
     _reschedulePolling();
     _scheduleScheduledMessagePump();
+    // Open chats mark what is on screen read on return (their read sweep
+    // runs on rebuild): without this a message that arrived while the
+    // window was hidden stayed unread until something else changed.
+    notifyListeners();
   }
 
   /// A suspended process can lose in-flight socket work while retaining its
@@ -4591,6 +4595,17 @@ class MessengerController extends ChangeNotifier {
     final peer = deltaChats.peers[fingerprint];
     return peer?.name ?? peer?.addr ?? fingerprint.substring(0, 8);
   }
+
+  /// Another app shared something with Conest (Android).
+  Stream<void> get shareAvailableEvents => _platformBridge.shareAvailableEvents;
+
+  /// The clipboard's image or file (Android), if any.
+  Future<({String path, String name, String mimeType})?> takeClipboardMedia() =>
+      _platformBridge.takeClipboardMedia();
+
+  /// What another app shared, if anything waits.
+  Future<SharedContent?> takePendingShare() =>
+      _platformBridge.takePendingShare();
 
   /// Files are sent without their metadata (EXIF, location, authors).
   bool get removesFileMetadata => !_snapshot.keepFileMetadata;
@@ -10122,6 +10137,8 @@ class MessengerController extends ChangeNotifier {
     }
     final attachmentId = _randomId('att');
     final prepared = await _prepareOutboundAttachmentSource(
+      // The user's own archive keeps what the file says.
+      cleanMetadata: false,
       attachmentId: attachmentId,
       source: source,
       allowOriginalFallback: false,
@@ -10996,6 +11013,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<_PreparedAttachmentSource> _prepareOutboundAttachmentSource({
+    bool cleanMetadata = true,
     required String attachmentId,
     required StagedAttachment source,
     required bool allowOriginalFallback,
@@ -11053,7 +11071,7 @@ class MessengerController extends ChangeNotifier {
           temporary.path,
           onProgress: onProgress,
         );
-        if (removesFileMetadata) {
+        if (cleanMetadata && removesFileMetadata) {
           switch (await MediaSanitizer.sanitizeFile(temporary.path)) {
             case SanitizeStatus.cleaned:
               digest = await hashAttachmentFile(temporary.path);
@@ -11084,6 +11102,7 @@ class MessengerController extends ChangeNotifier {
     // The original goes as it is: with its metadata, if it has any to
     // remove.
     final keepsMetadata =
+        cleanMetadata &&
         removesFileMetadata &&
         originalPath != null &&
         (metadataFailed || await MediaSanitizer.handles(originalPath));
@@ -17313,6 +17332,7 @@ class MessengerController extends ChangeNotifier {
         target != envelope.acknowledgedMessageId) {
       return;
     }
+    _noteConfirmed(contact.deviceId, target);
     if (group != null) {
       if (!group.hasActiveMember(contact.deviceId)) return;
       _updateGroupRecipientState(
@@ -23197,8 +23217,11 @@ class MessengerController extends ChangeNotifier {
     // contact at once regardless (see _flushContactSoon).
     final attempts = _outboundAttemptCount[key] ?? 0;
     final pending = message.state == DeliveryState.pending;
+    // Handed straight to them and still no receipt: another route soon.
     final base = pending
         ? _pendingMessageRetryDelay
+        : _sentRouteKeys.containsKey(key) && attempts <= 1
+        ? _routeAckTimeout
         : _acceptedMessageRetryDelay;
     final cap = pending
         ? const Duration(minutes: 1)
@@ -23209,6 +23232,62 @@ class MessengerController extends ChangeNotifier {
   }
 
   final Map<String, int> _outboundAttemptCount = {};
+
+  /// Routes that took a chat message no receipt has confirmed, by contact
+  /// then route key, since when. Taking a message proves nothing: a
+  /// firewall can drop what arrives while the other way works.
+  final Map<String, Map<String, DateTime>> _unconfirmedRoutes = {};
+
+  /// The route each message last went on, by [_outboundAttemptKey].
+  final Map<String, String> _sentRouteKeys = {};
+
+  /// How long a route has to bring back a receipt before others go first.
+  static const Duration _routeAckTimeout = Duration(seconds: 8);
+  static const Duration _unconfirmedRouteMemory = Duration(minutes: 10);
+
+  void _noteHandedOff(String deviceId, String messageId, _DeliveryRoute route) {
+    // A relay or a forwarding contact keeps it until they fetch it: no
+    // receipt is due soon.
+    if (route.forwarded || route.path == TransportPathKind.storeForward) {
+      return;
+    }
+    final key = _outboundAttemptKey(deviceId, messageId);
+    _sentRouteKeys.remove(key);
+    while (_sentRouteKeys.length >= 4096) {
+      _sentRouteKeys.remove(_sentRouteKeys.keys.first);
+    }
+    _sentRouteKeys[key] = route.routeKey;
+    (_unconfirmedRoutes[deviceId] ??= {}).putIfAbsent(
+      route.routeKey,
+      () => _now().toUtc(),
+    );
+  }
+
+  /// A receipt for [messageId] arrived: its route works.
+  void _noteConfirmed(String deviceId, String messageId) {
+    final routeKey = _sentRouteKeys.remove(
+      _outboundAttemptKey(deviceId, messageId),
+    );
+    if (routeKey == null) return;
+    final routes = _unconfirmedRoutes[deviceId];
+    routes?.remove(routeKey);
+    if (routes != null && routes.isEmpty) _unconfirmedRoutes.remove(deviceId);
+  }
+
+  /// Routes to [deviceId] whose messages have gone unconfirmed past
+  /// [_routeAckTimeout] (forgotten after [_unconfirmedRouteMemory]).
+  Set<String> _suspectRoutes(String deviceId) {
+    final routes = _unconfirmedRoutes[deviceId];
+    if (routes == null) return const {};
+    final now = _now().toUtc();
+    routes.removeWhere(
+      (_, since) => now.difference(since) > _unconfirmedRouteMemory,
+    );
+    return {
+      for (final MapEntry(:key, value: since) in routes.entries)
+        if (now.difference(since) >= _routeAckTimeout) key,
+    };
+  }
 
   String _outboundAttemptKey(String peerDeviceId, String messageId) {
     return '$peerDeviceId|$messageId';
@@ -23381,11 +23460,24 @@ class MessengerController extends ChangeNotifier {
     Object? lastError;
     _DeliveryRoute? deliveredVia;
     final attemptedRouteKeys = <String>{};
+    // Routes that took messages no receipt confirmed (a one-way link: a
+    // firewall dropping what arrives, say) go last, after every other.
+    final suspects = _suspectRoutes(contact.deviceId);
+    final skippedSuspects = <PeerEndpoint>[];
 
-    Future<void> tryLegacy(Iterable<PeerEndpoint> routes) async {
+    Future<void> tryLegacy(
+      Iterable<PeerEndpoint> routes, {
+      bool suspectsToo = false,
+    }) async {
       if (deliveredVia != null) return;
       final untried = routes
-          .where((route) => attemptedRouteKeys.add(route.routeKey))
+          .where((route) {
+            if (!suspectsToo && suspects.contains(route.routeKey)) {
+              skippedSuspects.add(route);
+              return false;
+            }
+            return attemptedRouteKeys.add(route.routeKey);
+          })
           .toList(growable: false);
       if (untried.isEmpty) return;
       try {
@@ -23400,7 +23492,7 @@ class MessengerController extends ChangeNotifier {
       }
     }
 
-    Future<void> tryUnifiedTransports() async {
+    Future<void> tryUnifiedTransports({bool suspectsToo = false}) async {
       if (deliveredVia != null || !canTryRegistry) return;
       // A background retry skips an Iroh dial that just failed for this
       // contact, when another route can carry it: each dial would cost the
@@ -23436,6 +23528,7 @@ class MessengerController extends ChangeNotifier {
           envelope: envelope,
           policies: registryPolicies,
           allowRelay: allowRelayedPaths,
+          skipRouteIds: suspectsToo ? const {} : suspects,
         );
         if (deliveredVia?.transportKind == TransportKind.iroh) {
           _irohSkipUntil.remove(contact.deviceId);
@@ -23557,6 +23650,9 @@ class MessengerController extends ChangeNotifier {
         await tryLegacy(rankedRoutes);
       }
     }
+    // Last, the routes no receipt confirmed lately: better than nothing.
+    await tryLegacy(skippedSuspects, suspectsToo: true);
+    if (suspects.isNotEmpty) await tryUnifiedTransports(suspectsToo: true);
     final result = deliveredVia;
     if (result == null) {
       // No route of ours reaches them: a contact who carries for us might.
@@ -23569,6 +23665,9 @@ class MessengerController extends ChangeNotifier {
         if (forwarded != null) return forwarded;
       }
       throw lastError ?? StateError('No reachable route for recipient.');
+    }
+    if (envelope.kind == 'direct_message' || envelope.kind == 'group_message') {
+      _noteHandedOff(contact.deviceId, envelope.messageId, result);
     }
     final deliveredEndpoint = result.endpoint;
     if (deliveredEndpoint?.kind == PeerRouteKind.lan) {
@@ -24350,6 +24449,7 @@ class MessengerController extends ChangeNotifier {
     required RelayEnvelope envelope,
     required Map<TransportKind, TransportPolicy> policies,
     bool allowRelay = true,
+    Set<String> skipRouteIds = const {},
   }) async {
     final registry = _transportRegistry;
     final global = _snapshot.identity?.connectivity;
@@ -24373,6 +24473,7 @@ class MessengerController extends ChangeNotifier {
         bytes: Uint8List.fromList(utf8.encode(jsonEncode(envelope.toJson()))),
         createdAt: envelope.createdAt,
       ),
+      skipRouteIds: skipRouteIds,
     );
     return _DeliveryRoute.transport(result.receipt);
   }
@@ -26208,12 +26309,31 @@ class MessengerController extends ChangeNotifier {
     final contactRelayRoutes = _rankInviteRoutes(
       _contactRelayRoutes().where((route) => route.kind == PeerRouteKind.relay),
     ).take(remainingRelaySlots);
+    // Internet routes before the extra LAN hosts: when the budget runs
+    // out it is a spare LAN address that goes, never the way to reach this
+    // device from elsewhere.
     return dedupePeerEndpoints([
       ...irohDirectRoutes,
-      ...lanRoutes,
+      ...lanRoutes.take(2),
       ...configuredRelayRoutes,
       ...contactRelayRoutes,
+      ...lanRoutes.skip(2),
     ]).take(_maxInviteRouteHints).toList(growable: false);
+  }
+
+  /// Whether an invite from this device can be answered from another
+  /// network: Iroh with its relays, a Conest relay, or a carrier is on.
+  bool get invitesReachOverInternet {
+    final identity = _snapshot.identity;
+    if (identity == null) return false;
+    final iroh = _transportRegistry?.adapterFor(TransportKind.iroh);
+    if (iroh is IrohTransportAdapter && (iroh.status?.relayEnabled ?? false)) {
+      return true;
+    }
+    return identity.configuredRelays.any(
+          (route) => route.kind == PeerRouteKind.relay,
+        ) ||
+        _carrierTransports.isNotEmpty;
   }
 
   List<PeerEndpoint> _irohDirectInviteRoutes(IdentityRecord identity) {
