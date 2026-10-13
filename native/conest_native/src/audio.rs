@@ -4,7 +4,7 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     thread::{self, JoinHandle},
@@ -20,7 +20,11 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use crossbeam_queue::ArrayQueue;
-use opus::{Application, Channels, Decoder, Encoder};
+use opus::{Application, Channels, Encoder};
+
+#[path = "audio_remote.rs"]
+mod remote;
+use remote::RemoteMixer;
 
 const VOICE_RATE: u32 = 48_000;
 const FRAME_SAMPLES: usize = 960; // 20 ms, mono, 48 kHz.
@@ -183,7 +187,7 @@ pub struct VoiceAudioSession {
     platform_noise_suppression: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
     encoded: Arc<ArrayQueue<Vec<u8>>>,
-    incoming: Arc<ArrayQueue<(u64, Vec<u8>, Instant)>>,
+    incoming: Arc<Mutex<RemoteMixer>>,
     capture: Arc<ArrayQueue<f32>>,
     playback: Arc<ArrayQueue<f32>>,
     render_reference: Arc<ArrayQueue<f32>>,
@@ -306,14 +310,13 @@ impl VoiceAudioSession {
         let playback = Arc::new(ArrayQueue::new(PLAYBACK_QUEUE_SAMPLES));
         let render_reference = Arc::new(ArrayQueue::new(ECHO_REFERENCE_QUEUE_SAMPLES));
         let encoded = Arc::new(ArrayQueue::new(OPUS_PACKET_QUEUE));
-        let incoming = Arc::new(ArrayQueue::new(OPUS_PACKET_QUEUE));
+        let incoming = Arc::new(Mutex::new(RemoteMixer::new()
+            .context("Could not initialize the remote audio mixer")?));
         let mut encoder = Encoder::new(VOICE_RATE, Channels::Mono, Application::Voip)
             .context("Could not initialize the Opus encoder")?;
         encoder
             .set_bitrate(opus::Bitrate::Bits(32_000))
             .context("Could not configure the Opus voice bitrate")?;
-        let decoder = Decoder::new(VOICE_RATE, Channels::Mono)
-            .context("Could not initialize the Opus decoder")?;
 
         let encode_worker = thread::Builder::new()
             .name("conest-call-encoder".into())
@@ -347,7 +350,7 @@ impl VoiceAudioSession {
                 let running = running.clone();
                 let incoming = incoming.clone();
                 let playback = playback.clone();
-                move || decode_loop(running, incoming, playback, decoder)
+                move || decode_loop(running, incoming, playback)
             }) {
             Ok(worker) => worker,
             Err(error) => {
@@ -408,20 +411,21 @@ impl VoiceAudioSession {
     }
 
     pub fn push_packet(&self, sequence: u64, packet: &[u8]) -> bool {
-        if sequence == 0 || packet.is_empty() || packet.len() > MAX_OPUS_PACKET {
-            return false;
-        }
-        let incoming = (sequence, packet.to_vec(), Instant::now());
-        if self.incoming.push(incoming).is_err() {
-            // The audio path is lossy by design. Replace stale queued audio
-            // with the freshest packet instead of building latency.
-            let _ = self.incoming.pop();
-            self.incoming
-                .push((sequence, packet.to_vec(), Instant::now()))
-                .is_ok()
-        } else {
-            true
-        }
+        self.push_participant_packet(0, sequence, packet)
+    }
+
+    pub fn set_participant_active(&self, participant: u16, active: bool) -> bool {
+        self.incoming.lock().ok().and_then(|mut mixer|
+            mixer.set_active(participant, active).ok()).unwrap_or(false)
+    }
+
+    pub fn push_participant_packet(&self, participant: u16, sequence: u64, packet: &[u8]) -> bool {
+        self.incoming.lock().ok().map(|mut mixer|
+            mixer.push(participant, sequence, packet, Instant::now())).unwrap_or(false)
+    }
+
+    pub fn participant_level(&self, participant: u16) -> f32 {
+        self.incoming.lock().ok().map_or(0.0, |mixer| mixer.level(participant))
     }
 
     /// Supplies one bounded mono PCM capture slice from Android's audio thread.
@@ -764,31 +768,28 @@ fn encode_loop(
 
 fn decode_loop(
     running: Arc<AtomicBool>,
-    incoming: Arc<ArrayQueue<(u64, Vec<u8>, Instant)>>,
+    incoming: Arc<Mutex<RemoteMixer>>,
     playback: Arc<ArrayQueue<f32>>,
-    mut decoder: Decoder,
 ) {
-    let mut pcm = vec![0.0_f32; FRAME_SAMPLES * 6];
-    let mut jitter = PacketJitterBuffer::new(1);
+    let mut next_playout = Instant::now();
     while running.load(Ordering::Relaxed) {
-        while let Some((sequence, packet, arrived_at)) = incoming.pop() {
-            jitter.insert(sequence, packet, arrived_at);
+        let now = Instant::now();
+        if now < next_playout {
+            thread::sleep(Duration::from_millis(2));
+            continue;
         }
-        let Some(packet) = jitter.pop_ready(Instant::now()) else {
+        let frame = incoming.lock().ok().and_then(|mut mixer| mixer.render(now));
+        let Some(frame) = frame else {
             thread::sleep(Duration::from_millis(2));
             continue;
         };
-        let Ok(samples) = decoder.decode_float(&packet, &mut pcm, false) else {
-            continue;
-        };
-        if playback.len().saturating_add(samples) > PLAYBACK_QUEUE_SAMPLES * 3 / 4 {
+        next_playout = now + Duration::from_millis(20);
+        if playback.len().saturating_add(frame.len()) > PLAYBACK_QUEUE_SAMPLES * 3 / 4 {
             while playback.len() > PLAYBACK_QUEUE_SAMPLES / 4 {
                 let _ = playback.pop();
             }
         }
-        for sample in pcm.iter().take(samples) {
-            let _ = playback.push(*sample);
-        }
+        for sample in frame { let _ = playback.push(sample); }
     }
 }
 
@@ -875,9 +876,10 @@ impl PacketJitterBuffer {
 #[cfg(test)]
 mod tests {
     use super::{
-        AdaptiveBitrate, Application, Channels, Decoder, Encoder, MAX_JITTER_WAIT, MIN_JITTER_WAIT,
+        AdaptiveBitrate, Application, Channels, Encoder, MAX_JITTER_WAIT, MIN_JITTER_WAIT,
         PacketJitterBuffer,
     };
+    use opus::Decoder;
     use std::time::{Duration, Instant};
 
     #[test]

@@ -36,6 +36,9 @@ jobs:
         with:
           key: rust-tests
       - run: cargo test --workspace --locked
+      - name: M36 audio behavior negative checks
+        if: github.ref == 'refs/heads/agent/m36-group-calls'
+        run: python3 tool/m36_rust_sabotage.py
       - name: Formatting of changed files (report only)
         continue-on-error: true
         run: |

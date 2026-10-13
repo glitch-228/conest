@@ -311,6 +311,36 @@ pub unsafe extern "C" fn conest_voice_audio_push_packet(
         .unwrap_or(false)
 }
 
+/// Group receive APIs are the same on Android (Dart FFI + JNI PCM) and desktop.
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_audio_set_participant(handle: u64, participant: u16, active: bool) -> bool {
+    VOICE_AUDIO_SESSIONS.lock().ok().and_then(|sessions| sessions.get(&handle)
+        .map(|session| session.set_participant_active(participant, active))).unwrap_or(false)
+}
+
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_voice_audio_push_participant_packet(
+    handle: u64, participant: u16, sequence: u64, packet: *const u8, packet_length: usize,
+) -> bool {
+    if packet.is_null() || packet_length == 0 || packet_length > 1100 || participant >= 16 {
+        return false;
+    }
+    // SAFETY: the caller owns a readable packet_length byte buffer throughout
+    // this synchronous call. The bounded receive stream copies it.
+    let bytes = unsafe { slice::from_raw_parts(packet, packet_length) };
+    VOICE_AUDIO_SESSIONS.lock().ok().and_then(|sessions| sessions.get(&handle)
+        .map(|session| session.push_participant_packet(participant, sequence, bytes))).unwrap_or(false)
+}
+
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_audio_participant_level(handle: u64, participant: u16) -> f32 {
+    VOICE_AUDIO_SESSIONS.lock().ok().and_then(|sessions| sessions.get(&handle)
+        .map(|session| session.participant_level(participant))).unwrap_or(0.0)
+}
+
 #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn conest_voice_audio_close(handle: u64) {

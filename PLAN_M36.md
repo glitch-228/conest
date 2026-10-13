@@ -167,6 +167,10 @@ Commit and push after each phase, with the tests green.
 
 - Phase A full Flutter suite: 909 passed, 18 skipped, only the explicitly documented native-Iroh local failure. New diagnostics: none.
 
+- Phase A Rust CI 38448979012 is green, including synthetic noise attenuation (>10 dB) and voiced-energy preservation. Cross-platform debug build 38449547803 is running.
+- Phase B: separate Opus decoder, jitter buffer, bounded PCM and level per participant (16 max), with final-sum clamping and independent playout. Legacy stream-zero FFI remains. Android and desktop use the same FFI receive/mixer API and Android JNI renders the mixed PCM. Tests cover clipping, join/leave, and a gap/flood in one stream while another plays. CI-only negative checks disable NS, clamping, and leave cleanup and require behavioral test failures (never compile errors).
+- Protocol decision for Phase C: add Ed25519 sender signatures to the required call-key/HKDF/ChaCha scheme. A shared call key alone cannot authenticate a speaker against a malicious participating forwarder. Header + tag + signature still fits Iroh's 1200-byte bound; group Opus payload is capped at 1096 bytes to reserve its audio-sequence field.
+
 ## Handoff
 
 - Branch and final commit:

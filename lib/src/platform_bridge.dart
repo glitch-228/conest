@@ -341,6 +341,15 @@ class PlatformBridge {
     _voiceAudio?.playPacket(sequence, bytes);
   }
 
+  bool setGroupCallParticipant(int participant, bool active) =>
+      _voiceAudio?.setParticipant(participant, active) ?? false;
+
+  double groupCallParticipantLevel(int participant) =>
+      _voiceAudio?.participantLevel(participant) ?? 0;
+
+  bool playGroupCallFrame(int participant, int sequence, Uint8List bytes) =>
+      _voiceAudio?.playParticipantPacket(participant, sequence, bytes) ?? false;
+
   Future<Map<String, dynamic>?> startVoiceRecording() async {
     try {
       final value = await _channel.invokeMethod<dynamic>('startVoiceRecording');
