@@ -215,6 +215,8 @@ Commit and push after each phase, with the tests green.
 
 - With independent protocol time restored, all 11 affected controller-bootstrap/duplicate/privacy/resource sabotage checks passed again with behavioural failures; code restored. Integration-only clock changes preserve every production guard and all FakeCallNetwork deadlines. Final complete suite and analysis are restarting on the committed branch.
 
+- The next full run passed every Iroh/Nostr/cache/resource controller case under load; only the two revocation fixtures still used the earlier faster clock driver and timed out in initial four-member admission. Aligned their clock cadence and retry allowance with the successful controller harness, adding bounded state-only diagnostics. Both standalone signed-revocation scenarios pass again; production code is unchanged.
+
 ## Handoff
 
 - Branch and final commit:

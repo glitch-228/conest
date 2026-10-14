@@ -4823,24 +4823,38 @@ void main() {
     var stage = 0;
     Future<void> waitRevocation(bool Function() ready) async {
       stage++;
-      var nextStep = DateTime.now().add(const Duration(milliseconds: 250));
-      await _waitForIroh(
-        () {
-          if (ready()) return true;
-          if (stage >= 5 && !DateTime.now().isBefore(nextStep)) {
-            // Advance the injected protocol clock while waiting for calls.
-            // A frozen clock otherwise suppresses the actual 2 s key retry.
-            now = now.add(const Duration(milliseconds: 125));
-            nextStep = DateTime.now().add(const Duration(milliseconds: 250));
-            for (final peer in peers) {
-              unawaited(peer.groupCallService?.tick());
+      var nextStep = DateTime.now().add(const Duration(milliseconds: 500));
+      try {
+        await _waitForIroh(
+          () {
+            if (ready()) return true;
+            if (stage >= 5 && !DateTime.now().isBefore(nextStep)) {
+              // Advance the injected protocol clock while waiting for calls.
+              // A frozen clock otherwise suppresses the actual 2 s key retry.
+              now = now.add(const Duration(milliseconds: 125));
+              nextStep = DateTime.now().add(const Duration(milliseconds: 500));
+              for (final peer in peers) {
+                unawaited(peer.groupCallService?.tick());
+              }
             }
-          }
-          return false;
-        },
-        reason: "revocation setup stage $stage, foreign=$foreignClaim",
-        timeout: const Duration(seconds: 12),
-      );
+            return false;
+          },
+          reason: "revocation setup stage $stage, foreign=$foreignClaim",
+          timeout: const Duration(seconds: 45),
+        );
+      } catch (_) {
+        for (var index = 0; index < peers.length; index++) {
+          final peer = peers[index];
+          final room = peer.groupCallService?.active;
+          debugPrint(
+            '${peer.identity!.displayName}: term=${room?.term} '
+            'coordinator=${room?.coordinator} epoch=${room?.epoch}/${room?.cipher.epoch} '
+            'roster=${room?.participants.map((p) => p.deviceId).toList()} '
+            'ratchetWrites=${vaults[index].committedPeerWrites}',
+          );
+        }
+        rethrow;
+      }
     }
 
     await _pairControllers(alice, bob);
