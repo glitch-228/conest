@@ -327,6 +327,7 @@ const Set<String> _v2PairwiseKinds = <String>{
   'route_probe',
   'route_probe_reply',
   'account_link',
+  'account_sync',
 };
 
 /// Outcome of a [`MessengerController.refreshDefaultRelays`] call.
@@ -1016,10 +1017,11 @@ class MessengerController extends ChangeNotifier {
     await service.end(reason: 'Call rejected.');
   }
 
-  /// The contacts as listed: another device of a contact's account is
-  /// kept separately and not listed (see [ContactRecord.isLinkedDevice]).
+  /// The contacts as listed: another device of a contact's account, and
+  /// this account's other devices, are kept separately and not listed (see
+  /// [ContactRecord.isHiddenDevice]).
   List<ContactRecord> get contacts => List.unmodifiable(
-    _snapshot.contacts.where((contact) => !contact.isLinkedDevice),
+    _snapshot.contacts.where((contact) => !contact.isHiddenDevice),
   );
 
   /// Every group the controller knows about, including ones the local user
@@ -1294,6 +1296,9 @@ class MessengerController extends ChangeNotifier {
     return key.extractBytes();
   }
 
+  /// Read receipts this device has sent (for tests).
+  @visibleForTesting
+  int readReceiptsSent = 0;
   @visibleForTesting
   Future<void> retryUnacknowledgedMessagesNow() =>
       _retryUnacknowledgedMessages(force: true);
@@ -3401,6 +3406,10 @@ class MessengerController extends ChangeNotifier {
   Future<void> initialize() async {
     try {
       _snapshot = await _vaultStore.load();
+      // Devices linked before own-device records existed get them now, at
+      // their signed dates: that list came only from this device or its
+      // link.
+      _reconcileOwnDevices(vouchAll: true);
       await _openRatchetSessions();
       _createMatrixTransport();
       unawaited(_restoreMatrixClient());
@@ -9811,7 +9820,8 @@ class MessengerController extends ChangeNotifier {
       if (candidate.publicKeyBase64 == publicKeyBase64) {
         continue;
       }
-      if (candidate.isArchived) {
+      // Other devices (ours or a contact's) are never replaced by a request.
+      if (candidate.isArchived || candidate.isHiddenDevice) {
         continue;
       }
       if (candidate.displayName.trim().toLowerCase() != needle) {
@@ -10239,25 +10249,24 @@ class MessengerController extends ChangeNotifier {
     String? messageId,
   }) async {
     final me = _requireIdentity();
-    _upsertMessage(
-      me.deviceId,
-      ChatMessage(
-        id: messageId ?? _randomId('msg'),
-        conversationId: _crypto.conversationIdFor(me.deviceId),
-        senderDeviceId: me.deviceId,
-        recipientDeviceId: me.deviceId,
-        body: body,
-        outbound: true,
-        state: DeliveryState.delivered,
-        createdAt: _now().toUtc(),
-        replyToMessageId: replyTo?.id,
-        replySnippet: replyTo == null ? null : _replySnippetForMessage(replyTo),
-        replySenderDeviceId: replyTo?.senderDeviceId,
-        replySenderDisplayName: replyTo == null
-            ? null
-            : _replySenderDisplayName(replyTo),
-      ),
+    final message = ChatMessage(
+      id: messageId ?? _randomId('msg'),
+      conversationId: _crypto.conversationIdFor(me.deviceId),
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: me.deviceId,
+      body: body,
+      outbound: true,
+      state: DeliveryState.delivered,
+      createdAt: _now().toUtc(),
+      replyToMessageId: replyTo?.id,
+      replySnippet: replyTo == null ? null : _replySnippetForMessage(replyTo),
+      replySenderDeviceId: replyTo?.senderDeviceId,
+      replySenderDisplayName: replyTo == null
+          ? null
+          : _replySenderDisplayName(replyTo),
     );
+    _upsertMessage(me.deviceId, message);
+    _syncSentMessage(me.deviceId, message);
     await _persist('Saved.');
   }
 
@@ -10388,6 +10397,7 @@ class MessengerController extends ChangeNotifier {
           : _replySenderDisplayName(replyTo),
     );
     _upsertMessage(contact.deviceId, message);
+    _syncSentMessage(contact.deviceId, message);
     _markRuntimeActivity();
     if (!contact.canSendOutbound) {
       await _persist(
@@ -17271,6 +17281,12 @@ class MessengerController extends ChangeNotifier {
           continue;
         }
 
+        if (envelope.kind == 'account_sync') {
+          await _handleAccountSync(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
         if (envelope.kind == 'route_probe_reply') {
           await _handleRouteProbeReply(envelope);
           _markSeen(envelope.messageId);
@@ -17326,10 +17342,11 @@ class MessengerController extends ChangeNotifier {
             break;
           }
         }
-        if (contact == null) {
+        if (contact == null || contact.ownDevice) {
           // Strict v2 cannot authenticate an orphan response after the key
           // has been forgotten. Silently ignore instead of emitting a
-          // forgeable contact-removal control.
+          // forgeable contact-removal control. This account's other devices
+          // sync what they sent instead (account_sync).
           continue;
         }
 
@@ -17604,11 +17621,21 @@ class MessengerController extends ChangeNotifier {
       final chatId = _chatIdFor(contact);
       final message = _messageById(chatId, target);
       if (message == null || !message.outbound) return;
+      final before = message.state;
       if (receipt == 'read') {
         _markMessagesReadThroughMessage(chatId, target);
       } else {
         _updateMessageState(chatId, target, DeliveryState.delivered);
         _clearOutboundAttempt(chatId, target);
+      }
+      final after = _messageById(chatId, target)?.state;
+      if (after != null && after != before) {
+        _syncToOwnDevices({
+          'type': 'state',
+          'chat': chatId,
+          'id': target,
+          'state': after == DeliveryState.read ? 'read' : 'delivered',
+        });
       }
     }
     // When the ack was sent, not when it was fetched: one waiting on a relay
@@ -17624,7 +17651,12 @@ class MessengerController extends ChangeNotifier {
   Future<void> _handleVoiceCallSignal(RelayEnvelope envelope) async {
     final service = _voiceCallService;
     final contact = _contactByDeviceId(envelope.senderDeviceId);
-    if (service == null || contact == null || !contact.canSendOutbound) return;
+    if (service == null ||
+        contact == null ||
+        contact.ownDevice ||
+        !contact.canSendOutbound) {
+      return;
+    }
     if (envelope.conversationId !=
         _crypto.conversationIdFor(contact.deviceId)) {
       return;
@@ -19915,7 +19947,7 @@ class MessengerController extends ChangeNotifier {
     // the request proves nothing about the listed device.
     if (envelope.protocolVersion == 1 &&
         existing != null &&
-        existing.isLinkedDevice &&
+        existing.isHiddenDevice &&
         existing.signingPublicKeyBase64 != invite.signingPublicKeyBase64) {
       appendDebugLog(
         'Ignored a contact request from a device id another account lists.',
@@ -19923,7 +19955,11 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     if (accountStatement != null && envelope.protocolVersion != 1) {
-      await _applyAccountDevices(envelope.senderDeviceId, accountStatement);
+      if (existing?.ownDevice ?? false) {
+        await _applyOwnAccountDevices(existing!, accountStatement);
+      } else {
+        await _applyAccountDevices(envelope.senderDeviceId, accountStatement);
+      }
     }
     final tombstone = _snapshot.contactRemovalTombstones[invite.deviceId];
     if (tombstone != null &&
@@ -20992,7 +21028,8 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> _handleContactRemoval(RelayEnvelope envelope) async {
     final contact = _contactByDeviceId(envelope.senderDeviceId);
-    if (contact == null) {
+    // Own devices leave the account by revocation, not removal.
+    if (contact == null || contact.ownDevice) {
       return;
     }
     final decoded = jsonDecode(
@@ -21910,6 +21947,7 @@ class MessengerController extends ChangeNotifier {
     if (me.suppressReadReceipts) {
       return;
     }
+    readReceiptsSent++;
     final receipt = await _crypto.encryptPayloadEnvelope(
       kind: 'ack',
       messageId: _randomId('read'),
@@ -22159,18 +22197,42 @@ class MessengerController extends ChangeNotifier {
     final pending = List<PendingAckDelivery>.from(
       _snapshot.pendingAckDeliveries,
     );
+    final unreachableOwnDevices = <String>{};
     for (final entry in pending) {
       if (entry.requiresPeerUpdate) {
         continue;
       }
-      if (entry.attempts >= maxAttempts) {
+      // What this account's devices tell each other waits for a device that
+      // is away for days: retried ever more slowly, until it expires.
+      final sync = entry.kind == PendingAckKind.accountSync;
+      // One failed sync send per device per pass: the rest wait with it.
+      if (sync && unreachableOwnDevices.contains(entry.targetDeviceId)) {
+        continue;
+      }
+      if (sync &&
+          now.difference(entry.payload?.createdAt ?? entry.lastAttemptedAt) >
+              _syncEventLifetime) {
+        _clearPendingAckDelivery(
+          targetDeviceId: entry.targetDeviceId,
+          acknowledgedMessageId: entry.acknowledgedMessageId,
+          kind: entry.kind,
+        );
+        continue;
+      }
+      if (!sync && entry.attempts >= maxAttempts) {
         continue;
       }
       if (!force) {
         final waited = now.difference(entry.lastAttemptedAt);
-        final delay = entry.attempts <= 1
+        var delay = entry.attempts <= 1
             ? _pendingMessageRetryDelay
             : _acceptedMessageRetryDelay;
+        if (sync && entry.attempts > maxAttempts) {
+          final slower = delay * (entry.attempts - maxAttempts + 1);
+          delay = slower > const Duration(minutes: 30)
+              ? const Duration(minutes: 30)
+              : slower;
+        }
         if (waited < delay) {
           continue;
         }
@@ -22268,6 +22330,7 @@ class MessengerController extends ChangeNotifier {
         );
       } catch (_) {
         // Stays queued.
+        if (sync) unreachableOwnDevices.add(entry.targetDeviceId);
       }
     }
     await _saveSnapshotSilently(notify: false);
@@ -23227,7 +23290,9 @@ class MessengerController extends ChangeNotifier {
     bool background = false,
   }) async {
     if (_locallyDeletedMessageIds.contains(message.id) ||
-        _messageById(contact.deviceId, message.id) == null) {
+        _messageById(contact.deviceId, message.id) == null ||
+        // Sent from another of this account's devices: that one sends it.
+        message.senderDeviceId != identity?.deviceId) {
       return true;
     }
     _noteOutboundAttempt(contact.deviceId, message.id);
@@ -24757,6 +24822,7 @@ class MessengerController extends ChangeNotifier {
   List<ContactRecord> _forwardersFor(ContactRecord recipient) => [
     for (final contact in _snapshot.contacts)
       if (contact.deviceId != recipient.deviceId &&
+          !contact.ownDevice &&
           contact.canSendOutbound &&
           !contact.isArchived &&
           contact.featureCapabilities.contains(
@@ -28715,6 +28781,10 @@ class MessengerController extends ChangeNotifier {
     final devices = List<DeviceCert>.of(current.devices);
     final revoked = Map<String, DateTime>.of(current.revoked);
     change(devices, revoked);
+    // The table is bounded: refuse rather than let a revocation fall out.
+    if (revoked.length > maxRevokedDevices) {
+      throw StateError('This account has too many removed devices.');
+    }
     final list = await AccountDeviceList.issue(
       account: account,
       accountId: me.accountId,
@@ -28726,6 +28796,7 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(
       identity: me.copyWith(accountDeviceList: list.toJson()),
     );
+    _reconcileOwnDevices();
     await _saveSnapshotSilently(notify: true);
     _advertiseProfileToContacts();
     return list;
@@ -28778,6 +28849,18 @@ class MessengerController extends ChangeNotifier {
       if (revoked.containsKey(deviceId)) {
         throw StateError('A revoked device cannot be added again.');
       }
+      final listed = devices
+          .where((device) => device.deviceId == deviceId)
+          .firstOrNull;
+      // Its keys are fixed once listed (the account's other devices hold
+      // to them): other keys mean another device.
+      if (listed != null &&
+          (listed.encryptionKeyBase64 != encryptionKeyBase64 ||
+              listed.signingKeyBase64 != signingKeyBase64)) {
+        throw StateError('A device with that id is already in the account.');
+      }
+      // Already in, as it is: its certificate stays.
+      if (listed != null) return;
       devices.removeWhere((device) => device.deviceId == deviceId);
       if (devices.length >= maxAccountDevices) {
         throw StateError('The account has $maxAccountDevices devices already.');
@@ -29293,7 +29376,7 @@ class MessengerController extends ChangeNotifier {
       'accountDeviceList': me.accountDeviceList,
       'contacts': [
         for (final contact in _snapshot.contacts)
-          if (!contact.isArchived) contact.toJson(),
+          if (!contact.isArchived && !contact.ownDevice) contact.toJson(),
       ],
     };
     final bodyHash = base64Encode(
@@ -29379,6 +29462,7 @@ class MessengerController extends ChangeNotifier {
       // The account's contacts replace what this new device had.
       contacts: _dedupeContacts([...contacts, ..._snapshot.contacts]),
     );
+    _reconcileOwnDevices(vouchedDeviceId: offer.deviceId);
     await _saveSnapshotSilently(notify: true);
     setStatus('This device is now linked to your account.');
     _advertiseProfileToContacts();
@@ -29424,6 +29508,627 @@ class MessengerController extends ChangeNotifier {
     for (final contact in _snapshot.contacts)
       if (contact.accountAnchorDeviceId == deviceId) contact,
   ];
+
+  // This account's other devices (M29b): each is a hidden record made from
+  // the signed device list, reached like a contact, and told what this
+  // device sent and read.
+
+  /// The records of this account's other devices.
+  @visibleForTesting
+  List<ContactRecord> get ownDevices => [
+    for (final contact in _snapshot.contacts)
+      if (contact.ownDevice) contact,
+  ];
+
+  /// Takes [statement] as if [senderDeviceId], one of this account's
+  /// devices, had sent it.
+  @visibleForTesting
+  Future<void> receiveOwnDeviceListForTesting(
+    String senderDeviceId,
+    Map<String, Object?> statement,
+  ) async {
+    final sender = _contactByDeviceId(senderDeviceId);
+    if (sender == null || !sender.ownDevice) return;
+    await _applyOwnAccountDevices(sender, statement);
+  }
+
+  /// Sends [event] as a sync event to any contact (to check it is refused
+  /// from anyone but the account's own devices).
+  @visibleForTesting
+  Future<void> sendAccountSyncForTesting(
+    String deviceId,
+    Map<String, Object?> event,
+  ) async {
+    final contact = _contactByDeviceId(deviceId)!;
+    final me = _requireIdentity();
+    final envelope = await _crypto.encryptPayloadEnvelope(
+      kind: 'account_sync',
+      messageId: _randomId('sync'),
+      conversationId: _crypto.conversationIdFor(deviceId),
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: deviceId,
+      contact: contact,
+      plaintext: jsonEncode({
+        'events': [event],
+      }),
+      createdAt: _now().toUtc(),
+    );
+    await _deliverToContact(
+      contact: contact,
+      recipientDeviceId: deviceId,
+      envelope: envelope,
+    );
+  }
+
+  /// Makes the own-device records match the device list: one per other
+  /// listed device, with the keys the list certifies; others go.
+  ///
+  /// A device seen here for the first time counts as linked now (its
+  /// signed date is only what some device holding the account key wrote),
+  /// except [vouchedDeviceId]: the device that linked this one, which the
+  /// user had in hand.
+  void _reconcileOwnDevices({String? vouchedDeviceId, bool vouchAll = false}) {
+    final me = identity;
+    final list = accountDevices;
+    if (me == null || list == null) return;
+    final contacts = <ContactRecord>[
+      for (final contact in _snapshot.contacts)
+        if (!contact.ownDevice ||
+            (contact.deviceId != me.deviceId &&
+                list.deviceFor(contact.deviceId) != null &&
+                !list.revoked.containsKey(contact.deviceId)))
+          contact,
+    ];
+    for (final cert in list.devices) {
+      if (cert.deviceId == me.deviceId ||
+          list.revoked.containsKey(cert.deviceId)) {
+        continue;
+      }
+      final index = contacts.indexWhere((c) => c.deviceId == cert.deviceId);
+      // A contact with that device id is left alone, unless it is the
+      // device itself (the keys the list certifies) or a record some
+      // contact's list claimed for it.
+      if (index >= 0 &&
+          !contacts[index].ownDevice &&
+          !contacts[index].isLinkedDevice &&
+          contacts[index].publicKeyBase64 != cert.encryptionKeyBase64) {
+        continue;
+      }
+      final existing = index >= 0 ? contacts[index] : null;
+      final record = _ownDeviceRecord(
+        me,
+        cert,
+        existing: existing,
+        firstSeen: vouchAll || cert.deviceId == vouchedDeviceId
+            ? cert.linkedAt
+            : _now().toUtc(),
+      );
+      if (record == null) continue;
+      if (existing != null && !existing.isHiddenDevice) {
+        setStatus(
+          '${existing.alias} is one of your own devices now; its old chat '
+          'is no longer listed.',
+        );
+      }
+      if (index >= 0) {
+        contacts[index] = record;
+      } else {
+        contacts.add(record);
+      }
+    }
+    _snapshot = _snapshot.copyWith(contacts: contacts);
+  }
+
+  /// Whether own device [deviceId] may add or remove devices: linked over
+  /// a day ago, by the later of its signed date and when this device first
+  /// saw it.
+  bool _ownDeviceMayManage(String deviceId, DateTime now) {
+    final record = _contactByDeviceId(deviceId);
+    final cert = accountDevices?.deviceFor(deviceId);
+    if (record == null || !record.ownDevice || cert == null) return false;
+    return cert.mayManageDevicesAt(now) &&
+        now.difference(record.trustedAt) >= const Duration(hours: 24);
+  }
+
+  ContactRecord? _ownDeviceRecord(
+    IdentityRecord me,
+    DeviceCert cert, {
+    ContactRecord? existing,
+    DateTime? firstSeen,
+  }) {
+    // The keys are the certificate's; what was learned about reaching the
+    // device is kept while they stay the same.
+    final same =
+        existing != null &&
+        existing.ownDevice &&
+        existing.publicKeyBase64 == cert.encryptionKeyBase64 &&
+        existing.signingPublicKeyBase64 == cert.signingKeyBase64;
+    final known = same ? existing.toJson() : const <String, dynamic>{};
+    final json = <String, dynamic>{
+      'accountId': me.accountId,
+      'deviceId': cert.deviceId,
+      'alias': cert.name,
+      'displayName': me.displayName,
+      'relayCapable': false,
+      'publicKeyBase64': cert.encryptionKeyBase64,
+      'signingPublicKeyBase64': cert.signingKeyBase64,
+      if (cert.irohEndpointId != null) 'irohEndpointId': cert.irohEndpointId,
+      'routeHints': known['routeHints'] ?? const <Object>[],
+      'safetyNumber': '',
+      // When this device first knew it (see [_reconcileOwnDevices]).
+      'trustedAt':
+          known['trustedAt'] ??
+          (firstSeen ?? cert.linkedAt).toUtc().toIso8601String(),
+      'pairingState': ContactPairingState.accepted.name,
+      'accountKey': me.accountKeyPublicBase64,
+      'deviceName': cert.name,
+      'ownDevice': true,
+      for (final key in const [
+        'capabilities',
+        'featureCapabilities',
+        'featureCapabilityVersion',
+        'carrierAddresses',
+        'groupCarrierAddresses',
+        'matrixAddress',
+        'matrixAddressAt',
+        'routing',
+      ])
+        if (known[key] != null) key: known[key],
+    };
+    try {
+      return ContactRecord.fromJson(json);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// When this device last signed a merged device list (rate-limited, so a
+  /// device cannot make the others re-sign and re-announce endlessly).
+  final Map<String, List<DateTime>> _ownListMerges = <String, List<DateTime>>{};
+
+  /// Devices each own device added here in the last day (bounded, so one
+  /// cannot add and revoke devices until the revocation table is full).
+  final Map<String, List<DateTime>> _ownDeviceAdditions =
+      <String, List<DateTime>>{};
+  static const int _maxOwnDeviceAdditionsPerDay = 4;
+
+  /// Places in the revocation table only revocations made on this device
+  /// may use: what other devices send stops short of them.
+  static const int _ownRevocationReserve = 64;
+
+  /// Revocations of devices never seen here taken from one list at most.
+  static const int _maxUnknownRevocationsPerList = 16;
+  static const int _maxOwnListMergesPerHour = 6;
+
+  /// Another of this account's devices ([sender]) sent its device list.
+  ///
+  /// Every device holds the account key, so a list signed by it proves
+  /// little on its own: one is refused when it removes or revokes this
+  /// device or the account's original device, or changes the keys of a
+  /// device already listed. New revocations count only from a device that
+  /// may manage devices (linked over a day ago).
+  ///
+  /// A newer list that keeps everything known here is taken (and told to
+  /// contacts); when the two disagree, this device signs one with both,
+  /// one version above either.
+  Future<void> _applyOwnAccountDevices(
+    ContactRecord sender,
+    Object? statement,
+  ) async {
+    final me = identity;
+    final accountKey = me?.accountKeyPublicBase64;
+    final current = accountDevices;
+    if (me == null ||
+        accountKey == null ||
+        current == null ||
+        statement is! Map) {
+      return;
+    }
+    final list = AccountDeviceList.fromJson(statement['devices']);
+    if (list == null ||
+        list.accountId != me.accountId ||
+        list.version > current.version + maxDeviceListVersionStep ||
+        !await list.verify(accountKey)) {
+      return;
+    }
+    final original = AccountUpgrade.fromJson(me.accountUpgrade)?.deviceId;
+    final mine = list.deviceFor(me.deviceId);
+    if (mine == null ||
+        mine.encryptionKeyBase64 != me.publicKeyBase64 ||
+        mine.signingKeyBase64 != me.signingPublicKeyBase64 ||
+        list.revoked.containsKey(me.deviceId) ||
+        original == null ||
+        list.deviceFor(original) == null ||
+        list.revoked.containsKey(original)) {
+      appendDebugLog('Refused a device list that drops this device.');
+      return;
+    }
+    for (final known in current.devices) {
+      final listed = list.deviceFor(known.deviceId);
+      if (listed != null &&
+          (listed.encryptionKeyBase64 != known.encryptionKeyBase64 ||
+              listed.signingKeyBase64 != known.signingKeyBase64 ||
+              listed.irohEndpointId != known.irohEndpointId ||
+              listed.linkedAt != known.linkedAt)) {
+        appendDebugLog('Refused a device list that changes device keys.');
+        return;
+      }
+    }
+    final now = _now().toUtc();
+    // New revocations: of devices listed here, always (there are few, and
+    // revoking one must reach every device). Of devices never seen here
+    // (linked and removed while this one was away), a few per list and
+    // never into the places kept for this device's own revocations; left
+    // out beyond that. Dates in the future (which would keep their place
+    // in the bounded table over real ones) never count.
+    final soon = now.add(const Duration(minutes: 5));
+    final ofListed = <String, DateTime>{};
+    final ofUnknown = <String, DateTime>{};
+    for (final MapEntry(key: id, value: at) in list.revoked.entries) {
+      if (current.revoked.containsKey(id) || at.isAfter(soon)) continue;
+      (current.deviceFor(id) != null ? ofListed : ofUnknown)[id] = at;
+    }
+    final room =
+        maxRevokedDevices -
+        _ownRevocationReserve -
+        current.revoked.length -
+        ofListed.length;
+    final newRevocations = <String, DateTime>{
+      ...ofListed,
+      if (ofUnknown.length <= min(room, _maxUnknownRevocationsPerList))
+        ...ofUnknown,
+    };
+    final junk = list.revoked.keys.any(
+      (id) =>
+          !current.revoked.containsKey(id) && !newRevocations.containsKey(id),
+    );
+    if (current.revoked.length + newRevocations.length > maxRevokedDevices) {
+      appendDebugLog('Refused a device list: too many removed devices.');
+      return;
+    }
+    final addsRevocations = newRevocations.isNotEmpty;
+    final addsDevices = list.devices.any(
+      (device) =>
+          current.deviceFor(device.deviceId) == null &&
+          !current.revoked.containsKey(device.deviceId),
+    );
+    if ((addsRevocations || addsDevices) &&
+        !_ownDeviceMayManage(sender.deviceId, now)) {
+      appendDebugLog(
+        'Refused device changes from a device linked less than a day ago.',
+      );
+      return;
+    }
+    final added = list.devices
+        .where(
+          (device) =>
+              current.deviceFor(device.deviceId) == null &&
+              !current.revoked.containsKey(device.deviceId),
+        )
+        .length;
+    final additions = _ownDeviceAdditions.putIfAbsent(
+      sender.deviceId,
+      () => [],
+    );
+    additions.removeWhere((at) => now.difference(at) > const Duration(days: 1));
+    if (additions.length + added > _maxOwnDeviceAdditionsPerDay) {
+      appendDebugLog('Refused a device list: too many devices added today.');
+      return;
+    }
+    final keepsMine = current.revoked.keys.every(list.revoked.containsKey);
+    // Devices leave only by being revoked.
+    final dropsNone = current.devices.every(
+      (device) =>
+          list.deviceFor(device.deviceId) != null ||
+          list.revoked.containsKey(device.deviceId),
+    );
+    if (list.version > current.version && keepsMine && dropsNone && !junk) {
+      additions.addAll(List.filled(added, now));
+      _snapshot = _snapshot.copyWith(
+        identity: me.copyWith(accountDeviceList: list.toJson()),
+      );
+      _reconcileOwnDevices();
+      await _saveSnapshotSilently(notify: true);
+      // Contacts follow each step, so a later list stays within their step
+      // limit.
+      _advertiseProfileToContacts();
+      return;
+    }
+    // Only what adds something is merged (a higher version alone, or a
+    // list that leaves a device out, is not).
+    if (!addsRevocations && !addsDevices) return;
+    // Merges that only add devices are limited per device; revocations
+    // always go through.
+    final merges = _ownListMerges.putIfAbsent(sender.deviceId, () => []);
+    merges.removeWhere((at) => now.difference(at) > const Duration(hours: 1));
+    if (!addsRevocations && merges.length >= _maxOwnListMergesPerHour) {
+      appendDebugLog('Device list merge skipped: too many this hour.');
+      return;
+    }
+    // Each side revoked or added something the other did not see: one list
+    // with both, signed here, one version above either. Certificates known
+    // here are kept as they are.
+    final revoked = <String, DateTime>{...newRevocations, ...current.revoked};
+    if (revoked.length > maxRevokedDevices) return;
+    final devices = <String, DeviceCert>{
+      for (final device in current.devices) device.deviceId: device,
+    };
+    for (final device in list.devices) {
+      devices.putIfAbsent(device.deviceId, () => device);
+    }
+    devices.removeWhere((id, _) => revoked.containsKey(id));
+    if (devices.length > maxAccountDevices) {
+      // Too many together: the other side's revocations still count, its
+      // additions do not.
+      devices
+        ..clear()
+        ..addAll({
+          for (final device in current.devices)
+            if (!revoked.containsKey(device.deviceId)) device.deviceId: device,
+        });
+      if (!addsRevocations) return;
+      setStatus(
+        'Your devices disagree on which devices are in the account, and '
+        'together there would be more than $maxAccountDevices. Remove one '
+        'in Settings → Devices.',
+      );
+    }
+    merges.add(now);
+    additions.addAll(List.filled(added, now));
+    final merged = await AccountDeviceList.issue(
+      account: _accountKeys(me),
+      accountId: me.accountId,
+      version: max(list.version, current.version) + 1,
+      devices: devices.values.toList(),
+      revoked: revoked,
+      issuedAt: now,
+    );
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(accountDeviceList: merged.toJson()),
+    );
+    _reconcileOwnDevices();
+    await _saveSnapshotSilently(notify: true);
+    _advertiseProfileToContacts();
+  }
+
+  /// Most events one sync message may carry, and the largest message text.
+  static const int _maxSyncEvents = 32;
+  static const int _maxSyncedPayloadChars = 64 * 1024;
+
+  /// Sync events queued for one device at most; the oldest go first.
+  static const int _maxQueuedSyncEvents = 500;
+
+  /// How long a sync event waits for a device that stays away.
+  static const Duration _syncEventLifetime = Duration(days: 14);
+
+  static Map<String, dynamic>? _queuedSyncEvent(
+    PendingAckDelivery entry, {
+    bool foldableOnly = false,
+  }) {
+    if (entry.kind != PendingAckKind.accountSync) return null;
+    final plaintext = entry.payload?.plaintext;
+    if (plaintext == null) return null;
+    // Sent messages are never folded: not worth decoding them for it.
+    if (foldableOnly && plaintext.contains('"type":"sent"')) {
+      return const {'type': 'sent'};
+    }
+    try {
+      final decoded = jsonDecode(plaintext);
+      final events = decoded is Map ? decoded['events'] : null;
+      final first = events is List && events.isNotEmpty ? events.first : null;
+      return first is Map<String, dynamic> ? first : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Tells this account's other devices [event] (queued until each gets
+  /// it). A newer read position or receipt replaces a queued one for the
+  /// same chat or message.
+  void _syncToOwnDevices(Map<String, Object?> event) {
+    if (!conestActive) return;
+    final devices = ownDevices.where((device) => device.canSendOutbound);
+    if (devices.isEmpty) return;
+    final plaintext = jsonEncode({
+      'events': [event],
+    });
+    bool supersedes(Map<String, dynamic> queued) =>
+        queued['type'] == event['type'] &&
+        queued['chat'] == event['chat'] &&
+        switch (event['type']) {
+          'read' => true,
+          'state' => queued['id'] == event['id'],
+          _ => false,
+        };
+    for (final device in devices) {
+      final forDevice = <(PendingAckDelivery, bool)>[];
+      final kept = <PendingAckDelivery>[];
+      for (final entry in _snapshot.pendingAckDeliveries) {
+        final queued = entry.targetDeviceId == device.deviceId
+            ? _queuedSyncEvent(entry, foldableOnly: true)
+            : null;
+        if (queued == null) {
+          kept.add(entry);
+        } else if (!supersedes(queued)) {
+          forDevice.add((entry, queued['type'] == 'sent'));
+        }
+      }
+      // Room for the new one: receipts and read marks go before sent
+      // messages, the oldest first.
+      final excess = forDevice.length - (_maxQueuedSyncEvents - 1);
+      if (excess > 0) {
+        final order = [...forDevice]
+          ..sort((a, b) {
+            if (a.$2 != b.$2) return a.$2 ? 1 : -1;
+            final at = a.$1.payload?.createdAt ?? a.$1.lastAttemptedAt;
+            final bt = b.$1.payload?.createdAt ?? b.$1.lastAttemptedAt;
+            return at.compareTo(bt);
+          });
+        final dropped = order.take(excess).map((e) => e.$1).toSet();
+        forDevice.removeWhere((e) => dropped.contains(e.$1));
+      }
+      _snapshot = _snapshot.copyWith(
+        pendingAckDeliveries: [...kept, for (final e in forDevice) e.$1],
+      );
+    }
+    for (final device in devices) {
+      unawaited(
+        _enqueueAndDeliverEnvelope(
+          contact: device,
+          payload: QueuedEnvelopePayload(
+            kind: 'account_sync',
+            messageId: _randomId('sync'),
+            conversationId: _crypto.conversationIdFor(device.deviceId),
+            plaintext: plaintext,
+            createdAt: _now().toUtc(),
+          ),
+          kind: PendingAckKind.accountSync,
+        ).catchError((Object _) {}),
+      );
+    }
+  }
+
+  /// A text this device sent (or saved) shows on the account's other
+  /// devices too. Files, voice and groups follow later.
+  void _syncSentMessage(String chatId, ChatMessage message) {
+    final me = identity;
+    if (me == null || message.attachment != null || message.poll != null) {
+      return;
+    }
+    final payload = _crypto.encodeDirectMessagePayload(message);
+    if (payload.length > _maxSyncedPayloadChars) return;
+    _syncToOwnDevices({
+      'type': 'sent',
+      // Saved messages are each device's own chat.
+      'chat': chatId == me.deviceId ? 'saved' : chatId,
+      'id': message.id,
+      'createdAt': message.createdAt.toUtc().toIso8601String(),
+      'payload': payload,
+    });
+  }
+
+  /// Receipts synced before the message they are about (bounded).
+  final Map<String, String> _earlySyncStates = <String, String>{};
+
+  Future<void> _handleAccountSync(RelayEnvelope envelope) async {
+    final me = identity;
+    final sender = _contactByDeviceId(envelope.senderDeviceId);
+    if (me == null ||
+        sender == null ||
+        !sender.ownDevice ||
+        !sender.canSendOutbound ||
+        sender.accountId != envelope.senderAccountId ||
+        envelope.conversationId != _crypto.conversationIdFor(sender.deviceId) ||
+        accountDevices?.deviceFor(sender.deviceId) == null) {
+      return;
+    }
+    final decoded = jsonDecode(
+      await _crypto.decryptMessage(contact: sender, envelope: envelope),
+    );
+    if (decoded is! Map<String, dynamic>) return;
+    final events = decoded['events'];
+    if (events is! List) return;
+    var changed = false;
+    for (final event in events.take(_maxSyncEvents)) {
+      if (event is! Map<String, dynamic>) continue;
+      final rawChat = event['chat'];
+      if (rawChat is! String || rawChat.isEmpty || rawChat.length > 160) {
+        continue;
+      }
+      final chat = rawChat == 'saved' ? me.deviceId : rawChat;
+      if (chat != me.deviceId) {
+        final contact = _contactByDeviceId(chat);
+        if (contact == null || contact.isHiddenDevice || contact.isArchived) {
+          continue;
+        }
+      }
+      final id = event['id'];
+      switch (event['type']) {
+        case 'sent':
+          final payload = event['payload'];
+          if (id is! String ||
+              id.isEmpty ||
+              id.length > 160 ||
+              payload is! String ||
+              payload.length > _maxSyncedPayloadChars ||
+              _locallyDeletedMessageIds.contains(id) ||
+              _messageById(chat, id) != null) {
+            continue;
+          }
+          final text = _crypto.decodeDirectMessagePayload(payload);
+          final now = _now().toUtc();
+          final sentAt =
+              DateTime.tryParse(event['createdAt'] as String? ?? '')?.toUtc() ??
+              envelope.createdAt.toUtc();
+          _upsertMessage(
+            chat,
+            ChatMessage(
+              id: id,
+              conversationId: _crypto.conversationIdFor(chat),
+              senderDeviceId: sender.deviceId,
+              recipientDeviceId: chat,
+              body: text.body,
+              outbound: true,
+              // Sent from there; its receipts arrive there and follow here.
+              state: chat == me.deviceId
+                  ? DeliveryState.delivered
+                  : DeliveryState.relayed,
+              createdAt: sentAt.isAfter(now) ? now : sentAt,
+              replyToMessageId: text.replyToMessageId,
+              replySnippet: text.replySnippet,
+              replySenderDeviceId: text.replySenderDeviceId,
+              replySenderDisplayName: text.replySenderDisplayName,
+            ),
+          );
+          changed = true;
+          switch (_earlySyncStates.remove('$chat|$id')) {
+            case 'read':
+              _markMessagesReadThroughMessage(chat, id);
+            case 'delivered':
+              _updateMessageState(chat, id, DeliveryState.delivered);
+          }
+        case 'state':
+          if (id is! String || id.isEmpty || id.length > 160) continue;
+          final message = _messageById(chat, id);
+          if (message == null) {
+            // The message itself may still be on its way.
+            final state = event['state'];
+            if (state == 'read' || state == 'delivered') {
+              if (_earlySyncStates.length >= 256) {
+                _earlySyncStates.remove(_earlySyncStates.keys.first);
+              }
+              final key = '$chat|$id';
+              if (_earlySyncStates[key] != 'read') {
+                _earlySyncStates[key] = state as String;
+              }
+            }
+            continue;
+          }
+          if (!message.outbound) continue;
+          if (event['state'] == 'read') {
+            _markMessagesReadThroughMessage(chat, id);
+            changed = true;
+          } else if (event['state'] == 'delivered' &&
+              message.state.awaitsRecipientAck) {
+            _updateMessageState(chat, id, DeliveryState.delivered);
+            changed = true;
+          }
+        case 'read':
+          final at = DateTime.tryParse(event['at'] as String? ?? '')?.toUtc();
+          if (at == null) continue;
+          final now = _now().toUtc();
+          await _markConversationReadWhere(
+            (conversation) =>
+                conversation.kind == ConversationKind.direct &&
+                conversation.peerDeviceId == chat,
+            readThroughAt: at.isAfter(now) ? now : at,
+            fromOwnDevice: true,
+          );
+      }
+    }
+    if (changed) await _saveSnapshotSilently(notify: true);
+  }
 
   /// Applies a contact's account statement (their account key and device
   /// list) once [verifyAccountDevices] accepts it: each other device
@@ -29500,9 +30205,12 @@ class MessengerController extends ChangeNotifier {
           contact,
     ];
     final added = <DeviceCert>[];
+    final mine = accountDevices;
     for (final cert in list.devices) {
       if (cert.deviceId == current.deviceId ||
           cert.deviceId == me?.deviceId ||
+          // One of this account's own devices is never someone else's.
+          mine?.deviceFor(cert.deviceId) != null ||
           revoked.contains(cert.deviceId)) {
         continue;
       }
@@ -30483,6 +31191,8 @@ class MessengerController extends ChangeNotifier {
     bool Function(ConversationRecord conversation) predicate, {
     DateTime? readThroughAt,
     String? readThroughMessageId,
+    // Read on another of this account's devices, which told the contact.
+    bool fromOwnDevice = false,
   }) async {
     final conversations = List<ConversationRecord>.from(
       _snapshot.conversations,
@@ -30506,8 +31216,16 @@ class MessengerController extends ChangeNotifier {
     conversations[index] = conversation.copyWith(lastReadAt: latestCreatedAt);
     _snapshot = _snapshot.copyWith(conversations: conversations);
     await _saveSnapshotSilently(debounce: true);
-    if (conversation.kind != ConversationKind.direct) {
+    if (conversation.kind != ConversationKind.direct || fromOwnDevice) {
       return;
+    }
+    // Saved messages are all this user's own: nothing to read.
+    if (conversation.peerDeviceId != identity?.deviceId) {
+      _syncToOwnDevices({
+        'type': 'read',
+        'chat': conversation.peerDeviceId,
+        'at': latestCreatedAt.toUtc().toIso8601String(),
+      });
     }
     final contact = _contactByDeviceId(conversation.peerDeviceId);
     if (contact == null) {

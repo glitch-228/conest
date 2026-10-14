@@ -1,52 +1,39 @@
-## Conest 0.3.12 nightly (October 14, second)
+## Conest 0.3.12 nightly (October 14, third)
 
-This nightly brings Conest in six languages and lets one account use more
-than one device. Everything from the earlier October nightlies (modes,
-messages on several routes, Delta Chat, files without metadata) is
-included.
+Your devices now keep each other up to date. Everything from the earlier
+October nightlies (languages, linking devices, modes, messages on several
+routes, Delta Chat) is included.
 
 ### Before you update
 
-- Linking devices only works between devices that both have this nightly.
-- Your contacts learn about a new device only once they also run this
-  nightly; until then they keep reaching your first device as before.
+- Update all your linked devices: syncing works only between devices that
+  both have this nightly.
 
-### Languages (new)
+### Your devices stay in step (new)
 
-- Settings → Personal → Language: English, Arabic, Persian, Indonesian,
-  Russian or Simplified Chinese, or the same as the device. Arabic and
-  Persian read right to left.
-- The translations were made with AI and may contain mistakes; Settings
-  says so under the language. Help improve them on Weblate (see
-  TRANSLATING.md).
-- So far setup, the modes, the onboarding screen, calls, message details
-  and the message menu, the Settings sections and the add-contact and
-  new-group dialogs are translated; the rest follows.
-
-### Your account on several devices (new)
-
-- Settings → Devices lists the devices of your account.
-- To add one: on the new device open Settings → Devices → Link this
-  device to my account; on a device you already use open Settings →
-  Devices → Link a device and scan the code. Both devices then show the
-  same six digits: check that they match and confirm on both. The new
-  device gets your account, name and contacts.
-- Your contacts see the new device as you, not as a new contact. Their
-  messages reach all your devices, and what you write from any of them
-  shows in the same chat on their side.
-- Remove a lost device in Settings → Devices; your contacts stop accepting
-  anything from it. A device linked less than a day ago cannot add or
-  remove others, and your first device cannot be removed yet.
-- Not yet: what you sent from one of your devices showing on the others,
-  and history syncing between them (next).
+- A message you write on one of your devices shows on your other devices
+  too, in the same chat, with its delivered and read ticks.
+- Reading a chat on one device marks it read on the others.
+- Notes in Saved messages show on all your devices.
+- When you add or remove a device on one of your devices, your other
+  devices learn it too.
+- A device you remove can no longer sync with your others or speak for
+  your account.
+- If a device is away for a while, it catches up when it comes back (up to
+  two weeks).
+- Not yet: files, voice messages, polls and group chats sent from one
+  device do not show on the others; edits, deletions and reactions do not
+  sync; history from before a device was linked does not come over.
 
 ### Fixes
 
-- Delta Chat: an internal check that started failing on dates after
-  October 13 (tests only; the app was not affected).
+- A device of yours that was linked less than a day ago cannot remove
+  your other devices, also when it tells them through another device.
+- A removed device that keeps announcing new device lists can no longer
+  hold back its removal from your contacts.
 
 ### Not tested on devices yet
 
-- Linking a phone to a desktop and back, over the same Wi-Fi and over the
-  internet.
-- Each language on a phone, including right to left.
+- Writing from a phone and seeing it on a linked desktop, and the other
+  way round, over the same Wi-Fi and over the internet.
+- A device that was off for a day catching up.

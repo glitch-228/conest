@@ -34,6 +34,7 @@ const Set<String> ratchetedEnvelopeKinds = <String>{
   'message_delete',
   'message_reaction',
   'voice_call_signal',
+  'account_sync',
 };
 
 /// Ratchet state is keyed by device id and static key together, so a device

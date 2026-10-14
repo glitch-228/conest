@@ -1815,6 +1815,7 @@ class ContactRecord {
     this.accountRevokedDeviceIds = const <String>[],
     this.accountAnchorDeviceId,
     this.deviceName,
+    this.ownDevice = false,
     this.routing = const ContactRoutingPreferences(),
     this.signingPublicKeyBase64,
     this.irohEndpointId,
@@ -1938,8 +1939,15 @@ class ContactRecord {
   /// The name their account gave this device.
   final String? deviceName;
 
+  /// Another device of this user's own account (made from the signed
+  /// device list): reached like a contact, for syncing only, never listed.
+  final bool ownDevice;
+
   /// Another device of a contact's account, not the contact as listed.
   bool get isLinkedDevice => accountAnchorDeviceId != null;
+
+  /// Kept for routing only, never shown as a contact.
+  bool get isHiddenDevice => isLinkedDevice || ownDevice;
 
   String get shortSafetyNumber => _truncateSafetyNumber(safetyNumber);
 
@@ -1981,6 +1989,7 @@ class ContactRecord {
     List<String>? accountRevokedDeviceIds,
     String? accountAnchorDeviceId,
     String? deviceName,
+    bool? ownDevice,
     bool clearRemoteRemovedAt = false,
     ContactRoutingPreferences? routing,
     String? signingPublicKeyBase64,
@@ -2036,6 +2045,7 @@ class ContactRecord {
       accountAnchorDeviceId:
           accountAnchorDeviceId ?? this.accountAnchorDeviceId,
       deviceName: deviceName ?? this.deviceName,
+      ownDevice: ownDevice ?? this.ownDevice,
       routing: routing ?? this.routing,
       signingPublicKeyBase64:
           signingPublicKeyBase64 ?? this.signingPublicKeyBase64,
@@ -2154,6 +2164,7 @@ class ContactRecord {
       if (accountAnchorDeviceId != null)
         'accountAnchorDeviceId': accountAnchorDeviceId,
       if (deviceName != null) 'deviceName': deviceName,
+      if (ownDevice) 'ownDevice': true,
       'routing': routing.toJson(),
       if (signingPublicKeyBase64 != null)
         'signingPublicKeyBase64': signingPublicKeyBase64,
@@ -2271,6 +2282,7 @@ class ContactRecord {
       deviceName: json['deviceName'] is String
           ? json['deviceName'] as String
           : null,
+      ownDevice: json['ownDevice'] == true,
       routing: json['routing'] is Map<String, dynamic>
           ? ContactRoutingPreferences.fromJson(
               json['routing'] as Map<String, dynamic>,
@@ -4349,7 +4361,9 @@ enum PendingAckKind {
   voiceCallSignal,
   // The receiver's "file verified" notice: lost once, it left the sender's
   // bubble at 100% forever.
-  attachmentComplete;
+  attachmentComplete,
+  // What one of this account's devices tells the others (M29b).
+  accountSync;
 
   String get wireValue => name;
 

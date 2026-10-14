@@ -61,16 +61,19 @@ Future<AccountDevicesUpdate?> verifyAccountDevices({
       list.deviceFor(anchorDeviceId) == null) {
     return null;
   }
-  final revocationsOnly = list.version <= knownVersion;
+  // A list too far ahead (a stolen device may have published many
+  // versions to the owner's other devices alone) still brings its
+  // revocations: only those are applied.
+  final revocationsOnly =
+      list.version <= knownVersion ||
+      (knownVersion > 0 &&
+          list.version > knownVersion + maxDeviceListVersionStep);
   if (revocationsOnly) {
     // Only worth anything if it revokes something not yet revoked here.
     if (knownAccountKeyBase64 == null ||
         list.revoked.keys.every(knownRevoked.contains)) {
       return null;
     }
-  } else if (knownVersion > 0 &&
-      list.version > knownVersion + maxDeviceListVersionStep) {
-    return null;
   }
   var accountKey = knownAccountKeyBase64;
   if (accountKey == null) {
