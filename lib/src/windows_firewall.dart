@@ -16,8 +16,12 @@ abstract final class WindowsFirewall {
         '/c netsh advfirewall firewall delete rule name=$ruleName & '
         'netsh advfirewall firewall add rule name=$ruleName dir=in '
         'action=allow program="$program" enable=yes profile=any';
-    // A single-quoted PowerShell string: quotes inside are doubled.
-    final argument = netsh.replaceAll("'", "''");
+    // A single-quoted PowerShell string: quotes inside are doubled,
+    // including the typographic ones PowerShell also treats as quotes.
+    final argument = netsh.replaceAllMapped(
+      RegExp("['\u2018\u2019\u201A\u201B]"),
+      (match) => '${match[0]}${match[0]}',
+    );
     return "Start-Process -FilePath cmd -Verb RunAs -Wait -WindowStyle Hidden "
         "-ArgumentList '$argument'";
   }

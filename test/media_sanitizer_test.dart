@@ -42,6 +42,47 @@ img.Image picture() {
 }
 
 void main() {
+  test('a zip too large to rewrite asks only when it is a document', () async {
+    final dir = await Directory.systemTemp.createTemp('conest_bigzip-');
+    addTearDown(() => dir.delete(recursive: true));
+    // Random bytes do not compress: the zip stays over the in-memory cap.
+    final filler = Uint8List(MediaSanitizer.maxInMemoryBytes + 1024);
+    var seed = 7;
+    for (var i = 0; i < filler.length; i++) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      filler[i] = seed >> 16;
+    }
+    Future<SanitizeStatus> sanitize(String name, List<ArchiveFile> files) {
+      final archive = Archive();
+      for (final file in files) {
+        archive.add(file);
+      }
+      final path = '${dir.path}/$name';
+      File(path).writeAsBytesSync(ZipEncoder().encode(archive));
+      expect(
+        File(path).lengthSync(),
+        greaterThan(MediaSanitizer.maxInMemoryBytes),
+      );
+      return MediaSanitizer.sanitizeFile(path);
+    }
+
+    expect(
+      await sanitize('photos.zip', [ArchiveFile.bytes('big.bin', filler)]),
+      SanitizeStatus.unsupported,
+    );
+    expect(
+      await sanitize('deck.pptx', [
+        ArchiveFile.bytes('[Content_Types].xml', utf8.encode('<Types/>')),
+        ArchiveFile.bytes(
+          'docProps/core.xml',
+          utf8.encode('<dc:creator>Alice</dc:creator>'),
+        ),
+        ArchiveFile.bytes('ppt/media/image1.bin', filler),
+      ]),
+      SanitizeStatus.failed,
+    );
+  });
+
   late Directory temp;
 
   setUp(() async {

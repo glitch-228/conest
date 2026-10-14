@@ -18,4 +18,20 @@ void main() {
     );
     expect(command, contains('profile=any'));
   });
+
+  test('typographic quotes in the path are doubled too', () {
+    // PowerShell ends a single-quoted string at ’ as well as at '.
+    final command = WindowsFirewall.command(
+      'C:\\Users\\O\u2019Brien\\conest.exe',
+    );
+    expect(command, contains('O\u2019\u2019Brien'));
+    final quoted = command.substring(command.indexOf("-ArgumentList '") + 15);
+    // The argument closes only at its end.
+    expect(
+      RegExp(
+        "(?<!['\u2018\u2019\u201A\u201B])['\u2018\u2019\u201A\u201B](?!['\u2018\u2019\u201A\u201B])",
+      ).allMatches(quoted).length,
+      1,
+    );
+  });
 }

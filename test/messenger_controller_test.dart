@@ -24,6 +24,10 @@ import 'package:conest/src/carrier.dart';
 import 'package:conest/src/crypto_service.dart';
 import 'package:conest/src/feature_models.dart';
 import 'package:conest/src/email/mail_socket.dart';
+import 'package:conest/src/account/account_model.dart';
+import 'package:conest/src/energy_policy.dart';
+import 'package:conest/src/ui/devices_panel.dart';
+import 'package:conest/src/ui/user_mode_screen.dart';
 import 'package:conest/src/group_file_crypto.dart';
 import 'package:conest/src/group_file_download.dart';
 import 'package:conest/src/group_history_event.dart';
@@ -429,6 +433,9 @@ class _FakeRelayClient extends RelayClient {
   shouldFailStore;
   final List<String> storeAttempts = <String>[];
   final List<String> fetchAttempts = <String>[];
+
+  /// Hosts asked with a wait (long polls).
+  final List<String> waitingFetchHosts = <String>[];
   final List<String> inspectHealthAttempts = <String>[];
   final List<RelayEnvelope> storedEnvelopes = <RelayEnvelope>[];
   final Map<String, List<RelayEnvelope>> _queues =
@@ -446,16 +453,19 @@ class _FakeRelayClient extends RelayClient {
     Duration leaseFor = const Duration(seconds: 60),
     String? expectedIdentityPublicKeyBase64,
   }) async => RelayFetchBatch(
-    envelopes: await fetchEnvelopes(
-      host: host,
-      port: port,
-      protocol: protocol,
-      recipientDeviceId: recipientDeviceId,
-      limit: limit,
-      timeout: timeout,
-      waitFor: waitFor,
-      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
-    ),
+    envelopes: await (() {
+      if (waitFor > Duration.zero) waitingFetchHosts.add(host);
+      return fetchEnvelopes(
+        host: host,
+        port: port,
+        protocol: protocol,
+        recipientDeviceId: recipientDeviceId,
+        limit: limit,
+        timeout: timeout,
+        waitFor: waitFor,
+        expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+      );
+    })(),
   );
 
   @override
@@ -1012,8 +1022,10 @@ Future<MessengerController> _createController({
   MeshCoreConnector? meshCoreConnector,
   BitchatConnector? bitchatConnector,
   TorApi? torApi,
+  EnergyPolicy? energyPolicy,
 }) async {
   final controller = MessengerController(
+    energyPolicy: energyPolicy,
     torApi: torApi,
     bitchatConnector: bitchatConnector,
     meshCoreConnector: meshCoreConnector,
@@ -14773,6 +14785,1032 @@ void main() {
     },
   );
 
+  group('Several routes', () {
+    Future<
+      (
+        MessengerController,
+        MessengerController,
+        _FakeRelayClient,
+        _InProcessIrohNetwork,
+      )
+    >
+    pair({EnergyPolicy? alicePolicy}) async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        energyPolicy: alicePolicy,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      return (alice, bob, relay, network);
+    }
+
+    Set<MessageRoute> families(Iterable<RouteTrace> traces) => {
+      for (final trace in traces) trace.route.family,
+    };
+
+    test('on mains power a message goes on every route, and the receipt '
+        'names each one', () async {
+      final (alice, bob, relay, _) = await pair(
+        alicePolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'twice');
+      final sent = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'twice');
+      // The copy went to the relay as well as straight to Bob.
+      await _waitForIroh(
+        () => relay.storedEnvelopes.any((e) => e.messageId == sent.id),
+        reason: 'no copy went to the relay',
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        final received = bob
+            .messagesFor(aliceId)
+            .where((m) => m.body == 'twice')
+            .firstOrNull;
+        return received != null && received.routeTrace.length >= 2;
+      }, reason: 'Bob did not list both routes');
+      final received = bob
+          .messagesFor(aliceId)
+          .singleWhere((m) => m.body == 'twice');
+      final arrivedBy = families(received.routeTrace);
+      expect(arrivedBy, contains(MessageRoute.irohDirect));
+      expect(arrivedBy.length, greaterThanOrEqualTo(2));
+      expect(
+        received.routeTrace.every(
+          (trace) => trace.mark == MessageRouteMark.confirmed,
+        ),
+        isTrue,
+      );
+      // Alice learns that both routes reached Bob.
+      await _waitForIroh(() {
+        final traces = alice
+            .messagesFor(bobId)
+            .singleWhere((m) => m.body == 'twice')
+            .routeTrace
+            .where((trace) => trace.mark == MessageRouteMark.confirmed);
+        return families(traces).containsAll(arrivedBy);
+      }, reason: 'the receipts did not name every route');
+      // One message, however many copies.
+      expect(
+        bob.messagesFor(aliceId).where((m) => m.body == 'twice').length,
+        1,
+      );
+    });
+
+    test('in battery saver a message goes on one route, as before', () async {
+      final (alice, bob, relay, _) = await pair(
+        alicePolicy: EnergyPolicy.fixed(EnergyMode.saver),
+      );
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'once');
+      final sent = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'once');
+      await _waitForIroh(
+        () => bob.messagesFor(aliceId).any((m) => m.body == 'once'),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(
+        relay.storedEnvelopes.where((e) => e.messageId == sent.id),
+        isEmpty,
+      );
+    });
+
+    test('on battery a copy waits for the receipt first', () async {
+      final (alice, bob, relay, _) = await pair(
+        alicePolicy: EnergyPolicy.fixed(
+          EnergyMode.limited,
+          escalateInterval: const Duration(seconds: 30),
+        ),
+      );
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'patient');
+      final sent = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'patient');
+      await _waitForIroh(
+        () => {DeliveryState.delivered, DeliveryState.read}.contains(
+          alice.messagesFor(bobId).singleWhere((m) => m.id == sent.id).state,
+        ),
+      );
+      // The receipt came within the interval: no copy went anywhere.
+      expect(
+        relay.storedEnvelopes.where((e) => e.messageId == sent.id),
+        isEmpty,
+      );
+      expect(
+        alice
+            .messagesFor(bobId)
+            .singleWhere((m) => m.id == sent.id)
+            .routeTrace
+            .map((trace) => trace.route.family)
+            .toSet(),
+        {MessageRoute.irohDirect},
+      );
+      expect(
+        bob.messagesFor(aliceId).where((m) => m.body == 'patient').length,
+        1,
+      );
+    });
+
+    test('on battery, no receipt within the interval sends a copy on the '
+        'next route', () async {
+      final (alice, bob, _, network) = await pair(
+        alicePolicy: EnergyPolicy.fixed(
+          EnergyMode.limited,
+          escalateInterval: const Duration(seconds: 1),
+        ),
+      );
+      // What Alice sends straight to Bob is lost on the way.
+      network.droppedPairs.add((
+        alice.identity!.irohEndpointId!,
+        bob.identity!.irohEndpointId!,
+      ));
+      final aliceId = alice.identity!.deviceId;
+      await alice.sendMessage(
+        contact: alice.contacts.single,
+        body: 'lost once',
+      );
+      // No retry pass: the copy alone gets it there.
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.messagesFor(aliceId).any((m) => m.body == 'lost once');
+      }, reason: 'no copy went on another route');
+    });
+
+    test('copies arriving together get one receipt', () async {
+      final (alice, bob, relay, _) = await pair(
+        alicePolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      final aliceId = alice.identity!.deviceId;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'thrice');
+      final id = alice
+          .messagesFor(bob.identity!.deviceId)
+          .singleWhere((m) => m.body == 'thrice')
+          .id;
+      // The copies left on the relay and the LAN queue wait for one poll.
+      await _waitForIroh(
+        () => relay.storedEnvelopes.where((e) => e.messageId == id).length >= 2,
+        reason: 'the copies did not go out',
+      );
+      await _waitForIroh(
+        () => bob.messagesFor(aliceId).any((m) => m.body == 'thrice'),
+      );
+      // Two more copies come by two other routes, one right after the
+      // other: one more receipt names both.
+      final copy = relay.storedEnvelopes.firstWhere((e) => e.messageId == id);
+      final before = bob.messageReceiptsSent;
+      await bob.processEnvelopesForTesting([
+        copy,
+      ], route: MessageRoute.nostrCarrier);
+      await bob.processEnvelopesForTesting([
+        copy,
+      ], route: MessageRoute.emailCarrier);
+      // The same copy again from the other relay, same route: no extra.
+      await bob.processEnvelopesForTesting([
+        copy,
+      ], route: MessageRoute.emailCarrier);
+      // Bob is in battery saver (the test default): it gathers for 3 s.
+      await Future<void>.delayed(const Duration(milliseconds: 3500));
+      final received = bob
+          .messagesFor(aliceId)
+          .singleWhere((m) => m.body == 'thrice');
+      expect(
+        received.routeTrace.map((trace) => trace.route),
+        containsAll([MessageRoute.nostrCarrier, MessageRoute.emailCarrier]),
+      );
+      expect(bob.messageReceiptsSent - before, 1);
+    });
+
+    test('retries do not send the same copies again', () async {
+      var now = DateTime.now().toUtc();
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        nowProvider: () => now,
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        nowProvider: () => now,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobId = bob.identity!.deviceId;
+      // Bob is away: nothing reaches him, nothing comes back.
+      network.droppedPairs.add((
+        alice.identity!.irohEndpointId!,
+        bob.identity!.irohEndpointId!,
+      ));
+      await alice.sendMessage(contact: alice.contacts.single, body: 'away');
+      final id = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'away')
+          .id;
+      int stores() =>
+          relay.storedEnvelopes.where((e) => e.messageId == id).length;
+      await Future<void>.delayed(const Duration(seconds: 2));
+      final afterFirst = stores();
+      for (var pass = 0; pass < 3; pass++) {
+        now = now.add(const Duration(minutes: 6));
+        await alice.retryUnacknowledgedMessagesNow();
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+      // Each retry may hand the message to one route again; copies to the
+      // other routes went once, on the first pass.
+      final perRetry = (stores() - afterFirst) / 3;
+      expect(perRetry, lessThan(2));
+      expect(id, isNotEmpty);
+    });
+
+    test('copies reach every member of a group', () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        // Answers copies after 1 s (3 s in battery saver).
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Both ways',
+        members: [alice.contacts.single],
+      );
+      await _waitForIroh(
+        () => bob.groups.any((g) => g.groupId == group.groupId),
+        reason: 'Bob did not join',
+      );
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'all routes');
+      final bobId = bob.identity!.deviceId;
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        final traces = alice
+            .messagesForGroup(group.groupId)
+            .singleWhere((m) => m.body == 'all routes')
+            .routeTrace
+            .where(
+              (trace) =>
+                  trace.deviceId == bobId &&
+                  trace.mark == MessageRouteMark.confirmed,
+            );
+        return families(traces).length >= 2;
+      }, reason: 'the group receipt did not name two routes');
+    });
+  });
+
+  group('Accounts with several devices', () {
+    Future<
+      (
+        MessengerController,
+        MessengerController,
+        MessengerController,
+        void Function(Duration),
+      )
+    >
+    threeDevices() async {
+      var now = DateTime.now().toUtc();
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+          nowProvider: () => now,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      final phone = await make('New phone');
+      await _pairControllers(alice, bob);
+      return (alice, bob, phone, (Duration by) => now = now.add(by));
+    }
+
+    test('a new device is linked after both confirm the same code', () async {
+      final (alice, bob, phone, advance) = await threeDevices();
+      advance(const Duration(hours: 25));
+      final aliceId = alice.identity!.deviceId;
+      final phoneId = phone.identity!.deviceId;
+
+      final qr = await phone.startLinkAsNewDevice();
+      expect(phone.linkState, LinkState.showingQrCode);
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () =>
+            phone.linkState == LinkState.compareCode &&
+            alice.linkState == LinkState.compareCode,
+        reason: 'the codes did not show',
+      );
+      expect(phone.linkCode, alice.linkCode, reason: 'both show the same code');
+
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      await _waitForIroh(
+        () => phone.linkState == LinkState.linked,
+        reason: 'the phone was not linked',
+      );
+      expect(phone.identity!.accountId, alice.identity!.accountId);
+      expect(phone.identity!.displayName, 'Alice');
+      expect(
+        phone.identity!.accountKeyPublicBase64,
+        alice.identity!.accountKeyPublicBase64,
+      );
+      expect(phone.contacts.map((c) => c.displayName), contains('Bob'));
+      expect(
+        alice.accountDevices!.devices.map((d) => d.deviceId),
+        containsAll([aliceId, phoneId]),
+      );
+      // Bob learns the phone is Alice's.
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.linkedDevicesOf(aliceId).any((d) => d.deviceId == phoneId);
+      }, reason: 'Bob did not learn the phone');
+      expect(bob.contacts.length, 1);
+    });
+
+    test('someone who photographed the QR code cannot pass for the real '
+        'device', () async {
+      final (alice, bob, phone, advance) = await threeDevices();
+      advance(const Duration(hours: 25));
+      final qr = await phone.startLinkAsNewDevice();
+      // Bob (any stranger with the QR code) offers first.
+      await bob.startLinkFromQrCode(qr);
+      await _waitForIroh(() => phone.linkState == LinkState.compareCode);
+      await alice.startLinkFromQrCode(qr);
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      // The phone answered Bob only: Alice shows no code at all, so the
+      // user sees that the devices do not match.
+      expect(alice.linkCode, isNull);
+      expect(alice.linkState, LinkState.connecting);
+      await _waitForIroh(() => bob.linkCode != null);
+      expect(bob.linkCode, phone.linkCode);
+    });
+
+    test('messages reach every device of the account, and one chat shows '
+        'them all', () async {
+      final (alice, bob, phone, advance) = await threeDevices();
+      advance(const Duration(hours: 25));
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () =>
+            phone.linkState == LinkState.compareCode &&
+            alice.linkState == LinkState.compareCode,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return phone.linkState == LinkState.linked &&
+            bob.linkedDevicesOf(aliceId).isNotEmpty;
+      }, reason: 'the phone was not linked and known');
+
+      // Bob writes to Alice: both her devices get it.
+      await bob.sendMessage(contact: bob.contacts.single, body: 'hi both');
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        return alice.messagesFor(bobId).any((m) => m.body == 'hi both') &&
+            phone.messagesFor(bobId).any((m) => m.body == 'hi both');
+      }, reason: 'not every device of Alice got it');
+
+      // Alice answers from her phone: Bob sees it in Alice's chat, and the
+      // phone gets his receipt.
+      await phone.sendMessage(
+        contact: phone.contacts.firstWhere((c) => c.deviceId == bobId),
+        body: 'from my phone',
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        unawaited(phone.pollNow());
+        final mine = phone
+            .messagesFor(bobId)
+            .where((m) => m.body == 'from my phone')
+            .firstOrNull;
+        return bob.messagesFor(aliceId).any((m) => m.body == 'from my phone') &&
+            mine != null &&
+            {DeliveryState.delivered, DeliveryState.read}.contains(mine.state);
+      }, reason: 'the phone\'s message did not reach Alice\'s chat at Bob');
+      expect(bob.contacts.length, 1);
+    });
+
+    test('removing a contact removes their other devices', () async {
+      final (alice, bob, phone, advance) = await threeDevices();
+      advance(const Duration(hours: 25));
+      final aliceId = alice.identity!.deviceId;
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () =>
+            phone.linkState == LinkState.compareCode &&
+            alice.linkState == LinkState.compareCode,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.linkedDevicesOf(aliceId).isNotEmpty;
+      });
+      await bob.removeContact(aliceId);
+      expect(bob.linkedDevicesOf(aliceId), isEmpty);
+    });
+
+    testWidgets('Settings lists the devices and shows a link code', (
+      tester,
+    ) async {
+      final alice = (await tester.runAsync(
+        () => _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+        ),
+      ))!;
+      addTearDown(alice.dispose);
+      await tester.runAsync(() => alice.createAccount(deviceName: 'Laptop'));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: alice,
+              builder: (context, _) => DevicesPanel(controller: alice),
+            ),
+          ),
+        ),
+      );
+      expect(find.text('Laptop'), findsOneWidget);
+      expect(find.text('This device'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('link-this-device')));
+      await tester.pump();
+      for (
+        var i = 0;
+        i < 20 && find.byKey(const ValueKey('link-qr-text')).evaluate().isEmpty;
+        i++
+      ) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pump();
+      }
+      final qr = tester.widget<SelectableText>(
+        find.byKey(const ValueKey('link-qr-text')),
+      );
+      expect(qr.data, startsWith('cl1|'));
+      expect(alice.linkState, LinkState.showingQrCode);
+      alice.cancelLink();
+      await tester.pump(const Duration(seconds: 1));
+    });
+
+    test(
+      'nothing secret is sent unless the new device confirmed too',
+      () async {
+        final (alice, _, phone, advance) = await threeDevices();
+        advance(const Duration(hours: 25));
+        final qr = await phone.startLinkAsNewDevice();
+        await alice.startLinkFromQrCode(qr);
+        await _waitForIroh(
+          () =>
+              phone.linkState == LinkState.compareCode &&
+              alice.linkState == LinkState.compareCode,
+        );
+        // Only the existing device confirms.
+        await alice.confirmLinkCode();
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        expect(phone.linkState, isNot(LinkState.linked));
+        expect(phone.identity!.accountKeyPrivateBase64, isNull);
+        expect(alice.accountDevices!.devices.length, 1);
+        // A code from another device's QR does not start a link.
+        await expectLater(
+          alice.startLinkFromQrCode('cl1|not|a|real|code|x'),
+          throwsArgumentError,
+        );
+      },
+    );
+
+    test('a contact learns the account\'s other devices, and loses revoked '
+        'ones', () async {
+      var now = DateTime.now().toUtc();
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        nowProvider: () => now,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        nowProvider: () => now,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final aliceId = alice.identity!.deviceId;
+
+      await alice.createAccount(deviceName: 'Laptop');
+      expect(alice.accountDevices?.devices.single.name, 'Laptop');
+      // A brand-new identity waits a day before adding devices.
+      expect(alice.mayManageAccountDevices, isFalse);
+      now = now.add(const Duration(hours: 25));
+      expect(alice.mayManageAccountDevices, isTrue);
+
+      final phoneSigning = await Ed25519().newKeyPair();
+      final phoneSigningKey = base64Encode(
+        (await phoneSigning.extractPublicKey()).bytes,
+      );
+      final phoneEncryption = await X25519().newKeyPair();
+      final phoneEncryptionKey = base64Encode(
+        (await phoneEncryption.extractPublicKey()).bytes,
+      );
+      Future<String> phoneProof() async => base64Encode(
+        (await Ed25519().sign(
+          DeviceCert.proofBytes(
+            accountId: alice.identity!.accountId,
+            accountKeyBase64: alice.identity!.accountKeyPublicBase64!,
+            deviceId: 'alice-phone',
+            encryptionKeyBase64: phoneEncryptionKey,
+            signingKeyBase64: phoneSigningKey,
+          ),
+          keyPair: phoneSigning,
+        )).bytes,
+      );
+      // Without the phone's own proof it is refused.
+      await expectLater(
+        alice.addAccountDevice(
+          deviceId: 'alice-phone',
+          encryptionKeyBase64: phoneEncryptionKey,
+          signingKeyBase64: phoneSigningKey,
+          name: 'Pixel 8',
+          proofSignatureBase64: base64Encode(List<int>.filled(64, 1)),
+        ),
+        throwsArgumentError,
+      );
+      await alice.addAccountDevice(
+        deviceId: 'alice-phone',
+        encryptionKeyBase64: phoneEncryptionKey,
+        signingKeyBase64: phoneSigningKey,
+        name: 'Pixel 8',
+        proofSignatureBase64: await phoneProof(),
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.linkedDevicesOf(aliceId).isNotEmpty;
+      }, reason: 'Bob did not learn Alice\'s phone');
+      final phone = bob.linkedDevicesOf(aliceId).single;
+      expect(phone.deviceId, 'alice-phone');
+      expect(phone.deviceName, 'Pixel 8');
+      expect(phone.signingPublicKeyBase64, phoneSigningKey);
+      // Listed once: the phone is Alice, not a new contact.
+      expect(bob.contacts.map((c) => c.deviceId), [aliceId]);
+      expect(
+        bob.contacts.single.accountKeyBase64,
+        alice.identity!.accountKeyPublicBase64,
+      );
+
+      await alice.revokeAccountDevice('alice-phone');
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.linkedDevicesOf(aliceId).isEmpty;
+      }, reason: 'Bob kept the revoked phone');
+      expect(
+        bob.contacts.single.accountRevokedDeviceIds,
+        contains('alice-phone'),
+      );
+      // It cannot come back.
+      await expectLater(
+        alice.addAccountDevice(
+          deviceId: 'alice-phone',
+          encryptionKeyBase64: phoneEncryptionKey,
+          signingKeyBase64: phoneSigningKey,
+          name: 'Pixel 8',
+          proofSignatureBase64: await phoneProof(),
+        ),
+        throwsStateError,
+      );
+      // The original device stays: contacts know the account through it.
+      expect(() => alice.revokeAccountDevice(aliceId), throwsArgumentError);
+    });
+  });
+
+  group('User modes', () {
+    test('a new identity chooses a mode; older vaults stay advanced', () async {
+      final vault = _MemoryVaultStore();
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        vaultStore: vault,
+      );
+      addTearDown(alice.dispose);
+      expect(alice.needsUserModeChoice, isTrue);
+      await alice.setUserMode(UserMode.minimal);
+      expect(alice.needsUserModeChoice, isFalse);
+      expect(alice.userMode, UserMode.minimal);
+      expect((await vault.load()).userMode, UserMode.minimal);
+
+      // A vault from before modes: advanced, nothing to choose.
+      final old = VaultSnapshot.fromJson(
+        (await vault.load()).toJson()
+          ..remove('userMode')
+          ..remove('userModeChosen'),
+      );
+      expect(old.userMode, isNull);
+      expect(old.userModeChosen, isTrue);
+    });
+
+    test('the language is kept, and can follow the device again', () async {
+      final vault = _MemoryVaultStore();
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        vaultStore: vault,
+      );
+      addTearDown(alice.dispose);
+      expect(alice.localeCode, isNull);
+      await alice.setLocaleCode('fa');
+      expect((await vault.load()).localeCode, 'fa');
+      await alice.setLocaleCode(null);
+      expect(alice.localeCode, isNull);
+      expect((await vault.load()).localeCode, isNull);
+    });
+
+    testWidgets('the choice screen sets the mode', (tester) async {
+      final alice = (await tester.runAsync(
+        () => _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+        ),
+      ))!;
+      addTearDown(alice.dispose);
+      await tester.pumpWidget(
+        MaterialApp(home: UserModeScreen(controller: alice)),
+      );
+      await tester.tap(find.byKey(const ValueKey('user-mode-advanced')));
+      await tester.pump();
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('user-mode-continue')),
+        200,
+      );
+      await tester.tap(find.byKey(const ValueKey('user-mode-continue')));
+      await tester.pump();
+      expect(
+        find.textContaining('Each is off until you turn it on'),
+        findsOneWidget,
+      );
+      await tester.ensureVisible(find.byKey(const ValueKey('user-mode-start')));
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const ValueKey('user-mode-start')));
+        await _waitForIroh(() => !alice.needsUserModeChoice);
+      });
+      expect(alice.userMode, UserMode.advanced);
+    });
+
+    testWidgets('standard mode on a phone has chats and calls tabs', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(400, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final alice = (await tester.runAsync(
+        () => _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+        ),
+      ))!;
+      addTearDown(alice.dispose);
+      final updates = _createUpdateService();
+      final theme = app.ConestThemeController.memory();
+      addTearDown(updates.dispose);
+      addTearDown(theme.dispose);
+      Future<void> show() async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: ListenableBuilder(
+              listenable: alice,
+              builder: (context, _) => app.HomeScreen(
+                controller: alice,
+                updateService: updates,
+                buildInfo: _createBuildInfo(),
+                themeController: theme,
+                palette: app.ConestPalette(),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+      }
+
+      await tester.runAsync(() => alice.setUserMode(UserMode.advanced));
+      await show();
+      expect(find.byKey(const ValueKey('phone-tabs')), findsNothing);
+
+      await tester.runAsync(() => alice.setUserMode(UserMode.normal));
+      await show();
+      expect(find.byKey(const ValueKey('phone-tabs')), findsOneWidget);
+      await tester.tap(find.text('Calls'));
+      await tester.pump();
+      expect(find.textContaining('No calls yet'), findsOneWidget);
+    });
+
+    testWidgets('simple mode shows only personal settings until asked', (
+      tester,
+    ) async {
+      final alice = (await tester.runAsync(
+        () => _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+        ),
+      ))!;
+      addTearDown(alice.dispose);
+      await tester.runAsync(() => alice.setUserMode(UserMode.minimal));
+      final updates = _createUpdateService();
+      final theme = app.ConestThemeController.memory();
+      addTearDown(updates.dispose);
+      addTearDown(theme.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: app.SettingsDialog(
+              controller: alice,
+              updateService: updates,
+              themeController: theme,
+              palette: app.ConestPalette(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('// CONNECTIVITY'), findsNothing);
+      expect(find.text('// PERSONAL'), findsOneWidget);
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('show-all-settings')),
+      );
+      await tester.tap(find.byKey(const ValueKey('show-all-settings')));
+      await tester.pump();
+      expect(find.text('// CONNECTIVITY'), findsOneWidget);
+    });
+  });
+
+  group('Watching relays', () {
+    Future<Set<String>> watchedHosts(EnergyMode mode) async {
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        enableLongPoll: true,
+        energyPolicy: EnergyPolicy.fixed(mode),
+      );
+      addTearDown(alice.dispose);
+      await alice.addRelay(host: 'relay-two.example', port: 7667);
+      relay.waitingFetchHosts.clear();
+      // The watchers look for relays every 5 s.
+      await Future<void>.delayed(const Duration(seconds: 7));
+      return relay.waitingFetchHosts.toSet();
+    }
+
+    test('on mains power a second relay is watched too', () async {
+      expect(
+        await watchedHosts(EnergyMode.unconstrained),
+        containsAll(['relay.example', 'relay-two.example']),
+      );
+    });
+
+    test('in battery saver one relay is watched', () async {
+      expect((await watchedHosts(EnergyMode.saver)).length, 1);
+    });
+  });
+
+  group('Route tests', () {
+    test(
+      'each route is timed both ways, and a silent one is flagged',
+      () async {
+        final network = _InProcessIrohNetwork();
+        final relay = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          transportRegistryFactory: network.registry,
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          transportRegistryFactory: network.registry,
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final contact = alice.contacts.single;
+        expect(alice.canTestRoutes(contact), isTrue);
+        // Both keep reading their queues, as running apps do.
+        var polling = true;
+        addTearDown(() => polling = false);
+        unawaited(() async {
+          while (polling) {
+            await Future.wait([
+              alice.pollNow(),
+              bob.pollNow(),
+            ]).catchError((_) => const <void>[]);
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+          }
+        }());
+
+        final healthy = await alice.testContactRoutes(contact);
+        final iroh = healthy.results.firstWhere(
+          (result) => result.route?.family == MessageRoute.irohDirect,
+        );
+        expect(iroh.answered, isTrue);
+        expect(healthy.results.length, greaterThanOrEqualTo(2));
+        expect(
+          alice.routeTestReportFor(contact.deviceId)?.results,
+          same(healthy.results),
+        );
+
+        // Bob's side now drops what Alice sends straight to him.
+        network.droppedPairs.add((
+          alice.identity!.irohEndpointId!,
+          bob.identity!.irohEndpointId!,
+        ));
+        final broken = await alice.testContactRoutes(
+          contact,
+          replyTimeout: const Duration(seconds: 3),
+        );
+        final silent = broken.results.firstWhere(
+          (result) => result.route?.family == MessageRoute.irohDirect,
+        );
+        expect(silent.answered, isFalse);
+        expect(silent.stored, isFalse);
+        expect(
+          broken.results.where((result) => result.answered),
+          isNotEmpty,
+          reason: 'another route still answers',
+        );
+      },
+    );
+  });
+
+  group('Energy policy', () {
+    test('mains power and unmetered networks send on every route', () {
+      const plugged = PowerState(hasBattery: true, charging: true);
+      const desktop = PowerState(hasBattery: false);
+      const onBattery = PowerState(
+        hasBattery: true,
+        charging: false,
+        batteryPercent: 80,
+      );
+      const low = PowerState(
+        hasBattery: true,
+        charging: false,
+        batteryPercent: 12,
+      );
+      const saver = PowerState(charging: true, batterySaver: true);
+      expect(
+        EnergyPolicy.modeOf(desktop, NetworkCostClass.unmetered),
+        EnergyMode.unconstrained,
+      );
+      expect(
+        EnergyPolicy.modeOf(plugged, NetworkCostClass.unmetered),
+        EnergyMode.unconstrained,
+      );
+      expect(
+        EnergyPolicy.modeOf(plugged, NetworkCostClass.metered),
+        EnergyMode.limited,
+      );
+      expect(
+        EnergyPolicy.modeOf(onBattery, NetworkCostClass.unmetered),
+        EnergyMode.limited,
+      );
+      expect(
+        EnergyPolicy.modeOf(low, NetworkCostClass.unmetered),
+        EnergyMode.saver,
+      );
+      expect(
+        EnergyPolicy.modeOf(saver, NetworkCostClass.unmetered),
+        EnergyMode.saver,
+      );
+      expect(
+        EnergyPolicy.modeOf(PowerState.unknown, NetworkCostClass.unmetered),
+        EnergyMode.limited,
+      );
+    });
+
+    test('contacts on older apps and large groups get fewer copies', () {
+      final policy = EnergyPolicy.fixed(EnergyMode.unconstrained);
+      expect(
+        policy.fanoutFor(NetworkCostClass.unmetered, copiesAllowed: false),
+        isA<SingleRouteFanout>(),
+      );
+      expect(
+        policy.fanoutFor(NetworkCostClass.unmetered, copiesAllowed: true),
+        isA<AllRoutesFanout>(),
+      );
+      expect(
+        policy.fanoutFor(
+          NetworkCostClass.unmetered,
+          copiesAllowed: true,
+          groupSize: 20,
+        ),
+        isA<EscalatingFanout>(),
+      );
+    });
+
+    test('Linux power supplies are read, device batteries ignored', () async {
+      final root = await Directory.systemTemp.createTemp('conest_power-');
+      addTearDown(() => root.delete(recursive: true));
+      Future<void> supply(String name, Map<String, String> values) async {
+        final dir = Directory('${root.path}/$name')..createSync();
+        for (final entry in values.entries) {
+          await File('${dir.path}/${entry.key}').writeAsString(entry.value);
+        }
+      }
+
+      await supply('AC', {'type': 'Mains\n', 'online': '0\n'});
+      await supply('BAT0', {
+        'type': 'Battery\n',
+        'status': 'Discharging\n',
+        'capacity': '55\n',
+      });
+      await supply('hid-mouse', {
+        'type': 'Battery\n',
+        'scope': 'Device\n',
+        'status': 'Charging\n',
+        'capacity': '5\n',
+      });
+      final power = await LinuxPowerStateSource(root: root.path).read();
+      expect(power.hasBattery, isTrue);
+      expect(power.charging, isFalse);
+      expect(power.batteryPercent, 55);
+      await File('${root.path}/AC/online').writeAsString('1\n');
+      expect(
+        (await LinuxPowerStateSource(root: root.path).read()).charging,
+        isTrue,
+      );
+    });
+
+    test('a slow first route gets longer before the next copy', () {
+      const base = Duration(milliseconds: 2500);
+      expect(escalationInterval(base, null), base);
+      expect(escalationInterval(base, 40), base);
+      expect(escalationInterval(base, 4000), const Duration(seconds: 6));
+      expect(escalationInterval(base, 90000), const Duration(seconds: 30));
+    });
+
+    test('Windows power status flags are read', () {
+      final desktop = windowsPowerState(
+        acLineStatus: 1,
+        batteryFlag: 128,
+        batteryLifePercent: 255,
+        systemStatusFlag: 0,
+      );
+      expect(desktop.hasBattery, isFalse);
+      expect(desktop.charging, isTrue);
+      final laptop = windowsPowerState(
+        acLineStatus: 0,
+        batteryFlag: 1,
+        batteryLifePercent: 70,
+        systemStatusFlag: 1,
+      );
+      expect(laptop.hasBattery, isTrue);
+      expect(laptop.charging, isFalse);
+      expect(laptop.batteryPercent, 70);
+      expect(laptop.batterySaver, isTrue);
+    });
+  });
+
   group('File privacy', () {
     /// A small JPEG carrying a GPS marker in an EXIF segment.
     Uint8List photoWithLocation() {
@@ -14853,6 +15891,50 @@ void main() {
       final path = await bob.attachmentCachePathFor(message!.attachment!.id);
       return (message!.attachment!.fileName, await File(path!).readAsBytes());
     }
+
+    test('a file records how much of it each route carried, on both '
+        'sides', () async {
+      final (alice, bob, root) = await pair();
+      final data = Uint8List.fromList(
+        List<int>.generate(300 * 1024, (i) => i % 251),
+      );
+      final source = await File('${root.path}/data.bin').writeAsBytes(data);
+      await alice.sendAttachmentSource(
+        contact: alice.contacts.single,
+        source: StagedAttachment(
+          id: 'routes-${DateTime.now().microsecondsSinceEpoch}',
+          fileName: 'data.bin',
+          mimeType: 'application/octet-stream',
+          sizeBytes: data.length,
+          filePath: source.path,
+        ),
+      );
+      await received(alice, bob, 1);
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      final inbound = bob
+          .messagesFor(aliceId)
+          .singleWhere((m) => m.attachment != null);
+      final inboundBytes = inbound.routeTrace
+          .where((trace) => trace.bytes != null)
+          .fold<int>(0, (sum, trace) => sum + trace.bytes!);
+      expect(inboundBytes, data.length);
+      expect(
+        inbound.routeTrace.map((trace) => trace.route.family),
+        contains(MessageRoute.irohDirect),
+      );
+      await _waitForIroh(() {
+        final outbound = alice
+            .messagesFor(bobId)
+            .singleWhere((m) => m.attachment != null);
+        return outbound.routeTrace.any(
+          (trace) =>
+              trace.bytes != null &&
+              trace.bytes! > 0 &&
+              trace.mark == MessageRouteMark.confirmed,
+        );
+      }, reason: 'the sender did not record the file\'s routes');
+    });
 
     test('photos go without their location unless the user keeps it, '
         'under random names when asked', () async {

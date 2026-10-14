@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
@@ -968,6 +969,10 @@ class IdentityRecord {
     this.signingPublicKeyBase64,
     this.signingPrivateKeyBase64,
     this.irohEndpointId,
+    this.accountKeyPublicBase64,
+    this.accountKeyPrivateBase64,
+    this.accountUpgrade,
+    this.accountDeviceList,
   });
 
   final String accountId;
@@ -1000,6 +1005,17 @@ class IdentityRecord {
   final String? signingPrivateKeyBase64;
   final String? irohEndpointId;
 
+  /// The account key (M29), once this identity has one: every linked
+  /// device holds it.
+  final String? accountKeyPublicBase64;
+  final String? accountKeyPrivateBase64;
+
+  /// How this identity joined its account key (sent to contacts).
+  final Map<String, Object?>? accountUpgrade;
+
+  /// The account's current signed device list (sent to contacts).
+  final Map<String, Object?>? accountDeviceList;
+
   String get deviceIdShort => deviceId.substring(0, 8);
   String get shortSafetyNumber => _truncateSafetyNumber(safetyNumber);
   bool get hasInternetRelay => configuredRelays.isNotEmpty;
@@ -1031,6 +1047,8 @@ class IdentityRecord {
   }
 
   IdentityRecord copyWith({
+    // Only linking changes it: the device joins its account.
+    String? accountId,
     String? displayName,
     String? bio,
     String? pairingNonce,
@@ -1050,9 +1068,13 @@ class IdentityRecord {
     String? signingPublicKeyBase64,
     String? signingPrivateKeyBase64,
     String? irohEndpointId,
+    String? accountKeyPublicBase64,
+    String? accountKeyPrivateBase64,
+    Map<String, Object?>? accountUpgrade,
+    Map<String, Object?>? accountDeviceList,
   }) {
     return IdentityRecord(
-      accountId: accountId,
+      accountId: accountId ?? this.accountId,
       deviceId: deviceId,
       displayName: displayName ?? this.displayName,
       bio: bio ?? this.bio,
@@ -1084,6 +1106,12 @@ class IdentityRecord {
       signingPrivateKeyBase64:
           signingPrivateKeyBase64 ?? this.signingPrivateKeyBase64,
       irohEndpointId: irohEndpointId ?? this.irohEndpointId,
+      accountKeyPublicBase64:
+          accountKeyPublicBase64 ?? this.accountKeyPublicBase64,
+      accountKeyPrivateBase64:
+          accountKeyPrivateBase64 ?? this.accountKeyPrivateBase64,
+      accountUpgrade: accountUpgrade ?? this.accountUpgrade,
+      accountDeviceList: accountDeviceList ?? this.accountDeviceList,
     );
   }
 
@@ -1119,6 +1147,12 @@ class IdentityRecord {
       if (signingPrivateKeyBase64 != null)
         'signingPrivateKeyBase64': signingPrivateKeyBase64,
       if (irohEndpointId != null) 'irohEndpointId': irohEndpointId,
+      if (accountKeyPublicBase64 != null)
+        'accountKeyPublic': accountKeyPublicBase64,
+      if (accountKeyPrivateBase64 != null)
+        'accountKeyPrivate': accountKeyPrivateBase64,
+      if (accountUpgrade != null) 'accountUpgrade': accountUpgrade,
+      if (accountDeviceList != null) 'accountDeviceList': accountDeviceList,
     };
   }
 
@@ -1192,6 +1226,14 @@ class IdentityRecord {
       signingPublicKeyBase64: json['signingPublicKeyBase64'] as String?,
       signingPrivateKeyBase64: json['signingPrivateKeyBase64'] as String?,
       irohEndpointId: json['irohEndpointId'] as String?,
+      accountKeyPublicBase64: json['accountKeyPublic'] as String?,
+      accountKeyPrivateBase64: json['accountKeyPrivate'] as String?,
+      accountUpgrade: json['accountUpgrade'] is Map<String, dynamic>
+          ? json['accountUpgrade'] as Map<String, dynamic>
+          : null,
+      accountDeviceList: json['accountDeviceList'] is Map<String, dynamic>
+          ? json['accountDeviceList'] as Map<String, dynamic>
+          : null,
     );
   }
 }
@@ -1768,6 +1810,11 @@ class ContactRecord {
     this.replacedByDeviceId,
     this.unverifiedPublicKeyBase64,
     this.remoteRemovedAt,
+    this.accountKeyBase64,
+    this.accountDeviceListVersion = 0,
+    this.accountRevokedDeviceIds = const <String>[],
+    this.accountAnchorDeviceId,
+    this.deviceName,
     this.routing = const ContactRoutingPreferences(),
     this.signingPublicKeyBase64,
     this.irohEndpointId,
@@ -1874,6 +1921,26 @@ class ContactRecord {
   /// re-adds it locally.
   final DateTime? remoteRemovedAt;
 
+  /// The contact's account key (M29), once their account vouched for it.
+  final String? accountKeyBase64;
+
+  /// The newest device list of their account applied here (on the main
+  /// record); older ones are refused.
+  final int accountDeviceListVersion;
+
+  /// Their account's revoked devices: never accepted again.
+  final List<String> accountRevokedDeviceIds;
+
+  /// For another device of a contact's account: the main record's device
+  /// id. Such records are hidden from contact lists.
+  final String? accountAnchorDeviceId;
+
+  /// The name their account gave this device.
+  final String? deviceName;
+
+  /// Another device of a contact's account, not the contact as listed.
+  bool get isLinkedDevice => accountAnchorDeviceId != null;
+
   String get shortSafetyNumber => _truncateSafetyNumber(safetyNumber);
 
   bool get isArchived => replacedByDeviceId != null || remoteRemovedAt != null;
@@ -1909,6 +1976,11 @@ class ContactRecord {
     String? unverifiedPublicKeyBase64,
     bool clearUnverifiedPublicKey = false,
     DateTime? remoteRemovedAt,
+    String? accountKeyBase64,
+    int? accountDeviceListVersion,
+    List<String>? accountRevokedDeviceIds,
+    String? accountAnchorDeviceId,
+    String? deviceName,
     bool clearRemoteRemovedAt = false,
     ContactRoutingPreferences? routing,
     String? signingPublicKeyBase64,
@@ -1956,6 +2028,14 @@ class ContactRecord {
       remoteRemovedAt: clearRemoteRemovedAt
           ? null
           : (remoteRemovedAt ?? this.remoteRemovedAt),
+      accountKeyBase64: accountKeyBase64 ?? this.accountKeyBase64,
+      accountDeviceListVersion:
+          accountDeviceListVersion ?? this.accountDeviceListVersion,
+      accountRevokedDeviceIds:
+          accountRevokedDeviceIds ?? this.accountRevokedDeviceIds,
+      accountAnchorDeviceId:
+          accountAnchorDeviceId ?? this.accountAnchorDeviceId,
+      deviceName: deviceName ?? this.deviceName,
       routing: routing ?? this.routing,
       signingPublicKeyBase64:
           signingPublicKeyBase64 ?? this.signingPublicKeyBase64,
@@ -2066,6 +2146,14 @@ class ContactRecord {
         'unverifiedPublicKeyBase64': unverifiedPublicKeyBase64,
       if (remoteRemovedAt != null)
         'remoteRemovedAt': remoteRemovedAt!.toUtc().toIso8601String(),
+      if (accountKeyBase64 != null) 'accountKey': accountKeyBase64,
+      if (accountDeviceListVersion > 0)
+        'accountDeviceListVersion': accountDeviceListVersion,
+      if (accountRevokedDeviceIds.isNotEmpty)
+        'accountRevokedDeviceIds': accountRevokedDeviceIds,
+      if (accountAnchorDeviceId != null)
+        'accountAnchorDeviceId': accountAnchorDeviceId,
+      if (deviceName != null) 'deviceName': deviceName,
       'routing': routing.toJson(),
       if (signingPublicKeyBase64 != null)
         'signingPublicKeyBase64': signingPublicKeyBase64,
@@ -2165,7 +2253,24 @@ class ContactRecord {
       unverifiedPublicKeyBase64: unverifiedKey,
       remoteRemovedAt: DateTime.tryParse(
         json['remoteRemovedAt'] as String? ?? '',
-      )?.toUtc(),
+)?.toUtc(),
+      accountKeyBase64: json['accountKey'] is String
+          ? json['accountKey'] as String
+          : null,
+      accountDeviceListVersion: json['accountDeviceListVersion'] is int
+          ? json['accountDeviceListVersion'] as int
+          : 0,
+      accountRevokedDeviceIds: [
+        if (json['accountRevokedDeviceIds'] case final List revoked)
+          for (final id in revoked.take(1024))
+            if (id is String && id.length <= 128) id,
+      ],
+      accountAnchorDeviceId: json['accountAnchorDeviceId'] is String
+          ? json['accountAnchorDeviceId'] as String
+          : null,
+      deviceName: json['deviceName'] is String
+          ? json['deviceName'] as String
+          : null,
       routing: json['routing'] is Map<String, dynamic>
           ? ContactRoutingPreferences.fromJson(
               json['routing'] as Map<String, dynamic>,
@@ -2485,6 +2590,28 @@ enum MessageRoute {
   };
 
   /// Routes recorded before [MessageRoute] existed.
+  /// The routes a receipt names, or null when it names none this build
+  /// knows (an older app, or only a newer app's routes): then the receipt
+  /// says nothing about routes.
+  static Set<MessageRoute>? namedInReceipt(Object? value) {
+    if (value is! List) return null;
+    final names = MessageRoute.values.asNameMap();
+    final named = {
+      for (final name in value.take(MessageRoute.values.length))
+        if (names[name] case final route?) route,
+    };
+    return named.isEmpty ? null : named;
+  }
+
+  /// Routes the two ends may name differently (a LAN or Iroh connection
+  /// one side sees as direct and the other as relayed) share a family.
+  MessageRoute get family => switch (this) {
+    lanDirect || lanRelay || lanLobby || internetDirect => lanDirect,
+    irohDirect || irohRelay => irohDirect,
+    matrixCarrier || plainMatrix => matrixCarrier,
+    _ => this,
+  };
+
   static MessageRoute? fromTransport(
     TransportKind? kind,
     TransportPathKind? path,
@@ -2535,7 +2662,13 @@ class ChatMessage {
     Map<String, DeliveryState>? recipientStates,
     Map<String, Set<String>>? reactions,
     Map<String, DateTime>? reactionClocks,
-  }) : recipientStates = Map.unmodifiable(
+    List<RouteTrace>? routeTrace,
+    Map<String, DateTime>? recipientReadAt,
+  }) : routeTrace = List.unmodifiable(routeTrace ?? const <RouteTrace>[]),
+       recipientReadAt = Map.unmodifiable(
+         recipientReadAt ?? const <String, DateTime>{},
+       ),
+       recipientStates = Map.unmodifiable(
          recipientStates ?? const <String, DeliveryState>{},
        ),
        reactions = Map.unmodifiable({
@@ -2619,6 +2752,52 @@ class ChatMessage {
   /// restart without relying on wall-clock arrival order.
   final Map<String, DateTime> reactionClocks;
 
+  /// Every route this message took, with how far it got on each: for an
+  /// incoming message the routes its copies arrived by; for an outgoing one
+  /// the routes it was sent on, per group member in a group.
+  final List<RouteTrace> routeTrace;
+
+  /// When each recipient read it (outgoing), by device id.
+  final Map<String, DateTime> recipientReadAt;
+
+  /// [routeTrace] with [trace] merged in: a route's mark only goes up, and
+  /// keeps the time it was first reached.
+  List<RouteTrace> tracedWith(RouteTrace trace) {
+    final merged = <RouteTrace>[];
+    var found = false;
+    for (final existing in routeTrace) {
+      if (existing.route == trace.route &&
+          existing.deviceId == trace.deviceId) {
+        found = true;
+        merged.add(
+          trace.mark.index > existing.mark.index
+              ? RouteTrace(
+                  route: trace.route,
+                  mark: trace.mark,
+                  at: trace.at,
+                  deviceId: trace.deviceId,
+                  bytes: max(existing.bytes ?? 0, trace.bytes ?? 0) > 0
+                      ? max(existing.bytes ?? 0, trace.bytes ?? 0)
+                      : null,
+                )
+              : (trace.bytes ?? 0) > (existing.bytes ?? 0)
+              ? RouteTrace(
+                  route: existing.route,
+                  mark: existing.mark,
+                  at: existing.at,
+                  deviceId: existing.deviceId,
+                  bytes: trace.bytes,
+                )
+              : existing,
+        );
+      } else {
+        merged.add(existing);
+      }
+    }
+    if (!found && merged.length < RouteTrace.maxPerMessage) merged.add(trace);
+    return merged;
+  }
+
   String get bodyPreview => body.replaceAll('\n', ' ');
   bool get isEdited => editedAt != null;
   bool get hasRecipientStates => recipientStates.isNotEmpty;
@@ -2657,6 +2836,8 @@ class ChatMessage {
     Map<String, DeliveryState>? recipientStates,
     Map<String, Set<String>>? reactions,
     Map<String, DateTime>? reactionClocks,
+    List<RouteTrace>? routeTrace,
+    Map<String, DateTime>? recipientReadAt,
   }) {
     return ChatMessage(
       id: id,
@@ -2695,6 +2876,8 @@ class ChatMessage {
       recipientStates: recipientStates ?? this.recipientStates,
       reactions: reactions ?? this.reactions,
       reactionClocks: reactionClocks ?? this.reactionClocks,
+      routeTrace: routeTrace ?? this.routeTrace,
+      recipientReadAt: recipientReadAt ?? this.recipientReadAt,
     );
   }
 
@@ -2747,6 +2930,13 @@ class ChatMessage {
       if (reactionClocks.isNotEmpty)
         'reactionClocks': {
           for (final entry in reactionClocks.entries)
+            entry.key: entry.value.toIso8601String(),
+        },
+      if (routeTrace.isNotEmpty)
+        'routeTrace': [for (final trace in routeTrace) trace.toJson()],
+      if (recipientReadAt.isNotEmpty)
+        'recipientReadAt': {
+          for (final entry in recipientReadAt.entries)
             entry.key: entry.value.toIso8601String(),
         },
     };
@@ -2826,8 +3016,89 @@ class ChatMessage {
           entry.key: (entry.value as List).cast<String>().toSet(),
       },
       reactionClocks: reactionClocks,
+      routeTrace: RouteTrace.listFromJson(json['routeTrace']),
+      recipientReadAt: {
+        if (json['recipientReadAt'] case final Map<String, dynamic> raw)
+          for (final entry in raw.entries)
+            if (entry.value is String &&
+                DateTime.tryParse(entry.value as String) != null)
+              entry.key: DateTime.parse(entry.value as String).toUtc(),
+      },
     );
   }
+}
+
+/// How far a message got on one route. Append only.
+enum MessageRouteMark {
+  /// Handed to the route (a live connection took it).
+  sent,
+
+  /// Left on a relay or carrier that keeps it until they fetch it.
+  stored,
+
+  /// The route itself reported it reached their device (a radio ack).
+  reachedDevice,
+
+  /// Their receipt names this route: it arrived this way. For an incoming
+  /// message: a copy arrived this way.
+  confirmed,
+}
+
+/// One route of a message, how far it got, and when.
+class RouteTrace {
+  const RouteTrace({
+    required this.route,
+    required this.mark,
+    required this.at,
+    this.deviceId,
+    this.bytes,
+  });
+
+  /// Routes kept per message (members × routes in a group).
+  static const int maxPerMessage = 64;
+
+  final MessageRoute route;
+  final MessageRouteMark mark;
+  final DateTime at;
+
+  /// The group member this is about; null in a direct chat.
+  final String? deviceId;
+
+  /// For a file: how much of it went this way.
+  final int? bytes;
+
+  Map<String, dynamic> toJson() => {
+    'route': route.name,
+    'mark': mark.name,
+    'at': at.toUtc().toIso8601String(),
+    if (deviceId != null) 'deviceId': deviceId,
+    if (bytes != null) 'bytes': bytes,
+  };
+
+  static RouteTrace? fromJson(Object? json) {
+    if (json is! Map) return null;
+    final route = MessageRoute.values.asNameMap()[json['route']];
+    final mark = MessageRouteMark.values.asNameMap()[json['mark']];
+    final at = json['at'] is String
+        ? DateTime.tryParse(json['at'] as String)?.toUtc()
+        : null;
+    final deviceId = json['deviceId'];
+    final bytes = json['bytes'];
+    if (route == null || mark == null || at == null) return null;
+    return RouteTrace(
+      route: route,
+      mark: mark,
+      at: at,
+      deviceId: deviceId is String ? deviceId : null,
+      bytes: bytes is int && bytes >= 0 ? bytes : null,
+    );
+  }
+
+  static List<RouteTrace> listFromJson(Object? json) => [
+    if (json is List)
+      for (final entry in json.take(maxPerMessage))
+        if (fromJson(entry) case final RouteTrace trace) trace,
+  ];
 }
 
 class GroupMemberProfile {
@@ -4588,6 +4859,22 @@ enum AppMode {
   matrixOnly,
 }
 
+/// How much of Conest a user sees. Append only.
+enum UserMode {
+  /// One chat list, large text, the fewest settings: for people who just
+  /// want to message.
+  minimal,
+
+  /// Like the popular messengers: delivered and read ticks, no routes.
+  normal,
+
+  /// Everything: routes, transports, diagnostics.
+  advanced;
+
+  /// Whether routes, transports and other network detail show.
+  bool get showsNetworkDetail => this == advanced;
+}
+
 class VaultSnapshot {
   VaultSnapshot({
     required this.identity,
@@ -4626,6 +4913,9 @@ class VaultSnapshot {
     this.hiddenChatNetworks = const <String>[],
     this.keepFileMetadata = false,
     this.randomFileNames = false,
+    this.userMode,
+    this.userModeChosen = true,
+    this.localeCode,
   });
 
   final IdentityRecord? identity;
@@ -4735,6 +5025,15 @@ class VaultSnapshot {
   /// removed before sending.
   final bool keepFileMetadata;
 
+  /// How much the app shows (null: advanced, as before modes existed).
+  final UserMode? userMode;
+
+  /// False only between creating a new identity and choosing a mode.
+  final bool userModeChosen;
+
+  /// The app's language (such as "ru"); null follows the device.
+  final String? localeCode;
+
   /// Send files under random names (the extension kept).
   final bool randomFileNames;
 
@@ -4812,6 +5111,10 @@ class VaultSnapshot {
     List<String>? hiddenChatNetworks,
     bool? keepFileMetadata,
     bool? randomFileNames,
+    UserMode? userMode,
+    bool? userModeChosen,
+    String? localeCode,
+    bool clearLocaleCode = false,
     bool clearMatrixSession = false,
     bool clearIdentity = false,
   }) {
@@ -4866,6 +5169,9 @@ class VaultSnapshot {
       hiddenChatNetworks: hiddenChatNetworks ?? this.hiddenChatNetworks,
       keepFileMetadata: keepFileMetadata ?? this.keepFileMetadata,
       randomFileNames: randomFileNames ?? this.randomFileNames,
+      userMode: userMode ?? this.userMode,
+      userModeChosen: userModeChosen ?? this.userModeChosen,
+      localeCode: clearLocaleCode ? null : localeCode ?? this.localeCode,
     );
   }
 
@@ -4941,6 +5247,9 @@ class VaultSnapshot {
         'hiddenChatNetworks': hiddenChatNetworks,
       if (keepFileMetadata) 'keepFileMetadata': true,
       if (randomFileNames) 'randomFileNames': true,
+      if (userMode != null) 'userMode': userMode!.name,
+      if (!userModeChosen) 'userModeChosen': false,
+      if (localeCode != null) 'localeCode': localeCode,
     };
   }
 
@@ -5001,6 +5310,13 @@ class VaultSnapshot {
       ],
       keepFileMetadata: json['keepFileMetadata'] == true,
       randomFileNames: json['randomFileNames'] == true,
+      userMode: UserMode.values.asNameMap()[json['userMode']],
+      userModeChosen: json['userModeChosen'] != false,
+      localeCode:
+          json['localeCode'] is String &&
+              (json['localeCode'] as String).length <= 16
+          ? json['localeCode'] as String
+          : null,
       contacts: (json['contacts'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>()
           .map(ContactRecord.fromJson)

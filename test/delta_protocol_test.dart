@@ -39,7 +39,9 @@ void main() {
   late Party bob;
   late Party carol;
   late Map<String, Party> byAddr;
-  var clock = DateTime.utc(2026, 10, 13, 9);
+  // Keys are made at the real time: the protocol clock starts there too,
+  // or keys would look like they come from the future.
+  var clock = DateTime.now().toUtc();
 
   Future<Party> party(String name, int seed) async {
     final addr = '$name@example.org';
