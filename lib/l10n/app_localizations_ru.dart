@@ -314,4 +314,63 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get onbMatrixHelp =>
       'Только чаты Matrix, без личности Conest. Позже можно включить режим «Оба» (Conest и Matrix рядом) в «Настройки → Подключение → Режим приложения».';
+
+  @override
+  String get groupCreate => 'Создать группу';
+
+  @override
+  String get groupTitle => 'Название группы';
+
+  @override
+  String get roleMember => 'Участник';
+
+  @override
+  String get roleModerator => 'Модератор';
+
+  @override
+  String get roleAdmin => 'Администратор';
+
+  @override
+  String get actionCancel => 'Отмена';
+
+  @override
+  String get actionCreate => 'Создать';
+
+  @override
+  String get actionCreating => 'Создание…';
+
+  @override
+  String get contactAdd => 'Добавить контакт';
+
+  @override
+  String get contactAlias => 'Имя';
+
+  @override
+  String get contactInvitePayload => 'Приглашение или отсканированный QR-код';
+
+  @override
+  String get contactScanQr => 'Сканировать QR';
+
+  @override
+  String get contactCodephrase => 'Только кодовая фраза';
+
+  @override
+  String get contactTrustPayload => 'Доверять QR / приглашению';
+
+  @override
+  String get contactFindCodephrase => 'Найти по кодовой фразе';
+
+  @override
+  String get contactExchangeFailed => 'Автоматический обмен не удался';
+
+  @override
+  String contactExchangeFailedBody(String alias) {
+    return 'Вы добавили $alias, но ваше приглашение не удалось отправить обратно автоматически. Попросите собеседника отсканировать или ввести ваше приглашение со своей стороны, или отмените и удалите этот односторонний контакт.';
+  }
+
+  @override
+  String get actionAbort => 'Отменить';
+
+  @override
+  String get contactKeep => 'Оставить контакт';
 }

@@ -311,4 +311,63 @@ class AppLocalizationsAr extends AppLocalizations {
   @override
   String get onbMatrixHelp =>
       'محادثات Matrix فقط، دون هوية Conest. يمكنك لاحقًا التبديل إلى «كلاهما» (Conest وMatrix جنبًا إلى جنب) من «الإعدادات ← الاتصال ← وضع التطبيق».';
+
+  @override
+  String get groupCreate => 'إنشاء مجموعة';
+
+  @override
+  String get groupTitle => 'اسم المجموعة';
+
+  @override
+  String get roleMember => 'عضو';
+
+  @override
+  String get roleModerator => 'مشرف';
+
+  @override
+  String get roleAdmin => 'مسؤول';
+
+  @override
+  String get actionCancel => 'إلغاء';
+
+  @override
+  String get actionCreate => 'إنشاء';
+
+  @override
+  String get actionCreating => 'جارٍ الإنشاء…';
+
+  @override
+  String get contactAdd => 'إضافة جهة اتصال';
+
+  @override
+  String get contactAlias => 'الاسم المستعار';
+
+  @override
+  String get contactInvitePayload => 'نص الدعوة أو رمز QR الممسوح';
+
+  @override
+  String get contactScanQr => 'مسح QR';
+
+  @override
+  String get contactCodephrase => 'عبارة الرمز فقط';
+
+  @override
+  String get contactTrustPayload => 'الوثوق برمز QR / الدعوة';
+
+  @override
+  String get contactFindCodephrase => 'البحث بعبارة الرمز';
+
+  @override
+  String get contactExchangeFailed => 'فشل التبادل التلقائي';
+
+  @override
+  String contactExchangeFailedBody(String alias) {
+    return 'أضفت $alias، لكن تعذّر إرسال دعوتك إليه تلقائيًا. اطلب من الطرف الآخر مسح دعوتك أو إدخالها من جهته، أو ألغِ واحذف جهة الاتصال أحادية الجانب هذه الآن.';
+  }
+
+  @override
+  String get actionAbort => 'إلغاء العملية';
+
+  @override
+  String get contactKeep => 'الإبقاء على جهة الاتصال';
 }

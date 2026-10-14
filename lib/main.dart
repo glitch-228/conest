@@ -6471,7 +6471,7 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
         !_creating;
     return AdaptiveChatDialog(
       fullscreenOnMobile: widget.fullscreenOnMobile,
-      title: const Text('Create group'),
+      title: Text(l10nOf(context).groupCreate),
       content: SizedBox(
         width: 420,
         child: Column(
@@ -6480,7 +6480,9 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
             TextField(
               controller: _titleController,
               autofocus: true,
-              decoration: const InputDecoration(labelText: 'Group title'),
+              decoration: InputDecoration(
+                labelText: l10nOf(context).groupTitle,
+              ),
               onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 12),
@@ -6525,18 +6527,18 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
                                   _selectedRoles[contact.deviceId] = role;
                                 });
                               },
-                              items: const [
+                              items: [
                                 DropdownMenuItem(
                                   value: GroupMemberRole.member,
-                                  child: Text('Member'),
+                                  child: Text(l10nOf(context).roleMember),
                                 ),
                                 DropdownMenuItem(
                                   value: GroupMemberRole.moderator,
-                                  child: Text('Moderator'),
+                                  child: Text(l10nOf(context).roleModerator),
                                 ),
                                 DropdownMenuItem(
                                   value: GroupMemberRole.admin,
-                                  child: Text('Admin'),
+                                  child: Text(l10nOf(context).roleAdmin),
                                 ),
                               ],
                             )
@@ -6551,11 +6553,15 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
       actions: [
         TextButton(
           onPressed: _creating ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(l10nOf(context).actionCancel),
         ),
         FilledButton(
           onPressed: canCreate ? _create : null,
-          child: Text(_creating ? 'Creating' : 'Create'),
+          child: Text(
+            _creating
+                ? l10nOf(context).actionCreating
+                : l10nOf(context).actionCreate,
+          ),
         ),
       ],
     );
@@ -12325,12 +12331,12 @@ class _AddContactDialogState extends State<AddContactDialog> {
   bool get _hasCodephrase => _codephraseController.text.trim().isNotEmpty;
   String get _submitLabel {
     if (_hasPayload) {
-      return 'Trust QR / payload';
+      return l10nOf(context).contactTrustPayload;
     }
     if (_hasCodephrase) {
-      return 'Find by codephrase';
+      return l10nOf(context).contactFindCodephrase;
     }
-    return 'Add contact';
+    return l10nOf(context).contactAdd;
   }
 
   @override
@@ -12379,26 +12385,30 @@ class _AddContactDialogState extends State<AddContactDialog> {
         return;
       }
       if (result.exchangeStatus == ContactExchangeStatus.manualActionRequired) {
-        keepContact = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Automatic exchange failed'),
-            content: Text(
-              'You added ${result.contact.alias}, but your invite could not be sent back automatically. Ask the other user to scan or enter your invite from their side, or abort and remove this one-sided contact now.',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('Abort'),
+        keepContact =
+            await showDialog<bool>(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: Text(l10nOf(context).contactExchangeFailed),
+                content: Text(
+                  l10nOf(
+                    context,
+                  ).contactExchangeFailedBody(result.contact.alias),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: Text(l10nOf(context).actionAbort),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.of(context).pop(true),
+                    child: Text(l10nOf(context).contactKeep),
+                  ),
+                ],
               ),
-              FilledButton(
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('Keep Contact'),
-              ),
-            ],
-          ),
-        ) ?? false;
+            ) ??
+            false;
         if (keepContact != true) {
           await widget.controller.removeContact(
             result.contact.deviceId,
@@ -12430,7 +12440,7 @@ class _AddContactDialogState extends State<AddContactDialog> {
       fullscreenOnMobile: widget.fullscreenOnMobile,
       scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-      title: const Text('Add contact'),
+      title: Text(l10nOf(context).contactAdd),
       content: SizedBox(
         width: 560,
         child: SingleChildScrollView(
@@ -12445,15 +12455,17 @@ class _AddContactDialogState extends State<AddContactDialog> {
               ),
               TextField(
                 controller: _aliasController,
-                decoration: const InputDecoration(labelText: 'Alias'),
+                decoration: InputDecoration(
+                  labelText: l10nOf(context).contactAlias,
+                ),
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: _payloadController,
                 minLines: 4,
                 maxLines: 7,
-                decoration: const InputDecoration(
-                  labelText: 'Invite payload or scanned QR',
+                decoration: InputDecoration(
+                  labelText: l10nOf(context).contactInvitePayload,
                   alignLabelWithHint: true,
                 ),
                 onChanged: (_) => setState(() {}),
@@ -12465,14 +12477,16 @@ class _AddContactDialogState extends State<AddContactDialog> {
                   child: OutlinedButton.icon(
                     onPressed: _scanPayload,
                     icon: const Icon(Icons.qr_code_scanner),
-                    label: const Text('Scan QR'),
+                    label: Text(l10nOf(context).contactScanQr),
                   ),
                 ),
               ],
               const SizedBox(height: 12),
               TextField(
                 controller: _codephraseController,
-                decoration: const InputDecoration(labelText: 'Codephrase only'),
+                decoration: InputDecoration(
+                  labelText: l10nOf(context).contactCodephrase,
+                ),
                 onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 12),
@@ -12526,7 +12540,7 @@ class _AddContactDialogState extends State<AddContactDialog> {
       actions: [
         TextButton(
           onPressed: _submitting ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(l10nOf(context).actionCancel),
         ),
         FilledButton(
           onPressed: _submitting ? null : _submit,

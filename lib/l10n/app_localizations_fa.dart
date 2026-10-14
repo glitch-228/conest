@@ -314,4 +314,63 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get onbMatrixHelp =>
       'فقط گفتگوهای Matrix، بدون هویت Conest. بعداً می‌توانید در «تنظیمات ← اتصال ← حالت برنامه» به «هر دو» (Conest و Matrix کنار هم) بروید.';
+
+  @override
+  String get groupCreate => 'ساخت گروه';
+
+  @override
+  String get groupTitle => 'نام گروه';
+
+  @override
+  String get roleMember => 'عضو';
+
+  @override
+  String get roleModerator => 'ناظر';
+
+  @override
+  String get roleAdmin => 'مدیر';
+
+  @override
+  String get actionCancel => 'لغو';
+
+  @override
+  String get actionCreate => 'ساختن';
+
+  @override
+  String get actionCreating => 'در حال ساخت…';
+
+  @override
+  String get contactAdd => 'افزودن مخاطب';
+
+  @override
+  String get contactAlias => 'نام مستعار';
+
+  @override
+  String get contactInvitePayload => 'متن دعوت یا QR اسکن‌شده';
+
+  @override
+  String get contactScanQr => 'اسکن QR';
+
+  @override
+  String get contactCodephrase => 'فقط عبارت رمز';
+
+  @override
+  String get contactTrustPayload => 'اعتماد به QR / دعوت';
+
+  @override
+  String get contactFindCodephrase => 'یافتن با عبارت رمز';
+
+  @override
+  String get contactExchangeFailed => 'تبادل خودکار ناموفق بود';
+
+  @override
+  String contactExchangeFailedBody(String alias) {
+    return '$alias را افزودید، اما دعوت شما به‌طور خودکار برگشت داده نشد. از طرف مقابل بخواهید دعوت شما را اسکن یا وارد کند، یا همین حالا این مخاطب یک‌طرفه را لغو و حذف کنید.';
+  }
+
+  @override
+  String get actionAbort => 'لغو کردن';
+
+  @override
+  String get contactKeep => 'نگه‌داشتن مخاطب';
 }

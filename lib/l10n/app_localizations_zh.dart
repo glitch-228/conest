@@ -301,4 +301,63 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String get onbMatrixHelp =>
       '仅 Matrix 聊天，没有 Conest 身份。之后可在“设置 → 连接 → 应用模式”中切换为“两者”（Conest 与 Matrix 并排）。';
+
+  @override
+  String get groupCreate => '创建群组';
+
+  @override
+  String get groupTitle => '群组名称';
+
+  @override
+  String get roleMember => '成员';
+
+  @override
+  String get roleModerator => '版主';
+
+  @override
+  String get roleAdmin => '管理员';
+
+  @override
+  String get actionCancel => '取消';
+
+  @override
+  String get actionCreate => '创建';
+
+  @override
+  String get actionCreating => '正在创建…';
+
+  @override
+  String get contactAdd => '添加联系人';
+
+  @override
+  String get contactAlias => '备注名';
+
+  @override
+  String get contactInvitePayload => '邀请内容或扫描的二维码';
+
+  @override
+  String get contactScanQr => '扫描二维码';
+
+  @override
+  String get contactCodephrase => '仅口令';
+
+  @override
+  String get contactTrustPayload => '信任二维码 / 邀请';
+
+  @override
+  String get contactFindCodephrase => '通过口令查找';
+
+  @override
+  String get contactExchangeFailed => '自动交换失败';
+
+  @override
+  String contactExchangeFailedBody(String alias) {
+    return '你添加了 $alias，但你的邀请无法自动发回。请让对方在他们那边扫描或输入你的邀请，或者现在放弃并删除这个单向联系人。';
+  }
+
+  @override
+  String get actionAbort => '放弃';
+
+  @override
+  String get contactKeep => '保留联系人';
 }

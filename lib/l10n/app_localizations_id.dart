@@ -314,4 +314,63 @@ class AppLocalizationsId extends AppLocalizations {
   @override
   String get onbMatrixHelp =>
       'Hanya obrolan Matrix, tanpa identitas Conest. Kamu bisa beralih ke Keduanya (Conest dan Matrix berdampingan) nanti di Pengaturan → Konektivitas → Mode aplikasi.';
+
+  @override
+  String get groupCreate => 'Buat grup';
+
+  @override
+  String get groupTitle => 'Nama grup';
+
+  @override
+  String get roleMember => 'Anggota';
+
+  @override
+  String get roleModerator => 'Moderator';
+
+  @override
+  String get roleAdmin => 'Admin';
+
+  @override
+  String get actionCancel => 'Batal';
+
+  @override
+  String get actionCreate => 'Buat';
+
+  @override
+  String get actionCreating => 'Membuat…';
+
+  @override
+  String get contactAdd => 'Tambah kontak';
+
+  @override
+  String get contactAlias => 'Alias';
+
+  @override
+  String get contactInvitePayload => 'Isi undangan atau QR yang dipindai';
+
+  @override
+  String get contactScanQr => 'Pindai QR';
+
+  @override
+  String get contactCodephrase => 'Frasa kode saja';
+
+  @override
+  String get contactTrustPayload => 'Percayai QR / undangan';
+
+  @override
+  String get contactFindCodephrase => 'Cari dengan frasa kode';
+
+  @override
+  String get contactExchangeFailed => 'Pertukaran otomatis gagal';
+
+  @override
+  String contactExchangeFailedBody(String alias) {
+    return 'Kamu menambahkan $alias, tetapi undanganmu tidak bisa dikirim balik secara otomatis. Minta pengguna lain memindai atau memasukkan undanganmu dari sisinya, atau batalkan dan hapus kontak satu arah ini sekarang.';
+  }
+
+  @override
+  String get actionAbort => 'Batalkan';
+
+  @override
+  String get contactKeep => 'Simpan kontak';
 }

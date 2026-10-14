@@ -645,6 +645,120 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Matrix chats only, with no Conest identity. You can switch to Both (Conest and Matrix side by side) later under Settings → Connectivity → App mode.'**
   String get onbMatrixHelp;
+
+  /// Title of the dialog that creates a group.
+  ///
+  /// In en, this message translates to:
+  /// **'Create group'**
+  String get groupCreate;
+
+  /// Field: the group's name.
+  ///
+  /// In en, this message translates to:
+  /// **'Group title'**
+  String get groupTitle;
+
+  /// Group role: an ordinary member.
+  ///
+  /// In en, this message translates to:
+  /// **'Member'**
+  String get roleMember;
+
+  /// Group role: can manage messages.
+  ///
+  /// In en, this message translates to:
+  /// **'Moderator'**
+  String get roleModerator;
+
+  /// Group role: can manage the group and members.
+  ///
+  /// In en, this message translates to:
+  /// **'Admin'**
+  String get roleAdmin;
+
+  /// Button that cancels a dialog.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get actionCancel;
+
+  /// Button that creates something (a group).
+  ///
+  /// In en, this message translates to:
+  /// **'Create'**
+  String get actionCreate;
+
+  /// The create button while it works.
+  ///
+  /// In en, this message translates to:
+  /// **'Creating'**
+  String get actionCreating;
+
+  /// Title of the dialog, and its button, that adds a contact.
+  ///
+  /// In en, this message translates to:
+  /// **'Add contact'**
+  String get contactAdd;
+
+  /// Field: the name you give the new contact.
+  ///
+  /// In en, this message translates to:
+  /// **'Alias'**
+  String get contactAlias;
+
+  /// Field: the invite text (from a link or a QR code).
+  ///
+  /// In en, this message translates to:
+  /// **'Invite payload or scanned QR'**
+  String get contactInvitePayload;
+
+  /// Button that opens the camera to scan an invite QR code.
+  ///
+  /// In en, this message translates to:
+  /// **'Scan QR'**
+  String get contactScanQr;
+
+  /// Field: a short codephrase to find a nearby contact instead of an invite.
+  ///
+  /// In en, this message translates to:
+  /// **'Codephrase only'**
+  String get contactCodephrase;
+
+  /// Button when an invite was pasted or scanned.
+  ///
+  /// In en, this message translates to:
+  /// **'Trust QR / payload'**
+  String get contactTrustPayload;
+
+  /// Button when a codephrase was entered.
+  ///
+  /// In en, this message translates to:
+  /// **'Find by codephrase'**
+  String get contactFindCodephrase;
+
+  /// Title when your invite could not be sent back to the new contact.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic exchange failed'**
+  String get contactExchangeFailed;
+
+  /// Explains a contact added only on one side.
+  ///
+  /// In en, this message translates to:
+  /// **'You added {alias}, but your invite could not be sent back automatically. Ask the other user to scan or enter your invite from their side, or abort and remove this one-sided contact now.'**
+  String contactExchangeFailedBody(String alias);
+
+  /// Button: undo what was just done.
+  ///
+  /// In en, this message translates to:
+  /// **'Abort'**
+  String get actionAbort;
+
+  /// Button: keep the one-sided contact.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep Contact'**
+  String get contactKeep;
 }
 
 class _AppLocalizationsDelegate

@@ -312,4 +312,63 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get onbMatrixHelp =>
       'Matrix chats only, with no Conest identity. You can switch to Both (Conest and Matrix side by side) later under Settings → Connectivity → App mode.';
+
+  @override
+  String get groupCreate => 'Create group';
+
+  @override
+  String get groupTitle => 'Group title';
+
+  @override
+  String get roleMember => 'Member';
+
+  @override
+  String get roleModerator => 'Moderator';
+
+  @override
+  String get roleAdmin => 'Admin';
+
+  @override
+  String get actionCancel => 'Cancel';
+
+  @override
+  String get actionCreate => 'Create';
+
+  @override
+  String get actionCreating => 'Creating';
+
+  @override
+  String get contactAdd => 'Add contact';
+
+  @override
+  String get contactAlias => 'Alias';
+
+  @override
+  String get contactInvitePayload => 'Invite payload or scanned QR';
+
+  @override
+  String get contactScanQr => 'Scan QR';
+
+  @override
+  String get contactCodephrase => 'Codephrase only';
+
+  @override
+  String get contactTrustPayload => 'Trust QR / payload';
+
+  @override
+  String get contactFindCodephrase => 'Find by codephrase';
+
+  @override
+  String get contactExchangeFailed => 'Automatic exchange failed';
+
+  @override
+  String contactExchangeFailedBody(String alias) {
+    return 'You added $alias, but your invite could not be sent back automatically. Ask the other user to scan or enter your invite from their side, or abort and remove this one-sided contact now.';
+  }
+
+  @override
+  String get actionAbort => 'Abort';
+
+  @override
+  String get contactKeep => 'Keep Contact';
 }
