@@ -69,6 +69,7 @@ import 'ratchet.dart';
 import 'reachability_tracker.dart';
 import 'staged_attachment.dart';
 import 'account/account_contacts.dart';
+import 'account/account_link.dart';
 import 'account/account_model.dart';
 import 'energy_policy.dart';
 import 'route_test.dart';
@@ -322,6 +323,7 @@ const Set<String> _v2PairwiseKinds = <String>{
   'forward_request',
   'route_probe',
   'route_probe_reply',
+  'account_link',
 };
 
 /// Outcome of a [`MessengerController.refreshDefaultRelays`] call.
@@ -6383,6 +6385,24 @@ class MessengerController extends ChangeNotifier {
         final decoded = jsonDecode(utf8.decode(inbound.bytes));
         if (decoded is! Map<String, dynamic>) return;
         final envelope = RelayEnvelope.fromJson(decoded);
+        // Linking a device: the link secret authenticates it; the existing
+        // device also requires the Iroh identity the QR code named.
+        if (envelope.kind == 'account_link' &&
+            envelope.protocolVersion == 1 &&
+            _isValidInboundEnvelope(envelope)) {
+          final expected = _linkAsExisting?.invitation.irohEndpointId;
+          if (expected != null && expected != inbound.senderTransportIdentity) {
+            return;
+          }
+          await _processEnvelopes(
+            [envelope],
+            ingressKind: inbound.path == TransportPathKind.relayed
+                ? PeerRouteKind.relay
+                : PeerRouteKind.directInternet,
+            route: _irohRoute(inbound.path),
+          );
+          return;
+        }
         if (envelope.kind != 'contact_exchange' ||
             envelope.protocolVersion != 1 ||
             !_isValidInboundEnvelope(envelope)) {
@@ -17216,6 +17236,12 @@ class MessengerController extends ChangeNotifier {
           continue;
         }
 
+        if (envelope.kind == 'account_link') {
+          await _handleAccountLink(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
         if (envelope.kind == 'route_probe_reply') {
           await _handleRouteProbeReply(envelope);
           _markSeen(envelope.messageId);
@@ -17423,6 +17449,14 @@ class MessengerController extends ChangeNotifier {
     if (envelope.recipientDeviceId != me.deviceId ||
         envelope.senderDeviceId == me.deviceId) {
       return false;
+    }
+    if (envelope.protocolVersion == 1 && envelope.kind == 'account_link') {
+      // Linking a device: sealed with the link secret, checked by the
+      // handler, and only read while a link is under way.
+      final payload = envelope.payloadBase64;
+      return payload != null &&
+          payload.length <= maxLinkMessageBytes * 2 &&
+          (_linkAsNew != null || _linkAsExisting != null);
     }
     if (envelope.protocolVersion == 1) {
       // Known contacts may ask again (a lost acceptance, a removal they
@@ -28701,6 +28735,379 @@ class MessengerController extends ChangeNotifier {
     });
   }
 
+  // Linking a new device (M29a). The new device shows a QR code; the
+  // existing device scans it and sends an offer; both show the same 6-digit
+  // code, which the user confirms on both; then the existing device adds
+  // the new one to the account and sends it the account (keys, device
+  // list, contacts). Everything is sealed to the receiving device's key
+  // and the QR code's secret.
+
+  static const Duration _linkLifetime = Duration(minutes: 10);
+
+  _LinkAsNew? _linkAsNew;
+  _LinkAsExisting? _linkAsExisting;
+
+  /// The code to compare on this device during a link, once known.
+  String? get linkCode => _linkAsNew?.code ?? _linkAsExisting?.code;
+
+  /// Where a link stands on this device, for the screens.
+  LinkState get linkState {
+    final asNew = _linkAsNew;
+    if (asNew != null) {
+      if (asNew.done) return LinkState.linked;
+      if (asNew.confirmed) return LinkState.waitingForOtherDevice;
+      return asNew.offer == null
+          ? LinkState.showingQrCode
+          : LinkState.compareCode;
+    }
+    final asExisting = _linkAsExisting;
+    if (asExisting != null) {
+      if (asExisting.granted) return LinkState.linked;
+      return asExisting.confirmedHere
+          ? LinkState.waitingForOtherDevice
+          : LinkState.compareCode;
+    }
+    return LinkState.none;
+  }
+
+  /// Stops a link under way on this device.
+  void cancelLink() {
+    _linkAsNew = null;
+    _linkAsExisting = null;
+    notifyListeners();
+  }
+
+  /// On the new device: the QR code for the existing device to scan.
+  Future<String> startLinkAsNewDevice() async {
+    final me = _requireIdentity();
+    final signing = me.signingPublicKeyBase64;
+    if (signing == null) throw StateError('This device has no signing key.');
+    final invitation = LinkInvitation(
+      deviceId: me.deviceId,
+      encryptionKeyBase64: me.publicKeyBase64,
+      signingKeyBase64: signing,
+      irohEndpointId: me.irohEndpointId,
+      linkSecret: LinkInvitation.newSecret(),
+    );
+    _linkAsNew = _LinkAsNew(invitation, _now().toUtc());
+    notifyListeners();
+    return invitation.encode();
+  }
+
+  /// On the existing device: starts linking the device whose QR code is
+  /// [qrText]; returns the code to compare.
+  Future<String> startLinkFromQrCode(String qrText) async {
+    final invitation = LinkInvitation.tryParse(qrText);
+    if (invitation == null) {
+      throw ArgumentError('This is not a Conest device link code.');
+    }
+    final me = _requireIdentity();
+    if (invitation.deviceId == me.deviceId) {
+      throw ArgumentError('That is this device.');
+    }
+    if (!hasAccount) await createAccount();
+    if (!mayManageAccountDevices) {
+      throw StateError(
+        'A device linked in the last 24 hours cannot link others yet.',
+      );
+    }
+    final signing = _requireIdentity().signingPublicKeyBase64!;
+    final code = await linkConfirmationCode(
+      existingSigningKeyBase64: signing,
+      newSigningKeyBase64: invitation.signingKeyBase64,
+      linkSecret: invitation.linkSecret,
+    );
+    _linkAsExisting = _LinkAsExisting(invitation, code, _now().toUtc());
+    notifyListeners();
+    final current = _requireIdentity();
+    await _sendLinkMessage(
+      to: invitation,
+      purpose: 'offer',
+      body: {
+        'deviceId': current.deviceId,
+        'accountId': current.accountId,
+        'name': current.displayName,
+        'encryptionKey': current.publicKeyBase64,
+        'signingKey': signing,
+        if (current.irohEndpointId != null)
+          'irohEndpointId': current.irohEndpointId,
+      },
+    );
+    return code;
+  }
+
+  /// The user saw the same code on both devices and confirmed it here.
+  Future<void> confirmLinkCode() async {
+    final asNew = _linkAsNew;
+    final offer = asNew?.offer;
+    if (asNew != null && offer != null) {
+      asNew.confirmed = true;
+      notifyListeners();
+      await _sendLinkMessage(
+        to: offer,
+        linkSecret: asNew.invitation.linkSecret,
+        purpose: 'accept',
+        body: {'deviceId': _requireIdentity().deviceId},
+      );
+      return;
+    }
+    final asExisting = _linkAsExisting;
+    if (asExisting == null) throw StateError('No link is under way.');
+    asExisting.confirmedHere = true;
+    notifyListeners();
+    if (asExisting.acceptedThere) await _sendLinkGrant(asExisting);
+  }
+
+  Future<void> _sendLinkMessage({
+    required Object to,
+    Uint8List? linkSecret,
+    required String purpose,
+    required Map<String, Object?> body,
+  }) async {
+    final me = _requireIdentity();
+    final ({
+      String deviceId,
+      String encryptionKey,
+      String signingKey,
+      String? iroh,
+    })
+    target = switch (to) {
+      LinkInvitation invitation => (
+        deviceId: invitation.deviceId,
+        encryptionKey: invitation.encryptionKeyBase64,
+        signingKey: invitation.signingKeyBase64,
+        iroh: invitation.irohEndpointId,
+      ),
+      _LinkOffer offer => (
+        deviceId: offer.deviceId,
+        encryptionKey: offer.encryptionKeyBase64,
+        signingKey: offer.signingKeyBase64,
+        iroh: offer.irohEndpointId,
+      ),
+      _ => throw ArgumentError('Unknown link peer.'),
+    };
+    final secret = linkSecret ?? (to as LinkInvitation).linkSecret;
+    final sealed = await sealLinkMessage(
+      purpose: purpose,
+      plaintext: utf8.encode(jsonEncode(body)),
+      recipientEncryptionKeyBase64: target.encryptionKey,
+      linkSecret: secret,
+    );
+    final envelope = RelayEnvelope(
+      protocolVersion: 1,
+      kind: 'account_link',
+      messageId: _randomId('link'),
+      conversationId: 'account-link',
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: target.deviceId,
+      createdAt: _now().toUtc(),
+      payloadBase64: base64Encode(utf8.encode(jsonEncode(sealed))),
+    );
+    // Not a contact: a passing record with the keys the QR code (or the
+    // sealed offer) gave, for the transports to find the device.
+    final peer = ContactRecord.fromJson({
+      'accountId': 'link',
+      'deviceId': target.deviceId,
+      'alias': 'Device being linked',
+      'displayName': '',
+      'bio': '',
+      'relayCapable': false,
+      'publicKeyBase64': target.encryptionKey,
+      'signingPublicKeyBase64': target.signingKey,
+      if (target.iroh != null) 'irohEndpointId': target.iroh,
+      'routeHints': const <Object>[],
+      'safetyNumber': '',
+      'trustedAt': _now().toUtc().toIso8601String(),
+      'pairingState': ContactPairingState.accepted.name,
+    });
+    await _deliverToContact(
+      contact: peer,
+      recipientDeviceId: target.deviceId,
+      envelope: envelope,
+      irohFirst: true,
+      allowForwarding: false,
+    );
+  }
+
+  Future<void> _handleAccountLink(RelayEnvelope envelope) async {
+    final me = identity;
+    if (me == null) return;
+    final now = _now().toUtc();
+    Object? sealed;
+    try {
+      sealed = jsonDecode(utf8.decode(base64Decode(envelope.payloadBase64!)));
+    } catch (_) {
+      return;
+    }
+    if (sealed is! Map) return;
+    Future<Map<String, dynamic>?> open(String purpose, Uint8List secret) async {
+      final bytes = await openLinkMessage(
+        purpose: purpose,
+        sealed: sealed,
+        encryptionPublicKeyBase64: me.publicKeyBase64,
+        encryptionPrivateKeyBase64: me.privateKeyBase64,
+        linkSecret: secret,
+      );
+      if (bytes == null) return null;
+      try {
+        final decoded = jsonDecode(utf8.decode(bytes));
+        return decoded is Map<String, dynamic> ? decoded : null;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    final asNew = _linkAsNew;
+    if (asNew != null) {
+      if (now.difference(asNew.startedAt) > _linkLifetime) {
+        _linkAsNew = null;
+        notifyListeners();
+        return;
+      }
+      final secret = asNew.invitation.linkSecret;
+      if (sealed['purpose'] == 'offer' && asNew.offer == null) {
+        final body = await open('offer', secret);
+        final offer = body == null ? null : _LinkOffer.fromJson(body);
+        if (offer == null || offer.deviceId != envelope.senderDeviceId) {
+          return;
+        }
+        asNew.offer = offer;
+        asNew.code = await linkConfirmationCode(
+          existingSigningKeyBase64: offer.signingKeyBase64,
+          newSigningKeyBase64: asNew.invitation.signingKeyBase64,
+          linkSecret: secret,
+        );
+        notifyListeners();
+        return;
+      }
+      final offer = asNew.offer;
+      if (sealed['purpose'] == 'grant' &&
+          asNew.confirmed &&
+          offer != null &&
+          envelope.senderDeviceId == offer.deviceId) {
+        final body = await open('grant', secret);
+        if (body == null) return;
+        await _applyLinkGrant(asNew, offer, body);
+      }
+      return;
+    }
+    final asExisting = _linkAsExisting;
+    if (asExisting != null &&
+        sealed['purpose'] == 'accept' &&
+        envelope.senderDeviceId == asExisting.invitation.deviceId) {
+      if (now.difference(asExisting.startedAt) > _linkLifetime) {
+        _linkAsExisting = null;
+        notifyListeners();
+        return;
+      }
+      final body = await open('accept', asExisting.invitation.linkSecret);
+      if (body == null || body['deviceId'] != asExisting.invitation.deviceId) {
+        return;
+      }
+      asExisting.acceptedThere = true;
+      notifyListeners();
+      if (asExisting.confirmedHere) await _sendLinkGrant(asExisting);
+    }
+  }
+
+  /// Both sides confirmed: the new device joins the account, and gets the
+  /// account (keys, device list, contacts).
+  Future<void> _sendLinkGrant(_LinkAsExisting link) async {
+    if (link.granted) return;
+    link.granted = true;
+    final invitation = link.invitation;
+    await addAccountDevice(
+      deviceId: invitation.deviceId,
+      encryptionKeyBase64: invitation.encryptionKeyBase64,
+      signingKeyBase64: invitation.signingKeyBase64,
+      irohEndpointId: invitation.irohEndpointId,
+      name: 'New device',
+    );
+    final me = _requireIdentity();
+    await _sendLinkMessage(
+      to: invitation,
+      purpose: 'grant',
+      body: {
+        'accountId': me.accountId,
+        'displayName': me.displayName,
+        'bio': me.bio,
+        'accountKeyPublic': me.accountKeyPublicBase64,
+        'accountKeyPrivate': me.accountKeyPrivateBase64,
+        'accountUpgrade': me.accountUpgrade,
+        'accountDeviceList': me.accountDeviceList,
+        'contacts': [
+          for (final contact in _snapshot.contacts)
+            if (!contact.isArchived) contact.toJson(),
+        ],
+      },
+    );
+    notifyListeners();
+  }
+
+  /// On the new device: takes the account the existing device sent.
+  Future<void> _applyLinkGrant(
+    _LinkAsNew link,
+    _LinkOffer offer,
+    Map<String, dynamic> grant,
+  ) async {
+    final me = _requireIdentity();
+    final accountId = grant['accountId'];
+    final accountKey = grant['accountKeyPublic'];
+    final accountPrivate = grant['accountKeyPrivate'];
+    final list = AccountDeviceList.fromJson(grant['accountDeviceList']);
+    if (accountId != offer.accountId ||
+        accountKey is! String ||
+        accountPrivate is! String ||
+        list == null ||
+        list.accountId != accountId ||
+        !await list.verify(accountKey)) {
+      return;
+    }
+    // This device must be in the list, with its own keys.
+    final mine = list.deviceFor(me.deviceId);
+    final existing = list.deviceFor(offer.deviceId);
+    if (mine == null ||
+        mine.encryptionKeyBase64 != me.publicKeyBase64 ||
+        mine.signingKeyBase64 != me.signingPublicKeyBase64 ||
+        existing == null ||
+        existing.signingKeyBase64 != offer.signingKeyBase64) {
+      return;
+    }
+    final contacts = <ContactRecord>[];
+    if (grant['contacts'] case final List raw) {
+      for (final item in raw.take(4096)) {
+        if (item is! Map<String, dynamic>) continue;
+        try {
+          final contact = ContactRecord.fromJson(item);
+          if (contact.deviceId != me.deviceId) contacts.add(contact);
+        } catch (_) {}
+      }
+    }
+    final displayName = grant['displayName'];
+    final bio = grant['bio'];
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(
+        accountId: accountId as String,
+        displayName: displayName is String && displayName.length <= 128
+            ? displayName
+            : me.displayName,
+        bio: bio is String && bio.length <= 2048 ? bio : me.bio,
+        accountKeyPublicBase64: accountKey,
+        accountKeyPrivateBase64: accountPrivate,
+        accountUpgrade: grant['accountUpgrade'] is Map<String, dynamic>
+            ? grant['accountUpgrade'] as Map<String, dynamic>
+            : null,
+        accountDeviceList: list.toJson(),
+      ),
+      contacts: _dedupeContacts([..._snapshot.contacts, ...contacts]),
+    );
+    link.done = true;
+    await _saveSnapshotSilently(notify: true);
+    setStatus('This device is now linked to ${me.displayName}\'s account.');
+    _advertiseProfileToContacts();
+  }
+
   /// A device some contact's account revoked: nothing from it is read.
   bool _isRevokedAccountDevice(String deviceId) => _snapshot.contacts.any(
     (contact) => contact.accountRevokedDeviceIds.contains(deviceId),
@@ -31496,4 +31903,99 @@ class _MatrixClientCarrierChannel implements MatrixCarrierChannel {
     content: frame,
     transactionId: transactionId,
   );
+}
+
+/// Where linking a device stands on this device.
+enum LinkState {
+  none,
+
+  /// The new device shows its QR code and waits for the existing one.
+  showingQrCode,
+
+  /// Both devices show a code for the user to compare.
+  compareCode,
+
+  /// Confirmed here; waiting for the other device.
+  waitingForOtherDevice,
+
+  /// Done.
+  linked,
+}
+
+/// What the existing device said about itself in its offer.
+class _LinkOffer {
+  const _LinkOffer({
+    required this.deviceId,
+    required this.accountId,
+    required this.name,
+    required this.encryptionKeyBase64,
+    required this.signingKeyBase64,
+    this.irohEndpointId,
+  });
+
+  final String deviceId;
+  final String accountId;
+  final String name;
+  final String encryptionKeyBase64;
+  final String signingKeyBase64;
+  final String? irohEndpointId;
+
+  static _LinkOffer? fromJson(Map<String, dynamic> json) {
+    bool key(Object? value) {
+      if (value is! String || value.length > 64) return false;
+      try {
+        return base64Decode(value).length == 32;
+      } on FormatException {
+        return false;
+      }
+    }
+
+    final deviceId = json['deviceId'];
+    final accountId = json['accountId'];
+    final name = json['name'];
+    final iroh = json['irohEndpointId'];
+    if (deviceId is! String ||
+        deviceId.isEmpty ||
+        deviceId.length > 128 ||
+        accountId is! String ||
+        accountId.isEmpty ||
+        accountId.length > 128 ||
+        name is! String ||
+        name.length > 128 ||
+        !key(json['encryptionKey']) ||
+        !key(json['signingKey']) ||
+        (iroh != null && (iroh is! String || iroh.length > 128))) {
+      return null;
+    }
+    return _LinkOffer(
+      deviceId: deviceId,
+      accountId: accountId,
+      name: name,
+      encryptionKeyBase64: json['encryptionKey'] as String,
+      signingKeyBase64: json['signingKey'] as String,
+      irohEndpointId: iroh as String?,
+    );
+  }
+}
+
+class _LinkAsNew {
+  _LinkAsNew(this.invitation, this.startedAt);
+
+  final LinkInvitation invitation;
+  final DateTime startedAt;
+  _LinkOffer? offer;
+  String? code;
+  bool confirmed = false;
+  bool done = false;
+}
+
+class _LinkAsExisting {
+  _LinkAsExisting(this.invitation, this.code, this.startedAt);
+
+  final LinkInvitation invitation;
+  final String code;
+  final DateTime startedAt;
+  bool confirmedHere = false;
+  bool acceptedThere = false;
+  bool granted = false;
 }

@@ -1047,6 +1047,8 @@ class IdentityRecord {
   }
 
   IdentityRecord copyWith({
+    // Only linking changes it: the device joins its account.
+    String? accountId,
     String? displayName,
     String? bio,
     String? pairingNonce,
@@ -1072,7 +1074,7 @@ class IdentityRecord {
     Map<String, Object?>? accountDeviceList,
   }) {
     return IdentityRecord(
-      accountId: accountId,
+      accountId: accountId ?? this.accountId,
       deviceId: deviceId,
       displayName: displayName ?? this.displayName,
       bio: bio ?? this.bio,

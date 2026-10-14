@@ -55,6 +55,7 @@ import 'src/ui/message_info_dialog.dart';
 import 'l10n/app_localizations.dart';
 import 'src/app_locales.dart';
 import 'src/ui/calls_list.dart';
+import 'src/ui/devices_panel.dart';
 import 'src/ui/route_test_panel.dart';
 import 'src/ui/user_mode_screen.dart';
 import 'src/windows_firewall.dart';
@@ -14375,6 +14376,24 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                       ),
                     const SizedBox(height: 16),
+                    if (!categorized ||
+                        _settingsCategory == 'Personal / Preferences') ...[
+                      _SettingsSection(
+                        title: 'Devices',
+                        palette: widget.palette,
+                        child: DevicesPanel(
+                          controller: widget.controller,
+                          onScan: widget.controller.supportsScanner
+                              ? () => Navigator.of(context).push<String>(
+                                  MaterialPageRoute(
+                                    builder: (_) => const QrScanScreen(),
+                                  ),
+                                )
+                              : null,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
                     if (!simple &&
                         (!categorized || _settingsCategory == 'Storage'))
                       _SettingsSection(
