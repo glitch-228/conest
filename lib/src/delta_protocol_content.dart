@@ -1,6 +1,44 @@
 part of 'delta_protocol.dart';
 
 extension DeltaProtocolContent on DeltaProtocol {
+  DeltaChats _rememberControl(
+    DeltaChats chats,
+    String chatKey,
+    String id,
+    String author,
+    DateTime date,
+    String kind,
+    String text,
+  ) {
+    final chat = chats.chats[chatKey]!;
+    final live = chat.pendingControls
+        .where((c) => c.expires.isAfter(_now()))
+        .toList();
+    final old = live
+        .where((c) => c.id == id && c.author == author && c.kind == kind)
+        .firstOrNull;
+    if (old != null && old.date.isAfter(date)) return chats;
+    final next = [
+      for (final c in live)
+        if (c.id != id || c.author != author || c.kind != kind) c,
+      DeltaPendingControl(
+        id: id,
+        author: author,
+        date: date,
+        expires: _now().toUtc().add(DeltaLimits.pendingLifetime),
+        kind: kind,
+        text: text,
+      ),
+    ];
+    return chats.withChat(
+      chat.copyWith(
+        pendingControls: next.length > 128
+            ? next.sublist(next.length - 128)
+            : next,
+      ),
+    );
+  }
+
   DeltaStep? _receiveControl(
     DeltaChats chats,
     DeltaIncoming read,
@@ -12,53 +50,94 @@ extension DeltaProtocolContent on DeltaProtocol {
     if (!read.reaction && edit == null && deletion == null) return null;
     final chat = chats.chats[chatKey];
     final author = signer.fingerprintHex;
-    if (chat == null || chat.left || !chat.members.contains(author)) {
+    if (chat == null) {
       return DeltaStep(chats, consumed: true);
     }
+    final activeMember = !chat.left && chat.members.contains(author);
     var next = chats;
     final date = _clamp(read.date);
     if (read.reaction) {
+      if (!activeMember) return DeltaStep(chats, consumed: true);
       final target = deltaMessageId(read.header('in-reply-to'));
-      if (target != null)
+      if (target != null) {
+        if (!chat.messages.any(
+          (m) => m.id == target || m.preMessageId == target,
+        )) {
+          next = _rememberControl(
+            next,
+            chatKey,
+            target,
+            author,
+            date,
+            'reaction',
+            read.reactionText,
+          );
+        }
         next = next.updateMessage(chatKey, target, (m) {
           final prior = m.reactionDates[author];
-          if (m.info || m.deleted || (prior != null && date.isBefore(prior)))
+          if (m.info || m.deleted || (prior != null && date.isBefore(prior))) {
             return m;
+          }
           if (!m.reactions.containsKey(author) &&
-              m.reactions.length >= DeltaLimits.members)
+              m.reactions.length >= DeltaLimits.members) {
             return m;
+          }
           return m.copyWith(
             reactions: {...m.reactions, author: read.reactionText},
             reactionDates: {...m.reactionDates, author: date},
           );
         });
+      }
     } else if (edit != null) {
       final target = deltaMessageId(edit);
-      if (target != null)
+      if (target != null) {
         next = next.updateMessage(chatKey, target, (m) {
           if (m.info ||
               m.deleted ||
               m.author != author ||
-              (m.editedAt != null && date.isBefore(m.editedAt!)))
+              (m.editedAt != null && date.isBefore(m.editedAt!))) {
             return m;
-          var text = read.text;
-          if (text.startsWith('>')) {
-            final lines = text.split('\n');
-            while (lines.isNotEmpty && lines.first.startsWith('>')) {
-              lines.removeAt(0);
-            }
-            while (lines.isNotEmpty && lines.first.trim().isEmpty) {
-              lines.removeAt(0);
-            }
-            text = lines.join('\n');
           }
+          if (read.text.length > DeltaProtocol.maxTextChars * 4) return m;
+          var start = 0;
+          while (start < read.text.length &&
+              read.text.codeUnitAt(start) == 62) {
+            final end = read.text.indexOf('\n', start);
+            if (end < 0) break;
+            start = end + 1;
+            if (start > DeltaProtocol.maxTextChars * 2) return m;
+          }
+          if (start > 0) {
+            while (start < read.text.length &&
+                const {9, 10, 13, 32}.contains(read.text.codeUnitAt(start))) {
+              start++;
+            }
+          }
+          var text = read.text.substring(start);
           if (text.startsWith('✏️')) text = text.substring('✏️'.length);
+          final footer = text.indexOf('\n-- \n');
+          if (footer >= 0) text = text.substring(0, footer).trimRight();
           return m.copyWith(text: _boundedText(text), editedAt: date);
         });
+      }
     } else {
       for (final raw in deletion!.split(RegExp(r'\s+')).take(100)) {
         final target = deltaMessageId(raw);
-        if (target != null)
+        if (target != null) {
+          if (activeMember &&
+              !chat.messages.any(
+                (m) => m.id == target || m.preMessageId == target,
+              )) {
+            next = _rememberControl(
+              next,
+              chatKey,
+              target,
+              author,
+              date,
+              'delete',
+              '',
+            );
+          }
           next = next.updateMessage(
             chatKey,
             target,
@@ -74,6 +153,7 @@ extension DeltaProtocolContent on DeltaProtocol {
                     wantsReceipt: false,
                   ),
           );
+        }
       }
     }
     return DeltaStep(next, consumed: true, chatKey: chatKey);
@@ -100,6 +180,29 @@ extension DeltaProtocolContent on DeltaProtocol {
         (existing.author != signer.fingerprintHex || existing.deleted)) {
       return DeltaStep(chats, consumed: true);
     }
+    final controls = chat.pendingControls
+        .where(
+          (c) =>
+              c.expires.isAfter(_now()) &&
+              (c.id == id || c.id == read.messageId),
+        )
+        .toList();
+    if (controls.any(
+      (c) => c.kind == 'delete' && c.author == signer.fingerprintHex,
+    )) {
+      final tombstone = DeltaChatMessage(
+        id: id,
+        author: signer.fingerprintHex,
+        text: '',
+        at: _clamp(read.date),
+        deleted: true,
+      );
+      return DeltaStep(
+        chats.add(chatKey, tombstone, create: create),
+        consumed: true,
+        chatKey: chatKey,
+      );
+    }
     if (postId != null && existing != null) {
       // A post can arrive first. Only its signed author can fill the caption.
       return DeltaStep(
@@ -107,7 +210,9 @@ extension DeltaProtocolContent on DeltaProtocol {
           chatKey,
           id,
           (m) => m.copyWith(
-            text: m.text.isEmpty ? _boundedText(read.text) : null,
+            text: m.text.isEmpty && m.editedAt == null
+                ? _boundedText(read.text)
+                : null,
             preMessageId: read.messageId,
           ),
         ),
@@ -119,8 +224,9 @@ extension DeltaProtocolContent on DeltaProtocol {
       return DeltaStep(chats, consumed: true);
     }
     if (chats.deleted[chatKey] case final deletedAt?) {
-      if (!_clamp(read.date).isAfter(deletedAt))
+      if (!_clamp(read.date).isAfter(deletedAt)) {
         return DeltaStep(chats, consumed: true);
+      }
     }
     final files = <AttachmentDescriptor>[];
     var text = _boundedText(read.text);
@@ -134,7 +240,7 @@ extension DeltaProtocolContent on DeltaProtocol {
       try {
         files.add(await saveFile!(file, chatKey, id, index++));
       } catch (_) {
-        return DeltaStep(chats, chatKey: chatKey);
+        return DeltaStep(chats, chatKey: chatKey, retry: true);
       }
     }
     if (read.header('chat-content') == 'call') text = 'Call (not supported)';
@@ -147,7 +253,7 @@ extension DeltaProtocolContent on DeltaProtocol {
           (m) => m.copyWith(
             attachments: files,
             clearPending: true,
-            text: m.text.isEmpty ? text : null,
+            text: m.text.isEmpty && m.editedAt == null ? text : null,
           ),
         ),
         consumed: true,
@@ -170,6 +276,16 @@ extension DeltaProtocolContent on DeltaProtocol {
           ? null
           : _now().toUtc().add(DeltaLimits.pendingLifetime),
       preMessageId: postId == null ? null : read.messageId,
+      reactions: {
+        for (final c in controls)
+          if (c.kind == 'reaction' && chat.members.contains(c.author))
+            c.author: c.text,
+      },
+      reactionDates: {
+        for (final c in controls)
+          if (c.kind == 'reaction' && chat.members.contains(c.author))
+            c.author: c.date,
+      },
     );
     return DeltaStep(
       chats.add(chatKey, message, create: create),
@@ -177,6 +293,11 @@ extension DeltaProtocolContent on DeltaProtocol {
       chatKey: chatKey,
     );
   }
+
+  DateTime _memberClock(DateTime date) => DateTime.fromMillisecondsSinceEpoch(
+    (date.millisecondsSinceEpoch ~/ 1000) * 1000,
+    isUtc: true,
+  );
 
   DeltaChat _mergeMembers(
     DeltaChats chats,
@@ -193,8 +314,12 @@ extension DeltaProtocolContent on DeltaProtocol {
           groupId: groupId,
           members: const [],
         );
-    final additions = {...base.additionDates};
-    final removals = {...base.memberRemoved};
+    final additions = {
+      for (final e in base.additionDates.entries) e.key: _memberClock(e.value),
+    };
+    final removals = {
+      for (final e in base.memberRemoved.entries) e.key: _memberClock(e.value),
+    };
     final addresses = {...base.pastAddresses};
     final epoch = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
     final past = [
@@ -204,8 +329,9 @@ extension DeltaProtocolContent on DeltaProtocol {
         ?parseMailAddress(value),
     ];
     if (read.to.length > DeltaLimits.members ||
-        past.length > DeltaLimits.members)
+        past.length > DeltaLimits.members) {
       return base;
+    }
     final ids = (read.header('chat-group-member-fpr') ?? '').split(
       RegExp(r'\s+'),
     );
@@ -243,11 +369,14 @@ extension DeltaProtocolContent on DeltaProtocol {
       if (!additions.containsKey(member) &&
           !removals.containsKey(member) &&
           {...additions.keys, ...removals.keys}.length >=
-              DeltaLimits.members * 2)
+              DeltaLimits.members * 2) {
         continue;
+      }
       // Unknown timestamps are zero; omission never removes a member.
       final seconds = hasClocks
-          ? int.parse(clocks[i]).clamp(0, _now().millisecondsSinceEpoch ~/ 1000)
+          ? int.parse(
+              clocks[i],
+            ).clamp(0, (_now().millisecondsSinceEpoch ~/ 1000) + 60)
           : 0;
       final date = DateTime.fromMillisecondsSinceEpoch(
         seconds * 1000,
@@ -289,14 +418,28 @@ extension DeltaProtocolContent on DeltaProtocol {
               .firstOrNull
               ?.fingerprint;
     if (removed != null &&
+        (additions.containsKey(removed) || removals.containsKey(removed)) &&
         !hasClocks &&
         (base.membersAt == null || !stamp.isBefore(base.membersAt!))) {
       final addition = additions[removed] ?? epoch;
-      final date = stamp.isAfter(addition)
-          ? stamp
+      final date = _memberClock(stamp).isAfter(addition)
+          ? _memberClock(stamp)
           : addition.add(const Duration(seconds: 1));
       if (date.isAfter(removals[removed] ?? epoch)) removals[removed] = date;
       if (removedAddr != null) addresses[removed] = removedAddr;
+    }
+    final addedAddr = parseMailAddress(read.header('chat-group-member-added'));
+    final addedIndex = addedAddr == null ? -1 : read.to.indexOf(addedAddr);
+    final added = addedIndex < 0 ? null : who(addedAddr!, addedIndex);
+    if (!hasClocks &&
+        added != null &&
+        !_memberClock(stamp).isBefore(removals[added] ?? epoch) &&
+        !_memberClock(stamp).isBefore(additions[added] ?? epoch) &&
+        (additions.containsKey(added) ||
+            removals.containsKey(added) ||
+            {...additions.keys, ...removals.keys}.length <
+                DeltaLimits.members * 2)) {
+      additions[added] = _memberClock(stamp);
     }
     return base.copyWith(
       members: [
@@ -319,8 +462,9 @@ extension DeltaProtocolContent on DeltaProtocol {
     List<AttachmentDescriptor> localFiles,
   ) async {
     final chat = chats.chats[chatKey];
-    if (chat == null || chat.left)
+    if (chat == null || chat.left) {
       throw StateError('Not a chat you can write in.');
+    }
     if (files.isEmpty ||
         files.length != localFiles.length ||
         files.length > DeltaLimits.attachments ||
@@ -328,11 +472,13 @@ extension DeltaProtocolContent on DeltaProtocol {
             DeltaLimits.fileBytes) {
       throw ArgumentError('Delta Chat files must be at most 21 MiB.');
     }
-    if (text.length > DeltaProtocol.maxTextChars)
+    if (text.length > DeltaProtocol.maxTextChars) {
       throw ArgumentError('Message is too long.');
+    }
     final recipients = await _recipients(chats, chat);
-    if (recipients.isEmpty)
+    if (recipients.isEmpty) {
       throw StateError('Waiting for the invite to be answered.');
+    }
     final id = _newMessageId();
     final date = _now().toUtc();
     final headers = [
@@ -456,8 +602,9 @@ extension DeltaProtocolContent on DeltaProtocol {
     if (!reaction && (!message.outgoing || message.author != fingerprint)) {
       throw StateError('Only your own messages can be changed.');
     }
-    if (text.length > DeltaProtocol.maxTextChars)
+    if (text.length > DeltaProtocol.maxTextChars) {
       throw ArgumentError('Message is too long.');
+    }
     final recipients = await _recipients(chats, chat);
     if (recipients.isEmpty) throw StateError('Nobody can be written to yet.');
     final date = _now().toUtc();

@@ -708,7 +708,7 @@ abstract final class DeltaMail {
             name: sanitizeAttachmentFileName(name ?? 'attachment.bin'),
             bytes: entity.body,
             mimeType: mime,
-            voice: voice && mime.startsWith('audio/'),
+            voice: voice && (mime.startsWith('audio/') || mime == 'video/mp4'),
             durationMs: duration,
             sticker: sticker && mime.startsWith('image/'),
           ),

@@ -129,8 +129,9 @@ class MimeEntity {
     var decoded = 0;
     void count(int size) {
       decoded += size;
-      if (decoded > maxDecodedBytes)
+      if (decoded > maxDecodedBytes) {
         throw const FormatException('MIME decoded size exceeded.');
+      }
     }
 
     return _parse(data, 0, () => budget-- > 0, count);
@@ -218,8 +219,9 @@ class MimeEntity {
         : _delimiterAt(body, delimiter, 0);
     if (index < 0) return parts;
     while (true) {
-      if (parts.length >= maxParts)
+      if (parts.length >= maxParts) {
         throw const FormatException('Too many MIME parts.');
+      }
       final lineEnd = body.indexOf('\n', index);
       final afterDelimiter = body.substring(
         index + delimiter.length,

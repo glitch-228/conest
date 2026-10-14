@@ -1,5 +1,27 @@
 part of 'messenger_controller_test.dart';
 
+class _DeltaPersistenceVault extends _MemoryVaultStore {
+  bool failDeltaSaves = false;
+  @override
+  Future<void> save(VaultSnapshot snapshot) async {
+    final delta = snapshot.networkChats['deltaChat'];
+    if (failDeltaSaves &&
+        delta is Map<String, dynamic> &&
+        (delta['chats'] as List? ?? const []).any(
+          (chat) =>
+              chat is Map &&
+              (chat['messages'] as List? ?? const []).any(
+                (m) =>
+                    m is Map &&
+                    (m['attachments'] as List? ?? const []).isNotEmpty,
+              ),
+        )) {
+      throw const FileSystemException('simulated Delta vault save failure');
+    }
+    await super.save(snapshot);
+  }
+}
+
 void deltaContentControllerTests() {
   group('Delta content through fake mail', () {
     late FakeMailServer server;
@@ -8,12 +30,18 @@ void deltaContentControllerTests() {
     late Directory root;
     late String aliceFp, bobFp, aliceMail, bobMail;
     late DateTime clock;
+    var storageFails = false;
     Future<void> until(bool Function() condition) async {
       final deadline = DateTime.now().add(const Duration(seconds: 15));
       while (!condition() && DateTime.now().isBefore(deadline)) {
         await Future<void>.delayed(const Duration(milliseconds: 30));
       }
-      expect(condition(), isTrue, reason: 'mail delivery must finish');
+      expect(
+        condition(),
+        isTrue,
+        reason:
+            'mail delivery must finish; state=${bob.emailCarrierConfig?.lastUid}, fetched=${server.fetched.length}, messages=${bob.deltaChats.chats[aliceFp]?.messages.length}',
+      );
     }
 
     StagedAttachment source(Uint8List bytes, String name) => StagedAttachment(
@@ -61,7 +89,8 @@ void deltaContentControllerTests() {
       server = await FakeMailServer.start();
       root = await Directory.systemTemp.createTemp('conest-delta-content');
       aliceVault = _MemoryVaultStore();
-      bobVault = _MemoryVaultStore();
+      bobVault = _DeltaPersistenceVault();
+      storageFails = false;
       alice = await _createController(
         relayClient: _FakeRelayClient(),
         displayName: 'Alice',
@@ -76,6 +105,10 @@ void deltaContentControllerTests() {
         vaultStore: bobVault,
         mailConnector: server.connect,
         nowProvider: () => clock,
+        storageCapacityProvider: (_) async => StorageCapacity(
+          freeBytes: storageFails ? 0 : 100 * 1024 * 1024 * 1024,
+          totalBytes: 100 * 1024 * 1024 * 1024,
+        ),
         attachmentRootProvider: () async => Directory('${root.path}/bob'),
       );
       await alice.enableChatmailCarrier('chat.test');
@@ -303,6 +336,98 @@ void deltaContentControllerTests() {
         await until(
           () => (server.mailboxes[bobMail] ?? []).every((m) => m.deleted),
         );
+      },
+    );
+
+    test(
+      'unsaved file keeps its UID and retries after storage recovers',
+      () async {
+        final photo = Uint8List.fromList(
+          img.encodePng(img.Image(width: 3, height: 2)),
+        );
+        storageFails = true;
+        await alice.sendDeltaAttachment(bobFp, source(photo, 'retry.png'));
+        final id = alice.deltaChats.chats[bobFp]!.messages.last.id;
+        bool isFile(FakeMail m) =>
+            latin1.decode(m.raw).contains('Message-ID: <$id>');
+        await until(() => server.mailboxes[bobMail]?.any(isFile) ?? false);
+        final uid = server.mailboxes[bobMail]!.firstWhere(isFile).uid;
+        await until(
+          () => server.fetched.where((value) => value == uid).length >= 2,
+        );
+        expect(
+          bob.deltaChats.chats[aliceFp]!.messages.where(
+            (m) => m.attachments.isNotEmpty,
+          ),
+          isEmpty,
+        );
+        expect(bob.emailCarrierConfig!.lastUid, lessThan(uid));
+        expect(
+          server.mailboxes[bobMail]!.where((m) => m.uid == uid),
+          hasLength(1),
+        );
+        storageFails = false;
+        await until(
+          () => bob.deltaChats.chats[aliceFp]!.messages.any(
+            (m) => m.attachments.isNotEmpty,
+          ),
+        );
+        await until(
+          () => (server.mailboxes[bobMail] ?? []).every((m) => m.deleted),
+        );
+        expect(
+          server.fetched.where((value) => value == uid).length,
+          greaterThanOrEqualTo(2),
+        );
+      },
+    );
+
+    test(
+      'saved file mail waits for the vault write before consumption',
+      () async {
+        final vault = bobVault as _DeltaPersistenceVault;
+        final photo = Uint8List.fromList(
+          img.encodePng(img.Image(width: 2, height: 1)),
+        );
+        vault.failDeltaSaves = true;
+        await alice.sendDeltaAttachment(
+          bobFp,
+          source(photo, 'vault-retry.png'),
+        );
+        final id = alice.deltaChats.chats[bobFp]!.messages.last.id;
+        bool isFile(FakeMail m) =>
+            latin1.decode(m.raw).contains('Message-ID: <$id>');
+        await until(() => server.mailboxes[bobMail]?.any(isFile) ?? false);
+        final uid = server.mailboxes[bobMail]!.firstWhere(isFile).uid;
+        await until(
+          () => server.fetched.where((value) => value == uid).length >= 2,
+        );
+        expect(
+          server.mailboxes[bobMail]!.where((m) => m.uid == uid),
+          hasLength(1),
+        );
+        expect(bob.emailCarrierConfig!.lastUid, lessThan(uid));
+        expect(
+          DeltaChats.fromJson(
+            vault._snapshot.networkChats['deltaChat'],
+          ).chats[aliceFp]!.messages.where((m) => m.attachments.isNotEmpty),
+          isEmpty,
+        );
+        vault.failDeltaSaves = false;
+        await until(
+          () => (server.mailboxes[bobMail] ?? []).every((m) => m.deleted),
+        );
+        final persisted = DeltaChats.fromJson(
+          vault._snapshot.networkChats['deltaChat'],
+        );
+        expect(
+          persisted.chats[aliceFp]!.messages.single.attachments,
+          hasLength(1),
+        );
+        final path = await bob.attachmentCachePathFor(
+          persisted.chats[aliceFp]!.messages.single.attachments.single.id,
+        );
+        expect(await File(path!).readAsBytes(), photo);
       },
     );
 

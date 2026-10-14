@@ -414,11 +414,12 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
   @override
   void dispose() {
     _expiryTimer?.cancel();
-    if (widget.controller.voiceMessageService.isRecording &&
-        widget.controller.voiceMessageService.previewDestinationKey ==
-            'delta:${widget.chatKey}') {
-      unawaited(widget.controller.voiceMessageService.stopForInterruption());
-    }
+    unawaited(
+      interruptDeltaVoiceOnClose(
+        widget.controller.voiceMessageService,
+        widget.chatKey,
+      ).catchError((_) {}),
+    );
     widget.controller.removeListener(_markRead);
     _composer.dispose();
     super.dispose();

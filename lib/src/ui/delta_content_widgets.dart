@@ -11,6 +11,17 @@ import '../media_picker_sheet.dart';
 import '../messenger_controller.dart';
 import '../voice_message_service.dart';
 
+Future<void> interruptDeltaVoiceOnClose(
+  VoiceMessageService service,
+  String chatKey,
+) async {
+  if (service.previewDestinationKey == 'delta:$chatKey' &&
+      (service.state == VoiceRecordingState.starting ||
+          service.state == VoiceRecordingState.recording)) {
+    await service.stopForInterruption();
+  }
+}
+
 Widget? deltaListAvatar(MessengerController controller, String seed) {
   const prefix = 'deltaChat:';
   if (!seed.startsWith(prefix)) return null;
@@ -51,8 +62,9 @@ Future<void> pickDeltaFiles(
       await controller.sendDeltaAttachment(chatKey, source, caption: text);
     } on FileMetadataException {
       if (!context.mounted ||
-          !await confirmSendingMetadata(context, source.fileName))
+          !await confirmSendingMetadata(context, source.fileName)) {
         return;
+      }
       await controller.sendDeltaAttachment(
         chatKey,
         source,
@@ -107,11 +119,13 @@ Future<void> pickDeltaFiles(
     allowMultiple: true,
   );
   if (picked == null || !context.mounted) return;
-  if (picked.files.length > DeltaLimits.attachments)
+  if (picked.files.length > DeltaLimits.attachments) {
     throw ArgumentError('Choose at most 20 files.');
+  }
   for (final file in picked.files) {
-    if (file.size > DeltaLimits.fileBytes)
+    if (file.size > DeltaLimits.fileBytes) {
       throw ArgumentError('Delta Chat files must be at most 21 MiB.');
+    }
     await send(
       StagedAttachment(
         id: UniqueKey().toString(),
@@ -236,8 +250,9 @@ class DeltaMessageMenu extends StatelessWidget {
         ),
       ),
     );
-    if (selected != null)
+    if (selected != null) {
       await controller.reactDeltaMessage(chat.key, message.id, selected);
+    }
   }
 
   Future<void> _edit(BuildContext context) async {
@@ -260,8 +275,9 @@ class DeltaMessageMenu extends StatelessWidget {
       ),
     );
     text.dispose();
-    if (result != null)
+    if (result != null) {
       await controller.editDeltaMessage(chat.key, message.id, result);
+    }
   }
 
   @override

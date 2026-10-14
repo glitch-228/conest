@@ -18,6 +18,7 @@ class DeltaPeer {
     this.name,
     this.verified = false,
     this.avatar,
+    this.avatarAt,
   });
 
   /// Upper-case hex: who this is.
@@ -33,6 +34,7 @@ class DeltaPeer {
   /// The key was checked against an invite (Securejoin).
   final bool verified;
   final Uint8List? avatar;
+  final DateTime? avatarAt;
 
   DeltaPeer copyWith({
     String? addr,
@@ -40,6 +42,7 @@ class DeltaPeer {
     String? name,
     bool? verified,
     Uint8List? avatar,
+    DateTime? avatarAt,
     bool clearAvatar = false,
   }) => DeltaPeer(
     fingerprint: fingerprint,
@@ -48,6 +51,7 @@ class DeltaPeer {
     name: name ?? this.name,
     verified: verified ?? this.verified,
     avatar: clearAvatar ? null : avatar ?? this.avatar,
+    avatarAt: avatarAt ?? this.avatarAt,
   );
 
   Map<String, dynamic> toJson() => {
@@ -57,6 +61,7 @@ class DeltaPeer {
     if (name != null) 'name': name,
     if (verified) 'verified': true,
     if (avatar != null) 'avatar': base64.encode(avatar!),
+    if (avatarAt != null) 'avatarAt': avatarAt!.toUtc().toIso8601String(),
   };
 
   static DeltaPeer? fromJson(Object? json) {
@@ -78,6 +83,7 @@ class DeltaPeer {
       key: key,
       name: json['name'] as String?,
       verified: json['verified'] == true,
+      avatarAt: DateTime.tryParse(json['avatarAt'] as String? ?? ''),
       avatar: deltaAvatar(
         json['avatar'] is String ? 'base64:${json['avatar']}' : null,
       ),
@@ -86,6 +92,55 @@ class DeltaPeer {
 }
 
 enum DeltaMessageState { sent, read, failed }
+
+/// Bounded controls for a target whose original mail has not arrived yet.
+class DeltaPendingControl {
+  const DeltaPendingControl({
+    required this.id,
+    required this.author,
+    required this.date,
+    required this.expires,
+    required this.kind,
+    this.text = '',
+  });
+  final String id;
+  final String author;
+  final DateTime date;
+  final DateTime expires;
+  final String kind;
+  final String text;
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'author': author,
+    'date': date.toUtc().toIso8601String(),
+    'expires': expires.toUtc().toIso8601String(),
+    'kind': kind,
+    if (text.isNotEmpty) 'text': text,
+  };
+  static DeltaPendingControl? fromJson(Object? value) {
+    if (value is! Map<String, dynamic>) return null;
+    final id = deltaMessageId(value['id'] is String ? value['id'] : null);
+    final author = value['author'];
+    final date = DateTime.tryParse(value['date'] as String? ?? '');
+    final expires = DateTime.tryParse(value['expires'] as String? ?? '');
+    if (id == null ||
+        author is! String ||
+        !RegExp(r'^[0-9A-F]{40}$').hasMatch(author) ||
+        date == null ||
+        expires == null ||
+        !const {'delete', 'reaction'}.contains(value['kind'])) {
+      return null;
+    }
+    return DeltaPendingControl(
+      id: id,
+      author: author,
+      date: date,
+      expires: expires,
+      kind: value['kind'],
+      text: deltaReaction(value['text'] as String? ?? ''),
+    );
+  }
+}
 
 class DeltaChatMessage {
   const DeltaChatMessage({
@@ -262,6 +317,8 @@ class DeltaChat {
     this.memberRemoved = const {},
     this.pastAddresses = const {},
     this.avatar,
+    this.avatarAt,
+    this.pendingControls = const [],
   });
 
   /// A peer's fingerprint for a one-to-one chat, `g:<id>` for a group.
@@ -292,6 +349,8 @@ class DeltaChat {
   final Map<String, DateTime> memberRemoved;
   final Map<String, String> pastAddresses;
   final Uint8List? avatar;
+  final DateTime? avatarAt;
+  final List<DeltaPendingControl> pendingControls;
 
   Map<String, DateTime> get additionDates => {
     for (final m in members)
@@ -315,7 +374,9 @@ class DeltaChat {
     Map<String, DateTime>? memberRemoved,
     Map<String, String>? pastAddresses,
     Uint8List? avatar,
+    DateTime? avatarAt,
     bool clearAvatar = false,
+    List<DeltaPendingControl>? pendingControls,
   }) => DeltaChat(
     key: key,
     members: members ?? this.members,
@@ -330,6 +391,8 @@ class DeltaChat {
     memberRemoved: memberRemoved ?? this.memberRemoved,
     pastAddresses: pastAddresses ?? this.pastAddresses,
     avatar: clearAvatar ? null : avatar ?? this.avatar,
+    avatarAt: avatarAt ?? this.avatarAt,
+    pendingControls: pendingControls ?? this.pendingControls,
   );
 
   Map<String, dynamic> toJson() => {
@@ -354,6 +417,9 @@ class DeltaChat {
       },
     if (pastAddresses.isNotEmpty) 'pastAddresses': pastAddresses,
     if (avatar != null) 'avatar': base64.encode(avatar!),
+    if (avatarAt != null) 'avatarAt': avatarAt!.toUtc().toIso8601String(),
+    if (pendingControls.isNotEmpty)
+      'pendingControls': [for (final c in pendingControls) c.toJson()],
   };
 
   static DeltaChat? fromJson(Object? json) {
@@ -385,6 +451,13 @@ class DeltaChat {
                 .take(DeltaLimits.members))
           if (e.value is String) e.key: e.value,
       },
+      pendingControls: [
+        for (final c in (json['pendingControls'] as List? ?? const []).take(
+          128,
+        ))
+          ?DeltaPendingControl.fromJson(c),
+      ],
+      avatarAt: DateTime.tryParse(json['avatarAt'] as String? ?? ''),
       avatar: deltaAvatar(
         json['avatar'] is String ? 'base64:${json['avatar']}' : null,
       ),
@@ -495,6 +568,7 @@ class DeltaChats {
             name: peer.name,
             verified: known.verified || peer.verified,
             avatar: peer.avatar,
+            avatarAt: peer.avatarAt,
           );
     final next = {...peers, peer.fingerprint: merged};
     if (next.length > maxPeers) {
@@ -510,12 +584,26 @@ class DeltaChats {
         }
       }
     }
+    if (next.length > maxPeers && known == null) next.remove(peer.fingerprint);
     return copyWith(peers: next);
   }
 
   /// [chat] in place of the chat with its key.
-  DeltaChats withChat(DeltaChat chat) =>
-      copyWith(chats: {...chats, chat.key: chat});
+  DeltaChats withChat(DeltaChat chat) {
+    final next = {...chats, chat.key: chat};
+    final requests = next.values.where((c) => !c.kept).toList();
+    if (requests.length > maxRequests) {
+      requests.sort(
+        (a, b) => (a.messages.lastOrNull?.at ?? DateTime(0)).compareTo(
+          b.messages.lastOrNull?.at ?? DateTime(0),
+        ),
+      );
+      for (final old in requests.take(requests.length - maxRequests)) {
+        next.remove(old.key);
+      }
+    }
+    return copyWith(chats: next);
+  }
 
   /// [message] added to the chat [key] (made from [create] when new),
   /// unless it is there already or older than the chat's deletion.

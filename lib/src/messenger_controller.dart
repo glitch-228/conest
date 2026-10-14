@@ -4483,17 +4483,27 @@ class MessengerController extends ChangeNotifier {
   /// Runs [change] on the Delta Chat chats, one change at a time, then
   /// sends its mail.
   Future<DeltaStep?> _deltaRun(
-    Future<DeltaStep> Function(DeltaProtocol protocol, DeltaChats chats) change,
-  ) {
+    Future<DeltaStep> Function(DeltaProtocol protocol, DeltaChats chats)
+    change, {
+    bool retryMailOnSaveFailure = false,
+  }) {
     final result = _deltaQueue.then((_) async {
       final protocol = await _startDeltaChat();
       if (protocol == null) return null;
+      await flushPendingChanges();
       final tokens = protocol.tokens;
       final step = await change(protocol, deltaChats);
+      try {
       await _saveDeltaChats(
         step.chats,
         tokens: protocol.tokens == tokens ? null : protocol.tokens,
       );
+      } catch (_) {
+        if (retryMailOnSaveFailure && (step.consumed || step.retry)) {
+          throw const OtherMailRetryException();
+        }
+        rethrow;
+      }
       unawaited(_sendDeltaMails(step.mails));
       return step;
     });
@@ -4507,7 +4517,9 @@ class MessengerController extends ChangeNotifier {
     if (!deltaChatEnabled) return false;
     final step = await _deltaRun(
       (protocol, chats) => protocol.receive(chats, raw),
+      retryMailOnSaveFailure: true,
     );
+    if (step?.retry ?? false) throw const OtherMailRetryException();
     return step?.consumed ?? false;
   }
 

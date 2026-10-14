@@ -814,8 +814,9 @@ abstract final class Pgp {
     required int depth,
     int limit = maxPgpPlaintextBytes,
   }) async {
-    if (data.length > limit + 1024)
+    if (data.length > limit + 1024) {
       throw const FormatException('OpenPGP plaintext too large.');
+    }
     final packets = OpenPgpSymmetric.readPackets(data);
     if (packets.length == 1 && packets.single.$1 == 8) {
       if (depth > 0) {

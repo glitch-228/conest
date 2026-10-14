@@ -18781,19 +18781,20 @@ class _AttachmentRow extends StatelessWidget {
 
   bool get _isImage => descriptor.mimeType.startsWith('image/');
   bool get _isVideo =>
-      descriptor.mimeType.startsWith('video/') ||
-      const {
-        '.3gp',
-        '.avi',
-        '.m4v',
-        '.mkv',
-        '.mov',
-        '.mp4',
-        '.mpeg',
-        '.mpg',
-        '.webm',
-        '.wmv',
-      }.contains(p.extension(descriptor.fileName).toLowerCase());
+      descriptor.voiceMetadata == null &&
+      (descriptor.mimeType.startsWith('video/') ||
+          const {
+            '.3gp',
+            '.avi',
+            '.m4v',
+            '.mkv',
+            '.mov',
+            '.mp4',
+            '.mpeg',
+            '.mpg',
+            '.webm',
+            '.wmv',
+          }.contains(p.extension(descriptor.fileName).toLowerCase()));
 
   /// Wraps an image/video thumbnail so it never overflows its parent. In a
   /// tight (bounded-height) context — e.g. the album grid's square cells —

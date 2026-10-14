@@ -181,10 +181,16 @@ abstract final class OpenPgpSymmetric {
 
   /// Reads new- and old-format packets with definite lengths, and new-format
   /// partial lengths (gpg writes those for data it streams).
+  static const maxPackets = 1024;
+  static const maxPartialChunks = 65536;
+
   static List<(int, Uint8List)> readPackets(Uint8List data) {
     final packets = <(int, Uint8List)>[];
     var offset = 0;
     while (offset < data.length) {
+      if (packets.length >= maxPackets) {
+        throw const FormatException('Too many OpenPGP packets.');
+      }
       final first = data[offset++];
       if ((first & 0x80) == 0) {
         throw const FormatException('Malformed OpenPGP packet header.');
@@ -192,7 +198,11 @@ abstract final class OpenPgpSymmetric {
       if ((first & 0x40) != 0) {
         final tag = first & 0x3f;
         final body = BytesBuilder(copy: false);
+        var chunks = 0;
         while (true) {
+          if (++chunks > maxPartialChunks) {
+            throw const FormatException('Too many partial OpenPGP chunks.');
+          }
           if (offset >= data.length) {
             throw const FormatException('Truncated OpenPGP packet.');
           }

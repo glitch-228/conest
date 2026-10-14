@@ -174,6 +174,36 @@ void main() {
     await until(() => bobGot.isNotEmpty);
   });
 
+  test(
+    'recognized unsaved mail is retried without advancing its UID',
+    () async {
+      var attempts = 0;
+      final client = EmailCarrierChannel(
+        config: account('retry'),
+        connector: server.connect,
+        onFrame: (_, _) {},
+        onOtherMail: (_) async {
+          attempts++;
+          if (attempts < 2) throw const OtherMailRetryException();
+          return true;
+        },
+      );
+      channels.add(client);
+      client.start();
+      await until(() => client.state == EmailCarrierState.connected);
+      server.deliver(
+        'retry@chat.test',
+        'From: <a@chat.test>\r\n'
+            'Content-Type: multipart/encrypted\r\n\r\nunavailable',
+      );
+      final uid = server.mailboxes['retry@chat.test']!.last.uid;
+      await until(() => attempts == 1);
+      expect(client.config.lastUid, lessThan(uid));
+      await until(() => attempts >= 2);
+      await until(() => server.mailboxes['retry@chat.test']!.isEmpty);
+    },
+  );
+
   test('reading resumes after the server drops the connection', () async {
     final bobGot = <(String, Uint8List)>[];
     final alice = channel(account('alice'), [])..start();

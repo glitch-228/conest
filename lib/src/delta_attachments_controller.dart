@@ -20,8 +20,9 @@ extension DeltaAttachmentsController on MessengerController {
     String messageId,
     int index,
   ) async {
-    if (file.bytes.length > DeltaLimits.fileBytes)
+    if (file.bytes.length > DeltaLimits.fileBytes) {
       throw StateError('File is too large.');
+    }
     final id = 'delta:${attachmentStorageKey('$chatKey/$messageId/$index')}';
     final hash = base64Encode(dart_crypto.sha256.convert(file.bytes).bytes);
     final root = await _attachmentRoot();
@@ -32,8 +33,9 @@ extension DeltaAttachmentsController on MessengerController {
     );
     if (!await cache.exists()) {
       final capacity = await _storageCapacityProvider(root.path);
-      if (!_canAllocateStorage(capacity, file.bytes.length))
+      if (!_canAllocateStorage(capacity, file.bytes.length)) {
         throw StateError('Not enough free storage.');
+      }
       final temporary = File(
         p.join(directory.path, '${_randomId('delta')}.tmp'),
       );
@@ -50,7 +52,9 @@ extension DeltaAttachmentsController on MessengerController {
     return AttachmentDescriptor(
       id: id,
       fileName: sanitizeAttachmentFileName(file.name),
-      mimeType: deltaMimeType(file.bytes),
+      mimeType: file.voice && deltaMimeType(file.bytes) == 'video/mp4'
+          ? 'audio/mp4'
+          : deltaMimeType(file.bytes),
       sizeBytes: file.bytes.length,
       chunkSize: MessengerController._lanAttachmentChunkSize,
       chunkHashes: const [],
@@ -77,8 +81,9 @@ extension DeltaAttachmentsController on MessengerController {
     }
     await _deltaRequired((protocol, chats) async {
       final chat = chats.chats[chatKey];
-      if (chat == null || chat.left)
+      if (chat == null || chat.left) {
         throw StateError('Not a chat you can write in.');
+      }
       final attachmentId = _randomId('delta');
       final prepared = await _prepareOutboundAttachmentSource(
         attachmentId: attachmentId,
@@ -88,8 +93,9 @@ extension DeltaAttachmentsController on MessengerController {
       );
       String? cleaned;
       try {
-        if (!keepMetadata)
+        if (!keepMetadata) {
           cleaned = await _withoutFileMetadata(prepared.path, source.fileName);
+        }
         final path = cleaned ?? prepared.path;
         final bytes = BytesBuilder(copy: false);
         await for (final chunk in File(path).openRead()) {
@@ -139,8 +145,9 @@ extension DeltaAttachmentsController on MessengerController {
           [local],
         );
       } finally {
-        if (cleaned != null)
+        if (cleaned != null) {
           await MessengerController._deleteQuietly(File(cleaned));
+        }
         await MessengerController._deleteQuietly(File(prepared.path));
       }
     });

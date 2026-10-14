@@ -5,9 +5,10 @@ library;
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:image/image.dart' as img;
-
 import '../attachment_safety.dart';
+import 'delta_avatar.dart';
+
+export 'delta_avatar.dart' show deltaAvatar;
 
 abstract final class DeltaLimits {
   static const fileBytes = 21 * 1024 * 1024;
@@ -16,7 +17,7 @@ abstract final class DeltaLimits {
   static const plaintextBytes = 30 * 1024 * 1024;
   static const attachments = 20;
   static const members = 64;
-  static const avatarEncodedBytes = 256 * 1024;
+  static const avatarEncodedBytes = maxDeltaAvatarEncodedBytes;
   static const splitBytes = 140000;
   static const pendingLifetime = Duration(days: 7);
 }
@@ -99,8 +100,9 @@ class DeltaPendingFile {
           'Audio',
           'Video',
           'Webxdc',
-        }.contains(type))
+        }.contains(type)) {
       return null;
+    }
     return DeltaPendingFile(
       name: sanitizeAttachmentFileName(name),
       size: size,
@@ -153,37 +155,14 @@ String deltaMimeType(Uint8List bytes) {
     return 'audio/wav';
   }
   if (starts(ascii.encode('ID3')) ||
-      (bytes.length > 1 && bytes[0] == 255 && bytes[1] & 0xe0 == 0xe0))
+      (bytes.length > 1 && bytes[0] == 255 && bytes[1] & 0xe0 == 0xe0)) {
     return 'audio/mpeg';
-  if (starts(ascii.encode('ftyp'), 4)) return 'video/mp4';
+  }
+  if (starts(ascii.encode('ftyp'), 4)) {
+    return starts(ascii.encode('M4A '), 8) || starts(ascii.encode('M4B '), 8)
+        ? 'audio/mp4'
+        : 'video/mp4';
+  }
   if (starts(ascii.encode('%PDF-'))) return 'application/pdf';
   return 'application/octet-stream';
-}
-
-/// Returns a validated static avatar, or null. Dimensions are checked before
-/// allocating decoded pixels, and animation is refused.
-Uint8List? deltaAvatar(String? header) {
-  if (header == null ||
-      !header.startsWith('base64:') ||
-      header.length > DeltaLimits.avatarEncodedBytes + 7)
-    return null;
-  try {
-    final bytes = base64.decode(
-      header.substring(7).replaceAll(RegExp(r'\s'), ''),
-    );
-    if (!deltaMimeType(bytes).startsWith('image/')) return null;
-    final decoder = img.findDecoderForData(bytes);
-    final info = decoder?.startDecode(bytes);
-    if (info == null ||
-        info.width <= 0 ||
-        info.height <= 0 ||
-        info.width > 512 ||
-        info.height > 512 ||
-        info.numFrames != 1)
-      return null;
-    if (decoder!.decodeFrame(0) == null) return null;
-    return bytes;
-  } catch (_) {
-    return null;
-  }
 }

@@ -2,6 +2,9 @@
 // d766641ce27eb5ff52baa72bd5f87d0baf378a18, mimefactory.rs,
 // receive_imf.rs, reaction.rs and download/post_msg_metadata.rs.
 import 'dart:convert';
+import 'dart:io';
+
+import 'package:archive/archive.dart' show getCrc32;
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -376,6 +379,44 @@ void main() {
     expect(chats.chats[fp(alice)]!.messages.first.text, 'New');
   });
 
+  test(
+    'removed author can edit and delete old messages but cannot react',
+    () async {
+      chats = chats.withChat(group().copyWith(members: [fp(carol)]));
+      await receive(
+        await coreMail(
+          grouped: true,
+          text: '✏️Edited after leaving',
+          headers: [('Chat-Edit', '<original@example.org>')],
+        ),
+      );
+      expect(
+        chats.chats[groupKey]!.messages.first.text,
+        'Edited after leaving',
+      );
+      await receive(
+        await coreMail(
+          grouped: true,
+          reaction: true,
+          text: '👍',
+          headers: [('In-Reply-To', '<original@example.org>')],
+        ),
+      );
+      expect(chats.chats[groupKey]!.messages.first.reactions, isEmpty);
+      await receive(
+        await coreMail(
+          grouped: true,
+          headers: [
+            ('Chat-Delete', '<original@example.org> <unknown@example.org>'),
+          ],
+        ),
+      );
+      expect(chats.chats[groupKey]!.messages.first.deleted, isTrue);
+      expect(chats.chats[groupKey]!.pendingControls, isEmpty);
+      expect(chats.chats[groupKey]!.members, [fp(carol)]);
+    },
+  );
+
   final metadata = '{"size":150001,"viewtype":"Image","filename":"photo.png"}';
   Future<Uint8List> pre({PgpSecretKey? author}) => coreMail(
     id: 'pre@example.org',
@@ -469,6 +510,48 @@ void main() {
     expect(chats.chats[groupKey]!.messages.last.pending, isNotNull);
     expect(saved, isEmpty);
   });
+  for (final left in [false, true]) {
+    test(
+      'accepted group post completes after ${left ? 'local departure' : 'author removal'}',
+      () async {
+        await receive(
+          await coreMail(
+            grouped: true,
+            id: 'pre@example.org',
+            text: 'Accepted caption',
+            headers: [
+              ('Chat-Post-Message-ID', '<post@example.org>'),
+              ('Chat-Post-Message-Metadata', metadata),
+            ],
+          ),
+        );
+        chats = chats.withChat(
+          chats.chats[groupKey]!.copyWith(
+            members: left ? [fp(alice), fp(carol)] : [fp(carol)],
+            left: left,
+          ),
+        );
+        final count = chats.chats[groupKey]!.messages.length;
+        await receive(
+          await coreMail(
+            grouped: true,
+            id: 'post@example.org',
+            outer: 'Chat-Is-Post-Message: 1\r\n',
+            headers: [('Chat-Group-Name', 'Delayed group change')],
+            parts: [filePart(photo)],
+          ),
+        );
+        final chat = chats.chats[groupKey]!;
+        expect(chat.messages, hasLength(count));
+        expect(chat.messages.last.pending, isNull);
+        expect(chat.messages.last.attachments.single.sizeBytes, photo.length);
+        expect(chat.messages.last.text, 'Accepted caption');
+        expect(chat.name, 'Team');
+        expect(chat.left, left);
+        expect(chat.members, left ? [fp(alice), fp(carol)] : [fp(carol)]);
+      },
+    );
+  }
   test(
     'outer pre/edit/delete/voice/avatar headers do not gain authority',
     () async {
@@ -579,6 +662,94 @@ void main() {
     expect(read[1].text, '✏️New');
     expect(read[2].header('chat-delete'), '<sent@example.org>');
   });
+
+  test(
+    'outgoing direct and group voice use protected millisecond headers and Voice split metadata',
+    () async {
+      final outgoing = DeltaChats(
+        peers: {
+          for (final k in [bob, carol])
+            fp(k): DeltaPeer(
+              fingerprint: fp(k),
+              addr: addr(k),
+              key: k.publicKey.bytes,
+            ),
+        },
+        chats: {
+          fp(bob): DeltaChat(key: fp(bob), members: [fp(bob)], kept: true),
+          groupKey: group().copyWith(members: [fp(bob), fp(carol)]),
+        },
+      );
+      for (final key in [fp(bob), groupKey]) {
+        for (final size in [120, 150001]) {
+          final bytes = Uint8List(size)..setRange(0, 4, ascii.encode('OggS'));
+          final file = DeltaFile(
+            name: 'voice.ogg',
+            bytes: bytes,
+            mimeType: 'audio/ogg',
+            voice: true,
+            durationMs: 152310,
+          );
+          final step = await sender.sendFiles(
+            outgoing,
+            key,
+            '',
+            [file],
+            [descriptor(file)],
+          );
+          for (final mail in step.mails) {
+            final read = (await DeltaMail.read(
+              Uint8List.fromList(utf8.encode(mail.mail)),
+              bob,
+              now: clock,
+            ))!;
+            expect(read.header('chat-voice-message'), '1');
+            expect(read.header('chat-duration'), '152310');
+            expect(
+              read.header('chat-group-id'),
+              key == groupKey ? 'test-group' : null,
+            );
+            if (read.postMessageId != null) {
+              expect(read.pending!.viewtype, 'Voice');
+              expect(read.pending!.durationMs, 152310);
+            } else {
+              expect(read.files.single.voice, isTrue);
+              expect(read.files.single.mimeType, 'audio/ogg');
+              expect(read.files.single.bytes, bytes);
+            }
+          }
+        }
+      }
+    },
+  );
+
+  test(
+    'M4A voice is recognized from its content with an untrusted MIME hint',
+    () async {
+      final bytes = Uint8List.fromList([
+        0,
+        0,
+        0,
+        24,
+        ...ascii.encode('ftypM4A '),
+      ]);
+      await receive(
+        await coreMail(
+          headers: [('Chat-Voice-Message', '1'), ('Chat-Duration', '3210')],
+          parts: [
+            filePart(
+              bytes,
+              name: 'voice.mp4',
+              mime: 'application/octet-stream',
+            ),
+          ],
+        ),
+      );
+      final file = chats.chats[fp(alice)]!.messages.last.attachments.single;
+      expect(file.mimeType, 'audio/mp4');
+      expect(file.voiceMetadata!.durationMs, 3210);
+    },
+  );
   test('exact avatar headers set and clear peer and group avatars', () async {
     await receive(
       await coreMail(
@@ -619,6 +790,49 @@ void main() {
     );
     expect(deltaAvatar('base64:${base64Encode(photo)}'), photo);
   });
+  test(
+    'tiny PNG canvas refuses excess inflated IDAT before pixel decoding',
+    () {
+      List<int> chunk(String type, List<int> data) {
+        final n = data.length;
+        final typed = [...ascii.encode(type), ...data];
+        final crc = getCrc32(typed);
+        return [
+          n >> 24,
+          (n >> 16) & 255,
+          (n >> 8) & 255,
+          n & 255,
+          ...typed,
+          crc >> 24,
+          (crc >> 16) & 255,
+          (crc >> 8) & 255,
+          crc & 255,
+        ];
+      }
+
+      final tiny = img.encodePng(img.Image(width: 1, height: 1));
+      final bad = Uint8List.fromList([
+        ...tiny.sublist(0, 8),
+        ...chunk('IHDR', tiny.sublist(16, 29)),
+        ...chunk('IDAT', ZLibEncoder().convert(Uint8List(1024 * 1024))),
+        ...chunk('IEND', const []),
+      ]);
+      expect(bad.length, lessThan(2048));
+      expect(deltaAvatar('base64:${base64Encode(bad)}'), isNull);
+      expect(deltaAvatar('base64:${base64Encode(tiny)}'), isNotNull);
+    },
+  );
+
+  test('valid JPEG avatar is normalized to a bounded static PNG', () {
+    final jpeg = img.encodeJpg(img.Image(width: 2, height: 3));
+    final avatar = deltaAvatar('base64:${base64Encode(jpeg)}');
+    expect(avatar, isNotNull);
+    expect(deltaMimeType(avatar!), 'image/png');
+    final decoded = img.decodePng(avatar)!;
+    expect((decoded.width, decoded.height), (2, 3));
+    expect(decoded.iccProfile, isNull);
+  });
+
   test('too many attachments and aggregate decoded budget are refused', () async {
     final mail = await coreMail(parts: List.filled(21, filePart(photo)));
     expect((await receive(mail)).consumed, isFalse);
@@ -740,6 +954,301 @@ void main() {
       t2.add(const Duration(seconds: 1)),
     );
   });
+  test('same-second removal stays newer than addition on the wire', () async {
+    var localClock = clock.add(const Duration(milliseconds: 100));
+    final protocol = DeltaProtocol(
+      key: alice,
+      self: addr(alice),
+      tokens: DeltaTokens.create(Random(4)),
+      now: () => localClock,
+    );
+    final outgoing = DeltaChats(
+      peers: {
+        for (final k in [bob, carol])
+          fp(k): DeltaPeer(
+            fingerprint: fp(k),
+            addr: addr(k),
+            key: k.publicKey.bytes,
+          ),
+      },
+      chats: {
+        groupKey: DeltaChat(
+          key: groupKey,
+          groupId: 'test-group',
+          name: 'Team',
+          members: [fp(bob), fp(carol)],
+          kept: true,
+          memberAdded: {
+            fp(alice): localClock,
+            fp(bob): localClock,
+            fp(carol): localClock,
+          },
+        ),
+      },
+    );
+    localClock = clock.add(const Duration(milliseconds: 200));
+    final removed = await protocol.removeMember(outgoing, groupKey, fp(carol));
+    expect(
+      removed.chats.chats[groupKey]!.memberRemoved[fp(carol)],
+      clock.add(const Duration(seconds: 1)),
+    );
+    await receive(Uint8List.fromList(utf8.encode(removed.mails.single.mail)));
+    expect(chats.chats[groupKey]!.members, isNot(contains(fp(carol))));
+  });
+
+  test(
+    'legacy explicit add rejoins only the named member after a tombstone',
+    () async {
+      final removedAt = clock.add(const Duration(seconds: 1));
+      receivedAt = clock.add(const Duration(seconds: 2));
+      chats = chats.withChat(
+        group().copyWith(
+          members: [fp(alice)],
+          memberRemoved: {fp(carol): removedAt},
+        ),
+      );
+      // A legacy add includes Carol in To and gossip, but no member clocks.
+      final inner = await DeltaMail.build(
+        key: alice,
+        from: addr(alice),
+        to: [
+          (addr: addr(bob), key: bob.publicKey),
+          (addr: addr(carol), key: carol.publicKey),
+        ],
+        gossip: [(addr: addr(carol), key: carol.publicKey)],
+        text: 'Carol added',
+        messageId: 'legacy-add@example.org',
+        date: receivedAt,
+        extraHeaders: [
+          ('Chat-Group-ID', 'test-group'),
+          ('Chat-Group-Member-Added', addr(carol)),
+          ('Chat-Group-Member-Added-Fpr', fp(carol)),
+        ],
+      );
+      await receive(Uint8List.fromList(utf8.encode(inner)));
+      expect(chats.chats[groupKey]!.members, contains(fp(carol)));
+      expect(chats.chats[groupKey]!.memberAdded[fp(carol)], receivedAt);
+    },
+  );
+
+  test(
+    'legacy removal cannot grow tombstones for unknown fingerprints',
+    () async {
+      final before = chats.chats[groupKey]!.memberRemoved.length;
+      for (var i = 0; i < 5; i++) {
+        await receive(
+          await coreMail(
+            grouped: true,
+            id: 'unknown-remove-$i@example.org',
+            headers: [
+              (
+                'Chat-Group-Member-Removed-Fpr',
+                i.toRadixString(16).padLeft(40, '0'),
+              ),
+            ],
+            text: 'remove',
+          ),
+        );
+      }
+      expect(chats.chats[groupKey]!.memberRemoved, hasLength(before));
+      expect(chats.chats[groupKey]!.pastAddresses, isEmpty);
+    },
+  );
+
+  test('avatar reader refuses animation flags even for one-frame WebP', () {
+    // A complete, valid 1x1 VP8L frame in an animated RIFF container.
+    final bytes = base64Decode(
+      'UklGRlIAAABXRUJQVlA4WAoAAAACAAAAAAAAAAAAQU5JTQYAAAAAAAAAAABBTk1GJgAAAAAAAAAAAAAAAAAAAAAAAABWUDhMDgAAAC8AAAAABxAR/Q9ERP8D',
+    );
+    expect(img.decodeWebP(bytes), isNotNull);
+    expect(deltaAvatar('base64:${base64Encode(bytes)}'), isNull);
+  });
+
+  test('excess edit quote prefixes and a Delta footer stay bounded', () async {
+    await receive(
+      await coreMail(
+        text: '${'> quoted\n' * 5000}\n✏️New',
+        headers: [('Chat-Edit', '<original@example.org>')],
+      ),
+    );
+    expect(chats.chats[fp(alice)]!.messages.first.text, 'Original');
+    await receive(
+      await coreMail(
+        text: '> Original\n\n✏️New\n\n-- \nStatus',
+        headers: [('Chat-Edit', '<original@example.org>')],
+      ),
+    );
+    expect(chats.chats[fp(alice)]!.messages.first.text, 'New');
+  });
+
+  test('packet and partial chunk budgets reject hostile armored data', () async {
+    final packets = Uint8List.fromList([
+      for (var i = 0; i <= OpenPgpSymmetric.maxPackets; i++) ...[0xca, 0],
+    ]);
+    expect(() => OpenPgpSymmetric.readPackets(packets), throwsFormatException);
+    final raw = Uint8List.fromList(
+      utf8.encode(
+        'From: <${addr(alice)}>\r\n'
+        'Content-Type: multipart/encrypted; boundary=x\r\n\r\n'
+        '--x\r\nContent-Type: application/octet-stream\r\n\r\n${OpenPgpArmor.encode(packets)}\r\n--x--\r\n',
+      ),
+    );
+    expect(await DeltaMail.read(raw, bob, now: clock), isNull);
+    final chunks = Uint8List.fromList([
+      0xd2,
+      for (var i = 0; i <= OpenPgpSymmetric.maxPartialChunks; i++) ...[224, 0],
+      0,
+    ]);
+    expect(() => OpenPgpSymmetric.readPackets(chunks), throwsFormatException);
+  });
+
+  test('JPEG cyclic EXIF is stripped before avatar decoding', () {
+    final jpeg = img.encodeJpg(img.Image(width: 1, height: 1));
+    final exif = [
+      ...ascii.encode('Exif'),
+      0,
+      0,
+      0x49,
+      0x49,
+      42,
+      0,
+      8,
+      0,
+      0,
+      0,
+      0,
+      0,
+      14,
+      0,
+      0,
+      0,
+      0,
+      0,
+      8,
+      0,
+      0,
+      0,
+    ];
+    final dirty = Uint8List.fromList([
+      255,
+      216,
+      255,
+      225,
+      0,
+      exif.length + 2,
+      ...exif,
+      ...jpeg.sublist(2),
+    ]);
+    final clean = deltaAvatar('base64:${base64Encode(dirty)}');
+    expect(clean, isNotNull);
+    expect(img.decodePng(clean!)!.width, 1);
+    expect(latin1.decode(clean), isNot(contains('Exif')));
+  });
+
+  test(
+    'early delete is persisted and suppresses only its signed author',
+    () async {
+      await receive(
+        await coreMail(
+          grouped: true,
+          headers: [('Chat-Delete', '<late@example.org>')],
+        ),
+      );
+      chats = DeltaChats.fromJson(chats.toJson());
+      await receive(
+        await coreMail(
+          grouped: true,
+          id: 'late@example.org',
+          parts: [filePart(photo)],
+        ),
+      );
+      expect(chats.chats[groupKey]!.messages.last.deleted, isTrue);
+      expect(saved, isEmpty);
+      await receive(
+        await coreMail(
+          grouped: true,
+          author: carol,
+          headers: [('Chat-Delete', '<alice-late@example.org>')],
+        ),
+      );
+      await receive(
+        await coreMail(
+          grouped: true,
+          id: 'alice-late@example.org',
+          text: 'Alice still here',
+        ),
+      );
+      expect(chats.chats[groupKey]!.messages.last.text, 'Alice still here');
+      expect(chats.chats[groupKey]!.messages.last.deleted, isFalse);
+    },
+  );
+
+  test('early reaction is applied when the target arrives', () async {
+    await receive(
+      await coreMail(
+        grouped: true,
+        reaction: true,
+        text: '👍',
+        headers: [('In-Reply-To', '<react-late@example.org>')],
+      ),
+    );
+    chats = DeltaChats.fromJson(chats.toJson());
+    await receive(
+      await coreMail(
+        grouped: true,
+        id: 'react-late@example.org',
+        text: 'Later',
+      ),
+    );
+    expect(chats.chats[groupKey]!.messages.last.reactions[fp(alice)], '👍');
+  });
+
+  test('late pre preserves an explicitly emptied caption', () async {
+    await receive(await post());
+    await receive(
+      await coreMail(
+        text: '✏️',
+        headers: [('Chat-Edit', '<post@example.org>')],
+      ),
+    );
+    await receive(await pre());
+    expect(chats.chats[fp(alice)]!.messages.last.text, '');
+  });
+
+  test('older avatar mail cannot reset a newer signed avatar', () async {
+    await receive(
+      await coreMail(
+        grouped: true,
+        headers: [
+          ('Chat-User-Avatar', 'base64:${base64Encode(photo)}'),
+          ('Chat-Group-Avatar', 'base64:${base64Encode(photo)}'),
+        ],
+        text: 'new',
+      ),
+    );
+    await receive(
+      await coreMail(
+        grouped: true,
+        id: 'older-avatar@example.org',
+        date: clock.subtract(const Duration(seconds: 1)),
+        headers: [('Chat-User-Avatar', '0'), ('Chat-Group-Avatar', '0')],
+        text: 'old',
+      ),
+    );
+    expect(chats.peers[fp(alice)]!.avatar, isNotNull);
+    expect(chats.chats[groupKey]!.avatar, isNotNull);
+  });
+
+  test('empty unkept group requests remain capped', () {
+    var store = const DeltaChats();
+    for (var i = 0; i < DeltaChats.maxRequests + 1; i++) {
+      store = store.withChat(
+        DeltaChat(key: 'g:$i', groupId: '$i', members: const []),
+      );
+    }
+    expect(store.chats, hasLength(DeltaChats.maxRequests));
+  });
+
   test('old membersAt migrates into each current member clock', () {
     final legacy = DeltaChat.fromJson({
       'key': groupKey,
