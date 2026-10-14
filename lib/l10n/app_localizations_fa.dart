@@ -231,4 +231,22 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get actionSearch => 'جستجو';
+
+  @override
+  String get settingsPersonal => 'شخصی';
+
+  @override
+  String get settingsStorage => 'فضای ذخیره‌سازی';
+
+  @override
+  String get settingsConnectivity => 'اتصال';
+
+  @override
+  String get settingsRelays => 'رله‌ها';
+
+  @override
+  String get settingsUpdates => 'به‌روزرسانی‌ها';
+
+  @override
+  String get settingsAccount => 'حساب';
 }

@@ -137,5 +137,17 @@
   "archivedChats": "Archived chats",
   "@archivedChats": {"description": "Entry that opens the archived chats."},
   "actionSearch": "Search",
-  "@actionSearch": {"description": "Tooltip of a search button."}
+  "@actionSearch": {"description": "Tooltip of a search button."},
+  "settingsPersonal": "Personal",
+  "@settingsPersonal": {"description": "Settings section and tab: profile, look, language, privacy."},
+  "settingsStorage": "Storage",
+  "@settingsStorage": {"description": "Settings section and tab: space used by files."},
+  "settingsConnectivity": "Connectivity",
+  "@settingsConnectivity": {"description": "Settings section and tab: the ways Conest reaches contacts (networks, transports). Other texts refer to it as Settings \u2192 Connectivity."},
+  "settingsRelays": "Relays",
+  "@settingsRelays": {"description": "Settings section and tab: relay servers."},
+  "settingsUpdates": "Updates",
+  "@settingsUpdates": {"description": "Settings section and tab: app updates."},
+  "settingsAccount": "Account",
+  "@settingsAccount": {"description": "Settings section and tab: resetting or removing this identity."}
 }

@@ -65,5 +65,11 @@
   "searchChats": "Поиск чатов",
   "searchContacts": "Поиск контактов",
   "archivedChats": "Архив чатов",
-  "actionSearch": "Поиск"
+  "actionSearch": "Поиск",
+  "settingsPersonal": "Личное",
+  "settingsStorage": "Хранилище",
+  "settingsConnectivity": "Подключение",
+  "settingsRelays": "Ретрансляторы",
+  "settingsUpdates": "Обновления",
+  "settingsAccount": "Аккаунт"
 }

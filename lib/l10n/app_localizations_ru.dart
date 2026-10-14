@@ -231,4 +231,22 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get actionSearch => 'Поиск';
+
+  @override
+  String get settingsPersonal => 'Личное';
+
+  @override
+  String get settingsStorage => 'Хранилище';
+
+  @override
+  String get settingsConnectivity => 'Подключение';
+
+  @override
+  String get settingsRelays => 'Ретрансляторы';
+
+  @override
+  String get settingsUpdates => 'Обновления';
+
+  @override
+  String get settingsAccount => 'Аккаунт';
 }

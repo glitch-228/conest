@@ -14041,7 +14041,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       fullscreenOnMobile: widget.fullscreenOnMobile,
       scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-      title: const Text('Settings'),
+      title: Text(l10nOf(context).tabSettings),
       content: SizedBox(
         width: 720,
         child: identity == null
@@ -14068,9 +14068,22 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 padding: const EdgeInsets.only(right: 8),
                                 child: ChoiceChip(
                                   label: Text(switch (category) {
-                                    'Personal / Preferences' => 'Personal',
-                                    'Network / Relay' => 'Relays',
-                                    'Danger' => 'Account',
+                                    'Personal / Preferences' => l10nOf(
+                                      context,
+                                    ).settingsPersonal,
+                                    'Storage' => l10nOf(
+                                      context,
+                                    ).settingsStorage,
+                                    'Connectivity' => l10nOf(
+                                      context,
+                                    ).settingsConnectivity,
+                                    'Network / Relay' => l10nOf(
+                                      context,
+                                    ).settingsRelays,
+                                    'Updates' => l10nOf(
+                                      context,
+                                    ).settingsUpdates,
+                                    'Danger' => l10nOf(context).settingsAccount,
                                     _ => category,
                                   }),
                                   selected: _settingsCategory == category,
@@ -14087,7 +14100,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     if (!categorized ||
                         _settingsCategory == 'Personal / Preferences')
                       _SettingsSection(
-                        title: 'Personal / Preferences',
+                        title: l10nOf(context).settingsPersonal,
                         palette: widget.palette,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -14358,7 +14371,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     if (!simple &&
                         (!categorized || _settingsCategory == 'Storage'))
                       _SettingsSection(
-                        title: 'Storage',
+                        title: l10nOf(context).settingsStorage,
                         palette: widget.palette,
                         child: SwitchListTile.adaptive(
                           value: identity.connectivity.storageReserveEnabled,
@@ -14379,7 +14392,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     if (!simple &&
                         (!categorized || _settingsCategory == 'Connectivity'))
                       _SettingsSection(
-                        title: 'Connectivity',
+                        title: l10nOf(context).settingsConnectivity,
                         palette: widget.palette,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -14648,7 +14661,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         (!categorized ||
                             _settingsCategory == 'Network / Relay'))
                       _SettingsSection(
-                        title: 'Network / Relay',
+                        title: l10nOf(context).settingsRelays,
                         palette: widget.palette,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -14866,7 +14879,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     if (!simple &&
                         (!categorized || _settingsCategory == 'Updates'))
                       _SettingsSection(
-                        title: 'Updates',
+                        title: l10nOf(context).settingsUpdates,
                         palette: widget.palette,
                         child: ListenableBuilder(
                           listenable: widget.updateService,
@@ -15000,7 +15013,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     if (!simple &&
                         (!categorized || _settingsCategory == 'Danger'))
                       _SettingsSection(
-                        title: 'Danger',
+                        title: l10nOf(context).settingsAccount,
                         palette: widget.palette,
                         child: OutlinedButton.icon(
                           onPressed: _busy ? null : _confirmReset,

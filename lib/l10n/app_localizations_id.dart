@@ -231,4 +231,22 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get actionSearch => 'Cari';
+
+  @override
+  String get settingsPersonal => 'Pribadi';
+
+  @override
+  String get settingsStorage => 'Penyimpanan';
+
+  @override
+  String get settingsConnectivity => 'Konektivitas';
+
+  @override
+  String get settingsRelays => 'Relay';
+
+  @override
+  String get settingsUpdates => 'Pembaruan';
+
+  @override
+  String get settingsAccount => 'Akun';
 }

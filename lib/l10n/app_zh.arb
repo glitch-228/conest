@@ -65,5 +65,11 @@
   "searchChats": "搜索聊天",
   "searchContacts": "搜索联系人",
   "archivedChats": "已归档的聊天",
-  "actionSearch": "搜索"
+  "actionSearch": "搜索",
+  "settingsPersonal": "个人",
+  "settingsStorage": "存储",
+  "settingsConnectivity": "连接",
+  "settingsRelays": "中继",
+  "settingsUpdates": "更新",
+  "settingsAccount": "账户"
 }

@@ -229,4 +229,22 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get actionSearch => 'بحث';
+
+  @override
+  String get settingsPersonal => 'شخصي';
+
+  @override
+  String get settingsStorage => 'التخزين';
+
+  @override
+  String get settingsConnectivity => 'الاتصال';
+
+  @override
+  String get settingsRelays => 'المرحّلات';
+
+  @override
+  String get settingsUpdates => 'التحديثات';
+
+  @override
+  String get settingsAccount => 'الحساب';
 }

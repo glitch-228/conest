@@ -223,4 +223,22 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get actionSearch => '搜索';
+
+  @override
+  String get settingsPersonal => '个人';
+
+  @override
+  String get settingsStorage => '存储';
+
+  @override
+  String get settingsConnectivity => '连接';
+
+  @override
+  String get settingsRelays => '中继';
+
+  @override
+  String get settingsUpdates => '更新';
+
+  @override
+  String get settingsAccount => '账户';
 }

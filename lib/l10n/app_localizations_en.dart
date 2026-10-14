@@ -229,4 +229,22 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get actionSearch => 'Search';
+
+  @override
+  String get settingsPersonal => 'Personal';
+
+  @override
+  String get settingsStorage => 'Storage';
+
+  @override
+  String get settingsConnectivity => 'Connectivity';
+
+  @override
+  String get settingsRelays => 'Relays';
+
+  @override
+  String get settingsUpdates => 'Updates';
+
+  @override
+  String get settingsAccount => 'Account';
 }

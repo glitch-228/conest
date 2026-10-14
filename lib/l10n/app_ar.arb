@@ -65,5 +65,11 @@
   "searchChats": "البحث في المحادثات",
   "searchContacts": "البحث في جهات الاتصال",
   "archivedChats": "المحادثات المؤرشفة",
-  "actionSearch": "بحث"
+  "actionSearch": "بحث",
+  "settingsPersonal": "شخصي",
+  "settingsStorage": "التخزين",
+  "settingsConnectivity": "الاتصال",
+  "settingsRelays": "المرحّلات",
+  "settingsUpdates": "التحديثات",
+  "settingsAccount": "الحساب"
 }

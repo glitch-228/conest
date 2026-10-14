@@ -65,5 +65,11 @@
   "searchChats": "جستجوی گفتگوها",
   "searchContacts": "جستجوی مخاطبان",
   "archivedChats": "گفتگوهای بایگانی‌شده",
-  "actionSearch": "جستجو"
+  "actionSearch": "جستجو",
+  "settingsPersonal": "شخصی",
+  "settingsStorage": "فضای ذخیره‌سازی",
+  "settingsConnectivity": "اتصال",
+  "settingsRelays": "رله‌ها",
+  "settingsUpdates": "به‌روزرسانی‌ها",
+  "settingsAccount": "حساب"
 }

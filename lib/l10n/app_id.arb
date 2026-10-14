@@ -65,5 +65,11 @@
   "searchChats": "Cari obrolan",
   "searchContacts": "Cari kontak",
   "archivedChats": "Obrolan yang diarsipkan",
-  "actionSearch": "Cari"
+  "actionSearch": "Cari",
+  "settingsPersonal": "Pribadi",
+  "settingsStorage": "Penyimpanan",
+  "settingsConnectivity": "Konektivitas",
+  "settingsRelays": "Relay",
+  "settingsUpdates": "Pembaruan",
+  "settingsAccount": "Akun"
 }

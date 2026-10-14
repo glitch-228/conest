@@ -15228,7 +15228,7 @@ void main() {
       );
       await tester.pump();
       expect(find.text('// CONNECTIVITY'), findsNothing);
-      expect(find.text('// PERSONAL / PREFERENCES'), findsOneWidget);
+      expect(find.text('// PERSONAL'), findsOneWidget);
       await tester.ensureVisible(
         find.byKey(const ValueKey('show-all-settings')),
       );

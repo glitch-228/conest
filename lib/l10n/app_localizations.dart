@@ -495,6 +495,42 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Search'**
   String get actionSearch;
+
+  /// Settings section and tab: profile, look, language, privacy.
+  ///
+  /// In en, this message translates to:
+  /// **'Personal'**
+  String get settingsPersonal;
+
+  /// Settings section and tab: space used by files.
+  ///
+  /// In en, this message translates to:
+  /// **'Storage'**
+  String get settingsStorage;
+
+  /// Settings section and tab: the ways Conest reaches contacts (networks, transports). Other texts refer to it as Settings → Connectivity.
+  ///
+  /// In en, this message translates to:
+  /// **'Connectivity'**
+  String get settingsConnectivity;
+
+  /// Settings section and tab: relay servers.
+  ///
+  /// In en, this message translates to:
+  /// **'Relays'**
+  String get settingsRelays;
+
+  /// Settings section and tab: app updates.
+  ///
+  /// In en, this message translates to:
+  /// **'Updates'**
+  String get settingsUpdates;
+
+  /// Settings section and tab: resetting or removing this identity.
+  ///
+  /// In en, this message translates to:
+  /// **'Account'**
+  String get settingsAccount;
 }
 
 class _AppLocalizationsDelegate
