@@ -17090,7 +17090,145 @@ void main() {
     });
   });
 
+  group('Clocks that are off', () {
+    Future<(MessengerController, MessengerController, MessengerController)>
+    threeWithBobBehind() async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(
+        String name, {
+        Duration behind = Duration.zero,
+      }) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+          nowProvider: () => DateTime.now().toUtc().subtract(behind),
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob', behind: const Duration(hours: 2));
+      final carol = await make('Carol');
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      return (alice, bob, carol);
+    }
+
+    test('a message from a device whose clock is behind still sorts after '
+        'what it answers, in a group', () async {
+      final (alice, bob, carol) = await threeWithBobBehind();
+      final group = await alice.createGroup(
+        title: 'Clocks',
+        members: alice.contacts,
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        unawaited(carol.pollNow());
+        return bob.visibleGroups.isNotEmpty && carol.visibleGroups.isNotEmpty;
+      });
+      // Two from Alice, so Bob's journal (which has neither) would place his
+      // answer between them unless he counts what he has seen.
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'zero');
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'first');
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob
+            .messagesForGroup(group.groupId)
+            .any((m) => m.body == 'first');
+      });
+      await bob.sendGroupMessage(groupId: group.groupId, body: 'second');
+      await _waitForIroh(() {
+        unawaited(carol.pollNow());
+        unawaited(alice.pollNow());
+        return [alice, carol].every(
+          (device) => device
+              .messagesForGroup(group.groupId)
+              .any((m) => m.body == 'second'),
+        );
+      }, reason: 'Bob\'s message did not arrive');
+      for (final device in [alice, carol]) {
+        final bodies = [
+          for (final message in device.messagesForGroup(group.groupId))
+            if (message.body == 'first' || message.body == 'second')
+              message.body,
+        ];
+        expect(bodies, ['first', 'second']);
+      }
+    });
+
+    test('times from a contact whose clock is behind are corrected once '
+        'its route updates agree on it', () async {
+      final (alice, bob, _) = await threeWithBobBehind();
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      for (var i = 0; i < 3; i++) {
+        await bob.checkContactRoutes(
+          bob.contacts.firstWhere((c) => c.deviceId == aliceId),
+        );
+        await alice.pollNow();
+      }
+      final offset = alice.clockOffsetFor(bobId);
+      expect(offset, isNotNull);
+      expect(
+        (offset! - const Duration(hours: 2)).abs(),
+        lessThan(const Duration(seconds: 30)),
+      );
+      await bob.sendMessage(
+        contact: bob.contacts.firstWhere((c) => c.deviceId == aliceId),
+        body: 'now',
+      );
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        return alice.messagesFor(bobId).any((m) => m.body == 'now');
+      });
+      final received = alice
+          .messagesFor(bobId)
+          .firstWhere((m) => m.body == 'now');
+      expect(
+        DateTime.now().toUtc().difference(received.createdAt).abs(),
+        lessThan(const Duration(minutes: 1)),
+      );
+    });
+  });
+
   group('Route tests', () {
+    test('a capability list that was lost arrives with the next route '
+        'update', () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final aliceId = alice.identity!.deviceId;
+      // Alice's list reached Bob before an update (or was lost): he holds
+      // one without route tests.
+      bob.dropContactCapabilityForTesting(
+        aliceId,
+        ApplicationCapability.routeProbeV1,
+      );
+      expect(bob.canTestRoutes(bob.contacts.single), isFalse);
+      // Any route update from Alice carries her capability digest.
+      await alice.checkContactRoutes(alice.contacts.single);
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(bob.pollNow());
+        return bob.canTestRoutes(bob.contacts.single);
+      }, reason: 'Bob never learned Alice can take route tests');
+    });
+
     test(
       'each route is timed both ways, and a silent one is flagged',
       () async {

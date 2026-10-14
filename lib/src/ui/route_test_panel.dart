@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../messenger_controller.dart';
@@ -23,6 +25,37 @@ class RouteTestPanel extends StatefulWidget {
 class _RouteTestPanelState extends State<RouteTestPanel> {
   bool _running = false;
   String? _error;
+
+  /// Asked them what their app can do, and the answer may still come.
+  bool _asking = false;
+  Timer? _askTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_changed);
+    // What we hold for them may be out of date (a list they sent while we
+    // could not be reached is lost): ask before saying they cannot.
+    if (!widget.controller.canTestRoutes(widget.contact)) {
+      _asking = widget.controller.askContactCapabilities(widget.contact);
+      if (_asking) {
+        _askTimer = Timer(const Duration(seconds: 20), () {
+          if (mounted) setState(() => _asking = false);
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _askTimer?.cancel();
+    widget.controller.removeListener(_changed);
+    super.dispose();
+  }
+
+  void _changed() {
+    if (mounted) setState(() {});
+  }
 
   Future<void> _test() async {
     setState(() {
@@ -80,7 +113,11 @@ class _RouteTestPanelState extends State<RouteTestPanel> {
           Padding(
             padding: const EdgeInsets.only(top: 6),
             child: Text(
-              'Route tests need a newer Conest on their side.',
+              _asking
+                  ? 'Checking whether their app can take route tests…'
+                  : 'Their app did not say it can take route tests. If '
+                        'they run this version too, they may not be '
+                        'reachable right now.',
               style: muted,
             ),
           ),

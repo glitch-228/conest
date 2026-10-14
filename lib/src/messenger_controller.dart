@@ -3748,17 +3748,89 @@ class MessengerController extends ChangeNotifier {
   /// match (say a carrier kind it does not know) is asked about only once.
   final Map<String, String> _carrierRefreshAskedDigest = {};
 
-  /// [contact]'s carrier digest differs from what this device holds for it:
-  /// it enabled or dropped a route since; ask for a fresh exchange.
-  void _refreshCarriersIfStale(ContactRecord contact, Object? digest) {
-    if (digest is! String || !contact.canSendOutbound) return;
-    final held = _carrierDigest({
-      for (final entry in contact.carrierAddresses.entries)
-        if (entry.value.value case final address?
-            when entry.key != TransportKind.matrix)
-          entry.key.name: address,
-    }, contact.matrixAddress);
-    if (held == digest) return;
+  // Clocks that are off: each route update that came over a live route
+  // gives how far its sender's clock is from ours, plus however long it
+  // travelled. The smallest gaps of the last day estimate the offset; it is
+  // used only when several agree (a delay varies, a wrong clock does not).
+
+  /// How far ahead of the newest known Lamport a live claim may be.
+  static const int _maxLamportLead = 1024;
+
+  /// (when received, our time − their time) per sender, newest last.
+  final Map<String, List<(DateTime, Duration)>> _clockSamples = {};
+  static const int _maxClockSamples = 16;
+  static const Duration _clockSampleWindow = Duration(days: 1);
+
+  /// Offsets smaller than this are left alone (ordinary drift).
+  static const Duration _clockTolerance = Duration(minutes: 1);
+
+  void _noteClock(String deviceId, DateTime sentAt) {
+    final now = _now().toUtc();
+    final samples = _clockSamples.putIfAbsent(deviceId, () => []);
+    samples
+      ..add((now, now.difference(sentAt.toUtc())))
+      ..removeWhere((sample) => now.difference(sample.$1) > _clockSampleWindow);
+    if (samples.length > _maxClockSamples) {
+      samples.removeRange(0, samples.length - _maxClockSamples);
+    }
+  }
+
+  /// How far [deviceId]'s clock is behind ours (negative: ahead), when the
+  /// recent samples agree on it and it is more than a minute; else null.
+  Duration? clockOffsetFor(String deviceId) {
+    final samples = _clockSamples[deviceId];
+    if (samples == null || samples.length < 3) return null;
+    // The three newest (a clock set right takes effect at once), only
+    // when they agree: a delayed copy differs, a wrong clock does not.
+    final gaps = [
+      for (final sample in samples.skip(samples.length - 3)) sample.$2,
+    ]..sort();
+    if (gaps[2] - gaps[0] > const Duration(seconds: 30)) return null;
+    final offset = gaps[0];
+    return offset.abs() < _clockTolerance ? null : offset;
+  }
+
+  /// [sentAt] by [senderDeviceId]'s clock, as our clock would have said.
+  DateTime _localTimeOf(String senderDeviceId, DateTime sentAt) {
+    final offset = clockOffsetFor(senderDeviceId);
+    return offset == null ? sentAt : sentAt.add(offset);
+  }
+
+  /// A short digest of a capability list (names, in any order).
+  static String _capabilityDigest(List<String> names) => base64Encode(
+    dart_crypto.sha256
+        .convert(utf8.encode((List.of(names)..sort()).join('\n')))
+        .bytes
+        .sublist(0, 9),
+  );
+
+  /// [contact]'s carrier digest (or capability digest) differs from what
+  /// this device holds for it: it enabled or dropped a route, or updated,
+  /// since; ask for a fresh exchange.
+  void _refreshCarriersIfStale(
+    ContactRecord contact,
+    Object? carrierDigest, {
+    Object? capabilityDigest,
+  }) {
+    if (!contact.canSendOutbound) return;
+    final carriersStale =
+        carrierDigest is String &&
+        carrierDigest !=
+            _carrierDigest({
+              for (final entry in contact.carrierAddresses.entries)
+                if (entry.value.value case final address?
+                    when entry.key != TransportKind.matrix)
+                  entry.key.name: address,
+            }, contact.matrixAddress);
+    final capabilitiesStale =
+        capabilityDigest is String &&
+        capabilityDigest !=
+            _capabilityDigest([
+              for (final capability in contact.featureCapabilities)
+                capability.name,
+            ]);
+    if (!carriersStale && !capabilitiesStale) return;
+    final digest = '$carrierDigest|$capabilityDigest';
     final now = _now();
     final last = _carrierRefreshAskedAt[contact.deviceId];
     if (last != null && now.difference(last) < const Duration(minutes: 10)) {
@@ -3771,7 +3843,11 @@ class MessengerController extends ChangeNotifier {
     }
     _carrierRefreshAskedAt[contact.deviceId] = now;
     _carrierRefreshAskedDigest[contact.deviceId] = digest;
-    appendDebugLog('${contact.alias} has new routes; asking for them.');
+    appendDebugLog(
+      capabilitiesStale
+          ? '${contact.alias} updated; asking what it can do.'
+          : '${contact.alias} has new routes; asking for them.',
+    );
     unawaited(
       _sendReciprocalContactExchange(
         contact,
@@ -13313,13 +13389,24 @@ class MessengerController extends ChangeNotifier {
     _upsertGroupMessage(profiledGroup.groupId, message);
     _markRuntimeActivity();
     await _persist('Sending group message to ${profiledGroup.title}.');
+    _groupMessagesBeingRecorded.add(message.id);
     try {
-      final event = await _groupHistory.recordOutgoing(profiledGroup, message);
+      final event = await _groupHistory.recordOutgoing(
+        profiledGroup,
+        message,
+        seenLamport: _groupConversation(profiledGroup.groupId).messages
+            .fold<int>(
+              0,
+              (latest, other) => max(latest, other.groupHistoryLamport ?? 0),
+            ),
+      );
       if (event != null) {
         _attachGroupHistoryOrder(profiledGroup.groupId, message.id, event);
       }
     } catch (error) {
       appendDebugLog('Group history archive pending: $error');
+    } finally {
+      _groupMessagesBeingRecorded.remove(message.id);
     }
     // Members in parallel: one offline member must not hold the message
     // back from everyone listed after them.
@@ -13655,6 +13742,10 @@ class MessengerController extends ChangeNotifier {
       .every(
         (deviceId) => _groupMemberSupportsFeature(group, deviceId, feature),
       );
+
+  /// Own group messages being signed into the history: retries wait for
+  /// them, so every copy carries its place.
+  final Set<String> _groupMessagesBeingRecorded = <String>{};
 
   void _attachGroupHistoryOrder(
     String groupId,
@@ -15320,6 +15411,12 @@ class MessengerController extends ChangeNotifier {
         _ownCarrierAddressesFor(contact, me.connectivity),
         _ownMatrixAddressFor(contact, me),
       ),
+      // What this build can do: a contact holding an older list (one sent
+      // when it could not be reached was lost) asks again.
+      'capabilityDigest': _capabilityDigest([
+        for (final capability in _localApplicationCapabilities())
+          capability.name,
+      ]),
       ..._localLanDirectHintPayload(),
     };
     if (effectiveProbeId != null) {
@@ -17429,7 +17526,10 @@ class MessengerController extends ChangeNotifier {
             body: decodedMessage.body,
             outbound: false,
             state: DeliveryState.delivered,
-            createdAt: envelope.createdAt,
+            createdAt: _localTimeOf(
+              envelope.senderDeviceId,
+              envelope.createdAt,
+            ),
             replyToMessageId: decodedMessage.replyToMessageId,
             replySnippet: decodedMessage.replySnippet,
             replySenderDeviceId: decodedMessage.replySenderDeviceId,
@@ -18023,7 +18123,7 @@ class MessengerController extends ChangeNotifier {
       body: rawCaption,
       outbound: false,
       state: DeliveryState.pending,
-      createdAt: envelope.createdAt,
+      createdAt: _localTimeOf(sender.deviceId, envelope.createdAt),
       senderDisplayName: sender.alias,
       attachment: descriptor,
       albumId: rawAlbumId as String?,
@@ -20555,7 +20655,20 @@ class MessengerController extends ChangeNotifier {
       _cachePeerLanDirectFromPayload(sender.deviceId, routePayload);
     }
     _acceptedByTraffic(sender, sentAt: envelope.createdAt);
-    _refreshCarriersIfStale(sender, routePayload?['carrierDigest']);
+    // Route updates are stamped when sent (never queued with an old time);
+    // over a live route they arrive within moments.
+    if (_ingressRoute?.family
+        case MessageRoute.lanDirect ||
+            MessageRoute.internetDirect ||
+            MessageRoute.irohDirect ||
+            MessageRoute.irohRelay) {
+      _noteClock(sender.deviceId, sentAt ?? envelope.createdAt);
+    }
+    _refreshCarriersIfStale(
+      sender,
+      routePayload?['carrierDigest'],
+      capabilityDigest: routePayload?['capabilityDigest'],
+    );
     _reachability.noteAnySignal(
       sender.deviceId,
       at: sentAt ?? envelope.createdAt,
@@ -20982,10 +21095,44 @@ class MessengerController extends ChangeNotifier {
     )) {
       return;
     }
-    final alreadyKnown = existingConversation.messages.any(
-      (message) => message.id == envelope.messageId,
-    );
+    final known = existingConversation.messages
+        .where((message) => message.id == envelope.messageId)
+        .firstOrNull;
+    final alreadyKnown = known != null;
+    // A copy sent before the author's history had it placed may have come
+    // first: a later copy brings the place.
+    final laterOrder = payload.historyOrder;
+    if (known != null &&
+        known.groupHistoryLamport == null &&
+        laterOrder != null) {
+      final order = laterOrder;
+      final latestLamport = existingConversation.messages.fold<int>(
+        0,
+        (latest, message) => max(latest, message.groupHistoryLamport ?? 0),
+      );
+      if (order.lamport <= latestLamport + _maxLamportLead) {
+        _upsertGroupMessage(
+          group.groupId,
+          known.copyWith(
+            groupHistoryLamport: order.lamport,
+            groupHistoryAuthorDeviceId: envelope.senderDeviceId,
+            groupHistorySequence: order.sequence,
+            groupHistoryEventId: order.eventId,
+          ),
+        );
+      }
+    }
     if (!alreadyKnown) {
+      // The author's place in its history orders the message until the
+      // signed event replaces it; a claim far past anything seen is ignored
+      // (it would pin the message to the end).
+      final order = payload.historyOrder;
+      final latestLamport = existingConversation.messages.fold<int>(
+        0,
+        (latest, message) => max(latest, message.groupHistoryLamport ?? 0),
+      );
+      final ordered =
+          order != null && order.lamport <= latestLamport + _maxLamportLead;
       _upsertGroupMessage(
         group.groupId,
         ChatMessage(
@@ -20996,7 +21143,11 @@ class MessengerController extends ChangeNotifier {
           body: payload.body,
           outbound: false,
           state: DeliveryState.delivered,
-          createdAt: envelope.createdAt,
+          createdAt: _localTimeOf(envelope.senderDeviceId, envelope.createdAt),
+          groupHistoryLamport: ordered ? order.lamport : null,
+          groupHistoryAuthorDeviceId: ordered ? envelope.senderDeviceId : null,
+          groupHistorySequence: ordered ? order.sequence : null,
+          groupHistoryEventId: ordered ? order.eventId : null,
           senderDisplayName: payload.senderDisplayName ?? sender.alias,
           route: _ingressRoute,
           replyToMessageId: payload.replyToMessageId,
@@ -23414,7 +23565,12 @@ class MessengerController extends ChangeNotifier {
         !group.hasActiveMember(contact.deviceId)) {
       return true;
     }
+    // Still being signed: the send that follows carries its place.
+    if (_groupMessagesBeingRecorded.contains(message.id)) return false;
     _noteOutboundAttempt(contact.deviceId, message.id);
+    // As stored now: its place in the signed history was added after the
+    // caller took its copy.
+    message = _groupMessageById(group.groupId, message.id) ?? message;
     try {
       final envelope = await _outboxEnvelope(
         contact,
@@ -24027,7 +24183,36 @@ class MessengerController extends ChangeNotifier {
 
   /// Whether [contact]'s app answers route tests.
   bool canTestRoutes(ContactRecord contact) =>
-      contact.featureCapabilities.contains(ApplicationCapability.routeProbeV1);
+      (_contactByDeviceId(contact.deviceId) ?? contact).featureCapabilities
+          .contains(ApplicationCapability.routeProbeV1);
+
+  /// When this device last asked [deviceId] what it can do, from a screen.
+  final Map<String, DateTime> _capabilitiesAskedAt = {};
+
+  /// Asks [contact] what its app can do (at most once a minute): a list
+  /// sent while this device could not be reached may have been lost.
+  /// True while an answer may still come.
+  bool askContactCapabilities(ContactRecord contact) {
+    final current = _contactByDeviceId(contact.deviceId);
+    if (current == null || !current.canSendOutbound) return false;
+    final now = _now();
+    final last = _capabilitiesAskedAt[current.deviceId];
+    if (last != null && now.difference(last) < const Duration(minutes: 1)) {
+      return now.difference(last) < const Duration(seconds: 20);
+    }
+    _capabilitiesAskedAt[current.deviceId] = now;
+    unawaited(
+      _sendReciprocalContactExchange(
+        current,
+        recipientKnowsIdentity: true,
+        requestPeerCapabilities: true,
+      ).catchError((Object error) {
+        appendDebugLog('Asking ${current.alias} what it can do failed: $error');
+        return false;
+      }),
+    );
+    return true;
+  }
 
   /// Sends a small probe on each route to [contact] in turn and times the
   /// answer. A route that takes probes but never answers goes last for

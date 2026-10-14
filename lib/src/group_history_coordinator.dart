@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:cryptography/cryptography.dart';
 
@@ -231,6 +232,7 @@ class GroupHistoryCoordinator {
     required String membershipId,
     required GroupEventKind kind,
     required Map<String, Object?> payload,
+    int seenLamport = 0,
   }) async {
     final me = identity();
     final previous = await journal.authorHead(me.deviceId);
@@ -253,7 +255,7 @@ class GroupHistoryCoordinator {
       ),
       sequence: (previous?.sequence ?? 0) + 1,
       previousEventId: previous?.eventId,
-      lamport: (latest.isEmpty ? 0 : latest.first.lamport) + 1,
+      lamport: max(latest.isEmpty ? 0 : latest.first.lamport, seenLamport) + 1,
       membershipId: membershipId,
       kind: kind,
       payload: payload,
@@ -387,10 +389,14 @@ class GroupHistoryCoordinator {
         }
       });
 
+  /// [seenLamport]: the highest place this device has seen in the group
+  /// from live messages not yet in its journal; the new event goes after
+  /// it, so a reply orders after what it answers.
   Future<GroupHistoryEvent?> recordOutgoing(
     GroupRecord snapshot,
-    ChatMessage message,
-  ) async {
+    ChatMessage message, {
+    int seenLamport = 0,
+  }) async {
     await prepareMembership(snapshot);
     return _write(snapshot.groupId, () async {
       final replica = await _replica(snapshot.groupId);
@@ -416,6 +422,7 @@ class GroupHistoryCoordinator {
         groupId: snapshot.groupId,
         membershipId: membership.id,
         kind: GroupEventKind.message,
+        seenLamport: seenLamport,
         payload: {
           'messageId': message.id,
           'body': message.body,
