@@ -217,14 +217,45 @@ Commit and push after each phase, with the tests green.
 
 - The next full run passed every Iroh/Nostr/cache/resource controller case under load; only the two revocation fixtures still used the earlier faster clock driver and timed out in initial four-member admission. Aligned their clock cadence and retry allowance with the successful controller harness, adding bounded state-only diagnostics. Both standalone signed-revocation scenarios pass again; production code is unchanged.
 
+- Final full Flutter suite on 6b93e00 completed: 1033 passed, 18 skipped, only the explicitly documented local native-Iroh failure. Both revocation and all four group-only controller cases passed inside the full run. Final analysis: 28 inherited diagnostics, no new M36 errors/warnings. Logs: .buildlog/m36-shared-clock-full-tests.log and .buildlog/m36-shared-clock-analysis.log. Source is restored; 59 Dart behavioural negative checks proven. Proceeding to push own branch and qualified debug/Rust CI.
+
+- Pushed only agent/m36-group-calls, qualified head 6b93e00. Full debug workflow (quick_build defaults false): https://github.com/glitch-228/conest/actions/runs/38569923478 . Rust workspace/audio negative checks: https://github.com/glitch-228/conest/actions/runs/38569929942 . Both dispatched successfully; waiting for complete green qualification before final handoff.
+
+- Qualified debug 38569923478: verification gate and all six real carrier jobs (Email, Nostr, Matrix/Synapse, Tor, Reticulum/RNS, Meshtastic) passed; Android/Linux/Windows builds started. Rust 38569929942: workspace tests and all three native audio sabotage checks passed; advisory Clippy still finishing.
+
+- Final Rust run 38569929942 is green on 6b93e00, including workspace tests and all three native audio negative checks. Qualified debug verification and six carrier jobs are green; platform app/native builds are running. Verification success confirmed in job metadata; GitHub defers its full log until the debug run completes.
+
+- Qualified debug 38569923478: Android APK job is green; Linux native Opus/jitter/ratchet checks passed and the bundle build is running; Windows native build continues. All carrier/verification/Rust jobs remain green.
+
+- Qualified debug 38569923478: Linux bundle and native group-transport qualification are green. Android, all six carriers, verification and Rust are green; only Windows remains in progress.
+
+- Final qualified debug 38569923478 is fully green on 6b93e0092b7ff6097b07e51e6e1b01d28f046a3f: all 11 jobs succeeded, including Windows and all three uploaded platform artifacts. Rust 38569929942 is fully green on the same source (80 passed, 2 ignored, 3 native negative checks). Handoff completed below; only this plan changes in the final documentation commit.
+
 ## Handoff
 
-- Branch and final commit:
-- Debug run id and result; Rust tests run id:
-- Phases completed (A–F), and the Phase F decision:
-- What changed (wire formats, capability, settings):
-- Draft release-note lines:
-- Device checks:
-- Review summary:
-- Known gaps:
-- Hooks added in lib/main.dart and lib/src/messenger_controller.dart:
+- Branch and final implementation commit: `agent/m36-group-calls`, qualified commit `6b93e0092b7ff6097b07e51e6e1b01d28f046a3f`. Latest base `2024a89` was merged as `fdf7aca`. The final handoff commit changes only this plan; the qualified application source is unchanged.
+- Qualified debug: [38569923478](https://github.com/glitch-228/conest/actions/runs/38569923478), **green**, with `quick_build=false`. All 11 jobs passed: Android, Linux and Windows artifacts, verification, cadence, and all six live carriers (Email, Nostr, Matrix/Synapse, Tor, Reticulum/RNS, Meshtastic). Linux native Opus/jitter/ratchet and group-transport qualifications passed. Uploaded artifacts: `conest-debug-android-arm64-126`, `conest-debug-linux-x64-126`, `conest-debug-windows-x64-126`.
+- Rust: [38569929942](https://github.com/glitch-228/conest/actions/runs/38569929942), **green** on the same commit: 80 workspace tests passed, 2 ignored, and all three audio negative checks passed. No local native/application builds were performed.
+- Local validation: full Flutter suite **1033 passed, 18 skipped**, with only the explicitly documented local native-Iroh failure. All group-only, revocation, ownership, cache and resource cases passed within that full run. Analysis has 28 inherited diagnostics (26 info, 2 warnings), with no new M36 errors or warnings. All **59 Dart behavioural negative checks** passed with the source restored, plus the 3 Rust checks above. Integration fixtures advance injected protocol time independently of real encrypted disk I/O; deterministic fake-network failure deadlines remain unchanged. Logs are under ignored `.buildlog/`, including `m36-shared-clock-full-tests.log`, `m36-shared-clock-analysis.log`, `m36-ci-verification.log` and `m36-ci-rust.log`.
+- Phases A–E are implemented: default-on saved noise suppression for 1:1 and group calls; Sonora High NS with AEC3 on desktop; Android platform NS/AEC plus software NS fallback; bounded independent remote decoding, jitter, PCM, mixing and levels; encrypted group mesh/forwarder calls and failover; group-only member parity; incoming notification/banner, call screen, mute, pointer/Space push-to-talk, live NS toggle, joining running calls, and persisted chronological summaries.
+- Phase F is complete as research/design only, as explicitly allowed. [notes/GROUP-CALLS-MATRIX.md](notes/GROUP-CALLS-MATRIX.md) documents current/deployed MatrixRTC, discovery, OpenID/JWT, encrypted key exchange, Rust LiveKit costs, and future migration/voting/dual-path design. Blocking facts: native MatrixRTC media/to-device APIs and a linked-group room model are absent; additional shipped binary growth under 25 MB is unmeasured. The measured 114–163 MB compressed upstream archives are build/download costs, not final binary growth. Matrix media, switching, voting and simultaneous transport settings are deferred for the maintainer's decision; no corresponding UI is advertised.
+- Wire/capability/settings: append-only `groupVoiceCallsV1`; authenticated bounded `group_call_signal` controls; individually addressed call keys require established v3 forward-secret pairwise sessions. Keys rotate randomly on admission/removal and bind the recipient's fresh admission nonce. Ordered joins and term/roster/installed-key repair recover missing controls without rotating healthy admissions. HKDF binds call/authority/epoch/sender; ChaCha20-Poly1305 encrypts media and Ed25519 authenticates each speaker. Frames are at most 1200 bytes: marker `0x36`, 8-byte tag, u32 epoch, u8 sender index, u32 sequence, ciphertext/MAC and sender signature; Opus is capped at 1096 bytes. Limits include 16 participants, mesh threshold 5, replay window 64, 250 ms old-key grace, 600 ms forwarder overlap, and about 1.5 s silent-leader/forwarder detection. Optional `voiceNoiseSuppressionEnabled` defaults true; persisted summaries/settings remain backward compatible.
+- Review summary: independent reviewer `m36_security_review` reviewed the initial implementation and subsequent recovery, ratchet/bootstrap and base-integration changes. Every confirmed P1/P2 finding was repaired with regressions, including microphone privacy/ownership races, authority and admission recovery, atomic rejected keys, replay/jitter generations, concurrent ratchet reads, reciprocal group-only bootstrap and deduplication, bounded work and private error text. Signed local/learned account revocations now block stale group-profile fallback; unrelated signed revoked IDs cannot ban members of another account. The final restored security source had no confirmed new findings. Maintainer review/merge remains the normal next step.
+- Known gaps: group calls use the existing experimental voice-call setting and require Iroh and ratchet availability. M25 still needs to supply the actual power, metering and route policy; the default uses desktop/mobile heuristics and measured call RTT/loss. Media needs an Iroh path even when another carrier carries signalling. High-tier relay forwarding remains M28. Matrix media/interoperability remains the Phase F follow-up above. Physical listening and device checks below were not performed.
+- Shared-file hooks: `lib/main.dart` imports the group call screen and inserts the incoming/return banner, header actions in both layouts, chronological summary tile and live 1:1 NS toggle. `lib/src/messenger_controller.dart` adds small fields/lifecycle/media-ownership hooks, group datagram demultiplexing, authenticated group signal dispatch, reciprocal group-only Iroh/carrier ratchet bootstrap, synthetic capability propagation, generic private bootstrap error text, and revocation before group-peer fallback. Protocol/controller/UI implementations live in new group-call files. Desktop FFI and Android JNI expose matching multi-stream and NS controls.
+
+Draft release-note lines:
+
+- Start or join voice calls from a group chat. Small calls connect members directly; larger calls can choose a participant to forward encrypted audio.
+- Mute or hold to talk with the button or Space. See who is speaking, connection quality, and a call summary in the chat.
+- Noise suppression is on by default for calls and can be changed while talking.
+
+Device checks for the maintainer:
+
+- Calls with 3, 6 and 10 participants across Android, Linux and Windows.
+- A forwarder leaving or losing its route during the call, followed by audible recovery.
+- Fan/keyboard noise with suppression on/off; Android platform effect availability and software fallback.
+- Pointer hold, cancellation and Space press/release; mute and leave while a send is stalled.
+- Microphone ownership when moving between group and 1:1 calls, including delayed teardown and Android foreground behaviour.
+- Revoking a linked phone during a call: fresh keys exclude it and survivors keep hearing one another.
+- Matrix/Element interoperability belongs to the deferred Phase F prototype; no Matrix call transport was built here.
