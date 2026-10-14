@@ -63,6 +63,7 @@ import 'src/voice_message_service.dart';
 import 'src/swipe_to_reply.dart';
 import 'src/transport.dart';
 import 'src/ui/seal_avatar.dart';
+import 'src/ui/delta_content_widgets.dart' show deltaListAvatar;
 import 'src/ui/signature_decoration.dart';
 import 'src/ui/signature_panels.dart';
 import 'src/ui/signature_widgets.dart';
@@ -4726,6 +4727,7 @@ class _CourierHomeState extends State<_CourierHome> {
                 for (final entry in entries)
                   _CourierRow(
                     key: ValueKey('courier-chat-${entry.seed}'),
+                    avatar: deltaListAvatar(widget.controller, entry.seed),
                     palette: widget.palette,
                     seed: entry.seed,
                     title: entry.title,
@@ -4935,6 +4937,7 @@ class _CourierRow extends StatelessWidget {
     required this.selected,
     required this.onTap,
     this.seed,
+    this.avatar,
     this.icon,
     this.at,
     this.isGroup = false,
@@ -4960,6 +4963,7 @@ class _CourierRow extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
   final String? seed;
+  final Widget? avatar;
   final IconData? icon;
   final DateTime? at;
   final bool isGroup;
@@ -4983,12 +4987,13 @@ class _CourierRow extends StatelessWidget {
                 height: 44,
                 child: Stack(
                   children: [
-                    SealAvatar(
-                      seed: seed!,
-                      palette: palette,
-                      size: 44,
-                      label: title,
-                    ),
+                    avatar ??
+                        SealAvatar(
+                          seed: seed!,
+                          palette: palette,
+                          size: 44,
+                          label: title,
+                        ),
                     if (isGroup && memberCount > 0)
                       Positioned(
                         right: 0,
@@ -18541,6 +18546,25 @@ class _StorageReserveOverrideButton extends StatelessWidget {
             ),
           ),
     child: const Text('Download anyway'),
+  );
+}
+
+/// Delta uses the same file viewer, save/forward menu and voice player.
+Widget buildDeltaAttachment(
+  BuildContext context,
+  MessengerController controller,
+  AttachmentDescriptor descriptor,
+  bool outgoing,
+) {
+  final palette = ConestPalette(brightness: Theme.of(context).brightness);
+  return _AttachmentRow(
+    descriptor: descriptor,
+    outbound: outgoing,
+    palette: palette,
+    controller: controller,
+    messageState: DeliveryState.delivered,
+    onForward: () =>
+        _forwardAttachment(context, controller, palette, descriptor),
   );
 }
 

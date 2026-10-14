@@ -35,6 +35,10 @@ class FakeMailServer {
 
   /// UIDs whose bodies were downloaded.
   final List<int> fetched = [];
+  final List<int> fetchedSizes = [];
+
+  /// Tests can announce hostile sizes without allocating oversized bodies.
+  final Map<int, int> reportedSizes = {};
   final List<Socket> _open = [];
   final _arrivals = StreamController<String>.broadcast();
   int _nextUid = 1;
@@ -283,10 +287,13 @@ class FakeMailServer {
           final index = box().indexWhere((mail) => mail.uid == uid);
           if (index >= 0) {
             final mail = box()[index];
-            if (!upper.contains('RFC822.SIZE')) fetched.add(uid);
+            if (!upper.contains('RFC822.SIZE')) {
+              fetched.add(uid);
+              fetchedSizes.add(mail.raw.length);
+            }
             if (upper.contains('RFC822.SIZE')) {
               reply(
-                '* ${index + 1} FETCH (UID $uid RFC822.SIZE ${mail.raw.length})',
+                '* ${index + 1} FETCH (UID $uid RFC822.SIZE ${reportedSizes[uid] ?? mail.raw.length})',
               );
             } else {
               socket.write(

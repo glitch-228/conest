@@ -186,6 +186,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     this.onCursor,
     this.onStatusChanged,
     this.onOtherMail,
+    this.otherMailMaxBytes,
     MailConnector? connector,
     this.tls = true,
     this.idleTimeout = const Duration(minutes: 25),
@@ -214,6 +215,9 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
   /// Mail that is not carrier mail (Delta Chat's, say): true when it was
   /// handled and may be deleted. Without it such mail is left alone.
   final Future<bool> Function(Uint8List raw)? onOtherMail;
+
+  /// Explicit larger budget for enabled external chats; carrier cap is unchanged.
+  final int Function()? otherMailMaxBytes;
 
   EmailCarrierState _state = EmailCarrierState.stopped;
   String? _lastError;
@@ -374,11 +378,14 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     for (final uid in uids) {
       if (!current()) return;
       final size = await client.size(uid);
-      if (size != null && size <= maxCarrierMailBytes) {
-        final raw = await client.fetch(
-          uid,
-          maxBytes: maxCarrierMailBytes + 64 * 1024,
-        );
+      final maxBytes = onOtherMail == null
+          ? maxCarrierMailBytes
+          : (otherMailMaxBytes?.call() ?? maxCarrierMailBytes).clamp(
+              maxCarrierMailBytes,
+              42 * 1024 * 1024,
+            );
+      if (size != null && size >= 0 && size <= maxBytes) {
+        final raw = await client.fetch(uid, maxBytes: maxBytes);
         if (!current()) return;
         final mail = raw == null
             ? null

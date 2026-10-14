@@ -35,6 +35,7 @@ import 'nostr_chats.dart';
 import 'delta_chats.dart';
 import 'delta_protocol.dart';
 import 'email/pgp.dart';
+import 'email/delta_content.dart';
 import 'nostr_direct.dart';
 import 'radio_chats.dart';
 import 'carrier.dart';
@@ -92,6 +93,8 @@ import 'storage.dart';
 import 'storage_capacity.dart';
 import 'tor_carrier.dart';
 import 'transport.dart';
+
+part 'delta_attachments_controller.dart';
 
 const bool experimentalAndroidBackgroundRuntimeAvailable = bool.fromEnvironment(
   'CONEST_EXPERIMENTAL_ANDROID_BACKGROUND_RUNTIME',
@@ -4434,6 +4437,7 @@ class MessengerController extends ChangeNotifier {
           key: key,
           self: config['addr'] as String,
           selfName: _snapshot.identity?.displayName,
+          saveFile: _saveDeltaAttachment,
           tokens:
               DeltaTokens.fromJson(config['tokens']) ??
               DeltaTokens.create(Random.secure()),
@@ -4514,7 +4518,8 @@ class MessengerController extends ChangeNotifier {
             },
     );
     _deltaChatsCache = (json, chats);
-    await _saveSnapshotSilently(notify: true, debounce: true);
+    _recordDeltaCacheReferences();
+    await _saveSnapshotSilently(notify: true);
   }
 
   Future<DeltaStep> _deltaRequired(
@@ -5934,6 +5939,8 @@ class MessengerController extends ChangeNotifier {
       onCursor: (validity, uid) => _saveEmailCursor(config.mail, validity, uid),
       onStatusChanged: notifyListeners,
       onOtherMail: _onOtherMail,
+      otherMailMaxBytes: () =>
+          deltaChatEnabled ? DeltaLimits.fileMailBytes : maxCarrierMailBytes,
     );
     await adapter.detach();
     adapter.attach(channel);
@@ -6580,6 +6587,7 @@ class MessengerController extends ChangeNotifier {
         }
       }
     }
+    _addDeltaCacheKeys(cacheAttachmentIds);
     final referencedCacheKeys = cacheAttachmentIds.keys.toSet();
     final referencedInternalPaths = <String>{
       for (final session in _snapshot.transferSessions)
@@ -11830,7 +11838,8 @@ class MessengerController extends ChangeNotifier {
   }
 
   AttachmentDescriptor? attachmentDescriptorFor(String attachmentId) =>
-      messageForAttachment(attachmentId)?.attachment;
+      messageForAttachment(attachmentId)?.attachment ??
+      _deltaAttachmentDescriptorFor(attachmentId);
 
   /// Makes [contactDeviceId] look like a build without [capability].
   @visibleForTesting
@@ -12313,6 +12322,9 @@ class MessengerController extends ChangeNotifier {
         }
       }
     }
+    references += _deltaAttachments
+        .where((a) => a.fileHashBase64 == fileHashBase64)
+        .length;
     return references;
   }
 

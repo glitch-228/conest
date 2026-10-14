@@ -7,7 +7,9 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import '../attachment_safety.dart';
 import 'carrier_mail.dart' show parseMailAddress;
+import 'delta_content.dart';
 import 'mime.dart';
 import 'openpgp.dart';
 import 'pgp.dart';
@@ -93,6 +95,9 @@ class DeltaIncoming {
     required this.receiptsFor,
     required this.attachments,
     required this.reaction,
+    required this.reactionText,
+    required this.files,
+    required this.postMessage,
   });
 
   /// The sender's address (lower case).
@@ -143,6 +148,14 @@ class DeltaIncoming {
 
   /// A reaction (an emoji on another message), not a message to show.
   final bool reaction;
+  final String reactionText;
+  final List<DeltaFile> files;
+
+  /// Unprotected hint only. Author and signed ID authorize completion.
+  final bool postMessage;
+  String? get postMessageId => deltaMessageId(header('chat-post-message-id'));
+  DeltaPendingFile? get pending =>
+      DeltaPendingFile.parse(header('chat-post-message-metadata'));
 
   String? header(String name) => headers[name];
 
@@ -191,7 +204,15 @@ abstract final class DeltaMail {
     bool requestReadReceipt = false,
     String? subject,
     Random? random,
+    List<DeltaFile> files = const [],
+    bool reaction = false,
+    bool postMessage = false,
   }) async {
+    if (files.length > DeltaLimits.attachments ||
+        files.fold<int>(0, (sum, f) => sum + f.bytes.length) >
+            DeltaLimits.fileBytes) {
+      throw ArgumentError('Delta Chat files must be at most 21 MiB.');
+    }
     final source = random ?? Random.secure();
     final boundary = mimeBoundary(source);
     final named = fromName == null || fromName.trim().isEmpty
@@ -234,9 +255,18 @@ abstract final class DeltaMail {
       '',
       '--$boundary',
       'Content-Type: text/plain; charset="utf-8"',
+      if (reaction) 'Content-Disposition: reaction',
       'Content-Transfer-Encoding: base64',
       '',
       base64Lines(utf8.encode(text)),
+      for (final file in files) ...[
+        '--$boundary',
+        'Content-Type: ${sanitizeAttachmentMimeType(file.mimeType)}',
+        "Content-Disposition: attachment; filename*=utf-8''${Uri.encodeComponent(sanitizeAttachmentFileName(file.name))}",
+        'Content-Transfer-Encoding: base64',
+        '',
+        base64Lines(file.bytes),
+      ],
       '--$boundary--',
       '',
     ].join('\r\n');
@@ -253,6 +283,7 @@ abstract final class DeltaMail {
       date: date,
       armored: OpenPgpArmor.encode(encrypted),
       random: source,
+      postMessage: postMessage,
     );
   }
 
@@ -262,12 +293,14 @@ abstract final class DeltaMail {
     required DateTime date,
     required String armored,
     required Random random,
+    bool postMessage = false,
   }) {
     final boundary = mimeBoundary(random);
     return [
       'From: <$from>',
       'To: "hidden-recipients": ;',
       'Subject: [...]',
+      if (postMessage) 'Chat-Is-Post-Message: 1',
       'Date: ${rfc5322Date(date)}',
       'Message-ID: <$messageId>',
       'Chat-Version: 1.0',
@@ -485,10 +518,10 @@ abstract final class DeltaMail {
     List<String> passwords,
     DateTime? now,
   ) async {
-    if (raw.length > maxBytes) return null;
+    if (raw.length > DeltaLimits.fileMailBytes) return null;
     final MimeEntity outer;
     try {
-      outer = MimeEntity.parse(raw);
+      outer = MimeEntity.parse(raw, maxDecodedBytes: DeltaLimits.fileMailBytes);
     } on FormatException {
       return null;
     }
@@ -518,9 +551,17 @@ abstract final class DeltaMail {
           decrypted = opened.$1;
           password = utf8.decode(opened.$2);
         } else {
-          decrypted = await Pgp.decrypt(bytes, key, now: now);
+          decrypted = await Pgp.decrypt(
+            bytes,
+            key,
+            now: now,
+            maxPlaintextBytes: DeltaLimits.plaintextBytes,
+          );
         }
-        content = MimeEntity.parse(decrypted.data);
+        content = MimeEntity.parse(
+          decrypted.data,
+          maxDecodedBytes: DeltaLimits.fileBytes + maxBytes,
+        );
       } on FormatException {
         return null;
       }
@@ -552,6 +593,13 @@ abstract final class DeltaMail {
             field,
       ]);
     }
+    final to = [
+      for (final address in splitAddressList(
+        headers.raw('to').firstOrNull ?? '',
+      ))
+        ?parseMailAddress(address),
+    ];
+    if (to.length > DeltaLimits.members) return null;
     final from = parseMailAddress(headers['from']);
     if (from == null || from != outerFrom) return null;
 
@@ -622,39 +670,61 @@ abstract final class DeltaMail {
           ?_bareMessageId(fields['original-message-id']),
           for (final match in RegExp(
             r'<([^<>\s]+)>',
-          ).allMatches(fields['additional-message-ids'] ?? ''))
+          ).allMatches(fields['additional-message-ids'] ?? '').take(100))
             match.group(1)!,
         ]);
       }
     }
-    final attachments = <String>[];
+    final files = <DeltaFile>[];
     var reaction = false;
+    var reactionText = '';
+    var decoded = 0;
+    final voice = headers['chat-voice-message'] == '1';
+    final duration = deltaDuration(headers['chat-duration']);
+    final sticker = headers['chat-content'] == 'sticker';
+    var invalidFiles = false;
     void walk(MimeEntity entity) {
       if (entity.isMultipart) {
         entity.parts.forEach(walk);
         return;
       }
-      if (entity.disposition == 'reaction') reaction = true;
+      if (entity.disposition == 'reaction' && entity.mimeType == 'text/plain') {
+        reaction = true;
+        reactionText = deltaReaction(entity.text);
+        return;
+      }
       final name = entity.fileName;
       if (entity.disposition == 'attachment' ||
           (name != null && entity.mimeType != 'text/plain')) {
-        attachments.add(name ?? entity.mimeType);
+        decoded += entity.body.length;
+        if (files.length >= DeltaLimits.attachments ||
+            decoded > DeltaLimits.fileBytes) {
+          invalidFiles = true;
+          return;
+        }
+        final mime = deltaMimeType(entity.body);
+        files.add(
+          DeltaFile(
+            name: sanitizeAttachmentFileName(name ?? 'attachment.bin'),
+            bytes: entity.body,
+            mimeType: mime,
+            voice: voice && mime.startsWith('audio/'),
+            durationMs: duration,
+            sticker: sticker && mime.startsWith('image/'),
+          ),
+        );
       }
     }
 
     if (receiptsFor.isEmpty) walk(content);
+    if (invalidFiles || (raw.length > maxBytes && files.isEmpty)) return null;
 
     final messageId = _bareMessageId(headers['message-id']);
     if (messageId == null) return null;
     return DeltaIncoming._(
       from: from,
       fromName: _displayName(headers['from']),
-      to: [
-        for (final address in splitAddressList(
-          headers.raw('to').firstOrNull ?? '',
-        ))
-          ?parseMailAddress(address),
-      ],
+      to: to,
       intendedFor: [
         for (final fingerprint in decrypted?.intendedRecipients ?? const [])
           fingerprint
@@ -672,7 +742,10 @@ abstract final class DeltaMail {
       text: receiptsFor.isEmpty && !reaction ? _text(content) : '',
       password: password,
       receiptsFor: receiptsFor.take(100).toList(),
-      attachments: attachments.take(20).toList(),
+      attachments: [for (final file in files) file.name],
+      files: files,
+      reactionText: reactionText,
+      postMessage: outer.headers['chat-is-post-message'] != null,
       reaction: reaction,
     );
   }
@@ -716,7 +789,9 @@ abstract final class DeltaMail {
     if (value == null) return null;
     final match = RegExp(r'<([^<>\s]+)>').firstMatch(value);
     final id = (match?.group(1) ?? value).trim();
-    return id.isEmpty || id.length > 250 || id.contains(RegExp(r'\s'))
+    return id.isEmpty ||
+            id.length > 250 ||
+            id.contains(RegExp(r'[<>\s\x00-\x1f\x7f]'))
         ? null
         : id;
   }

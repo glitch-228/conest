@@ -45,7 +45,7 @@ void main() {
     final addr = '$name@example.org';
     return Party(
       DeltaProtocol(
-        key: await PgpSecretKey.generate('<$addr>'),
+        key: await PgpSecretKey.generate('<$addr>', created: clock),
         self: addr,
         selfName: name,
         tokens: DeltaTokens.create(Random(seed)),
@@ -630,6 +630,7 @@ void main() {
         Uint8List.fromList(utf8.encode(stripped)),
         [bob.protocol.key.publicKey],
         signer: alice.protocol.key,
+        now: clock,
       );
       final armored = OpenPgpArmor.encode(reencrypted);
       final rebuilt = mail
@@ -719,6 +720,7 @@ void main() {
         Uint8List.fromList(utf8.encode(inner)),
         utf8.encode(secret),
         signer: sign ? from.protocol.key : null,
+        now: clock,
       );
       return wrap(from.addr, 'Mr.v3.$step@example.org', encrypted);
     }
@@ -795,6 +797,7 @@ void main() {
         Uint8List.fromList(utf8.encode(inner)),
         [bob.protocol.key.publicKey],
         signer: alice.protocol.key,
+        now: clock,
       );
       final step = await receiveAs(
         bob,
@@ -803,7 +806,7 @@ void main() {
       expect(step.consumed, isFalse);
       expect(
         bob.chats.chats[created.chatKey!]!.messages.map((m) => m.text),
-        contains(contains('p.jpg')),
+        isNot(contains(contains('p.jpg'))),
       );
     });
 

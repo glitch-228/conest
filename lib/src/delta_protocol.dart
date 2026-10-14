@@ -4,14 +4,20 @@
 /// chats and returns them changed, with the mail to send.
 library;
 
+import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'delta_chats.dart';
-import 'email/carrier_mail.dart' show isPlausibleMailAddress;
+import 'email/carrier_mail.dart' show isPlausibleMailAddress, parseMailAddress;
 import 'email/delta_mail.dart';
-import 'email/mime.dart' show encodeMimeWord;
+import 'email/delta_content.dart';
+import 'models.dart' show AttachmentDescriptor;
+
+import 'email/mime.dart' show encodeMimeWord, splitAddressList;
 import 'email/pgp.dart';
+
+part 'delta_protocol_content.dart';
 
 /// Mail to send: its recipients' addresses and the message text.
 class DeltaOutgoingMail {
@@ -235,6 +241,7 @@ class DeltaProtocol {
     required this.self,
     required this.tokens,
     this.selfName,
+    this.saveFile,
     DateTime Function()? now,
     Random? random,
   }) : _now = now ?? DateTime.now,
@@ -245,6 +252,15 @@ class DeltaProtocol {
   /// This account's address (lower case).
   final String self;
   final String? selfName;
+
+  /// A completed private cache write. Failure leaves file mail unconsumed.
+  final Future<AttachmentDescriptor> Function(
+    DeltaFile file,
+    String chatKey,
+    String messageId,
+    int index,
+  )?
+  saveFile;
   DeltaTokens tokens;
   final DateTime Function() _now;
   final Random _random;
@@ -396,7 +412,6 @@ class DeltaProtocol {
       }
       return DeltaStep(next, consumed: true);
     }
-    if (read.reaction) return DeltaStep(next, consumed: true);
     final groupId = read.header('chat-group-id')?.trim();
     if (groupId != null && groupId.isNotEmpty && groupId.length <= 64) {
       return _groupMessage(next, read, signer, groupId);
@@ -405,22 +420,19 @@ class DeltaProtocol {
         next.peers[signer.fingerprintHex] ??
         DeltaPeer(fingerprint: signer.fingerprintHex, addr: read.from);
     final chatKey = signer.fingerprintHex;
-    next = next.add(
+    final control = _receiveControl(next, read, signer, chatKey);
+    if (control != null) return control;
+    return _receiveContent(
+      next,
+      read,
+      signer,
       chatKey,
-      _incomingMessage(read, signer),
-      create: () => DeltaChat(
+      () => DeltaChat(
         key: chatKey,
         members: [chatKey],
         name: peer.name,
-        // Someone verified by invite is no stranger.
         kept: peer.verified,
       ),
-    );
-    // Files cannot be shown here yet: such mail stays on the server.
-    return DeltaStep(
-      next,
-      consumed: read.attachments.isEmpty,
-      chatKey: chatKey,
     );
   }
 
@@ -439,8 +451,19 @@ class DeltaProtocol {
         addr: read.from,
         key: signer.bytes,
         name: _shortName(read.fromName),
+        avatar: deltaAvatar(read.header('chat-user-avatar')),
       ),
     );
+    if (read.header('chat-user-avatar') == '0') {
+      next = next.copyWith(
+        peers: {
+          ...next.peers,
+          signer.fingerprintHex: next.peers[signer.fingerprintHex]!.copyWith(
+            clearAvatar: true,
+          ),
+        },
+      );
+    }
     // Gossip only for the message's own recipients, and only about people
     // not known yet: a gossiped key never moves someone to another address.
     var added = 0;
@@ -471,63 +494,28 @@ class DeltaProtocol {
     return next;
   }
 
-  DeltaChatMessage _incomingMessage(DeltaIncoming read, PgpPublicKey signer) {
-    var text = read.text;
-    if (text.isEmpty && read.attachments.isNotEmpty) {
-      text = '[${read.attachments.join(', ')}: open in Delta Chat]';
-    } else if (read.attachments.isNotEmpty) {
-      text = '$text\n[${read.attachments.join(', ')}: open in Delta Chat]';
-    }
-    if (text.length > maxTextChars) {
-      text = '${String.fromCharCodes(text.runes.take(maxTextChars))}…';
-    }
-    return DeltaChatMessage(
-      id: read.messageId,
-      author: signer.fingerprintHex,
-      text: text,
-      at: _clamp(read.date),
-      wantsReceipt: read.header('chat-disposition-notification-to') != null,
-    );
-  }
-
   /// A group message: membership changes from members, then the text.
-  DeltaStep _groupMessage(
+  Future<DeltaStep> _groupMessage(
     DeltaChats chats,
     DeltaIncoming read,
     PgpPublicKey signer,
     String groupId,
-  ) {
+  ) async {
     final chatKey = DeltaChat.groupKey(groupId);
     final sender = signer.fingerprintHex;
     final existing = chats.chats[chatKey];
     final senderIsMember =
         existing == null || existing.members.contains(sender);
-    // Membership follows the newest change: an older message (reordered,
-    // or replayed by a removed member) does not undo a later one.
+    final control = _receiveControl(chats, read, signer, chatKey);
+    if (control != null) return control;
     final date = _clamp(read.date);
     final now = _now().toUtc();
-    // A date ahead of this clock must not freeze the member list.
     final stamp = date.isAfter(now) ? now : date;
     final membersAt = existing?.membersAt;
     final fresh = membersAt == null || !stamp.isBefore(membersAt);
-    // To and Chat-Group-Member-Fpr in the same order.
-    final fingerprints = (read.header('chat-group-member-fpr') ?? '')
-        .split(RegExp(r'\s+'))
-        .where((value) => RegExp(r'^[0-9A-Fa-f]{40}$').hasMatch(value))
-        .map((value) => value.toUpperCase())
-        .toList();
-    String? fingerprintOf(String addr, int index) {
-      if (addr == self) return fingerprint;
-      if (index < fingerprints.length) return fingerprints[index];
-      final gossiped = read.gossip[addr];
-      if (gossiped != null) return gossiped.fingerprintHex;
-      final matches = chats.peers.values.where((peer) => peer.addr == addr);
-      return matches.length == 1 ? matches.single.fingerprint : null;
-    }
-
-    final listed = <String>{
-      for (final (index, addr) in read.to.indexed) ?fingerprintOf(addr, index),
-    };
+    final merged = senderIsMember
+        ? _mergeMembers(chats, existing, read, signer, stamp)
+        : existing;
     final removedFpr = read.header('chat-group-member-removed-fpr')?.trim();
     final removedAddr = read.header('chat-group-member-removed')?.trim();
     final addedAddr = read
@@ -540,21 +528,27 @@ class DeltaProtocol {
     final addedSelf = addedAddr == self;
 
     var next = chats;
-    var members = existing?.members ?? const <String>[];
+    var members = merged.members;
     var left = existing?.left ?? false;
+    final selfAdded = merged.memberAdded[fingerprint];
+    final selfRemoved = merged.memberRemoved[fingerprint];
+    if (selfRemoved != null &&
+        (selfAdded == null || selfRemoved.isAfter(selfAdded))) {
+      left = true;
+    } else if (selfAdded != null &&
+        selfRemoved != null &&
+        !selfAdded.isBefore(selfRemoved)) {
+      left = false;
+    }
     var kept = existing?.kept ?? false;
     var changed = false;
     final notes = <String>[];
     if (senderIsMember && fresh) {
       changed = true;
-      if (removedSelf) {
+      if (removedSelf && left) {
         left = true;
         notes.add(sender == fingerprint ? 'You left.' : 'You were removed.');
       } else if (!left || addedSelf || existing == null) {
-        members = {
-          ...listed.where((member) => member != fingerprint),
-          sender,
-        }.toList()..sort();
         if (removedFpr != null || removedAddr != null) {
           final gone =
               removedFpr?.toUpperCase() ??
@@ -562,7 +556,11 @@ class DeltaProtocol {
                   .where((peer) => peer.addr == removedAddr?.toLowerCase())
                   .map((peer) => peer.fingerprint)
                   .firstOrNull;
-          members.remove(gone);
+          final removedAt = merged.memberRemoved[gone];
+          final addedAt = merged.additionDates[gone];
+          if (removedAt != null &&
+              (addedAt == null || removedAt.isAfter(addedAt)))
+            members.remove(gone);
           if (gone != null) {
             notes.add('${_nameOf(next, gone)} left the group.');
           }
@@ -578,7 +576,9 @@ class DeltaProtocol {
               : read.gossip[addedAddr]?.fingerprintHex;
           if (added != null) notes.add('${_nameOf(next, added)} joined.');
         }
-        if (addedSelf) {
+        if (addedSelf &&
+            (selfRemoved == null ||
+                (selfAdded != null && !selfAdded.isBefore(selfRemoved)))) {
           left = false;
           // Being added after joining by invite, or by someone verified.
           kept =
@@ -611,6 +611,14 @@ class DeltaProtocol {
               name: senderIsMember && fresh ? name : null,
               left: left,
               membersAt: changed ? stamp : null,
+              memberAdded: merged.memberAdded,
+              memberRemoved: merged.memberRemoved,
+              pastAddresses: merged.pastAddresses,
+              avatar: senderIsMember
+                  ? deltaAvatar(read.header('chat-group-avatar'))
+                  : null,
+              clearAvatar:
+                  senderIsMember && read.header('chat-group-avatar') == '0',
               kept:
                   kept ||
                   chats.chats.values.any(
@@ -641,19 +649,12 @@ class DeltaProtocol {
     if (!isSystem &&
         senderIsMember &&
         !left &&
-        (read.text.isNotEmpty || read.attachments.isNotEmpty)) {
-      next = next.add(
-        chatKey,
-        _incomingMessage(read, signer),
-        create: () => chat,
-      );
+        (read.text.isNotEmpty ||
+            read.files.isNotEmpty ||
+            read.postMessageId != null)) {
+      return _receiveContent(next, read, signer, chatKey, () => chat);
     }
-    // Files cannot be shown here yet: such mail stays on the server.
-    return DeltaStep(
-      next,
-      consumed: read.attachments.isEmpty,
-      chatKey: chatKey,
-    );
+    return DeltaStep(next, consumed: true, chatKey: chatKey);
   }
 
   String _nameOf(DeltaChats chats, String fingerprint) {
@@ -1136,14 +1137,47 @@ class DeltaProtocol {
   List<(String, String)> _groupHeaders(
     DeltaChat chat,
     List<DeltaRecipient> recipients,
-  ) => [
-    ('Chat-Group-ID', chat.groupId!),
-    ('Chat-Group-Name', encodeMimeWord(chat.name ?? 'Group')),
-    (
-      'Chat-Group-Member-Fpr',
-      recipients.map((recipient) => recipient.key.fingerprintHex).join(' '),
-    ),
-  ];
+  ) {
+    final past = chat.memberRemoved.entries
+        .where(
+          (e) =>
+              e.value.isAfter(
+                chat.additionDates[e.key] ??
+                    DateTime.fromMillisecondsSinceEpoch(0),
+              ) &&
+              chat.pastAddresses.containsKey(e.key),
+        )
+        .take(DeltaLimits.members)
+        .toList();
+    int seconds(DateTime date) => date.millisecondsSinceEpoch ~/ 1000;
+    return [
+      ('Chat-Group-ID', chat.groupId!),
+      ('Chat-Group-Name', encodeMimeWord(chat.name ?? 'Group')),
+      if (past.isNotEmpty)
+        (
+          'Chat-Group-Past-Members',
+          past.map((e) => '<${chat.pastAddresses[e.key]}>').join(', '),
+        ),
+      (
+        'Chat-Group-Member-Fpr',
+        [
+          for (final r in recipients) r.key.fingerprintHex,
+          for (final e in past) e.key,
+        ].join(' '),
+      ),
+      (
+        'Chat-Group-Member-Timestamps',
+        [
+          for (final r in recipients)
+            seconds(
+              chat.additionDates[r.key.fingerprintHex] ??
+                  DateTime.fromMillisecondsSinceEpoch(0),
+            ),
+          for (final e in past) seconds(e.value),
+        ].join(' '),
+      ),
+    ];
+  }
 
   /// A new group with [name] and [members] (fingerprints of peers with
   /// keys); its first message announces it.
@@ -1152,6 +1186,8 @@ class DeltaProtocol {
     String name,
     List<String> members,
   ) async {
+    if (members.length > DeltaLimits.members - 1)
+      throw ArgumentError('Too many group members.');
     final groupId = _token(_random);
     final chat = DeltaChat(
       key: DeltaChat.groupKey(groupId),
@@ -1163,6 +1199,9 @@ class DeltaProtocol {
       name: _shortName(name) ?? 'Group',
       kept: true,
       membersAt: _now().toUtc(),
+      memberAdded: {
+        for (final m in {...members, fingerprint}) m: _now().toUtc(),
+      },
     );
     var next = chats.withChat(chat);
     if (chat.members.isEmpty) return DeltaStep(next, chatKey: chat.key);
@@ -1187,7 +1226,19 @@ class DeltaProtocol {
     if (chat == null || !chat.isGroup || chat.left || peer == null) {
       throw StateError('Cannot add them to this group.');
     }
+    if (!chat.members.contains(member) &&
+        chat.members.length >= DeltaLimits.members - 1) {
+      throw StateError('Too many group members.');
+    }
+    final removedAt = chat.memberRemoved[member];
+    final addedAt = _now().toUtc();
     final updated = chat.copyWith(
+      memberAdded: {
+        ...chat.additionDates,
+        member: removedAt != null && removedAt.isAfter(addedAt)
+            ? removedAt
+            : addedAt,
+      },
       members: {...chat.members, member}.toList()..sort(),
       membersAt: _now().toUtc(),
     );
@@ -1219,32 +1270,33 @@ class DeltaProtocol {
     final leaving = member == fingerprint;
     final addr = leaving ? self : chats.peers[member]?.addr;
     if (addr == null) throw StateError('Not in this group.');
-    // The removed member hears of it too.
-    final step = await _systemMessage(
-      chats,
-      chat,
+    final oldAdd =
+        chat.additionDates[member] ??
+        DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    final now = _now().toUtc();
+    final removedAt = now.isAfter(oldAdd)
+        ? now
+        : oldAdd.add(const Duration(seconds: 1));
+    final updated = chat.copyWith(
+      members: [
+        for (final m in chat.members)
+          if (m != member) m,
+      ],
+      left: leaving,
+      membersAt: now,
+      memberRemoved: {...chat.memberRemoved, member: removedAt},
+      pastAddresses: {...chat.pastAddresses, member: addr},
+    );
+    return _systemMessage(
+      chats.withChat(updated),
+      updated,
       leaving ? 'Group left.' : 'Member $addr removed.',
       [
         ('Chat-Group-Member-Removed', addr),
         ('Chat-Group-Member-Removed-Fpr', member),
       ],
       note: leaving ? 'You left.' : '${_nameOf(chats, member)} was removed.',
-    );
-    final after = step.chats.chats[chatKey]!;
-    return DeltaStep(
-      step.chats.withChat(
-        leaving
-            ? after.copyWith(left: true, membersAt: _now().toUtc())
-            : after.copyWith(
-                members: [
-                  for (final existing in after.members)
-                    if (existing != member) existing,
-                ],
-                membersAt: _now().toUtc(),
-              ),
-      ),
-      mails: step.mails,
-      chatKey: chatKey,
+      extra: leaving ? const [] : [member],
     );
   }
 
@@ -1254,8 +1306,9 @@ class DeltaProtocol {
     String text,
     List<(String, String)> headers, {
     String? note,
+    Iterable<String> extra = const [],
   }) async {
-    final recipients = await _recipients(chats, chat);
+    final recipients = await _recipients(chats, chat, extra: extra);
     final messageId = _newMessageId();
     final now = _now();
     final mails = <DeltaOutgoingMail>[];

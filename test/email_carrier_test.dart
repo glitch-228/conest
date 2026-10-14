@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:conest/src/email/carrier_mail.dart';
+import 'package:conest/src/email/delta_content.dart';
 import 'package:conest/src/email/smtp.dart';
 import 'package:conest/src/email_carrier.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -130,6 +131,37 @@ void main() {
     expect(cursors.first, server.mailboxes['bob@chat.test']!.last.uid);
     expect(server.fetched, isEmpty);
   });
+
+  test(
+    'ordinary and explicit Delta budgets refuse mail before body fetch',
+    () async {
+      for (final larger in [false, true]) {
+        final config = account(larger ? 'delta' : 'ordinary');
+        final cursors = <int>[];
+        final client = EmailCarrierChannel(
+          config: config,
+          connector: server.connect,
+          onFrame: (_, _) {},
+          onCursor: (_, uid) => cursors.add(uid),
+          onOtherMail: larger ? (_) async => false : null,
+          otherMailMaxBytes: larger ? () => DeltaLimits.fileMailBytes : null,
+        );
+        channels.add(client);
+        client.start();
+        await until(() => client.state == EmailCarrierState.connected);
+        server.deliver(
+          config.mail,
+          'From: <alice@chat.test>\r\nContent-Type: multipart/encrypted\r\n\r\nsmall',
+        );
+        final uid = server.mailboxes[config.mail]!.last.uid;
+        server.reportedSizes[uid] =
+            (larger ? DeltaLimits.fileMailBytes : maxCarrierMailBytes) + 1;
+        await until(() => cursors.contains(uid));
+        expect(server.fetched, isNot(contains(uid)));
+        expect(server.mailboxes[config.mail], hasLength(1));
+      }
+    },
+  );
 
   test('mail is read without IDLE by polling', () async {
     await server.close();
