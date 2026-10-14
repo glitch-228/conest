@@ -4641,6 +4641,16 @@ class MessengerController extends ChangeNotifier {
   List<VoiceCallSummary> get voiceCallSummaries =>
       List.unmodifiable(_snapshot.voiceCallSummaries);
 
+  /// The app's language code; null follows the device.
+  String? get localeCode => _snapshot.localeCode;
+
+  Future<void> setLocaleCode(String? code) async {
+    _snapshot = code == null
+        ? _snapshot.copyWith(clearLocaleCode: true)
+        : _snapshot.copyWith(localeCode: code);
+    await _saveSnapshotSilently(notify: true);
+  }
+
   /// How much of the app shows (advanced for vaults from before modes).
   UserMode get userMode => _snapshot.userMode ?? UserMode.advanced;
 

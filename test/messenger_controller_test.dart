@@ -15105,6 +15105,22 @@ void main() {
       expect(old.userModeChosen, isTrue);
     });
 
+    test('the language is kept, and can follow the device again', () async {
+      final vault = _MemoryVaultStore();
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        vaultStore: vault,
+      );
+      addTearDown(alice.dispose);
+      expect(alice.localeCode, isNull);
+      await alice.setLocaleCode('fa');
+      expect((await vault.load()).localeCode, 'fa');
+      await alice.setLocaleCode(null);
+      expect(alice.localeCode, isNull);
+      expect((await vault.load()).localeCode, isNull);
+    });
+
     testWidgets('the choice screen sets the mode', (tester) async {
       final alice = (await tester.runAsync(
         () => _createController(

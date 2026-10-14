@@ -52,6 +52,8 @@ import 'src/ui/nostr_carrier_panel.dart';
 import 'src/ui/nostr_chats_screen.dart';
 import 'src/ui/delta_chats_screen.dart';
 import 'src/ui/message_info_dialog.dart';
+import 'l10n/app_localizations.dart';
+import 'src/app_locales.dart';
 import 'src/ui/calls_list.dart';
 import 'src/ui/route_test_panel.dart';
 import 'src/ui/user_mode_screen.dart';
@@ -845,6 +847,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
   late bool _controllerMatrixOnly;
   late bool _controllerNeedsMode;
   late UserMode _controllerUserMode;
+  String? _controllerLocale;
 
   @override
   void initState() {
@@ -856,6 +859,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     _controllerMatrixOnly = widget.controller.appMode == AppMode.matrixOnly;
     _controllerNeedsMode = widget.controller.needsUserModeChoice;
     _controllerUserMode = widget.controller.userMode;
+    _controllerLocale = widget.controller.localeCode;
     widget.controller.addListener(_handleControllerChanged);
     widget.controller.setAppForegroundState(true);
     widget.updateService.addListener(_handleUpdateServiceChanged);
@@ -883,6 +887,11 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     final matrixOnly = widget.controller.appMode == AppMode.matrixOnly;
     final needsMode = widget.controller.needsUserModeChoice;
     final userMode = widget.controller.userMode;
+    final locale = widget.controller.localeCode;
+    if (locale != _controllerLocale) {
+      _controllerLocale = locale;
+      if (mounted) setState(() {});
+    }
     if (ready == _controllerReady &&
         hasIdentity == _controllerHasIdentity &&
         matrixOnly == _controllerMatrixOnly &&
@@ -992,6 +1001,11 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
               debugShowCheckedModeBanner: false,
               title: 'Conest',
               navigatorKey: _navigatorKey,
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              locale: _controllerLocale == null
+                  ? null
+                  : Locale(_controllerLocale!),
               theme: palette.themeData(
                 courier: widget.themeController.shell == ConestShell.courier,
               ),
@@ -14070,11 +14084,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             UserModeSelector(controller: widget.controller),
+                            const SizedBox(height: 12),
+                            LanguageSelector(
+                              controller: widget.controller,
+                              languages: appLanguageNames,
+                              aiTranslated: aiTranslatedLanguages,
+                            ),
                             if (widget.controller.userMode == UserMode.minimal)
                               SwitchListTile(
                                 key: const ValueKey('show-all-settings'),
                                 contentPadding: EdgeInsets.zero,
-                                title: const Text('Show all settings'),
+                                title: Text(l10nOf(context).settingsShowAll),
                                 value: _showAllSettings,
                                 onChanged: (value) =>
                                     setState(() => _showAllSettings = value),
@@ -21579,20 +21599,20 @@ class _PhoneTabs extends StatelessWidget {
           key: const ValueKey('phone-tabs'),
           selectedIndex: tab,
           onDestinationSelected: onTab,
-          destinations: const [
+          destinations: [
             NavigationDestination(
-              icon: Icon(Icons.chat_bubble_outline),
-              selectedIcon: Icon(Icons.chat_bubble),
-              label: 'Chats',
+              icon: const Icon(Icons.chat_bubble_outline),
+              selectedIcon: const Icon(Icons.chat_bubble),
+              label: l10nOf(context).tabChats,
             ),
             NavigationDestination(
-              icon: Icon(Icons.call_outlined),
-              selectedIcon: Icon(Icons.call),
-              label: 'Calls',
+              icon: const Icon(Icons.call_outlined),
+              selectedIcon: const Icon(Icons.call),
+              label: l10nOf(context).tabCalls,
             ),
             NavigationDestination(
-              icon: Icon(Icons.settings_outlined),
-              label: 'Settings',
+              icon: const Icon(Icons.settings_outlined),
+              label: l10nOf(context).tabSettings,
             ),
           ],
         ),

@@ -4811,6 +4811,7 @@ class VaultSnapshot {
     this.randomFileNames = false,
     this.userMode,
     this.userModeChosen = true,
+    this.localeCode,
   });
 
   final IdentityRecord? identity;
@@ -4926,6 +4927,9 @@ class VaultSnapshot {
   /// False only between creating a new identity and choosing a mode.
   final bool userModeChosen;
 
+  /// The app's language (such as "ru"); null follows the device.
+  final String? localeCode;
+
   /// Send files under random names (the extension kept).
   final bool randomFileNames;
 
@@ -5005,6 +5009,8 @@ class VaultSnapshot {
     bool? randomFileNames,
     UserMode? userMode,
     bool? userModeChosen,
+    String? localeCode,
+    bool clearLocaleCode = false,
     bool clearMatrixSession = false,
     bool clearIdentity = false,
   }) {
@@ -5061,6 +5067,7 @@ class VaultSnapshot {
       randomFileNames: randomFileNames ?? this.randomFileNames,
       userMode: userMode ?? this.userMode,
       userModeChosen: userModeChosen ?? this.userModeChosen,
+      localeCode: clearLocaleCode ? null : localeCode ?? this.localeCode,
     );
   }
 
@@ -5138,6 +5145,7 @@ class VaultSnapshot {
       if (randomFileNames) 'randomFileNames': true,
       if (userMode != null) 'userMode': userMode!.name,
       if (!userModeChosen) 'userModeChosen': false,
+      if (localeCode != null) 'localeCode': localeCode,
     };
   }
 
@@ -5200,6 +5208,11 @@ class VaultSnapshot {
       randomFileNames: json['randomFileNames'] == true,
       userMode: UserMode.values.asNameMap()[json['userMode']],
       userModeChosen: json['userModeChosen'] != false,
+      localeCode:
+          json['localeCode'] is String &&
+              (json['localeCode'] as String).length <= 16
+          ? json['localeCode'] as String
+          : null,
       contacts: (json['contacts'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>()
           .map(ContactRecord.fromJson)

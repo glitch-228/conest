@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../l10n/app_localizations.dart';
+import '../app_locales.dart';
 import '../messenger_controller.dart';
 import '../models.dart';
 
@@ -15,20 +17,19 @@ class CallsList extends StatelessWidget {
   final MessengerController controller;
   final void Function(ContactRecord contact) onOpenContact;
 
-  static String _outcome(VoiceCallSummary call) => switch (call.outcome) {
-    'completed' => call.outgoing ? 'Outgoing' : 'Incoming',
-    'missed' => 'Missed',
-    'rejected' => 'Declined',
-    'canceled' => 'Cancelled',
-    _ => 'Failed',
-  };
+  static String _outcome(AppLocalizations l10n, VoiceCallSummary call) =>
+      switch (call.outcome) {
+        'completed' => call.outgoing ? l10n.callOutgoing : l10n.callIncoming,
+        'missed' => l10n.callMissed,
+        'rejected' => l10n.callDeclined,
+        'canceled' => l10n.callCancelled,
+        _ => l10n.callFailed,
+      };
 
-  static String _duration(VoiceCallSummary call) {
+  static String _duration(AppLocalizations l10n, VoiceCallSummary call) {
     final length = call.endedAt.difference(call.startedAt);
     if (call.outcome != 'completed' || length.inSeconds < 1) return '';
-    final minutes = length.inMinutes;
-    final seconds = length.inSeconds % 60;
-    return ' · ${minutes > 0 ? '$minutes min ' : ''}$seconds s';
+    return ' · ${l10n.callDuration(length.inMinutes, length.inSeconds % 60)}';
   }
 
   static String _when(DateTime time) {
@@ -46,16 +47,14 @@ class CallsList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = l10nOf(context);
     final calls = [...controller.voiceCallSummaries]
       ..sort((a, b) => b.startedAt.compareTo(a.startedAt));
     if (calls.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text(
-            'No calls yet. Open a chat and tap the call button.',
-            textAlign: TextAlign.center,
-          ),
+          padding: const EdgeInsets.all(24),
+          child: Text(l10n.callsEmpty, textAlign: TextAlign.center),
         ),
       );
     }
@@ -72,8 +71,8 @@ class CallsList extends StatelessWidget {
             call.outgoing ? Icons.call_made : Icons.call_received,
             color: missed ? theme.colorScheme.error : null,
           ),
-          title: Text(contact?.alias ?? 'Unknown contact'),
-          subtitle: Text('${_outcome(call)}${_duration(call)}'),
+          title: Text(contact?.alias ?? l10n.unknownContact),
+          subtitle: Text('${_outcome(l10n, call)}${_duration(l10n, call)}'),
           trailing: Text(_when(call.startedAt)),
           onTap: contact == null ? null : () => onOpenContact(contact),
         );

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../l10n/app_localizations.dart';
+import '../app_locales.dart';
 import '../messenger_controller.dart';
 import '../models.dart';
 
@@ -31,6 +33,7 @@ class _UserModeScreenState extends State<UserModeScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = l10nOf(context);
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -38,7 +41,9 @@ class _UserModeScreenState extends State<UserModeScreen> {
             constraints: const BoxConstraints(maxWidth: 560),
             child: ListView(
               padding: const EdgeInsets.all(24),
-              children: _showRoutes ? _routes(theme) : _modes(theme),
+              children: _showRoutes
+                  ? _routes(theme, l10n)
+                  : _modes(theme, l10n),
             ),
           ),
         ),
@@ -46,13 +51,10 @@ class _UserModeScreenState extends State<UserModeScreen> {
     );
   }
 
-  List<Widget> _modes(ThemeData theme) => [
-    Text('How should Conest look?', style: theme.textTheme.headlineSmall),
+  List<Widget> _modes(ThemeData theme, AppLocalizations l10n) => [
+    Text(l10n.modeChooseTitle, style: theme.textTheme.headlineSmall),
     const SizedBox(height: 8),
-    Text(
-      'You can change this any time in Settings.',
-      style: theme.textTheme.bodyMedium,
-    ),
+    Text(l10n.modeChangeLater, style: theme.textTheme.bodyMedium),
     const SizedBox(height: 20),
     for (final mode in UserMode.values)
       Padding(
@@ -75,43 +77,34 @@ class _UserModeScreenState extends State<UserModeScreen> {
                 setState(() => _showRoutes = true);
               }
             },
-      child: Text(_mode == UserMode.minimal ? 'Start' : 'Continue'),
+      child: Text(
+        _mode == UserMode.minimal ? l10n.actionStart : l10n.actionContinue,
+      ),
     ),
   ];
 
-  List<Widget> _routes(ThemeData theme) => [
-    Text('How Conest reaches people', style: theme.textTheme.headlineSmall),
+  List<Widget> _routes(ThemeData theme, AppLocalizations l10n) => [
+    Text(l10n.routesTitle, style: theme.textTheme.headlineSmall),
     const SizedBox(height: 12),
-    const Text(
-      'Conest sends messages straight to your contacts over your network '
-      'and the internet, with no server in between. That is on now.',
-    ),
+    Text(l10n.routesDirect),
     const SizedBox(height: 12),
-    const Text(
-      'When those are blocked or missing, Conest can also use relays, Tor, '
-      'Nostr, email, Matrix, a Bluetooth mesh of nearby phones or LoRa '
-      'radios. Each is off until you turn it on in Settings → '
-      'Connectivity.',
-    ),
+    Text(l10n.routesOthers),
     if (_mode == UserMode.advanced) ...[
       const SizedBox(height: 12),
-      const Text(
-        'In advanced mode each message shows the routes it took, and a '
-        "contact's profile can test every route.",
-      ),
+      Text(l10n.routesAdvanced),
     ],
     const SizedBox(height: 24),
     Row(
       children: [
         TextButton(
           onPressed: _saving ? null : () => setState(() => _showRoutes = false),
-          child: const Text('Back'),
+          child: Text(l10n.actionBack),
         ),
         const Spacer(),
         FilledButton(
           key: const ValueKey('user-mode-start'),
           onPressed: _saving ? null : _finish,
-          child: const Text('Start'),
+          child: Text(l10n.actionStart),
         ),
       ],
     ),
@@ -129,27 +122,23 @@ class _ModeCard extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
-  static String title(UserMode mode) => switch (mode) {
-    UserMode.minimal => 'Simple',
-    UserMode.normal => 'Standard',
-    UserMode.advanced => 'Advanced',
+  static String title(AppLocalizations l10n, UserMode mode) => switch (mode) {
+    UserMode.minimal => l10n.modeSimple,
+    UserMode.normal => l10n.modeStandard,
+    UserMode.advanced => l10n.modeAdvanced,
   };
 
-  static String description(UserMode mode) => switch (mode) {
-    UserMode.minimal =>
-      'One list of chats, large text and only the settings you need. '
-          'Messages show sent, delivered and read.',
-    UserMode.normal =>
-      'Like the messengers you know: chats, groups, calls and files, with '
-          'delivered and read ticks.',
-    UserMode.advanced =>
-      'Everything, including the routes each message took, every '
-          'transport and diagnostics.',
-  };
+  static String description(AppLocalizations l10n, UserMode mode) =>
+      switch (mode) {
+        UserMode.minimal => l10n.modeSimpleDescription,
+        UserMode.normal => l10n.modeStandardDescription,
+        UserMode.advanced => l10n.modeAdvancedDescription,
+      };
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = l10nOf(context);
     return Card(
       key: ValueKey('user-mode-${mode.name}'),
       clipBehavior: Clip.antiAlias,
@@ -177,9 +166,9 @@ class _ModeCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title(mode), style: theme.textTheme.titleMedium),
+                    Text(title(l10n, mode), style: theme.textTheme.titleMedium),
                     const SizedBox(height: 4),
-                    Text(description(mode)),
+                    Text(description(l10n, mode)),
                   ],
                 ),
               ),
@@ -199,15 +188,67 @@ class UserModeSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = l10nOf(context);
     return SegmentedButton<UserMode>(
       key: const ValueKey('user-mode-selector'),
       segments: [
         for (final mode in UserMode.values)
-          ButtonSegment(value: mode, label: Text(_ModeCard.title(mode))),
+          ButtonSegment(value: mode, label: Text(_ModeCard.title(l10n, mode))),
       ],
       selected: {controller.userMode},
       onSelectionChanged: (selection) =>
           controller.setUserMode(selection.single),
+    );
+  }
+}
+
+/// The language picker in Settings, with a note when the language was
+/// translated with AI.
+class LanguageSelector extends StatelessWidget {
+  const LanguageSelector({
+    super.key,
+    required this.controller,
+    required this.languages,
+    required this.aiTranslated,
+  });
+
+  final MessengerController controller;
+
+  /// Language codes and their own names.
+  final Map<String, String> languages;
+  final Set<String> aiTranslated;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = l10nOf(context);
+    final shown = Localizations.localeOf(context).languageCode;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        DropdownButtonFormField<String?>(
+          key: const ValueKey('language-selector'),
+          initialValue: controller.localeCode,
+          decoration: InputDecoration(labelText: l10n.settingsLanguage),
+          items: [
+            DropdownMenuItem(
+              value: null,
+              child: Text(l10n.settingsLanguageSystem),
+            ),
+            for (final MapEntry(key: code, value: name) in languages.entries)
+              DropdownMenuItem(value: code, child: Text(name)),
+          ],
+          onChanged: controller.setLocaleCode,
+        ),
+        if (aiTranslated.contains(shown))
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              l10n.settingsAiTranslated,
+              key: const ValueKey('ai-translated-note'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+      ],
     );
   }
 }
