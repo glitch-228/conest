@@ -15223,6 +15223,594 @@ void main() {
       expect(bob.contacts.length, 1);
     });
 
+    test('what one device sends, reads and saves shows on the others, '
+        'and only the sending device sends it', () async {
+      final (alice, bob, phone, advance) = await threeDevices();
+      advance(const Duration(hours: 25));
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      final phoneId = phone.identity!.deviceId;
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () =>
+            phone.linkState == LinkState.compareCode &&
+            alice.linkState == LinkState.compareCode,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return phone.linkState == LinkState.linked &&
+            bob.linkedDevicesOf(aliceId).isNotEmpty;
+      }, reason: 'the phone was not linked and known');
+      // Each knows the other as its own device, never as a contact.
+      expect(alice.ownDevices.map((d) => d.deviceId), [phoneId]);
+      expect(phone.ownDevices.map((d) => d.deviceId), [aliceId]);
+      expect(alice.contacts.map((c) => c.deviceId), [bobId]);
+      expect(phone.contacts.map((c) => c.deviceId), [bobId]);
+
+      // Sent from the phone: the laptop shows it in the chat with Bob, and
+      // its receipt once the phone gets it.
+      await phone.sendMessage(
+        contact: phone.contacts.single,
+        body: 'from my phone',
+      );
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(bob.pollNow());
+        unawaited(phone.pollNow());
+        final copy = alice
+            .messagesFor(bobId)
+            .where((m) => m.body == 'from my phone')
+            .firstOrNull;
+        return copy != null &&
+            copy.outbound &&
+            copy.senderDeviceId == phoneId &&
+            {DeliveryState.delivered, DeliveryState.read}.contains(copy.state);
+      }, reason: 'the laptop did not show the phone\'s message as delivered');
+      // The laptop never sends it itself.
+      await alice.pollNow();
+      await bob.pollNow();
+      expect(
+        bob.messagesFor(aliceId).where((m) => m.body == 'from my phone'),
+        hasLength(1),
+      );
+
+      // Read on the phone: read on the laptop too.
+      advance(const Duration(minutes: 1));
+      await bob.sendMessage(contact: bob.contacts.single, body: 'did you?');
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        return alice.unreadCountFor(bobId) == 1 &&
+            phone.messagesFor(bobId).any((m) => m.body == 'did you?');
+      }, reason: 'Bob\'s message did not reach both devices');
+      await phone.markConversationReadThroughMessage(
+        bobId,
+        phone.messagesFor(bobId).firstWhere((m) => m.body == 'did you?'),
+      );
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        return alice.unreadCountFor(bobId) == 0;
+      }, reason: 'reading on the phone did not reach the laptop');
+
+      // Saved on the phone: in the laptop's Saved messages.
+      await phone.sendMessage(
+        contact: phone.savedMessagesContact!,
+        body: 'note to self',
+      );
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        return alice.messagesFor(aliceId).any((m) => m.body == 'note to self');
+      }, reason: 'the saved note did not reach the laptop');
+
+      // A receipt that overtakes its message is kept until the message
+      // comes.
+      await phone.sendAccountSyncForTesting(aliceId, {
+        'type': 'state',
+        'chat': bobId,
+        'id': 'msg-late',
+        'state': 'delivered',
+      });
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        return phone.ownDevices.isNotEmpty;
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      await alice.pollNow();
+      await phone.sendAccountSyncForTesting(aliceId, {
+        'type': 'sent',
+        'chat': bobId,
+        'id': 'msg-late',
+        'createdAt': DateTime.now().toUtc().toIso8601String(),
+        'payload': 'came late',
+      });
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        return alice
+                .messagesFor(bobId)
+                .where((m) => m.id == 'msg-late')
+                .firstOrNull
+                ?.state ==
+            DeliveryState.delivered;
+      }, reason: 'the early receipt was lost');
+    });
+
+    test('a message sent from another own device is never sent again from '
+        'this one', () async {
+      var now = DateTime.now().toUtc();
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+          nowProvider: () => now,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      final phone = await make('Phone');
+      await _pairControllers(alice, bob);
+      now = now.add(const Duration(hours: 25));
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () =>
+            phone.linkState == LinkState.compareCode &&
+            alice.linkState == LinkState.compareCode,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      await _waitForIroh(() => phone.linkState == LinkState.linked);
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      // What the phone sends Bob is lost on the way, so it stays unreceipted.
+      network.droppedPairs.add((
+        phone.identity!.irohEndpointId!,
+        bob.identity!.irohEndpointId!,
+      ));
+      await phone.sendMessage(
+        contact: phone.contacts.single,
+        body: 'lost on the way',
+      );
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        return alice.messagesFor(bobId).any((m) => m.body == 'lost on the way');
+      }, reason: 'the laptop did not get the phone\'s message');
+      final id = alice
+          .messagesFor(bobId)
+          .firstWhere((m) => m.body == 'lost on the way')
+          .id;
+      now = now.add(const Duration(hours: 1));
+      await alice.retryUnacknowledgedMessagesNow();
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(
+        [
+          ...network.envelopes,
+          ...relay.storedEnvelopes,
+        ].where((e) => e.senderDeviceId == aliceId && e.messageId == id),
+        isEmpty,
+        reason: 'the laptop sent the phone\'s message itself',
+      );
+
+      // Read on the phone: the laptop marks it read and tells Bob nothing.
+      now = now.add(const Duration(minutes: 1));
+      await bob.sendMessage(contact: bob.contacts.single, body: 'seen it?');
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        return alice.unreadCountFor(bobId) == 1 &&
+            phone.messagesFor(bobId).any((m) => m.body == 'seen it?');
+      });
+      final receiptsBefore = alice.readReceiptsSent;
+      await phone.markConversationReadThroughMessage(
+        bobId,
+        phone.messagesFor(bobId).firstWhere((m) => m.body == 'seen it?'),
+      );
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        return alice.unreadCountFor(bobId) == 0;
+      }, reason: 'the read did not reach the laptop');
+      // Long enough for a receipt to have gone out after the read.
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      await alice.pollNow();
+      expect(
+        alice.readReceiptsSent,
+        receiptsBefore,
+        reason: 'the laptop sent Bob a read receipt',
+      );
+    });
+
+    test('only the account\'s own devices sync, and a list that takes '
+        'over a device is refused', () async {
+      final (alice, bob, phone, advance) = await threeDevices();
+      advance(const Duration(hours: 25));
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      final phoneId = phone.identity!.deviceId;
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () =>
+            phone.linkState == LinkState.compareCode &&
+            alice.linkState == LinkState.compareCode,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      await _waitForIroh(() => phone.linkState == LinkState.linked);
+
+      // A contact cannot make a message appear as sent by Alice.
+      await bob.sendAccountSyncForTesting(aliceId, {
+        'type': 'sent',
+        'chat': bobId,
+        'id': 'forged-1',
+        'createdAt': DateTime.now().toUtc().toIso8601String(),
+        'payload': 'forged text',
+      });
+      await bob.sendMessage(contact: bob.contacts.single, body: 'after it');
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        return alice.messagesFor(bobId).any((m) => m.body == 'after it');
+      });
+      expect(alice.messagesFor(bobId).any((m) => m.id == 'forged-1'), isFalse);
+
+      final me = phone.identity!;
+      final account = AccountKeys(
+        publicKeyBase64: me.accountKeyPublicBase64!,
+        privateKeyBase64: me.accountKeyPrivateBase64!,
+      );
+      final current = alice.accountDevices!;
+      Future<Map<String, Object?>> statement({
+        List<DeviceCert>? devices,
+        Map<String, DateTime> revoked = const {},
+        int? version,
+      }) async => {
+        'devices': (await AccountDeviceList.issue(
+          account: account,
+          accountId: me.accountId,
+          version: version ?? current.version + 1,
+          devices: devices ?? current.devices,
+          revoked: revoked,
+          issuedAt: DateTime.now().toUtc(),
+        )).toJson(),
+      };
+      Future<DeviceCert> certWithKeysOf(
+        String deviceId,
+        IdentityRecord keys, {
+        DateTime? linkedAt,
+      }) async => DeviceCert.issue(
+        account: account,
+        accountId: me.accountId,
+        deviceId: deviceId,
+        encryptionKeyBase64: keys.publicKeyBase64,
+        signingKeyBase64: keys.signingPublicKeyBase64!,
+        irohEndpointId: keys.irohEndpointId,
+        name: 'Swapped',
+        linkedAt: linkedAt ?? DateTime.now().toUtc(),
+        proofSignatureBase64: await signEd25519(
+          DeviceCert.proofBytes(
+            accountId: me.accountId,
+            accountKeyBase64: account.publicKeyBase64,
+            deviceId: deviceId,
+            encryptionKeyBase64: keys.publicKeyBase64,
+            signingKeyBase64: keys.signingPublicKeyBase64!,
+            irohEndpointId: keys.irohEndpointId,
+          ),
+          publicKeyBase64: keys.signingPublicKeyBase64!,
+          privateKeyBase64: keys.signingPrivateKeyBase64!,
+        ),
+      );
+      final aliceCert = current.deviceFor(aliceId)!;
+      final phoneCert = current.deviceFor(phoneId)!;
+
+      // Linked minutes ago: the phone's revocations do not count yet.
+      await alice.receiveOwnDeviceListForTesting(
+        phoneId,
+        await statement(revoked: {'dev-gone': DateTime.now().toUtc()}),
+      );
+      expect(alice.accountDevices!.version, current.version);
+      // Nor can it add a device that claims to be a year old.
+      final yearAgo = DateTime.now().toUtc().subtract(
+        const Duration(days: 365),
+      );
+      await alice.receiveOwnDeviceListForTesting(
+        phoneId,
+        await statement(
+          devices: [
+            ...current.devices,
+            await certWithKeysOf(
+              'dev-puppet',
+              bob.identity!,
+              linkedAt: yearAgo,
+            ),
+          ],
+        ),
+      );
+      expect(alice.accountDevices!.deviceFor('dev-puppet'), isNull);
+      advance(const Duration(hours: 25));
+      // Revoking this (the original) device, or swapping its keys or the
+      // phone's for someone else's: refused.
+      for (final forged in [
+        await statement(
+          devices: [phoneCert],
+          revoked: {aliceId: DateTime.now().toUtc()},
+        ),
+        // Still listed, and revoked too.
+        await statement(revoked: {aliceId: DateTime.now().toUtc()}),
+        await statement(
+          devices: [await certWithKeysOf(aliceId, me), phoneCert],
+        ),
+        await statement(
+          devices: [aliceCert, await certWithKeysOf(phoneId, bob.identity!)],
+        ),
+        // Its own keys, but linked long ago.
+        await statement(
+          devices: [
+            aliceCert,
+            await certWithKeysOf(phoneId, me, linkedAt: yearAgo),
+          ],
+        ),
+      ]) {
+        await alice.receiveOwnDeviceListForTesting(phoneId, forged);
+        expect(alice.accountDevices!.version, current.version);
+        expect(
+          alice.accountDevices!.deviceFor(aliceId)!.encryptionKeyBase64,
+          alice.identity!.publicKeyBase64,
+        );
+        expect(
+          alice.ownDevices.single.publicKeyBase64,
+          phone.identity!.publicKeyBase64,
+        );
+      }
+      // A revocation dated in the future (to keep its place in the bounded
+      // table over real ones): left out, and the list is not taken.
+      await alice.receiveOwnDeviceListForTesting(
+        phoneId,
+        await statement(revoked: {'dev-made-up': DateTime.utc(2099)}),
+      );
+      expect(alice.accountDevices!.version, current.version);
+      // Nor can other devices fill the places kept for this one's own
+      // revocations, or add many devices in a day.
+      await alice.receiveOwnDeviceListForTesting(
+        phoneId,
+        await statement(
+          revoked: {
+            for (var i = 0; i < 961; i++) 'dev-junk-$i': DateTime.now().toUtc(),
+          },
+        ),
+      );
+      expect(alice.accountDevices!.revoked, isEmpty);
+      await alice.receiveOwnDeviceListForTesting(
+        phoneId,
+        await statement(
+          devices: [
+            aliceCert,
+            phoneCert,
+            for (var i = 0; i < 5; i++)
+              await certWithKeysOf('dev-many-$i', bob.identity!),
+          ],
+        ),
+      );
+      expect(alice.accountDevices!.version, current.version);
+      // A newer list that adds devices: taken.
+      final devA = await certWithKeysOf('dev-a', bob.identity!);
+      final devB = await certWithKeysOf('dev-b', bob.identity!);
+      await alice.receiveOwnDeviceListForTesting(
+        phoneId,
+        await statement(devices: [aliceCert, phoneCert, devA, devB]),
+      );
+      expect(alice.accountDevices!.version, current.version + 1);
+      expect(
+        alice.ownDevices.map((d) => d.deviceId),
+        unorderedEquals([phoneId, 'dev-a', 'dev-b']),
+      );
+      await alice.receiveOwnDeviceListForTesting(
+        phoneId,
+        await statement(
+          version: current.version + 2,
+          devices: [aliceCert, phoneCert, devB],
+          revoked: {'dev-a': DateTime.utc(2099)},
+        ),
+      );
+      expect(alice.accountDevices!.version, current.version + 1);
+      // Revoking one: taken.
+      await alice.receiveOwnDeviceListForTesting(
+        phoneId,
+        await statement(
+          version: current.version + 2,
+          devices: [aliceCert, phoneCert, devB],
+          revoked: {'dev-a': DateTime.now().toUtc()},
+        ),
+      );
+      expect(alice.accountDevices!.version, current.version + 2);
+      expect(alice.accountDevices!.revoked.keys, contains('dev-a'));
+      // The phone revoked the other one without seeing that list: the laptop
+      // signs one with both, a version above.
+      await alice.receiveOwnDeviceListForTesting(
+        phoneId,
+        await statement(
+          version: current.version + 2,
+          devices: [aliceCert, phoneCert, devA],
+          revoked: {'dev-b': DateTime.now().toUtc()},
+        ),
+      );
+      final merged = alice.accountDevices!;
+      expect(merged.version, current.version + 3);
+      expect(merged.revoked.keys, containsAll(['dev-a', 'dev-b']));
+      expect(merged.devices.map((d) => d.deviceId), [aliceId, phoneId]);
+      expect(await merged.verify(account.publicKeyBase64), isTrue);
+      // A higher version that only leaves a device out is not taken.
+      await alice.receiveOwnDeviceListForTesting(
+        phoneId,
+        await statement(
+          version: current.version + 6,
+          devices: [aliceCert],
+          revoked: merged.revoked,
+        ),
+      );
+      expect(alice.accountDevices!.version, current.version + 3);
+      expect(alice.ownDevices.single.deviceId, phoneId);
+      // A device added through the phone counts as new here, whatever date
+      // its certificate says: its revocations wait a day.
+      final latest = alice.accountDevices!;
+      await alice.receiveOwnDeviceListForTesting(
+        phoneId,
+        await statement(
+          version: latest.version + 1,
+          devices: [
+            ...latest.devices,
+            await certWithKeysOf(
+              'dev-puppet',
+              bob.identity!,
+              linkedAt: yearAgo,
+            ),
+          ],
+          revoked: latest.revoked,
+        ),
+      );
+      expect(alice.accountDevices!.deviceFor('dev-puppet'), isNotNull);
+      Future<Map<String, Object?>> revokePhone() => statement(
+        version: alice.accountDevices!.version + 1,
+        devices: [
+          for (final d in alice.accountDevices!.devices)
+            if (d.deviceId != phoneId) d,
+        ],
+        revoked: {
+          ...alice.accountDevices!.revoked,
+          phoneId: DateTime.now().toUtc(),
+        },
+      );
+      await alice.receiveOwnDeviceListForTesting(
+        'dev-puppet',
+        await revokePhone(),
+      );
+      expect(alice.accountDevices!.revoked.keys, isNot(contains(phoneId)));
+      advance(const Duration(hours: 25));
+      await alice.receiveOwnDeviceListForTesting(
+        'dev-puppet',
+        await revokePhone(),
+      );
+      expect(alice.accountDevices!.revoked.keys, contains(phoneId));
+      // A real revocation always gets through, even in a list padded with
+      // made-up ones (which are left out).
+      final before = alice.accountDevices!;
+      await alice.receiveOwnDeviceListForTesting(
+        'dev-puppet',
+        await statement(
+          version: before.version + 1,
+          devices: [
+            for (final d in before.devices)
+              if (d.deviceId != 'dev-puppet') d,
+          ],
+          revoked: {
+            ...before.revoked,
+            'dev-puppet': DateTime.now().toUtc(),
+            for (var i = 0; i < 900; i++)
+              'dev-padding-$i': DateTime.now().toUtc(),
+          },
+        ),
+      );
+      expect(alice.accountDevices!.revoked.keys, contains('dev-puppet'));
+      expect(
+        alice.accountDevices!.revoked.keys.where(
+          (id) => id.startsWith('dev-padding'),
+        ),
+        isEmpty,
+      );
+    });
+
+    test('a device removed on one device is removed on the others', () async {
+      var now = DateTime.now().toUtc();
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+          nowProvider: () => now,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      final phone = await make('Phone');
+      final tablet = await make('Tablet');
+      await _pairControllers(alice, bob);
+      now = now.add(const Duration(hours: 25));
+      Future<void> link(MessengerController device) async {
+        final qr = await device.startLinkAsNewDevice();
+        await alice.startLinkFromQrCode(qr);
+        await _waitForIroh(
+          () =>
+              device.linkState == LinkState.compareCode &&
+              alice.linkState == LinkState.compareCode,
+        );
+        await device.confirmLinkCode();
+        await alice.confirmLinkCode();
+        await _waitForIroh(() => device.linkState == LinkState.linked);
+        alice.cancelLink();
+        device.cancelLink();
+      }
+
+      await link(phone);
+      await link(tablet);
+      final aliceId = alice.identity!.deviceId;
+      final phoneId = phone.identity!.deviceId;
+      final tabletId = tablet.identity!.deviceId;
+      // The phone learns of the tablet from the laptop.
+      await _waitForIroh(() {
+        unawaited(phone.pollNow());
+        return phone.ownDevices.any((d) => d.deviceId == tabletId);
+      }, reason: 'the phone did not learn of the tablet');
+      expect(
+        tablet.ownDevices.map((d) => d.deviceId),
+        unorderedEquals([aliceId, phoneId]),
+      );
+
+      now = now.add(const Duration(hours: 25));
+      await alice.revokeAccountDevice(phoneId);
+      expect(alice.ownDevices.map((d) => d.deviceId), [tabletId]);
+      await _waitForIroh(() {
+        unawaited(tablet.pollNow());
+        return tablet.accountDevices!.revoked.containsKey(phoneId);
+      }, reason: 'the tablet did not learn the phone was removed');
+      expect(tablet.ownDevices.map((d) => d.deviceId), [aliceId]);
+
+      // Nothing the removed phone sends is taken as the account's.
+      await phone.sendMessage(
+        contact: phone.contacts.single,
+        body: 'after removal',
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.linkedDevicesOf(aliceId).every((d) => d.deviceId != phoneId);
+      }, reason: 'Bob kept the removed phone');
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      await alice.pollNow();
+      await tablet.pollNow();
+      await bob.pollNow();
+      final bobId = bob.identity!.deviceId;
+      for (final device in [alice, tablet]) {
+        expect(
+          device.messagesFor(bobId).any((m) => m.body == 'after removal'),
+          isFalse,
+        );
+      }
+      expect(
+        bob.messagesFor(aliceId).any((m) => m.body == 'after removal'),
+        isFalse,
+      );
+    });
+
     test('removing a contact removes their other devices', () async {
       final (alice, bob, phone, advance) = await threeDevices();
       advance(const Duration(hours: 25));

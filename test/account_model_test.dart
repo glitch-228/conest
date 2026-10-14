@@ -636,6 +636,19 @@ void main() {
         ),
         isNotNull,
       );
+      // Too far ahead, but revoking something: the revocation still counts,
+      // and only that.
+      final far = await check(
+        await statement(
+          s.account,
+          null,
+          [s.anchorCert],
+          version: 5000,
+          revoked: {'dev-stolen': now},
+        ),
+      );
+      expect(far?.revocationsOnly, isTrue);
+      expect(far?.list.revoked.keys, ['dev-stolen']);
       // The owner revokes it with a lower version: still applied, as a
       // revocation only.
       final revocation = await check(
