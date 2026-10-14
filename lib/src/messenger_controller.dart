@@ -16158,7 +16158,10 @@ class MessengerController extends ChangeNotifier {
           );
         }
       } else {
-        final contact = _contactByDeviceId(entry.conversationId);
+        // Saved messages are this device's own chat, not a contact.
+        final contact = entry.conversationId == identity?.deviceId
+            ? savedMessagesContact
+            : _contactByDeviceId(entry.conversationId);
         if (contact == null) {
           throw StateError('Contact is no longer available.');
         }

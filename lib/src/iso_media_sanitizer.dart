@@ -293,10 +293,10 @@ class IsoMediaSanitizer {
     final iinf = meta.child('iinf'), iloc = meta.child('iloc');
     if (iinf == null) { return; }
     final info = _Reader(await _body(iinf));
-    final version = info.n(1);
+    final infoVersion = info.n(1);
     info.skip(3);
-    if (version > 1) { throw const FormatException('Unsupported iinf.'); }
-    final count = info.n(version == 0 ? 2 : 4);
+    if (infoVersion > 1) { throw const FormatException('Unsupported iinf.'); }
+    final count = info.n(infoVersion == 0 ? 2 : 4);
     final entries = await _boxes(iinf.content + info.at, iinf.end, 2);
     if (count != entries.length) { throw const FormatException('Bad iinf count.'); }
     final metadata = <int>{};

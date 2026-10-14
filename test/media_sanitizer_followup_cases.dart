@@ -404,25 +404,28 @@ class _CountingIsoFile implements RandomAccessFile {
   _CountingIsoFile(this.data, this.sampleAt);
   final Uint8List data;
   final int sampleAt;
-  var position = 0;
+  var at = 0;
   var sampleReads = 0;
 
   @override
-  Future<RandomAccessFile> setPosition(int position) async { this.position = position; return this; }
+  Future<RandomAccessFile> setPosition(int position) async { at = position; return this; }
+
+  @override
+  Future<int> position() async => at;
 
   @override
   Future<Uint8List> read(int count) async {
-    if (position == sampleAt) { sampleReads++; }
-    final bytes = Uint8List.fromList(data.sublist(position, position + count));
-    position += count;
+    if (at == sampleAt) { sampleReads++; }
+    final bytes = Uint8List.fromList(data.sublist(at, at + count));
+    at += count;
     return bytes;
   }
 
   @override
   Future<RandomAccessFile> writeFrom(List<int> buffer, [int start = 0, int? end]) async {
     final bytes = buffer.sublist(start, end);
-    data.setAll(position, bytes);
-    position += bytes.length;
+    data.setAll(at, bytes);
+    at += bytes.length;
     return this;
   }
 
