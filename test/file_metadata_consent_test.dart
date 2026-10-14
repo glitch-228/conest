@@ -10,7 +10,7 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: Builder(builder: (context) =>
           TextButton(onPressed: () async {
             accepted = await showFileMetadataConsent(context, 'photo.pdf', partial: partial);
-          }, child: const Text('Open'))))));
+          }, child: const Text('Open')))));
       await tester.tap(find.text('Open'));
       await tester.pumpAndSettle();
       expect(find.text(partial

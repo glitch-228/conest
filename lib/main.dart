@@ -2195,6 +2195,9 @@ class _HomeScreenState extends State<HomeScreen> {
     AttachmentSpoolException error,
   ) async {
     if (!mounted) return false;
+    if (error.partialMetadata) {
+      return confirmSendingMetadata(context, attachment.fileName, partial: true);
+    }
     return await showDialog<bool>(
           context: context,
           builder: (dialogContext) => AlertDialog(
@@ -2204,9 +2207,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   : 'Send without resumable copy?',
             ),
             content: Text(
-              error.partialMetadata
-                  ? 'Some details may remain in ${attachment.fileName}. Send it anyway?'
-                  : '${attachment.fileName} could not be copied into private '
+              '${attachment.fileName} could not be copied into private '
               'transfer storage.\n\n$error\n\nThe app can read the original '
               'file directly, but the transfer cannot resume after restart '
               'if that file moves or its permission expires.'

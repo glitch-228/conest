@@ -18,16 +18,24 @@ class IsoMediaSanitizer {
   var _boxCount = 0;
   var _sampleCount = 0;
   var _changed = false;
+  var _hasTimedMetadata = false;
+  var _unindexedTrack = false;
 
   Future<bool> clean() async {
     final trailer = await _samsungTrailer();
     final boxes = await _boxes(0, trailer ?? length, 0);
     for (final box in boxes) {
-      if (box.type == 'mdat') _media.add((box.content, box.end));
+      if (box.type == 'mdat') { _media.add((box.content, box.end)); }
+    }
+    if (boxes.where((box) => box.type == 'meta').length > 1) {
+      throw const FormatException('Ambiguous top-level ISO metadata.');
     }
     await _plan(boxes, top: true);
+    if (_hasTimedMetadata && (_unindexedTrack || boxes.any((box) => box.type == 'moof'))) {
+      throw const FormatException('Unindexed or fragmented timed metadata.');
+    }
     for (final sample in _samples) {
-      if (!_media.any((range) => sample.$1 >= range.$1 && sample.$2 <= range.$2)) {
+      if (!_insideMedia(sample.$1, sample.$2)) {
         throw const FormatException('Samples outside local mdat.');
       }
     }
@@ -49,11 +57,40 @@ class IsoMediaSanitizer {
         throw const FormatException('Metadata overlaps media samples.');
       }
     }
+    final merged = <(int, int)>[];
+    for (final range in zeroRanges) {
+      if (range.$1 < 0 || range.$2 < range.$1 || range.$2 > length) {
+        throw const FormatException('Invalid ISO write range.');
+      }
+      if (merged.isNotEmpty && range.$1 <= merged.last.$2) {
+        if (range.$2 > merged.last.$2) { merged[merged.length - 1] = (merged.last.$1, range.$2); }
+      } else {
+        merged.add(range);
+      }
+    }
     for (final box in _freeBoxes) {
       await _write(box.start + 4, latin1.encode('free'));
     }
-    for (final range in zeroRanges) { await _zero(range.$1, range.$2); }
+    for (final range in merged) { await _zero(range.$1, range.$2); }
     return _changed;
+  }
+
+  bool _insideMedia(int start, int end) {
+    if (start < 0 || end < start || end > length) { return false; }
+    var low = 0, high = _media.length;
+    while (low < high) {
+      final mid = (low + high) ~/ 2;
+      if (_media[mid].$1 <= start) { low = mid + 1; }
+      else { high = mid; }
+    }
+    return low > 0 && end <= _media[low - 1].$2;
+  }
+
+  int _fileOffset(int base, int offset) {
+    if (base < 0 || offset < 0 || base > length || offset > length - base) {
+      throw const FormatException('ISO offset outside file.');
+    }
+    return base + offset;
   }
 
   Future<Uint8List> _read(int at, int count) async {
@@ -62,7 +99,7 @@ class IsoMediaSanitizer {
     }
     await file.setPosition(at);
     final bytes = await file.read(count);
-    if (bytes.length != count) throw const FormatException('Short ISO read.');
+    if (bytes.length != count) { throw const FormatException('Short ISO read.'); }
     return bytes;
   }
 
@@ -76,12 +113,12 @@ class IsoMediaSanitizer {
     for (var at = start; at < end; at += 65536) {
       final count = (end - at).clamp(0, 65536);
       final current = await _read(at, count);
-      if (current.any((byte) => byte != 0)) await _write(at, Uint8List(count));
+      if (current.any((byte) => byte != 0)) { await _write(at, Uint8List(count)); }
     }
   }
 
   Future<List<_Box>> _boxes(int start, int end, int depth) async {
-    if (depth > maxDepth) throw const FormatException('ISO nesting cap.');
+    if (depth > maxDepth) { throw const FormatException('ISO nesting cap.'); }
     final boxes = <_Box>[];
     var at = start;
     while (at < end) {
@@ -93,7 +130,7 @@ class IsoMediaSanitizer {
       final type = latin1.decode(header.sublist(4));
       var content = at + 8;
       if (size == 1) {
-        if (end - at < 16) throw const FormatException('Short large ISO box.');
+        if (end - at < 16) { throw const FormatException('Short large ISO box.'); }
         size = ByteData.sublistView(await _read(at + 8, 8)).getUint64(0);
         content += 8;
       } else if (size == 0) { size = end - at; }
@@ -105,7 +142,7 @@ class IsoMediaSanitizer {
           'iprp', 'ipco', 'moof', 'traf', 'mfra'}.contains(type)) {
         box.children = await _boxes(content, box.end, depth + 1);
       } else if (type == 'meta' && depth == 0) {
-        if (box.end - content < 4) throw const FormatException('Short HEIF meta.');
+        if (box.end - content < 4) { throw const FormatException('Short HEIF meta.'); }
         box.children = await _boxes(content + 4, box.end, depth + 1);
       }
       boxes.add(box);
@@ -122,8 +159,8 @@ class IsoMediaSanitizer {
         _zeros.add((box.content, box.end));
         continue;
       }
-      if (box.type == 'trak') await _track(box);
-      if (box.type == 'meta' && top) await _heif(box);
+      if (box.type == 'trak') { await _track(box); }
+      if (box.type == 'meta' && top) { await _heif(box); }
       if (const {'mvhd', 'tkhd', 'mdhd'}.contains(box.type)) {
         final version = (await _read(box.content, 1))[0];
         if (version > 1 || box.content + 4 + (version == 1 ? 16 : 8) > box.end) {
@@ -140,12 +177,14 @@ class IsoMediaSanitizer {
   Future<void> _track(_Box track) async {
     final mdia = track.child('mdia');
     final handler = mdia?.child('hdlr');
-    if (handler == null) return;
-    if (handler.end - handler.content < 12) throw const FormatException('Short handler.');
+    if (handler == null) { _unindexedTrack = true; return; }
+    if (handler.end - handler.content < 12) { throw const FormatException('Short handler.'); }
     final type = latin1.decode(await _read(handler.content + 8, 4));
+    if (type == 'meta') { _hasTimedMetadata = true; }
     final stbl = mdia?.child('minf')?.child('stbl');
     if (stbl == null) {
-      if (type == 'meta') throw const FormatException('Metadata samples unavailable.');
+      if (type == 'meta') { throw const FormatException('Metadata samples unavailable.'); }
+      _unindexedTrack = true;
       return;
     }
     final stsd = stbl.child('stsd');
@@ -154,19 +193,27 @@ class IsoMediaSanitizer {
       final data = await _body(stsd);
       final reader = _Reader(data)..skip(4);
       final count = reader.u32();
-      if (count > 256) throw const FormatException('Sample description cap.');
+      if (count > 256) { throw const FormatException('Sample description cap.'); }
       var offset = 8;
       for (var i = 0; i < count; i++) {
-        if (offset + 8 > data.length) throw const FormatException('Short stsd.');
+        if (offset + 8 > data.length) { throw const FormatException('Short stsd.'); }
         final size = ByteData.sublistView(data).getUint32(offset);
-        if (size < 8 || size > data.length - offset) throw const FormatException('Bad stsd.');
+        if (size < 8 || size > data.length - offset) { throw const FormatException('Bad stsd.'); }
         descriptions.add(latin1.decode(data.sublist(offset + 4, offset + 8)));
         offset += size;
       }
-      if (offset != data.length) throw const FormatException('Bad stsd length.');
+      if (offset != data.length) { throw const FormatException('Bad stsd length.'); }
     }
     bool metadata(int description) => type == 'meta' || type == 'text' &&
         const {'gpmd', 'mebx', 'camm'}.contains(descriptions[description - 1]);
+    if (type == 'text' && descriptions.any(
+        (entry) => const {'gpmd', 'mebx', 'camm'}.contains(entry))) {
+      _hasTimedMetadata = true;
+    }
+    if (stbl.child('stsz') != null && stbl.child('stz2') != null ||
+        stbl.child('stco') != null && stbl.child('co64') != null) {
+      throw const FormatException('Ambiguous ISO sample tables.');
+    }
     final sizesBox = stbl.child('stsz') ?? stbl.child('stz2');
     final chunksBox = stbl.child('stco') ?? stbl.child('co64');
     final stsc = stbl.child('stsc');
@@ -175,6 +222,7 @@ class IsoMediaSanitizer {
           (entry) => const {'gpmd', 'mebx', 'camm'}.contains(entry))) {
         throw const FormatException('Incomplete metadata sample tables.');
       }
+      _unindexedTrack = true;
       return;
     }
     final sizes = _Reader(await _body(sizesBox))..skip(4);
@@ -184,17 +232,17 @@ class IsoMediaSanitizer {
       final size = sizes.u32();
       count = sizes.u32();
       _capSamples(count);
-      for (var i = 0; i < count; i++) sampleSizes.add(size == 0 ? sizes.u32() : size);
+      for (var i = 0; i < count; i++) { sampleSizes.add(size == 0 ? sizes.u32() : size); }
     } else {
       sizes.skip(3);
       final bits = sizes.n(1);
-      if (!const {4, 8, 16}.contains(bits)) throw const FormatException('Bad stz2 width.');
+      if (!const {4, 8, 16}.contains(bits)) { throw const FormatException('Bad stz2 width.'); }
       count = sizes.u32();
       _capSamples(count);
       var pair = 0;
       for (var i = 0; i < count; i++) {
         if (bits == 4) {
-          if (i.isEven) pair = sizes.n(1);
+          if (i.isEven) { pair = sizes.n(1); }
           sampleSizes.add(i.isEven ? pair >> 4 : pair & 15);
         } else { sampleSizes.add(sizes.n(bits ~/ 8)); }
       }
@@ -202,13 +250,13 @@ class IsoMediaSanitizer {
     sizes.done();
     final chunks = _Reader(await _body(chunksBox))..skip(4);
     final chunkCount = chunks.u32();
-    if (chunkCount > maxSamples) throw const FormatException('ISO chunk cap.');
+    if (chunkCount > maxSamples) { throw const FormatException('ISO chunk cap.'); }
     final offsets = List.generate(chunkCount,
         (_) => chunks.n(chunksBox.type == 'co64' ? 8 : 4));
     chunks.done();
     final mapping = _Reader(await _body(stsc))..skip(4);
     final mappings = mapping.u32();
-    if (mappings > chunkCount) throw const FormatException('ISO mapping cap.');
+    if (mappings > chunkCount) { throw const FormatException('ISO mapping cap.'); }
     final runs = <(int, int, int)>[];
     for (var i = 0; i < mappings; i++) {
       final first = mapping.u32(), samples = mapping.u32(), description = mapping.u32();
@@ -220,66 +268,68 @@ class IsoMediaSanitizer {
       runs.add((first, samples, description));
     }
     mapping.done();
-    if (chunkCount > 0 && runs.isEmpty) throw const FormatException('No chunk mapping.');
+    if (chunkCount > 0 && runs.isEmpty) { throw const FormatException('No chunk mapping.'); }
     var sampleIndex = 0, run = 0;
     for (var chunk = 1; chunk <= chunkCount; chunk++) {
-      if (run + 1 < runs.length && runs[run + 1].$1 == chunk) run++;
+      if (run + 1 < runs.length && runs[run + 1].$1 == chunk) { run++; }
       var offset = offsets[chunk - 1];
       for (var i = 0; i < runs[run].$2; i++) {
-        if (sampleIndex >= count) throw const FormatException('Too many chunk samples.');
+        if (sampleIndex >= count) { throw const FormatException('Too many chunk samples.'); }
         final size = sampleSizes[sampleIndex++];
-        if (offset < 0 || size > length - offset) throw const FormatException('Bad sample range.');
-        if (size > 0) _samples.add((offset, offset + size, metadata(runs[run].$3)));
+        if (offset < 0 || size > length - offset) { throw const FormatException('Bad sample range.'); }
+        if (size > 0) { _samples.add((offset, offset + size, metadata(runs[run].$3))); }
         offset += size;
       }
     }
-    if (sampleIndex != count) throw const FormatException('Missing chunk samples.');
+    if (sampleIndex != count) { throw const FormatException('Missing chunk samples.'); }
   }
 
   void _capSamples(int count) {
     _sampleCount += count;
-    if (_sampleCount > maxSamples) throw const FormatException('ISO sample cap.');
+    if (_sampleCount > maxSamples) { throw const FormatException('ISO sample cap.'); }
   }
 
   Future<void> _heif(_Box meta) async {
     final iinf = meta.child('iinf'), iloc = meta.child('iloc');
-    if (iinf == null) return;
+    if (iinf == null) { return; }
     final info = _Reader(await _body(iinf));
     final version = info.n(1);
     info.skip(3);
-    if (version > 1) throw const FormatException('Unsupported iinf.');
+    if (version > 1) { throw const FormatException('Unsupported iinf.'); }
     final count = info.n(version == 0 ? 2 : 4);
     final entries = await _boxes(iinf.content + info.at, iinf.end, 2);
-    if (count != entries.length) throw const FormatException('Bad iinf count.');
+    if (count != entries.length) { throw const FormatException('Bad iinf count.'); }
     final metadata = <int>{};
+    final declared = <int>{};
     for (final entry in entries) {
-      if (entry.type != 'infe') continue;
+      if (entry.type != 'infe') { continue; }
       final body = await _body(entry);
       final reader = _Reader(body);
       final version = reader.n(1);
       reader.skip(3);
-      if (version < 2 || version > 3) throw const FormatException('Unsupported infe.');
+      if (version < 2 || version > 3) { throw const FormatException('Unsupported infe.'); }
       final id = reader.n(version == 2 ? 2 : 4);
+      if (!declared.add(id)) { throw const FormatException('Duplicate HEIF item ID.'); }
       reader.skip(2);
       final type = latin1.decode(body.sublist(reader.at, reader.at + 4));
       reader.skip(4);
       final nameEnd = body.indexOf(0, reader.at);
-      if (nameEnd < 0) throw const FormatException('Bad HEIF name.');
+      if (nameEnd < 0) { throw const FormatException('Bad HEIF name.'); }
       var xmp = false;
       if (type == 'mime') {
         final typeEnd = body.indexOf(0, nameEnd + 1);
-        if (typeEnd < 0) throw const FormatException('Bad HEIF mime.');
+        if (typeEnd < 0) { throw const FormatException('Bad HEIF mime.'); }
         final mime = latin1.decode(body.sublist(nameEnd + 1, typeEnd));
         xmp = mime.contains('rdf+xml') || mime.contains('xmp');
       }
-      if (type == 'Exif' || xmp) metadata.add(id);
+      if (type == 'Exif' || xmp) { metadata.add(id); }
     }
-    if (metadata.isEmpty) return;
-    if (iloc == null) throw const FormatException('HEIF metadata locations missing.');
+    if (metadata.isEmpty) { return; }
+    if (iloc == null) { throw const FormatException('HEIF metadata locations missing.'); }
     final reader = _Reader(await _body(iloc));
     final version = reader.n(1);
     reader.skip(3);
-    if (version > 2) throw const FormatException('Unsupported iloc.');
+    if (version > 2) { throw const FormatException('Unsupported iloc.'); }
     final widths = reader.n(1), baseWidths = reader.n(1);
     final offsetSize = widths >> 4, lengthSize = widths & 15;
     final baseSize = baseWidths >> 4, indexSize = version > 0 ? baseWidths & 15 : 0;
@@ -287,39 +337,57 @@ class IsoMediaSanitizer {
       throw const FormatException('Bad iloc widths.');
     }
     final items = reader.n(version < 2 ? 2 : 4);
-    if (items > maxSamples) throw const FormatException('HEIF item cap.');
+    if (items > maxSamples) { throw const FormatException('HEIF item cap.'); }
     final idat = meta.child('idat');
+    if (idat != null) {
+      _media.add((idat.content, idat.end));
+      _media.sort((a, b) => a.$1.compareTo(b.$1));
+    }
     var extentsTotal = 0;
+    final located = <int>{};
     for (var item = 0; item < items; item++) {
       final id = reader.n(version < 2 ? 2 : 4);
+      if (!declared.contains(id) || !located.add(id)) {
+        throw const FormatException('Unknown or duplicate HEIF location ID.');
+      }
       final method = version > 0 ? reader.n(2) & 15 : 0;
       final reference = reader.n(2);
       final base = reader.n(baseSize);
       final extents = reader.n(2);
+      if (metadata.contains(id) && extents == 0) {
+        throw const FormatException('HEIF metadata has no extents.');
+      }
       extentsTotal += extents;
-      if (extentsTotal > maxSamples) throw const FormatException('HEIF extent cap.');
+      _capSamples(extents);
+      if (extentsTotal > maxSamples) { throw const FormatException('HEIF extent cap.'); }
       for (var extent = 0; extent < extents; extent++) {
         reader.n(indexSize);
         final offset = reader.n(offsetSize), size = reader.n(lengthSize);
         if (reference != 0 || method > 1 || method == 1 && idat == null || size == 0) {
           throw const FormatException('Unsupported HEIF extent.');
         }
-        final origin = (method == 1 ? idat!.content : 0) + base + offset;
-        final stop = origin + size;
-        final ranges = method == 1 ? [(idat!.content, idat.end)] : _media;
-        if (!ranges.any((range) => origin >= range.$1 && stop <= range.$2)) {
+        final origin = _fileOffset(method == 1 ? idat!.content : 0,
+            _fileOffset(base, offset));
+        final stop = _fileOffset(origin, size);
+        final contained = method == 1
+            ? origin >= idat!.content && stop <= idat.end
+            : _insideMedia(origin, stop);
+        if (!contained) {
           throw const FormatException('HEIF extent outside sample data.');
         }
         _samples.add((origin, stop, metadata.contains(id)));
       }
     }
     reader.done();
+    if (!located.containsAll(metadata)) {
+      throw const FormatException('Missing HEIF metadata locations.');
+    }
   }
 
   Future<int?> _samsungTrailer() async {
-    if (length < 20) return null;
+    if (length < 20) { return null; }
     final tail = await _read(length - 8, 8);
-    if (latin1.decode(tail.sublist(4)) != 'SEFT') return null;
+    if (latin1.decode(tail.sublist(4)) != 'SEFT') { return null; }
     final size = ByteData.sublistView(tail).getUint32(0, Endian.little);
     if (size < 12 || size > 65536 || size + 8 > length) {
       throw const FormatException('Bad Samsung trailer.');
@@ -342,7 +410,7 @@ class IsoMediaSanitizer {
       if (origin < 0 || origin + bytes > start) {
         throw const FormatException('Bad Samsung data range.');
       }
-      if (origin < first) first = origin;
+      if (origin < first) { first = origin; }
     }
     return first;
   }
@@ -355,7 +423,7 @@ class _Box {
   List<_Box> children = [];
   _Box? child(String type) {
     final matches = children.where((box) => box.type == type).toList();
-    if (matches.length > 1) throw const FormatException('Duplicate ISO table.');
+    if (matches.length > 1) { throw const FormatException('Duplicate ISO table.'); }
     return matches.firstOrNull;
   }
 }
@@ -365,15 +433,15 @@ class _Reader {
   final Uint8List bytes;
   var at = 0;
   int n(int count) {
-    if (count < 0 || at + count > bytes.length) throw const FormatException('Short ISO table.');
+    if (count < 0 || at + count > bytes.length) { throw const FormatException('Short ISO table.'); }
     var value = 0;
     for (var i = 0; i < count; i++) { value = value * 256 + bytes[at++]; }
-    if (value < 0) throw const FormatException('ISO integer overflow.');
+    if (value < 0) { throw const FormatException('ISO integer overflow.'); }
     return value;
   }
   int u32() => n(4);
   void skip(int count) { n(count); }
   void done() {
-    if (at != bytes.length) throw const FormatException('ISO table length mismatch.');
+    if (at != bytes.length) { throw const FormatException('ISO table length mismatch.'); }
   }
 }

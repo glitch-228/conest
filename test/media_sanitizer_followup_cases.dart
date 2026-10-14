@@ -5,8 +5,6 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:conest/src/media_sanitizer.dart';
 import 'package:conest/src/iso_media_sanitizer.dart';
-import 'package:conest/src/office_metadata_sanitizer.dart';
-import 'package:conest/src/pdf_metadata_sanitizer.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
@@ -69,6 +67,39 @@ void registerFilePrivacyFollowupTests() {
       expect(result.status, SanitizeStatus.cleaned);
       expect(result.bytes.sublist(fixture.videoAt, fixture.mediaEnd),
           fixture.bytes.sublist(fixture.videoAt, fixture.mediaEnd));
+    });
+    test('MP4 duplicate alternative tables fail without changing the video', () async {
+      final fixture = timedMp4(ambiguousTables: true);
+      final result = await clean(fixture.bytes);
+      expect(result.status, SanitizeStatus.failed);
+      expect(result.bytes, fixture.bytes);
+    });
+    test('MP4 repeated metadata offsets are patched only once', () async {
+      final fixture = timedMp4(repeatedSamples: 1000);
+      final file = _CountingIsoFile(Uint8List.fromList(fixture.bytes), fixture.metadataAt);
+      expect(await IsoMediaSanitizer(file, fixture.bytes.length).clean(), isTrue);
+      expect(file.sampleReads, 1);
+      expect(file.data.sublist(fixture.videoAt, fixture.metadataAt),
+          fixture.bytes.sublist(fixture.videoAt, fixture.metadataAt));
+    });
+    for (final entry in [
+      ('duplicate item ID', privacyHeif(duplicate: true)),
+      ('missing metadata location', privacyHeif(missing: true)),
+      ('overflowing image extent', privacyHeif(wideLength: true, overflow: true)),
+    ]) {
+      test('HEIF ${entry.$1} fails before rewriting any pixels', () async {
+        final result = await clean(entry.$2);
+        expect(result.status, SanitizeStatus.failed);
+        expect(result.bytes, entry.$2);
+      });
+    }
+    test('HEIF metadata in idat is cleared while image bytes remain intact', () async {
+      final input = privacyHeif(inIdat: true);
+      final result = await clean(input);
+      expect(result.status, SanitizeStatus.cleaned);
+      expect(latin1.decode(result.bytes), contains('IMAGE123'));
+      expect(latin1.decode(result.bytes), isNot(contains('EXIF-GPS')));
+      expect(result.bytes.length, input.length);
     });
 
     test('DOCX tracked changes, comments, people and embedded GPS are cleaned', () async {
@@ -143,6 +174,15 @@ void registerFilePrivacyFollowupTests() {
       expect(latin1.decode(archive.findFile('Pictures/photo.jpg')!.readBytes()!),
           isNot(contains('GPSLatitude')));
     });
+    test('Office embedded ISO images cannot silently retain GPS', () async {
+      final input = officeZip({
+        '[Content_Types].xml': utf8.encode('<Types/>'),
+        'word/media/photo.heic': privacyHeif(),
+      });
+      final result = await clean(input);
+      expect(result.status, SanitizeStatus.failed);
+      expect(result.bytes, input);
+    });
 
     test('PDF cleans only Info and Metadata streams, retaining page strings', () async {
       final page = latin1.encode('/Author (Alice in page content) <x:xmpmeta>Keep</x:xmpmeta>');
@@ -192,7 +232,103 @@ void registerFilePrivacyFollowupTests() {
     });
     test('PDF inflate output cap fails closed', () async {
       final input = pdfObjects([pdfStream(1, '/Type /ObjStm /Filter /FlateDecode',
-          zlib.encode(List.filled(PdfMetadataSanitizer.maxInflatedBytes + 1, 32)))]);
+          zlib.encode(List.filled(8 * 1024 * 1024 + 1, 32)))]);
+      expect((await clean(input)).status, SanitizeStatus.failed);
+    });
+    test('PDF incremental revisions remove each old Info and XMP version', () async {
+      final old = pdfObjects([
+        '1 0 obj\n<< /Author (Alice-old) >>\nendobj',
+        pdfStream(2, '/Type /Metadata', latin1.encode('Alice-XMP-old')),
+      ], trailer: '/Info 1 0 R');
+      final appended = latin1.encode('\n1 0 obj\n<< /Author (Bob-new) >>\nendobj\n'
+          '${pdfStream(2, '/Type /Metadata', latin1.encode('Bob-XMP-new'))}\n'
+          'trailer\n<< /Info 1 0 R >>\n%%EOF\n');
+      final result = await clean([...old, ...appended]);
+      expect(result.status, SanitizeStatus.cleaned);
+      expect(result.bytes.length, old.length + appended.length);
+      expect(latin1.decode(result.bytes), isNot(contains('Alice')));
+      expect(latin1.decode(result.bytes), isNot(contains('Bob')));
+    });
+    test('PDF indirect stream Type and Filter are resolved before cleaning', () async {
+      final input = pdfObjects([
+        pdfStream(1, '/Filter 3 0 R', privacyJpeg()),
+        pdfStream(2, '/Type 4 0 R', latin1.encode('Alice-XMP')),
+        '3 0 obj\n/DCTDecode\nendobj',
+        '4 0 obj\n/Metadata\nendobj',
+      ]);
+      final result = await clean(input);
+      expect(result.status, SanitizeStatus.cleaned);
+      expect(result.bytes.length, input.length);
+      expect(latin1.decode(result.bytes), isNot(contains('GPSLatitude')));
+      expect(latin1.decode(result.bytes), isNot(contains('Alice-XMP')));
+    });
+    test('PDF changed indirect stream parameters fail instead of hiding an old JPEG', () async {
+      final old = pdfObjects([
+        pdfStream(1, '/Filter 5 0 R', privacyJpeg()),
+        '5 0 obj\n/DCTDecode\nendobj',
+      ]);
+      final input = [...old, ...latin1.encode(
+          '\n${pdfStream(1, '/Filter 5 0 R', zlib.encode([1, 2, 3]))}\n'
+          '5 0 obj\n/FlateDecode\nendobj\ntrailer\n<< >>\n%%EOF\n')];
+      final result = await clean(input);
+      expect(result.status, SanitizeStatus.failed);
+      expect(result.bytes, input);
+    });
+    test('PDF custom Info name and numeric values are removed in place', () async {
+      final input = pdfObjects([
+        '1 0 obj\n<< /PrivatePlace /Berlin /Latitude 52.52 /Flags [ /Alice 123 ] >>\nendobj',
+      ], trailer: '/Info 1 0 R');
+      final result = await clean(input);
+      expect(result.status, SanitizeStatus.cleaned);
+      expect(result.bytes.length, input.length);
+      for (final marker in ['Berlin', '52.52', 'Alice', '123']) {
+        expect(latin1.decode(result.bytes), isNot(contains(marker)));
+      }
+    });
+    test('PDF Info shared with page resources requires consent without altering the font', () async {
+      final input = pdfObjects([
+        '1 0 obj\n<< /Type /Page /Resources << /Font << /F1 3 0 R >> >> >>\nendobj',
+        '3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Author (Alice) >>\nendobj',
+      ], trailer: '/Info 3 0 R');
+      final result = await clean(input);
+      expect(result.status, SanitizeStatus.partial);
+      expect(result.bytes, input);
+    });
+    test('PDF indirect Info aliases require consent without altering a shared target', () async {
+      final input = pdfObjects([
+        '1 0 obj\n3 0 R\nendobj',
+        '3 0 obj\n<< /Differences [65 /A /B] >>\nendobj',
+        '4 0 obj\n<< /Encoding 3 0 R >>\nendobj',
+      ], trailer: '/Info 1 0 R');
+      final result = await clean(input);
+      expect(result.status, SanitizeStatus.partial);
+      expect(result.bytes, input);
+    });
+    for (final reference in ['003 00 R', '3 % comment\n0 R', '3\x000\x00R', '+3 +0 R', '3 -0 R']) {
+      test('PDF compressed shared encoding reference ${reference.codeUnits} requires consent', () async {
+        final input = pdfObjects([
+          '3 0 obj\n<< /Differences [65 /A /B] >>\nendobj',
+          pdfStream(4, '/Type /ObjStm /Filter /FlateDecode',
+              zlib.encode(latin1.encode('5 0 << /Encoding $reference >>'))),
+        ], trailer: '/Info 3 0 R');
+        final result = await clean(input);
+        expect(result.status, SanitizeStatus.partial);
+        expect(result.bytes, input);
+      });
+    }
+    test('PDF indirect parameter graph is bounded even with repeated references', () async {
+      final input = pdfObjects([
+        pdfStream(50, '/Filter 1 0 R', [1, 2, 3]),
+        for (var i = 1; i < 20; i++)
+          '$i 0 obj\n[ ${List.filled(8, '${i + 1} 0 R').join(' ')} ]\nendobj',
+        '20 0 obj\n/DCTDecode\nendobj',
+      ]);
+      expect((await clean(input)).status, SanitizeStatus.failed);
+    }, timeout: const Timeout(Duration(seconds: 5)));
+    test('PDF oversized name token fails quickly', () async {
+      final input = pdfObjects([
+        '1 0 obj\n<< /${List.filled(5000, 'A').join()} 1 >>\nendobj',
+      ]);
       expect((await clean(input)).status, SanitizeStatus.failed);
     });
 
@@ -220,12 +356,12 @@ void registerFilePrivacyFollowupTests() {
       expect(result.status, SanitizeStatus.cleaned);
       expect(latin1.decode(result.bytes), isNot(contains('JFXX')));
       expect(latin1.decode(result.bytes), contains('ICC_PROFILE\x00Profile123'));
-      expect(result.bytes.sublist(16, 18), [0, 0]);
+      expect(result.bytes.sublist(18, 20), [0, 0]);
       expect(result.bytes.sublist(4, 6), [0, 16]);
       expect(img.decodeJpgExif(result.bytes)!.imageIfd.orientation, 6);
       int scan(List<int> bytes) {
         for (var at = 0; at + 1 < bytes.length; at++) {
-          if (bytes[at] == 255 && bytes[at + 1] == 0xda) return at;
+          if (bytes[at] == 255 && bytes[at + 1] == 0xda) { return at; }
         }
         return -1;
       }
@@ -234,24 +370,24 @@ void registerFilePrivacyFollowupTests() {
     test('ZIP expansion ratio and entry count caps fail closed', () async {
       final bomb = officeZip({
         '[Content_Types].xml': utf8.encode('<Types/>'),
-        'word/document.xml': List.filled(1024 * 1024, 65),
+        'word/document.xml': utf8.encode('<document><p>${List.filled(1024 * 1024, 'A').join()}</p></document>'),
       });
       expect((await clean(bomb)).status, SanitizeStatus.failed);
       final entries = officeZip({
         '[Content_Types].xml': utf8.encode('<Types/>'),
-        for (var i = 0; i < OfficeMetadataSanitizer.maxEntries; i++) 'file-$i': [1],
+        for (var i = 0; i < 2048; i++) 'file-$i': [1],
       });
       expect((await clean(entries)).status, SanitizeStatus.failed);
     });
     test('ISO nesting, global box count and truncated layouts fail closed', () async {
       var nested = isoBox('moov', []);
-      for (var i = 0; i < IsoMediaSanitizer.maxDepth + 1; i++) {
+      for (var i = 0; i < 33; i++) {
         nested = isoBox('moov', nested);
       }
       expect((await clean(nested)).status, SanitizeStatus.failed);
       final many = [
         ...isoBox('ftyp', latin1.encode('isom')),
-        for (var i = 0; i < IsoMediaSanitizer.maxBoxes; i++) ...isoBox('free', []),
+        for (var i = 0; i < 20000; i++) ...isoBox('free', []),
       ];
       expect((await clean(many)).status, SanitizeStatus.failed);
       expect((await clean([...isoBox('ftyp', latin1.encode('isom')), 1, 2])).status,
@@ -262,4 +398,34 @@ void registerFilePrivacyFollowupTests() {
       expect(await MediaSanitizer.sanitizeFile(root.path), SanitizeStatus.failed);
     });
   });
+}
+
+class _CountingIsoFile implements RandomAccessFile {
+  _CountingIsoFile(this.data, this.sampleAt);
+  final Uint8List data;
+  final int sampleAt;
+  var position = 0;
+  var sampleReads = 0;
+
+  @override
+  Future<RandomAccessFile> setPosition(int position) async { this.position = position; return this; }
+
+  @override
+  Future<Uint8List> read(int count) async {
+    if (position == sampleAt) { sampleReads++; }
+    final bytes = Uint8List.fromList(data.sublist(position, position + count));
+    position += count;
+    return bytes;
+  }
+
+  @override
+  Future<RandomAccessFile> writeFrom(List<int> buffer, [int start = 0, int? end]) async {
+    final bytes = buffer.sublist(start, end);
+    data.setAll(position, bytes);
+    position += bytes.length;
+    return this;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

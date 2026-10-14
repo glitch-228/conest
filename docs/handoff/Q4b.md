@@ -17,6 +17,14 @@
 - An independent tree-sitter Dart syntax scan passed for the implementation and media fixtures. This is syntax-only, not Dart type analysis or tests.
 - Picker platform source inspection and final hardening/review are still in progress.
 
+### Phase 2 — hardening, picker and independent review
+- Added Android's `android.provider.extra.SHOW_ADVANCED` hint to the plain SAF document picker via a small MainActivity hook and a separate helper. Added an Android instrumentation regression test without a new package. The pinned file_picker 11.0.2 Linux path is the XDG portal; Windows file picking uses GetOpenFileNameW (IFileDialog only for directories). Neither exposes a hidden-file API. Provider/desktop visibility remains a device check.
+- Independent reviewer examined the source diff and the current hardening patches. Fixed: old PDF incremental metadata surviving; indirect stream types/filters and changed revisions; shared Info dictionaries corrupting fonts (including compressed references, comments, NUL separators, aliases and canonical numeric IDs); exponential reference traversal; repeated ISO sample rewrites and linear containment; HEIF duplicate/missing IDs, ambiguous sample tables and overflow; failed scheduled candidates retaining incomplete writes; Saved-message name parity; a JPEG fixture offset.
+- Added regression fixtures for every confirmed finding. Compressed metadata remains partial; unknown/shared PDF structures request consent rather than being rewritten unsafely. Embedded ISO images in Office currently fail closed, never report clean.
+- Kept cap fixtures independent of implementation constants so lifting a limit can actually break their tests. Added `tool/q4b_sabotage.py`: 29 mutation anchors validated with `--dry-run`; Python compilation passed. An attempted execution stopped at the healthy-suite precheck because Flutter cannot start, before making any mutation. No runtime sabotage outcome is claimed.
+- Formatter/helper attempts also abort at Dart VM initialization. Hand-adjusted only new code and our small hooks; checked recommended braces and Dart syntax independently. `git diff --check` passes.
+- Reviewer final result: no remaining confirmed blocker by source inspection; no definite Dart type/API error found. Runtime analysis/tests, sabotage proofs and platform builds remain unverified.
+
 ## Handoff
 
 - Branch and final commit: `agent/q4b-file-privacy`; in progress.

@@ -46,38 +46,51 @@ abstract final class MediaSanitizer {
 
   static Future<SanitizeStatus> _sanitizeFileWorker(String path) async {
     RandomAccessFile? handle;
+    var status = SanitizeStatus.failed;
     try {
-      if (!await File(path).exists()) return SanitizeStatus.failed;
-      handle = await File(path).open(mode: FileMode.append);
-      final length = await handle.length();
-      await handle.setPosition(0);
-      final head = await handle.read(length < 64 ? length : 64);
-      if (_isIsoMedia(head)) {
-        return await IsoMediaSanitizer(handle, length).clean()
-            ? SanitizeStatus.cleaned : SanitizeStatus.clean;
+      if (await File(path).exists()) {
+        handle = await File(path).open(mode: FileMode.append);
+        status = await _sanitizeOpenFile(handle, await handle.length());
       }
-      final kind = _kind(head);
-      if (kind == null) return SanitizeStatus.unsupported;
-      if (length > maxInMemoryBytes) {
-        return kind == 'zip' && !await OfficeMetadataSanitizer.isDocumentFile(handle, length)
-            ? SanitizeStatus.unsupported : SanitizeStatus.failed;
-      }
-      await handle.setPosition(0);
-      final data = await handle.read(length);
-      if (data.length != length) return SanitizeStatus.failed;
-      final result = sanitizeBytesWithStatus(data);
-      if (!identical(result.bytes, data)) {
-        await handle.setPosition(0);
-        await handle.writeFrom(result.bytes);
-        await handle.truncate(result.bytes.length);
-      }
-      return result.status;
     } catch (_) {
-      return SanitizeStatus.failed;
-    } finally {
-      // Closing is part of the no-throw contract too.
-      try { await handle?.close(); } catch (_) {}
+      status = SanitizeStatus.failed;
     }
+    // Closing is part of the no-throw contract too.
+    try {
+      await handle?.close();
+    } catch (_) {
+      status = SanitizeStatus.failed;
+    }
+    return status;
+  }
+
+  static Future<SanitizeStatus> _sanitizeOpenFile(
+    RandomAccessFile handle,
+    int length,
+  ) async {
+    await handle.setPosition(0);
+    final head = await handle.read(length < 64 ? length : 64);
+    if (_isIsoMedia(head)) {
+      return await IsoMediaSanitizer(handle, length).clean()
+          ? SanitizeStatus.cleaned : SanitizeStatus.clean;
+    }
+    final kind = _kind(head);
+    if (kind == null) return SanitizeStatus.unsupported;
+    if (length > maxInMemoryBytes) {
+      return kind == 'zip' &&
+              !await OfficeMetadataSanitizer.isDocumentFile(handle, length)
+          ? SanitizeStatus.unsupported : SanitizeStatus.failed;
+    }
+    await handle.setPosition(0);
+    final data = await handle.read(length);
+    if (data.length != length) return SanitizeStatus.failed;
+    final result = sanitizeBytesWithStatus(data);
+    if (!identical(result.bytes, data)) {
+      await handle.setPosition(0);
+      await handle.writeFrom(result.bytes);
+      await handle.truncate(result.bytes.length);
+    }
+    return result.status;
   }
 
   /// Whether [path] is of a type whose metadata this removes (judged by
@@ -168,6 +181,9 @@ abstract final class MediaSanitizer {
         'gif' => _gif(data),
         'webp' => _webp(data),
         'zip' => OfficeMetadataSanitizer.clean(data, (image) {
+          if (_isIsoMedia(image)) {
+            throw const FormatException('Embedded ISO image needs file cleaning.');
+          }
           if (!const {'jpeg', 'png', 'gif', 'webp'}.contains(_kind(image))) {
             return null;
           }

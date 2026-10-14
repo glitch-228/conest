@@ -15703,6 +15703,11 @@ class MessengerController extends ChangeNotifier {
           if (confirmKeepingMetadata == null || !await confirmKeepingMetadata(error)) {
             throw error;
           }
+          if (status == SanitizeStatus.failed) {
+            // An I/O failure may have left a partly written candidate.
+            // Consent authorizes the intact source, never that candidate.
+            await copyAndHashAttachment(source, temporary.path);
+          }
         }
       }
       await temporary.rename(target.path);
@@ -15743,7 +15748,8 @@ class MessengerController extends ChangeNotifier {
       createdAt: _now().toUtc(),
       attachmentId: id,
       attachmentPath: staged.relativePath,
-      attachmentFileName: _outgoingFileName(source.fileName),
+      attachmentFileName: contact.deviceId == identity?.deviceId
+          ? source.fileName : _outgoingFileName(source.fileName),
       attachmentMimeType: source.mimeType,
       attachmentSizeBytes: await File(staged.path).length(),
       attachmentPrivacyPrepared: true,

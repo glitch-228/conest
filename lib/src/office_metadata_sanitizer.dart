@@ -30,7 +30,7 @@ abstract final class OfficeMetadataSanitizer {
         break;
       }
     }
-    if (end < 0) throw const FormatException('ZIP directory missing.');
+    if (end < 0) { throw const FormatException('ZIP directory missing.'); }
     final size = view.getUint32(end + 12, Endian.little);
     final offset = view.getUint32(end + 16, Endian.little);
     if (size > maxXmlBytes || offset + size != length - tailSize + end) {
@@ -58,7 +58,7 @@ abstract final class OfficeMetadataSanitizer {
     final office = names.contains('[Content_Types].xml');
     final odf = names.contains('mimetype') &&
         (names.contains('meta.xml') || names.contains('content.xml'));
-    if (!office && !odf) return null;
+    if (!office && !odf) { return null; }
     final archive = Archive();
     var changed = false;
     var total = 0;
@@ -88,7 +88,7 @@ abstract final class OfficeMetadataSanitizer {
         // is retained, while a damaged supported image fails closed.
         content = cleanImage(source) ?? source;
       }
-      if (!identical(content, source)) changed = true;
+      if (!identical(content, source)) { changed = true; }
       final file = name == 'mimetype'
           ? ArchiveFile.noCompress(name, content.length, content)
           : ArchiveFile.bytes(name, content);
@@ -109,14 +109,14 @@ abstract final class OfficeMetadataSanitizer {
     }
     var tags = 0;
     for (final _ in RegExp('<').allMatches(text)) {
-      if (++tags > 50000) throw const FormatException('XML node cap.');
+      if (++tags > 50000) { throw const FormatException('XML node cap.'); }
     }
     final document = XmlDocument.parse(text);
     final elements = document.descendants.whereType<XmlElement>().toList();
     for (final element in elements) {
       var depth = 0;
       for (var parent = element.parent; parent != null; parent = parent.parent) {
-        if (++depth > 128) throw const FormatException('XML nesting cap.');
+        if (++depth > 128) { throw const FormatException('XML nesting cap.'); }
       }
     }
     var changed = false;
@@ -161,13 +161,13 @@ abstract final class OfficeMetadataSanitizer {
           (ancestor) => const {'change-info', 'annotation'}
               .contains(ancestor.name.local),
         );
-        if (inDetails && local == 'creator') clear(element, 'Author');
-        if (inDetails && local == 'date') clear(element, epoch);
+        if (inDetails && local == 'creator') { clear(element, 'Author'); }
+        if (inDetails && local == 'date') { clear(element, epoch); }
       } else if (name.startsWith('xl/comments') && local == 'author') {
         clear(element, 'Author');
       }
 
-      if (odf || name.startsWith('docProps/')) continue;
+      if (odf || name.startsWith('docProps/')) { continue; }
       final people = name == 'word/people.xml' ||
           name.startsWith('xl/persons/') || name == 'ppt/commentAuthors.xml';
       for (final attribute in element.attributes) {
@@ -202,7 +202,7 @@ abstract final class OfficeMetadataSanitizer {
         break;
       }
     }
-    if (end < 0) throw const FormatException('ZIP directory missing.');
+    if (end < 0) { throw const FormatException('ZIP directory missing.'); }
     int u16(int at) => view.getUint16(at, Endian.little);
     int u32(int at) => view.getUint32(at, Endian.little);
     final count = u16(end + 10);
@@ -245,7 +245,7 @@ abstract final class OfficeMetadataSanitizer {
           u32(at + 16), compressed, expanded, u32(at + 42), start));
       at = next;
     }
-    if (at != end) throw const FormatException('Bad ZIP directory length.');
+    if (at != end) { throw const FormatException('Bad ZIP directory length.'); }
     return entries;
   }
 }

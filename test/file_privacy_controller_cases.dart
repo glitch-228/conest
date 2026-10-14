@@ -64,6 +64,10 @@ void registerFilePrivacyControllerTests({
         prompts++;
         expect(error.fileName, 'broken.jpg');
         expect(alice.scheduledMessages, isEmpty, reason: 'ask before confirmation');
+        // Model an incomplete I/O rewrite reported as failed. Consent must
+        // queue the intact original, rather than this damaged candidate.
+        final candidate = (await Directory('${root.path}/scheduled').list().toList()).single as File;
+        await candidate.writeAsBytes(List.filled(bytes.length, 0));
         return true;
       },
     );
@@ -149,4 +153,23 @@ void registerFilePrivacyControllerTests({
     expect(alice.scheduledMessages.single.state, ScheduledMessageState.sent);
     expect(prompts, 1);
   });
+  test('scheduled Saved messages retain metadata and the original name', () async {
+    final (alice, _, root) = await pair();
+    await alice.setRandomizesFileNames(true);
+    final bytes = privacyJpeg();
+    final file = await File('${root.path}/saved.jpg').writeAsBytes(bytes);
+    final saved = alice.savedMessagesContact!;
+    final scheduled = await alice.scheduleAttachment(contact: saved,
+      source: source(file, 'saved.jpg', bytes.length),
+      scheduledAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+    );
+    expect(scheduled.attachmentFileName, 'saved.jpg');
+    expect(await File('${root.path}/${scheduled.attachmentPath}').readAsBytes(), bytes);
+    await alice.sendScheduledMessageNow(scheduled.id);
+    expect(alice.scheduledMessages.single.state, ScheduledMessageState.sent);
+    final message = alice.messagesFor(saved.deviceId).singleWhere((m) => m.attachment != null);
+    expect(message.attachment!.fileName, 'saved.jpg');
+    expect(await File((await alice.attachmentCachePathFor(message.attachment!.id))!).readAsBytes(), bytes);
+  });
+
 }
