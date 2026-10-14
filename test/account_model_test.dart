@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:conest/src/account/account_contacts.dart';
 import 'package:conest/src/account/account_model.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -306,5 +307,238 @@ void main() {
         throwsArgumentError,
       );
     });
+  });
+
+  group('a contact\'s account statement', () {
+    Future<
+      ({
+        AccountKeys account,
+        ({String publicKey, String privateKey}) anchor,
+        AccountUpgrade upgrade,
+        DeviceCert anchorCert,
+        DeviceCert second,
+      })
+    >
+    setUp() async {
+      final account = await AccountKeys.generate();
+      final anchor = await _deviceKeys();
+      final upgrade = await AccountUpgrade.create(
+        accountId: 'acc-1',
+        deviceId: 'dev-1',
+        deviceSigningPublicKeyBase64: anchor.publicKey,
+        deviceSigningPrivateKeyBase64: anchor.privateKey,
+        account: account,
+        issuedAt: now,
+      );
+      final anchorCert = await DeviceCert.issue(
+        account: account,
+        accountId: 'acc-1',
+        deviceId: 'dev-1',
+        encryptionKeyBase64: _key(1),
+        signingKeyBase64: anchor.publicKey,
+        name: 'Laptop',
+        linkedAt: now,
+      );
+      final second = await cert(account, 'dev-2');
+      return (
+        account: account,
+        anchor: anchor,
+        upgrade: upgrade,
+        anchorCert: anchorCert,
+        second: second,
+      );
+    }
+
+    Future<Map<String, Object?>> statement(
+      AccountKeys account,
+      AccountUpgrade? upgrade,
+      List<DeviceCert> devices, {
+      int version = 1,
+      Map<String, DateTime> revoked = const {},
+    }) async => {
+      if (upgrade != null) 'upgrade': upgrade.toJson(),
+      'devices': (await AccountDeviceList.issue(
+        account: account,
+        accountId: 'acc-1',
+        version: version,
+        devices: devices,
+        revoked: revoked,
+        issuedAt: now,
+      )).toJson(),
+    };
+
+    test('a new account key is learned from the pinned device key', () async {
+      final s = await setUp();
+      final update = await verifyAccountDevices(
+        accountId: 'acc-1',
+        anchorDeviceId: 'dev-1',
+        anchorSigningKeyBase64: s.anchor.publicKey,
+        knownAccountKeyBase64: null,
+        knownVersion: 0,
+        knownRevoked: const [],
+        fromAnchor: false,
+        payload: await statement(s.account, s.upgrade, [
+          s.anchorCert,
+          s.second,
+        ]),
+      );
+      expect(update?.accountKeyBase64, s.account.publicKeyBase64);
+      expect(update?.list.deviceFor('dev-2')?.name, 'Pixel 8');
+    });
+
+    test('a stranger\'s account key is never learned', () async {
+      final s = await setUp();
+      final mallory = await AccountKeys.generate();
+      final malloryDevice = await _deviceKeys();
+      // Mallory signs an upgrade with her own device key and account key.
+      final forged = await AccountUpgrade.create(
+        accountId: 'acc-1',
+        deviceId: 'dev-1',
+        deviceSigningPublicKeyBase64: malloryDevice.publicKey,
+        deviceSigningPrivateKeyBase64: malloryDevice.privateKey,
+        account: mallory,
+        issuedAt: now,
+      );
+      final malloryAnchor = await DeviceCert.issue(
+        account: mallory,
+        accountId: 'acc-1',
+        deviceId: 'dev-1',
+        encryptionKeyBase64: _key(1),
+        signingKeyBase64: s.anchor.publicKey,
+        name: 'Laptop',
+        linkedAt: now,
+      );
+      expect(
+        await verifyAccountDevices(
+          accountId: 'acc-1',
+          anchorDeviceId: 'dev-1',
+          anchorSigningKeyBase64: s.anchor.publicKey,
+          knownAccountKeyBase64: null,
+          knownVersion: 0,
+          knownRevoked: const [],
+          fromAnchor: false,
+          payload: await statement(mallory, forged, [
+            malloryAnchor,
+            await cert(mallory, 'dev-evil'),
+          ]),
+        ),
+        isNull,
+      );
+    });
+
+    test('once learned, the account key does not change', () async {
+      final s = await setUp();
+      final mallory = await AccountKeys.generate();
+      expect(
+        await verifyAccountDevices(
+          accountId: 'acc-1',
+          anchorDeviceId: 'dev-1',
+          anchorSigningKeyBase64: s.anchor.publicKey,
+          knownAccountKeyBase64: s.account.publicKeyBase64,
+          knownVersion: 1,
+          knownRevoked: const [],
+          fromAnchor: true,
+          payload: await statement(mallory, null, [
+            await DeviceCert.issue(
+              account: mallory,
+              accountId: 'acc-1',
+              deviceId: 'dev-1',
+              encryptionKeyBase64: _key(1),
+              signingKeyBase64: s.anchor.publicKey,
+              name: 'Laptop',
+              linkedAt: now,
+            ),
+          ], version: 2),
+        ),
+        isNull,
+      );
+    });
+
+    test(
+      'old lists, lost revocations and a missing main device are ignored',
+      () async {
+        final s = await setUp();
+        Future<AccountDevicesUpdate?> check(
+          Map<String, Object?> payload, {
+          int knownVersion = 2,
+          List<String> knownRevoked = const ['dev-0'],
+        }) => verifyAccountDevices(
+          accountId: 'acc-1',
+          anchorDeviceId: 'dev-1',
+          anchorSigningKeyBase64: s.anchor.publicKey,
+          knownAccountKeyBase64: s.account.publicKeyBase64,
+          knownVersion: knownVersion,
+          knownRevoked: knownRevoked,
+          fromAnchor: true,
+          payload: payload,
+        );
+        expect(
+          await check(
+            await statement(
+              s.account,
+              null,
+              [s.anchorCert],
+              version: 2,
+              revoked: {'dev-0': now},
+            ),
+          ),
+          isNull,
+          reason: 'not newer',
+        );
+        expect(
+          await check(
+            await statement(s.account, null, [s.anchorCert], version: 3),
+          ),
+          isNull,
+          reason: 'dev-0 would come back',
+        );
+        expect(
+          await check(
+            await statement(
+              s.account,
+              null,
+              [s.second],
+              version: 3,
+              revoked: {'dev-0': now},
+            ),
+          ),
+          isNull,
+          reason: 'the main device must be listed',
+        );
+        expect(
+          await check(
+            await statement(
+              s.account,
+              null,
+              [s.anchorCert, s.second],
+              version: 3,
+              revoked: {'dev-0': now},
+            ),
+          ),
+          isNotNull,
+        );
+      },
+    );
+
+    test(
+      'without a pinned key, only the main device may introduce it',
+      () async {
+        final s = await setUp();
+        final payload = await statement(s.account, s.upgrade, [s.anchorCert]);
+        Future<AccountDevicesUpdate?> check({required bool fromAnchor}) =>
+            verifyAccountDevices(
+              accountId: 'acc-1',
+              anchorDeviceId: 'dev-1',
+              anchorSigningKeyBase64: null,
+              knownAccountKeyBase64: null,
+              knownVersion: 0,
+              knownRevoked: const [],
+              fromAnchor: fromAnchor,
+              payload: payload,
+            );
+        expect(await check(fromAnchor: false), isNull);
+        expect(await check(fromAnchor: true), isNotNull);
+      },
+    );
   });
 }
