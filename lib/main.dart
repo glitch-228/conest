@@ -1237,15 +1237,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
     final localRelayPort = int.tryParse(_localRelayPortController.text.trim());
     if (displayName.isEmpty || localRelayPort == null) {
-      widget.controller.setStatus(
-        'Enter a display name and a valid local relay port.',
-      );
+      widget.controller.setStatus(l10nOf(context).onbNameRequired);
       return;
     }
     if (internetRelayHost.isNotEmpty && internetRelayPort == null) {
-      widget.controller.setStatus(
-        'If you set an internet relay host, the relay port must be valid too.',
-      );
+      widget.controller.setStatus(l10nOf(context).onbRelayPortInvalid);
       return;
     }
     setState(() {
@@ -1274,10 +1270,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Widget build(BuildContext context) {
     final palette = widget.palette;
     final relayModeNote = _isDesktopPlatform
-        ? 'Desktop nodes relay by default and advertise nearby LAN routes automatically.'
+        ? l10nOf(context).onbRelayDesktop
         : !kIsWeb && Platform.isAndroid
-        ? 'Android starts with relay mode off. Enable it in Settings only when you want this device to relay.'
-        : 'Relay mode can be enabled in Settings when this device should help carry traffic.';
+        ? l10nOf(context).onbRelayAndroid
+        : l10nOf(context).onbRelayOther;
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(gradient: palette.appGradient),
@@ -1320,7 +1316,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               ),
                               const SizedBox(height: 16),
                               Text(
-                                'Reach contacts directly over your network or the internet, end-to-end encrypted with forward secrecy. When the usual routes are blocked, Conest falls back to relays, Matrix, Nostr, email, Tor, LoRa radios or a Bluetooth mesh of nearby phones.',
+                                l10nOf(context).onbTagline,
                                 style: Theme.of(context).textTheme.titleMedium
                                     ?.copyWith(
                                       color: palette.inkSoft,
@@ -1330,11 +1326,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               const SizedBox(height: 24),
                               _FeatureStrip(
                                 palette: palette,
-                                items: const [
-                                  'Forward-secret chats',
-                                  'Direct over LAN and internet',
-                                  'Tor, mesh and radio fallbacks',
-                                  'Also a Matrix client',
+                                items: [
+                                  l10nOf(context).onbFeatureForwardSecret,
+                                  l10nOf(context).onbFeatureDirect,
+                                  l10nOf(context).onbFeatureFallbacks,
+                                  l10nOf(context).onbFeatureMatrix,
                                 ],
                               ),
                               const SizedBox(height: 18),
@@ -1364,7 +1360,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   Text(
-                                    'Create your first device',
+                                    l10nOf(context).onbCreateTitle,
                                     style: Theme.of(context)
                                         .textTheme
                                         .headlineSmall
@@ -1372,7 +1368,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                   ),
                                   const SizedBox(height: 8),
                                   Text(
-                                    'Only a display name is needed. The local port is for nearby (LAN) delivery and codephrase pairing. An internet relay is optional: contacts are reached over the internet without one. Turn on more routes later under Settings → Connectivity.',
+                                    l10nOf(context).onbCreateHelp,
                                     style: Theme.of(context)
                                         .textTheme
                                         .bodyMedium
@@ -1381,24 +1377,23 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                   const SizedBox(height: 18),
                                   TextField(
                                     controller: _displayNameController,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Display name',
+                                    decoration: InputDecoration(
+                                      labelText: l10nOf(context).onbDisplayName,
                                     ),
                                   ),
                                   const SizedBox(height: 12),
                                   TextField(
                                     controller: _localRelayPortController,
                                     keyboardType: TextInputType.number,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Local relay / LAN port',
+                                    decoration: InputDecoration(
+                                      labelText: l10nOf(context).onbLocalPort,
                                     ),
                                   ),
                                   const SizedBox(height: 12),
                                   TextField(
                                     controller: _internetRelayHostController,
-                                    decoration: const InputDecoration(
-                                      labelText:
-                                          'Internet relay host / URL (optional)',
+                                    decoration: InputDecoration(
+                                      labelText: l10nOf(context).onbRelayHost,
                                       hintText:
                                           'host auto-detects TCP/UDP; udp://host:port forces UDP',
                                     ),
@@ -1407,8 +1402,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                   TextField(
                                     controller: _internetRelayPortController,
                                     keyboardType: TextInputType.number,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Internet relay port',
+                                    decoration: InputDecoration(
+                                      labelText: l10nOf(context).onbRelayPort,
                                     ),
                                   ),
                                   const SizedBox(height: 18),
@@ -1424,8 +1419,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                         : const Icon(
                                             Icons.shield_moon_outlined,
                                           ),
-                                    label: const Text(
-                                      'Create encrypted device',
+                                    label: Text(
+                                      l10nOf(context).onbCreateButton,
                                     ),
                                   ),
                                   if (widget.controller.matrixAvailable) ...[
@@ -1437,15 +1432,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                               AppMode.matrixOnly,
                                             ),
                                       icon: const Icon(Icons.alternate_email),
-                                      label: const Text(
-                                        'Use as a Matrix client instead',
+                                      label: Text(
+                                        l10nOf(context).onbMatrixInstead,
                                       ),
                                     ),
                                     const SizedBox(height: 6),
                                     Text(
-                                      'Matrix chats only, with no Conest identity. You can '
-                                      'switch to Both (Conest and Matrix side by side) '
-                                      'later under Settings → Connectivity → App mode.',
+                                      l10nOf(context).onbMatrixHelp,
                                       style: Theme.of(context)
                                           .textTheme
                                           .bodySmall

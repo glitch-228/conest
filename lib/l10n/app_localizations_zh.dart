@@ -241,4 +241,64 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settingsAccount => '账户';
+
+  @override
+  String get onbNameRequired => '请输入显示名称和有效的本地端口。';
+
+  @override
+  String get onbRelayPortInvalid => '如果填写了互联网中继地址，中继端口也必须有效。';
+
+  @override
+  String get onbRelayDesktop => '电脑默认充当中继，并自动公布附近的局域网路线。';
+
+  @override
+  String get onbRelayAndroid => '安卓默认关闭中继模式。只有希望这台设备帮忙转发时，才在设置中开启。';
+
+  @override
+  String get onbRelayOther => '如果希望这台设备帮忙转发流量，可以在设置中开启中继模式。';
+
+  @override
+  String get onbTagline =>
+      '通过你的网络或互联网直接联系联系人，端到端加密并具备前向保密。当常用途径被封锁时，Conest 会改用中继、Matrix、Nostr、电子邮件、Tor、LoRa 电台或附近手机组成的蓝牙网络。';
+
+  @override
+  String get onbFeatureForwardSecret => '前向保密聊天';
+
+  @override
+  String get onbFeatureDirect => '通过局域网和互联网直连';
+
+  @override
+  String get onbFeatureFallbacks => 'Tor、网状网络和电台备用';
+
+  @override
+  String get onbFeatureMatrix => '同时也是 Matrix 客户端';
+
+  @override
+  String get onbCreateTitle => '创建你的第一台设备';
+
+  @override
+  String get onbCreateHelp =>
+      '只需要一个显示名称。本地端口用于局域网投递和口令配对。互联网中继是可选的：没有它也能通过互联网联系到联系人。之后可在“设置 → 连接”中开启更多路线。';
+
+  @override
+  String get onbDisplayName => '显示名称';
+
+  @override
+  String get onbLocalPort => '本地中继 / 局域网端口';
+
+  @override
+  String get onbRelayHost => '互联网中继地址（可选）';
+
+  @override
+  String get onbRelayPort => '互联网中继端口';
+
+  @override
+  String get onbCreateButton => '创建加密设备';
+
+  @override
+  String get onbMatrixInstead => '改为仅用作 Matrix 客户端';
+
+  @override
+  String get onbMatrixHelp =>
+      '仅 Matrix 聊天，没有 Conest 身份。之后可在“设置 → 连接 → 应用模式”中切换为“两者”（Conest 与 Matrix 并排）。';
 }

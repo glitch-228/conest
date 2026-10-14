@@ -531,6 +531,120 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Account'**
   String get settingsAccount;
+
+  /// Error on the first screen when the name or port is missing.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a display name and a valid local relay port.'**
+  String get onbNameRequired;
+
+  /// Error on the first screen.
+  ///
+  /// In en, this message translates to:
+  /// **'If you set an internet relay host, the relay port must be valid too.'**
+  String get onbRelayPortInvalid;
+
+  /// Note on the first screen on desktops.
+  ///
+  /// In en, this message translates to:
+  /// **'Desktop nodes relay by default and advertise nearby LAN routes automatically.'**
+  String get onbRelayDesktop;
+
+  /// Note on the first screen on Android.
+  ///
+  /// In en, this message translates to:
+  /// **'Android starts with relay mode off. Enable it in Settings only when you want this device to relay.'**
+  String get onbRelayAndroid;
+
+  /// Note on the first screen on other platforms.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay mode can be enabled in Settings when this device should help carry traffic.'**
+  String get onbRelayOther;
+
+  /// Introduction on the first screen. Keep the names Matrix, Nostr, Tor, LoRa.
+  ///
+  /// In en, this message translates to:
+  /// **'Reach contacts directly over your network or the internet, end-to-end encrypted with forward secrecy. When the usual routes are blocked, Conest falls back to relays, Matrix, Nostr, email, Tor, LoRa radios or a Bluetooth mesh of nearby phones.'**
+  String get onbTagline;
+
+  /// Short feature label on the first screen.
+  ///
+  /// In en, this message translates to:
+  /// **'Forward-secret chats'**
+  String get onbFeatureForwardSecret;
+
+  /// Short feature label on the first screen.
+  ///
+  /// In en, this message translates to:
+  /// **'Direct over LAN and internet'**
+  String get onbFeatureDirect;
+
+  /// Short feature label on the first screen.
+  ///
+  /// In en, this message translates to:
+  /// **'Tor, mesh and radio fallbacks'**
+  String get onbFeatureFallbacks;
+
+  /// Short feature label on the first screen.
+  ///
+  /// In en, this message translates to:
+  /// **'Also a Matrix client'**
+  String get onbFeatureMatrix;
+
+  /// Heading of the form that creates the user's identity.
+  ///
+  /// In en, this message translates to:
+  /// **'Create your first device'**
+  String get onbCreateTitle;
+
+  /// Help text above the first-screen form.
+  ///
+  /// In en, this message translates to:
+  /// **'Only a display name is needed. The local port is for nearby (LAN) delivery and codephrase pairing. An internet relay is optional: contacts are reached over the internet without one. Turn on more routes later under Settings → Connectivity.'**
+  String get onbCreateHelp;
+
+  /// Form field: the name contacts see.
+  ///
+  /// In en, this message translates to:
+  /// **'Display name'**
+  String get onbDisplayName;
+
+  /// Form field: network port for nearby delivery.
+  ///
+  /// In en, this message translates to:
+  /// **'Local relay / LAN port'**
+  String get onbLocalPort;
+
+  /// Form field: an optional relay server address.
+  ///
+  /// In en, this message translates to:
+  /// **'Internet relay host / URL (optional)'**
+  String get onbRelayHost;
+
+  /// Form field: the relay server's port.
+  ///
+  /// In en, this message translates to:
+  /// **'Internet relay port'**
+  String get onbRelayPort;
+
+  /// Button that creates the identity.
+  ///
+  /// In en, this message translates to:
+  /// **'Create encrypted device'**
+  String get onbCreateButton;
+
+  /// Button: use the app only for Matrix chats.
+  ///
+  /// In en, this message translates to:
+  /// **'Use as a Matrix client instead'**
+  String get onbMatrixInstead;
+
+  /// Explains the Matrix-only choice.
+  ///
+  /// In en, this message translates to:
+  /// **'Matrix chats only, with no Conest identity. You can switch to Both (Conest and Matrix side by side) later under Settings → Connectivity → App mode.'**
+  String get onbMatrixHelp;
 }
 
 class _AppLocalizationsDelegate

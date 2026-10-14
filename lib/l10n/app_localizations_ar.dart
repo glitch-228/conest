@@ -247,4 +247,68 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get settingsAccount => 'الحساب';
+
+  @override
+  String get onbNameRequired => 'أدخل اسمًا للعرض ومنفذًا محليًا صالحًا.';
+
+  @override
+  String get onbRelayPortInvalid =>
+      'إذا حددت عنوان مرحّل على الإنترنت، فيجب أن يكون منفذه صالحًا أيضًا.';
+
+  @override
+  String get onbRelayDesktop =>
+      'تعمل أجهزة الكمبيوتر كمرحّلات افتراضيًا وتعلن مسارات الشبكة المحلية القريبة تلقائيًا.';
+
+  @override
+  String get onbRelayAndroid =>
+      'يبدأ أندرويد ووضع الترحيل متوقف. شغّله من الإعدادات فقط إذا أردت أن يعمل هذا الجهاز كمرحّل.';
+
+  @override
+  String get onbRelayOther =>
+      'يمكن تشغيل وضع الترحيل من الإعدادات إذا أردت أن يساعد هذا الجهاز في نقل الرسائل.';
+
+  @override
+  String get onbTagline =>
+      'تواصل مع جهات اتصالك مباشرة عبر شبكتك أو الإنترنت، بتشفير تام بين الطرفين مع السرية الأمامية. وعندما تُحجب الطرق المعتادة، يلجأ Conest إلى المرحّلات وMatrix وNostr والبريد الإلكتروني وTor وأجهزة راديو LoRa أو شبكة بلوتوث من الهواتف القريبة.';
+
+  @override
+  String get onbFeatureForwardSecret => 'محادثات بسرية أمامية';
+
+  @override
+  String get onbFeatureDirect => 'مباشرة عبر الشبكة المحلية والإنترنت';
+
+  @override
+  String get onbFeatureFallbacks => 'بدائل عبر Tor والشبكة المتداخلة والراديو';
+
+  @override
+  String get onbFeatureMatrix => 'وأيضًا عميل Matrix';
+
+  @override
+  String get onbCreateTitle => 'أنشئ جهازك الأول';
+
+  @override
+  String get onbCreateHelp =>
+      'لا تحتاج إلا إلى اسم للعرض. المنفذ المحلي للتسليم عبر الشبكة المحلية والاقتران بعبارة الرمز. المرحّل على الإنترنت اختياري: يمكن الوصول إلى جهات الاتصال عبر الإنترنت بدونه. شغّل مسارات أخرى لاحقًا من «الإعدادات ← الاتصال».';
+
+  @override
+  String get onbDisplayName => 'اسم العرض';
+
+  @override
+  String get onbLocalPort => 'منفذ المرحّل المحلي / الشبكة المحلية';
+
+  @override
+  String get onbRelayHost => 'عنوان المرحّل على الإنترنت (اختياري)';
+
+  @override
+  String get onbRelayPort => 'منفذ المرحّل على الإنترنت';
+
+  @override
+  String get onbCreateButton => 'إنشاء جهاز مشفّر';
+
+  @override
+  String get onbMatrixInstead => 'استخدامه كعميل Matrix بدلًا من ذلك';
+
+  @override
+  String get onbMatrixHelp =>
+      'محادثات Matrix فقط، دون هوية Conest. يمكنك لاحقًا التبديل إلى «كلاهما» (Conest وMatrix جنبًا إلى جنب) من «الإعدادات ← الاتصال ← وضع التطبيق».';
 }

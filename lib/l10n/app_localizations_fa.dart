@@ -249,4 +249,69 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get settingsAccount => 'حساب';
+
+  @override
+  String get onbNameRequired =>
+      'یک نام نمایشی و یک درگاه محلی معتبر وارد کنید.';
+
+  @override
+  String get onbRelayPortInvalid =>
+      'اگر نشانی رله اینترنتی را وارد کرده‌اید، درگاه آن هم باید معتبر باشد.';
+
+  @override
+  String get onbRelayDesktop =>
+      'رایانه‌ها به‌طور پیش‌فرض رله می‌کنند و مسیرهای شبکه محلی را خودکار اعلام می‌کنند.';
+
+  @override
+  String get onbRelayAndroid =>
+      'در اندروید حالت رله خاموش است. فقط وقتی می‌خواهید این دستگاه رله کند آن را در تنظیمات روشن کنید.';
+
+  @override
+  String get onbRelayOther =>
+      'اگر می‌خواهید این دستگاه در جابه‌جایی پیام‌ها کمک کند، حالت رله را در تنظیمات روشن کنید.';
+
+  @override
+  String get onbTagline =>
+      'مستقیم و از راه شبکه خودتان یا اینترنت به مخاطبان برسید، با رمزگذاری سرتاسری و محرمانگی پیشرو. وقتی راه‌های معمول مسدود باشند، Conest از رله‌ها، Matrix، Nostr، ایمیل، Tor، رادیوهای LoRa یا شبکه بلوتوث گوشی‌های نزدیک استفاده می‌کند.';
+
+  @override
+  String get onbFeatureForwardSecret => 'گفتگو با محرمانگی پیشرو';
+
+  @override
+  String get onbFeatureDirect => 'مستقیم از شبکه محلی و اینترنت';
+
+  @override
+  String get onbFeatureFallbacks => 'راه‌های جایگزین Tor، مش و رادیو';
+
+  @override
+  String get onbFeatureMatrix => 'کلاینت Matrix هم هست';
+
+  @override
+  String get onbCreateTitle => 'نخستین دستگاه خود را بسازید';
+
+  @override
+  String get onbCreateHelp =>
+      'فقط یک نام نمایشی لازم است. درگاه محلی برای تحویل در شبکه محلی و جفت‌شدن با عبارت رمز است. رله اینترنتی اختیاری است: بدون آن هم از راه اینترنت به مخاطبان می‌رسید. مسیرهای بیشتر را بعداً در «تنظیمات ← اتصال» روشن کنید.';
+
+  @override
+  String get onbDisplayName => 'نام نمایشی';
+
+  @override
+  String get onbLocalPort => 'درگاه رله محلی / LAN';
+
+  @override
+  String get onbRelayHost => 'نشانی رله اینترنتی (اختیاری)';
+
+  @override
+  String get onbRelayPort => 'درگاه رله اینترنتی';
+
+  @override
+  String get onbCreateButton => 'ساخت دستگاه رمزگذاری‌شده';
+
+  @override
+  String get onbMatrixInstead => 'استفاده به‌عنوان کلاینت Matrix';
+
+  @override
+  String get onbMatrixHelp =>
+      'فقط گفتگوهای Matrix، بدون هویت Conest. بعداً می‌توانید در «تنظیمات ← اتصال ← حالت برنامه» به «هر دو» (Conest و Matrix کنار هم) بروید.';
 }

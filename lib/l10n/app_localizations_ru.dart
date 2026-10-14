@@ -249,4 +249,69 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get settingsAccount => 'Аккаунт';
+
+  @override
+  String get onbNameRequired =>
+      'Введите отображаемое имя и правильный локальный порт.';
+
+  @override
+  String get onbRelayPortInvalid =>
+      'Если указан адрес ретранслятора, порт тоже должен быть правильным.';
+
+  @override
+  String get onbRelayDesktop =>
+      'Компьютеры по умолчанию работают как ретрансляторы и сами сообщают о маршрутах в локальной сети.';
+
+  @override
+  String get onbRelayAndroid =>
+      'На Android режим ретранслятора выключен. Включайте его в настройках, только если хотите, чтобы устройство передавало чужие сообщения.';
+
+  @override
+  String get onbRelayOther =>
+      'Режим ретранслятора можно включить в настройках, если устройство должно помогать передавать сообщения.';
+
+  @override
+  String get onbTagline =>
+      'Связывайтесь с контактами напрямую через свою сеть или интернет, со сквозным шифрованием и прямой секретностью. Если обычные пути заблокированы, Conest использует ретрансляторы, Matrix, Nostr, email, Tor, радио LoRa или Bluetooth-сеть телефонов рядом.';
+
+  @override
+  String get onbFeatureForwardSecret => 'Чаты с прямой секретностью';
+
+  @override
+  String get onbFeatureDirect => 'Напрямую через сеть и интернет';
+
+  @override
+  String get onbFeatureFallbacks => 'Запасные пути: Tor, mesh и радио';
+
+  @override
+  String get onbFeatureMatrix => 'Ещё и клиент Matrix';
+
+  @override
+  String get onbCreateTitle => 'Создайте своё первое устройство';
+
+  @override
+  String get onbCreateHelp =>
+      'Нужно только отображаемое имя. Локальный порт нужен для доставки по локальной сети и сопряжения по кодовой фразе. Интернет-ретранслятор необязателен: контакты доступны через интернет и без него. Другие пути можно включить позже в «Настройки → Подключение».';
+
+  @override
+  String get onbDisplayName => 'Отображаемое имя';
+
+  @override
+  String get onbLocalPort => 'Локальный порт / порт LAN';
+
+  @override
+  String get onbRelayHost => 'Адрес интернет-ретранслятора (необязательно)';
+
+  @override
+  String get onbRelayPort => 'Порт интернет-ретранслятора';
+
+  @override
+  String get onbCreateButton => 'Создать зашифрованное устройство';
+
+  @override
+  String get onbMatrixInstead => 'Использовать как клиент Matrix';
+
+  @override
+  String get onbMatrixHelp =>
+      'Только чаты Matrix, без личности Conest. Позже можно включить режим «Оба» (Conest и Matrix рядом) в «Настройки → Подключение → Режим приложения».';
 }

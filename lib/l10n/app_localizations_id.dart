@@ -249,4 +249,69 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get settingsAccount => 'Akun';
+
+  @override
+  String get onbNameRequired =>
+      'Masukkan nama tampilan dan port lokal yang valid.';
+
+  @override
+  String get onbRelayPortInvalid =>
+      'Jika kamu mengisi alamat relay internet, port relay juga harus valid.';
+
+  @override
+  String get onbRelayDesktop =>
+      'Komputer menjadi relay secara bawaan dan mengumumkan rute LAN terdekat secara otomatis.';
+
+  @override
+  String get onbRelayAndroid =>
+      'Di Android mode relay mati di awal. Nyalakan di Pengaturan hanya jika kamu ingin perangkat ini menjadi relay.';
+
+  @override
+  String get onbRelayOther =>
+      'Mode relay bisa dinyalakan di Pengaturan jika perangkat ini perlu membantu mengirim lalu lintas.';
+
+  @override
+  String get onbTagline =>
+      'Hubungi kontak langsung lewat jaringanmu atau internet, terenkripsi ujung ke ujung dengan forward secrecy. Saat jalur biasa diblokir, Conest beralih ke relay, Matrix, Nostr, email, Tor, radio LoRa, atau jaringan Bluetooth ponsel di sekitar.';
+
+  @override
+  String get onbFeatureForwardSecret => 'Obrolan dengan forward secrecy';
+
+  @override
+  String get onbFeatureDirect => 'Langsung lewat LAN dan internet';
+
+  @override
+  String get onbFeatureFallbacks => 'Cadangan lewat Tor, mesh, dan radio';
+
+  @override
+  String get onbFeatureMatrix => 'Juga klien Matrix';
+
+  @override
+  String get onbCreateTitle => 'Buat perangkat pertamamu';
+
+  @override
+  String get onbCreateHelp =>
+      'Hanya nama tampilan yang diperlukan. Port lokal dipakai untuk pengiriman di LAN dan pemasangan dengan frasa kode. Relay internet opsional: kontak tetap terjangkau lewat internet tanpanya. Nyalakan rute lain nanti di Pengaturan → Konektivitas.';
+
+  @override
+  String get onbDisplayName => 'Nama tampilan';
+
+  @override
+  String get onbLocalPort => 'Port relay lokal / LAN';
+
+  @override
+  String get onbRelayHost => 'Alamat relay internet (opsional)';
+
+  @override
+  String get onbRelayPort => 'Port relay internet';
+
+  @override
+  String get onbCreateButton => 'Buat perangkat terenkripsi';
+
+  @override
+  String get onbMatrixInstead => 'Pakai sebagai klien Matrix saja';
+
+  @override
+  String get onbMatrixHelp =>
+      'Hanya obrolan Matrix, tanpa identitas Conest. Kamu bisa beralih ke Keduanya (Conest dan Matrix berdampingan) nanti di Pengaturan → Konektivitas → Mode aplikasi.';
 }

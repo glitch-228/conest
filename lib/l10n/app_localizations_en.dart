@@ -247,4 +247,69 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsAccount => 'Account';
+
+  @override
+  String get onbNameRequired =>
+      'Enter a display name and a valid local relay port.';
+
+  @override
+  String get onbRelayPortInvalid =>
+      'If you set an internet relay host, the relay port must be valid too.';
+
+  @override
+  String get onbRelayDesktop =>
+      'Desktop nodes relay by default and advertise nearby LAN routes automatically.';
+
+  @override
+  String get onbRelayAndroid =>
+      'Android starts with relay mode off. Enable it in Settings only when you want this device to relay.';
+
+  @override
+  String get onbRelayOther =>
+      'Relay mode can be enabled in Settings when this device should help carry traffic.';
+
+  @override
+  String get onbTagline =>
+      'Reach contacts directly over your network or the internet, end-to-end encrypted with forward secrecy. When the usual routes are blocked, Conest falls back to relays, Matrix, Nostr, email, Tor, LoRa radios or a Bluetooth mesh of nearby phones.';
+
+  @override
+  String get onbFeatureForwardSecret => 'Forward-secret chats';
+
+  @override
+  String get onbFeatureDirect => 'Direct over LAN and internet';
+
+  @override
+  String get onbFeatureFallbacks => 'Tor, mesh and radio fallbacks';
+
+  @override
+  String get onbFeatureMatrix => 'Also a Matrix client';
+
+  @override
+  String get onbCreateTitle => 'Create your first device';
+
+  @override
+  String get onbCreateHelp =>
+      'Only a display name is needed. The local port is for nearby (LAN) delivery and codephrase pairing. An internet relay is optional: contacts are reached over the internet without one. Turn on more routes later under Settings → Connectivity.';
+
+  @override
+  String get onbDisplayName => 'Display name';
+
+  @override
+  String get onbLocalPort => 'Local relay / LAN port';
+
+  @override
+  String get onbRelayHost => 'Internet relay host / URL (optional)';
+
+  @override
+  String get onbRelayPort => 'Internet relay port';
+
+  @override
+  String get onbCreateButton => 'Create encrypted device';
+
+  @override
+  String get onbMatrixInstead => 'Use as a Matrix client instead';
+
+  @override
+  String get onbMatrixHelp =>
+      'Matrix chats only, with no Conest identity. You can switch to Both (Conest and Matrix side by side) later under Settings → Connectivity → App mode.';
 }
