@@ -2557,8 +2557,13 @@ class MessengerController extends ChangeNotifier {
           }
           // A notice is worth something only while both are online: none
           // waits on a relay or a carrier (a member back later catches up).
-          final notice = payload['type'] == 'changed';
-          if (notice) groupNoticesSent++;
+          // Notices someone asked for (a member that cannot be reached
+          // otherwise) may take any route; others only live ones.
+          final notice =
+              payload['type'] == 'changed' &&
+              payload['passTo'] == null &&
+              payload['asked'] != true;
+          if (payload['type'] == 'changed') groupNoticesSent++;
           final envelope = await _crypto.encryptPayloadEnvelope(
             kind: 'group_history',
             messageId: _randomId('ghist'),
@@ -3507,6 +3512,47 @@ class MessengerController extends ChangeNotifier {
   @visibleForTesting
   int groupNoticesSent = 0;
 
+  /// When each group last pulled from a member at random.
+  final Map<String, DateTime> _groupSlowCatchUpAt = {};
+  static const Duration _groupSlowCatchUpInterval = Duration(minutes: 20);
+
+  /// Every 20 minutes (not in battery saver), each group pulls from the
+  /// member heard from last: a message the author could not get to this device,
+  /// and could not ask anyone to pass on (it went offline), still comes.
+  void _catchUpGroupsNow() {
+    final me = _snapshot.identity;
+    if (me == null ||
+        _disposed ||
+        _energyPolicy.modeFor(_networkCostClass) == EnergyMode.saver) {
+      return;
+    }
+    final now = _now();
+    for (final group in visibleGroups) {
+      if (!group.hasActiveMember(me.deviceId)) continue;
+      final last = _groupSlowCatchUpAt[group.groupId];
+      if (last == null) {
+        // Start-up already catches up.
+        _groupSlowCatchUpAt[group.groupId] = now;
+        continue;
+      }
+      if (now.difference(last) < _groupSlowCatchUpInterval) continue;
+      _groupSlowCatchUpAt[group.groupId] = now;
+      final peers = [
+        for (final peer in group.activeMemberDeviceIds)
+          if (peer != me.deviceId &&
+              group.memberProfileFor(peer)?.signingPublicKeyBase64 != null)
+            peer,
+      ];
+      if (peers.isEmpty) continue;
+      // The member heard from last is the likeliest to answer.
+      DateTime heard(String peer) =>
+          _reachability.recordByDeviceId(peer)?.lastAnySignalAt ??
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+      peers.sort((a, b) => heard(b).compareTo(heard(a)));
+      _scheduleGroupHistorySync(group.groupId, peers.first);
+    }
+  }
+
   /// Pulls whose result is to be passed on (keyed as the timers are).
   final Set<String> _groupHistoryPassOn = <String>{};
 
@@ -3585,13 +3631,18 @@ class MessengerController extends ChangeNotifier {
     final heads = await _groupHistory.authorHeads(groupId, members);
     for (final peer in peers) {
       unawaited(
-        _groupHistory.announceChange(groupId, peer, heads: heads).catchError((
-          Object error,
-        ) {
-          if (!_disposed) {
-            appendDebugLog('Group announcement waiting: $error');
-          }
-        }),
+        _groupHistory
+            .announceChange(
+              groupId,
+              peer,
+              heads: heads,
+              asked: asked.contains(peer),
+            )
+            .catchError((Object error) {
+              if (!_disposed) {
+                appendDebugLog('Group announcement waiting: $error');
+              }
+            }),
       );
     }
   }
@@ -15864,6 +15915,7 @@ class MessengerController extends ChangeNotifier {
       processed += lobbyProcessed;
       displayableProcessed += lobbyProcessed;
       await _retryUnacknowledgedMessages();
+      _catchUpGroupsNow();
       final heartbeatResult = await _runHeartbeatPass();
 
       _lastRelayStatus = _networkSummary(
@@ -24025,7 +24077,7 @@ class MessengerController extends ChangeNotifier {
             background: !force,
           );
           // Not reachable from here: a member who has it may reach them.
-          if (!delivered) {
+          if (!delivered && !_groupMessagesBeingRecorded.contains(message.id)) {
             _askMemberToPassOn(group, message, contact.deviceId);
           }
         });

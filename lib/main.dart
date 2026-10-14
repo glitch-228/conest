@@ -9127,6 +9127,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           memberLabel: controller.groupMemberLabel,
                           timestamp: formatTimestamp,
                           showRoutes: controller.userMode.showsNetworkDetail,
+                          senderClockOffset: controller.clockOffsetFor(
+                            message.senderDeviceId,
+                          ),
                         );
                       } else if (value == 'copy') {
                         await _copyMessage(message);
@@ -10969,6 +10972,9 @@ class _ChatPanelState extends State<_ChatPanel> {
                             message: message,
                             timestamp: formatTimestamp,
                             showRoutes: controller.userMode.showsNetworkDetail,
+                            senderClockOffset: controller.clockOffsetFor(
+                              message.senderDeviceId,
+                            ),
                           );
                         } else if (value == 'forward') {
                           await _forwardTextMessage(

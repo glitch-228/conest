@@ -645,12 +645,15 @@ class GroupHistoryCoordinator {
     String peer, {
     Map<String, int> heads = const {},
     List<String> passTo = const [],
+    // Sent because another member asked (it cannot reach [peer]).
+    bool asked = false,
   }) => send(id, peer, {
     'version': 1,
     'groupId': id,
     'type': 'changed',
     if (heads.isNotEmpty) 'heads': heads,
     if (passTo.isNotEmpty) 'passTo': passTo,
+    if (asked) 'asked': true,
   });
 
   /// Most authors named in one announcement.

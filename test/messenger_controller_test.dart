@@ -17092,6 +17092,98 @@ void main() {
     });
   });
 
+  test('a group message its author could not hand on still reaches a '
+      'member through the slow catch-up', () async {
+    final network = _InProcessIrohNetwork();
+    final relay = _FakeRelayClient();
+    var carolNow = DateTime.now().toUtc();
+    Future<MessengerController> device(
+      String name, {
+      DateTime Function()? now,
+    }) async {
+      final controller = await _createController(
+        relayClient: relay,
+        displayName: name,
+        transportRegistryFactory: network.registry,
+        nowProvider: now,
+        // Battery saver (the tests' default) skips the slow catch-up.
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.limited),
+      );
+      addTearDown(controller.dispose);
+      return controller;
+    }
+
+    final alice = await device('Alice');
+    final bob = await device('Bob');
+    final carol = await device('Carol', now: () => carolNow);
+    await _pairControllers(alice, bob);
+    await _pairControllers(alice, carol);
+    await _pairControllers(bob, carol);
+    final group = await alice.createGroup(
+      title: 'Slow',
+      members: alice.contacts,
+    );
+    Future<void> settle(bool Function() ready, String reason) async {
+      final deadline = DateTime.now().add(const Duration(seconds: 20));
+      while (!ready() && DateTime.now().isBefore(deadline)) {
+        await Future.wait([bob.pollNow(), carol.pollNow(), alice.pollNow()]);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      expect(ready(), isTrue, reason: reason);
+    }
+
+    await settle(
+      () => bob.visibleGroups.isNotEmpty && carol.visibleGroups.isNotEmpty,
+      'the group did not reach everyone',
+    );
+    // Carol's catch-up clock starts.
+    await carol.pollNow();
+    relay.shouldFailStore = (_, _, _, _, _) => true;
+    final aliceIroh = alice.identity!.irohEndpointId!;
+    final carolIroh = carol.identity!.irohEndpointId!;
+    final bobIroh = bob.identity!.irohEndpointId!;
+    network.blockedPairs
+      ..add((aliceIroh, carolIroh))
+      ..add((carolIroh, aliceIroh));
+    await alice.sendGroupMessage(groupId: group.groupId, body: 'gone quiet');
+    // Alice is no longer driven (her app is in the background), so her
+    // retries never ask anyone; Bob pulls her signed event.
+    final bobDeadline = DateTime.now().add(const Duration(seconds: 20));
+    bool bobHasSigned() => bob
+        .messagesForGroup(group.groupId)
+        .any(
+          (m) =>
+              m.body == 'gone quiet' && m.verifiedGroupHistoryEventId != null,
+        );
+    while (!bobHasSigned() && DateTime.now().isBefore(bobDeadline)) {
+      await Future.wait([bob.pollNow(), carol.pollNow()]);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    expect(bobHasSigned(), isTrue, reason: 'Bob did not get the signed event');
+    // Then Alice is gone before she could ask anyone.
+    network.blockedPairs
+      ..add((aliceIroh, bobIroh))
+      ..add((bobIroh, aliceIroh));
+    for (var i = 0; i < 20; i++) {
+      await Future.wait([bob.pollNow(), carol.pollNow()]);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    expect(
+      carol.messagesForGroup(group.groupId).any((m) => m.body == 'gone quiet'),
+      isFalse,
+    );
+    carolNow = carolNow.add(const Duration(minutes: 21));
+    final deadline = DateTime.now().add(const Duration(seconds: 20));
+    bool reached() => carol
+        .messagesForGroup(group.groupId)
+        .any((m) => m.body == 'gone quiet');
+    while (!reached() && DateTime.now().isBefore(deadline)) {
+      await Future.wait([bob.pollNow(), carol.pollNow()]);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    expect(reached(), isTrue, reason: 'the slow catch-up did not bring it');
+  });
+
   test(
     'when every member is reached, a group message causes no notices',
     () async {
