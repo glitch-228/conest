@@ -75,6 +75,7 @@ abstract interface class VoiceCallMediaEngine {
   Future<void> prepare();
   Future<void> open({required String peerDeviceId, required bool outgoing});
   Future<void> setMuted(bool muted);
+  Future<void> setNoiseSuppression(bool enabled);
   Future<bool> setSpeakerphoneEnabled(bool enabled);
   Future<List<String>> availableOutputDevices();
   Future<void> selectOutputDevice(String name);
@@ -97,6 +98,9 @@ class UnavailableVoiceCallMediaEngine implements VoiceCallMediaEngine {
 
   @override
   Future<void> setMuted(bool muted) async {}
+
+  @override
+  Future<void> setNoiseSuppression(bool enabled) async {}
 
   @override
   Future<bool> setSpeakerphoneEnabled(bool enabled) async => false;
@@ -143,6 +147,10 @@ class PlatformVoiceCallMediaEngine implements VoiceCallMediaEngine {
   Future<void> setMuted(bool muted) => bridge.setVoiceCallMuted(muted);
 
   @override
+  Future<void> setNoiseSuppression(bool enabled) =>
+      bridge.setVoiceCallNoiseSuppression(enabled);
+
+  @override
   Future<bool> setSpeakerphoneEnabled(bool enabled) =>
       bridge.setVoiceCallSpeakerphoneEnabled(enabled);
 
@@ -169,6 +177,8 @@ class VoiceCallService {
     required this.localDeviceId,
     required this.transport,
     VoiceCallMediaEngine? media,
+    this.noiseSuppressionEnabled = true,
+    this.canOpenMedia,
     DateTime Function()? now,
     Duration connectionTimeout = const Duration(seconds: 15),
     Duration mediaInactivityTimeout = const Duration(seconds: 5),
@@ -184,6 +194,8 @@ class VoiceCallService {
   final String localDeviceId;
   final VoiceCallSignalTransport transport;
   final VoiceCallMediaEngine media;
+  bool noiseSuppressionEnabled;
+  final bool Function()? canOpenMedia;
   final DateTime Function() _now;
   final Duration _connectionTimeout;
   final Duration _mediaInactivityTimeout;
@@ -199,8 +211,15 @@ class VoiceCallService {
   String? _mediaOwnerCallId;
   int _outboundMediaFailures = 0;
   int _outgoingCallSequence = 0;
+  int _pendingMediaOperations = 0;
   bool _disposed = false;
 
+  /// Includes cleanup after a timed-out/ended prepare or open. Other call
+  /// services must not acquire the same hardware before this becomes false.
+  bool get mediaBusy =>
+      _terminalTransition != null ||
+      _pendingMediaOperations > 0 ||
+      (_active != null && _active!.state != VoiceCallState.ended);
   VoiceCallSession? get active => _active;
   Stream<VoiceCallSession?> get changes => _changes.stream;
 
@@ -211,7 +230,7 @@ class VoiceCallService {
     if (_active != null && _active!.state != VoiceCallState.ended) {
       throw StateError('Only one voice call can be active on this device.');
     }
-    if (!media.available) {
+    if (!media.available || canOpenMedia?.call() == false) {
       throw StateError('Voice calls are not available on this build yet.');
     }
     final callId =
@@ -258,7 +277,7 @@ class VoiceCallService {
           priorState: session.state,
         );
         try {
-          await media.close();
+          await _closeOwnedMedia();
         } catch (_) {
           // A failed invitation must release any media resources prepared
           // before transport or capability validation completed.
@@ -288,7 +307,7 @@ class VoiceCallService {
         _terminalCallIds.contains(signal.callId)) {
       return false;
     }
-    if (!media.available) {
+    if (!media.available || canOpenMedia?.call() == false) {
       await transport.send(
         VoiceCallSignal(
           callId: signal.callId,
@@ -359,6 +378,8 @@ class VoiceCallService {
         media.open(peerDeviceId: session.peerDeviceId, outgoing: false),
       ).timeout(_connectionTimeout);
       if (!_isConnecting(connecting.callId)) return;
+      await media.setNoiseSuppression(noiseSuppressionEnabled);
+      if (!_isConnecting(connecting.callId)) return;
       _markConnected(connecting.callId);
     } catch (error) {
       if (_active?.callId == connecting.callId) {
@@ -386,12 +407,23 @@ class VoiceCallService {
         media.open(peerDeviceId: session.peerDeviceId, outgoing: true),
       ).timeout(_connectionTimeout);
       if (!_isConnecting(connecting.callId)) return;
+      await media.setNoiseSuppression(noiseSuppressionEnabled);
+      if (!_isConnecting(connecting.callId)) return;
       _markConnected(connecting.callId);
     } catch (error) {
       if (_active?.callId == connecting.callId) {
         await end(reason: 'Could not establish voice media: $error');
       }
     }
+  }
+
+  Future<void> setNoiseSuppression(bool enabled) async {
+    if (_active != null &&
+        _active!.state != VoiceCallState.ended &&
+        _mediaOwnerCallId == _active!.callId) {
+      await media.setNoiseSuppression(enabled);
+    }
+    noiseSuppressionEnabled = enabled;
   }
 
   Future<void> toggleMute() async {
@@ -522,7 +554,7 @@ class VoiceCallService {
         priorState: session.state,
       );
       try {
-        await media.close();
+        await _closeOwnedMedia();
       } catch (_) {}
       await summarySaved;
       if (notifyPeer) {
@@ -563,17 +595,36 @@ class VoiceCallService {
   /// held. Close again then, unless a newer call has taken over the media.
   Future<void> _ownMedia(String callId, Future<void> operation) {
     _mediaOwnerCallId = callId;
-    operation.then((_) {
-      final current = _active;
-      final live =
-          !_disposed &&
-          current?.callId == callId &&
-          current?.state != VoiceCallState.ended;
-      if (!live && _mediaOwnerCallId == callId) {
-        unawaited(media.close().catchError((Object _) {}));
-      }
-    }, onError: (Object _) {});
+    _pendingMediaOperations++;
+    unawaited(
+      operation
+          .then<void>((_) async {
+            final current = _active;
+            final live =
+                !_disposed &&
+                current?.callId == callId &&
+                current?.state != VoiceCallState.ended;
+            if (!live && _mediaOwnerCallId == callId) {
+              try {
+                await media.close();
+              } catch (_) {}
+            }
+          }, onError: (Object _) {})
+          .whenComplete(() {
+            _pendingMediaOperations--;
+          })
+          .catchError((Object _) {}),
+    );
     return operation;
+  }
+
+  Future<void> _closeOwnedMedia() async {
+    _pendingMediaOperations++;
+    try {
+      await media.close();
+    } finally {
+      _pendingMediaOperations--;
+    }
   }
 
   VoiceCallSignal _signal(VoiceCallSession session, String action) =>

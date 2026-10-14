@@ -20,6 +20,14 @@ typedef _NextNative =
 typedef _NextDart = bool Function(int, Pointer<Uint8>, int, Pointer<UintPtr>);
 typedef _PushNative = Bool Function(Uint64, Uint64, Pointer<Uint8>, UintPtr);
 typedef _PushDart = bool Function(int, int, Pointer<Uint8>, int);
+typedef _ParticipantNative = Bool Function(Uint64, Uint16, Bool);
+typedef _ParticipantDart = bool Function(int, int, bool);
+typedef _PushParticipantNative =
+    Bool Function(Uint64, Uint16, Uint64, Pointer<Uint8>, UintPtr);
+typedef _PushParticipantDart =
+    bool Function(int, int, int, Pointer<Uint8>, int);
+typedef _ParticipantLevelNative = Float Function(Uint64, Uint16);
+typedef _ParticipantLevelDart = double Function(int, int);
 typedef _CloseNative = Void Function(Uint64);
 typedef _CloseDart = void Function(int);
 typedef _OutputDevicesNative = Pointer<Utf8> Function();
@@ -45,6 +53,10 @@ class _NativeVoiceAudioBindings {
       setMuted = library.lookupFunction<_SetMutedNative, _SetMutedDart>(
         'conest_voice_audio_set_muted',
       ),
+      setNoiseSuppression = library
+          .lookupFunction<_SetMutedNative, _SetMutedDart>(
+            'conest_voice_audio_set_noise_suppression',
+          ),
       setNetworkCongested = library
           .lookupFunction<_SetCongestedNative, _SetCongestedDart>(
             'conest_voice_audio_set_network_congested',
@@ -58,6 +70,18 @@ class _NativeVoiceAudioBindings {
       pushPacket = library.lookupFunction<_PushNative, _PushDart>(
         'conest_voice_audio_push_packet',
       ),
+      setParticipant = library
+          .lookupFunction<_ParticipantNative, _ParticipantDart>(
+            'conest_voice_audio_set_participant',
+          ),
+      pushParticipant = library
+          .lookupFunction<_PushParticipantNative, _PushParticipantDart>(
+            'conest_voice_audio_push_participant_packet',
+          ),
+      participantLevel = library
+          .lookupFunction<_ParticipantLevelNative, _ParticipantLevelDart>(
+            'conest_voice_audio_participant_level',
+          ),
       close = library.lookupFunction<_CloseNative, _CloseDart>(
         'conest_voice_audio_close',
       ),
@@ -93,10 +117,14 @@ class _NativeVoiceAudioBindings {
 
   final _OpenDart open;
   final _SetMutedDart setMuted;
+  final _SetMutedDart setNoiseSuppression;
   final _SetCongestedDart setNetworkCongested;
   final _HealthyDart isHealthy;
   final _NextDart nextPacket;
   final _PushDart pushPacket;
+  final _ParticipantDart setParticipant;
+  final _PushParticipantDart pushParticipant;
+  final _ParticipantLevelDart participantLevel;
   final _CloseDart close;
   final _OutputDevicesDart outputDevices;
   final _SelectOutputDart selectOutput;
@@ -247,6 +275,11 @@ class NativeVoiceCallAudio {
     return handle != null && _bindings.setMuted(handle, muted);
   }
 
+  bool setNoiseSuppression(bool enabled) {
+    final handle = _handle;
+    return handle != null && _bindings.setNoiseSuppression(handle, enabled);
+  }
+
   bool setNetworkCongested(bool congested) {
     final handle = _handle;
     return handle != null && _bindings.setNetworkCongested(handle, congested);
@@ -263,6 +296,45 @@ class NativeVoiceCallAudio {
     try {
       pointer.asTypedList(packet.length).setAll(0, packet);
       return _bindings.pushPacket(handle, sequence, pointer, packet.length);
+    } finally {
+      calloc.free(pointer);
+    }
+  }
+
+  bool setParticipant(int participant, bool active) {
+    final handle = _handle;
+    return handle != null &&
+        participant >= 0 &&
+        participant < 16 &&
+        _bindings.setParticipant(handle, participant, active);
+  }
+
+  double participantLevel(int participant) {
+    final handle = _handle;
+    if (handle == null || participant < 0 || participant >= 16) return 0;
+    return _bindings.participantLevel(handle, participant);
+  }
+
+  bool playParticipantPacket(int participant, int sequence, Uint8List bytes) {
+    final handle = _handle;
+    if (handle == null ||
+        participant < 0 ||
+        participant >= 16 ||
+        sequence <= 0 ||
+        bytes.isEmpty ||
+        bytes.length > _maximumPacketBytes) {
+      return false;
+    }
+    final pointer = calloc<Uint8>(bytes.length);
+    try {
+      pointer.asTypedList(bytes.length).setAll(0, bytes);
+      return _bindings.pushParticipant(
+        handle,
+        participant,
+        sequence,
+        pointer,
+        bytes.length,
+      );
     } finally {
       calloc.free(pointer);
     }

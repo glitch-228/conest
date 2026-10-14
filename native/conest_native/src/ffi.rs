@@ -216,6 +216,15 @@ pub extern "C" fn conest_voice_audio_set_muted(handle: u64, muted: bool) -> bool
 
 #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
 #[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_audio_set_noise_suppression(handle: u64, enabled: bool) -> bool {
+    let Ok(sessions) = VOICE_AUDIO_SESSIONS.lock() else { return false; };
+    let Some(session) = sessions.get(&handle) else { return false; };
+    session.set_noise_suppression(enabled);
+    true
+}
+
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
 pub extern "C" fn conest_voice_audio_set_network_congested(handle: u64, congested: bool) -> bool {
     let Ok(sessions) = VOICE_AUDIO_SESSIONS.lock() else {
         record_error("voice audio session registry lock poisoned");
@@ -300,6 +309,36 @@ pub unsafe extern "C" fn conest_voice_audio_push_packet(
                 .map(|session| session.push_packet(sequence, packet))
         })
         .unwrap_or(false)
+}
+
+/// Group receive APIs are the same on Android (Dart FFI + JNI PCM) and desktop.
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_audio_set_participant(handle: u64, participant: u16, active: bool) -> bool {
+    VOICE_AUDIO_SESSIONS.lock().ok().and_then(|sessions| sessions.get(&handle)
+        .map(|session| session.set_participant_active(participant, active))).unwrap_or(false)
+}
+
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_voice_audio_push_participant_packet(
+    handle: u64, participant: u16, sequence: u64, packet: *const u8, packet_length: usize,
+) -> bool {
+    if packet.is_null() || packet_length == 0 || packet_length > 1100 || participant >= 16 {
+        return false;
+    }
+    // SAFETY: the caller owns a readable packet_length byte buffer throughout
+    // this synchronous call. The bounded receive stream copies it.
+    let bytes = unsafe { slice::from_raw_parts(packet, packet_length) };
+    VOICE_AUDIO_SESSIONS.lock().ok().and_then(|sessions| sessions.get(&handle)
+        .map(|session| session.push_participant_packet(participant, sequence, bytes))).unwrap_or(false)
+}
+
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_audio_participant_level(handle: u64, participant: u16) -> f32 {
+    VOICE_AUDIO_SESSIONS.lock().ok().and_then(|sessions| sessions.get(&handle)
+        .map(|session| session.participant_level(participant))).unwrap_or(0.0)
 }
 
 #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
@@ -483,6 +522,29 @@ pub extern "system" fn Java_dev_conest_conest_ConestBackgroundService_nativeVoic
     if let Ok(sessions) = VOICE_AUDIO_SESSIONS.lock() {
         if let Some(session) = sessions.get(&(handle as u64)) {
             session.mark_failed();
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_conest_conest_ConestBackgroundService_nativeVoiceAudioNoiseEnabled(
+    _env: EnvUnowned<'_>, _this: JObject<'_>, handle: jlong,
+) -> jboolean {
+    let enabled = VOICE_AUDIO_SESSIONS.lock().ok()
+        .and_then(|sessions| sessions.get(&(handle as u64))
+            .map(VoiceAudioSession::noise_suppression_enabled)).unwrap_or(false);
+    if enabled { JNI_TRUE } else { JNI_FALSE }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_conest_conest_ConestBackgroundService_nativeVoiceAudioPlatformNoise(
+    _env: EnvUnowned<'_>, _this: JObject<'_>, handle: jlong, enabled: jboolean,
+) {
+    if let Ok(sessions) = VOICE_AUDIO_SESSIONS.lock() {
+        if let Some(session) = sessions.get(&(handle as u64)) {
+            session.set_platform_noise_suppression(enabled != JNI_FALSE);
         }
     }
 }

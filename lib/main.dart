@@ -43,6 +43,7 @@ import 'src/models.dart';
 import 'src/platform_bridge.dart';
 import 'src/qr_scan_screen.dart';
 import 'src/ui/app_mode_selector.dart';
+import 'src/ui/group_call_screen.dart';
 import 'src/ui/matrix_account_panel.dart';
 import 'src/ui/bitchat_carrier_panel.dart';
 import 'src/ui/email_carrier_panel.dart';
@@ -3352,6 +3353,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
+              Positioned(
+                top: 4,
+                left: 12,
+                right: 12,
+                child: SafeArea(
+                  child: GroupCallBanner(controller: widget.controller),
+                ),
+              ),
               if (visibleCall != null && !_callScreenMinimized)
                 Positioned.fill(
                   child: _VoiceCallOverlay(
@@ -3546,6 +3555,21 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                               call.muted ? Icons.mic_off : Icons.mic,
                             ),
                             label: Text(call.muted ? 'Unmute' : 'Mute'),
+                          ),
+                        if (connected)
+                          FilterChip(
+                            label: const Text('Noise suppression'),
+                            selected:
+                                widget
+                                    .controller
+                                    .identity
+                                    ?.voiceNoiseSuppressionEnabled ??
+                                true,
+                            onSelected: (enabled) => _run(
+                              () => widget.controller.setVoiceNoiseSuppression(
+                                enabled,
+                              ),
+                            ),
                           ),
                         if (connected && !kIsWeb && Platform.isAndroid)
                           OutlinedButton.icon(
@@ -9291,6 +9315,10 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   @override
   Widget build(BuildContext context) {
     final messages = controller.messagesForGroup(group.groupId);
+    final callTimeline = groupCallChatTimeline(
+      messages,
+      controller.groupCallSummariesFor(group.groupId),
+    );
     _pruneMessageKeys(messages);
     _scheduleInitialPosition();
     _scheduleReadSweep();
@@ -9326,6 +9354,13 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                 seed: group.groupId,
                 onBack: widget.onBack,
                 onDetails: widget.onShowDetails,
+                onCall: controller.groupVoiceCallsAvailable
+                    ? () => openGroupCallScreen(
+                        context,
+                        controller,
+                        group.groupId,
+                      )
+                    : null,
               )
             else
               Padding(
@@ -9363,6 +9398,10 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       icon: Icons.lock_outline,
                     ),
                     const SizedBox(width: 8),
+                    GroupCallButton(
+                      controller: controller,
+                      groupId: group.groupId,
+                    ),
                     IconButton(
                       onPressed: widget.onShowDetails,
                       icon: const Icon(Icons.groups_2_outlined),
@@ -9402,9 +9441,10 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       reverse: true,
                       controller: _scrollController,
                       padding: const EdgeInsets.all(18),
-                      itemCount: messages.length + (_historyExhausted ? 0 : 1),
+                      itemCount:
+                          callTimeline.length + (_historyExhausted ? 0 : 1),
                       itemBuilder: (context, index) {
-                        if (index == messages.length) {
+                        if (index == callTimeline.length) {
                           return Center(
                             child: TextButton.icon(
                               onPressed: _loadingHistory
@@ -9419,7 +9459,15 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                             ),
                           );
                         }
-                        final chronoIndex = messages.length - 1 - index;
+                        final entry =
+                            callTimeline[callTimeline.length - 1 - index];
+                        if (entry.summary != null) {
+                          return GroupCallSummaryTile(
+                            summary: entry.summary!,
+                            labelFor: controller.groupMemberLabel,
+                          );
+                        }
+                        final chronoIndex = entry.messageIndex!;
                         final message = messages[chronoIndex];
                         if (_isAlbumContinuation(messages, chronoIndex)) {
                           return const SizedBox.shrink();

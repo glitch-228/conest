@@ -236,6 +236,9 @@ class _WorkingMedia implements VoiceCallMediaEngine {
   Future<void> setMuted(bool muted) async {}
 
   @override
+  Future<void> setNoiseSuppression(bool enabled) async {}
+
+  @override
   Future<bool> setSpeakerphoneEnabled(bool enabled) async => true;
 
   @override

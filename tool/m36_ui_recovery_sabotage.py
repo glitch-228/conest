@@ -1,0 +1,192 @@
+"""M36 review/UI negative checks; restores each edit before the next check."""
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+FLUTTER = '/home/glitch/.local/share/flutter-sdk/bin/flutter'
+
+
+def check(path, mutation, test, file='test/group_call_recovery_test.dart', label=None):
+    if sys.argv[1:] and test not in sys.argv[1:] and label not in sys.argv[1:]:
+        return
+    path = Path(path)
+    original = path.read_text()
+    try:
+        broken = mutation(original)
+        assert broken != original, f'Sabotage anchor changed: {test}'
+        path.write_text(broken)
+        result = subprocess.run(
+            ['rtk', 'proxy', FLUTTER, 'test', '--no-pub', file,
+             '--plain-name', test, '--reporter', 'expanded'],
+            capture_output=True, text=True, timeout=180)
+        output = result.stdout + result.stderr
+        assert result.returncode != 0 and '[E]' in output and 'Compilation failed' not in output, output
+        print(f'PASS negative check: {label or test}', flush=True)
+    finally:
+        path.write_text(original)
+
+
+service = 'lib/src/group_call/group_call_service.dart'
+repair_file = 'test/group_call_admission_repair_test.dart'
+check(service, lambda s: s.replace('if (room.lastJoinSent == null ||',
+      'if (!room.connected && (room.lastJoinSent == null ||', 1).replace(
+      'const Duration(seconds: 2)) {', 'const Duration(seconds: 2))) {', 1),
+      'connected stale roster repairs before the discovery beacon', repair_file,
+      'admission-heartbeat')
+check(service, lambda s: s.replace('room.joinIntents.containsKey(sender)', 'false', 1),
+      'authenticated join intent repairs a missed new leader roster', repair_file,
+      'admission-history')
+check(service, lambda s: s.replace("                signal.payload['admission'] != room.admission ||\n", '', 1),
+      'delayed previous admission key cannot reopen a fresh join', repair_file,
+      'admission-key')
+check(service, lambda s: s.replace('if (intent != null &&', 'if (false && intent != null &&', 1),
+      'delayed old join cannot replace the latest admission', repair_file,
+      'admission-order')
+check(service, lambda s: s.replace('issuedAt = previous.add(const Duration(microseconds: 1));', '', 1),
+      'delayed old join cannot replace the latest admission', repair_file,
+      'admission-clock')
+
+def ignore_join_term(source):
+    start = source.index("        case 'join':")
+    end = source.index('          final intent = ', start)
+    broken = source[start:end].replace('term is! int ||', 'false ||', 1).replace(
+        'term < 0 ||', 'false ||', 1).replace('term > 0x7fffffff', 'false', 1)
+    return source[:start] + broken + source[end:]
+
+check(service, ignore_join_term,
+      'invalid join term cannot become an authority witness', repair_file,
+      'admission-term')
+check(service, lambda s: s.replace('final silent = admitted',
+      'final silent = true', 1),
+      'pending admission survives slow signalling until its first key arrives')
+check(service, lambda s: s.replace('final silent = admitted',
+      'final silent = room.connected', 1),
+      'admitted listener replaces a dead coordinator while its rotated key is pending',
+      'test/group_call_pending_key_test.dart')
+check('lib/src/group_call/group_call_crypto.dart', lambda s: s.replace(
+      '        _tag == null ||\n', '', 1),
+      'cipher drops early capture while its initial tag is being prepared',
+      'test/group_call_crypto_test.dart')
+
+def unlock_ratchet_read(source, signature):
+    start = source.index(signature)
+    end = source.index('\n  ///', start)
+    method = source[start:end].replace(
+        '_withPeer(peerDeviceId, () async {', '(() async {', 1).replace(
+        '      });', '      })();', 1)
+    return source[:start] + method + source[end:]
+
+for signature, lookup in [
+        ('Future<bool> hasSession(', 'availability'),
+        ('Future<DateTime?> confirmedAt(', 'confirmation'),
+        ('Future<List<int>?> receivedBulkKey(', 'bulk key')]:
+    check('lib/src/ratchet.dart', lambda s, method=signature: unlock_ratchet_read(s, method),
+          f'concurrent {lookup} lookup preserves the ratchet send counter',
+          'test/ratchet_concurrent_read_test.dart')
+
+def lose_receive_admission_guard(s):
+    split = s.index('final frame = await room.cipher.decrypt(bytes);')
+    return s[:split] + s[split:].replace('          !room.connected ||\n', '', 1).replace(
+        'p.index == frame.index &&\n            p.version == frame.version', 'true', 1)
+
+check(service, lose_receive_admission_guard,
+      'old in-flight audio cannot poison a new admission while its key is pending')
+check(service, lambda s: s.replace('_adoptAuthority(room, term, sender);', '', 1),
+      'restored asymmetric links converge on one authority and working audio')
+check(service, lambda s: s.replace('room.allParticipants.contains(sender)',
+      'false', 1).replace('room.joinIntents.containsKey(sender)', 'false', 1),
+      'restored full partition reconciles a leader missing from the local roster')
+check(service, lambda s: s.replace('if (!room.joined) {', 'if (false && !room.joined) {', 1),
+      'unjoined observer expires discovery without electing or tombstoning a live call')
+check(service, lambda s: s.replace(
+      'idle.epoch = room.coordinator == localDeviceId ? 0 : room.epoch;',
+      'idle.epoch = room.epoch;', 1),
+      'starter leaves and rejoins in the new authority term without another join')
+check(service, lambda s: s.replace('room.holdingToTalk = enabled && held;',
+      'room.holdingToTalk = enabled && (held || room.holdingToTalk);', 1),
+      'stalled key sends cannot delay mute, PTT release or leave')
+check(service, lambda s: s.replace('(payload[0] == 0 && room.microphoneMuted)',
+      'false', 1),
+      'muting discards audio already waiting for its sender signature')
+check(service, lambda s: s.replace('jsonEncode([groupId, callId]);', 'callId;', 1),
+      'terminal call identities are scoped to their group')
+check(service, lambda s: s.replace('idle.outgoingAudioSequence = room.outgoingAudioSequence;', '', 1),
+      'lost leave controls still permit immediate audio after rejoining')
+check(service, lambda s: s.replace('p.version == peer.version', 'true', 1),
+      'fresh sender admission resets retained receiver jitter state')
+check(service, lambda s: s.replace('if (!_startRate.accept(now(), 8))', 'if (false)', 1),
+      'start flood limits survive eviction across nine authorized groups')
+check(service, lambda s: s.replace("case 'key':\n", "case 'key':\n          _considerAuthority(room, signal);\n", 1),
+      'rejected higher-term keys leave current authority and audio intact')
+check('lib/src/voice_call_service.dart', lambda s: re.sub(
+      r'bool get mediaBusy =>.*?;\n',
+      'bool get mediaBusy => _active != null && _active!.state != VoiceCallState.ended;\n',
+      s, count=1, flags=re.S),
+      '1:1 close retains microphone ownership until teardown completes',
+      'test/group_call_media_ownership_test.dart')
+controller = 'lib/src/group_call/group_call_controller.dart'
+main_controller = 'lib/src/messenger_controller.dart'
+revocation_test = 'account revocation excludes a linked device from stale group call profiles'
+foreign_revocation_test = 'account revocation cannot exclude a different account from group calls'
+check(main_controller, lambda s: s.replace(
+      '    if (_isRevokedGroupMember(group, deviceId)) return null;\n', '', 1),
+      revocation_test, 'test/messenger_controller_test.dart', 'revocation-group')
+check(controller, lambda s: s.replace('_isRevokedAccountDevice(deviceId, accountId)',
+      'false', 1), revocation_test, 'test/messenger_controller_test.dart', 'revocation-remote')
+check(controller, lambda s: s.replace('identity?.accountId == accountId', 'false', 1),
+      revocation_test, 'test/messenger_controller_test.dart', 'revocation-own')
+check(controller, lambda s: s.replace('_isRevokedAccountDevice(deviceId, accountId)',
+      '_snapshot.contacts.any((c) => c.accountRevokedDeviceIds.contains(deviceId))', 1),
+      foreign_revocation_test, 'test/messenger_controller_test.dart', 'revocation-remote-scope')
+check(controller, lambda s: s.replace('identity?.accountId == accountId', 'true', 1),
+      foreign_revocation_test, 'test/messenger_controller_test.dart', 'revocation-own-scope')
+check(main_controller, lambda s: s.replace(
+      '    if (await _handleGroupOnlyRatchetInbound(inbound, envelope)) {\n      return true;\n    }\n', '', 1),
+      'group-only members join encrypted voice calls over Iroh',
+      'test/messenger_controller_test.dart')
+check(main_controller, lambda s: re.sub(
+      r'_groupOnlyRatchetPeer\(envelope\)\?\.publicKeyBase64 ==\s*groupPeer\.publicKeyBase64',
+      'false', s, count=1),
+      'group-only call keys survive handoff over a carrier',
+      'test/messenger_controller_test.dart')
+preflight = '    _groupOnlyRatchetJobs++;\n    try {\n'
+check(controller, lambda s: s.replace(preflight, preflight +
+      '      await _crypto.decryptMessage(contact: peer, envelope: envelope);\n', 1),
+      'group-only hello duplicates and cache-evicted replays preserve call keys',
+      'test/messenger_controller_test.dart')
+check(controller, lambda s: s.replace(preflight, preflight +
+      '      if (_seenEnvelopeIdSet.contains(envelope.messageId)) {\n'
+      '        await _crypto.decryptMessage(contact: peer, envelope: envelope);\n      }\n', 1),
+      'group-only hello duplicates and cache-evicted replays preserve call keys',
+      'test/messenger_controller_test.dart')
+auth_test = 'group-only ratchet controls enforce identity privacy and resource bounds'
+for label, mutation in [
+        ('bootstrap-account', lambda s: s.replace('        peer.accountId != envelope.senderAccountId ||\n', '', 1)),
+        ('bootstrap-conversation', lambda s: re.sub(r'envelope\.conversationId !=\s*_crypto\.conversationIdFor\(envelope\.senderDeviceId\)',
+                         'false', s, count=1)),
+        ('bootstrap-pin', lambda s: s.replace('          peer.irohEndpointId != inbound.senderTransportIdentity ||\n', '', 1)),
+        ('bootstrap-size', lambda s: s.replace('    if (inbound.bytes.length > _maxBootstrapPayloadBytes * 2) return false;\n', '', 1)),
+        ('bootstrap-privacy', lambda s: s.replace("'Invalid forward-secret control.'", 'error.toString()', 1)),
+        ('bootstrap-jobs', lambda s: s.replace('_groupOnlyRatchetJobs >= 16', 'false', 1)),
+        ('bootstrap-rate', lambda s: s.replace('!_groupOnlyRatchetRate.accept(_now(), 32)', 'false', 1))]:
+    check(controller, mutation, auth_test, 'test/messenger_controller_test.dart', label)
+check(controller, lambda s: s.replace('room == null && _voiceCallService?.mediaBusy == true', 'false', 1),
+      'empty group ticks preserve a live Android 1:1 foreground call',
+      'test/messenger_controller_test.dart')
+check(controller, lambda s: s.replace('_groupCallTeardown;','null;',1),
+      'repeated group service replacements retain every pending hardware cleanup',
+      'test/messenger_controller_test.dart')
+ui = 'lib/src/ui/group_call_screen.dart'
+check(ui, lambda s: s.replace('onPointerCancel: (_) => _hold(false)',
+      'onPointerCancel: (_) {}', 1),
+      'group screen controls capture and releases hold on pointer and keyboard',
+      'test/group_call_screen_test.dart')
+check(ui, lambda s: s.replace('if (event is KeyUpEvent) _hold(false);', '', 1),
+      'group screen controls capture and releases hold on pointer and keyboard',
+      'test/group_call_screen_test.dart')
+check(ui, lambda s: s.replace('await widget.service.leave();', '', 1),
+      'Leave closes capture and returns to the chat', 'test/group_call_screen_test.dart')
+check(ui, lambda s: s.replace('a.at.compareTo(b.at)', 'b.at.compareTo(a.at)', 1),
+      'call summary is chronological and shows starter, duration and participants',
+      'test/group_call_screen_test.dart')

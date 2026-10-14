@@ -20,6 +20,7 @@ const Set<String> ratchetedEnvelopeKinds = <String>{
   'direct_message',
   'group_message',
   'group_history',
+  'group_call_signal',
   'group_membership',
   'group_membership_ack',
   'group_leave',
