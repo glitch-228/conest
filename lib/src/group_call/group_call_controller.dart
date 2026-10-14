@@ -201,6 +201,105 @@ extension GroupCallController on MessengerController {
     return service.join(groupId);
   }
 
+  // Group-only call members need pairwise sessions when the key coordinator
+  // changes. This permits only the existing ratchet bootstrap/key controls;
+  // it never grants the member access to the private-message path.
+  ContactRecord? _groupOnlyRatchetPeer(RelayEnvelope envelope) {
+    final me = identity;
+    final allowedKind =
+        (envelope.kind == _ratchetBundleKind &&
+            envelope.protocolVersion == 2) ||
+        ((envelope.kind == 'ratchet_hello' ||
+                envelope.kind == 'ratchet_bulk_key') &&
+            envelope.protocolVersion == 3);
+    if (_disposed ||
+        !conestActive ||
+        me == null ||
+        _ratchet == null ||
+        !allowedKind ||
+        !_isValidInboundEnvelope(envelope) ||
+        envelope.conversationId !=
+            _crypto.conversationIdFor(envelope.senderDeviceId)) {
+      return null;
+    }
+    final peer = _ratchetPeer(envelope.senderDeviceId);
+    if (peer == null ||
+        !peer.canSendOutbound ||
+        peer.accountId != envelope.senderAccountId ||
+        !_snapshot.groups.any(
+          (group) =>
+              group.localRemovedAt == null &&
+              group.hasActiveMember(me.deviceId) &&
+              group.hasActiveMember(peer.deviceId) &&
+              group.memberProfileFor(peer.deviceId)?.publicKeyBase64 ==
+                  peer.publicKeyBase64,
+        )) {
+      return null;
+    }
+    return peer;
+  }
+
+  Future<bool> _handleGroupOnlyRatchetInbound(
+    TransportInboundEnvelope inbound,
+    RelayEnvelope envelope,
+  ) async {
+    if (inbound.bytes.length > _maxBootstrapPayloadBytes * 2) return false;
+    final peer = _groupOnlyRatchetPeer(envelope);
+    if (peer == null) return false;
+    final iroh = inbound.transport == TransportKind.iroh;
+    if (iroh) {
+      if (!peer.hasPinnedIrohIdentity ||
+          peer.irohEndpointId != inbound.senderTransportIdentity ||
+          !_canUseIrohForContact(peer) ||
+          (inbound.path == TransportPathKind.relayed &&
+              !_irohRelayEnabledFor(peer))) {
+        return false;
+      }
+    } else if (!inbound.transport.isCarrier ||
+        inbound.senderTransportIdentity != peer.deviceId ||
+        !_carrierAllowed(inbound.transport) ||
+        peer.routing.effectivePolicy(
+              inbound.transport,
+              identity!.connectivity,
+            ) ==
+            TransportPolicy.disabled) {
+      return false;
+    }
+    if (_groupOnlyRatchetJobs >= 16 ||
+        !_groupOnlyRatchetRate.accept(_now(), 32)) {
+      return false;
+    }
+    _groupOnlyRatchetJobs++;
+    try {
+      // The regular dispatch checks seen/in-flight ids before decrypting.
+      // Copies must not advance the ratchet twice or trigger a reset.
+      await _processEnvelopes(
+        [envelope],
+        ingressKind: !iroh || inbound.path == TransportPathKind.relayed
+            ? PeerRouteKind.relay
+            : PeerRouteKind.directInternet,
+        route: iroh
+            ? MessengerController._irohRoute(inbound.path)
+            : MessageRoute.forCarrier(inbound.transport),
+      );
+      await _saveSnapshotSilently(debounce: true);
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      _groupOnlyRatchetJobs--;
+    }
+  }
+
+  String _envelopeProcessingError(String kind, Object error) =>
+      const {
+        _ratchetBundleKind,
+        'ratchet_hello',
+        'ratchet_bulk_key',
+      }.contains(kind)
+      ? 'Invalid forward-secret control.'
+      : _boundedLogValue(error.toString(), 180);
+
   Future<void> _handleGroupCallSignal(RelayEnvelope envelope) async {
     final me = identity;
     final group = _groupById(envelope.conversationId);

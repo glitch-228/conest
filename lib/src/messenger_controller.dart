@@ -863,6 +863,8 @@ class MessengerController extends ChangeNotifier {
   Future<void>? _groupCallTeardown;
   final GroupCallMediaEngine? _groupCallMediaOverride;
   final GroupCallLinkPolicy? _groupCallLinkPolicy;
+  final _groupOnlyRatchetRate = GroupCallRateLimit();
+  int _groupOnlyRatchetJobs = 0;
   VoiceCallService? _voiceCallService;
   VoiceCallService? _retiredVoiceMedia;
   late final VoiceMessageService voiceMessageService;
@@ -6304,7 +6306,11 @@ class MessengerController extends ChangeNotifier {
         final decoded = jsonDecode(utf8.decode(inbound.bytes));
         if (decoded is Map<String, dynamic>) {
           final envelope = RelayEnvelope.fromJson(decoded);
-          if (_groupOnlyKinds.contains(envelope.kind)) groupEnvelope = envelope;
+          if (_groupOnlyKinds.contains(envelope.kind) ||
+              _groupOnlyRatchetPeer(envelope)?.publicKeyBase64 ==
+                  groupPeer.publicKeyBase64) {
+            groupEnvelope = envelope;
+          }
         }
       } catch (_) {}
     }
@@ -6321,6 +6327,10 @@ class MessengerController extends ChangeNotifier {
             envelope.recipientDeviceId != _snapshot.identity?.deviceId ||
             groupPeer.routing.effectivePolicy(kind, global) ==
                 TransportPolicy.disabled) {
+          return;
+        }
+        if (!_groupOnlyKinds.contains(envelope.kind)) {
+          await _handleGroupOnlyRatchetInbound(inbound, envelope);
           return;
         }
         await _processEnvelopes(
@@ -6569,6 +6579,9 @@ class MessengerController extends ChangeNotifier {
     final decoded = jsonDecode(utf8.decode(inbound.bytes));
     if (decoded is! Map<String, dynamic>) return false;
     final envelope = RelayEnvelope.fromJson(decoded);
+    if (await _handleGroupOnlyRatchetInbound(inbound, envelope)) {
+      return true;
+    }
     if (!_groupOnlyKinds.contains(envelope.kind)) {
       return false;
     }
@@ -17373,7 +17386,7 @@ class MessengerController extends ChangeNotifier {
         failed++;
         appendDebugLog(
           'Dropped envelope ${_boundedLogValue(envelope.messageId)} after '
-          'processing error: ${_boundedLogValue(error.toString(), 180)}',
+          'processing error: ${_envelopeProcessingError(envelope.kind, error)}',
         );
       } finally {
         _inFlightEnvelopeIds.remove(envelope.messageId);

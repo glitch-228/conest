@@ -79,6 +79,7 @@ import 'support/fake_meshcore.dart';
 import 'support/fake_meshtastic.dart';
 import 'support/fake_nostr_relay.dart';
 import 'support/fake_ratchet_engine.dart';
+import 'support/observing_ratchet_store.dart';
 import 'support/fake_rns_bus.dart';
 import 'support/fake_tor.dart';
 
@@ -291,6 +292,27 @@ class _MemoryVaultStore extends VaultStore {
     await super.clear();
     _snapshot = VaultSnapshot.empty();
   }
+}
+
+class _GroupCallVaultStore extends _MemoryVaultStore {
+  Future<void> Function()? beforePeerWrite;
+  int committedPeerWrites = 0;
+  final watchedIdentities = <String, Completer<void>>{};
+  int watchedWrites = 0;
+
+  Completer<void> watchIdentity(String identity) =>
+      watchedIdentities[identity] = Completer<void>();
+
+  @override
+  Future<RatchetStore> openRatchetStore() async =>
+      ObservingRatchetStore(await super.openRatchetStore(), (state) {
+        committedPeerWrites++;
+        final completion = watchedIdentities[state.peerIdentityKey];
+        if (completion != null) {
+          watchedWrites++;
+          if (!completion.isCompleted) completion.complete();
+        }
+      }, () async => await beforePeerWrite?.call());
 }
 
 class _DelayedVaultStore extends _MemoryVaultStore {
@@ -1188,6 +1210,9 @@ class _InProcessIrohNetwork {
 
   /// (sender, recipient) endpoint pairs that cannot reach each other.
   final blockedPairs = <(String, String)>{};
+  final blockedEnvelopePairs = <(String, String)>{};
+  final heldHelloPairs = <(String, String)>{};
+  final heldHellos = <(String, RelayEnvelope)>[];
 
   /// Pairs whose sends are accepted and lost (a firewall dropping what
   /// arrives while the other way works).
@@ -1286,6 +1311,9 @@ class _InProcessIrohBridge implements NativeIrohDatagramBridge {
     if (network.blockedPairs.contains((endpointId, remoteEndpointId))) {
       throw StateError('Peer unreachable');
     }
+    if (network.blockedEnvelopePairs.contains((endpointId, remoteEndpointId))) {
+      throw StateError('Envelope route unreachable');
+    }
     if (network.droppedPairs.contains((endpointId, remoteEndpointId))) {
       return IrohBridgeReceipt(
         endpointId: remoteEndpointId,
@@ -1299,13 +1327,21 @@ class _InProcessIrohBridge implements NativeIrohDatagramBridge {
     }
     if (range == null) {
       final decoded = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
-      network.envelopes.add(
-        RelayEnvelope.fromJson(
+      final envelope = RelayEnvelope.fromJson(
           decoded['conestForwarded'] == 1
               ? decoded['envelope'] as Map<String, dynamic>
               : decoded,
-        ),
       );
+      network.envelopes.add(envelope);
+      if (envelope.kind == 'ratchet_hello' &&
+          network.heldHelloPairs.contains((endpointId, remoteEndpointId))) {
+        network.heldHellos.add((endpointId, envelope));
+        return IrohBridgeReceipt(
+          endpointId: remoteEndpointId,
+          relayed: network.relayed,
+          accepted: true,
+        );
+      }
     }
     recipient._inbound.add(
       IrohBridgeInbound(
@@ -1328,11 +1364,14 @@ class _InProcessIrohBridge implements NativeIrohDatagramBridge {
 Future<void> _waitForIroh(
   bool Function() ready, {
   String reason = 'Iroh delivery did not finish',
+  Duration? timeout,
 }) async {
   // Real native Iroh on a shared CI runner can take several seconds per
   // dial (seen twice timing out at 5 s); the in-memory bridge cannot.
   final native = Platform.environment['CONEST_RUN_IROH_GROUP_CERT'] == '1';
-  final deadline = DateTime.now().add(Duration(seconds: native ? 20 : 5));
+  final deadline = DateTime.now().add(
+    timeout ?? Duration(seconds: native ? 20 : 5),
+  );
   while (!ready() && DateTime.now().isBefore(deadline)) {
     await Future<void>.delayed(const Duration(milliseconds: 10));
   }
@@ -4751,13 +4790,22 @@ void main() {
     },
   );
 
-  test('group-only members join encrypted voice calls over Iroh', () async {
+  Future<void> groupOnlyVoiceCall({
+    bool carrierControls = false,
+    bool probeBootstrap = false,
+    bool probeAuthorization = false,
+  }) async {
     final network = _InProcessIrohNetwork();
+    final carrierNetwork = _FakeCarrierNetwork();
     final relay = _FakeRelayClient();
     final media = <FakeCallMedia>[];
     final peers = <MessengerController>[];
+    final vaults = <_GroupCallVaultStore>[];
+    DateTime? frozenNow;
     for (final name in ['Alice', 'Bob', 'Carol']) {
       final audio = FakeCallMedia();
+      final vault = _GroupCallVaultStore();
+      vaults.add(vault);
       media.add(audio);
       final peer = await _createController(
         relayClient: relay,
@@ -4766,56 +4814,212 @@ void main() {
         transportRegistryFactory: network.registry,
         ratchetEngine: FakeRatchetEngine(),
         groupCallMedia: audio,
+        vaultStore: vault,
+        nowProvider: () => frozenNow ?? DateTime.now(),
       );
       peers.add(peer);
       addTearDown(peer.dispose);
-      await peer.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await peer.updateGlobalConnectivity(
+        carrierControls
+            ? _irohOnlyConnectivity.copyWith(
+                transportPolicies: {
+                  TransportKind.iroh: TransportPolicy.automatic,
+                  TransportKind.nostr: TransportPolicy.automatic,
+                },
+              )
+            : _irohOnlyConnectivity,
+      );
+      if (carrierControls) {
+        await carrierNetwork.join(peer, 'npub-$name|wss://relay.one');
+      }
     }
     final [alice, bob, carol] = peers;
+    Future<void> waitForCall(
+      bool Function() ready,
+      String reason, {
+      Duration? timeout,
+    }) async {
+      try {
+        await _waitForIroh(ready, reason: reason, timeout: timeout);
+      } catch (_) {
+        for (final peer in peers) {
+          final room =
+              peer.groupCallService?.active ??
+              peer.groupCallService?.rooms.firstOrNull;
+          // State only: never print the key-bearing signal payloads.
+          debugPrint(
+            '${peer.identity!.displayName}: contacts=${peer.contacts.length} '
+            'requests=${peer.pendingContactRequests.length} '
+            'groups=${peer.groups.length} call=${room?.callId} '
+            'joined=${room?.joined} connected=${room?.connected} '
+            'term=${room?.term} epoch=${room?.epoch}/${room?.cipher.epoch} '
+            'participants=${room?.participants.map((p) => p.deviceId).toList()}',
+          );
+        }
+        rethrow;
+      }
+    }
     for (final peer in [bob, carol]) {
       await alice.addContactFromInvite(
         alias: peer.identity!.displayName,
         payload: (await peer.buildInvite()).encodePayload(),
         codephrase: '',
       );
-      await _waitForIroh(() => peer.pendingContactRequests.isNotEmpty);
+      await waitForCall(
+        () => peer.pendingContactRequests.isNotEmpty,
+        'group call pairing request for ${peer.identity!.displayName}',
+      );
       await peer.approvePendingContactRequest(
         peer.pendingContactRequests.single.id,
       );
+    }
+    if (carrierControls) {
+      network.blockedEnvelopePairs.addAll([
+        (bob.identity!.irohEndpointId!, carol.identity!.irohEndpointId!),
+        (carol.identity!.irohEndpointId!, bob.identity!.irohEndpointId!),
+      ]);
+    }
+    if (probeBootstrap) {
+      network.heldHelloPairs.addAll([
+        (bob.identity!.irohEndpointId!, carol.identity!.irohEndpointId!),
+        (carol.identity!.irohEndpointId!, bob.identity!.irohEndpointId!),
+      ]);
     }
     final group = await alice.createGroup(
       title: 'Voice group',
       members: alice.contacts,
     );
-    await _waitForIroh(() => bob.groups.isNotEmpty && carol.groups.isNotEmpty);
-    await _waitForIroh(
+    await waitForCall(
+      () => bob.groups.isNotEmpty && carol.groups.isNotEmpty,
+      'group call membership arrived',
+    );
+    await waitForCall(
       () => peers.every(
         (p) => p.groupCallMembersFor(group.groupId).every((m) => m.canJoin),
       ),
-      reason: 'group call capabilities arrived',
+      'group call capabilities arrived',
     );
     expect(bob.contactByDeviceId(carol.identity!.deviceId), isNull);
     expect(carol.contactByDeviceId(bob.identity!.deviceId), isNull);
+    if (probeBootstrap) {
+      await waitForCall(
+        () => network.heldHellos.isNotEmpty,
+        'group-only hello was captured',
+        timeout: const Duration(seconds: 15),
+      );
+      final (endpoint, hello) = network.heldHellos.first;
+      final recipientIndex = peers.indexWhere(
+        (p) => p.identity!.deviceId == hello.recipientDeviceId,
+      );
+      final recipient = peers[recipientIndex];
+      final vault = vaults[recipientIndex];
+      final store = await vault.openRatchetStore();
+      final sender = alice.contactByDeviceId(hello.senderDeviceId)!;
+      for (var attempt = 0; attempt < 100; attempt++) {
+        if ((await store.readPeer(ratchetPeerId(sender)))?.peerIdentityKey !=
+            null) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      final writeStarted = Completer<void>();
+      final allowWrite = Completer<void>();
+      addTearDown(() {
+        if (!allowWrite.isCompleted) allowWrite.complete();
+      });
+      vault.beforePeerWrite = () async {
+        if (!writeStarted.isCompleted) writeStarted.complete();
+        await allowWrite.future;
+      };
+      int pairwiseBundles() => network.envelopes
+          .where(
+            (e) =>
+                e.kind == 'ratchet_bundle' &&
+                e.senderDeviceId != alice.identity!.deviceId &&
+                e.recipientDeviceId != alice.identity!.deviceId,
+          )
+          .length;
+      final beforeBundles = pairwiseBundles();
+      final beforeWrites = vault.committedPeerWrites;
+      network.inject(recipient.identity!, endpoint, hello);
+      await writeStarted.future.timeout(const Duration(seconds: 5));
+      network.inject(recipient.identity!, endpoint, hello);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      allowWrite.complete();
+      vault.beforePeerWrite = null;
+      await waitForCall(
+        () => vault.committedPeerWrites > beforeWrites,
+        'duplicate hello durable write completed',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(
+        pairwiseBundles(),
+        beforeBundles,
+        reason: 'duplicate hello must not reset the session',
+      );
+      network.heldHelloPairs.clear();
+      for (final (senderEndpoint, packet) in network.heldHellos.skip(1)) {
+        final target = peers.singleWhere(
+          (p) => p.identity!.deviceId == packet.recipientDeviceId,
+        );
+        network.inject(target.identity!, senderEndpoint, packet);
+      }
+
+      // Evict the hello from the 256-entry crypto plaintext cache using real
+      // ratcheted traffic, then replay it. Seen ids must be checked first.
+      var sent = 0;
+      int encryptedMessages() => network.envelopes
+          .where(
+            (e) =>
+                e.kind == 'direct_message' &&
+                e.protocolVersion == 3 &&
+                e.recipientDeviceId == recipient.identity!.deviceId,
+          )
+          .length;
+      while (encryptedMessages() < 257 && sent < 270) {
+        await alice.sendMessage(
+          contact: alice.contactByDeviceId(recipient.identity!.deviceId)!,
+          body: 'cache-fill-${sent++}',
+        );
+      }
+      expect(encryptedMessages(), greaterThanOrEqualTo(257));
+      await waitForCall(
+        () => recipient.messagesFor(alice.identity!.deviceId).length >= sent,
+        'ratchet cache eviction traffic arrived',
+      );
+      final beforeReplay = pairwiseBundles();
+      network.inject(recipient.identity!, endpoint, hello);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(
+        pairwiseBundles(),
+        beforeReplay,
+        reason: 'seen hello replay must not reset the session',
+      );
+    }
     await alice.joinOrStartGroupCall(group.groupId);
-    await _waitForIroh(
+    await waitForCall(
       () =>
           bob.groupCallService?.roomFor(group.groupId) != null &&
           carol.groupCallService?.roomFor(group.groupId) != null,
+      'group call start discovered',
+      // Discovery beacons repeat every 5 s if a ratchet transition drops the
+      // initial announcement. Give one retry time to arrive and authenticate.
+      timeout: const Duration(seconds: 10),
     );
     await bob.joinOrStartGroupCall(group.groupId);
     await carol.joinOrStartGroupCall(group.groupId);
-    await _waitForIroh(
+    await waitForCall(
       () => peers.every(
         (p) =>
             p.groupCallService?.active?.connected == true &&
             p.groupCallService!.active!.participants.length == 3,
       ),
-      reason: 'group-only call keys arrived',
+      'group-only call keys arrived',
     );
     await carol.groupCallService!.sendAudio(Uint8List.fromList([36, 42]));
-    await _waitForIroh(
+    await waitForCall(
       () => media[1].played.isNotEmpty,
-      reason: 'group-only audio arrived',
+      'group-only audio arrived',
     );
     final packet = media[1].played.single;
     expect(packet.$3, [36, 42]);
@@ -4831,9 +5035,180 @@ void main() {
     expect(keys, isNotEmpty);
     await bob.setVoiceNoiseSuppression(false);
     expect(media[1].noise.last, false);
+    final carrierBeforeHandoff = carrierNetwork.frames.length;
+    await alice.groupCallService!.leave();
+    final survivors = [bob, carol];
+    final leader =
+        (survivors.map((p) => p.identity!.deviceId).toList()..sort()).first;
+    await waitForCall(
+      () => survivors.every(
+        (p) =>
+            p.groupCallService?.active?.coordinator == leader &&
+            p.groupCallService!.active!.term == 1 &&
+            p.groupCallService!.active!.participants.length == 2,
+      ),
+      'group-only coordinator handoff',
+      timeout: const Duration(seconds: 3),
+    );
+    await waitForCall(
+      () =>
+          survivors.every((p) => p.groupCallService?.active?.connected == true),
+      'group-only handoff key arrived',
+      // A previously lost bootstrap offer backs off for 10 s. Media must
+      // recover once that bounded session retry succeeds.
+      timeout: const Duration(seconds: 15),
+    );
+    final beforeHandoffAudio = media[1].played.length;
+    await carol.groupCallService!.sendAudio(Uint8List.fromList([77, 88]));
+    await waitForCall(
+      () => media[1].played.length > beforeHandoffAudio,
+      'group-only handoff audio arrived',
+    );
+    expect(media[1].played.last.$3, [77, 88]);
+    if (carrierControls) {
+      expect(carrierNetwork.frames.length, greaterThan(carrierBeforeHandoff));
+    }
+    expect(bob.contactByDeviceId(carol.identity!.deviceId), isNull);
+    expect(carol.contactByDeviceId(bob.identity!.deviceId), isNull);
     await bob.groupCallService!.leave();
     expect(bob.groupCallSummariesFor(group.groupId), hasLength(1));
-  });
+    if (probeAuthorization) {
+      final crypto = CryptoService(identityProvider: () => bob.identity!);
+      final target = alice.contactByDeviceId(carol.identity!.deviceId)!;
+      final vault = vaults[2];
+      Future<(RelayEnvelope, Completer<void>)> control(
+        int sequence, {
+        String? account,
+        String? conversation,
+        int padding = 0,
+      }) async {
+        final session = RatchetSessions(
+          engine: FakeRatchetEngine(random: Random(500 + sequence)),
+          store: MemoryRatchetStore(),
+        );
+        final bundle = await session.createBundle();
+        final written = vault.watchIdentity(bundle.identityKey);
+        final envelope = await crypto.encryptPayloadEnvelope(
+          kind: 'ratchet_bundle',
+          messageId: 'bootstrap-probe-$sequence',
+          conversationId:
+              conversation ?? crypto.conversationIdFor(target.deviceId),
+          senderAccountId: account ?? bob.identity!.accountId,
+          senderDeviceId: bob.identity!.deviceId,
+          recipientDeviceId: target.deviceId,
+          contact: target,
+          plaintext: jsonEncode({
+            'version': 1,
+            'reason': 'answer',
+            'bundle': bundle.toJson(),
+            if (padding > 0) 'padding': 'x' * padding,
+          }),
+        );
+        return (envelope, written);
+      }
+
+      final beforeInvalid = vault.watchedWrites;
+      for (final (index, account, conversation, endpoint, padding) in [
+        (1, 'wrong-account', null, bob.identity!.irohEndpointId!, 0),
+        (2, null, 'wrong-conversation', bob.identity!.irohEndpointId!, 0),
+        (3, null, null, 'ff' * 32, 0),
+        (4, null, null, bob.identity!.irohEndpointId!, 70 * 1024),
+      ]) {
+        final (packet, _) = await control(
+          index,
+          account: account,
+          conversation: conversation,
+          padding: padding,
+        );
+        network.inject(carol.identity!, endpoint, packet);
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        expect(
+          vault.watchedWrites,
+          beforeInvalid,
+          reason: 'invalid bootstrap identity/scope/pin/size $index',
+        );
+      }
+
+      const marker = 'm36-private-control-marker';
+      final malformed = await crypto.encryptPayloadEnvelope(
+        kind: 'ratchet_bundle',
+        messageId: 'bootstrap-malformed-probe',
+        conversationId: crypto.conversationIdFor(target.deviceId),
+        senderAccountId: bob.identity!.accountId,
+        senderDeviceId: bob.identity!.deviceId,
+        recipientDeviceId: target.deviceId,
+        contact: target,
+        plaintext: '{"secret":"$marker',
+      );
+      network.inject(carol.identity!, bob.identity!.irohEndpointId!, malformed);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(carol.recentDebugLog.any((line) => line.contains(marker)), false);
+
+      // A blocked durable write cannot create an unlimited bootstrap queue.
+      // Freeze the policy clock only after the audible handoff has passed.
+      frozenNow = DateTime.now().add(const Duration(seconds: 1));
+      final writeStarted = Completer<void>();
+      final allowWrite = Completer<void>();
+      addTearDown(() {
+        if (!allowWrite.isCompleted) allowWrite.complete();
+      });
+      vault.beforePeerWrite = () async {
+        if (!writeStarted.isCompleted) writeStarted.complete();
+        await allowWrite.future;
+      };
+      final beforeBurst = vault.watchedWrites;
+      Completer<void>? last;
+      for (var index = 10; index < 30; index++) {
+        final (packet, written) = await control(index);
+        last = written;
+        network.inject(carol.identity!, bob.identity!.irohEndpointId!, packet);
+      }
+      await writeStarted.future.timeout(const Duration(seconds: 5));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      allowWrite.complete();
+      vault.beforePeerWrite = null;
+      await Future.any<void>([
+        last!.future,
+        Future<void>.delayed(const Duration(seconds: 2)),
+      ]);
+      expect(vault.watchedWrites - beforeBurst, inInclusiveRange(1, 16));
+      await carol.flushPendingChanges();
+      await Future<void>.delayed(Duration.zero);
+
+      // Completed jobs still obey the per-second admission budget.
+      frozenNow = frozenNow!.add(const Duration(seconds: 1));
+      final beforeRate = vault.watchedWrites;
+      for (var index = 40; index < 80; index++) {
+        final (packet, written) = await control(index);
+        network.inject(carol.identity!, bob.identity!.irohEndpointId!, packet);
+        await Future.any<void>([
+          written.future,
+          Future<void>.delayed(const Duration(milliseconds: 100)),
+        ]);
+        await Future<void>.delayed(Duration.zero);
+        await carol.flushPendingChanges();
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(vault.watchedWrites - beforeRate, inInclusiveRange(1, 32));
+    }
+  }
+
+  test(
+    'group-only members join encrypted voice calls over Iroh',
+    () => groupOnlyVoiceCall(),
+  );
+  test(
+    'group-only call keys survive handoff over a carrier',
+    () => groupOnlyVoiceCall(carrierControls: true),
+  );
+  test(
+    'group-only hello duplicates and cache-evicted replays preserve call keys',
+    () => groupOnlyVoiceCall(probeBootstrap: true),
+  );
+  test(
+    'group-only ratchet controls enforce identity privacy and resource bounds',
+    () => groupOnlyVoiceCall(probeAuthorization: true),
+  );
 
   for (final native in [false, true]) {
     for (final relayed in native ? [false] : [false, true]) {

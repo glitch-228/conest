@@ -99,6 +99,20 @@ void main() {
       await net.advance(const Duration(seconds: 6));
       expect(net.peers['p0']!.service.active!.participants, hasLength(1));
       net.blockedLinks.clear();
+      final replacement = net.signals
+          .lastWhere(
+            (s) => s.$1 == 'p1' && s.$2 == 'p0' && s.$3.action == 'start',
+          )
+          .$3;
+      // Reconcile a historically admitted leader before a repair join can
+      // happen to put it back into the old coordinator's current roster.
+      expect(
+        await net.peers['p0']!.service.receiveSignal(
+          replacement,
+          authenticatedSender: 'p1',
+        ),
+        true,
+      );
       await net.advance(const Duration(seconds: 6));
       final authorities = net.peers.values
           .map(
@@ -422,6 +436,7 @@ void main() {
           signal('key', {
             ...proposed,
             'recipient': 'p2',
+            'admission': room.admission,
             'key': base64Encode(key),
           }),
           authenticatedSender: 'p0',
@@ -519,6 +534,7 @@ void main() {
         'version': 1,
         'participants': room.participants.map((p) => p.toJson()).toList(),
         'recipient': 'p0',
+        'admission': room.admission,
         'key': base64Encode(Uint8List(32)),
       };
       for (final payload in [

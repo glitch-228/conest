@@ -40,6 +40,10 @@ class GroupCallRoom {
   Uint8List? distributionKey;
   String? admission;
   final Map<String, String> admissions = {};
+  // Recovery witnesses are not roster/media/summary membership. One bounded
+  // record per device also orders fresh admissions against delayed controls.
+  final Map<String, (String, DateTime)> joinIntents = {};
+  DateTime? lastJoinIssued;
   bool needsAdmission = false;
   bool leaving = false;
   List<GroupCallParticipant> participants = [];
@@ -194,14 +198,24 @@ class GroupCallService {
     GroupCallRoom room,
     String action, [
     Map<String, dynamic> payload = const {},
-  ]) => GroupCallSignal(
-    groupId: room.groupId,
-    callId: room.callId,
-    senderDeviceId: localDeviceId,
-    action: action,
-    issuedAt: now().toUtc(),
-    payload: {'term': room.term, ...payload},
-  );
+  ]) {
+    var issuedAt = now().toUtc();
+    if (action == 'join') {
+      final previous = room.lastJoinIssued;
+      if (previous != null && !issuedAt.isAfter(previous)) {
+        issuedAt = previous.add(const Duration(microseconds: 1));
+      }
+      room.lastJoinIssued = issuedAt;
+    }
+    return GroupCallSignal(
+      groupId: room.groupId,
+      callId: room.callId,
+      senderDeviceId: localDeviceId,
+      action: action,
+      issuedAt: issuedAt,
+      payload: {'term': room.term, ...payload},
+    );
+  }
 
   Future<void> _fanout(
     GroupCallRoom room,
@@ -265,6 +279,8 @@ class GroupCallService {
 
   Map<String, dynamic> _joinPayload(GroupCallRoom room) => {
     'admission': room.admission,
+    'rosterVersion': room.version,
+    'epoch': room.cipher.epoch,
   };
 
   bool _considerAuthority(GroupCallRoom room, GroupCallSignal signal) {
@@ -279,7 +295,9 @@ class GroupCallService {
             sender.compareTo(room.coordinator) < 0);
     if (!wins ||
         term > room.term + 128 ||
-        !room.allParticipants.contains(sender) ||
+        !(room.participants.any((p) => p.deviceId == sender) ||
+            room.allParticipants.contains(sender) ||
+            room.joinIntents.containsKey(sender)) ||
         !_validRoster(room, signal.payload, coordinator: sender)) {
       return false;
     }
@@ -366,6 +384,7 @@ class GroupCallService {
     room.admission = base64UrlEncode(
       GroupCallCipher.randomKey().take(16).toList(),
     ).replaceAll('=', '');
+    room.needsAdmission = true;
     room.leaving = false;
     try {
       // Serialize through a late open too: a timed-out engine cannot become
@@ -468,13 +487,19 @@ class GroupCallService {
 
   void _sendKey(GroupCallRoom room, String recipient) {
     final key = room.distributionKey;
-    if (key == null || !room.participants.any((p) => p.deviceId == recipient)) {
+    final admission =
+        room.admissions[recipient] ?? room.joinIntents[recipient]?.$1;
+    if (key == null ||
+        admission == null ||
+        !room.participants.any((p) => p.deviceId == recipient)) {
       return;
     }
+    room.admissions[recipient] = admission;
     _dispatchSignal(
       _signal(room, 'key', {
         ..._rosterPayload(room),
         'recipient': recipient,
+        'admission': admission,
         'key': base64Encode(key),
       }),
       recipient,
@@ -601,10 +626,27 @@ class GroupCallService {
       switch (signal.action) {
         case 'join':
           final admission = signal.payload['admission'];
+          final term = signal.payload['term'] ?? 0;
           if (admission is! String ||
-              !RegExp(r'^[A-Za-z0-9_-]{22}$').hasMatch(admission)) {
+              !RegExp(r'^[A-Za-z0-9_-]{22}$').hasMatch(admission) ||
+              term is! int ||
+              term < 0 ||
+              term > 0x7fffffff) {
             return false;
           }
+          final intent = room.joinIntents[authenticatedSender];
+          if (intent != null &&
+              (signal.issuedAt.isBefore(intent.$2) ||
+                  (signal.issuedAt == intent.$2 && admission != intent.$1))) {
+            return false;
+          }
+          if (intent == null && room.joinIntents.length >= 128) {
+            final oldest = room.joinIntents.entries.reduce(
+              (a, b) => a.value.$2.isBefore(b.value.$2) ? a : b,
+            );
+            room.joinIntents.remove(oldest.key);
+          }
+          room.joinIntents[authenticatedSender] = (admission, signal.issuedAt);
           final existing = room.participants
               .where((p) => p.deviceId == authenticatedSender)
               .firstOrNull;
@@ -614,6 +656,11 @@ class GroupCallService {
           }
           if (room.coordinator != localDeviceId || !room.joined) return true;
           if (existing != null && previousAdmission == admission) {
+            if (term == room.term &&
+                signal.payload['rosterVersion'] == room.version &&
+                signal.payload['epoch'] == room.epoch) {
+              return true;
+            }
             _dispatchSignal(
               _signal(room, 'roster', _rosterPayload(room)),
               authenticatedSender,
@@ -660,6 +707,8 @@ class GroupCallService {
           if (signal.action == 'key') {
             if (!room.joined ||
                 signal.payload['recipient'] != localDeviceId ||
+                room.admission == null ||
+                signal.payload['admission'] != room.admission ||
                 signal.payload['key'] is! String ||
                 (signal.payload['key'] as String).length != 44) {
               return false;
@@ -925,6 +974,8 @@ class GroupCallService {
         idle.version = room.coordinator == localDeviceId ? 0 : room.version;
         idle.epoch = room.coordinator == localDeviceId ? 0 : room.epoch;
         idle.allParticipants.addAll(room.allParticipants);
+        idle.joinIntents.addAll(room.joinIntents);
+        idle.lastJoinIssued = room.lastJoinIssued;
         idle.seen.addAll(room.seen);
         idle.admissions.addAll(room.admissions);
         idle.admissions.remove(localDeviceId);
@@ -1350,10 +1401,8 @@ class GroupCallService {
         await _remove(room, peer.deviceId);
       }
       if (!room.joined || room.ended) continue;
-      if (!room.connected &&
-          (room.lastJoinSent == null ||
-              now().difference(room.lastJoinSent!) >=
-                  const Duration(seconds: 2))) {
+      if (room.lastJoinSent == null ||
+          now().difference(room.lastJoinSent!) >= const Duration(seconds: 2)) {
         await _fanout(room, 'join', _joinPayload(room));
         room.lastJoinSent = now();
       }
