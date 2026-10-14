@@ -24,6 +24,7 @@ import 'package:conest/src/carrier.dart';
 import 'package:conest/src/crypto_service.dart';
 import 'package:conest/src/feature_models.dart';
 import 'package:conest/src/email/mail_socket.dart';
+import 'package:conest/src/account/account_model.dart';
 import 'package:conest/src/energy_policy.dart';
 import 'package:conest/src/ui/devices_panel.dart';
 import 'package:conest/src/ui/user_mode_screen.dart';
@@ -15120,12 +15121,14 @@ void main() {
 
       final qr = await phone.startLinkAsNewDevice();
       expect(phone.linkState, LinkState.showingQrCode);
-      final code = await alice.startLinkFromQrCode(qr);
+      await alice.startLinkFromQrCode(qr);
       await _waitForIroh(
-        () => phone.linkState == LinkState.compareCode,
-        reason: 'the offer did not arrive',
+        () =>
+            phone.linkState == LinkState.compareCode &&
+            alice.linkState == LinkState.compareCode,
+        reason: 'the codes did not show',
       );
-      expect(phone.linkCode, code, reason: 'both show the same code');
+      expect(phone.linkCode, alice.linkCode, reason: 'both show the same code');
 
       await phone.confirmLinkCode();
       await alice.confirmLinkCode();
@@ -15150,6 +15153,45 @@ void main() {
         return bob.linkedDevicesOf(aliceId).any((d) => d.deviceId == phoneId);
       }, reason: 'Bob did not learn the phone');
       expect(bob.contacts.length, 1);
+    });
+
+    test('someone who photographed the QR code cannot pass for the real '
+        'device', () async {
+      final (alice, bob, phone, advance) = await threeDevices();
+      advance(const Duration(hours: 25));
+      final qr = await phone.startLinkAsNewDevice();
+      // Bob (any stranger with the QR code) offers first.
+      await bob.startLinkFromQrCode(qr);
+      await _waitForIroh(() => phone.linkState == LinkState.compareCode);
+      await alice.startLinkFromQrCode(qr);
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      // The phone answered Bob only: Alice shows no code at all, so the
+      // user sees that the devices do not match.
+      expect(alice.linkCode, isNull);
+      expect(alice.linkState, LinkState.connecting);
+      await _waitForIroh(() => bob.linkCode != null);
+      expect(bob.linkCode, phone.linkCode);
+    });
+
+    test('removing a contact removes their other devices', () async {
+      final (alice, bob, phone, advance) = await threeDevices();
+      advance(const Duration(hours: 25));
+      final aliceId = alice.identity!.deviceId;
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () =>
+            phone.linkState == LinkState.compareCode &&
+            alice.linkState == LinkState.compareCode,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.linkedDevicesOf(aliceId).isNotEmpty;
+      });
+      await bob.removeContact(aliceId);
+      expect(bob.linkedDevicesOf(aliceId), isEmpty);
     });
 
     testWidgets('Settings lists the devices and shows a link code', (
@@ -15192,6 +15234,8 @@ void main() {
       );
       expect(qr.data, startsWith('cl1|'));
       expect(alice.linkState, LinkState.showingQrCode);
+      alice.cancelLink();
+      await tester.pump(const Duration(seconds: 1));
     });
 
     test(
@@ -15201,7 +15245,11 @@ void main() {
         advance(const Duration(hours: 25));
         final qr = await phone.startLinkAsNewDevice();
         await alice.startLinkFromQrCode(qr);
-        await _waitForIroh(() => phone.linkState == LinkState.compareCode);
+        await _waitForIroh(
+          () =>
+              phone.linkState == LinkState.compareCode &&
+              alice.linkState == LinkState.compareCode,
+        );
         // Only the existing device confirms.
         await alice.confirmLinkCode();
         await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -15250,13 +15298,37 @@ void main() {
         (await phoneSigning.extractPublicKey()).bytes,
       );
       final phoneEncryption = await X25519().newKeyPair();
+      final phoneEncryptionKey = base64Encode(
+        (await phoneEncryption.extractPublicKey()).bytes,
+      );
+      Future<String> phoneProof() async => base64Encode(
+        (await Ed25519().sign(
+          DeviceCert.proofBytes(
+            accountId: alice.identity!.accountId,
+            deviceId: 'alice-phone',
+            encryptionKeyBase64: phoneEncryptionKey,
+            signingKeyBase64: phoneSigningKey,
+          ),
+          keyPair: phoneSigning,
+        )).bytes,
+      );
+      // Without the phone's own proof it is refused.
+      await expectLater(
+        alice.addAccountDevice(
+          deviceId: 'alice-phone',
+          encryptionKeyBase64: phoneEncryptionKey,
+          signingKeyBase64: phoneSigningKey,
+          name: 'Pixel 8',
+          proofSignatureBase64: base64Encode(List<int>.filled(64, 1)),
+        ),
+        throwsArgumentError,
+      );
       await alice.addAccountDevice(
         deviceId: 'alice-phone',
-        encryptionKeyBase64: base64Encode(
-          (await phoneEncryption.extractPublicKey()).bytes,
-        ),
+        encryptionKeyBase64: phoneEncryptionKey,
         signingKeyBase64: phoneSigningKey,
         name: 'Pixel 8',
+        proofSignatureBase64: await phoneProof(),
       );
       await _waitForIroh(() {
         unawaited(bob.pollNow());
@@ -15286,12 +15358,15 @@ void main() {
       await expectLater(
         alice.addAccountDevice(
           deviceId: 'alice-phone',
-          encryptionKeyBase64: phone.publicKeyBase64,
+          encryptionKeyBase64: phoneEncryptionKey,
           signingKeyBase64: phoneSigningKey,
           name: 'Pixel 8',
+          proofSignatureBase64: await phoneProof(),
         ),
         throwsStateError,
       );
+      // The original device stays: contacts know the account through it.
+      expect(() => alice.revokeAccountDevice(aliceId), throwsArgumentError);
     });
   });
 

@@ -13,7 +13,10 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:cryptography/cryptography.dart';
+
+import 'account_model.dart';
 
 const String _qrPrefix = 'cl1';
 
@@ -78,18 +81,58 @@ class LinkInvitation {
   }
 }
 
+/// What a step of a link is about: both devices and their keys, the
+/// account, the QR code's secret (as a hash) and, once the new device chose
+/// it, its nonce. Each device signs the steps it sends over this, so a
+/// message can only come from the device whose key it names.
+List<int> linkTranscript({
+  required String step,
+  required LinkInvitation invitation,
+  required String existingDeviceId,
+  required String existingEncryptionKeyBase64,
+  required String existingSigningKeyBase64,
+  required String accountId,
+  String? nonceBase64,
+  String? bodyHashBase64,
+}) => accountSigningBytes('link-$step', {
+  'secretHash': base64Encode(sha256Bytes(invitation.linkSecret)),
+  'newDeviceId': invitation.deviceId,
+  'newEncryptionKey': invitation.encryptionKeyBase64,
+  'newSigningKey': invitation.signingKeyBase64,
+  'newIrohEndpointId': invitation.irohEndpointId,
+  'existingDeviceId': existingDeviceId,
+  'existingEncryptionKey': existingEncryptionKeyBase64,
+  'existingSigningKey': existingSigningKeyBase64,
+  'accountId': accountId,
+  'nonce': nonceBase64,
+  'bodyHash': bodyHashBase64,
+});
+
+/// SHA-256 of [bytes] (synchronously, for transcripts).
+List<int> sha256Bytes(List<int> bytes) => crypto.sha256.convert(bytes).bytes;
+
 /// The 6 digits both devices show: the same only when both have the same
-/// pair of devices and the same QR code.
+/// pair of devices (all four keys), the same QR code and the same nonce.
+/// The new device picks the nonce only after an offer arrived and sends it
+/// only to that offer's device, so whoever made the offer could not have
+/// chosen keys to land on a given code; and if someone else offered
+/// first, the real device never gets a nonce and shows no code.
 Future<String> linkConfirmationCode({
   required String existingSigningKeyBase64,
+  required String existingEncryptionKeyBase64,
   required String newSigningKeyBase64,
+  required String newEncryptionKeyBase64,
   required Uint8List linkSecret,
+  required String nonceBase64,
 }) async {
   final digest = await Sha256().hash([
-    ...utf8.encode('conest/link/v1/code\n'),
+    ...utf8.encode('conest/link/v2/code\n'),
     ...base64Decode(existingSigningKeyBase64),
+    ...base64Decode(existingEncryptionKeyBase64),
     ...base64Decode(newSigningKeyBase64),
+    ...base64Decode(newEncryptionKeyBase64),
     ...linkSecret,
+    ...base64Decode(nonceBase64),
   ]);
   final bytes = digest.bytes;
   final value =

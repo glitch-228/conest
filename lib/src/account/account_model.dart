@@ -11,6 +11,9 @@ import 'dart:convert';
 
 import 'package:cryptography/cryptography.dart';
 
+/// Highest device list version accepted (no overflow, no absurd jumps).
+const int maxDeviceListVersion = 1 << 30;
+
 /// Most devices one account lists (and certificates one list carries).
 const int maxAccountDevices = 16;
 
@@ -65,7 +68,8 @@ DateTime? _time(Object? value) => value is String && value.length <= 40
     ? DateTime.tryParse(value)?.toUtc()
     : null;
 
-Future<bool> _verify(
+/// Checks an Ed25519 [signatureBase64] over [bytes] by [publicKeyBase64].
+Future<bool> verifyEd25519(
   List<int> bytes, {
   required String signatureBase64,
   required String publicKeyBase64,
@@ -86,7 +90,8 @@ Future<bool> _verify(
   }
 }
 
-Future<String> _sign(
+/// Signs [bytes] with an Ed25519 key pair.
+Future<String> signEd25519(
   List<int> bytes, {
   required String publicKeyBase64,
   required String privateKeyBase64,
@@ -125,7 +130,7 @@ class AccountKeys {
     );
   }
 
-  Future<String> sign(List<int> bytes) => _sign(
+  Future<String> sign(List<int> bytes) => signEd25519(
     bytes,
     publicKeyBase64: publicKeyBase64,
     privateKeyBase64: privateKeyBase64,
@@ -204,7 +209,7 @@ class AccountUpgrade {
       deviceSigningKeyBase64: deviceSigningPublicKeyBase64,
       accountKeyBase64: account.publicKeyBase64,
       issuedAt: issuedAt.toUtc(),
-      deviceSignatureBase64: await _sign(
+      deviceSignatureBase64: await signEd25519(
         bytes,
         publicKeyBase64: deviceSigningPublicKeyBase64,
         privateKeyBase64: deviceSigningPrivateKeyBase64,
@@ -226,12 +231,12 @@ class AccountUpgrade {
       return false;
     }
     final bytes = signingBytes;
-    return await _verify(
+    return await verifyEd25519(
           bytes,
           signatureBase64: deviceSignatureBase64,
           publicKeyBase64: deviceSigningKeyBase64,
         ) &&
-        await _verify(
+        await verifyEd25519(
           bytes,
           signatureBase64: accountSignatureBase64,
           publicKeyBase64: accountKeyBase64,
@@ -284,11 +289,32 @@ class DeviceCert {
     required this.name,
     required this.linkedAt,
     required this.signatureBase64,
+    required this.proofSignatureBase64,
     this.irohEndpointId,
   });
 
   final String accountId;
   final String deviceId;
+
+  /// The device's own signature (by [signingKeyBase64]) on its keys and
+  /// id: proof it holds the key, so nobody can certify another person's
+  /// keys or claim a device id that is not theirs.
+  final String proofSignatureBase64;
+
+  /// The bytes a device signs to prove its keys ([proofSignatureBase64]).
+  static List<int> proofBytes({
+    required String accountId,
+    required String deviceId,
+    required String encryptionKeyBase64,
+    required String signingKeyBase64,
+    String? irohEndpointId,
+  }) => accountSigningBytes('device-proof', {
+    'accountId': accountId,
+    'deviceId': deviceId,
+    'encryptionKey': encryptionKeyBase64,
+    'signingKey': signingKeyBase64,
+    'irohEndpointId': irohEndpointId,
+  });
 
   /// The device's X25519 key (what contacts encrypt to).
   final String encryptionKeyBase64;
@@ -341,6 +367,7 @@ class DeviceCert {
     String? irohEndpointId,
     required String name,
     required DateTime linkedAt,
+    required String proofSignatureBase64,
   }) async {
     final trimmed = name.trim();
     final fields = _fields(
@@ -365,14 +392,29 @@ class DeviceCert {
       signatureBase64: await account.sign(
         accountSigningBytes('device', fields),
       ),
+      proofSignatureBase64: proofSignatureBase64,
     );
   }
 
-  Future<bool> verify(String accountKeyBase64) => _verify(
-    accountSigningBytes('device', _signedFields),
-    signatureBase64: signatureBase64,
-    publicKeyBase64: accountKeyBase64,
-  );
+  /// True when the account key vouches for this device and the device
+  /// proved it holds its signing key.
+  Future<bool> verify(String accountKeyBase64) async =>
+      await verifyEd25519(
+        accountSigningBytes('device', _signedFields),
+        signatureBase64: signatureBase64,
+        publicKeyBase64: accountKeyBase64,
+      ) &&
+      await verifyEd25519(
+        proofBytes(
+          accountId: accountId,
+          deviceId: deviceId,
+          encryptionKeyBase64: encryptionKeyBase64,
+          signingKeyBase64: signingKeyBase64,
+          irohEndpointId: irohEndpointId,
+        ),
+        signatureBase64: proofSignatureBase64,
+        publicKeyBase64: signingKeyBase64,
+      );
 
   /// Whether this device may add or remove others at [now].
   bool mayManageDevicesAt(DateTime now) =>
@@ -381,6 +423,7 @@ class DeviceCert {
   Map<String, Object?> toJson() => {
     ..._signedFields,
     'signature': signatureBase64,
+    'proof': proofSignatureBase64,
   };
 
   static DeviceCert? fromJson(Object? json) {
@@ -396,7 +439,8 @@ class DeviceCert {
         name is! String ||
         name.length > _maxNameLength ||
         linkedAt == null ||
-        !_isSignature(json['signature'])) {
+        !_isSignature(json['signature']) ||
+        !_isSignature(json['proof'])) {
       return null;
     }
     return DeviceCert(
@@ -408,6 +452,7 @@ class DeviceCert {
       name: name,
       linkedAt: linkedAt,
       signatureBase64: json['signature'] as String,
+      proofSignatureBase64: json['proof'] as String,
     );
   }
 }
@@ -511,7 +556,7 @@ class AccountDeviceList {
       revoked: revoked,
       issuedAt: issuedAt,
     );
-    if (!await _verify(
+    if (!await verifyEd25519(
       accountSigningBytes('devices', fields),
       signatureBase64: signatureBase64,
       publicKeyBase64: accountKeyBase64,
@@ -563,6 +608,7 @@ class AccountDeviceList {
     if (!_isId(json['accountId']) ||
         version is! int ||
         version < 1 ||
+        version > maxDeviceListVersion ||
         rawDevices is! List ||
         rawDevices.length > maxAccountDevices ||
         rawRevoked is! Map ||

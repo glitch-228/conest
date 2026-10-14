@@ -10,11 +10,22 @@ class AccountDevicesUpdate {
   const AccountDevicesUpdate({
     required this.accountKeyBase64,
     required this.list,
+    this.revocationsOnly = false,
   });
 
   final String accountKeyBase64;
   final AccountDeviceList list;
+
+  /// An older (or equal) version that only adds revocations: apply those,
+  /// nothing else. A revocation must get through even when a stolen device
+  /// published lists with higher versions first.
+  final bool revocationsOnly;
 }
+
+/// How far one statement may move the version ahead of what this device
+/// knows: a stolen device cannot jump so far that the owner's lists can
+/// never catch up.
+const int maxDeviceListVersionStep = 16;
 
 /// Checks [payload] ({"upgrade": …, "devices": …}), which came inside an
 /// authenticated exchange from one of a contact's devices, against what
@@ -43,9 +54,19 @@ Future<AccountDevicesUpdate?> verifyAccountDevices({
   final list = AccountDeviceList.fromJson(payload['devices']);
   if (list == null ||
       list.accountId != accountId ||
-      list.version <= knownVersion ||
       !knownRevoked.every(list.revoked.containsKey) ||
       list.deviceFor(anchorDeviceId) == null) {
+    return null;
+  }
+  final revocationsOnly = list.version <= knownVersion;
+  if (revocationsOnly) {
+    // Only worth anything if it revokes something not yet revoked here.
+    if (knownAccountKeyBase64 == null ||
+        list.revoked.keys.every(knownRevoked.contains)) {
+      return null;
+    }
+  } else if (knownVersion > 0 &&
+      list.version > knownVersion + maxDeviceListVersionStep) {
     return null;
   }
   var accountKey = knownAccountKeyBase64;
@@ -70,5 +91,9 @@ Future<AccountDevicesUpdate?> verifyAccountDevices({
     return null;
   }
   if (!await list.verify(accountKey)) return null;
-  return AccountDevicesUpdate(accountKeyBase64: accountKey, list: list);
+  return AccountDevicesUpdate(
+    accountKeyBase64: accountKey,
+    list: list,
+    revocationsOnly: revocationsOnly,
+  );
 }

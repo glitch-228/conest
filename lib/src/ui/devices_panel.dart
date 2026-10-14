@@ -214,6 +214,11 @@ class _LinkExistingDialogState extends State<LinkExistingDialog> {
               LinkState.waitingForOtherDevice => const Text(
                 'Confirm the code on the new device too.',
               ),
+              LinkState.connecting => const Text(
+                'Waiting for the new device to answer. If no code appears, '
+                'make sure the new device still shows its code, and that '
+                'both are on the same network or online.',
+              ),
               LinkState.compareCode when code != null => _CompareCode(
                 code: code,
                 onConfirm: () => widget.controller.confirmLinkCode(),

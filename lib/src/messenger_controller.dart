@@ -9042,8 +9042,13 @@ class MessengerController extends ChangeNotifier {
           for (final message in conversation.messages)
             if (message.attachment != null) message.attachment!.id,
     };
+    // The contact's other devices go with it.
     final contacts = _snapshot.contacts
-        .where((contact) => contact.deviceId != deviceId)
+        .where(
+          (contact) =>
+              contact.deviceId != deviceId &&
+              contact.accountAnchorDeviceId != deviceId,
+        )
         .toList();
     final conversations = _snapshot.conversations
         .where((conversation) => conversation.peerDeviceId != deviceId)
@@ -19742,7 +19747,21 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _handleContactExchange(RelayEnvelope envelope) async {
-    final existing = _contactByDeviceId(envelope.senderDeviceId);
+    var existing = _contactByDeviceId(envelope.senderDeviceId);
+    // A first-contact request from a device id some contact's account
+    // claims: that claim proves nothing about this device, so it goes, and
+    // the request is handled as from anyone new (the user approves it).
+    if (envelope.protocolVersion == 1 &&
+        existing != null &&
+        existing.isLinkedDevice) {
+      _snapshot = _snapshot.copyWith(
+        contacts: [
+          for (final contact in _snapshot.contacts)
+            if (contact.deviceId != existing.deviceId) contact,
+        ],
+      );
+      existing = null;
+    }
     String payload;
     String? pairingRequestId;
     String? pairingResponse;
@@ -19761,7 +19780,12 @@ class MessengerController extends ChangeNotifier {
     // Their account key and device list (M29), read only from an
     // authenticated exchange.
     Object? accountStatement;
-    if (_isRevokedAccountDevice(envelope.senderDeviceId)) return;
+    if (_isRevokedAccountDevice(
+      envelope.senderDeviceId,
+      envelope.senderAccountId,
+    )) {
+      return;
+    }
     if (envelope.protocolVersion == 1) {
       if (existing?.pendingVerification == true) return;
       final rawPayload = envelope.payloadBase64;
@@ -28619,6 +28643,15 @@ class MessengerController extends ChangeNotifier {
       name: deviceName,
       // The original device has been there all along.
       linkedAt: me.createdAt,
+      proofSignatureBase64: await _crypto.signInstallationBytes(
+        DeviceCert.proofBytes(
+          accountId: me.accountId,
+          deviceId: me.deviceId,
+          encryptionKeyBase64: me.publicKeyBase64,
+          signingKeyBase64: signingPublic,
+          irohEndpointId: me.irohEndpointId,
+        ),
+      ),
     );
     final list = await AccountDeviceList.issue(
       account: account,
@@ -28685,6 +28718,8 @@ class MessengerController extends ChangeNotifier {
     required String signingKeyBase64,
     String? irohEndpointId,
     required String name,
+    // The device's own signature on its keys (proof it holds them).
+    required String proofSignatureBase64,
   }) async {
     final me = _requireIdentity();
     if (!mayManageAccountDevices) {
@@ -28704,7 +28739,11 @@ class MessengerController extends ChangeNotifier {
       irohEndpointId: irohEndpointId,
       name: name,
       linkedAt: _now().toUtc(),
+      proofSignatureBase64: proofSignatureBase64,
     );
+    if (!await cert.verify(_accountKeys(me).publicKeyBase64)) {
+      throw ArgumentError('The device did not prove it holds its keys.');
+    }
     await _reissueAccountDevices((devices, revoked) {
       if (revoked.containsKey(deviceId)) {
         throw StateError('A revoked device cannot be added again.');
@@ -28724,6 +28763,12 @@ class MessengerController extends ChangeNotifier {
     if (deviceId == me.deviceId) {
       throw ArgumentError('This device cannot revoke itself.');
     }
+    // Contacts know the account through its original device: it stays.
+    if (AccountUpgrade.fromJson(me.accountUpgrade)?.deviceId == deviceId) {
+      throw ArgumentError(
+        'The account\'s original device cannot be removed yet.',
+      );
+    }
     if (!mayManageAccountDevices) {
       throw StateError(
         'A device linked in the last 24 hours cannot remove devices yet.',
@@ -28735,17 +28780,27 @@ class MessengerController extends ChangeNotifier {
     });
   }
 
-  // Linking a new device (M29a). The new device shows a QR code; the
-  // existing device scans it and sends an offer; both show the same 6-digit
-  // code, which the user confirms on both; then the existing device adds
-  // the new one to the account and sends it the account (keys, device
-  // list, contacts). Everything is sealed to the receiving device's key
-  // and the QR code's secret.
+  // Linking a new device (M29a).
+  //
+  // 1. The new device shows a QR code (its keys and a random secret).
+  // 2. The existing device scans it and sends an offer, signed by its
+  //    signing key over the link transcript.
+  // 3. The new device picks a random nonce and sends it, signed, only to
+  //    that offer's device. Both now show a code over all four keys, the
+  //    secret and the nonce (so nobody could pick keys to hit it).
+  // 4. The user confirms on both. The new device's confirmation (signed,
+  //    with its proof of holding its keys) goes to the existing device.
+  // 5. The existing device adds it to the account and sends the account
+  //    (keys, device list, contacts), signed. The new device accepts that
+  //    from the offer's device only, once.
+  // Everything is also sealed to the receiving device's key and the
+  // QR code's secret. A link lasts at most 10 minutes.
 
   static const Duration _linkLifetime = Duration(minutes: 10);
 
   _LinkAsNew? _linkAsNew;
   _LinkAsExisting? _linkAsExisting;
+  Timer? _linkExpiry;
 
   /// The code to compare on this device during a link, once known.
   String? get linkCode => _linkAsNew?.code ?? _linkAsExisting?.code;
@@ -28756,13 +28811,14 @@ class MessengerController extends ChangeNotifier {
     if (asNew != null) {
       if (asNew.done) return LinkState.linked;
       if (asNew.confirmed) return LinkState.waitingForOtherDevice;
-      return asNew.offer == null
+      return asNew.code == null
           ? LinkState.showingQrCode
           : LinkState.compareCode;
     }
     final asExisting = _linkAsExisting;
     if (asExisting != null) {
       if (asExisting.granted) return LinkState.linked;
+      if (asExisting.code == null) return LinkState.connecting;
       return asExisting.confirmedHere
           ? LinkState.waitingForOtherDevice
           : LinkState.compareCode;
@@ -28772,10 +28828,26 @@ class MessengerController extends ChangeNotifier {
 
   /// Stops a link under way on this device.
   void cancelLink() {
+    _linkExpiry?.cancel();
+    _linkExpiry = null;
     _linkAsNew = null;
     _linkAsExisting = null;
     notifyListeners();
   }
+
+  void _armLinkExpiry() {
+    _linkExpiry?.cancel();
+    _linkExpiry = Timer(_linkLifetime, () {
+      if (_disposed) return;
+      _linkAsNew = null;
+      _linkAsExisting = null;
+      _linkExpiry = null;
+      notifyListeners();
+    });
+  }
+
+  bool _linkExpired(DateTime startedAt) =>
+      _now().toUtc().difference(startedAt) > _linkLifetime;
 
   /// On the new device: the QR code for the existing device to scan.
   Future<String> startLinkAsNewDevice() async {
@@ -28789,14 +28861,16 @@ class MessengerController extends ChangeNotifier {
       irohEndpointId: me.irohEndpointId,
       linkSecret: LinkInvitation.newSecret(),
     );
+    _linkAsExisting = null;
     _linkAsNew = _LinkAsNew(invitation, _now().toUtc());
+    _armLinkExpiry();
     notifyListeners();
     return invitation.encode();
   }
 
   /// On the existing device: starts linking the device whose QR code is
-  /// [qrText]; returns the code to compare.
-  Future<String> startLinkFromQrCode(String qrText) async {
+  /// [qrText]. The code to compare shows once the new device answers.
+  Future<void> startLinkFromQrCode(String qrText) async {
     final invitation = LinkInvitation.tryParse(qrText);
     if (invitation == null) {
       throw ArgumentError('This is not a Conest device link code.');
@@ -28811,87 +28885,132 @@ class MessengerController extends ChangeNotifier {
         'A device linked in the last 24 hours cannot link others yet.',
       );
     }
-    final signing = _requireIdentity().signingPublicKeyBase64!;
-    final code = await linkConfirmationCode(
-      existingSigningKeyBase64: signing,
-      newSigningKeyBase64: invitation.signingKeyBase64,
-      linkSecret: invitation.linkSecret,
-    );
-    _linkAsExisting = _LinkAsExisting(invitation, code, _now().toUtc());
-    notifyListeners();
     final current = _requireIdentity();
+    final link = _LinkAsExisting(invitation, _now().toUtc());
+    _linkAsNew = null;
+    _linkAsExisting = link;
+    _armLinkExpiry();
+    notifyListeners();
+    final transcript = _transcriptAsExisting(link, 'offer');
     await _sendLinkMessage(
-      to: invitation,
+      toDeviceId: invitation.deviceId,
+      encryptionKeyBase64: invitation.encryptionKeyBase64,
+      signingKeyBase64: invitation.signingKeyBase64,
+      irohEndpointId: invitation.irohEndpointId,
+      linkSecret: invitation.linkSecret,
       purpose: 'offer',
       body: {
         'deviceId': current.deviceId,
         'accountId': current.accountId,
         'name': current.displayName,
         'encryptionKey': current.publicKeyBase64,
-        'signingKey': signing,
+        'signingKey': current.signingPublicKeyBase64,
         if (current.irohEndpointId != null)
           'irohEndpointId': current.irohEndpointId,
+        'signature': await _crypto.signInstallationBytes(transcript),
       },
     );
-    return code;
   }
+
+  List<int> _transcriptAsExisting(
+    _LinkAsExisting link,
+    String step, {
+    String? bodyHash,
+  }) {
+    final me = _requireIdentity();
+    return linkTranscript(
+      step: step,
+      invitation: link.invitation,
+      existingDeviceId: me.deviceId,
+      existingEncryptionKeyBase64: me.publicKeyBase64,
+      existingSigningKeyBase64: me.signingPublicKeyBase64!,
+      accountId: me.accountId,
+      nonceBase64: link.nonce,
+      bodyHashBase64: bodyHash,
+    );
+  }
+
+  List<int> _transcriptAsNew(
+    _LinkAsNew link,
+    _LinkOffer offer,
+    String step, {
+    String? bodyHash,
+  }) => linkTranscript(
+    step: step,
+    invitation: link.invitation,
+    existingDeviceId: offer.deviceId,
+    existingEncryptionKeyBase64: offer.encryptionKeyBase64,
+    existingSigningKeyBase64: offer.signingKeyBase64,
+    accountId: offer.accountId,
+    nonceBase64: link.nonce,
+    bodyHashBase64: bodyHash,
+  );
 
   /// The user saw the same code on both devices and confirmed it here.
   Future<void> confirmLinkCode() async {
     final asNew = _linkAsNew;
     final offer = asNew?.offer;
-    if (asNew != null && offer != null) {
+    if (asNew != null && offer != null && asNew.code != null) {
+      if (_linkExpired(asNew.startedAt)) {
+        cancelLink();
+        throw StateError('The link took too long. Start again.');
+      }
       asNew.confirmed = true;
       notifyListeners();
+      final me = _requireIdentity();
       await _sendLinkMessage(
-        to: offer,
+        toDeviceId: offer.deviceId,
+        encryptionKeyBase64: offer.encryptionKeyBase64,
+        signingKeyBase64: offer.signingKeyBase64,
+        irohEndpointId: offer.irohEndpointId,
         linkSecret: asNew.invitation.linkSecret,
         purpose: 'accept',
-        body: {'deviceId': _requireIdentity().deviceId},
+        body: {
+          'signature': await _crypto.signInstallationBytes(
+            _transcriptAsNew(asNew, offer, 'accept'),
+          ),
+          // Proof this device holds its keys, for its certificate.
+          'proof': await _crypto.signInstallationBytes(
+            DeviceCert.proofBytes(
+              accountId: offer.accountId,
+              deviceId: me.deviceId,
+              encryptionKeyBase64: me.publicKeyBase64,
+              signingKeyBase64: me.signingPublicKeyBase64!,
+              irohEndpointId: me.irohEndpointId,
+            ),
+          ),
+        },
       );
       return;
     }
     final asExisting = _linkAsExisting;
-    if (asExisting == null) throw StateError('No link is under way.');
+    if (asExisting == null || asExisting.code == null) {
+      throw StateError('No link is waiting for confirmation.');
+    }
+    if (_linkExpired(asExisting.startedAt)) {
+      cancelLink();
+      throw StateError('The link took too long. Start again.');
+    }
     asExisting.confirmedHere = true;
     notifyListeners();
-    if (asExisting.acceptedThere) await _sendLinkGrant(asExisting);
+    if (asExisting.proof != null) await _sendLinkGrant(asExisting);
   }
 
   Future<void> _sendLinkMessage({
-    required Object to,
-    Uint8List? linkSecret,
+    required String toDeviceId,
+    required String encryptionKeyBase64,
+    required String signingKeyBase64,
+    String? irohEndpointId,
+    required Uint8List linkSecret,
     required String purpose,
     required Map<String, Object?> body,
   }) async {
     final me = _requireIdentity();
-    final ({
-      String deviceId,
-      String encryptionKey,
-      String signingKey,
-      String? iroh,
-    })
-    target = switch (to) {
-      LinkInvitation invitation => (
-        deviceId: invitation.deviceId,
-        encryptionKey: invitation.encryptionKeyBase64,
-        signingKey: invitation.signingKeyBase64,
-        iroh: invitation.irohEndpointId,
-      ),
-      _LinkOffer offer => (
-        deviceId: offer.deviceId,
-        encryptionKey: offer.encryptionKeyBase64,
-        signingKey: offer.signingKeyBase64,
-        iroh: offer.irohEndpointId,
-      ),
-      _ => throw ArgumentError('Unknown link peer.'),
-    };
-    final secret = linkSecret ?? (to as LinkInvitation).linkSecret;
     final sealed = await sealLinkMessage(
       purpose: purpose,
       plaintext: utf8.encode(jsonEncode(body)),
-      recipientEncryptionKeyBase64: target.encryptionKey,
-      linkSecret: secret,
+      recipientEncryptionKeyBase64: encryptionKeyBase64,
+      linkSecret: linkSecret,
     );
     final envelope = RelayEnvelope(
       protocolVersion: 1,
@@ -28900,22 +29019,22 @@ class MessengerController extends ChangeNotifier {
       conversationId: 'account-link',
       senderAccountId: me.accountId,
       senderDeviceId: me.deviceId,
-      recipientDeviceId: target.deviceId,
+      recipientDeviceId: toDeviceId,
       createdAt: _now().toUtc(),
       payloadBase64: base64Encode(utf8.encode(jsonEncode(sealed))),
     );
     // Not a contact: a passing record with the keys the QR code (or the
-    // sealed offer) gave, for the transports to find the device.
+    // signed offer) gave, for the transports to find the device.
     final peer = ContactRecord.fromJson({
       'accountId': 'link',
-      'deviceId': target.deviceId,
+      'deviceId': toDeviceId,
       'alias': 'Device being linked',
       'displayName': '',
       'bio': '',
       'relayCapable': false,
-      'publicKeyBase64': target.encryptionKey,
-      'signingPublicKeyBase64': target.signingKey,
-      if (target.iroh != null) 'irohEndpointId': target.iroh,
+      'publicKeyBase64': encryptionKeyBase64,
+      'signingPublicKeyBase64': signingKeyBase64,
+      if (irohEndpointId != null) 'irohEndpointId': irohEndpointId,
       'routeHints': const <Object>[],
       'safetyNumber': '',
       'trustedAt': _now().toUtc().toIso8601String(),
@@ -28923,7 +29042,7 @@ class MessengerController extends ChangeNotifier {
     });
     await _deliverToContact(
       contact: peer,
-      recipientDeviceId: target.deviceId,
+      recipientDeviceId: toDeviceId,
       envelope: envelope,
       irohFirst: true,
       allowForwarding: false,
@@ -28933,7 +29052,6 @@ class MessengerController extends ChangeNotifier {
   Future<void> _handleAccountLink(RelayEnvelope envelope) async {
     final me = identity;
     if (me == null) return;
-    final now = _now().toUtc();
     Object? sealed;
     try {
       sealed = jsonDecode(utf8.decode(base64Decode(envelope.payloadBase64!)));
@@ -28958,27 +29076,62 @@ class MessengerController extends ChangeNotifier {
       }
     }
 
+    Future<bool> signedBy(
+      Object? signature,
+      String signingKey,
+      List<int> transcript,
+    ) async =>
+        signature is String &&
+        signature.length <= 128 &&
+        await verifyEd25519(
+          transcript,
+          signatureBase64: signature,
+          publicKeyBase64: signingKey,
+        );
+
     final asNew = _linkAsNew;
     if (asNew != null) {
-      if (now.difference(asNew.startedAt) > _linkLifetime) {
-        _linkAsNew = null;
-        notifyListeners();
-        return;
-      }
+      if (asNew.done || _linkExpired(asNew.startedAt)) return;
       final secret = asNew.invitation.linkSecret;
       if (sealed['purpose'] == 'offer' && asNew.offer == null) {
         final body = await open('offer', secret);
         final offer = body == null ? null : _LinkOffer.fromJson(body);
-        if (offer == null || offer.deviceId != envelope.senderDeviceId) {
+        if (offer == null ||
+            offer.deviceId != envelope.senderDeviceId ||
+            !await signedBy(
+              body!['signature'],
+              offer.signingKeyBase64,
+              _transcriptAsNew(asNew, offer, 'offer'),
+            ) ||
+            _linkAsNew != asNew ||
+            asNew.offer != null) {
           return;
         }
         asNew.offer = offer;
+        asNew.nonce = base64Encode(LinkInvitation.newSecret());
         asNew.code = await linkConfirmationCode(
           existingSigningKeyBase64: offer.signingKeyBase64,
+          existingEncryptionKeyBase64: offer.encryptionKeyBase64,
           newSigningKeyBase64: asNew.invitation.signingKeyBase64,
+          newEncryptionKeyBase64: asNew.invitation.encryptionKeyBase64,
           linkSecret: secret,
+          nonceBase64: asNew.nonce!,
         );
         notifyListeners();
+        await _sendLinkMessage(
+          toDeviceId: offer.deviceId,
+          encryptionKeyBase64: offer.encryptionKeyBase64,
+          signingKeyBase64: offer.signingKeyBase64,
+          irohEndpointId: offer.irohEndpointId,
+          linkSecret: secret,
+          purpose: 'nonce',
+          body: {
+            'nonce': asNew.nonce,
+            'signature': await _crypto.signInstallationBytes(
+              _transcriptAsNew(asNew, offer, 'nonce'),
+            ),
+          },
+        );
         return;
       }
       final offer = asNew.offer;
@@ -28987,34 +29140,91 @@ class MessengerController extends ChangeNotifier {
           offer != null &&
           envelope.senderDeviceId == offer.deviceId) {
         final body = await open('grant', secret);
-        if (body == null) return;
-        await _applyLinkGrant(asNew, offer, body);
+        final grant = body?['grant'];
+        if (body == null || grant is! Map<String, dynamic>) return;
+        final bodyHash = base64Encode(
+          sha256Bytes(utf8.encode(jsonEncode(grant))),
+        );
+        if (!await signedBy(
+          body['signature'],
+          offer.signingKeyBase64,
+          _transcriptAsNew(asNew, offer, 'grant', bodyHash: bodyHash),
+        )) {
+          return;
+        }
+        await _applyLinkGrant(asNew, offer, grant);
       }
       return;
     }
     final asExisting = _linkAsExisting;
-    if (asExisting != null &&
-        sealed['purpose'] == 'accept' &&
-        envelope.senderDeviceId == asExisting.invitation.deviceId) {
-      if (now.difference(asExisting.startedAt) > _linkLifetime) {
-        _linkAsExisting = null;
-        notifyListeners();
+    if (asExisting == null ||
+        asExisting.granted ||
+        envelope.senderDeviceId != asExisting.invitation.deviceId ||
+        _linkExpired(asExisting.startedAt)) {
+      return;
+    }
+    final invitation = asExisting.invitation;
+    if (sealed['purpose'] == 'nonce' && asExisting.nonce == null) {
+      final body = await open('nonce', invitation.linkSecret);
+      final nonce = body?['nonce'];
+      if (body == null ||
+          nonce is! String ||
+          nonce.length > 64 ||
+          asExisting.nonce != null) {
         return;
       }
-      final body = await open('accept', asExisting.invitation.linkSecret);
-      if (body == null || body['deviceId'] != asExisting.invitation.deviceId) {
+      try {
+        if (base64Decode(nonce).length != 32) return;
+      } on FormatException {
         return;
       }
-      asExisting.acceptedThere = true;
+      asExisting.nonce = nonce;
+      if (!await signedBy(
+        body['signature'],
+        invitation.signingKeyBase64,
+        _transcriptAsExisting(asExisting, 'nonce'),
+      )) {
+        asExisting.nonce = null;
+        return;
+      }
+      final current = _requireIdentity();
+      asExisting.code = await linkConfirmationCode(
+        existingSigningKeyBase64: current.signingPublicKeyBase64!,
+        existingEncryptionKeyBase64: current.publicKeyBase64,
+        newSigningKeyBase64: invitation.signingKeyBase64,
+        newEncryptionKeyBase64: invitation.encryptionKeyBase64,
+        linkSecret: invitation.linkSecret,
+        nonceBase64: nonce,
+      );
+      notifyListeners();
+      return;
+    }
+    if (sealed['purpose'] == 'accept' &&
+        asExisting.nonce != null &&
+        asExisting.proof == null) {
+      final body = await open('accept', invitation.linkSecret);
+      final proof = body?['proof'];
+      if (body == null ||
+          proof is! String ||
+          proof.length > 128 ||
+          !await signedBy(
+            body['signature'],
+            invitation.signingKeyBase64,
+            _transcriptAsExisting(asExisting, 'accept'),
+          )) {
+        return;
+      }
+      asExisting.proof = proof;
       notifyListeners();
       if (asExisting.confirmedHere) await _sendLinkGrant(asExisting);
     }
   }
 
   /// Both sides confirmed: the new device joins the account, and gets the
-  /// account (keys, device list, contacts).
+  /// account (keys, device list, contacts), signed by this device.
   Future<void> _sendLinkGrant(_LinkAsExisting link) async {
-    if (link.granted) return;
+    final proof = link.proof;
+    if (link.granted || proof == null || !link.confirmedHere) return;
     link.granted = true;
     final invitation = link.invitation;
     await addAccountDevice(
@@ -29023,34 +29233,47 @@ class MessengerController extends ChangeNotifier {
       signingKeyBase64: invitation.signingKeyBase64,
       irohEndpointId: invitation.irohEndpointId,
       name: 'New device',
+      proofSignatureBase64: proof,
     );
     final me = _requireIdentity();
+    final grant = <String, Object?>{
+      'accountId': me.accountId,
+      'displayName': me.displayName,
+      'bio': me.bio,
+      'accountKeyPublic': me.accountKeyPublicBase64,
+      'accountKeyPrivate': me.accountKeyPrivateBase64,
+      'accountUpgrade': me.accountUpgrade,
+      'accountDeviceList': me.accountDeviceList,
+      'contacts': [
+        for (final contact in _snapshot.contacts)
+          if (!contact.isArchived) contact.toJson(),
+      ],
+    };
+    final bodyHash = base64Encode(sha256Bytes(utf8.encode(jsonEncode(grant))));
     await _sendLinkMessage(
-      to: invitation,
+      toDeviceId: invitation.deviceId,
+      encryptionKeyBase64: invitation.encryptionKeyBase64,
+      signingKeyBase64: invitation.signingKeyBase64,
+      irohEndpointId: invitation.irohEndpointId,
+      linkSecret: invitation.linkSecret,
       purpose: 'grant',
       body: {
-        'accountId': me.accountId,
-        'displayName': me.displayName,
-        'bio': me.bio,
-        'accountKeyPublic': me.accountKeyPublicBase64,
-        'accountKeyPrivate': me.accountKeyPrivateBase64,
-        'accountUpgrade': me.accountUpgrade,
-        'accountDeviceList': me.accountDeviceList,
-        'contacts': [
-          for (final contact in _snapshot.contacts)
-            if (!contact.isArchived) contact.toJson(),
-        ],
+        'grant': grant,
+        'signature': await _crypto.signInstallationBytes(
+          _transcriptAsExisting(link, 'grant', bodyHash: bodyHash),
+        ),
       },
     );
     notifyListeners();
   }
 
-  /// On the new device: takes the account the existing device sent.
+  /// On the new device: takes the account the existing device sent (once).
   Future<void> _applyLinkGrant(
     _LinkAsNew link,
     _LinkOffer offer,
     Map<String, dynamic> grant,
   ) async {
+    if (link.done) return;
     final me = _requireIdentity();
     final accountId = grant['accountId'];
     final accountKey = grant['accountKeyPublic'];
@@ -29064,14 +29287,16 @@ class MessengerController extends ChangeNotifier {
         !await list.verify(accountKey)) {
       return;
     }
-    // This device must be in the list, with its own keys.
+    // This device and the offering device must both be in the list, with
+    // the keys this link was made with.
     final mine = list.deviceFor(me.deviceId);
     final existing = list.deviceFor(offer.deviceId);
     if (mine == null ||
         mine.encryptionKeyBase64 != me.publicKeyBase64 ||
         mine.signingKeyBase64 != me.signingPublicKeyBase64 ||
         existing == null ||
-        existing.signingKeyBase64 != offer.signingKeyBase64) {
+        existing.signingKeyBase64 != offer.signingKeyBase64 ||
+        existing.encryptionKeyBase64 != offer.encryptionKeyBase64) {
       return;
     }
     final contacts = <ContactRecord>[];
@@ -29086,6 +29311,7 @@ class MessengerController extends ChangeNotifier {
     }
     final displayName = grant['displayName'];
     final bio = grant['bio'];
+    link.done = true;
     _snapshot = _snapshot.copyWith(
       identity: me.copyWith(
         accountId: accountId as String,
@@ -29100,18 +29326,22 @@ class MessengerController extends ChangeNotifier {
             : null,
         accountDeviceList: list.toJson(),
       ),
-      contacts: _dedupeContacts([..._snapshot.contacts, ...contacts]),
+      // The account's contacts replace what this new device had.
+      contacts: _dedupeContacts([...contacts, ..._snapshot.contacts]),
     );
-    link.done = true;
     await _saveSnapshotSilently(notify: true);
-    setStatus('This device is now linked to ${me.displayName}\'s account.');
+    setStatus('This device is now linked to ${offer.name}\'s account.');
     _advertiseProfileToContacts();
   }
 
   /// A device some contact's account revoked: nothing from it is read.
-  bool _isRevokedAccountDevice(String deviceId) => _snapshot.contacts.any(
-    (contact) => contact.accountRevokedDeviceIds.contains(deviceId),
-  );
+  bool _isRevokedAccountDevice(String deviceId, String accountId) =>
+      _snapshot.contacts.any(
+        (contact) =>
+            !contact.isLinkedDevice &&
+            contact.accountId == accountId &&
+            contact.accountRevokedDeviceIds.contains(deviceId),
+      );
 
   /// The records of a contact's other devices (hidden from contact lists).
   @visibleForTesting
@@ -29148,11 +29378,28 @@ class MessengerController extends ChangeNotifier {
     if (update == null) return;
     // The contact may have changed while this was being checked.
     final current = _contactByDeviceId(anchor.deviceId);
-    if (current == null ||
-        current.accountDeviceListVersion >= update.list.version) {
+    if (current == null) return;
+    final list = update.list;
+    if (update.revocationsOnly) {
+      // Only the new revocations count: their devices go for good.
+      final revoked = {
+        ...current.accountRevokedDeviceIds,
+        ...list.revoked.keys,
+      };
+      _snapshot = _snapshot.copyWith(
+        contacts: [
+          for (final contact in _snapshot.contacts)
+            if (contact.deviceId == current.deviceId)
+              current.copyWith(accountRevokedDeviceIds: revoked.toList())
+            else if (contact.accountAnchorDeviceId != current.deviceId ||
+                !revoked.contains(contact.deviceId))
+              contact,
+        ],
+      );
+      await _saveSnapshotSilently(notify: true);
       return;
     }
-    final list = update.list;
+    if (current.accountDeviceListVersion >= list.version) return;
     final me = identity;
     final updatedAnchor = current.copyWith(
       accountKeyBase64: update.accountKeyBase64,
@@ -29208,30 +29455,39 @@ class MessengerController extends ChangeNotifier {
     DeviceCert cert, {
     ContactRecord? existing,
   }) {
-    final base = existing ?? anchor;
-    final json = base.toJson()
-      ..['deviceId'] = cert.deviceId
-      ..['publicKeyBase64'] = cert.encryptionKeyBase64
-      ..['signingPublicKeyBase64'] = cert.signingKeyBase64
-      ..['irohEndpointId'] = cert.irohEndpointId
-      ..['accountAnchorDeviceId'] = anchor.deviceId
-      ..['accountKey'] = anchor.accountKeyBase64
-      ..['deviceName'] = cert.name
-      ..['alias'] = anchor.alias
-      ..['displayName'] = anchor.displayName
-      ..remove('accountDeviceListVersion')
-      ..remove('accountRevokedDeviceIds');
-    if (existing == null) {
-      json
-        ..['routeHints'] = const <Object>[]
-        ..remove('carrierAddresses')
-        ..remove('groupCarrierAddresses')
-        ..remove('pairingRequestId')
-        ..remove('retiredPairingRequestIds')
-        ..remove('matrixAddress')
-        ..remove('featureCapabilities')
-        ..remove('capabilities');
-    }
+    // Only what is the person's, plus the device's own keys; nothing about
+    // trust, verification, pairing or reachability is carried over.
+    final anchorJson = anchor.toJson();
+    final json = <String, dynamic>{
+      'accountId': anchor.accountId,
+      'deviceId': cert.deviceId,
+      'alias': anchor.alias,
+      'displayName': anchor.displayName,
+      'bio': anchor.bio,
+      'relayCapable': false,
+      'publicKeyBase64': cert.encryptionKeyBase64,
+      'signingPublicKeyBase64': cert.signingKeyBase64,
+      if (cert.irohEndpointId != null) 'irohEndpointId': cert.irohEndpointId,
+      'routeHints': existing?.toJson()['routeHints'] ?? const <Object>[],
+      'safetyNumber': '',
+      'trustedAt':
+          existing?.trustedAt.toUtc().toIso8601String() ??
+          _now().toUtc().toIso8601String(),
+      'pairingState': ContactPairingState.accepted.name,
+      if (anchorJson['routing'] != null) 'routing': anchorJson['routing'],
+      'accountAnchorDeviceId': anchor.deviceId,
+      'accountKey': anchor.accountKeyBase64,
+      'deviceName': cert.name,
+      if (existing != null) ...{
+        if (existing.toJson()['capabilities'] != null)
+          'capabilities': existing.toJson()['capabilities'],
+        if (existing.toJson()['featureCapabilities'] != null)
+          'featureCapabilities': existing.toJson()['featureCapabilities'],
+        'featureCapabilityVersion': existing.featureCapabilityVersion,
+        if (existing.toJson()['carrierAddresses'] != null)
+          'carrierAddresses': existing.toJson()['carrierAddresses'],
+      },
+    };
     try {
       return ContactRecord.fromJson(json);
     } catch (_) {
@@ -31008,6 +31264,8 @@ class MessengerController extends ChangeNotifier {
       timer.cancel();
     }
     _routeReceiptTimers.clear();
+    _linkExpiry?.cancel();
+    _linkExpiry = null;
     _lanAdvertiseTimer?.cancel();
     for (final timer in _lanRecheckTimers) {
       timer.cancel();
@@ -31920,9 +32178,12 @@ enum LinkState {
 
   /// Done.
   linked,
+
+  /// The existing device sent its offer and waits for the new device.
+  connecting,
 }
 
-/// What the existing device said about itself in its offer.
+/// What the existing device said about itself in its (signed) offer.
 class _LinkOffer {
   const _LinkOffer({
     required this.deviceId,
@@ -31984,18 +32245,22 @@ class _LinkAsNew {
   final LinkInvitation invitation;
   final DateTime startedAt;
   _LinkOffer? offer;
+  String? nonce;
   String? code;
   bool confirmed = false;
   bool done = false;
 }
 
 class _LinkAsExisting {
-  _LinkAsExisting(this.invitation, this.code, this.startedAt);
+  _LinkAsExisting(this.invitation, this.startedAt);
 
   final LinkInvitation invitation;
-  final String code;
   final DateTime startedAt;
+  String? nonce;
+  String? code;
   bool confirmedHere = false;
-  bool acceptedThere = false;
+
+  /// The new device's confirmation: its proof of holding its keys.
+  String? proof;
   bool granted = false;
 }

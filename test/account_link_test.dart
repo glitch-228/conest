@@ -36,30 +36,60 @@ void main() {
     expect(LinkInvitation.tryParse('cl1|a|b'), isNull);
   });
 
-  test('both devices show the same code only for the same QR code', () async {
+  test('both devices show the same code only for the same keys, QR code '
+      'and nonce', () async {
     final secret = LinkInvitation.newSecret();
-    final code = await linkConfirmationCode(
-      existingSigningKeyBase64: _key(3),
+    final nonce = base64Encode(LinkInvitation.newSecret());
+    Future<String> code({
+      String existingSigning = 'AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=',
+      String existingEncryption =
+          'BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU=',
+      String? linkNonce,
+    }) => linkConfirmationCode(
+      existingSigningKeyBase64: existingSigning,
+      existingEncryptionKeyBase64: existingEncryption,
       newSigningKeyBase64: _key(4),
+      newEncryptionKeyBase64: _key(6),
       linkSecret: secret,
+      nonceBase64: linkNonce ?? nonce,
     );
-    expect(code, matches(RegExp(r'^\d{6}$')));
+    final shown = await code();
+    expect(shown, matches(RegExp(r'^\d{6}$')));
+    expect(await code(), shown);
+    // Someone else's device offering instead, or another key, or another
+    // nonce: another code.
+    expect(await code(existingSigning: _key(9)), isNot(shown));
+    expect(await code(existingEncryption: _key(9)), isNot(shown));
     expect(
-      await linkConfirmationCode(
-        existingSigningKeyBase64: _key(3),
-        newSigningKeyBase64: _key(4),
-        linkSecret: secret,
-      ),
-      code,
+      await code(linkNonce: base64Encode(LinkInvitation.newSecret())),
+      isNot(shown),
     );
-    // Someone else's device offering instead: another code.
+  });
+
+  test('the transcript names both devices, the account and the nonce', () {
+    final invitation = LinkInvitation(
+      deviceId: 'dev-new',
+      encryptionKeyBase64: _key(1),
+      signingKeyBase64: _key(2),
+      linkSecret: LinkInvitation.newSecret(),
+    );
+    List<int> transcript({String account = 'acc-1', String? nonce}) =>
+        linkTranscript(
+          step: 'offer',
+          invitation: invitation,
+          existingDeviceId: 'dev-old',
+          existingEncryptionKeyBase64: _key(3),
+          existingSigningKeyBase64: _key(4),
+          accountId: account,
+          nonceBase64: nonce,
+        );
+    expect(transcript(), transcript());
+    expect(transcript(account: 'acc-2'), isNot(transcript()));
+    expect(transcript(nonce: 'n'), isNot(transcript()));
+    // The secret itself never appears, only its hash.
     expect(
-      await linkConfirmationCode(
-        existingSigningKeyBase64: _key(9),
-        newSigningKeyBase64: _key(4),
-        linkSecret: secret,
-      ),
-      isNot(code),
+      utf8.decode(transcript()).contains(base64Encode(invitation.linkSecret)),
+      isFalse,
     );
   });
 

@@ -15,6 +15,26 @@ Future<({String publicKey, String privateKey})> _deviceKeys() async {
 
 String _key(int fill) => base64Encode(List<int>.filled(32, fill));
 
+/// The device's own proof for its certificate, signed with [keys].
+Future<String> _proof(
+  ({String publicKey, String privateKey}) keys, {
+  required String accountId,
+  required String deviceId,
+  required String encryptionKey,
+  required String signingKey,
+  String? iroh,
+}) => signEd25519(
+  DeviceCert.proofBytes(
+    accountId: accountId,
+    deviceId: deviceId,
+    encryptionKeyBase64: encryptionKey,
+    signingKeyBase64: signingKey,
+    irohEndpointId: iroh,
+  ),
+  publicKeyBase64: keys.publicKey,
+  privateKeyBase64: keys.privateKey,
+);
+
 void main() {
   final now = DateTime.utc(2026, 10, 14, 12);
 
@@ -24,16 +44,28 @@ void main() {
     String accountId = 'acc-1',
     DateTime? linkedAt,
     String name = 'Pixel 8',
-  }) => DeviceCert.issue(
-    account: account,
-    accountId: accountId,
-    deviceId: deviceId,
-    encryptionKeyBase64: _key(1),
-    signingKeyBase64: _key(2),
-    irohEndpointId: 'iroh-$deviceId',
-    name: name,
-    linkedAt: linkedAt ?? now,
-  );
+    ({String publicKey, String privateKey})? keys,
+  }) async {
+    final device = keys ?? await _deviceKeys();
+    return DeviceCert.issue(
+      account: account,
+      accountId: accountId,
+      deviceId: deviceId,
+      encryptionKeyBase64: _key(1),
+      signingKeyBase64: device.publicKey,
+      irohEndpointId: 'iroh-$deviceId',
+      name: name,
+      linkedAt: linkedAt ?? now,
+      proofSignatureBase64: await _proof(
+        device,
+        accountId: accountId,
+        deviceId: deviceId,
+        encryptionKey: _key(1),
+        signingKey: device.publicKey,
+        iroh: 'iroh-$deviceId',
+      ),
+    );
+  }
 
   group('upgrade', () {
     test(
@@ -143,6 +175,32 @@ void main() {
         expect(await rekeyed.verify(account.publicKeyBase64), isFalse);
       },
     );
+
+    test('a certificate needs the device\'s own proof of its keys', () async {
+      final account = await AccountKeys.generate();
+      final bob = await _deviceKeys();
+      final mallory = await _deviceKeys();
+      // Mallory certifies Bob's signing key without holding it.
+      final squatted = await DeviceCert.issue(
+        account: account,
+        accountId: 'acc-1',
+        deviceId: 'bob-phone',
+        encryptionKeyBase64: _key(1),
+        signingKeyBase64: bob.publicKey,
+        name: 'Bob',
+        linkedAt: now,
+        proofSignatureBase64: await _proof(
+          mallory,
+          accountId: 'acc-1',
+          deviceId: 'bob-phone',
+          encryptionKey: _key(1),
+          signingKey: bob.publicKey,
+        ),
+      );
+      expect(await squatted.verify(account.publicKeyBase64), isFalse);
+      final real = await cert(account, 'bob-phone', keys: bob);
+      expect(await real.verify(account.publicKeyBase64), isTrue);
+    });
 
     test('a new device waits a day before managing others', () async {
       final account = await AccountKeys.generate();
@@ -338,6 +396,13 @@ void main() {
         signingKeyBase64: anchor.publicKey,
         name: 'Laptop',
         linkedAt: now,
+        proofSignatureBase64: await _proof(
+          anchor,
+          accountId: 'acc-1',
+          deviceId: 'dev-1',
+          encryptionKey: _key(1),
+          signingKey: anchor.publicKey,
+        ),
       );
       final second = await cert(account, 'dev-2');
       return (
@@ -407,6 +472,13 @@ void main() {
         signingKeyBase64: s.anchor.publicKey,
         name: 'Laptop',
         linkedAt: now,
+        proofSignatureBase64: await _proof(
+          malloryDevice,
+          accountId: 'acc-1',
+          deviceId: 'dev-1',
+          encryptionKey: _key(1),
+          signingKey: s.anchor.publicKey,
+        ),
       );
       expect(
         await verifyAccountDevices(
@@ -447,6 +519,13 @@ void main() {
               signingKeyBase64: s.anchor.publicKey,
               name: 'Laptop',
               linkedAt: now,
+              proofSignatureBase64: await _proof(
+                s.anchor,
+                accountId: 'acc-1',
+                deviceId: 'dev-1',
+                encryptionKey: _key(1),
+                signingKey: s.anchor.publicKey,
+              ),
             ),
           ], version: 2),
         ),
@@ -519,6 +598,83 @@ void main() {
         );
       },
     );
+
+    test('versions cannot jump far ahead, and revocations always get '
+        'through', () async {
+      final s = await setUp();
+      Future<AccountDevicesUpdate?> check(
+        Map<String, Object?> payload, {
+        int knownVersion = 5,
+        List<String> knownRevoked = const [],
+      }) => verifyAccountDevices(
+        accountId: 'acc-1',
+        anchorDeviceId: 'dev-1',
+        anchorSigningKeyBase64: s.anchor.publicKey,
+        knownAccountKeyBase64: s.account.publicKeyBase64,
+        knownVersion: knownVersion,
+        knownRevoked: knownRevoked,
+        fromAnchor: true,
+        payload: payload,
+      );
+      // A stolen device racing far ahead so the owner can never catch up.
+      expect(
+        await check(
+          await statement(s.account, null, [s.anchorCert], version: 5000),
+        ),
+        isNull,
+      );
+      expect(
+        await check(
+          await statement(s.account, null, [s.anchorCert], version: 21),
+        ),
+        isNotNull,
+      );
+      // The owner revokes it with a lower version: still applied, as a
+      // revocation only.
+      final revocation = await check(
+        await statement(
+          s.account,
+          null,
+          [s.anchorCert],
+          version: 3,
+          revoked: {'dev-stolen': now},
+        ),
+        knownVersion: 20,
+      );
+      expect(revocation?.revocationsOnly, isTrue);
+      expect(revocation?.list.revoked.keys, ['dev-stolen']);
+      // A lower version that revokes nothing new is ignored.
+      expect(
+        await check(
+          await statement(
+            s.account,
+            null,
+            [s.anchorCert],
+            version: 3,
+            revoked: {'dev-stolen': now},
+          ),
+          knownVersion: 20,
+          knownRevoked: const ['dev-stolen'],
+        ),
+        isNull,
+      );
+      // Learned for the first time, any current version is fine.
+      expect(
+        await verifyAccountDevices(
+          accountId: 'acc-1',
+          anchorDeviceId: 'dev-1',
+          anchorSigningKeyBase64: s.anchor.publicKey,
+          knownAccountKeyBase64: null,
+          knownVersion: 0,
+          knownRevoked: const [],
+          fromAnchor: true,
+          payload: await statement(s.account, s.upgrade, [
+            s.anchorCert,
+          ], version: 300),
+        ),
+        isNotNull,
+      );
+    });
 
     test(
       'without a pinned key, only the main device may introduce it',
