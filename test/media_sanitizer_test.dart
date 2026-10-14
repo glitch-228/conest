@@ -7,6 +7,8 @@ import 'package:conest/src/media_sanitizer.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
+import 'media_sanitizer_followup_cases.dart';
+
 bool has(List<int> haystack, String needle) {
   final bytes = latin1.encode(needle);
   outer:
@@ -42,6 +44,7 @@ img.Image picture() {
 }
 
 void main() {
+  registerFilePrivacyFollowupTests();
   late Directory temp;
 
   setUp(() async {
@@ -457,8 +460,8 @@ void main() {
   test('PDF: information strings and XMP are blanked in place', () async {
     const pdf =
         '%PDF-1.4\n1 0 obj\n<< /Author (Jane \\(J\\) Doe) /Producer <4A616E65> '
-        '/Title (Plan) >>\nendobj\n2 0 obj\n<< /Type /Metadata >>\nstream\n'
-        '<x:xmpmeta xmlns:x="adobe:ns:meta/">Jane</x:xmpmeta>\nendstream\nendobj\n%%EOF\n';
+        '/Title (Plan) >>\nendobj\n2 0 obj\n<< /Type /Metadata /Length 52 >>\nstream\n'
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/">Jane</x:xmpmeta>\nendstream\nendobj\ntrailer\n<< /Info 1 0 R >>\n%%EOF\n';
     final (status, cleaned) = await run(latin1.encode(pdf));
     expect(status, SanitizeStatus.cleaned);
     expect(cleaned.length, pdf.length);

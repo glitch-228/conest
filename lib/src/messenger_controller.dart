@@ -41,6 +41,7 @@ import 'carrier.dart';
 import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
 import 'media_sanitizer.dart';
+import 'file_metadata_consent.dart';
 import 'attachment_block_worker.dart';
 import 'iroh_transport.dart';
 import 'lan_direct.dart';
@@ -353,6 +354,7 @@ class AttachmentSpoolException implements Exception {
     this.message, {
     this.canUseOriginal = false,
     this.keepsMetadata = false,
+    this.partialMetadata = false,
   });
 
   final String message;
@@ -361,6 +363,7 @@ class AttachmentSpoolException implements Exception {
   /// Sending the original would send its metadata (location, camera,
   /// author), which the user asked to have removed.
   final bool keepsMetadata;
+  final bool partialMetadata;
 
   @override
   String toString() => message;
@@ -369,17 +372,18 @@ class AttachmentSpoolException implements Exception {
 /// Metadata could not be removed from a file the user asked to send
 /// without it; sending it anyway needs their consent.
 class FileMetadataException implements Exception {
-  const FileMetadataException(this.fileName);
+  const FileMetadataException(this.fileName, {this.partial = false});
 
   final String fileName;
+  final bool partial;
 
   @override
-  String toString() =>
-      'Location and other details could not be removed from $fileName.';
+  String toString() => fileMetadataConsentText(fileName, partial: partial);
 }
 
 class _MetadataNotRemoved implements Exception {
-  const _MetadataNotRemoved();
+  const _MetadataNotRemoved({this.partial = false});
+  final bool partial;
 }
 
 enum DefaultRelaysRefreshStatus { upToDate, updated, error }
@@ -4656,6 +4660,8 @@ class MessengerController extends ChangeNotifier {
           return copy.path;
         case SanitizeStatus.failed:
           throw FileMetadataException(fileName);
+        case SanitizeStatus.partial:
+          throw FileMetadataException(fileName, partial: true);
         case SanitizeStatus.clean || SanitizeStatus.unsupported:
           break;
       }
@@ -10519,6 +10525,8 @@ class MessengerController extends ChangeNotifier {
     String caption = '',
     String? albumId,
     bool allowOriginalFallback = false,
+    bool cleanMetadata = true,
+    bool randomizeFileName = true,
     bool forceLanOnly = false,
     DebugAttachmentTestSpec? debugTest,
     bool debugUseSourceInPlace = false,
@@ -10578,7 +10586,9 @@ class MessengerController extends ChangeNotifier {
     final createdAt = DateTime.now().toUtc();
     final provisionalDescriptor = AttachmentDescriptor(
       id: attachmentId,
-      fileName: sanitizeAttachmentFileName(_outgoingFileName(source.fileName)),
+      fileName: sanitizeAttachmentFileName(
+        randomizeFileName ? _outgoingFileName(source.fileName) : source.fileName,
+      ),
       mimeType: sanitizeAttachmentMimeType(source.mimeType),
       sizeBytes: source.sizeBytes,
       chunkSize: chunkSize,
@@ -10634,6 +10644,7 @@ class MessengerController extends ChangeNotifier {
     final _PreparedAttachmentSource prepared;
     try {
       prepared = await _prepareOutboundAttachmentSource(
+        cleanMetadata: cleanMetadata,
         attachmentId: attachmentId,
         source: source,
         allowOriginalFallback: allowOriginalFallback,
@@ -11078,6 +11089,8 @@ class MessengerController extends ChangeNotifier {
             case SanitizeStatus.failed:
               // Never sent with its metadata without the user's say.
               throw const _MetadataNotRemoved();
+            case SanitizeStatus.partial:
+              throw const _MetadataNotRemoved(partial: true);
             case SanitizeStatus.clean || SanitizeStatus.unsupported:
               break;
           }
@@ -11099,6 +11112,7 @@ class MessengerController extends ChangeNotifier {
       }
     }
     final metadataFailed = spoolError is _MetadataNotRemoved;
+    final metadataPartial = spoolError is _MetadataNotRemoved && spoolError.partial;
     // The original goes as it is: with its metadata, if it has any to
     // remove.
     final keepsMetadata =
@@ -11109,8 +11123,7 @@ class MessengerController extends ChangeNotifier {
     if (!allowOriginalFallback || originalPath == null) {
       throw AttachmentSpoolException(
         metadataFailed
-            ? 'Location and other details could not be removed from this '
-                  'file.'
+            ? fileMetadataConsentText(source.fileName, partial: metadataPartial)
             : canSpool
             ? 'Could not create a private attachment spool: $spoolError'
             : _storageReserveFraction > 0
@@ -11118,6 +11131,7 @@ class MessengerController extends ChangeNotifier {
             : 'Not enough free storage to prepare this file.',
         canUseOriginal: originalPath != null,
         keepsMetadata: keepsMetadata,
+        partialMetadata: metadataPartial,
       );
     }
     final original = File(originalPath);
@@ -13517,6 +13531,7 @@ class MessengerController extends ChangeNotifier {
     String? scheduledOperationId,
     VoiceMessageMetadata? voiceMetadata,
     bool keepMetadata = false,
+    bool randomizeFileName = true,
   }) async {
     final group = _requireGroup(groupId);
     final captionSupported = _groupSupportsFeatureForAllOtherMembers(
@@ -13543,7 +13558,7 @@ class MessengerController extends ChangeNotifier {
         groupId: groupId,
         group: group,
         path: cleaned ?? path,
-        fileName: _outgoingFileName(fileName),
+        fileName: randomizeFileName ? _outgoingFileName(fileName) : fileName,
         mimeType: mimeType,
         caption: caption,
         scheduledOperationId: scheduledOperationId,
@@ -15656,7 +15671,11 @@ class MessengerController extends ChangeNotifier {
   /// schedule is confirmed. The original picker path is never retained, so
   /// dispatch remains safe after restart or source removal.
   Future<({String id, String path, String relativePath})>
-  _stageScheduledAttachmentSource(StagedAttachment source) async {
+  _stageScheduledAttachmentSource(
+    StagedAttachment source, {
+    bool cleanMetadata = true,
+    Future<bool> Function(FileMetadataException)? confirmKeepingMetadata,
+  }) async {
     final id = _randomId('scheduled');
     final root = await _attachmentRoot();
     final capacity = await _storageCapacityProvider(root.path);
@@ -15676,6 +15695,16 @@ class MessengerController extends ChangeNotifier {
       await temporary.create(recursive: true);
       await restrictFileToOwner(temporary);
       await copyAndHashAttachment(source, temporary.path);
+      if (cleanMetadata && removesFileMetadata) {
+        final status = await MediaSanitizer.sanitizeFile(temporary.path);
+        if (status == SanitizeStatus.failed || status == SanitizeStatus.partial) {
+          final error = FileMetadataException(source.fileName,
+              partial: status == SanitizeStatus.partial);
+          if (confirmKeepingMetadata == null || !await confirmKeepingMetadata(error)) {
+            throw error;
+          }
+        }
+      }
       await temporary.rename(target.path);
     } catch (_) {
       try {
@@ -15691,6 +15720,7 @@ class MessengerController extends ChangeNotifier {
     required StagedAttachment source,
     required DateTime scheduledAt,
     String caption = '',
+    Future<bool> Function(FileMetadataException)? confirmKeepingMetadata,
   }) async {
     if (!contact.canSendOutbound) {
       throw StateError('This contact is not approved for scheduled delivery.');
@@ -15699,7 +15729,10 @@ class MessengerController extends ChangeNotifier {
     if (trimmedCaption.length > 4096) {
       throw ArgumentError('Scheduled captions are limited to 4096 characters.');
     }
-    final staged = await _stageScheduledAttachmentSource(source);
+    final staged = await _stageScheduledAttachmentSource(source,
+      cleanMetadata: contact.deviceId != identity?.deviceId,
+      confirmKeepingMetadata: confirmKeepingMetadata,
+    );
     final id = staged.id;
     final entry = ScheduledMessage(
       id: id,
@@ -15710,9 +15743,10 @@ class MessengerController extends ChangeNotifier {
       createdAt: _now().toUtc(),
       attachmentId: id,
       attachmentPath: staged.relativePath,
-      attachmentFileName: source.fileName,
+      attachmentFileName: _outgoingFileName(source.fileName),
       attachmentMimeType: source.mimeType,
-      attachmentSizeBytes: source.sizeBytes,
+      attachmentSizeBytes: await File(staged.path).length(),
+      attachmentPrivacyPrepared: true,
     );
     try {
       _snapshot = _snapshot.copyWith(
@@ -15733,6 +15767,7 @@ class MessengerController extends ChangeNotifier {
     required String groupId,
     required StagedAttachment source,
     required DateTime scheduledAt,
+    Future<bool> Function(FileMetadataException)? confirmKeepingMetadata,
   }) async {
     final group = _requireGroup(groupId);
     final me = _requireIdentity();
@@ -15742,7 +15777,9 @@ class MessengerController extends ChangeNotifier {
     if (group.activeMemberDeviceIds.length < 2) {
       throw StateError('A group file needs at least one other member.');
     }
-    final staged = await _stageScheduledAttachmentSource(source);
+    final staged = await _stageScheduledAttachmentSource(source,
+      confirmKeepingMetadata: confirmKeepingMetadata,
+    );
     final entry = ScheduledMessage(
       id: staged.id,
       conversationId: groupId,
@@ -15752,9 +15789,10 @@ class MessengerController extends ChangeNotifier {
       createdAt: _now().toUtc(),
       attachmentId: staged.id,
       attachmentPath: staged.relativePath,
-      attachmentFileName: source.fileName,
+      attachmentFileName: _outgoingFileName(source.fileName),
       attachmentMimeType: source.mimeType,
-      attachmentSizeBytes: source.sizeBytes,
+      attachmentSizeBytes: await File(staged.path).length(),
+      attachmentPrivacyPrepared: true,
     );
     try {
       _snapshot = _snapshot.copyWith(
@@ -15949,6 +15987,8 @@ class MessengerController extends ChangeNotifier {
             mimeType: entry.attachmentMimeType ?? 'application/octet-stream',
             caption: captionSupported ? entry.body : '',
             scheduledOperationId: entry.id,
+            keepMetadata: entry.attachmentPrivacyPrepared,
+            randomizeFileName: !entry.attachmentPrivacyPrepared,
           );
           if (!captionSupported) {
             await sendGroupMessage(
@@ -15989,6 +16029,8 @@ class MessengerController extends ChangeNotifier {
             ),
             caption: entry.body,
             outgoingMessageId: entry.id,
+            cleanMetadata: !entry.attachmentPrivacyPrepared,
+            randomizeFileName: !entry.attachmentPrivacyPrepared,
           );
         } else {
           await sendMessage(

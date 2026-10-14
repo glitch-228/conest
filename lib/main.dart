@@ -36,6 +36,7 @@ import 'src/lan_direct.dart';
 import 'src/iroh_ffi_bridge.dart';
 import 'src/iroh_transport.dart';
 import 'src/media_picker_sheet.dart';
+import 'src/ui/file_metadata_consent.dart';
 import 'src/network_errors.dart';
 import 'src/matrix_service.dart';
 import 'src/messenger_controller.dart';
@@ -2203,7 +2204,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   : 'Send without resumable copy?',
             ),
             content: Text(
-              '${attachment.fileName} could not be copied into private '
+              error.partialMetadata
+                  ? 'Some details may remain in ${attachment.fileName}. Send it anyway?'
+                  : '${attachment.fileName} could not be copied into private '
               'transfer storage.\n\n$error\n\nThe app can read the original '
               'file directly, but the transfer cannot resume after restart '
               'if that file moves or its permission expires.'
@@ -2674,6 +2677,9 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       await widget.controller.scheduleGroupAttachment(
         groupId: group.groupId,
+        confirmKeepingMetadata: (error) async => mounted &&
+            await confirmSendingMetadata(context, error.fileName,
+                partial: error.partial),
         source: StagedAttachment(
           id: 'scheduled-file-${DateTime.now().microsecondsSinceEpoch}',
           fileName: file.name,
@@ -9987,12 +9993,20 @@ class _ChatPanelState extends State<_ChatPanel> {
       time.minute,
     );
     if (staged case [final attachment]) {
-      await controller.scheduleAttachment(
-        contact: contact,
-        source: attachment,
-        scheduledAt: due,
-        caption: body,
-      );
+      try {
+        await controller.scheduleAttachment(
+          contact: contact,
+          confirmKeepingMetadata: (error) async => mounted &&
+              await confirmSendingMetadata(context, error.fileName,
+                  partial: error.partial),
+          source: attachment,
+          scheduledAt: due,
+          caption: body,
+        );
+      } catch (error) {
+        controller.setStatus('Could not schedule ${attachment.fileName}: $error');
+        return;
+      }
       controller.removeStaged(
         deviceId: contact.deviceId,
         stagedId: attachment.id,
@@ -21220,8 +21234,9 @@ Future<bool> publishGroupFileAsking(
       caption: caption,
     );
     return true;
-  } on FileMetadataException {
-    if (!context.mounted || !await confirmSendingMetadata(context, fileName)) {
+  } on FileMetadataException catch (error) {
+    if (!context.mounted || !await confirmSendingMetadata(
+        context, fileName, partial: error.partial)) {
       return false;
     }
     await controller.publishGroupFile(
@@ -21240,29 +21255,9 @@ Future<bool> publishGroupFileAsking(
 /// removed.
 Future<bool> confirmSendingMetadata(
   BuildContext context,
-  String fileName,
-) async =>
-    await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Send with its details?'),
-        content: Text(
-          'The location, camera, author and date details of $fileName '
-          'could not be removed. Send it with them?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Send anyway'),
-          ),
-        ],
-      ),
-    ) ??
-    false;
+  String fileName, {
+  bool partial = false,
+}) => showFileMetadataConsent(context, fileName, partial: partial);
 
 /// Picks the chat to put something shared from another app into.
 class _ShareTargetDialog extends StatelessWidget {

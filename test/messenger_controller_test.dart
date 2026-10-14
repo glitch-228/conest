@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'file_privacy_controller_cases.dart';
+
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -14846,6 +14848,8 @@ void main() {
       final path = await bob.attachmentCachePathFor(message!.attachment!.id);
       return (message!.attachment!.fileName, await File(path!).readAsBytes());
     }
+
+    registerFilePrivacyControllerTests(pair: pair, received: received);
 
     test('photos go without their location unless the user keeps it, '
         'under random names when asked', () async {
