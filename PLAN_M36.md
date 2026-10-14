@@ -206,6 +206,11 @@ Commit and push after each phase, with the tests green.
 
 - Restored final Dart sabotage: all 42 recovery/UI/controller/cache/admission mutations and all 12 protocol/topology mutations produced behavioural test failures, never compilation-only failures; every mutation restored. Logs: .buildlog/m36-final-recovery-sabotage.log and .buildlog/m36-final-protocol-sabotage.log. Qualified debug includes the new admission and ratchet regressions.
 
+- Final base merge 2024a89 completed without conflicts as fdf7aca. Merged full-suite checkpoint: 1028 passed, 18 skipped, native-Iroh exception plus two single-datagram handoff assumptions and a 30 s timeout in the 257-real-write cache regression. Controller audio probes now emit finite fresh capture frames until audible, and the durable-I/O regression has an explicit 2 min timeout; deterministic protocol deadlines are unchanged. Analysis after integration: 28 inherited diagnostics (26 info, 2 warnings), no new M36 errors/warnings.
+- Merge review confirmed a P1: signed account revocation removed a linked contact but stale group profiles could still authorize call keys and bootstrap. Central group-peer resolution now checks revocation before either contact/profile fallback, using the trusted device account and both contact-anchor and local account lists. An account may not ban an unrelated installation by naming its ID in a signed list. Real linked-phone tests reproduce the original failure, verify own/learned revocation, roster/key rotation, blocked key send/bootstrap/media, survivor audio, and unrelated-account isolation. All five revocation sabotage checks passed and restored (59 Dart negative checks total). Independent reviewer confirmed the fix and account scopes, no new confirmed findings.
+
+- Restored integration checkpoint: all eight controller cases passed together in 47 s, including both revocation sources/scopes, group-only Iroh/Nostr handoff, cache eviction/duplicates, bounded bootstrap and hardware ownership. All five revocation sabotage checks passed again with the final advancing-clock fixture. Latest fetched base remains 2024a89.
+
 ## Handoff
 
 - Branch and final commit:

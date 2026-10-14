@@ -127,6 +127,20 @@ check('lib/src/voice_call_service.dart', lambda s: re.sub(
       'test/group_call_media_ownership_test.dart')
 controller = 'lib/src/group_call/group_call_controller.dart'
 main_controller = 'lib/src/messenger_controller.dart'
+revocation_test = 'account revocation excludes a linked device from stale group call profiles'
+foreign_revocation_test = 'account revocation cannot exclude a different account from group calls'
+check(main_controller, lambda s: s.replace(
+      '    if (_isRevokedGroupMember(group, deviceId)) return null;\n', '', 1),
+      revocation_test, 'test/messenger_controller_test.dart', 'revocation-group')
+check(controller, lambda s: s.replace('_isRevokedAccountDevice(deviceId, accountId)',
+      'false', 1), revocation_test, 'test/messenger_controller_test.dart', 'revocation-remote')
+check(controller, lambda s: s.replace('identity?.accountId == accountId', 'false', 1),
+      revocation_test, 'test/messenger_controller_test.dart', 'revocation-own')
+check(controller, lambda s: s.replace('_isRevokedAccountDevice(deviceId, accountId)',
+      '_snapshot.contacts.any((c) => c.accountRevokedDeviceIds.contains(deviceId))', 1),
+      foreign_revocation_test, 'test/messenger_controller_test.dart', 'revocation-remote-scope')
+check(controller, lambda s: s.replace('identity?.accountId == accountId', 'true', 1),
+      foreign_revocation_test, 'test/messenger_controller_test.dart', 'revocation-own-scope')
 check(main_controller, lambda s: s.replace(
       '    if (await _handleGroupOnlyRatchetInbound(inbound, envelope)) {\n      return true;\n    }\n', '', 1),
       'group-only members join encrypted voice calls over Iroh',

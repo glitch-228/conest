@@ -30,6 +30,8 @@ import 'package:conest/src/ui/devices_panel.dart';
 import 'package:conest/src/ui/user_mode_screen.dart';
 import 'package:conest/src/group_file_crypto.dart';
 import 'package:conest/src/group_call/group_call_media.dart';
+import 'package:conest/src/group_call/group_call_crypto.dart';
+import 'package:conest/src/group_call/group_call_models.dart';
 import 'support/fake_call_network.dart' show FakeCallMedia;
 import 'package:conest/src/group_file_download.dart';
 import 'package:conest/src/group_history_event.dart';
@@ -4792,6 +4794,235 @@ void main() {
     },
   );
 
+  Future<void> groupCallRevocation({bool foreignClaim = false}) async {
+    final network = _InProcessIrohNetwork();
+    final relay = _FakeRelayClient();
+    var now = DateTime.now().toUtc();
+    final media = <FakeCallMedia>[];
+    final peers = <MessengerController>[];
+    final vaults = <_GroupCallVaultStore>[];
+    for (final name in ['Alice', 'Bob', 'Phone', 'Carol']) {
+      final audio = FakeCallMedia();
+      final vault = _GroupCallVaultStore();
+      final peer = await _createController(
+        relayClient: relay,
+        displayName: name,
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+        groupCallMedia: audio,
+        vaultStore: vault,
+        nowProvider: () => now,
+      );
+      addTearDown(peer.dispose);
+      peers.add(peer);
+      media.add(audio);
+      vaults.add(vault);
+      await peer.updateGlobalConnectivity(_irohOnlyConnectivity);
+    }
+    final [alice, bob, phone, carol] = peers;
+    var stage = 0;
+    Future<void> waitRevocation(bool Function() ready) async {
+      stage++;
+      var nextStep = DateTime.now().add(const Duration(milliseconds: 250));
+      await _waitForIroh(
+        () {
+          if (ready()) return true;
+          if (stage >= 5 && !DateTime.now().isBefore(nextStep)) {
+            // Advance the injected protocol clock while waiting for calls.
+            // A frozen clock otherwise suppresses the actual 2 s key retry.
+            now = now.add(const Duration(milliseconds: 125));
+            nextStep = DateTime.now().add(const Duration(milliseconds: 250));
+            for (final peer in peers) {
+              unawaited(peer.groupCallService?.tick());
+            }
+          }
+          return false;
+        },
+        reason: "revocation setup stage $stage, foreign=$foreignClaim",
+        timeout: const Duration(seconds: 12),
+      );
+    }
+
+    await _pairControllers(alice, bob);
+    await _pairControllers(bob, carol);
+    now = now.add(const Duration(hours: 25));
+    final qr = await phone.startLinkAsNewDevice();
+    await alice.startLinkFromQrCode(qr);
+    await waitRevocation(
+      () => phone.linkCode != null && alice.linkCode != null,
+    );
+    expect(phone.linkCode, alice.linkCode);
+    await phone.confirmLinkCode();
+    await alice.confirmLinkCode();
+    await waitRevocation(
+      () =>
+          phone.linkState == LinkState.linked &&
+          bob.linkedDevicesOf(alice.identity!.deviceId).isNotEmpty,
+    );
+    final phoneId = phone.identity!.deviceId;
+    await waitRevocation(
+      () =>
+          bob
+              .contactByDeviceId(phoneId)
+              ?.featureCapabilities
+              .contains(ApplicationCapability.groupVoiceCallsV1) ==
+          true,
+    );
+    final group = await bob.createGroup(
+      title: 'Account call',
+      members: [
+        bob.contactByDeviceId(alice.identity!.deviceId)!,
+        bob.contactByDeviceId(phoneId)!,
+        bob.contactByDeviceId(carol.identity!.deviceId)!,
+      ],
+    );
+    await waitRevocation(
+      () => peers.every((p) => p.groups.any((g) => g.groupId == group.groupId)),
+    );
+    await bob.joinOrStartGroupCall(group.groupId);
+    await waitRevocation(
+      () => [
+        alice,
+        phone,
+        carol,
+      ].every((p) => p.groupCallService?.roomFor(group.groupId) != null),
+    );
+    for (final peer in [alice, phone, carol]) {
+      await peer.joinOrStartGroupCall(group.groupId);
+    }
+    await waitRevocation(
+      () => peers.every(
+        (p) =>
+            p.groupCallService?.active?.connected == true &&
+            p.groupCallService!.active!.participants.length == 4,
+      ),
+    );
+    final targetId = foreignClaim ? carol.identity!.deviceId : phoneId;
+    final epoch = bob.groupCallService!.active!.epoch;
+    await alice.revokeAccountDevice(targetId);
+    await waitRevocation(
+      () => bob
+          .contactByDeviceId(alice.identity!.deviceId)!
+          .accountRevokedDeviceIds
+          .contains(targetId),
+    );
+    for (final peer in [alice, bob]) {
+      // Revocation is authorization, not a destructive edit to group history.
+      expect(
+        peer.groups
+            .singleWhere((g) => g.groupId == group.groupId)
+            .hasActiveMember(targetId),
+        true,
+      );
+      expect(
+        peer.groups
+            .singleWhere((g) => g.groupId == group.groupId)
+            .memberProfileFor(targetId),
+        isNotNull,
+      );
+      expect(
+        peer
+            .groupCallMembersFor(group.groupId)
+            .singleWhere((m) => m.deviceId == targetId)
+            .canJoin,
+        foreignClaim,
+      );
+      await peer.groupCallService!.tick();
+    }
+    if (foreignClaim) {
+      expect(bob.groupCallService!.active!.epoch, epoch);
+      final before = media[0].played.length;
+      await waitRevocation(() {
+        if (media[0].played.length > before) return true;
+        unawaited(carol.groupCallService!.sendAudio(Uint8List.fromList([74])));
+        return false;
+      });
+      expect(media[0].played.last.$3, [74]);
+      return;
+    }
+    expect(bob.linkedDevicesOf(alice.identity!.deviceId), isEmpty);
+    await waitRevocation(
+      () => [alice, bob, carol].every(
+        (p) =>
+            p.groupCallService!.active!.connected &&
+            p.groupCallService!.active!.participants.length == 3,
+      ),
+    );
+    expect(bob.groupCallService!.active!.epoch, greaterThan(epoch));
+    // The former participant cannot install the survivors' rotated key.
+    final frame = await bob.groupCallService!.active!.cipher.encrypt(
+      Uint8List.fromList([0, 0, 0, 0, 1, 75]),
+    );
+    expect(
+      await phone.groupCallService!.active!.cipher.decrypt(frame!),
+      isNull,
+    );
+    await expectLater(
+      bob.groupCallService!.transport.sendSignal(
+        GroupCallSignal(
+          groupId: group.groupId,
+          callId: bob.groupCallService!.active!.callId,
+          senderDeviceId: bob.identity!.deviceId,
+          action: 'key',
+          issuedAt: now,
+          payload: {'key': base64Encode(GroupCallCipher.randomKey())},
+        ),
+        phoneId,
+      ),
+      throwsStateError,
+    );
+    final phoneCrypto = CryptoService(identityProvider: () => phone.identity!);
+    final probe = RatchetSessions(
+      engine: FakeRatchetEngine(random: Random(736)),
+      store: MemoryRatchetStore(),
+    );
+    final bundle = await probe.createBundle();
+    final written = vaults[1].watchIdentity(bundle.identityKey);
+    final packet = await phoneCrypto.encryptPayloadEnvelope(
+      kind: 'ratchet_bundle',
+      messageId: 'revoked-bootstrap',
+      conversationId: phoneCrypto.conversationIdFor(bob.identity!.deviceId),
+      senderAccountId: phone.identity!.accountId,
+      senderDeviceId: phoneId,
+      recipientDeviceId: bob.identity!.deviceId,
+      contact: phone.contactByDeviceId(bob.identity!.deviceId)!,
+      plaintext: jsonEncode({
+        'version': 1,
+        'reason': 'answer',
+        'bundle': bundle.toJson(),
+      }),
+    );
+    network.inject(bob.identity!, phone.identity!.irohEndpointId!, packet);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(written.isCompleted, false);
+    final played = [
+      for (final index in [0, 1, 3]) media[index].played.length,
+    ];
+    await phone.groupCallService!.sendAudio(Uint8List.fromList([76]));
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect([
+      for (final index in [0, 1, 3]) media[index].played.length,
+    ], played);
+    final before = media[0].played.length;
+    await waitRevocation(() {
+      if (media[0].played.length > before) return true;
+      unawaited(bob.groupCallService!.sendAudio(Uint8List.fromList([77])));
+      return false;
+    });
+    expect(media[0].played.last.$3, [77]);
+  }
+
+  test(
+    'account revocation excludes a linked device from stale group call profiles',
+    () => groupCallRevocation(),
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+  test(
+    'account revocation cannot exclude a different account from group calls',
+    () => groupCallRevocation(foreignClaim: true),
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
   Future<void> groupOnlyVoiceCall({
     bool carrierControls = false,
     bool probeBootstrap = false,
@@ -5018,12 +5249,15 @@ void main() {
       ),
       'group-only call keys arrived',
     );
-    await carol.groupCallService!.sendAudio(Uint8List.fromList([36, 42]));
-    await waitForCall(
-      () => media[1].played.isNotEmpty,
-      'group-only audio arrived',
-    );
-    final packet = media[1].played.single;
+    await waitForCall(() {
+      if (media[1].played.isNotEmpty) return true;
+      // A capture stream emits fresh frames; Iroh datagrams are best-effort.
+      unawaited(
+        carol.groupCallService!.sendAudio(Uint8List.fromList([36, 42])),
+      );
+      return false;
+    }, 'group-only audio arrived');
+    final packet = media[1].played.last;
     expect(packet.$3, [36, 42]);
     expect(
       bob.groupCallService!.active!.participants
@@ -5061,11 +5295,13 @@ void main() {
       timeout: const Duration(seconds: 15),
     );
     final beforeHandoffAudio = media[1].played.length;
-    await carol.groupCallService!.sendAudio(Uint8List.fromList([77, 88]));
-    await waitForCall(
-      () => media[1].played.length > beforeHandoffAudio,
-      'group-only handoff audio arrived',
-    );
+    await waitForCall(() {
+      if (media[1].played.length > beforeHandoffAudio) return true;
+      unawaited(
+        carol.groupCallService!.sendAudio(Uint8List.fromList([77, 88])),
+      );
+      return false;
+    }, 'group-only handoff audio arrived');
     expect(media[1].played.last.$3, [77, 88]);
     if (carrierControls) {
       expect(carrierNetwork.frames.length, greaterThan(carrierBeforeHandoff));
@@ -5178,7 +5414,7 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       // Completed jobs still obey the per-second admission budget.
-      frozenNow = frozenNow!.add(const Duration(seconds: 1));
+      frozenNow = frozenNow.add(const Duration(seconds: 1));
       final beforeRate = vault.watchedWrites;
       for (var index = 40; index < 80; index++) {
         final (packet, written) = await control(index);
@@ -5206,6 +5442,8 @@ void main() {
   test(
     'group-only hello duplicates and cache-evicted replays preserve call keys',
     () => groupOnlyVoiceCall(probeBootstrap: true),
+    // 257 real durable ratchet writes exercise eviction under full-suite load.
+    timeout: const Timeout(Duration(minutes: 2)),
   );
   test(
     'group-only ratchet controls enforce identity privacy and resource bounds',

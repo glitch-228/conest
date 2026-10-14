@@ -92,7 +92,7 @@ jobs:
         run: |
           flutter test test/group_call_test.dart test/group_call_crypto_test.dart test/group_call_topology_test.dart test/group_call_recovery_test.dart test/group_call_admission_repair_test.dart test/group_call_pending_key_test.dart test/group_call_media_ownership_test.dart test/group_call_screen_test.dart test/voice_noise_suppression_test.dart test/ratchet_concurrent_read_test.dart
           flutter test test/messenger_controller_test.dart --plain-name 'group-only members join encrypted voice calls over Iroh'
-          flutter test test/messenger_controller_test.dart --name 'group-only call keys survive handoff over a carrier|group-only hello duplicates and cache-evicted replays preserve call keys|group-only ratchet controls enforce identity privacy and resource bounds'
+          flutter test test/messenger_controller_test.dart --name 'group-only call keys survive handoff over a carrier|group-only hello duplicates and cache-evicted replays preserve call keys|group-only ratchet controls enforce identity privacy and resource bounds|account revocation .* group call'
           flutter test test/messenger_controller_test.dart --plain-name 'empty group ticks preserve a live Android 1:1 foreground call'
           flutter test test/messenger_controller_test.dart --plain-name 'repeated group service replacements retain every pending hardware cleanup'
           flutter test test/group_history_test.dart test/group_history_sync_test.dart test/group_history_wire_test.dart test/group_membership_history_test.dart test/storage_test.dart test/group_file_crypto_test.dart test/ratchet_test.dart test/matrix_carrier_test.dart

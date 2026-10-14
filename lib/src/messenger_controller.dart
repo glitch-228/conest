@@ -30273,6 +30273,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   ContactRecord? _groupMemberContact(GroupRecord group, String deviceId) {
+    if (_isRevokedGroupMember(group, deviceId)) return null;
     final contact = _contactByDeviceId(deviceId);
     final profile = group.memberProfileFor(deviceId);
     // A contact that removed us, or one not (or no longer) accepted, is

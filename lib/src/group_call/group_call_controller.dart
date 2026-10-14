@@ -1,6 +1,18 @@
 part of '../messenger_controller.dart';
 
 extension GroupCallController on MessengerController {
+  bool _isRevokedGroupMember(GroupRecord group, String deviceId) {
+    bool revoked(String? accountId) =>
+        accountId != null &&
+        (_isRevokedAccountDevice(deviceId, accountId) ||
+            (identity?.accountId == accountId &&
+                accountDevices?.revoked.containsKey(deviceId) == true));
+    // A signed revocation names an account's devices; it cannot revoke an
+    // unrelated member merely by putting that member's public ID in a list.
+    return revoked(_contactByDeviceId(deviceId)?.accountId) ||
+        revoked(group.memberProfileFor(deviceId)?.accountId);
+  }
+
   GroupCallService? get groupCallService => _groupCallService;
   bool get groupVoiceCallsAvailable =>
       conestActive &&
