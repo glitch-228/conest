@@ -2676,6 +2676,7 @@ class ChatMessage {
     this.groupHistoryAuthorDeviceId,
     this.groupHistorySequence,
     this.groupHistoryEventId,
+    this.groupHistoryClaimed = false,
     this.albumId,
     this.transportKind,
     this.transportPath,
@@ -2748,6 +2749,14 @@ class ChatMessage {
   final String? groupHistoryAuthorDeviceId;
   final int? groupHistorySequence;
   final String? groupHistoryEventId;
+
+  /// The group history fields are what a live copy claimed, not yet the
+  /// signed event's: they order the message, nothing else trusts them.
+  final bool groupHistoryClaimed;
+
+  /// The signed event this message is, once known (never a claim).
+  String? get verifiedGroupHistoryEventId =>
+      groupHistoryClaimed ? null : groupHistoryEventId;
 
   /// Telegram-style media-group id. Consecutive same-sender messages that
   /// share an `albumId` render as a single album bubble in the UI; null
@@ -2849,6 +2858,7 @@ class ChatMessage {
     String? groupHistoryAuthorDeviceId,
     int? groupHistorySequence,
     String? groupHistoryEventId,
+    bool? groupHistoryClaimed,
     String? albumId,
     TransportKind? transportKind,
     TransportPathKind? transportPath,
@@ -2890,6 +2900,7 @@ class ChatMessage {
           groupHistoryAuthorDeviceId ?? this.groupHistoryAuthorDeviceId,
       groupHistorySequence: groupHistorySequence ?? this.groupHistorySequence,
       groupHistoryEventId: groupHistoryEventId ?? this.groupHistoryEventId,
+      groupHistoryClaimed: groupHistoryClaimed ?? this.groupHistoryClaimed,
       albumId: albumId ?? this.albumId,
       transportKind: transportKind ?? this.transportKind,
       transportPath: transportPath ?? this.transportPath,
@@ -2936,6 +2947,7 @@ class ChatMessage {
         'groupHistorySequence': groupHistorySequence,
       if (groupHistoryEventId != null)
         'groupHistoryEventId': groupHistoryEventId,
+      if (groupHistoryClaimed) 'groupHistoryClaimed': true,
       if (albumId != null) 'albumId': albumId,
       if (transportKind != null) 'transportKind': transportKind!.name,
       if (transportPath != null) 'transportPath': transportPath!.name,
@@ -3021,6 +3033,7 @@ class ChatMessage {
       groupHistoryAuthorDeviceId: json['groupHistoryAuthorDeviceId'] as String?,
       groupHistorySequence: json['groupHistorySequence'] as int?,
       groupHistoryEventId: json['groupHistoryEventId'] as String?,
+      groupHistoryClaimed: json['groupHistoryClaimed'] == true,
       transportKind: TransportKind.values
           .where((entry) => entry.name == json['transportKind'])
           .firstOrNull,

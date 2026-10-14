@@ -17092,6 +17092,80 @@ void main() {
     });
   });
 
+  test(
+    'when every member is reached, a group message causes no notices',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final devices = <MessengerController>[];
+      for (final name in ['Alice', 'Bob', 'Carol', 'Dan', 'Eve']) {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+        );
+        addTearDown(controller.dispose);
+        devices.add(controller);
+      }
+      final alice = devices.first;
+      for (final other in devices.skip(1)) {
+        await _pairControllers(alice, other);
+      }
+      final group = await alice.createGroup(
+        title: 'Quiet',
+        members: alice.contacts,
+      );
+      Future<void> settle(bool Function() ready) async {
+        final deadline = DateTime.now().add(const Duration(seconds: 20));
+        while (!ready() && DateTime.now().isBefore(deadline)) {
+          await Future.wait([for (final d in devices) d.pollNow()]);
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        expect(ready(), isTrue);
+      }
+
+      await settle(
+        () => devices.skip(1).every((d) => d.visibleGroups.isNotEmpty),
+      );
+      for (var i = 0; i < 40; i++) {
+        await Future.wait([for (final d in devices) d.pollNow()]);
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      // Counted from before the first message (notices to a member are
+      // spaced 20 s apart, so the second alone could hide them).
+      final before = [for (final d in devices) d.groupNoticesSent];
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'warm up');
+      await settle(
+        () => devices
+            .skip(1)
+            .every(
+              (d) => d
+                  .messagesForGroup(group.groupId)
+                  .any((m) => m.body == 'warm up'),
+            ),
+      );
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'hello all');
+      await settle(
+        () => devices
+            .skip(1)
+            .every(
+              (d) => d
+                  .messagesForGroup(group.groupId)
+                  .any((m) => m.body == 'hello all'),
+            ),
+      );
+      for (var i = 0; i < 40; i++) {
+        await Future.wait([for (final d in devices) d.pollNow()]);
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      final sent = [
+        for (var i = 0; i < devices.length; i++)
+          devices[i].groupNoticesSent - before[i],
+      ];
+      expect(sent.reduce((a, b) => a + b), 0, reason: 'notices: $sent');
+    },
+  );
+
   test('a group message reaches a member its author cannot reach, through '
       'a member who can', () async {
     final network = _InProcessIrohNetwork();
@@ -17147,6 +17221,34 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 200));
     }
     expect(reached(), isTrue, reason: 'Carol never got Alice\'s message');
+    // Once Carol holds what Bob holds, his announcement makes her pull
+    // nothing; one newer event than hers does.
+    final bobHeads = await bob.groupHeadsForTesting(group.groupId);
+    final deadline2 = DateTime.now().add(const Duration(seconds: 10));
+    while (await carol.groupAnnouncementHasNewerForTesting(
+          group.groupId,
+          bobHeads,
+        ) &&
+        DateTime.now().isBefore(deadline2)) {
+      await Future.wait([bob.pollNow(), carol.pollNow()]);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    expect(
+      await carol.groupAnnouncementHasNewerForTesting(group.groupId, bobHeads),
+      isFalse,
+    );
+    final aliceId = alice.identity!.deviceId;
+    expect(
+      await carol.groupAnnouncementHasNewerForTesting(group.groupId, {
+        ...bobHeads,
+        aliceId: (bobHeads[aliceId] ?? 0) + 1,
+      }),
+      isTrue,
+    );
+    expect(
+      await carol.groupAnnouncementHasNewerForTesting(group.groupId, 'junk'),
+      isTrue,
+    );
     expect(
       carol
           .messagesForGroup(group.groupId)
@@ -17236,6 +17338,17 @@ void main() {
           bob.contacts.firstWhere((c) => c.deviceId == aliceId),
         );
         await alice.pollNow();
+      }
+      // Alice's own route checks come back with her time echoed: they say
+      // nothing about Bob's clock and must not unsettle the estimate.
+      await alice.checkContactRoutes(
+        alice.contacts.firstWhere((c) => c.deviceId == bobId),
+      );
+      // Bob reads it and answers; Alice reads the answer.
+      await bob.pollNow();
+      for (var i = 0; i < 5; i++) {
+        await alice.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
       }
       final offset = alice.clockOffsetFor(bobId);
       expect(offset, isNotNull);
