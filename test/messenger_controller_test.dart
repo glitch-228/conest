@@ -29,6 +29,7 @@ import 'package:conest/src/email/mail_socket.dart';
 import 'package:conest/src/account/account_model.dart';
 import 'package:conest/src/energy_policy.dart';
 import 'package:conest/src/ui/devices_panel.dart';
+import 'package:conest/src/ui/error_history_screen.dart';
 import 'package:conest/src/ui/user_mode_screen.dart';
 import 'package:conest/src/group_file_crypto.dart';
 import 'package:conest/src/group_call/group_call_media.dart';
@@ -1046,8 +1047,10 @@ Future<MessengerController> _createController({
   BitchatConnector? bitchatConnector,
   TorApi? torApi,
   EnergyPolicy? energyPolicy,
+  bool keepErrorHistory = false,
 }) async {
   final controller = MessengerController(
+    keepErrorHistory: keepErrorHistory,
     energyPolicy: energyPolicy,
     torApi: torApi,
     bitchatConnector: bitchatConnector,
@@ -17414,6 +17417,50 @@ void main() {
           .senderDeviceId,
       alice.identity!.deviceId,
     );
+  });
+
+  testWidgets('a send that finds no route goes into the error history, '
+      'shown in its screen', (tester) async {
+    final relay = _FakeRelayClient();
+    final (alice, bob) = (await tester.runAsync(() async {
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        keepErrorHistory: true,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      await _pairControllers(alice, bob);
+      return (alice, bob);
+    }))!;
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    expect(alice.errorHistoryEnabled, isTrue);
+    expect(bob.errorHistoryEnabled, isFalse);
+    relay.shouldFailStore = (_, _, _, _, _) => true;
+    await tester.runAsync(
+      () => alice
+          .sendMessage(contact: alice.contacts.single, body: 'lost')
+          .catchError((Object _) {}),
+    );
+    expect(
+      alice.errorHistoryEntries.any(
+        (entry) => entry.kind == 'send' && entry.text.contains('Bob'),
+      ),
+      isTrue,
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: ErrorHistoryScreen(controller: alice)),
+    );
+    expect(find.textContaining('found no route'), findsWidgets);
+    await tester.enterText(
+      find.byKey(const ValueKey('error-history-filter')),
+      'nothing like this',
+    );
+    await tester.pump();
+    expect(find.text('Nothing recorded.'), findsOneWidget);
   });
 
   group('Clocks that are off', () {

@@ -78,6 +78,7 @@ import 'account/account_contacts.dart';
 import 'account/account_link.dart';
 import 'account/account_model.dart';
 import 'energy_policy.dart';
+import 'error_history.dart';
 import 'route_test.dart';
 import 'voice_call_service.dart';
 import 'voice_call_sound_cues.dart';
@@ -540,6 +541,8 @@ class MessengerController extends ChangeNotifier {
     LanDirectChannel? lanDirectChannel,
     NativeAttachmentCrypto? attachmentCrypto,
     String? debugBuildId,
+    // Debug and nightly builds keep an error history across restarts.
+    bool keepErrorHistory = false,
     Future<TransportRegistry?> Function(IdentityRecord identity)?
     transportRegistryFactory,
     VoiceCallCuePlayer? voiceCallCuePlayer,
@@ -594,6 +597,7 @@ class MessengerController extends ChangeNotifier {
        _debugBuildId = debugBuildId?.trim().isEmpty == false
            ? debugBuildId!.trim()
            : null,
+       _keepErrorHistory = keepErrorHistory,
        _transportRegistryFactory = transportRegistryFactory {
     _relayClient = _ScoringRelayClient(
       inner: relayClient,
@@ -3715,6 +3719,7 @@ class MessengerController extends ChangeNotifier {
   Future<void> initialize() async {
     try {
       _snapshot = await _vaultStore.load();
+      await _openErrorHistory();
       // Devices linked before own-device records existed get them now, at
       // their signed dates: that list came only from this device or its
       // link.
@@ -7425,7 +7430,47 @@ class MessengerController extends ChangeNotifier {
   static const int _debugLogCapacity = 50;
   final List<String> _debugLog = <String>[];
 
+  /// Kept across restarts on debug and nightly builds (null on stable).
+  ErrorHistory? _errorHistory;
+  final bool _keepErrorHistory;
+
+  Future<void> _openErrorHistory() async {
+    if (!_keepErrorHistory || _errorHistory != null) return;
+    try {
+      final store = await _vaultStore.errorHistoryStore();
+      final history = ErrorHistory(file: store.file, key: store.key);
+      await history.load();
+      _errorHistory = history;
+    } catch (_) {
+      // No place to keep it (an in-memory vault): this run only.
+      _errorHistory = ErrorHistory();
+    }
+  }
+
+  bool get errorHistoryEnabled => _errorHistory != null;
+  List<ErrorHistoryEntry> get errorHistoryEntries =>
+      _errorHistory?.entries ?? const [];
+  String exportErrorHistory({String filter = ''}) =>
+      _errorHistory?.exportText(filter: filter) ?? '';
+  Future<void> clearErrorHistory() async {
+    _errorHistory?.clear();
+    await _errorHistory?.flush();
+    notifyListeners();
+  }
+
+  /// Something failed: into the debug log, and the error history as an
+  /// error of [kind] ('send', 'receive', 'carrier', …).
+  void recordError(String kind, String text) {
+    _appendDebugLine(text);
+    _errorHistory?.add(kind, text);
+  }
+
   void appendDebugLog(String line) {
+    _appendDebugLine(line);
+    _errorHistory?.add('log', line);
+  }
+
+  void _appendDebugLine(String line) {
     final stamped = '${DateTime.now().toUtc().toIso8601String()}  $line';
     _debugLog.add(stamped);
     if (_debugLog.length > _debugLogCapacity) {
@@ -17888,9 +17933,12 @@ class MessengerController extends ChangeNotifier {
         _markSeen(envelope.messageId);
       } catch (error) {
         failed++;
-        appendDebugLog(
-          'Dropped envelope ${_boundedLogValue(envelope.messageId)} after '
-          'processing error: ${_envelopeProcessingError(envelope.kind, error)}',
+        recordError(
+          'receive',
+          'Dropped ${_boundedLogValue(envelope.kind)} '
+              '${_boundedLogValue(envelope.messageId)} from '
+              '${_shortId(envelope.senderDeviceId)}: '
+              '${_envelopeProcessingError(envelope.kind, error)}',
         );
       } finally {
         _inFlightEnvelopeIds.remove(envelope.messageId);
@@ -25392,6 +25440,14 @@ class MessengerController extends ChangeNotifier {
         );
         if (forwarded != null) return forwarded;
       }
+      if (!background) {
+        recordError(
+          'send',
+          '${_boundedLogValue(envelope.kind)} to ${contact.alias} '
+              '(${_shortId(contact.deviceId)}) found no route: '
+              '${lastError ?? 'none'}',
+        );
+      }
       throw lastError ?? StateError('No reachable route for recipient.');
     }
     if (!extraCopy &&
@@ -32849,6 +32905,7 @@ class MessengerController extends ChangeNotifier {
     _voiceCallDatagramSubscription = null;
     savePendingChangesForLifecycle();
     _disposed = true;
+    unawaited(_errorHistory?.close());
     for (final timer in _groupHistoryTimers.values) {
       timer.cancel();
     }

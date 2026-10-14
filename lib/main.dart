@@ -58,6 +58,7 @@ import 'l10n/app_localizations.dart';
 import 'src/app_locales.dart';
 import 'src/ui/calls_list.dart';
 import 'src/ui/devices_panel.dart';
+import 'src/ui/error_history_screen.dart';
 import 'src/ui/route_test_panel.dart';
 import 'src/ui/user_mode_screen.dart';
 import 'src/windows_firewall.dart';
@@ -162,6 +163,7 @@ Future<void> _runConestWithProfile(
     // can't bind a port or peers don't advertise their endpoint.
     lanDirectChannel: HttpLanDirectChannel(),
     debugBuildId: buildInfo.debugProtocolId,
+    keepErrorHistory: buildInfo.channel != UpdateChannel.stable,
     transportRegistryFactory: (identity) async {
       final privateKey = identity.signingPrivateKeyBase64;
       final endpointId = identity.irohEndpointId;
@@ -15020,6 +15022,23 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                         ),
                                   ),
                                 ],
+                                if (widget.controller.errorHistoryEnabled)
+                                  ListTile(
+                                    key: const ValueKey('open-error-history'),
+                                    contentPadding: EdgeInsets.zero,
+                                    leading: const Icon(
+                                      Icons.bug_report_outlined,
+                                    ),
+                                    title: const Text('Error history'),
+                                    subtitle: const Text(
+                                      'What went wrong, kept across restarts '
+                                      'on this build, to copy for a bug report.',
+                                    ),
+                                    onTap: () => ErrorHistoryScreen.show(
+                                      context,
+                                      widget.controller,
+                                    ),
+                                  ),
                                 if (updateService.supportsUpdates)
                                   SwitchListTile.adaptive(
                                     key: const ValueKey(
