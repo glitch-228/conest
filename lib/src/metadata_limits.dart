@@ -23,7 +23,9 @@ class _BoundedBytes implements Sink<List<int>> {
   @override
   void add(List<int> data) {
     count += data.length;
-    if (count > limit) { throw const FormatException('Metadata expansion cap.'); }
+    if (count > limit) {
+      throw const FormatException('Metadata expansion cap.');
+    }
     bytes.add(data);
   }
 

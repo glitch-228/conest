@@ -18,13 +18,17 @@ abstract final class PdfMetadataSanitizer {
     var unknownObjectStreams = false;
     void blank(int start, int end, [int fill = 0x20]) {
       for (var at = start; at < end; at++) {
-        if (out[at] != fill) { changed = true; }
+        if (out[at] != fill) {
+          changed = true;
+        }
         out[at] = fill;
       }
     }
 
     void blankValue(_PdfValue value, [int depth = 0]) {
-      if (depth > 64) { throw const FormatException('PDF value depth cap.'); }
+      if (depth > 64) {
+        throw const FormatException('PDF value depth cap.');
+      }
       if (value.kind == 'string') {
         blank(value.start + 1, value.end - 1);
       } else if (value.kind == 'hex') {
@@ -41,7 +45,9 @@ abstract final class PdfMetadataSanitizer {
           }
         }
       } else if (value.kind == 'array') {
-        for (final item in value.items) { blankValue(item, depth + 1); }
+        for (final item in value.items) {
+          blankValue(item, depth + 1);
+        }
       } else if (value.kind == 'number' || value.kind == 'keyword') {
         blank(value.start, value.end);
         out[value.start] = 0x30;
@@ -51,7 +57,9 @@ abstract final class PdfMetadataSanitizer {
         if (value.end - value.start >= 2) {
           out[value.start] = 0x2f;
           out[value.start + 1] = 0x5f;
-        } else { out[value.start] = 0x30; }
+        } else {
+          out[value.start] = 0x30;
+        }
         changed = true;
       } else if (value.kind == 'ref') {
         // Referenced Info strings cannot safely be distinguished from
@@ -62,7 +70,9 @@ abstract final class PdfMetadataSanitizer {
 
     for (final (_, object) in parser.revisions) {
       final stream = object.stream;
-      if (stream == null) { continue; }
+      if (stream == null) {
+        continue;
+      }
       final dictionary = object.value;
       for (final key in ['Length', 'Type', 'Filter', 'DecodeParms']) {
         parser.requireStableStreamReferences(dictionary.fields[key]);
@@ -85,20 +95,25 @@ abstract final class PdfMetadataSanitizer {
           throw const FormatException('Unresolved PDF stream filter.');
         }
         final values = filter?.kind == 'array' ? filter!.items : [filter];
-        if (values.length > 8) { throw const FormatException('PDF filter count cap.'); }
+        if (values.length > 8) {
+          throw const FormatException('PDF filter count cap.');
+        }
         final resolved = values.map(parser.resolve).toList();
         if (raw != null && resolved.any((value) => value?.kind != 'name')) {
           throw const FormatException('Unsupported PDF filter value.');
         }
         return resolved;
       }
+
       if (type == 'Metadata') {
         // Blanking compressed bytes with spaces would corrupt the stream.
         // Turn it into an empty unfiltered stream of the same length.
         for (final key in ['Filter', 'DecodeParms']) {
           final value = dictionary.fields[key];
           final name = dictionary.keys[key];
-          if (value != null && name != null) { blank(name.start, value.end); }
+          if (value != null && name != null) {
+            blank(name.start, value.end);
+          }
         }
         blank(stream.$1, stream.$2);
       } else if (type == 'ObjStm') {
@@ -122,11 +137,15 @@ abstract final class PdfMetadataSanitizer {
             throw const FormatException('PDF inflate cap.');
           }
           final text = latin1.decode(decoded);
-          if (text.contains('%')) { unknownObjectStreams = true; }
+          if (text.contains('%')) {
+            unknownObjectStreams = true;
+          }
           // Compressed page/resource objects can share an Info dictionary.
           // Over-approximate references before deciding whether it is safe
           // to blank Info; a false positive only requests extra consent.
-          for (final match in RegExp(r'(?<![0-9A-Za-z])([+-]?\d+)[\x00\x09\x0a\x0c\x0d\x20]+([+-]?\d+)[\x00\x09\x0a\x0c\x0d\x20]+R\b').allMatches(text)) {
+          for (final match in RegExp(
+            r'(?<![0-9A-Za-z])([+-]?\d+)[\x00\x09\x0a\x0c\x0d\x20]+([+-]?\d+)[\x00\x09\x0a\x0c\x0d\x20]+R\b',
+          ).allMatches(text)) {
             ordinaryReferences.add(_objectId(match[1]!, match[2]!));
             if (ordinaryReferences.length > 250000) {
               throw const FormatException('PDF reference count cap.');
@@ -140,16 +159,21 @@ abstract final class PdfMetadataSanitizer {
             if (++nameCount > 500000 || name.length > 4096) {
               throw const FormatException('PDF inflated name cap.');
             }
-            if (_metadataKeys.contains(_decodeName(name))) { sensitive = true; break; }
+            if (_metadataKeys.contains(_decodeName(name))) {
+              sensitive = true;
+              break;
+            }
           }
           if (sensitive ||
-              text.contains('xmpmeta') || text.contains('<?xpacket')) {
+              text.contains('xmpmeta') ||
+              text.contains('<?xpacket')) {
             partial = true;
           }
         }
       } else {
         final filterValues = filters();
-        if (filterValues.length == 1 && filterValues.single?.text == 'DCTDecode') {
+        if (filterValues.length == 1 &&
+            filterValues.single?.text == 'DCTDecode') {
           _blankJpeg(data, stream.$1, stream.$2, blank);
         } else if (filterValues.any((value) => value?.text == 'DCTDecode')) {
           partial = true;
@@ -161,11 +185,15 @@ abstract final class PdfMetadataSanitizer {
         throw const FormatException('Encrypted PDF metadata unsupported.');
       }
       final info = trailer.fields['Info'];
-      if (info == null) { continue; }
+      if (info == null) {
+        continue;
+      }
       final value = parser.infoAtTrailer[trailer];
-      if (unknownObjectStreams || parser.aliasedInfoTrailers.contains(trailer) ||
+      if (unknownObjectStreams ||
+          parser.aliasedInfoTrailers.contains(trailer) ||
           info.kind == 'ref' && ordinaryReferences.contains(info.text) ||
-          value?.fields['Type'] != null && value!.fields['Type']!.text != 'Info') {
+          value?.fields['Type'] != null &&
+              value!.fields['Type']!.text != 'Info') {
         // A dictionary shared with a page/font/resource is not safe to edit.
         partial = true;
         continue;
@@ -184,12 +212,22 @@ abstract final class PdfMetadataSanitizer {
   }
 
   static const _metadataKeys = {
-    'Author', 'Creator', 'Producer', 'Title', 'Subject', 'Keywords',
-    'CreationDate', 'ModDate',
+    'Author',
+    'Creator',
+    'Producer',
+    'Title',
+    'Subject',
+    'Keywords',
+    'CreationDate',
+    'ModDate',
   };
 
-  static void _blankJpeg(Uint8List data, int start, int end,
-      void Function(int, int, [int]) blank) {
+  static void _blankJpeg(
+    Uint8List data,
+    int start,
+    int end,
+    void Function(int, int, [int]) blank,
+  ) {
     if (end - start < 4 || data[start] != 0xff || data[start + 1] != 0xd8) {
       throw const FormatException('Bad PDF JPEG.');
     }
@@ -198,24 +236,37 @@ abstract final class PdfMetadataSanitizer {
       if (at + 1 >= end || data[at] != 0xff) {
         throw const FormatException('Bad PDF JPEG marker.');
       }
-      while (at + 1 < end && data[at + 1] == 0xff) { at++; }
+      while (at + 1 < end && data[at + 1] == 0xff) {
+        at++;
+      }
       final marker = data[at + 1];
-      if (marker == 0xd9) { return; }
+      if (marker == 0xd9) {
+        return;
+      }
       if (marker == 1 || marker >= 0xd0 && marker <= 0xd7) {
         at += 2;
         continue;
       }
-      if (at + 4 > end) { throw const FormatException('Short PDF JPEG.'); }
+      if (at + 4 > end) {
+        throw const FormatException('Short PDF JPEG.');
+      }
       final size = data[at + 2] * 256 + data[at + 3];
       final next = at + 2 + size;
-      if (size < 2 || next > end) { throw const FormatException('Bad JPEG size.'); }
-      if (marker == 0xe1) { blank(at + 4, next, 0); }
+      if (size < 2 || next > end) {
+        throw const FormatException('Bad JPEG size.');
+      }
+      if (marker == 0xe1) {
+        blank(at + 4, next, 0);
+      }
       at = next;
       if (marker == 0xda) {
         while (at + 1 < end) {
-          if (data[at] == 0xff && data[at + 1] != 0 &&
+          if (data[at] == 0xff &&
+              data[at + 1] != 0 &&
               data[at + 1] != 0xff &&
-              !(data[at + 1] >= 0xd0 && data[at + 1] <= 0xd7)) { break; }
+              !(data[at + 1] >= 0xd0 && data[at + 1] <= 0xd7)) {
+            break;
+          }
           at++;
         }
       }
@@ -226,20 +277,34 @@ abstract final class PdfMetadataSanitizer {
 
 String _objectId(String number, String generation) {
   final id = int.tryParse(number), gen = int.tryParse(generation);
-  if (number.length > 20 || generation.length > 20 || id == null || gen == null ||
-      id <= 0 || id > 0x7fffffff || gen < 0 || gen > 65535) {
+  if (number.length > 20 ||
+      generation.length > 20 ||
+      id == null ||
+      gen == null ||
+      id <= 0 ||
+      id > 0x7fffffff ||
+      gen < 0 ||
+      gen > 65535) {
     throw const FormatException('PDF object ID cap.');
   }
   return '$id $gen';
 }
 
 String _decodeName(String text) => text.replaceAllMapped(
-    RegExp('#[0-9a-fA-F]{2}'),
-    (match) => String.fromCharCode(int.parse(match[0]!.substring(1), radix: 16)));
+  RegExp('#[0-9a-fA-F]{2}'),
+  (match) => String.fromCharCode(int.parse(match[0]!.substring(1), radix: 16)),
+);
 
 class _PdfValue {
-  _PdfValue(this.kind, this.start, this.end, this.text,
-      {this.items = const [], this.fields = const {}, this.keys = const {}});
+  _PdfValue(
+    this.kind,
+    this.start,
+    this.end,
+    this.text, {
+    this.items = const [],
+    this.fields = const {},
+    this.keys = const {},
+  });
   final String kind, text;
   final int start, end;
   final List<_PdfValue> items;
@@ -279,14 +344,23 @@ class _PdfParser {
     final references = <String>{};
     final seen = <_PdfValue>{};
     void walk(_PdfValue value) {
-      if (!seen.add(value)) { return; }
-      if (value.kind == 'ref') { references.add(value.text); }
-      for (final item in value.items) { walk(item); }
+      if (!seen.add(value)) {
+        return;
+      }
+      if (value.kind == 'ref') {
+        references.add(value.text);
+      }
+      for (final item in value.items) {
+        walk(item);
+      }
     }
+
     for (final (_, object) in revisions) {
       if (object.value.fields['Type']?.text == 'XRef') {
         for (final entry in object.value.fields.entries) {
-          if (entry.key != 'Info') { walk(entry.value); }
+          if (entry.key != 'Info') {
+            walk(entry.value);
+          }
         }
       } else {
         walk(object.value);
@@ -299,20 +373,29 @@ class _PdfParser {
     final seen = <_PdfValue>{};
     var steps = 0;
     void walk(_PdfValue? value, int depth) {
-      if (value == null || !seen.add(value)) { return; }
+      if (value == null || !seen.add(value)) {
+        return;
+      }
       if (depth > 64 || ++steps > 256) {
         throw const FormatException('PDF parameter traversal cap.');
       }
       if (value.kind == 'ref') {
         if (changedIds.contains(value.text)) {
-          throw const FormatException('Changed indirect PDF stream parameters.');
+          throw const FormatException(
+            'Changed indirect PDF stream parameters.',
+          );
         }
         walk(objects[value.text]?.value, depth + 1);
       } else if (value.kind == 'array') {
-        if (value.items.length > 8) { throw const FormatException('PDF parameter cap.'); }
-        for (final item in value.items) { walk(item, depth + 1); }
+        if (value.items.length > 8) {
+          throw const FormatException('PDF parameter cap.');
+        }
+        for (final item in value.items) {
+          walk(item, depth + 1);
+        }
       }
     }
+
     walk(value, 0);
   }
 
@@ -328,28 +411,43 @@ class _PdfParser {
   void parse() {
     while (at < text.length) {
       _space();
-      if (at >= text.length) { break; }
+      if (at >= text.length) {
+        break;
+      }
       final value = _value();
       if (value.text == 'trailer') {
         final dictionary = _value();
-        if (dictionary.kind != 'dict') { throw const FormatException('Bad trailer.'); }
+        if (dictionary.kind != 'dict') {
+          throw const FormatException('Bad trailer.');
+        }
         _trailer(dictionary);
       } else if (value.kind == 'number') {
         final saved = at;
         _space();
-        final objectHeader = RegExp(r'([+-]?\d+)\s+obj\b').matchAsPrefix(text, at);
-        if (objectHeader == null) { at = saved; continue; }
+        final objectHeader = RegExp(
+          r'([+-]?\d+)\s+obj\b',
+        ).matchAsPrefix(text, at);
+        if (objectHeader == null) {
+          at = saved;
+          continue;
+        }
         final generation = objectHeader[1]!;
         at = objectHeader.end;
         final content = _value(1);
         _space();
         (int, int)? stream;
         if (text.startsWith('stream', at)) {
-          if (content.kind != 'dict') { throw const FormatException('Bad stream.'); }
+          if (content.kind != 'dict') {
+            throw const FormatException('Bad stream.');
+          }
           at += 6;
-          if (text.startsWith('\r\n', at)) { at += 2; }
-          else if (text.startsWith('\n', at) || text.startsWith('\r', at)) { at++; }
-          else { throw const FormatException('Bad stream separator.'); }
+          if (text.startsWith('\r\n', at)) {
+            at += 2;
+          } else if (text.startsWith('\n', at) || text.startsWith('\r', at)) {
+            at++;
+          } else {
+            throw const FormatException('Bad stream separator.');
+          }
           final start = at;
           final length = resolve(content.fields['Length']);
           if (length?.kind == 'number') {
@@ -364,10 +462,16 @@ class _PdfParser {
             // Forward length reference: scan provisionally, then require
             // exact agreement with the resolved Length before any writes.
             final stop = text.indexOf('endstream', at);
-            if (stop < 0) { throw const FormatException('Stream end missing.'); }
+            if (stop < 0) {
+              throw const FormatException('Stream end missing.');
+            }
             var end = stop;
-            if (end > start && text[end - 1] == '\n') { end--; }
-            if (end > start && text[end - 1] == '\r') { end--; }
+            if (end > start && text[end - 1] == '\n') {
+              end--;
+            }
+            if (end > start && text[end - 1] == '\r') {
+              end--;
+            }
             stream = (start, end);
             at = stop;
           }
@@ -375,16 +479,24 @@ class _PdfParser {
             throw const FormatException('Bad stream end.');
           }
         }
-        if (_value().text != 'endobj') { throw const FormatException('Bad object end.'); }
+        if (_value().text != 'endobj') {
+          throw const FormatException('Bad object end.');
+        }
         final id = _objectId(value.text, generation);
         // Incremental updates can legitimately replace an object. Retain
         // all earlier Info/metadata objects as well as the latest lookup.
-        if (revisions.length >= 50000) { throw const FormatException('PDF object cap.'); }
-        if (objects.containsKey(id)) { changedIds.add(id); }
+        if (revisions.length >= 50000) {
+          throw const FormatException('PDF object cap.');
+        }
+        if (objects.containsKey(id)) {
+          changedIds.add(id);
+        }
         final object = _PdfObject(content, stream);
         objects[id] = object;
         revisions.add((id, object));
-        if (content.fields['Type']?.text == 'XRef') { _trailer(content); }
+        if (content.fields['Type']?.text == 'XRef') {
+          _trailer(content);
+        }
       }
     }
   }
@@ -392,17 +504,39 @@ class _PdfParser {
   void _space() {
     while (at < text.length) {
       if (text[at] == '%') {
-        while (at < text.length && text[at] != '\r' && text[at] != '\n') { at++; }
-      } else if (const ['\x00', '\t', '\n', '\f', '\r', ' '].contains(text[at])) {
+        while (at < text.length && text[at] != '\r' && text[at] != '\n') {
+          at++;
+        }
+      } else if (const [
+        '\x00',
+        '\t',
+        '\n',
+        '\f',
+        '\r',
+        ' ',
+      ].contains(text[at])) {
         at++;
-      } else { break; }
+      } else {
+        break;
+      }
     }
   }
 
   static bool _delimiter(int code) =>
-      code == 0 || code == 9 || code == 10 || code == 12 || code == 13 ||
-      code == 32 || code == 60 || code == 62 || code == 91 || code == 93 ||
-      code == 40 || code == 41 || code == 47 || code == 37;
+      code == 0 ||
+      code == 9 ||
+      code == 10 ||
+      code == 12 ||
+      code == 13 ||
+      code == 32 ||
+      code == 60 ||
+      code == 62 ||
+      code == 91 ||
+      code == 93 ||
+      code == 40 ||
+      code == 41 ||
+      code == 47 ||
+      code == 37;
 
   _PdfValue _value([int depth = 0]) {
     if (depth > 64 || ++tokens > 500000) {
@@ -410,35 +544,50 @@ class _PdfParser {
     }
     _space();
     final start = at;
-    if (at >= text.length) { throw const FormatException('PDF value missing.'); }
+    if (at >= text.length) {
+      throw const FormatException('PDF value missing.');
+    }
     final char = text[at++];
     if (char == '(') {
       var nesting = 1;
       while (at < text.length && nesting > 0) {
         final next = text[at++];
-        if (next == '\\') { at++; }
-        else if (next == '(') { nesting++; }
-        else if (next == ')') { nesting--; }
+        if (next == '\\') {
+          at++;
+        } else if (next == '(') {
+          nesting++;
+        } else if (next == ')') {
+          nesting--;
+        }
       }
-      if (nesting != 0 || at > text.length) { throw const FormatException('Bad PDF string.'); }
+      if (nesting != 0 || at > text.length) {
+        throw const FormatException('Bad PDF string.');
+      }
       return _PdfValue('string', start, at, '');
     }
     if (char == '<' && !text.startsWith('<', at)) {
       final end = text.indexOf('>', at);
-      if (end < 0) { throw const FormatException('Bad PDF hex string.'); }
+      if (end < 0) {
+        throw const FormatException('Bad PDF hex string.');
+      }
       at = end + 1;
       return _PdfValue('hex', start, at, '');
     }
     if (char == '[' || char == '<' && text.startsWith('<', at)) {
       final dict = char == '<';
-      if (dict) { at++; }
+      if (dict) {
+        at++;
+      }
       final close = dict ? '>>' : ']';
       final items = <_PdfValue>[];
       final fields = <String, _PdfValue>{};
       final keys = <String, _PdfValue>{};
       while (true) {
         _space();
-        if (text.startsWith(close, at)) { at += close.length; break; }
+        if (text.startsWith(close, at)) {
+          at += close.length;
+          break;
+        }
         final value = _value(depth + 1);
         if (dict) {
           if (value.kind != 'name' || fields.containsKey(value.text)) {
@@ -448,18 +597,32 @@ class _PdfParser {
           fields[value.text] = item;
           keys[value.text] = value;
           items.add(item);
-        } else { items.add(value); }
+        } else {
+          items.add(value);
+        }
       }
-      return _PdfValue(dict ? 'dict' : 'array', start, at, '',
-          items: items, fields: fields, keys: keys);
+      return _PdfValue(
+        dict ? 'dict' : 'array',
+        start,
+        at,
+        '',
+        items: items,
+        fields: fields,
+        keys: keys,
+      );
     }
     while (at < text.length && !_delimiter(text.codeUnitAt(at))) {
-      if (at - start >= 4096) { throw const FormatException('PDF token length cap.'); }
+      if (at - start >= 4096) {
+        throw const FormatException('PDF token length cap.');
+      }
       at++;
     }
     final raw = text.substring(char == '/' ? start + 1 : start, at);
-    final kind = char == '/' ? 'name'
-        : num.tryParse(raw) != null ? 'number' : 'keyword';
+    final kind = char == '/'
+        ? 'name'
+        : num.tryParse(raw) != null
+        ? 'number'
+        : 'keyword';
     if (kind == 'number' && depth > 0) {
       final saved = at;
       _space();

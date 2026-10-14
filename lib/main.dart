@@ -2240,7 +2240,11 @@ class _HomeScreenState extends State<HomeScreen> {
   ) async {
     if (!mounted) return false;
     if (error.partialMetadata) {
-      return confirmSendingMetadata(context, attachment.fileName, partial: true);
+      return confirmSendingMetadata(
+        context,
+        attachment.fileName,
+        partial: true,
+      );
     }
     return await showDialog<bool>(
           context: context,
@@ -2722,9 +2726,13 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       await widget.controller.scheduleGroupAttachment(
         groupId: group.groupId,
-        confirmKeepingMetadata: (error) async => mounted &&
-            await confirmSendingMetadata(context, error.fileName,
-                partial: error.partial),
+        confirmKeepingMetadata: (error) async =>
+            mounted &&
+            await confirmSendingMetadata(
+              context,
+              error.fileName,
+              partial: error.partial,
+            ),
         source: StagedAttachment(
           id: 'scheduled-file-${DateTime.now().microsecondsSinceEpoch}',
           fileName: file.name,
@@ -10093,15 +10101,21 @@ class _ChatPanelState extends State<_ChatPanel> {
       try {
         await controller.scheduleAttachment(
           contact: contact,
-          confirmKeepingMetadata: (error) async => mounted &&
-              await confirmSendingMetadata(context, error.fileName,
-                  partial: error.partial),
+          confirmKeepingMetadata: (error) async =>
+              mounted &&
+              await confirmSendingMetadata(
+                context,
+                error.fileName,
+                partial: error.partial,
+              ),
           source: attachment,
           scheduledAt: due,
           caption: body,
         );
       } catch (error) {
-        controller.setStatus('Could not schedule ${attachment.fileName}: $error');
+        controller.setStatus(
+          'Could not schedule ${attachment.fileName}: $error',
+        );
         return;
       }
       controller.removeStaged(
@@ -21424,8 +21438,12 @@ Future<bool> publishGroupFileAsking(
     );
     return true;
   } on FileMetadataException catch (error) {
-    if (!context.mounted || !await confirmSendingMetadata(
-        context, fileName, partial: error.partial)) {
+    if (!context.mounted ||
+        !await confirmSendingMetadata(
+          context,
+          fileName,
+          partial: error.partial,
+        )) {
       return false;
     }
     await controller.publishGroupFile(

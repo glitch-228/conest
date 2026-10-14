@@ -72,14 +72,16 @@ abstract final class MediaSanitizer {
     final head = await handle.read(length < 64 ? length : 64);
     if (_isIsoMedia(head)) {
       return await IsoMediaSanitizer(handle, length).clean()
-          ? SanitizeStatus.cleaned : SanitizeStatus.clean;
+          ? SanitizeStatus.cleaned
+          : SanitizeStatus.clean;
     }
     final kind = _kind(head);
     if (kind == null) return SanitizeStatus.unsupported;
     if (length > maxInMemoryBytes) {
       return kind == 'zip' &&
               !await OfficeMetadataSanitizer.isDocumentFile(handle, length)
-          ? SanitizeStatus.unsupported : SanitizeStatus.failed;
+          ? SanitizeStatus.unsupported
+          : SanitizeStatus.failed;
     }
     await handle.setPosition(0);
     final data = await handle.read(length);
@@ -165,15 +167,21 @@ abstract final class MediaSanitizer {
   ) {
     try {
       final kind = _kind(data);
-      if (kind == null) return (bytes: data, status: SanitizeStatus.unsupported);
+      if (kind == null)
+        return (bytes: data, status: SanitizeStatus.unsupported);
       if (data.length > maxInMemoryBytes) {
         return (bytes: data, status: SanitizeStatus.failed);
       }
       if (kind == 'pdf') {
         final result = PdfMetadataSanitizer.clean(data);
-        return (bytes: result.bytes, status: result.partial
-            ? SanitizeStatus.partial : identical(result.bytes, data)
-            ? SanitizeStatus.clean : SanitizeStatus.cleaned);
+        return (
+          bytes: result.bytes,
+          status: result.partial
+              ? SanitizeStatus.partial
+              : identical(result.bytes, data)
+              ? SanitizeStatus.clean
+              : SanitizeStatus.cleaned,
+        );
       }
       final cleaned = switch (kind) {
         'jpeg' => _jpeg(data),
@@ -182,20 +190,28 @@ abstract final class MediaSanitizer {
         'webp' => _webp(data),
         'zip' => OfficeMetadataSanitizer.clean(data, (image) {
           if (_isIsoMedia(image)) {
-            throw const FormatException('Embedded ISO image needs file cleaning.');
+            throw const FormatException(
+              'Embedded ISO image needs file cleaning.',
+            );
           }
           if (!const {'jpeg', 'png', 'gif', 'webp'}.contains(_kind(image))) {
             return null;
           }
           final cleaned = sanitizeBytes(image);
-          if (cleaned == null) throw const FormatException('Damaged embedded image.');
+          if (cleaned == null)
+            throw const FormatException('Damaged embedded image.');
           return cleaned;
         }),
         _ => null,
       };
-      return (bytes: cleaned ?? data, status: cleaned == null
-          ? SanitizeStatus.unsupported : identical(cleaned, data)
-          ? SanitizeStatus.clean : SanitizeStatus.cleaned);
+      return (
+        bytes: cleaned ?? data,
+        status: cleaned == null
+            ? SanitizeStatus.unsupported
+            : identical(cleaned, data)
+            ? SanitizeStatus.clean
+            : SanitizeStatus.cleaned,
+      );
     } catch (_) {
       return (bytes: data, status: SanitizeStatus.failed);
     }
@@ -259,7 +275,8 @@ abstract final class MediaSanitizer {
           throw const FormatException('Bad JFIF thumbnail.');
         }
         if (body[12] != 0 || body[13] != 0) {
-          final segment = Uint8List(18)..setAll(0, data.sublist(index, index + 18));
+          final segment = Uint8List(18)
+            ..setAll(0, data.sublist(index, index + 18));
           segment[2] = 0;
           segment[3] = 16;
           segment[16] = segment[17] = 0;
@@ -360,7 +377,14 @@ abstract final class MediaSanitizer {
       final type = latin1.decode(data.sublist(index + 4, index + 8));
       final end = index + 12 + length;
       if (end > data.length) throw const FormatException('Bad PNG chunk.');
-      if (const {'tEXt', 'zTXt', 'iTXt', 'eXIf', 'tIME', 'caBX'}.contains(type)) {
+      if (const {
+        'tEXt',
+        'zTXt',
+        'iTXt',
+        'eXIf',
+        'tIME',
+        'caBX',
+      }.contains(type)) {
         removed = true;
       } else {
         out.add(Uint8List.sublistView(data, index, end));

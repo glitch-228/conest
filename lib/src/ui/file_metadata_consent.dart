@@ -23,4 +23,5 @@ Future<bool> showFileMetadataConsent(
           ),
         ],
       ),
-    ) ?? false;
+    ) ??
+    false;

@@ -10706,7 +10706,9 @@ class MessengerController extends ChangeNotifier {
     final provisionalDescriptor = AttachmentDescriptor(
       id: attachmentId,
       fileName: sanitizeAttachmentFileName(
-        randomizeFileName ? _outgoingFileName(source.fileName) : source.fileName,
+        randomizeFileName
+            ? _outgoingFileName(source.fileName)
+            : source.fileName,
       ),
       mimeType: sanitizeAttachmentMimeType(source.mimeType),
       sizeBytes: source.sizeBytes,
@@ -11231,7 +11233,8 @@ class MessengerController extends ChangeNotifier {
       }
     }
     final metadataFailed = spoolError is _MetadataNotRemoved;
-    final metadataPartial = spoolError is _MetadataNotRemoved && spoolError.partial;
+    final metadataPartial =
+        spoolError is _MetadataNotRemoved && spoolError.partial;
     // The original goes as it is: with its metadata, if it has any to
     // remove.
     final keepsMetadata =
@@ -15845,10 +15848,14 @@ class MessengerController extends ChangeNotifier {
       await copyAndHashAttachment(source, temporary.path);
       if (cleanMetadata && removesFileMetadata) {
         final status = await MediaSanitizer.sanitizeFile(temporary.path);
-        if (status == SanitizeStatus.failed || status == SanitizeStatus.partial) {
-          final error = FileMetadataException(source.fileName,
-              partial: status == SanitizeStatus.partial);
-          if (confirmKeepingMetadata == null || !await confirmKeepingMetadata(error)) {
+        if (status == SanitizeStatus.failed ||
+            status == SanitizeStatus.partial) {
+          final error = FileMetadataException(
+            source.fileName,
+            partial: status == SanitizeStatus.partial,
+          );
+          if (confirmKeepingMetadata == null ||
+              !await confirmKeepingMetadata(error)) {
             throw error;
           }
           if (status == SanitizeStatus.failed) {
@@ -15882,7 +15889,8 @@ class MessengerController extends ChangeNotifier {
     if (trimmedCaption.length > 4096) {
       throw ArgumentError('Scheduled captions are limited to 4096 characters.');
     }
-    final staged = await _stageScheduledAttachmentSource(source,
+    final staged = await _stageScheduledAttachmentSource(
+      source,
       cleanMetadata: contact.deviceId != identity?.deviceId,
       confirmKeepingMetadata: confirmKeepingMetadata,
     );
@@ -15897,7 +15905,8 @@ class MessengerController extends ChangeNotifier {
       attachmentId: id,
       attachmentPath: staged.relativePath,
       attachmentFileName: contact.deviceId == identity?.deviceId
-          ? source.fileName : _outgoingFileName(source.fileName),
+          ? source.fileName
+          : _outgoingFileName(source.fileName),
       attachmentMimeType: source.mimeType,
       attachmentSizeBytes: await File(staged.path).length(),
       attachmentPrivacyPrepared: true,
@@ -15931,7 +15940,8 @@ class MessengerController extends ChangeNotifier {
     if (group.activeMemberDeviceIds.length < 2) {
       throw StateError('A group file needs at least one other member.');
     }
-    final staged = await _stageScheduledAttachmentSource(source,
+    final staged = await _stageScheduledAttachmentSource(
+      source,
       confirmKeepingMetadata: confirmKeepingMetadata,
     );
     final entry = ScheduledMessage(
