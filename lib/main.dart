@@ -56,6 +56,7 @@ import 'src/ui/message_info_dialog.dart';
 import 'l10n/app_localizations.dart';
 import 'src/app_locales.dart';
 import 'src/ui/calls_list.dart';
+import 'src/ui/devices_panel.dart';
 import 'src/ui/route_test_panel.dart';
 import 'src/ui/user_mode_screen.dart';
 import 'src/windows_firewall.dart';
@@ -1238,15 +1239,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
     final localRelayPort = int.tryParse(_localRelayPortController.text.trim());
     if (displayName.isEmpty || localRelayPort == null) {
-      widget.controller.setStatus(
-        'Enter a display name and a valid local relay port.',
-      );
+      widget.controller.setStatus(l10nOf(context).onbNameRequired);
       return;
     }
     if (internetRelayHost.isNotEmpty && internetRelayPort == null) {
-      widget.controller.setStatus(
-        'If you set an internet relay host, the relay port must be valid too.',
-      );
+      widget.controller.setStatus(l10nOf(context).onbRelayPortInvalid);
       return;
     }
     setState(() {
@@ -1275,10 +1272,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Widget build(BuildContext context) {
     final palette = widget.palette;
     final relayModeNote = _isDesktopPlatform
-        ? 'Desktop nodes relay by default and advertise nearby LAN routes automatically.'
+        ? l10nOf(context).onbRelayDesktop
         : !kIsWeb && Platform.isAndroid
-        ? 'Android starts with relay mode off. Enable it in Settings only when you want this device to relay.'
-        : 'Relay mode can be enabled in Settings when this device should help carry traffic.';
+        ? l10nOf(context).onbRelayAndroid
+        : l10nOf(context).onbRelayOther;
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(gradient: palette.appGradient),
@@ -1321,7 +1318,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               ),
                               const SizedBox(height: 16),
                               Text(
-                                'Reach contacts directly over your network or the internet, end-to-end encrypted with forward secrecy. When the usual routes are blocked, Conest falls back to relays, Matrix, Nostr, email, Tor, LoRa radios or a Bluetooth mesh of nearby phones.',
+                                l10nOf(context).onbTagline,
                                 style: Theme.of(context).textTheme.titleMedium
                                     ?.copyWith(
                                       color: palette.inkSoft,
@@ -1331,11 +1328,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               const SizedBox(height: 24),
                               _FeatureStrip(
                                 palette: palette,
-                                items: const [
-                                  'Forward-secret chats',
-                                  'Direct over LAN and internet',
-                                  'Tor, mesh and radio fallbacks',
-                                  'Also a Matrix client',
+                                items: [
+                                  l10nOf(context).onbFeatureForwardSecret,
+                                  l10nOf(context).onbFeatureDirect,
+                                  l10nOf(context).onbFeatureFallbacks,
+                                  l10nOf(context).onbFeatureMatrix,
                                 ],
                               ),
                               const SizedBox(height: 18),
@@ -1365,7 +1362,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   Text(
-                                    'Create your first device',
+                                    l10nOf(context).onbCreateTitle,
                                     style: Theme.of(context)
                                         .textTheme
                                         .headlineSmall
@@ -1373,7 +1370,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                   ),
                                   const SizedBox(height: 8),
                                   Text(
-                                    'Only a display name is needed. The local port is for nearby (LAN) delivery and codephrase pairing. An internet relay is optional: contacts are reached over the internet without one. Turn on more routes later under Settings → Connectivity.',
+                                    l10nOf(context).onbCreateHelp,
                                     style: Theme.of(context)
                                         .textTheme
                                         .bodyMedium
@@ -1382,24 +1379,23 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                   const SizedBox(height: 18),
                                   TextField(
                                     controller: _displayNameController,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Display name',
+                                    decoration: InputDecoration(
+                                      labelText: l10nOf(context).onbDisplayName,
                                     ),
                                   ),
                                   const SizedBox(height: 12),
                                   TextField(
                                     controller: _localRelayPortController,
                                     keyboardType: TextInputType.number,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Local relay / LAN port',
+                                    decoration: InputDecoration(
+                                      labelText: l10nOf(context).onbLocalPort,
                                     ),
                                   ),
                                   const SizedBox(height: 12),
                                   TextField(
                                     controller: _internetRelayHostController,
-                                    decoration: const InputDecoration(
-                                      labelText:
-                                          'Internet relay host / URL (optional)',
+                                    decoration: InputDecoration(
+                                      labelText: l10nOf(context).onbRelayHost,
                                       hintText:
                                           'host auto-detects TCP/UDP; udp://host:port forces UDP',
                                     ),
@@ -1408,8 +1404,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                   TextField(
                                     controller: _internetRelayPortController,
                                     keyboardType: TextInputType.number,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Internet relay port',
+                                    decoration: InputDecoration(
+                                      labelText: l10nOf(context).onbRelayPort,
                                     ),
                                   ),
                                   const SizedBox(height: 18),
@@ -1425,8 +1421,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                         : const Icon(
                                             Icons.shield_moon_outlined,
                                           ),
-                                    label: const Text(
-                                      'Create encrypted device',
+                                    label: Text(
+                                      l10nOf(context).onbCreateButton,
                                     ),
                                   ),
                                   if (widget.controller.matrixAvailable) ...[
@@ -1438,15 +1434,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                               AppMode.matrixOnly,
                                             ),
                                       icon: const Icon(Icons.alternate_email),
-                                      label: const Text(
-                                        'Use as a Matrix client instead',
+                                      label: Text(
+                                        l10nOf(context).onbMatrixInstead,
                                       ),
                                     ),
                                     const SizedBox(height: 6),
                                     Text(
-                                      'Matrix chats only, with no Conest identity. You can '
-                                      'switch to Both (Conest and Matrix side by side) '
-                                      'later under Settings → Connectivity → App mode.',
+                                      l10nOf(context).onbMatrixHelp,
                                       style: Theme.of(context)
                                           .textTheme
                                           .bodySmall
@@ -4107,7 +4101,7 @@ class _CourierHomeState extends State<_CourierHome> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, 'delete'),
-            child: const Text('Delete'),
+            child: Text(l10nOf(context).menuDelete),
           ),
           if (folderIndex > 0)
             TextButton(
@@ -4656,7 +4650,7 @@ class _CourierHomeState extends State<_CourierHome> {
                 ),
                 const Spacer(),
                 IconButton(
-                  tooltip: 'Search',
+                  tooltip: l10nOf(context).actionSearch,
                   onPressed: _searchFocus.requestFocus,
                   icon: const Icon(Icons.search),
                 ),
@@ -4746,7 +4740,7 @@ class _CourierHomeState extends State<_CourierHome> {
               focusNode: _searchFocus,
               onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
-                hintText: 'Search chats and messages',
+                hintText: l10nOf(context).searchChatsAndMessages,
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: query.isEmpty
                     ? null
@@ -4789,7 +4783,7 @@ class _CourierHomeState extends State<_CourierHome> {
                 if (!_showArchived && query.isEmpty && archivedCount > 0)
                   ListTile(
                     leading: const Icon(Icons.archive_outlined),
-                    title: const Text('Archived chats'),
+                    title: Text(l10nOf(context).archivedChats),
                     trailing: Text('$archivedCount'),
                     onTap: () => setState(() => _showArchived = true),
                   ),
@@ -4929,7 +4923,7 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
                       controller: _search,
                       onChanged: (_) => setState(() {}),
                       decoration: InputDecoration(
-                        hintText: 'Search contacts',
+                        hintText: l10nOf(context).searchContacts,
                         prefixIcon: const Icon(Icons.search),
                         suffixIcon: query.isEmpty
                             ? null
@@ -6502,7 +6496,7 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
         !_creating;
     return AdaptiveChatDialog(
       fullscreenOnMobile: widget.fullscreenOnMobile,
-      title: const Text('Create group'),
+      title: Text(l10nOf(context).groupCreate),
       content: SizedBox(
         width: 420,
         child: Column(
@@ -6511,7 +6505,9 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
             TextField(
               controller: _titleController,
               autofocus: true,
-              decoration: const InputDecoration(labelText: 'Group title'),
+              decoration: InputDecoration(
+                labelText: l10nOf(context).groupTitle,
+              ),
               onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 12),
@@ -6556,18 +6552,18 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
                                   _selectedRoles[contact.deviceId] = role;
                                 });
                               },
-                              items: const [
+                              items: [
                                 DropdownMenuItem(
                                   value: GroupMemberRole.member,
-                                  child: Text('Member'),
+                                  child: Text(l10nOf(context).roleMember),
                                 ),
                                 DropdownMenuItem(
                                   value: GroupMemberRole.moderator,
-                                  child: Text('Moderator'),
+                                  child: Text(l10nOf(context).roleModerator),
                                 ),
                                 DropdownMenuItem(
                                   value: GroupMemberRole.admin,
-                                  child: Text('Admin'),
+                                  child: Text(l10nOf(context).roleAdmin),
                                 ),
                               ],
                             )
@@ -6582,11 +6578,15 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
       actions: [
         TextButton(
           onPressed: _creating ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(l10nOf(context).actionCancel),
         ),
         FilledButton(
           onPressed: canCreate ? _create : null,
-          child: Text(_creating ? 'Creating' : 'Create'),
+          child: Text(
+            _creating
+                ? l10nOf(context).actionCreating
+                : l10nOf(context).actionCreate,
+          ),
         ),
       ],
     );
@@ -7178,8 +7178,8 @@ Future<void> _forwardTextMessage(
                     controller: search,
                     autofocus: true,
                     onChanged: (_) => setDialogState(() {}),
-                    decoration: const InputDecoration(
-                      hintText: 'Search chats',
+                    decoration: InputDecoration(
+                      hintText: l10nOf(context).searchChats,
                       prefixIcon: Icon(Icons.search),
                     ),
                   ),
@@ -7342,7 +7342,7 @@ Future<void> _forwardFile(
                 group.title.toLowerCase().contains(query),
           );
           return AlertDialog(
-            title: const Text('Forward attachment'),
+            title: Text(l10nOf(context).menuForwardAttachment),
             content: SizedBox(
               width: 420,
               height: 400,
@@ -7354,8 +7354,8 @@ Future<void> _forwardFile(
                     controller: search,
                     autofocus: true,
                     onChanged: (_) => setDialogState(() {}),
-                    decoration: const InputDecoration(
-                      hintText: 'Search chats',
+                    decoration: InputDecoration(
+                      hintText: l10nOf(context).searchChats,
                       prefixIcon: Icon(Icons.search),
                     ),
                   ),
@@ -8316,7 +8316,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('Delete'),
+              child: Text(l10nOf(context).menuDelete),
             ),
           ],
         ),
@@ -8466,7 +8466,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete'),
+            child: Text(l10nOf(context).menuDelete),
           ),
         ],
       ),
@@ -9201,17 +9201,20 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       }
                     },
                     itemBuilder: (context) => [
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'details',
-                        child: Text('Message details'),
+                        child: Text(l10nOf(context).messageDetails),
                       ),
-                      const PopupMenuItem(value: 'reply', child: Text('Reply')),
+                      PopupMenuItem(
+                        value: 'reply',
+                        child: Text(l10nOf(context).menuReply),
+                      ),
                       if (!message.hasAttachment &&
                           message.groupFile == null &&
                           message.body.trim().isNotEmpty)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'react',
-                          child: Text('React 👍'),
+                          child: Text(l10nOf(context).menuReact),
                         ),
                       if (message.outbound &&
                           message.groupFile == null &&
@@ -9219,32 +9222,35 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           group.hasActiveMember(
                             controller.identity?.deviceId ?? '',
                           )) ...[
-                        const PopupMenuItem(value: 'edit', child: Text('Edit')),
-                        const PopupMenuItem(
+                        PopupMenuItem(
+                          value: 'edit',
+                          child: Text(l10nOf(context).menuEdit),
+                        ),
+                        PopupMenuItem(
                           value: 'delete',
-                          child: Text('Delete'),
+                          child: Text(l10nOf(context).menuDelete),
                         ),
                       ],
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'copy',
-                        child: Text('Copy message'),
+                        child: Text(l10nOf(context).menuCopyMessage),
                       ),
                       if (attachmentDescriptor != null && !outbound &&
                           !attachmentAvailable)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_download',
-                          child: Text('Download attachment'),
+                          child: Text(l10nOf(context).menuDownloadAttachment),
                         ),
                       if (attachmentAvailable)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_save',
-                          child: Text('Save attachment'),
+                          child: Text(l10nOf(context).menuSaveAttachment),
                         ),
                       if (attachmentDescriptor?.mimeType.startsWith('image/') == true &&
                           controller.attachmentBytesFor(attachmentDescriptor!.id) != null)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_copy_image',
-                          child: Text('Copy image'),
+                          child: Text(l10nOf(context).menuCopyImage),
                         ),
                       if (attachmentAvailable) ...[
                         const PopupMenuItem(
@@ -9261,26 +9267,26 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         ),
                         if (!controller.attachmentKeptOffline(attachmentDescriptor.id) &&
                             !attachmentInFlight)
-                          const PopupMenuItem(
+                          PopupMenuItem(
                             value: 'attachment_evict',
-                            child: Text('Free up local space'),
+                            child: Text(l10nOf(context).menuFreeUpSpace),
                           ),
                       ],
                       if (attachmentInFlight)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_cancel',
-                          child: Text('Cancel transfer'),
+                          child: Text(l10nOf(context).menuCancelTransfer),
                         ),
                       if (attachmentDescriptor != null && outbound &&
                           message.state == DeliveryState.failed)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_retry',
-                          child: Text('Retry transfer'),
+                          child: Text(l10nOf(context).menuRetryTransfer),
                         ),
                       if (attachmentDescriptor != null)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'forward_attachment',
-                          child: Text('Forward attachment'),
+                          child: Text(l10nOf(context).menuForwardAttachment),
                         ),
                       if (message.groupFile != null &&
                           controller.groupFilePathFor(message.id) != null)
@@ -9291,9 +9297,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       if (!message.hasAttachment &&
                           message.groupFile == null &&
                           message.body.trim().isNotEmpty)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'forward',
-                          child: Text('Forward'),
+                          child: Text(l10nOf(context).menuForward),
                         ),
                     ],
                   ),
@@ -9741,7 +9747,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       ),
                       const SizedBox(width: 12),
                       IconButton(
-                        tooltip: 'Schedule message',
+                        tooltip: l10nOf(context).composerSchedule,
                         onPressed: canSend ? _scheduleText : null,
                         icon: const Icon(Icons.schedule_send_outlined),
                       ),
@@ -10619,7 +10625,7 @@ class _ChatPanelState extends State<_ChatPanel> {
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete'),
+            child: Text(l10nOf(context).menuDelete),
           ),
         ],
       ),
@@ -11029,42 +11035,45 @@ class _ChatPanelState extends State<_ChatPanel> {
                       }
                     },
                     itemBuilder: (context) => [
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'details',
-                        child: Text('Message details'),
+                        child: Text(l10nOf(context).messageDetails),
                       ),
-                      const PopupMenuItem(value: 'reply', child: Text('Reply')),
+                      PopupMenuItem(
+                        value: 'reply',
+                        child: Text(l10nOf(context).menuReply),
+                      ),
                       if (message.state != DeliveryState.canceled)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'react',
-                          child: Text('React 👍'),
+                          child: Text(l10nOf(context).menuReact),
                         ),
                       if (!message.hasAttachment &&
                           message.body.trim().isNotEmpty)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'forward',
-                          child: Text('Forward'),
+                          child: Text(l10nOf(context).menuForward),
                         ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'copy',
-                        child: Text('Copy message'),
+                        child: Text(l10nOf(context).menuCopyMessage),
                       ),
                       if (attachmentDescriptor != null && !outbound &&
                           !attachmentAvailable)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_download',
-                          child: Text('Download attachment'),
+                          child: Text(l10nOf(context).menuDownloadAttachment),
                         ),
                       if (attachmentAvailable)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_save',
-                          child: Text('Save attachment'),
+                          child: Text(l10nOf(context).menuSaveAttachment),
                         ),
                       if (attachmentDescriptor?.mimeType.startsWith('image/') == true &&
                           controller.attachmentBytesFor(attachmentDescriptor!.id) != null)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_copy_image',
-                          child: Text('Copy image'),
+                          child: Text(l10nOf(context).menuCopyImage),
                         ),
                       if (attachmentAvailable) ...[
                         const PopupMenuItem(
@@ -11081,31 +11090,31 @@ class _ChatPanelState extends State<_ChatPanel> {
                         ),
                         if (!controller.attachmentKeptOffline(attachmentDescriptor.id) &&
                             !attachmentInFlight)
-                          const PopupMenuItem(
+                          PopupMenuItem(
                             value: 'attachment_evict',
-                            child: Text('Free up local space'),
+                            child: Text(l10nOf(context).menuFreeUpSpace),
                           ),
                       ],
                       if (attachmentInFlight)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_cancel',
-                          child: Text('Cancel transfer'),
+                          child: Text(l10nOf(context).menuCancelTransfer),
                         ),
                       if (attachmentDescriptor != null && outbound &&
                           message.state == DeliveryState.failed)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_retry',
-                          child: Text('Retry transfer'),
+                          child: Text(l10nOf(context).menuRetryTransfer),
                         ),
                       if (attachmentDescriptor != null)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'forward_attachment',
-                          child: Text('Forward attachment'),
+                          child: Text(l10nOf(context).menuForwardAttachment),
                         ),
                       if (outbound && message.state == DeliveryState.pending)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'cancel',
-                          child: Text('Cancel sending'),
+                          child: Text(l10nOf(context).menuCancelSending),
                         ),
                       if (controller.canSendViaPlainMatrix(
                         contact.deviceId,
@@ -11116,13 +11125,13 @@ class _ChatPanelState extends State<_ChatPanel> {
                           child: Text('Send via Matrix…'),
                         ),
                       if (outbound)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'edit',
-                          child: Text('Edit message'),
+                          child: Text(l10nOf(context).menuEditMessage),
                         ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'delete',
-                        child: Text('Delete message'),
+                        child: Text(l10nOf(context).menuDeleteMessage),
                       ),
                     ],
                   ),
@@ -11493,7 +11502,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                             ? widget.onAttach
                             : null,
                         icon: const Icon(Icons.attach_file_outlined),
-                        tooltip: 'Attach a file or image',
+                        tooltip: l10nOf(context).composerAttach,
                       ),
                       Expanded(
                         child: Shortcuts(
@@ -11648,7 +11657,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                         },
                       ),
                       IconButton(
-                        tooltip: 'Schedule message',
+                        tooltip: l10nOf(context).composerSchedule,
                         onPressed: contact.canSendOutbound
                             ? _scheduleText
                             : null,
@@ -11656,7 +11665,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                       ),
                       if (widget.telegramLayout)
                         IconButton.filled(
-                          tooltip: 'Send',
+                          tooltip: l10nOf(context).composerSend,
                           onPressed: contact.canComposeOutbound
                               ? widget.onSend
                               : null,
@@ -11761,7 +11770,7 @@ class _EditMessageDialogState extends State<_EditMessageDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Edit message'),
+      title: Text(l10nOf(context).menuEditMessage),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -12371,12 +12380,12 @@ class _AddContactDialogState extends State<AddContactDialog> {
   bool get _hasCodephrase => _codephraseController.text.trim().isNotEmpty;
   String get _submitLabel {
     if (_hasPayload) {
-      return 'Trust QR / payload';
+      return l10nOf(context).contactTrustPayload;
     }
     if (_hasCodephrase) {
-      return 'Find by codephrase';
+      return l10nOf(context).contactFindCodephrase;
     }
-    return 'Add contact';
+    return l10nOf(context).contactAdd;
   }
 
   @override
@@ -12425,26 +12434,30 @@ class _AddContactDialogState extends State<AddContactDialog> {
         return;
       }
       if (result.exchangeStatus == ContactExchangeStatus.manualActionRequired) {
-        keepContact = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Automatic exchange failed'),
-            content: Text(
-              'You added ${result.contact.alias}, but your invite could not be sent back automatically. Ask the other user to scan or enter your invite from their side, or abort and remove this one-sided contact now.',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('Abort'),
+        keepContact =
+            await showDialog<bool>(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: Text(l10nOf(context).contactExchangeFailed),
+                content: Text(
+                  l10nOf(
+                    context,
+                  ).contactExchangeFailedBody(result.contact.alias),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: Text(l10nOf(context).actionAbort),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.of(context).pop(true),
+                    child: Text(l10nOf(context).contactKeep),
+                  ),
+                ],
               ),
-              FilledButton(
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('Keep Contact'),
-              ),
-            ],
-          ),
-        ) ?? false;
+            ) ??
+            false;
         if (keepContact != true) {
           await widget.controller.removeContact(
             result.contact.deviceId,
@@ -12476,7 +12489,7 @@ class _AddContactDialogState extends State<AddContactDialog> {
       fullscreenOnMobile: widget.fullscreenOnMobile,
       scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-      title: const Text('Add contact'),
+      title: Text(l10nOf(context).contactAdd),
       content: SizedBox(
         width: 560,
         child: SingleChildScrollView(
@@ -12491,15 +12504,17 @@ class _AddContactDialogState extends State<AddContactDialog> {
               ),
               TextField(
                 controller: _aliasController,
-                decoration: const InputDecoration(labelText: 'Alias'),
+                decoration: InputDecoration(
+                  labelText: l10nOf(context).contactAlias,
+                ),
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: _payloadController,
                 minLines: 4,
                 maxLines: 7,
-                decoration: const InputDecoration(
-                  labelText: 'Invite payload or scanned QR',
+                decoration: InputDecoration(
+                  labelText: l10nOf(context).contactInvitePayload,
                   alignLabelWithHint: true,
                 ),
                 onChanged: (_) => setState(() {}),
@@ -12511,14 +12526,16 @@ class _AddContactDialogState extends State<AddContactDialog> {
                   child: OutlinedButton.icon(
                     onPressed: _scanPayload,
                     icon: const Icon(Icons.qr_code_scanner),
-                    label: const Text('Scan QR'),
+                    label: Text(l10nOf(context).contactScanQr),
                   ),
                 ),
               ],
               const SizedBox(height: 12),
               TextField(
                 controller: _codephraseController,
-                decoration: const InputDecoration(labelText: 'Codephrase only'),
+                decoration: InputDecoration(
+                  labelText: l10nOf(context).contactCodephrase,
+                ),
                 onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 12),
@@ -12572,7 +12589,7 @@ class _AddContactDialogState extends State<AddContactDialog> {
       actions: [
         TextButton(
           onPressed: _submitting ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(l10nOf(context).actionCancel),
         ),
         FilledButton(
           onPressed: _submitting ? null : _submit,
@@ -14080,7 +14097,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       fullscreenOnMobile: widget.fullscreenOnMobile,
       scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-      title: const Text('Settings'),
+      title: Text(l10nOf(context).tabSettings),
       content: SizedBox(
         width: 720,
         child: identity == null
@@ -14107,9 +14124,22 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 padding: const EdgeInsets.only(right: 8),
                                 child: ChoiceChip(
                                   label: Text(switch (category) {
-                                    'Personal / Preferences' => 'Personal',
-                                    'Network / Relay' => 'Relays',
-                                    'Danger' => 'Account',
+                                    'Personal / Preferences' => l10nOf(
+                                      context,
+                                    ).settingsPersonal,
+                                    'Storage' => l10nOf(
+                                      context,
+                                    ).settingsStorage,
+                                    'Connectivity' => l10nOf(
+                                      context,
+                                    ).settingsConnectivity,
+                                    'Network / Relay' => l10nOf(
+                                      context,
+                                    ).settingsRelays,
+                                    'Updates' => l10nOf(
+                                      context,
+                                    ).settingsUpdates,
+                                    'Danger' => l10nOf(context).settingsAccount,
                                     _ => category,
                                   }),
                                   selected: _settingsCategory == category,
@@ -14126,7 +14156,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     if (!categorized ||
                         _settingsCategory == 'Personal / Preferences')
                       _SettingsSection(
-                        title: 'Personal / Preferences',
+                        title: l10nOf(context).settingsPersonal,
                         palette: widget.palette,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -14394,10 +14424,28 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                       ),
                     const SizedBox(height: 16),
+                    if (!categorized ||
+                        _settingsCategory == 'Personal / Preferences') ...[
+                      _SettingsSection(
+                        title: 'Devices',
+                        palette: widget.palette,
+                        child: DevicesPanel(
+                          controller: widget.controller,
+                          onScan: widget.controller.supportsScanner
+                              ? () => Navigator.of(context).push<String>(
+                                  MaterialPageRoute(
+                                    builder: (_) => const QrScanScreen(),
+                                  ),
+                                )
+                              : null,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
                     if (!simple &&
                         (!categorized || _settingsCategory == 'Storage'))
                       _SettingsSection(
-                        title: 'Storage',
+                        title: l10nOf(context).settingsStorage,
                         palette: widget.palette,
                         child: SwitchListTile.adaptive(
                           value: identity.connectivity.storageReserveEnabled,
@@ -14418,7 +14466,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     if (!simple &&
                         (!categorized || _settingsCategory == 'Connectivity'))
                       _SettingsSection(
-                        title: 'Connectivity',
+                        title: l10nOf(context).settingsConnectivity,
                         palette: widget.palette,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -14687,7 +14735,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         (!categorized ||
                             _settingsCategory == 'Network / Relay'))
                       _SettingsSection(
-                        title: 'Network / Relay',
+                        title: l10nOf(context).settingsRelays,
                         palette: widget.palette,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -14905,7 +14953,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     if (!simple &&
                         (!categorized || _settingsCategory == 'Updates'))
                       _SettingsSection(
-                        title: 'Updates',
+                        title: l10nOf(context).settingsUpdates,
                         palette: widget.palette,
                         child: ListenableBuilder(
                           listenable: widget.updateService,
@@ -15039,7 +15087,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     if (!simple &&
                         (!categorized || _settingsCategory == 'Danger'))
                       _SettingsSection(
-                        title: 'Danger',
+                        title: l10nOf(context).settingsAccount,
                         palette: widget.palette,
                         child: OutlinedButton.icon(
                           onPressed: _busy ? null : _confirmReset,
@@ -21366,7 +21414,10 @@ class _ScheduledMessagesScreen extends StatelessWidget {
                     }
                   },
                   itemBuilder: (_) => [
-                    const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                    PopupMenuItem(
+                      value: 'edit',
+                      child: Text(l10nOf(context).menuEdit),
+                    ),
                     const PopupMenuItem(value: 'send', child: Text('Send now')),
                     const PopupMenuItem(
                       value: 'reschedule',

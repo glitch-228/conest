@@ -351,6 +351,414 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'This translation was made with AI and may contain mistakes. You can help improve it on Weblate.'**
   String get settingsAiTranslated;
+
+  /// Message menu: reply to this message.
+  ///
+  /// In en, this message translates to:
+  /// **'Reply'**
+  String get menuReply;
+
+  /// Message menu: react with a thumbs-up. Keep the emoji.
+  ///
+  /// In en, this message translates to:
+  /// **'React 👍'**
+  String get menuReact;
+
+  /// Message menu: forward to another chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Forward'**
+  String get menuForward;
+
+  /// Message menu: copy the text.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy message'**
+  String get menuCopyMessage;
+
+  /// Message menu: download a received file.
+  ///
+  /// In en, this message translates to:
+  /// **'Download attachment'**
+  String get menuDownloadAttachment;
+
+  /// Message menu: save a file to the device.
+  ///
+  /// In en, this message translates to:
+  /// **'Save attachment'**
+  String get menuSaveAttachment;
+
+  /// Message menu: copy the picture to the clipboard.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy image'**
+  String get menuCopyImage;
+
+  /// Message menu: delete this device's copy of a file (it can be downloaded again).
+  ///
+  /// In en, this message translates to:
+  /// **'Free up local space'**
+  String get menuFreeUpSpace;
+
+  /// Message menu: stop a file that is being sent or received.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel transfer'**
+  String get menuCancelTransfer;
+
+  /// Message menu: try a failed file transfer again.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry transfer'**
+  String get menuRetryTransfer;
+
+  /// Message menu: forward the file to another chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Forward attachment'**
+  String get menuForwardAttachment;
+
+  /// Message menu: stop a message that has not gone out yet.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel sending'**
+  String get menuCancelSending;
+
+  /// Message menu: change the text of your message.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit message'**
+  String get menuEditMessage;
+
+  /// Message menu: delete the message.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete message'**
+  String get menuDeleteMessage;
+
+  /// Menu item: change something.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit'**
+  String get menuEdit;
+
+  /// Menu item: delete something.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete'**
+  String get menuDelete;
+
+  /// Tooltip of the paperclip button in the message box.
+  ///
+  /// In en, this message translates to:
+  /// **'Attach a file or image'**
+  String get composerAttach;
+
+  /// Tooltip: send the message later at a chosen time.
+  ///
+  /// In en, this message translates to:
+  /// **'Schedule message'**
+  String get composerSchedule;
+
+  /// Tooltip of the send button.
+  ///
+  /// In en, this message translates to:
+  /// **'Send'**
+  String get composerSend;
+
+  /// Hint in the search box of the chat list.
+  ///
+  /// In en, this message translates to:
+  /// **'Search chats and messages'**
+  String get searchChatsAndMessages;
+
+  /// Hint in a search box for chats.
+  ///
+  /// In en, this message translates to:
+  /// **'Search chats'**
+  String get searchChats;
+
+  /// Hint in a search box for contacts.
+  ///
+  /// In en, this message translates to:
+  /// **'Search contacts'**
+  String get searchContacts;
+
+  /// Entry that opens the archived chats.
+  ///
+  /// In en, this message translates to:
+  /// **'Archived chats'**
+  String get archivedChats;
+
+  /// Tooltip of a search button.
+  ///
+  /// In en, this message translates to:
+  /// **'Search'**
+  String get actionSearch;
+
+  /// Settings section and tab: profile, look, language, privacy.
+  ///
+  /// In en, this message translates to:
+  /// **'Personal'**
+  String get settingsPersonal;
+
+  /// Settings section and tab: space used by files.
+  ///
+  /// In en, this message translates to:
+  /// **'Storage'**
+  String get settingsStorage;
+
+  /// Settings section and tab: the ways Conest reaches contacts (networks, transports). Other texts refer to it as Settings → Connectivity.
+  ///
+  /// In en, this message translates to:
+  /// **'Connectivity'**
+  String get settingsConnectivity;
+
+  /// Settings section and tab: relay servers.
+  ///
+  /// In en, this message translates to:
+  /// **'Relays'**
+  String get settingsRelays;
+
+  /// Settings section and tab: app updates.
+  ///
+  /// In en, this message translates to:
+  /// **'Updates'**
+  String get settingsUpdates;
+
+  /// Settings section and tab: resetting or removing this identity.
+  ///
+  /// In en, this message translates to:
+  /// **'Account'**
+  String get settingsAccount;
+
+  /// Error on the first screen when the name or port is missing.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a display name and a valid local relay port.'**
+  String get onbNameRequired;
+
+  /// Error on the first screen.
+  ///
+  /// In en, this message translates to:
+  /// **'If you set an internet relay host, the relay port must be valid too.'**
+  String get onbRelayPortInvalid;
+
+  /// Note on the first screen on desktops.
+  ///
+  /// In en, this message translates to:
+  /// **'Desktop nodes relay by default and advertise nearby LAN routes automatically.'**
+  String get onbRelayDesktop;
+
+  /// Note on the first screen on Android.
+  ///
+  /// In en, this message translates to:
+  /// **'Android starts with relay mode off. Enable it in Settings only when you want this device to relay.'**
+  String get onbRelayAndroid;
+
+  /// Note on the first screen on other platforms.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay mode can be enabled in Settings when this device should help carry traffic.'**
+  String get onbRelayOther;
+
+  /// Introduction on the first screen. Keep the names Matrix, Nostr, Tor, LoRa.
+  ///
+  /// In en, this message translates to:
+  /// **'Reach contacts directly over your network or the internet, end-to-end encrypted with forward secrecy. When the usual routes are blocked, Conest falls back to relays, Matrix, Nostr, email, Tor, LoRa radios or a Bluetooth mesh of nearby phones.'**
+  String get onbTagline;
+
+  /// Short feature label on the first screen.
+  ///
+  /// In en, this message translates to:
+  /// **'Forward-secret chats'**
+  String get onbFeatureForwardSecret;
+
+  /// Short feature label on the first screen.
+  ///
+  /// In en, this message translates to:
+  /// **'Direct over LAN and internet'**
+  String get onbFeatureDirect;
+
+  /// Short feature label on the first screen.
+  ///
+  /// In en, this message translates to:
+  /// **'Tor, mesh and radio fallbacks'**
+  String get onbFeatureFallbacks;
+
+  /// Short feature label on the first screen.
+  ///
+  /// In en, this message translates to:
+  /// **'Also a Matrix client'**
+  String get onbFeatureMatrix;
+
+  /// Heading of the form that creates the user's identity.
+  ///
+  /// In en, this message translates to:
+  /// **'Create your first device'**
+  String get onbCreateTitle;
+
+  /// Help text above the first-screen form.
+  ///
+  /// In en, this message translates to:
+  /// **'Only a display name is needed. The local port is for nearby (LAN) delivery and codephrase pairing. An internet relay is optional: contacts are reached over the internet without one. Turn on more routes later under Settings → Connectivity.'**
+  String get onbCreateHelp;
+
+  /// Form field: the name contacts see.
+  ///
+  /// In en, this message translates to:
+  /// **'Display name'**
+  String get onbDisplayName;
+
+  /// Form field: network port for nearby delivery.
+  ///
+  /// In en, this message translates to:
+  /// **'Local relay / LAN port'**
+  String get onbLocalPort;
+
+  /// Form field: an optional relay server address.
+  ///
+  /// In en, this message translates to:
+  /// **'Internet relay host / URL (optional)'**
+  String get onbRelayHost;
+
+  /// Form field: the relay server's port.
+  ///
+  /// In en, this message translates to:
+  /// **'Internet relay port'**
+  String get onbRelayPort;
+
+  /// Button that creates the identity.
+  ///
+  /// In en, this message translates to:
+  /// **'Create encrypted device'**
+  String get onbCreateButton;
+
+  /// Button: use the app only for Matrix chats.
+  ///
+  /// In en, this message translates to:
+  /// **'Use as a Matrix client instead'**
+  String get onbMatrixInstead;
+
+  /// Explains the Matrix-only choice.
+  ///
+  /// In en, this message translates to:
+  /// **'Matrix chats only, with no Conest identity. You can switch to Both (Conest and Matrix side by side) later under Settings → Connectivity → App mode.'**
+  String get onbMatrixHelp;
+
+  /// Title of the dialog that creates a group.
+  ///
+  /// In en, this message translates to:
+  /// **'Create group'**
+  String get groupCreate;
+
+  /// Field: the group's name.
+  ///
+  /// In en, this message translates to:
+  /// **'Group title'**
+  String get groupTitle;
+
+  /// Group role: an ordinary member.
+  ///
+  /// In en, this message translates to:
+  /// **'Member'**
+  String get roleMember;
+
+  /// Group role: can manage messages.
+  ///
+  /// In en, this message translates to:
+  /// **'Moderator'**
+  String get roleModerator;
+
+  /// Group role: can manage the group and members.
+  ///
+  /// In en, this message translates to:
+  /// **'Admin'**
+  String get roleAdmin;
+
+  /// Button that cancels a dialog.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get actionCancel;
+
+  /// Button that creates something (a group).
+  ///
+  /// In en, this message translates to:
+  /// **'Create'**
+  String get actionCreate;
+
+  /// The create button while it works.
+  ///
+  /// In en, this message translates to:
+  /// **'Creating'**
+  String get actionCreating;
+
+  /// Title of the dialog, and its button, that adds a contact.
+  ///
+  /// In en, this message translates to:
+  /// **'Add contact'**
+  String get contactAdd;
+
+  /// Field: the name you give the new contact.
+  ///
+  /// In en, this message translates to:
+  /// **'Alias'**
+  String get contactAlias;
+
+  /// Field: the invite text (from a link or a QR code).
+  ///
+  /// In en, this message translates to:
+  /// **'Invite payload or scanned QR'**
+  String get contactInvitePayload;
+
+  /// Button that opens the camera to scan an invite QR code.
+  ///
+  /// In en, this message translates to:
+  /// **'Scan QR'**
+  String get contactScanQr;
+
+  /// Field: a short codephrase to find a nearby contact instead of an invite.
+  ///
+  /// In en, this message translates to:
+  /// **'Codephrase only'**
+  String get contactCodephrase;
+
+  /// Button when an invite was pasted or scanned.
+  ///
+  /// In en, this message translates to:
+  /// **'Trust QR / payload'**
+  String get contactTrustPayload;
+
+  /// Button when a codephrase was entered.
+  ///
+  /// In en, this message translates to:
+  /// **'Find by codephrase'**
+  String get contactFindCodephrase;
+
+  /// Title when your invite could not be sent back to the new contact.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic exchange failed'**
+  String get contactExchangeFailed;
+
+  /// Explains a contact added only on one side.
+  ///
+  /// In en, this message translates to:
+  /// **'You added {alias}, but your invite could not be sent back automatically. Ask the other user to scan or enter your invite from their side, or abort and remove this one-sided contact now.'**
+  String contactExchangeFailedBody(String alias);
+
+  /// Button: undo what was just done.
+  ///
+  /// In en, this message translates to:
+  /// **'Abort'**
+  String get actionAbort;
+
+  /// Button: keep the one-sided contact.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep Contact'**
+  String get contactKeep;
 }
 
 class _AppLocalizationsDelegate

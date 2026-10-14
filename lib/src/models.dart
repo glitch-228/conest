@@ -972,6 +972,10 @@ class IdentityRecord {
     this.signingPublicKeyBase64,
     this.signingPrivateKeyBase64,
     this.irohEndpointId,
+    this.accountKeyPublicBase64,
+    this.accountKeyPrivateBase64,
+    this.accountUpgrade,
+    this.accountDeviceList,
   });
 
   final String accountId;
@@ -1005,6 +1009,17 @@ class IdentityRecord {
   final String? signingPrivateKeyBase64;
   final String? irohEndpointId;
 
+  /// The account key (M29), once this identity has one: every linked
+  /// device holds it.
+  final String? accountKeyPublicBase64;
+  final String? accountKeyPrivateBase64;
+
+  /// How this identity joined its account key (sent to contacts).
+  final Map<String, Object?>? accountUpgrade;
+
+  /// The account's current signed device list (sent to contacts).
+  final Map<String, Object?>? accountDeviceList;
+
   String get deviceIdShort => deviceId.substring(0, 8);
   String get shortSafetyNumber => _truncateSafetyNumber(safetyNumber);
   bool get hasInternetRelay => configuredRelays.isNotEmpty;
@@ -1036,6 +1051,8 @@ class IdentityRecord {
   }
 
   IdentityRecord copyWith({
+    // Only linking changes it: the device joins its account.
+    String? accountId,
     String? displayName,
     String? bio,
     String? pairingNonce,
@@ -1056,9 +1073,13 @@ class IdentityRecord {
     String? signingPublicKeyBase64,
     String? signingPrivateKeyBase64,
     String? irohEndpointId,
+    String? accountKeyPublicBase64,
+    String? accountKeyPrivateBase64,
+    Map<String, Object?>? accountUpgrade,
+    Map<String, Object?>? accountDeviceList,
   }) {
     return IdentityRecord(
-      accountId: accountId,
+      accountId: accountId ?? this.accountId,
       deviceId: deviceId,
       displayName: displayName ?? this.displayName,
       bio: bio ?? this.bio,
@@ -1092,6 +1113,12 @@ class IdentityRecord {
       signingPrivateKeyBase64:
           signingPrivateKeyBase64 ?? this.signingPrivateKeyBase64,
       irohEndpointId: irohEndpointId ?? this.irohEndpointId,
+      accountKeyPublicBase64:
+          accountKeyPublicBase64 ?? this.accountKeyPublicBase64,
+      accountKeyPrivateBase64:
+          accountKeyPrivateBase64 ?? this.accountKeyPrivateBase64,
+      accountUpgrade: accountUpgrade ?? this.accountUpgrade,
+      accountDeviceList: accountDeviceList ?? this.accountDeviceList,
     );
   }
 
@@ -1128,6 +1155,12 @@ class IdentityRecord {
       if (signingPrivateKeyBase64 != null)
         'signingPrivateKeyBase64': signingPrivateKeyBase64,
       if (irohEndpointId != null) 'irohEndpointId': irohEndpointId,
+      if (accountKeyPublicBase64 != null)
+        'accountKeyPublic': accountKeyPublicBase64,
+      if (accountKeyPrivateBase64 != null)
+        'accountKeyPrivate': accountKeyPrivateBase64,
+      if (accountUpgrade != null) 'accountUpgrade': accountUpgrade,
+      if (accountDeviceList != null) 'accountDeviceList': accountDeviceList,
     };
   }
 
@@ -1203,6 +1236,14 @@ class IdentityRecord {
       signingPublicKeyBase64: json['signingPublicKeyBase64'] as String?,
       signingPrivateKeyBase64: json['signingPrivateKeyBase64'] as String?,
       irohEndpointId: json['irohEndpointId'] as String?,
+      accountKeyPublicBase64: json['accountKeyPublic'] as String?,
+      accountKeyPrivateBase64: json['accountKeyPrivate'] as String?,
+      accountUpgrade: json['accountUpgrade'] is Map<String, dynamic>
+          ? json['accountUpgrade'] as Map<String, dynamic>
+          : null,
+      accountDeviceList: json['accountDeviceList'] is Map<String, dynamic>
+          ? json['accountDeviceList'] as Map<String, dynamic>
+          : null,
     );
   }
 }
@@ -1779,6 +1820,11 @@ class ContactRecord {
     this.replacedByDeviceId,
     this.unverifiedPublicKeyBase64,
     this.remoteRemovedAt,
+    this.accountKeyBase64,
+    this.accountDeviceListVersion = 0,
+    this.accountRevokedDeviceIds = const <String>[],
+    this.accountAnchorDeviceId,
+    this.deviceName,
     this.routing = const ContactRoutingPreferences(),
     this.signingPublicKeyBase64,
     this.irohEndpointId,
@@ -1885,6 +1931,26 @@ class ContactRecord {
   /// re-adds it locally.
   final DateTime? remoteRemovedAt;
 
+  /// The contact's account key (M29), once their account vouched for it.
+  final String? accountKeyBase64;
+
+  /// The newest device list of their account applied here (on the main
+  /// record); older ones are refused.
+  final int accountDeviceListVersion;
+
+  /// Their account's revoked devices: never accepted again.
+  final List<String> accountRevokedDeviceIds;
+
+  /// For another device of a contact's account: the main record's device
+  /// id. Such records are hidden from contact lists.
+  final String? accountAnchorDeviceId;
+
+  /// The name their account gave this device.
+  final String? deviceName;
+
+  /// Another device of a contact's account, not the contact as listed.
+  bool get isLinkedDevice => accountAnchorDeviceId != null;
+
   String get shortSafetyNumber => _truncateSafetyNumber(safetyNumber);
 
   bool get isArchived => replacedByDeviceId != null || remoteRemovedAt != null;
@@ -1920,6 +1986,11 @@ class ContactRecord {
     String? unverifiedPublicKeyBase64,
     bool clearUnverifiedPublicKey = false,
     DateTime? remoteRemovedAt,
+    String? accountKeyBase64,
+    int? accountDeviceListVersion,
+    List<String>? accountRevokedDeviceIds,
+    String? accountAnchorDeviceId,
+    String? deviceName,
     bool clearRemoteRemovedAt = false,
     ContactRoutingPreferences? routing,
     String? signingPublicKeyBase64,
@@ -1967,6 +2038,14 @@ class ContactRecord {
       remoteRemovedAt: clearRemoteRemovedAt
           ? null
           : (remoteRemovedAt ?? this.remoteRemovedAt),
+      accountKeyBase64: accountKeyBase64 ?? this.accountKeyBase64,
+      accountDeviceListVersion:
+          accountDeviceListVersion ?? this.accountDeviceListVersion,
+      accountRevokedDeviceIds:
+          accountRevokedDeviceIds ?? this.accountRevokedDeviceIds,
+      accountAnchorDeviceId:
+          accountAnchorDeviceId ?? this.accountAnchorDeviceId,
+      deviceName: deviceName ?? this.deviceName,
       routing: routing ?? this.routing,
       signingPublicKeyBase64:
           signingPublicKeyBase64 ?? this.signingPublicKeyBase64,
@@ -2077,6 +2156,14 @@ class ContactRecord {
         'unverifiedPublicKeyBase64': unverifiedPublicKeyBase64,
       if (remoteRemovedAt != null)
         'remoteRemovedAt': remoteRemovedAt!.toUtc().toIso8601String(),
+      if (accountKeyBase64 != null) 'accountKey': accountKeyBase64,
+      if (accountDeviceListVersion > 0)
+        'accountDeviceListVersion': accountDeviceListVersion,
+      if (accountRevokedDeviceIds.isNotEmpty)
+        'accountRevokedDeviceIds': accountRevokedDeviceIds,
+      if (accountAnchorDeviceId != null)
+        'accountAnchorDeviceId': accountAnchorDeviceId,
+      if (deviceName != null) 'deviceName': deviceName,
       'routing': routing.toJson(),
       if (signingPublicKeyBase64 != null)
         'signingPublicKeyBase64': signingPublicKeyBase64,
@@ -2176,7 +2263,24 @@ class ContactRecord {
       unverifiedPublicKeyBase64: unverifiedKey,
       remoteRemovedAt: DateTime.tryParse(
         json['remoteRemovedAt'] as String? ?? '',
-      )?.toUtc(),
+)?.toUtc(),
+      accountKeyBase64: json['accountKey'] is String
+          ? json['accountKey'] as String
+          : null,
+      accountDeviceListVersion: json['accountDeviceListVersion'] is int
+          ? json['accountDeviceListVersion'] as int
+          : 0,
+      accountRevokedDeviceIds: [
+        if (json['accountRevokedDeviceIds'] case final List revoked)
+          for (final id in revoked.take(64))
+            if (id is String && id.length <= 128) id,
+      ],
+      accountAnchorDeviceId: json['accountAnchorDeviceId'] is String
+          ? json['accountAnchorDeviceId'] as String
+          : null,
+      deviceName: json['deviceName'] is String
+          ? json['deviceName'] as String
+          : null,
       routing: json['routing'] is Map<String, dynamic>
           ? ContactRoutingPreferences.fromJson(
               json['routing'] as Map<String, dynamic>,

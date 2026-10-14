@@ -159,4 +159,218 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get settingsAiTranslated =>
       'این ترجمه با هوش مصنوعی انجام شده و ممکن است اشتباه داشته باشد. می‌توانید در Weblate به بهتر شدن آن کمک کنید.';
+
+  @override
+  String get menuReply => 'پاسخ';
+
+  @override
+  String get menuReact => 'واکنش 👍';
+
+  @override
+  String get menuForward => 'بازارسال';
+
+  @override
+  String get menuCopyMessage => 'کپی پیام';
+
+  @override
+  String get menuDownloadAttachment => 'دانلود پیوست';
+
+  @override
+  String get menuSaveAttachment => 'ذخیره پیوست';
+
+  @override
+  String get menuCopyImage => 'کپی تصویر';
+
+  @override
+  String get menuFreeUpSpace => 'آزادسازی فضا';
+
+  @override
+  String get menuCancelTransfer => 'لغو انتقال';
+
+  @override
+  String get menuRetryTransfer => 'تلاش دوباره انتقال';
+
+  @override
+  String get menuForwardAttachment => 'بازارسال پیوست';
+
+  @override
+  String get menuCancelSending => 'لغو ارسال';
+
+  @override
+  String get menuEditMessage => 'ویرایش پیام';
+
+  @override
+  String get menuDeleteMessage => 'حذف پیام';
+
+  @override
+  String get menuEdit => 'ویرایش';
+
+  @override
+  String get menuDelete => 'حذف';
+
+  @override
+  String get composerAttach => 'پیوست فایل یا تصویر';
+
+  @override
+  String get composerSchedule => 'زمان‌بندی پیام';
+
+  @override
+  String get composerSend => 'ارسال';
+
+  @override
+  String get searchChatsAndMessages => 'جستجو در گفتگوها و پیام‌ها';
+
+  @override
+  String get searchChats => 'جستجوی گفتگوها';
+
+  @override
+  String get searchContacts => 'جستجوی مخاطبان';
+
+  @override
+  String get archivedChats => 'گفتگوهای بایگانی‌شده';
+
+  @override
+  String get actionSearch => 'جستجو';
+
+  @override
+  String get settingsPersonal => 'شخصی';
+
+  @override
+  String get settingsStorage => 'فضای ذخیره‌سازی';
+
+  @override
+  String get settingsConnectivity => 'اتصال';
+
+  @override
+  String get settingsRelays => 'رله‌ها';
+
+  @override
+  String get settingsUpdates => 'به‌روزرسانی‌ها';
+
+  @override
+  String get settingsAccount => 'حساب';
+
+  @override
+  String get onbNameRequired =>
+      'یک نام نمایشی و یک درگاه محلی معتبر وارد کنید.';
+
+  @override
+  String get onbRelayPortInvalid =>
+      'اگر نشانی رله اینترنتی را وارد کرده‌اید، درگاه آن هم باید معتبر باشد.';
+
+  @override
+  String get onbRelayDesktop =>
+      'رایانه‌ها به‌طور پیش‌فرض رله می‌کنند و مسیرهای شبکه محلی را خودکار اعلام می‌کنند.';
+
+  @override
+  String get onbRelayAndroid =>
+      'در اندروید حالت رله خاموش است. فقط وقتی می‌خواهید این دستگاه رله کند آن را در تنظیمات روشن کنید.';
+
+  @override
+  String get onbRelayOther =>
+      'اگر می‌خواهید این دستگاه در جابه‌جایی پیام‌ها کمک کند، حالت رله را در تنظیمات روشن کنید.';
+
+  @override
+  String get onbTagline =>
+      'مستقیم و از راه شبکه خودتان یا اینترنت به مخاطبان برسید، با رمزگذاری سرتاسری و محرمانگی پیشرو. وقتی راه‌های معمول مسدود باشند، Conest از رله‌ها، Matrix، Nostr، ایمیل، Tor، رادیوهای LoRa یا شبکه بلوتوث گوشی‌های نزدیک استفاده می‌کند.';
+
+  @override
+  String get onbFeatureForwardSecret => 'گفتگو با محرمانگی پیشرو';
+
+  @override
+  String get onbFeatureDirect => 'مستقیم از شبکه محلی و اینترنت';
+
+  @override
+  String get onbFeatureFallbacks => 'راه‌های جایگزین Tor، مش و رادیو';
+
+  @override
+  String get onbFeatureMatrix => 'کلاینت Matrix هم هست';
+
+  @override
+  String get onbCreateTitle => 'نخستین دستگاه خود را بسازید';
+
+  @override
+  String get onbCreateHelp =>
+      'فقط یک نام نمایشی لازم است. درگاه محلی برای تحویل در شبکه محلی و جفت‌شدن با عبارت رمز است. رله اینترنتی اختیاری است: بدون آن هم از راه اینترنت به مخاطبان می‌رسید. مسیرهای بیشتر را بعداً در «تنظیمات ← اتصال» روشن کنید.';
+
+  @override
+  String get onbDisplayName => 'نام نمایشی';
+
+  @override
+  String get onbLocalPort => 'درگاه رله محلی / LAN';
+
+  @override
+  String get onbRelayHost => 'نشانی رله اینترنتی (اختیاری)';
+
+  @override
+  String get onbRelayPort => 'درگاه رله اینترنتی';
+
+  @override
+  String get onbCreateButton => 'ساخت دستگاه رمزگذاری‌شده';
+
+  @override
+  String get onbMatrixInstead => 'استفاده به‌عنوان کلاینت Matrix';
+
+  @override
+  String get onbMatrixHelp =>
+      'فقط گفتگوهای Matrix، بدون هویت Conest. بعداً می‌توانید در «تنظیمات ← اتصال ← حالت برنامه» به «هر دو» (Conest و Matrix کنار هم) بروید.';
+
+  @override
+  String get groupCreate => 'ساخت گروه';
+
+  @override
+  String get groupTitle => 'نام گروه';
+
+  @override
+  String get roleMember => 'عضو';
+
+  @override
+  String get roleModerator => 'ناظر';
+
+  @override
+  String get roleAdmin => 'مدیر';
+
+  @override
+  String get actionCancel => 'لغو';
+
+  @override
+  String get actionCreate => 'ساختن';
+
+  @override
+  String get actionCreating => 'در حال ساخت…';
+
+  @override
+  String get contactAdd => 'افزودن مخاطب';
+
+  @override
+  String get contactAlias => 'نام مستعار';
+
+  @override
+  String get contactInvitePayload => 'متن دعوت یا QR اسکن‌شده';
+
+  @override
+  String get contactScanQr => 'اسکن QR';
+
+  @override
+  String get contactCodephrase => 'فقط عبارت رمز';
+
+  @override
+  String get contactTrustPayload => 'اعتماد به QR / دعوت';
+
+  @override
+  String get contactFindCodephrase => 'یافتن با عبارت رمز';
+
+  @override
+  String get contactExchangeFailed => 'تبادل خودکار ناموفق بود';
+
+  @override
+  String contactExchangeFailedBody(String alias) {
+    return '$alias را افزودید، اما دعوت شما به‌طور خودکار برگشت داده نشد. از طرف مقابل بخواهید دعوت شما را اسکن یا وارد کند، یا همین حالا این مخاطب یک‌طرفه را لغو و حذف کنید.';
+  }
+
+  @override
+  String get actionAbort => 'لغو کردن';
+
+  @override
+  String get contactKeep => 'نگه‌داشتن مخاطب';
 }

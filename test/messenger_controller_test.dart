@@ -24,7 +24,9 @@ import 'package:conest/src/carrier.dart';
 import 'package:conest/src/crypto_service.dart';
 import 'package:conest/src/feature_models.dart';
 import 'package:conest/src/email/mail_socket.dart';
+import 'package:conest/src/account/account_model.dart';
 import 'package:conest/src/energy_policy.dart';
+import 'package:conest/src/ui/devices_panel.dart';
 import 'package:conest/src/ui/user_mode_screen.dart';
 import 'package:conest/src/group_file_crypto.dart';
 import 'package:conest/src/group_call/group_call_media.dart';
@@ -15696,6 +15698,294 @@ void main() {
     });
   });
 
+  group('Accounts with several devices', () {
+    Future<
+      (
+        MessengerController,
+        MessengerController,
+        MessengerController,
+        void Function(Duration),
+      )
+    >
+    threeDevices() async {
+      var now = DateTime.now().toUtc();
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+          nowProvider: () => now,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      final phone = await make('New phone');
+      await _pairControllers(alice, bob);
+      return (alice, bob, phone, (Duration by) => now = now.add(by));
+    }
+
+    test('a new device is linked after both confirm the same code', () async {
+      final (alice, bob, phone, advance) = await threeDevices();
+      advance(const Duration(hours: 25));
+      final aliceId = alice.identity!.deviceId;
+      final phoneId = phone.identity!.deviceId;
+
+      final qr = await phone.startLinkAsNewDevice();
+      expect(phone.linkState, LinkState.showingQrCode);
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () =>
+            phone.linkState == LinkState.compareCode &&
+            alice.linkState == LinkState.compareCode,
+        reason: 'the codes did not show',
+      );
+      expect(phone.linkCode, alice.linkCode, reason: 'both show the same code');
+
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      await _waitForIroh(
+        () => phone.linkState == LinkState.linked,
+        reason: 'the phone was not linked',
+      );
+      expect(phone.identity!.accountId, alice.identity!.accountId);
+      expect(phone.identity!.displayName, 'Alice');
+      expect(
+        phone.identity!.accountKeyPublicBase64,
+        alice.identity!.accountKeyPublicBase64,
+      );
+      expect(phone.contacts.map((c) => c.displayName), contains('Bob'));
+      expect(
+        alice.accountDevices!.devices.map((d) => d.deviceId),
+        containsAll([aliceId, phoneId]),
+      );
+      // Bob learns the phone is Alice's.
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.linkedDevicesOf(aliceId).any((d) => d.deviceId == phoneId);
+      }, reason: 'Bob did not learn the phone');
+      expect(bob.contacts.length, 1);
+    });
+
+    test('someone who photographed the QR code cannot pass for the real '
+        'device', () async {
+      final (alice, bob, phone, advance) = await threeDevices();
+      advance(const Duration(hours: 25));
+      final qr = await phone.startLinkAsNewDevice();
+      // Bob (any stranger with the QR code) offers first.
+      await bob.startLinkFromQrCode(qr);
+      await _waitForIroh(() => phone.linkState == LinkState.compareCode);
+      await alice.startLinkFromQrCode(qr);
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      // The phone answered Bob only: Alice shows no code at all, so the
+      // user sees that the devices do not match.
+      expect(alice.linkCode, isNull);
+      expect(alice.linkState, LinkState.connecting);
+      await _waitForIroh(() => bob.linkCode != null);
+      expect(bob.linkCode, phone.linkCode);
+    });
+
+    test('removing a contact removes their other devices', () async {
+      final (alice, bob, phone, advance) = await threeDevices();
+      advance(const Duration(hours: 25));
+      final aliceId = alice.identity!.deviceId;
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () =>
+            phone.linkState == LinkState.compareCode &&
+            alice.linkState == LinkState.compareCode,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.linkedDevicesOf(aliceId).isNotEmpty;
+      });
+      await bob.removeContact(aliceId);
+      expect(bob.linkedDevicesOf(aliceId), isEmpty);
+    });
+
+    testWidgets('Settings lists the devices and shows a link code', (
+      tester,
+    ) async {
+      final alice = (await tester.runAsync(
+        () => _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+        ),
+      ))!;
+      addTearDown(alice.dispose);
+      await tester.runAsync(() => alice.createAccount(deviceName: 'Laptop'));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: alice,
+              builder: (context, _) => DevicesPanel(controller: alice),
+            ),
+          ),
+        ),
+      );
+      expect(find.text('Laptop'), findsOneWidget);
+      expect(find.text('This device'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('link-this-device')));
+      await tester.pump();
+      for (
+        var i = 0;
+        i < 20 && find.byKey(const ValueKey('link-qr-text')).evaluate().isEmpty;
+        i++
+      ) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pump();
+      }
+      final qr = tester.widget<SelectableText>(
+        find.byKey(const ValueKey('link-qr-text')),
+      );
+      expect(qr.data, startsWith('cl1|'));
+      expect(alice.linkState, LinkState.showingQrCode);
+      alice.cancelLink();
+      await tester.pump(const Duration(seconds: 1));
+    });
+
+    test(
+      'nothing secret is sent unless the new device confirmed too',
+      () async {
+        final (alice, _, phone, advance) = await threeDevices();
+        advance(const Duration(hours: 25));
+        final qr = await phone.startLinkAsNewDevice();
+        await alice.startLinkFromQrCode(qr);
+        await _waitForIroh(
+          () =>
+              phone.linkState == LinkState.compareCode &&
+              alice.linkState == LinkState.compareCode,
+        );
+        // Only the existing device confirms.
+        await alice.confirmLinkCode();
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        expect(phone.linkState, isNot(LinkState.linked));
+        expect(phone.identity!.accountKeyPrivateBase64, isNull);
+        expect(alice.accountDevices!.devices.length, 1);
+        // A code from another device's QR does not start a link.
+        await expectLater(
+          alice.startLinkFromQrCode('cl1|not|a|real|code|x'),
+          throwsArgumentError,
+        );
+      },
+    );
+
+    test('a contact learns the account\'s other devices, and loses revoked '
+        'ones', () async {
+      var now = DateTime.now().toUtc();
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        nowProvider: () => now,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        nowProvider: () => now,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final aliceId = alice.identity!.deviceId;
+
+      await alice.createAccount(deviceName: 'Laptop');
+      expect(alice.accountDevices?.devices.single.name, 'Laptop');
+      // A brand-new identity waits a day before adding devices.
+      expect(alice.mayManageAccountDevices, isFalse);
+      now = now.add(const Duration(hours: 25));
+      expect(alice.mayManageAccountDevices, isTrue);
+
+      final phoneSigning = await Ed25519().newKeyPair();
+      final phoneSigningKey = base64Encode(
+        (await phoneSigning.extractPublicKey()).bytes,
+      );
+      final phoneEncryption = await X25519().newKeyPair();
+      final phoneEncryptionKey = base64Encode(
+        (await phoneEncryption.extractPublicKey()).bytes,
+      );
+      Future<String> phoneProof() async => base64Encode(
+        (await Ed25519().sign(
+          DeviceCert.proofBytes(
+            accountId: alice.identity!.accountId,
+            deviceId: 'alice-phone',
+            encryptionKeyBase64: phoneEncryptionKey,
+            signingKeyBase64: phoneSigningKey,
+          ),
+          keyPair: phoneSigning,
+        )).bytes,
+      );
+      // Without the phone's own proof it is refused.
+      await expectLater(
+        alice.addAccountDevice(
+          deviceId: 'alice-phone',
+          encryptionKeyBase64: phoneEncryptionKey,
+          signingKeyBase64: phoneSigningKey,
+          name: 'Pixel 8',
+          proofSignatureBase64: base64Encode(List<int>.filled(64, 1)),
+        ),
+        throwsArgumentError,
+      );
+      await alice.addAccountDevice(
+        deviceId: 'alice-phone',
+        encryptionKeyBase64: phoneEncryptionKey,
+        signingKeyBase64: phoneSigningKey,
+        name: 'Pixel 8',
+        proofSignatureBase64: await phoneProof(),
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.linkedDevicesOf(aliceId).isNotEmpty;
+      }, reason: 'Bob did not learn Alice\'s phone');
+      final phone = bob.linkedDevicesOf(aliceId).single;
+      expect(phone.deviceId, 'alice-phone');
+      expect(phone.deviceName, 'Pixel 8');
+      expect(phone.signingPublicKeyBase64, phoneSigningKey);
+      // Listed once: the phone is Alice, not a new contact.
+      expect(bob.contacts.map((c) => c.deviceId), [aliceId]);
+      expect(
+        bob.contacts.single.accountKeyBase64,
+        alice.identity!.accountKeyPublicBase64,
+      );
+
+      await alice.revokeAccountDevice('alice-phone');
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.linkedDevicesOf(aliceId).isEmpty;
+      }, reason: 'Bob kept the revoked phone');
+      expect(
+        bob.contacts.single.accountRevokedDeviceIds,
+        contains('alice-phone'),
+      );
+      // It cannot come back.
+      await expectLater(
+        alice.addAccountDevice(
+          deviceId: 'alice-phone',
+          encryptionKeyBase64: phoneEncryptionKey,
+          signingKeyBase64: phoneSigningKey,
+          name: 'Pixel 8',
+          proofSignatureBase64: await phoneProof(),
+        ),
+        throwsStateError,
+      );
+      // The original device stays: contacts know the account through it.
+      expect(() => alice.revokeAccountDevice(aliceId), throwsArgumentError);
+    });
+  });
+
   group('User modes', () {
     test('a new identity chooses a mode; older vaults stay advanced', () async {
       final vault = _MemoryVaultStore();
@@ -15844,7 +16134,7 @@ void main() {
       );
       await tester.pump();
       expect(find.text('// CONNECTIVITY'), findsNothing);
-      expect(find.text('// PERSONAL / PREFERENCES'), findsOneWidget);
+      expect(find.text('// PERSONAL'), findsOneWidget);
       await tester.ensureVisible(
         find.byKey(const ValueKey('show-all-settings')),
       );

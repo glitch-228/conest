@@ -159,4 +159,218 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get settingsAiTranslated =>
       'Этот перевод сделан с помощью ИИ и может содержать ошибки. Помочь улучшить его можно на Weblate.';
+
+  @override
+  String get menuReply => 'Ответить';
+
+  @override
+  String get menuReact => 'Реакция 👍';
+
+  @override
+  String get menuForward => 'Переслать';
+
+  @override
+  String get menuCopyMessage => 'Копировать сообщение';
+
+  @override
+  String get menuDownloadAttachment => 'Скачать вложение';
+
+  @override
+  String get menuSaveAttachment => 'Сохранить вложение';
+
+  @override
+  String get menuCopyImage => 'Копировать изображение';
+
+  @override
+  String get menuFreeUpSpace => 'Освободить место';
+
+  @override
+  String get menuCancelTransfer => 'Отменить передачу';
+
+  @override
+  String get menuRetryTransfer => 'Повторить передачу';
+
+  @override
+  String get menuForwardAttachment => 'Переслать вложение';
+
+  @override
+  String get menuCancelSending => 'Отменить отправку';
+
+  @override
+  String get menuEditMessage => 'Изменить сообщение';
+
+  @override
+  String get menuDeleteMessage => 'Удалить сообщение';
+
+  @override
+  String get menuEdit => 'Изменить';
+
+  @override
+  String get menuDelete => 'Удалить';
+
+  @override
+  String get composerAttach => 'Прикрепить файл или изображение';
+
+  @override
+  String get composerSchedule => 'Запланировать сообщение';
+
+  @override
+  String get composerSend => 'Отправить';
+
+  @override
+  String get searchChatsAndMessages => 'Поиск по чатам и сообщениям';
+
+  @override
+  String get searchChats => 'Поиск чатов';
+
+  @override
+  String get searchContacts => 'Поиск контактов';
+
+  @override
+  String get archivedChats => 'Архив чатов';
+
+  @override
+  String get actionSearch => 'Поиск';
+
+  @override
+  String get settingsPersonal => 'Личное';
+
+  @override
+  String get settingsStorage => 'Хранилище';
+
+  @override
+  String get settingsConnectivity => 'Подключение';
+
+  @override
+  String get settingsRelays => 'Ретрансляторы';
+
+  @override
+  String get settingsUpdates => 'Обновления';
+
+  @override
+  String get settingsAccount => 'Аккаунт';
+
+  @override
+  String get onbNameRequired =>
+      'Введите отображаемое имя и правильный локальный порт.';
+
+  @override
+  String get onbRelayPortInvalid =>
+      'Если указан адрес ретранслятора, порт тоже должен быть правильным.';
+
+  @override
+  String get onbRelayDesktop =>
+      'Компьютеры по умолчанию работают как ретрансляторы и сами сообщают о маршрутах в локальной сети.';
+
+  @override
+  String get onbRelayAndroid =>
+      'На Android режим ретранслятора выключен. Включайте его в настройках, только если хотите, чтобы устройство передавало чужие сообщения.';
+
+  @override
+  String get onbRelayOther =>
+      'Режим ретранслятора можно включить в настройках, если устройство должно помогать передавать сообщения.';
+
+  @override
+  String get onbTagline =>
+      'Связывайтесь с контактами напрямую через свою сеть или интернет, со сквозным шифрованием и прямой секретностью. Если обычные пути заблокированы, Conest использует ретрансляторы, Matrix, Nostr, email, Tor, радио LoRa или Bluetooth-сеть телефонов рядом.';
+
+  @override
+  String get onbFeatureForwardSecret => 'Чаты с прямой секретностью';
+
+  @override
+  String get onbFeatureDirect => 'Напрямую через сеть и интернет';
+
+  @override
+  String get onbFeatureFallbacks => 'Запасные пути: Tor, mesh и радио';
+
+  @override
+  String get onbFeatureMatrix => 'Ещё и клиент Matrix';
+
+  @override
+  String get onbCreateTitle => 'Создайте своё первое устройство';
+
+  @override
+  String get onbCreateHelp =>
+      'Нужно только отображаемое имя. Локальный порт нужен для доставки по локальной сети и сопряжения по кодовой фразе. Интернет-ретранслятор необязателен: контакты доступны через интернет и без него. Другие пути можно включить позже в «Настройки → Подключение».';
+
+  @override
+  String get onbDisplayName => 'Отображаемое имя';
+
+  @override
+  String get onbLocalPort => 'Локальный порт / порт LAN';
+
+  @override
+  String get onbRelayHost => 'Адрес интернет-ретранслятора (необязательно)';
+
+  @override
+  String get onbRelayPort => 'Порт интернет-ретранслятора';
+
+  @override
+  String get onbCreateButton => 'Создать зашифрованное устройство';
+
+  @override
+  String get onbMatrixInstead => 'Использовать как клиент Matrix';
+
+  @override
+  String get onbMatrixHelp =>
+      'Только чаты Matrix, без личности Conest. Позже можно включить режим «Оба» (Conest и Matrix рядом) в «Настройки → Подключение → Режим приложения».';
+
+  @override
+  String get groupCreate => 'Создать группу';
+
+  @override
+  String get groupTitle => 'Название группы';
+
+  @override
+  String get roleMember => 'Участник';
+
+  @override
+  String get roleModerator => 'Модератор';
+
+  @override
+  String get roleAdmin => 'Администратор';
+
+  @override
+  String get actionCancel => 'Отмена';
+
+  @override
+  String get actionCreate => 'Создать';
+
+  @override
+  String get actionCreating => 'Создание…';
+
+  @override
+  String get contactAdd => 'Добавить контакт';
+
+  @override
+  String get contactAlias => 'Имя';
+
+  @override
+  String get contactInvitePayload => 'Приглашение или отсканированный QR-код';
+
+  @override
+  String get contactScanQr => 'Сканировать QR';
+
+  @override
+  String get contactCodephrase => 'Только кодовая фраза';
+
+  @override
+  String get contactTrustPayload => 'Доверять QR / приглашению';
+
+  @override
+  String get contactFindCodephrase => 'Найти по кодовой фразе';
+
+  @override
+  String get contactExchangeFailed => 'Автоматический обмен не удался';
+
+  @override
+  String contactExchangeFailedBody(String alias) {
+    return 'Вы добавили $alias, но ваше приглашение не удалось отправить обратно автоматически. Попросите собеседника отсканировать или ввести ваше приглашение со своей стороны, или отмените и удалите этот односторонний контакт.';
+  }
+
+  @override
+  String get actionAbort => 'Отменить';
+
+  @override
+  String get contactKeep => 'Оставить контакт';
 }
