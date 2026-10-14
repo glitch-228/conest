@@ -19,7 +19,7 @@ def check(path, mutation, test, file='test/group_call_recovery_test.dart', label
         result = subprocess.run(
             ['rtk', 'proxy', FLUTTER, 'test', '--no-pub', file,
              '--plain-name', test, '--reporter', 'expanded'],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True, timeout=180)
         output = result.stdout + result.stderr
         assert result.returncode != 0 and '[E]' in output and 'Compilation failed' not in output, output
         print(f'PASS negative check: {label or test}', flush=True)

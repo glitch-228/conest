@@ -211,6 +211,10 @@ Commit and push after each phase, with the tests green.
 
 - Restored integration checkpoint: all eight controller cases passed together in 47 s, including both revocation sources/scopes, group-only Iroh/Nostr handoff, cache eviction/duplicates, bounded bootstrap and hardware ownership. All five revocation sabotage checks passed again with the final advancing-clock fixture. Latest fetched base remains 2024a89.
 
+- Full b43a79c run still exposed fake-media timing interference: real durable signalling I/O delayed the only control heartbeat beyond the production failure detector, while FakeCallMedia emits no regular capture heartbeat. Stopped that superseded failed run precisely (its process and descendants only). Integration now drives an injected protocol clock through the actual tick/retry path, independently of durable disk I/O; real envelopes, authentication, deduplication and rate/resource checks remain. All deterministic FakeCallNetwork timing/deadline tests are unchanged. Restored eight-controller run passed in 61 s; affected negative checks and final full-suite rerun follow. No production timing or security guards changed.
+
+- With independent protocol time restored, all 11 affected controller-bootstrap/duplicate/privacy/resource sabotage checks passed again with behavioural failures; code restored. Integration-only clock changes preserve every production guard and all FakeCallNetwork deadlines. Final complete suite and analysis are restarting on the committed branch.
+
 ## Handoff
 
 - Branch and final commit:

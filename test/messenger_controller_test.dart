@@ -5034,6 +5034,8 @@ void main() {
     final media = <FakeCallMedia>[];
     final peers = <MessengerController>[];
     final vaults = <_GroupCallVaultStore>[];
+    var protocolNow = DateTime.now();
+    var driveCallClock = false;
     DateTime? frozenNow;
     for (final name in ['Alice', 'Bob', 'Carol']) {
       final audio = FakeCallMedia();
@@ -5048,7 +5050,7 @@ void main() {
         ratchetEngine: FakeRatchetEngine(),
         groupCallMedia: audio,
         vaultStore: vault,
-        nowProvider: () => frozenNow ?? DateTime.now(),
+        nowProvider: () => frozenNow ?? protocolNow,
       );
       peers.add(peer);
       addTearDown(peer.dispose);
@@ -5073,7 +5075,28 @@ void main() {
       Duration? timeout,
     }) async {
       try {
-        await _waitForIroh(ready, reason: reason, timeout: timeout);
+        var nextStep = DateTime.now().add(const Duration(milliseconds: 500));
+        await _waitForIroh(
+          () {
+            if (ready()) return true;
+            if (driveCallClock &&
+                frozenNow == null &&
+                !DateTime.now().isBefore(nextStep)) {
+              // The fake media engine emits no capture heartbeat. Advance
+              // protocol time separately from real encrypted disk I/O; the
+              // deterministic call-network tests cover failure deadlines.
+              protocolNow = protocolNow.add(const Duration(milliseconds: 125));
+              nextStep = DateTime.now().add(const Duration(milliseconds: 500));
+              for (final peer in peers) {
+                unawaited(peer.groupCallService?.tick());
+              }
+            }
+            return false;
+          },
+          reason: reason,
+          timeout:
+              timeout ?? (driveCallClock ? const Duration(seconds: 15) : null),
+        );
       } catch (_) {
         for (final peer in peers) {
           final room =
@@ -5229,15 +5252,15 @@ void main() {
         reason: 'seen hello replay must not reset the session',
       );
     }
+    driveCallClock = true;
     await alice.joinOrStartGroupCall(group.groupId);
     await waitForCall(
       () =>
           bob.groupCallService?.roomFor(group.groupId) != null &&
           carol.groupCallService?.roomFor(group.groupId) != null,
       'group call start discovered',
-      // Discovery beacons repeat every 5 s if a ratchet transition drops the
-      // initial announcement. Give one retry time to arrive and authenticate.
-      timeout: const Duration(seconds: 10),
+      // Allow one 5 s protocol beacon with the injected clock and real I/O.
+      timeout: const Duration(seconds: 25),
     );
     await bob.joinOrStartGroupCall(group.groupId);
     await carol.joinOrStartGroupCall(group.groupId);
@@ -5284,7 +5307,7 @@ void main() {
             p.groupCallService!.active!.participants.length == 2,
       ),
       'group-only coordinator handoff',
-      timeout: const Duration(seconds: 3),
+      timeout: const Duration(seconds: 15),
     );
     await waitForCall(
       () =>
@@ -5292,7 +5315,7 @@ void main() {
       'group-only handoff key arrived',
       // A previously lost bootstrap offer backs off for 10 s. Media must
       // recover once that bounded session retry succeeds.
-      timeout: const Duration(seconds: 15),
+      timeout: const Duration(seconds: 45),
     );
     final beforeHandoffAudio = media[1].played.length;
     await waitForCall(() {
@@ -5434,20 +5457,23 @@ void main() {
   test(
     'group-only members join encrypted voice calls over Iroh',
     () => groupOnlyVoiceCall(),
+    timeout: const Timeout(Duration(minutes: 3)),
   );
   test(
     'group-only call keys survive handoff over a carrier',
     () => groupOnlyVoiceCall(carrierControls: true),
+    timeout: const Timeout(Duration(minutes: 3)),
   );
   test(
     'group-only hello duplicates and cache-evicted replays preserve call keys',
     () => groupOnlyVoiceCall(probeBootstrap: true),
     // 257 real durable ratchet writes exercise eviction under full-suite load.
-    timeout: const Timeout(Duration(minutes: 2)),
+    timeout: const Timeout(Duration(minutes: 3)),
   );
   test(
     'group-only ratchet controls enforce identity privacy and resource bounds',
     () => groupOnlyVoiceCall(probeAuthorization: true),
+    timeout: const Timeout(Duration(minutes: 3)),
   );
 
   for (final native in [false, true]) {
