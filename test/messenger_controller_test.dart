@@ -15136,6 +15136,53 @@ void main() {
       expect(alice.userMode, UserMode.advanced);
     });
 
+    testWidgets('standard mode on a phone has chats and calls tabs', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(400, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final alice = (await tester.runAsync(
+        () => _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+        ),
+      ))!;
+      addTearDown(alice.dispose);
+      final updates = _createUpdateService();
+      final theme = app.ConestThemeController.memory();
+      addTearDown(updates.dispose);
+      addTearDown(theme.dispose);
+      Future<void> show() async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: ListenableBuilder(
+              listenable: alice,
+              builder: (context, _) => app.HomeScreen(
+                controller: alice,
+                updateService: updates,
+                buildInfo: _createBuildInfo(),
+                themeController: theme,
+                palette: app.ConestPalette(),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+      }
+
+      await tester.runAsync(() => alice.setUserMode(UserMode.advanced));
+      await show();
+      expect(find.byKey(const ValueKey('phone-tabs')), findsNothing);
+
+      await tester.runAsync(() => alice.setUserMode(UserMode.normal));
+      await show();
+      expect(find.byKey(const ValueKey('phone-tabs')), findsOneWidget);
+      await tester.tap(find.text('Calls'));
+      await tester.pump();
+      expect(find.textContaining('No calls yet'), findsOneWidget);
+    });
+
     testWidgets('simple mode shows only personal settings until asked', (
       tester,
     ) async {

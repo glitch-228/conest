@@ -4637,6 +4637,10 @@ class MessengerController extends ChangeNotifier {
     await _saveSnapshotSilently(notify: true);
   }
 
+  /// Calls with contacts, as kept for the call list.
+  List<VoiceCallSummary> get voiceCallSummaries =>
+      List.unmodifiable(_snapshot.voiceCallSummaries);
+
   /// How much of the app shows (advanced for vaults from before modes).
   UserMode get userMode => _snapshot.userMode ?? UserMode.advanced;
 

@@ -52,6 +52,7 @@ import 'src/ui/nostr_carrier_panel.dart';
 import 'src/ui/nostr_chats_screen.dart';
 import 'src/ui/delta_chats_screen.dart';
 import 'src/ui/message_info_dialog.dart';
+import 'src/ui/calls_list.dart';
 import 'src/ui/route_test_panel.dart';
 import 'src/ui/user_mode_screen.dart';
 import 'src/windows_firewall.dart';
@@ -1926,6 +1927,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Shared home-column selection handlers — used by the Signature sidebar and
   // the Garrison/Courier shells so all three drive the same chat panels.
+  /// The tab shown on phones in Standard mode (0 chats, 1 calls).
+  int _phoneTab = 0;
+
   void _selectHomeContact(ContactRecord contact) {
     setState(() {
       _lanLobbySelected = false;
@@ -3120,7 +3124,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           onSend: _sendLanLobbyMessage,
                         );
                       }
-                      return Row(
+                      final home = Row(
                         children: [
                           SizedBox(
                             width: isWide
@@ -3311,6 +3315,30 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                             ),
                         ],
+                      );
+                      // Standard mode on a phone: chats, calls and settings
+                      // as tabs, as the popular messengers have them.
+                      if (isWide ||
+                          widget.controller.userMode != UserMode.normal) {
+                        return home;
+                      }
+                      return _PhoneTabs(
+                        tab: _phoneTab,
+                        onTab: (tab) {
+                          if (tab == 2) {
+                            unawaited(_showSettings());
+                          } else {
+                            setState(() => _phoneTab = tab);
+                          }
+                        },
+                        chats: home,
+                        calls: CallsList(
+                          controller: widget.controller,
+                          onOpenContact: (contact) {
+                            setState(() => _phoneTab = 0);
+                            _selectHomeContact(contact);
+                          },
+                        ),
                       );
                     },
                   ),
@@ -4597,7 +4625,10 @@ class _CourierHomeState extends State<_CourierHome> {
               ],
             ),
           ),
-          if (!_showArchived && query.isEmpty)
+          // Simple mode: one list of chats, no filters or folders.
+          if (!_showArchived &&
+              query.isEmpty &&
+              widget.controller.userMode != UserMode.minimal)
             SizedBox(
               height: 42,
               child: ListView(
@@ -21523,4 +21554,49 @@ class _WindowsFirewallTileState extends State<_WindowsFirewallTile> {
           )
         : TextButton(onPressed: _allow, child: const Text('Allow')),
   );
+}
+
+/// Chats, calls and settings as tabs (Standard mode on a phone).
+class _PhoneTabs extends StatelessWidget {
+  const _PhoneTabs({
+    required this.tab,
+    required this.onTab,
+    required this.chats,
+    required this.calls,
+  });
+
+  final int tab;
+  final ValueChanged<int> onTab;
+  final Widget chats;
+  final Widget calls;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Expanded(child: tab == 1 ? calls : chats),
+        NavigationBar(
+          key: const ValueKey('phone-tabs'),
+          selectedIndex: tab,
+          onDestinationSelected: onTab,
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.chat_bubble_outline),
+              selectedIcon: Icon(Icons.chat_bubble),
+              label: 'Chats',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.call_outlined),
+              selectedIcon: Icon(Icons.call),
+              label: 'Calls',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.settings_outlined),
+              label: 'Settings',
+            ),
+          ],
+        ),
+      ],
+    );
+  }
 }
