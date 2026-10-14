@@ -43,9 +43,10 @@ abstract final class OfficeMetadataSanitizer {
     final entries = _directory(Uint8List.fromList([...directory, ...eocd]),
         checkExpansion: false);
     final names = entries.map((entry) => entry.name).toSet();
-    return names.contains('[Content_Types].xml') ||
-        names.contains('mimetype') &&
-            (names.contains('meta.xml') || names.contains('content.xml'));
+    return names.any((name) => name == '[Content_Types].xml' ||
+        name == 'meta.xml' || name == 'mimetype' ||
+        name.startsWith('docProps/') || name.startsWith('word/') ||
+        name.startsWith('xl/') || name.startsWith('ppt/'));
   }
 
   /// Null means an ordinary ZIP; malformed or over-cap inputs throw.

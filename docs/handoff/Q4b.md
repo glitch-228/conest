@@ -25,6 +25,11 @@
 - Formatter/helper attempts also abort at Dart VM initialization. Hand-adjusted only new code and our small hooks; checked recommended braces and Dart syntax independently. `git diff --check` passes.
 - Reviewer final result: no remaining confirmed blocker by source inspection; no definite Dart type/API error found. Runtime analysis/tests, sabotage proofs and platform builds remain unverified.
 
+### Phase 3 — upstream merge
+- Fetched origin and merged `origin/feature/matrix-client` (`f3489bc9020c46186946ef99e09766754c1bb198`). Resolved three overlapping insertion conflicts in the sanitizer and its two existing test files.
+- Retained upstream's oversized-Office consent rule and oversized plain-ZIP regression test, implemented using the new bounded ZIP directory reader. Retained upstream route-trace tests alongside Q4b's test registrations. No upstream release notes or version were manually edited.
+- Remaining checks: final syntax/whitespace/import verification, repeat analyze/full test attempts, clean bundle import verification and final handoff.
+
 ## Handoff
 
 - Branch and final commit: `agent/q4b-file-privacy`; in progress.

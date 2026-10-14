@@ -69,6 +69,11 @@ import 'radio/byte_link.dart';
 import 'ratchet.dart';
 import 'reachability_tracker.dart';
 import 'staged_attachment.dart';
+import 'account/account_contacts.dart';
+import 'account/account_link.dart';
+import 'account/account_model.dart';
+import 'energy_policy.dart';
+import 'route_test.dart';
 import 'voice_call_service.dart';
 import 'voice_call_sound_cues.dart';
 import 'voice_message_service.dart';
@@ -317,6 +322,9 @@ const Set<String> _v2PairwiseKinds = <String>{
   'debug_file_test_result',
   'voice_call_signal',
   'forward_request',
+  'route_probe',
+  'route_probe_reply',
+  'account_link',
 };
 
 /// Outcome of a [`MessengerController.refreshDefaultRelays`] call.
@@ -538,7 +546,9 @@ class MessengerController extends ChangeNotifier {
     MeshCoreConnector? meshCoreConnector,
     BitchatConnector? bitchatConnector,
     TorApi? torApi,
+    EnergyPolicy? energyPolicy,
   }) : _vaultStore = vaultStore,
+       _injectedEnergyPolicy = energyPolicy,
        _torApi = torApi,
        _torApiResolved = torApi != null,
        _bitchatConnector = bitchatConnector,
@@ -577,6 +587,17 @@ class MessengerController extends ChangeNotifier {
       onAttempt: _recordRelayAttemptFromShim,
       nowProvider: () => (nowProvider ?? DateTime.now)(),
     );
+    _energyPolicy =
+        _injectedEnergyPolicy ??
+        (Platform.environment.containsKey('FLUTTER_TEST')
+            // Tests see one route at a time, as before, unless they give a
+            // policy: their route counts stay exact.
+            ? EnergyPolicy.fixed(EnergyMode.saver)
+            : EnergyPolicy(
+                source: !kIsWeb && Platform.isAndroid
+                    ? PlatformBridgePowerSource(_platformBridge)
+                    : null,
+              ));
     voiceMessageService = VoiceMessageService(platformBridge: _platformBridge);
     _voiceCallSoundCues = VoiceCallSoundCues(
       voiceCallCuePlayer ??
@@ -996,7 +1017,11 @@ class MessengerController extends ChangeNotifier {
     await service.end(reason: 'Call rejected.');
   }
 
-  List<ContactRecord> get contacts => List.unmodifiable(_snapshot.contacts);
+  /// The contacts as listed: another device of a contact's account is
+  /// kept separately and not listed (see [ContactRecord.isLinkedDevice]).
+  List<ContactRecord> get contacts => List.unmodifiable(
+    _snapshot.contacts.where((contact) => !contact.isLinkedDevice),
+  );
 
   /// Every group the controller knows about, including ones the local user
   /// has left and ones they have explicitly removed from their list. Sidebar
@@ -1282,8 +1307,10 @@ class MessengerController extends ChangeNotifier {
   /// Wraps `_processEnvelopes` so the notifier-batching ref-count is
   /// exercised in tests without needing to drive the long-poll loop.
   @visibleForTesting
-  Future<int> processEnvelopesForTesting(List<RelayEnvelope> envelopes) =>
-      _processEnvelopes(envelopes);
+  Future<int> processEnvelopesForTesting(
+    List<RelayEnvelope> envelopes, {
+    MessageRoute? route,
+  }) => _processEnvelopes(envelopes, route: route);
 
   /// Marks an outgoing contact request as accepted, as if the peer's
   /// authenticated acceptance had arrived. Waits for the in-flight pairing
@@ -4622,6 +4649,32 @@ class MessengerController extends ChangeNotifier {
     await _saveSnapshotSilently(notify: true);
   }
 
+  /// Calls with contacts, as kept for the call list.
+  List<VoiceCallSummary> get voiceCallSummaries =>
+      List.unmodifiable(_snapshot.voiceCallSummaries);
+
+  /// The app's language code; null follows the device.
+  String? get localeCode => _snapshot.localeCode;
+
+  Future<void> setLocaleCode(String? code) async {
+    _snapshot = code == null
+        ? _snapshot.copyWith(clearLocaleCode: true)
+        : _snapshot.copyWith(localeCode: code);
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  /// How much of the app shows (advanced for vaults from before modes).
+  UserMode get userMode => _snapshot.userMode ?? UserMode.advanced;
+
+  /// A new identity has not chosen a mode yet.
+  bool get needsUserModeChoice =>
+      _snapshot.identity != null && !_snapshot.userModeChosen;
+
+  Future<void> setUserMode(UserMode mode) async {
+    _snapshot = _snapshot.copyWith(userMode: mode, userModeChosen: true);
+    await _saveSnapshotSilently(notify: true);
+  }
+
   Future<void> setRandomizesFileNames(bool value) async {
     _snapshot = _snapshot.copyWith(randomFileNames: value);
     await _saveSnapshotSilently(notify: true);
@@ -6006,6 +6059,8 @@ class MessengerController extends ChangeNotifier {
   final Map<TransportKind, CarrierTransportAdapter> _carrierTransports = {};
   final Map<TransportKind, StreamSubscription<TransportInboundEnvelope>>
   _carrierInboundSubscriptions = {};
+  final Map<TransportKind, StreamSubscription<CarrierDeliveryReceipt>>
+  _carrierReceiptSubscriptions = {};
 
   /// Seals for every carrier with keys derived from each contact's pairwise
   /// key; new carrier adapters are built with it.
@@ -6031,6 +6086,9 @@ class MessengerController extends ChangeNotifier {
       await _carrierInboundSubscriptions.remove(carrier.kind)?.cancel();
     }
     _carrierTransports[carrier.kind] = carrier;
+    await _carrierReceiptSubscriptions.remove(carrier.kind)?.cancel();
+    _carrierReceiptSubscriptions[carrier.kind] = carrier.deliveryReceipts
+        .listen(_onCarrierDeliveryReceipt);
     await _attachCarrier(carrier.kind);
     _syncCarrierPeers();
     // Contacts learn the address to reach this device on the carrier.
@@ -6041,10 +6099,44 @@ class MessengerController extends ChangeNotifier {
   Future<void> unregisterCarrierTransport(TransportKind kind) async {
     await _detachCarrier(kind);
     await _carrierInboundSubscriptions.remove(kind)?.cancel();
+    await _carrierReceiptSubscriptions.remove(kind)?.cancel();
     final carrier = _carrierTransports.remove(kind);
     if (carrier != null) {
       await carrier.detach();
       _advertiseProfileToContacts();
+    }
+  }
+
+  /// The other device's radio confirmed a message: it reached their
+  /// device (not yet necessarily their app).
+  void _onCarrierDeliveryReceipt(CarrierDeliveryReceipt receipt) {
+    final route = MessageRoute.forCarrier(receipt.kind);
+    if (route == null || _disposed) return;
+    final at = _now().toUtc();
+    if (_messageById(receipt.deviceId, receipt.envelopeId)?.outbound ?? false) {
+      _traceMessage(
+        receipt.deviceId,
+        receipt.envelopeId,
+        RouteTrace(route: route, mark: MessageRouteMark.reachedDevice, at: at),
+      );
+      return;
+    }
+    for (final group in groups) {
+      if (!group.hasActiveMember(receipt.deviceId)) continue;
+      final message = _groupMessageById(group.groupId, receipt.envelopeId);
+      if (message == null || !message.outbound) continue;
+      _traceMessage(
+        receipt.deviceId,
+        receipt.envelopeId,
+        RouteTrace(
+          route: route,
+          mark: MessageRouteMark.reachedDevice,
+          at: at,
+          deviceId: receipt.deviceId,
+        ),
+        group: group,
+      );
+      return;
     }
   }
 
@@ -6299,6 +6391,24 @@ class MessengerController extends ChangeNotifier {
         final decoded = jsonDecode(utf8.decode(inbound.bytes));
         if (decoded is! Map<String, dynamic>) return;
         final envelope = RelayEnvelope.fromJson(decoded);
+        // Linking a device: the link secret authenticates it; the existing
+        // device also requires the Iroh identity the QR code named.
+        if (envelope.kind == 'account_link' &&
+            envelope.protocolVersion == 1 &&
+            _isValidInboundEnvelope(envelope)) {
+          final expected = _linkAsExisting?.invitation.irohEndpointId;
+          if (expected != null && expected != inbound.senderTransportIdentity) {
+            return;
+          }
+          await _processEnvelopes(
+            [envelope],
+            ingressKind: inbound.path == TransportPathKind.relayed
+                ? PeerRouteKind.relay
+                : PeerRouteKind.directInternet,
+            route: _irohRoute(inbound.path),
+          );
+          return;
+        }
         if (envelope.kind != 'contact_exchange' ||
             envelope.protocolVersion != 1 ||
             !_isValidInboundEnvelope(envelope)) {
@@ -6368,6 +6478,9 @@ class MessengerController extends ChangeNotifier {
           index: range.offset ~/ state.descriptor.chunkSize,
           packedBytes: range.bytes,
           expectedHash: range.sha256,
+          route: inbound.path == TransportPathKind.direct
+              ? MessageRoute.irohDirect
+              : MessageRoute.irohRelay,
         );
         _reachability.noteAvailablePath(contact.deviceId);
         return;
@@ -8935,8 +9048,13 @@ class MessengerController extends ChangeNotifier {
           for (final message in conversation.messages)
             if (message.attachment != null) message.attachment!.id,
     };
+    // The contact's other devices go with it.
     final contacts = _snapshot.contacts
-        .where((contact) => contact.deviceId != deviceId)
+        .where(
+          (contact) =>
+              contact.deviceId != deviceId &&
+              contact.accountAnchorDeviceId != deviceId,
+        )
         .toList();
     final conversations = _snapshot.conversations
         .where((conversation) => conversation.peerDeviceId != deviceId)
@@ -9157,7 +9275,8 @@ class MessengerController extends ChangeNotifier {
         signingIdentity.publicKeyBase64,
       ),
     );
-    _snapshot = _snapshot.copyWith(identity: created);
+    // A new identity chooses how much of the app it sees.
+    _snapshot = _snapshot.copyWith(identity: created, userModeChosen: false);
     // A new device has told nobody anything yet; every later exchange
     // carries the current list.
     _snapshot = _snapshot.copyWith(
@@ -14665,6 +14784,12 @@ class MessengerController extends ChangeNotifier {
       // a contact still on one of those ids moves to the current one.
       if (recipientKnowsIdentity && contact.retiredPairingRequestIds.isNotEmpty)
         'retiredPairingRequestIds': contact.retiredPairingRequestIds,
+      // This identity's account key and devices (M29), to known contacts.
+      if (recipientKnowsIdentity && me.accountDeviceList != null)
+        'account': {
+          if (me.accountUpgrade != null) 'upgrade': me.accountUpgrade,
+          'devices': me.accountDeviceList,
+        },
       // What members of groups we share may learn (the group owner passes
       // it on in our member profile).
       if (recipientKnowsIdentity)
@@ -15383,13 +15508,19 @@ class MessengerController extends ChangeNotifier {
   PeerEndpoint? pickPrimaryRelayForLongPollForTesting(IdentityRecord me) =>
       _pickPrimaryRelayForLongPoll(me);
 
-  PeerEndpoint? _pickPrimaryRelayForLongPoll(IdentityRecord me) {
+  PeerEndpoint? _pickPrimaryRelayForLongPoll(
+    IdentityRecord me, {
+    int slot = 0,
+  }) {
+    // Each watcher takes a different relay (by host: one relay's addresses
+    // over TCP, UDP and HTTP are the same mailbox).
+    final hosts = <String>{};
     for (final relay in me.configuredRelays) {
       if (relay.kind != PeerRouteKind.relay) {
         continue;
       }
-      if (_routeHealthTracker.isEligibleNow(relay)) {
-        return relay;
+      if (_routeHealthTracker.isEligibleNow(relay) && hosts.add(relay.host)) {
+        if (hosts.length == slot + 1) return relay;
       }
     }
     return null;
@@ -15403,8 +15534,16 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     _longPollRunning = true;
-    unawaited(_runLongPollLoop());
+    final generation = ++_longPollGeneration;
+    unawaited(_runLongPollLoop(generation: generation));
+    // A second relay too, while this device can afford it: a contact may
+    // have left a message on either.
+    unawaited(_runLongPollLoop(slot: 1, generation: generation));
   }
+
+  /// Bumped on each start: a loop from an earlier start (asleep when it was
+  /// stopped and started again) ends instead of running twice.
+  int _longPollGeneration = 0;
 
   void _stopLongPoll() {
     _longPollRunning = false;
@@ -15418,13 +15557,22 @@ class MessengerController extends ChangeNotifier {
   /// in practice). Old relays that ignore `wait_ms` return immediately
   /// empty; the elapsed-time guard at the bottom of the loop keeps that
   /// case from busy-looping the CPU.
-  Future<void> _runLongPollLoop() async {
-    while (_longPollRunning && hasIdentity) {
+  Future<void> _runLongPollLoop({int slot = 0, int? generation}) async {
+    while (_longPollRunning &&
+        hasIdentity &&
+        (generation == null || generation == _longPollGeneration)) {
       final me = identity;
       if (me == null) {
         break;
       }
-      final route = _pickPrimaryRelayForLongPoll(me);
+      if (slot > 0 &&
+          _energyPolicy.modeFor(_networkCostClass) !=
+              EnergyMode.unconstrained) {
+        unawaited(_energyPolicy.refresh());
+        await Future<void>.delayed(const Duration(seconds: 30));
+        continue;
+      }
+      final route = _pickPrimaryRelayForLongPoll(me, slot: slot);
       if (route == null) {
         await Future<void>.delayed(const Duration(seconds: 5));
         continue;
@@ -16926,13 +17074,33 @@ class MessengerController extends ChangeNotifier {
             }
           } catch (_) {}
         }
+        // A copy on a route the user turned off is not answered either:
+        // its receipt would name that route as working.
+        final seenSender = _contactByDeviceId(envelope.senderDeviceId);
+        if (seenSender != null &&
+            _droppedByIngressMode(seenSender, ingressKind)) {
+          continue;
+        }
         await _replayAckForSeenEnvelope(envelope);
         continue;
       }
       if (!_inFlightEnvelopeIds.add(envelope.messageId)) {
         // An overlapping _processEnvelopes run (the same envelope arriving
-        // via a second transport) is already dispatching this id; its ack
-        // and side effects cover this copy too.
+        // via a second transport) is already dispatching this id; its side
+        // effects cover this copy too. The route this copy came by is
+        // answered once that run is done.
+        final route = _ingressRoute;
+        final copySender = _contactByDeviceId(envelope.senderDeviceId);
+        if (route != null &&
+            !(copySender != null &&
+                _droppedByIngressMode(copySender, ingressKind)) &&
+            (envelope.kind == 'direct_message' ||
+                envelope.kind == 'group_message')) {
+          final waiting = _overlappingCopies[envelope.messageId] ??= [];
+          if (waiting.length < 8 && _overlappingCopies.length <= 256) {
+            waiting.add((envelope: envelope, route: route));
+          }
+        }
         continue;
       }
       try {
@@ -17115,6 +17283,24 @@ class MessengerController extends ChangeNotifier {
           continue;
         }
 
+        if (envelope.kind == 'route_probe') {
+          await _handleRouteProbe(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'account_link') {
+          await _handleAccountLink(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'route_probe_reply') {
+          await _handleRouteProbeReply(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
         if (envelope.kind == 'debug_probe_ack') {
           await _handleDebugAcknowledgement(envelope, twoWay: false);
           _markSeen(envelope.messageId);
@@ -17175,8 +17361,15 @@ class MessengerController extends ChangeNotifier {
           contact: contact,
           envelope: envelope,
         );
+        // From any of the contact's devices, into the contact's one chat;
+        // none while that contact is archived or gone.
+        final chatId = _chatIdFor(contact);
+        if (contact.isLinkedDevice) {
+          final anchor = _contactByDeviceId(chatId);
+          if (anchor == null || anchor.isArchived) continue;
+        }
         _acceptedByTraffic(contact, sentAt: envelope.createdAt);
-        final existingConversation = _conversationFor(contact.deviceId);
+        final existingConversation = _conversationFor(chatId);
         final alreadyKnown = existingConversation.messages.any(
           (message) => message.id == envelope.messageId,
         );
@@ -17196,12 +17389,12 @@ class MessengerController extends ChangeNotifier {
             replySenderDisplayName: decodedMessage.replySenderDisplayName,
             route: _ingressRoute,
           );
-          _upsertMessage(contact.deviceId, inbound);
+          _upsertMessage(chatId, inbound);
           // They just reached us, so our waiting messages can reach them.
           _flushContactSoon(contact.deviceId);
-          await _applyDeferredDirectReactions(contact.deviceId, inbound.id);
+          await _applyDeferredDirectReactions(chatId, inbound.id);
           _showInboundMessageNotification(
-            contact: contact,
+            contact: _contactByDeviceId(chatId) ?? contact,
             body: decodedMessage.body,
           );
         }
@@ -17217,6 +17410,17 @@ class MessengerController extends ChangeNotifier {
         );
       } finally {
         _inFlightEnvelopeIds.remove(envelope.messageId);
+        final copies = _overlappingCopies.remove(envelope.messageId);
+        for (final copy
+            in copies ??
+                const <({RelayEnvelope envelope, MessageRoute route})>[]) {
+          unawaited(
+            runZoned(
+              () => _replayAckForSeenEnvelope(copy.envelope),
+              zoneValues: {_ingressRouteKey: copy.route},
+            ).catchError((_) {}),
+          );
+        }
       }
     }
     return _EnvelopeProcessingOutcome(processed: processed, failed: failed);
@@ -17248,6 +17452,8 @@ class MessengerController extends ChangeNotifier {
         return 3;
       case 'ack':
         return 1;
+      case 'route_probe':
+      case 'route_probe_reply':
       case 'debug_probe':
       case 'debug_probe_ack':
       case 'debug_two_way_message':
@@ -17303,6 +17509,14 @@ class MessengerController extends ChangeNotifier {
     if (envelope.recipientDeviceId != me.deviceId ||
         envelope.senderDeviceId == me.deviceId) {
       return false;
+    }
+    if (envelope.protocolVersion == 1 && envelope.kind == 'account_link') {
+      // Linking a device: sealed with the link secret, checked by the
+      // handler, and only read while a link is under way.
+      final payload = envelope.payloadBase64;
+      return payload != null &&
+          payload.length <= maxLinkMessageBytes * 2 &&
+          (_linkAsNew != null || _linkAsExisting != null);
     }
     if (envelope.protocolVersion == 1) {
       // Known contacts may ask again (a lost acceptance, a removal they
@@ -17380,7 +17594,23 @@ class MessengerController extends ChangeNotifier {
         target != envelope.acknowledgedMessageId) {
       return;
     }
-    _noteConfirmed(contact.deviceId, target);
+    // The routes copies of it arrived by (newer apps name them).
+    final namedRoutes = decoded['routes'];
+    final arrivedBy = MessageRoute.namedInReceipt(namedRoutes);
+    _noteConfirmed(contact.deviceId, target, arrivedBy: arrivedBy);
+    final ackedAt = envelope.createdAt.toUtc().isAfter(_now().toUtc())
+        ? _now().toUtc()
+        : envelope.createdAt.toUtc();
+    if (group == null || group.hasActiveMember(contact.deviceId)) {
+      _recordReceipt(
+        contact.deviceId,
+        target,
+        read: receipt == 'read',
+        at: ackedAt,
+        arrivedBy: arrivedBy,
+        group: group,
+      );
+    }
     if (group != null) {
       if (!group.hasActiveMember(contact.deviceId)) return;
       _updateGroupRecipientState(
@@ -17394,13 +17624,15 @@ class MessengerController extends ChangeNotifier {
           _crypto.conversationIdFor(contact.deviceId)) {
         return;
       }
-      final message = _messageById(contact.deviceId, target);
+      // A receipt from any of the contact's devices counts.
+      final chatId = _chatIdFor(contact);
+      final message = _messageById(chatId, target);
       if (message == null || !message.outbound) return;
       if (receipt == 'read') {
-        _markMessagesReadThroughMessage(contact.deviceId, target);
+        _markMessagesReadThroughMessage(chatId, target);
       } else {
-        _updateMessageState(contact.deviceId, target, DeliveryState.delivered);
-        _clearOutboundAttempt(contact.deviceId, target);
+        _updateMessageState(chatId, target, DeliveryState.delivered);
+        _clearOutboundAttempt(chatId, target);
       }
     }
     // When the ack was sent, not when it was fetched: one waiting on a relay
@@ -18200,6 +18432,7 @@ class MessengerController extends ChangeNotifier {
           state.lastChunkAt = DateTime.now().toUtc();
           state.consecutiveChunkFailures = 0;
           state.lastDeliveryRoute = OutboundDeliveryRoute.lanDirect;
+          _countServedBlock(state, index, MessageRoute.lanDirect);
           _armOutboundStallTimer(requester, attachmentId: attachmentId);
           _notifyTransferProgress();
         }
@@ -18257,6 +18490,13 @@ class MessengerController extends ChangeNotifier {
                 receipt.route.path == TransportPathKind.relayed
                 ? OutboundDeliveryRoute.irohRelay
                 : OutboundDeliveryRoute.irohDirect;
+            _countServedBlock(
+              state,
+              index,
+              receipt.route.path == TransportPathKind.relayed
+                  ? MessageRoute.irohRelay
+                  : MessageRoute.irohDirect,
+            );
             _armOutboundStallTimer(requester, attachmentId: attachmentId);
             _notifyTransferProgress();
           }
@@ -18344,6 +18584,7 @@ class MessengerController extends ChangeNotifier {
           state.lastChunkAt = DateTime.now().toUtc();
           state.consecutiveChunkFailures = 0;
           state.lastDeliveryRoute = OutboundDeliveryRoute.lanDirect;
+          _countServedBlock(state, index, MessageRoute.lanDirect);
           _armOutboundStallTimer(requester, attachmentId: attachmentId);
           _notifyTransferProgress();
         }
@@ -18404,6 +18645,7 @@ class MessengerController extends ChangeNotifier {
             OutboundDeliveryRoute.irohRelay,
           _ => OutboundDeliveryRoute.conestRelay,
         };
+        _countServedBlock(state, index, deliveredVia.messageRoute);
         // If the delivered route is NOT the preferred primary, surface
         // "Rerouting · X%" on the bubble for the next few seconds so the
         // user sees the fallback is working.
@@ -18538,6 +18780,8 @@ class MessengerController extends ChangeNotifier {
     required int index,
     required Uint8List packedBytes,
     required Uint8List expectedHash,
+    // The route the block came by; the envelope's route when null.
+    MessageRoute? route,
   }) async {
     final key = '${sender.deviceId}|$attachmentId|$index';
     if (!_receivingAttachmentBlocks.add(key)) return;
@@ -18548,6 +18792,7 @@ class MessengerController extends ChangeNotifier {
         index: index,
         packedBytes: packedBytes,
         expectedHash: expectedHash,
+        route: route ?? _ingressRoute,
       );
     } finally {
       _receivingAttachmentBlocks.remove(key);
@@ -18560,6 +18805,7 @@ class MessengerController extends ChangeNotifier {
     required int index,
     required Uint8List packedBytes,
     required Uint8List expectedHash,
+    MessageRoute? route,
   }) async {
     if (attachmentId.isEmpty ||
         attachmentId.length > 160 ||
@@ -18629,6 +18875,9 @@ class MessengerController extends ChangeNotifier {
       await state.writeChunk(offset, bytes);
       if (!identical(_inboundAttachments[attachmentId], state)) return;
       state.received.add(index);
+      if (route != null) {
+        state.routeBytes[route] = (state.routeBytes[route] ?? 0) + bytes.length;
+      }
       state.recordProgress();
       // Persist only crash-safe checkpoints. The old path flushed, closed and
       // rewrote the encrypted vault for every block, which made large files
@@ -18739,6 +18988,19 @@ class MessengerController extends ChangeNotifier {
         state.messageId,
         DeliveryState.delivered,
       );
+      for (final MapEntry(key: route, value: bytes)
+          in state.routeBytes.entries) {
+        _traceMessage(
+          sender.deviceId,
+          state.messageId,
+          RouteTrace(
+            route: route,
+            mark: MessageRouteMark.confirmed,
+            at: _now().toUtc(),
+            bytes: bytes,
+          ),
+        );
+      }
       await _sendAttachmentComplete(sender, attachmentId);
       if (state.debugTest != null) {
         Object? resultError;
@@ -19374,6 +19636,19 @@ class MessengerController extends ChangeNotifier {
     _outboundAttachments.remove(attachmentId);
     _outboundRetryTimers.remove(attachmentId)?.cancel();
     _outboundQueueByContact[sender.deviceId]?.remove(attachmentId);
+    // They have it all: each route that carried part of it worked.
+    for (final MapEntry(key: route, value: bytes) in state.routeBytes.entries) {
+      _traceMessage(
+        sender.deviceId,
+        state.messageId,
+        RouteTrace(
+          route: route,
+          mark: MessageRouteMark.confirmed,
+          at: _now().toUtc(),
+          bytes: min(bytes, state.descriptor.sizeBytes),
+        ),
+      );
+    }
     final session = _transferSessionById(attachmentId);
     await state.closeFile();
     if (state.sourceKind == TransferSourceKind.privateSpool) {
@@ -19529,7 +19804,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _handleContactExchange(RelayEnvelope envelope) async {
-    final existing = _contactByDeviceId(envelope.senderDeviceId);
+    var existing = _contactByDeviceId(envelope.senderDeviceId);
     String payload;
     String? pairingRequestId;
     String? pairingResponse;
@@ -19545,6 +19820,9 @@ class MessengerController extends ChangeNotifier {
     Map<TransportKind, String>? peerCarrierAddresses;
     Set<String> peerRetiredRequestIds = const {};
     Map<TransportKind, String>? peerGroupCarrierAddresses;
+    // Their account key and device list (M29), read only from an
+    // authenticated exchange.
+    Object? accountStatement;
     if (envelope.protocolVersion == 1) {
       if (existing?.pendingVerification == true) return;
       final rawPayload = envelope.payloadBase64;
@@ -19629,6 +19907,7 @@ class MessengerController extends ChangeNotifier {
           peerGroupCarrierAddresses = _groupCarrierAddressesFromExchange(
             decodedExchange['groupCarrierAddresses'],
           );
+          accountStatement = decodedExchange['account'];
           final retired = decodedExchange['retiredPairingRequestIds'];
           if (retired is List && retired.length <= 16) {
             peerRetiredRequestIds = {
@@ -19653,6 +19932,22 @@ class MessengerController extends ChangeNotifier {
         '${envelope.senderDeviceId}.',
       );
       return;
+    }
+    // A first-contact request from a device id that one of our contacts'
+    // accounts lists (with other keys): ignored, never deleting that
+    // device. Anyone can sign an invite for any id with their own keys, so
+    // the request proves nothing about the listed device.
+    if (envelope.protocolVersion == 1 &&
+        existing != null &&
+        existing.isLinkedDevice &&
+        existing.signingPublicKeyBase64 != invite.signingPublicKeyBase64) {
+      appendDebugLog(
+        'Ignored a contact request from a device id another account lists.',
+      );
+      return;
+    }
+    if (accountStatement != null && envelope.protocolVersion != 1) {
+      await _applyAccountDevices(envelope.senderDeviceId, accountStatement);
     }
     final tombstone = _snapshot.contactRemovalTombstones[invite.deviceId];
     if (tombstone != null &&
@@ -21570,6 +21865,15 @@ class MessengerController extends ChangeNotifier {
     required RelayEnvelope envelope,
   }) async {
     final me = _requireIdentity();
+    // Every route a copy of the message came by, so the sender knows which
+    // of the routes it used work.
+    final isMessage =
+        envelope.kind == 'direct_message' || envelope.kind == 'group_message';
+    if (isMessage) messageReceiptsSent++;
+    if (isMessage && _noteArrival(envelope.messageId)) {
+      _traceArrival(contact, envelope);
+    }
+    final arrivals = isMessage ? _arrivals[envelope.messageId] : null;
     final ack = await _crypto.encryptPayloadEnvelope(
       kind: 'ack',
       messageId: _randomId('ack'),
@@ -21581,10 +21885,13 @@ class MessengerController extends ChangeNotifier {
       plaintext: jsonEncode({
         'receipt': 'delivered',
         'acknowledgedMessageId': envelope.messageId,
+        if (arrivals != null && arrivals.arrived.isNotEmpty)
+          'routes': [for (final route in arrivals.arrived.keys) route.name],
       }),
       createdAt: _now().toUtc(),
       acknowledgedMessageId: envelope.messageId,
     );
+    arrivals?.acked.addAll(arrivals.arrived.keys);
     // Enqueue first so a crash mid-send doesn't lose the obligation; the
     // happy-path delivery clears the entry immediately. Retries are
     // independent of the original message-retry pass.
@@ -21638,6 +21945,9 @@ class MessengerController extends ChangeNotifier {
       plaintext: jsonEncode({
         'receipt': 'read',
         'acknowledgedMessageId': acknowledgedMessageId,
+        if (_arrivals[acknowledgedMessageId]?.arrived.keys case final routes?
+            when routes.isNotEmpty)
+          'routes': [for (final route in routes) route.name],
       }),
       createdAt: _now().toUtc(),
       acknowledgedMessageId: acknowledgedMessageId,
@@ -22945,6 +23255,9 @@ class MessengerController extends ChangeNotifier {
       return true;
     }
     _noteOutboundAttempt(contact.deviceId, message.id);
+    // Their other devices get it too, whether or not the main one can be
+    // reached now (each try, until a receipt comes).
+    _sendToLinkedDevices(contact, message);
     try {
       final envelope = await _outboxEnvelope(
         contact,
@@ -22976,6 +23289,8 @@ class MessengerController extends ChangeNotifier {
           ? DeliveryState.local
           : DeliveryState.relayed;
       _updateMessageState(contact.deviceId, message.id, state, route: route);
+      _traceOutbound(contact.deviceId, message.id, route);
+      _sendExtraCopies(contact: contact, envelope: envelope, first: route);
       _lastRelayStatus = '${route.label} accepted';
       await _persist(
         route.path == TransportPathKind.storeForward
@@ -23038,6 +23353,13 @@ class MessengerController extends ChangeNotifier {
         message.id,
         contact.deviceId,
         state,
+      );
+      _traceOutbound(contact.deviceId, message.id, route, group: group);
+      _sendExtraCopies(
+        contact: contact,
+        envelope: envelope,
+        first: route,
+        group: group,
       );
       // The first route that carried it to a member marks the message, as
       // in a direct chat (per-member routes come with route marks, M25).
@@ -23224,7 +23546,15 @@ class MessengerController extends ChangeNotifier {
     if (sameBytes) {
       final now = _now();
       final last = _duplicateAckedAt[envelope.messageId];
-      if (last != null && now.difference(last) < const Duration(seconds: 10)) {
+      // A copy by a route no receipt named yet is always answered: the
+      // sender learns that route works.
+      final route = _ingressRoute;
+      final newRoute =
+          route != null &&
+          !(_arrivals[envelope.messageId]?.acked.contains(route) ?? false);
+      if (!newRoute &&
+          last != null &&
+          now.difference(last) < const Duration(seconds: 10)) {
         return;
       }
       _duplicateAckedAt.remove(envelope.messageId);
@@ -23243,11 +23573,64 @@ class MessengerController extends ChangeNotifier {
           reportFailure: false,
         );
       }
+      // A copy by a new route, after the message was already answered:
+      // copies arriving together get one receipt naming all their routes.
+      final alreadyAnswered =
+          _arrivals[envelope.messageId]?.acked.isNotEmpty ?? false;
+      if (alreadyAnswered) {
+        final newRoute = _noteArrival(envelope.messageId);
+        if (newRoute) _traceArrival(contact, envelope);
+        // A receipt is on its way already: it will name this route too.
+        if (_routeReceiptTimers.containsKey(envelope.messageId)) return;
+        if (newRoute) {
+          _scheduleRouteReceipt(contact, envelope);
+          return;
+        }
+      }
       await _sendAck(contact: contact, envelope: envelope);
     } catch (_) {
       // Duplicate deliveries are retried best-effort; missing the replayed ack
       // only delays sender-side confirmation until the next duplicate.
     }
+  }
+
+  /// Receipts sent for messages (tests count them).
+  @visibleForTesting
+  int messageReceiptsSent = 0;
+
+  /// One receipt per message for the copies arriving close together, by
+  /// message id.
+  final Map<String, Timer> _routeReceiptTimers = {};
+
+  void _scheduleRouteReceipt(ContactRecord contact, RelayEnvelope envelope) {
+    if (_routeReceiptTimers.containsKey(envelope.messageId)) return;
+    if (_routeReceiptTimers.length >= 256) {
+      // Too many waiting: answered at once rather than not at all.
+      unawaited(
+        _sendAck(
+          contact: contact,
+          envelope: envelope,
+        ).catchError((Object _) {}),
+      );
+      return;
+    }
+    // In battery saver this device waits longer, gathering more routes.
+    final wait = _energyPolicy.modeFor(_networkCostClass) == EnergyMode.saver
+        ? const Duration(seconds: 3)
+        : const Duration(seconds: 1);
+    _routeReceiptTimers[envelope.messageId] = Timer(wait, () {
+      _routeReceiptTimers.remove(envelope.messageId);
+      if (_disposed) return;
+      // The contact as it is now (it may have been removed meanwhile).
+      final current = _contactByDeviceId(contact.deviceId) ?? contact;
+      if (!current.canSendOutbound) return;
+      unawaited(
+        _sendAck(
+          contact: current,
+          envelope: envelope,
+        ).catchError((Object _) {}),
+      );
+    });
   }
 
   bool _shouldRetryUnacknowledgedMessage(
@@ -23286,8 +23669,13 @@ class MessengerController extends ChangeNotifier {
   /// firewall can drop what arrives while the other way works.
   final Map<String, Map<String, DateTime>> _unconfirmedRoutes = {};
 
-  /// The route each message last went on, by [_outboundAttemptKey].
-  final Map<String, String> _sentRouteKeys = {};
+  /// Route families receipts have named, per message (bounded).
+  final LinkedHashMap<String, Set<MessageRoute>> _confirmedFamilies =
+      LinkedHashMap();
+
+  /// The routes each message went on and no receipt has named yet, by
+  /// [_outboundAttemptKey], then route key.
+  final Map<String, Map<String, MessageRoute?>> _sentRouteKeys = {};
 
   /// How long a route has to bring back a receipt before others go first.
   static const Duration _routeAckTimeout = Duration(seconds: 8);
@@ -23300,25 +23688,64 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final key = _outboundAttemptKey(deviceId, messageId);
-    _sentRouteKeys.remove(key);
+    final confirmedFamily = route.messageRoute?.family;
+    if (confirmedFamily != null &&
+        (_confirmedFamilies[key]?.contains(confirmedFamily) ?? false)) {
+      return; // Its receipt already came.
+    }
+    final sent = _sentRouteKeys.remove(key) ?? <String, MessageRoute?>{};
     while (_sentRouteKeys.length >= 4096) {
       _sentRouteKeys.remove(_sentRouteKeys.keys.first);
     }
-    _sentRouteKeys[key] = route.routeKey;
-    (_unconfirmedRoutes[deviceId] ??= {}).putIfAbsent(
-      route.routeKey,
-      () => _now().toUtc(),
-    );
+    if (sent.length < 16) sent[route.routeKey] = route.messageRoute;
+    _sentRouteKeys[key] = sent;
+    final unconfirmed = _unconfirmedRoutes[deviceId] ??= {};
+    if (unconfirmed.length < 64) {
+      unconfirmed.putIfAbsent(route.routeKey, () => _now().toUtc());
+    }
   }
 
-  /// A receipt for [messageId] arrived: its route works.
-  void _noteConfirmed(String deviceId, String messageId) {
-    final routeKey = _sentRouteKeys.remove(
-      _outboundAttemptKey(deviceId, messageId),
-    );
-    if (routeKey == null) return;
+  /// A receipt for [messageId] arrived. The routes it names ([arrivedBy];
+  /// null from apps that do not name them: then every route it went on)
+  /// work; a route it went on that the receipt leaves out stays
+  /// unconfirmed, and goes last after [_routeAckTimeout].
+  void _noteConfirmed(
+    String deviceId,
+    String messageId, {
+    Set<MessageRoute>? arrivedBy,
+  }) {
+    final key = _outboundAttemptKey(deviceId, messageId);
+    final copies = _copyRuns[key];
+    if (copies != null && !copies.isCompleted) copies.complete();
+    // Copies still going out frame by frame (radios) can stop.
+    for (final carrier in _carrierTransports.values) {
+      unawaited(carrier.cancel(carrierSendId(deviceId, messageId)));
+    }
+    // A copy's hand-off can be noted after its receipt came: remembered,
+    // that route is not then left unconfirmed.
+    final families = _confirmedFamilies.remove(key) ?? <MessageRoute>{};
+    if (arrivedBy == null) {
+      families.addAll(MessageRoute.values.map((route) => route.family));
+    } else {
+      families.addAll(arrivedBy.map((route) => route.family));
+    }
+    _confirmedFamilies[key] = families;
+    while (_confirmedFamilies.length > 2048) {
+      _confirmedFamilies.remove(_confirmedFamilies.keys.first);
+    }
+    final sent = _sentRouteKeys[key];
+    if (sent == null) return;
     final routes = _unconfirmedRoutes[deviceId];
-    routes?.remove(routeKey);
+    for (final MapEntry(key: routeKey, value: route) in sent.entries.toList()) {
+      if (arrivedBy != null &&
+          route != null &&
+          !arrivedBy.any((arrived) => arrived.family == route.family)) {
+        continue;
+      }
+      sent.remove(routeKey);
+      routes?.remove(routeKey);
+    }
+    if (sent.isEmpty) _sentRouteKeys.remove(key);
     if (routes != null && routes.isEmpty) _unconfirmedRoutes.remove(deviceId);
   }
 
@@ -23337,6 +23764,555 @@ class MessengerController extends ChangeNotifier {
     };
   }
 
+  final EnergyPolicy? _injectedEnergyPolicy;
+
+  /// What this device can afford: how many routes a message goes on.
+  late final EnergyPolicy _energyPolicy;
+
+  /// Extra copies of a message on its way, by [_outboundAttemptKey]; its
+  /// receipt completes them.
+  final Map<String, Completer<void>> _copyRuns = {};
+  static const int _maxCopyRuns = 256;
+  static const int _maxExtraCopies = 4;
+
+  /// Copies already sent per message, by [_outboundAttemptKey].
+  final LinkedHashMap<String, _CopyState> _copyStates = LinkedHashMap();
+  static const int _maxCopyStates = 2048;
+
+  /// Carriers that keep a message until it is fetched: one is enough.
+  static const Set<TransportKind> _storingCarriers = {
+    TransportKind.matrix,
+    TransportKind.nostr,
+    TransportKind.deltaChat,
+  };
+
+  /// Radios with little airtime: a copy goes by radio only when nothing
+  /// else has reached the contact lately, and only a small one.
+  static const Set<TransportKind> _radioKinds = {
+    TransportKind.meshtastic,
+    TransportKind.meshCore,
+    TransportKind.reticulum,
+  };
+  static const int _maxRadioCopyBytes = 600;
+
+  /// After the first route took [envelope], copies go out on the others as
+  /// this device can afford ([EnergyPolicy]): all at once, or one more every
+  /// few seconds while no receipt comes. A copy is the same ciphertext, so
+  /// the contact recognises it without decrypting it again; contacts whose
+  /// app cannot ([ApplicationCapability.multiRouteMessagesV1]) get none.
+  void _sendExtraCopies({
+    required ContactRecord contact,
+    required RelayEnvelope envelope,
+    required _DeliveryRoute first,
+    GroupRecord? group,
+  }) {
+    if (first.forwarded || _disposed) return;
+    unawaited(_energyPolicy.refresh());
+    final fanout = _energyPolicy.fanoutFor(
+      _networkCostClass,
+      copiesAllowed: contact.featureCapabilities.contains(
+        ApplicationCapability.multiRouteMessagesV1,
+      ),
+      groupSize: group?.activeMemberDeviceIds.length,
+    );
+    if (fanout is SingleRouteFanout) return;
+    // A slow first route gets its time before the next copy goes.
+    final paced = fanout is EscalatingFanout
+        ? EscalatingFanout(
+            escalationInterval(
+              fanout.interval,
+              _transportRegistry
+                  ?.statsFor(contact.deviceId, first.transportKind)
+                  ?.latencyMs,
+            ),
+          )
+        : fanout;
+    final key = _outboundAttemptKey(contact.deviceId, envelope.messageId);
+    if (_copyRuns.containsKey(key) || _copyRuns.length >= _maxCopyRuns) return;
+    final receipt = Completer<void>();
+    _copyRuns[key] = receipt;
+    unawaited(
+      _runExtraCopies(
+        contact: contact,
+        envelope: envelope,
+        first: first,
+        fanout: paced,
+        receipt: receipt,
+        group: group,
+      ).catchError((_) {}).whenComplete(() {
+        if (identical(_copyRuns[key], receipt)) _copyRuns.remove(key);
+      }),
+    );
+  }
+
+  Future<void> _runExtraCopies({
+    required ContactRecord contact,
+    required RelayEnvelope envelope,
+    required _DeliveryRoute first,
+    required MessageFanout fanout,
+    required Completer<void> receipt,
+    GroupRecord? group,
+  }) async {
+    // What earlier passes already sent survives retries: each route, a
+    // storing carrier and a radio get at most one copy of a message.
+    final key = _outboundAttemptKey(contact.deviceId, envelope.messageId);
+    final state = _copyStates.remove(key) ?? _CopyState();
+    _copyStates[key] = state;
+    while (_copyStates.length > _maxCopyStates) {
+      _copyStates.remove(_copyStates.keys.first);
+    }
+    state.note(first, storing: _storingCarriers.contains(first.transportKind));
+    final used = state.routeKeys;
+    final usedKinds = state.kinds;
+    final usedLegacyKinds = state.legacyKinds;
+    final radioSized =
+        utf8.encode(jsonEncode(envelope.toJson())).length <= _maxRadioCopyBytes;
+    for (var copy = 0; copy < _maxExtraCopies; copy++) {
+      if (fanout case EscalatingFanout(:final interval)) {
+        await Future.any([receipt.future, Future<void>.delayed(interval)]);
+      }
+      if (receipt.isCompleted || _disposed) return;
+      if (!_awaitsReceipt(contact.deviceId, envelope.messageId, group)) return;
+      final lastTwoWay = _reachability
+          .recordByDeviceId(contact.deviceId)
+          ?.lastTwoWaySuccessAt;
+      final radiosAllowed =
+          radioSized &&
+          !state.radioUsed &&
+          (lastTwoWay == null ||
+              _now().difference(lastTwoWay) > const Duration(minutes: 5));
+      final allowed = <TransportKind>{
+        for (final kind in TransportKind.values)
+          if (!usedKinds.contains(kind) &&
+              !(state.storedOnCarrier && _storingCarriers.contains(kind)) &&
+              (radiosAllowed || !_radioKinds.contains(kind)))
+            kind,
+      };
+      final _DeliveryRoute route;
+      try {
+        route = await _deliverToContact(
+          contact: contact,
+          recipientDeviceId: contact.deviceId,
+          envelope: envelope,
+          background: true,
+          allowForwarding: false,
+          allowedUnifiedKinds: allowed,
+          excludeRouteKeys: used,
+          skipLegacyKinds: usedLegacyKinds,
+          extraCopy: true,
+        );
+      } catch (_) {
+        return; // No route left.
+      }
+      if (used.contains(route.routeKey)) return;
+      state.note(
+        route,
+        storing: _storingCarriers.contains(route.transportKind),
+      );
+      if (_radioKinds.contains(route.transportKind)) state.radioUsed = true;
+      _noteHandedOff(contact.deviceId, envelope.messageId, route);
+      _traceOutbound(contact.deviceId, envelope.messageId, route, group: group);
+    }
+  }
+
+  /// Probes waiting for their answer, by probe id.
+  final Map<String, Completer<void>> _routeProbeWaiters = {};
+  static const int _maxRouteProbeWaiters = 64;
+  static const int _maxRouteTestRoutes = 8;
+
+  /// When this device answered each contact's probes lately (a bound).
+  final Map<String, List<DateTime>> _routeProbesAnswered = {};
+  static const int _maxRouteProbesPerMinute = 30;
+
+  final Map<String, RouteTestReport> _routeTestReports = {};
+
+  /// The last route test with [deviceId], if any.
+  RouteTestReport? routeTestReportFor(String deviceId) =>
+      _routeTestReports[deviceId];
+
+  /// Whether [contact]'s app answers route tests.
+  bool canTestRoutes(ContactRecord contact) =>
+      contact.featureCapabilities.contains(ApplicationCapability.routeProbeV1);
+
+  /// Sends a small probe on each route to [contact] in turn and times the
+  /// answer. A route that takes probes but never answers goes last for
+  /// messages (as one that loses messages does); one that answers moves up.
+  Future<RouteTestReport> testContactRoutes(
+    ContactRecord contact, {
+    Duration replyTimeout = const Duration(seconds: 15),
+  }) async {
+    final current = _contactByDeviceId(contact.deviceId) ?? contact;
+    if (!current.canSendOutbound || !canTestRoutes(current)) {
+      throw StateError(
+        '${current.alias} cannot answer route tests yet (their app needs an '
+        'update).',
+      );
+    }
+    final me = _requireIdentity();
+    final used = <String>{};
+    // One route of each kind: one LAN address answers for the others.
+    final usedKinds = <TransportKind>{};
+    final usedLegacyKinds = <PeerRouteKind>{};
+    final probes =
+        <({_DeliveryRoute route, Stopwatch clock, Future<Duration?> answer})>[];
+    for (var index = 0; index < _maxRouteTestRoutes; index++) {
+      if (_routeProbeWaiters.length >= _maxRouteProbeWaiters) break;
+      final probeId = _randomId('rprobe');
+      final envelope = await _crypto.encryptPayloadEnvelope(
+        kind: 'route_probe',
+        messageId: probeId,
+        conversationId: _crypto.conversationIdFor(current.deviceId),
+        senderAccountId: me.accountId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: current.deviceId,
+        contact: current,
+        plaintext: jsonEncode({'probeId': probeId}),
+        createdAt: _now().toUtc(),
+      );
+      final waiter = Completer<void>();
+      _routeProbeWaiters[probeId] = waiter;
+      final clock = Stopwatch()..start();
+      final _DeliveryRoute route;
+      try {
+        route = await _deliverToContact(
+          contact: current,
+          recipientDeviceId: current.deviceId,
+          envelope: envelope,
+          background: true,
+          allowForwarding: false,
+          excludeRouteKeys: used,
+          allowedUnifiedKinds: {
+            for (final kind in TransportKind.values)
+              if (!usedKinds.contains(kind)) kind,
+          },
+          skipLegacyKinds: usedLegacyKinds,
+          extraCopy: true,
+        );
+      } catch (_) {
+        _routeProbeWaiters.remove(probeId);
+        break; // No route left.
+      }
+      if (!used.add(route.routeKey)) {
+        _routeProbeWaiters.remove(probeId);
+        break;
+      }
+      usedKinds.add(route.transportKind);
+      if (route.endpoint?.kind case final kind?) usedLegacyKinds.add(kind);
+      probes.add((
+        route: route,
+        clock: clock,
+        answer: waiter.future
+            .then<Duration?>((_) => clock.elapsed)
+            .timeout(replyTimeout, onTimeout: () => null)
+            .whenComplete(() => _routeProbeWaiters.remove(probeId)),
+      ));
+    }
+    final answers = await Future.wait([
+      for (final probe in probes) probe.answer,
+    ]);
+    final results = <RouteTestResult>[];
+    final now = _now().toUtc();
+    for (var index = 0; index < probes.length; index++) {
+      final route = probes[index].route;
+      final roundTrip = answers[index];
+      final stored = route.path == TransportPathKind.storeForward;
+      results.add(
+        RouteTestResult(
+          label: route.label,
+          route: route.messageRoute,
+          roundTrip: roundTrip,
+          stored: stored && roundTrip == null,
+        ),
+      );
+      final unconfirmed = _unconfirmedRoutes[current.deviceId];
+      if (roundTrip != null) {
+        unconfirmed?.remove(route.routeKey);
+        if (route.endpoint == null) {
+          _transportRegistry?.noteRoundTrip(
+            current.deviceId,
+            route.transportKind,
+            roundTrip,
+          );
+        }
+      } else if (!stored &&
+          !route.forwarded &&
+          !_radioKinds.contains(route.transportKind)) {
+        // (A radio may answer later than the test waits.)
+        // Took the probe, never answered: suspect at once.
+        final routes = _unconfirmedRoutes[current.deviceId] ??= {};
+        if (routes.length < 64) {
+          routes[route.routeKey] = now.subtract(_routeAckTimeout);
+        }
+      }
+    }
+    if (_noUnconfirmedRoutes(current.deviceId)) {
+      _unconfirmedRoutes.remove(current.deviceId);
+    }
+    if (results.any((result) => result.answered)) {
+      _reachability.noteTwoWaySuccess(current.deviceId);
+    }
+    final report = RouteTestReport(measuredAt: now, results: results);
+    _routeTestReports.remove(current.deviceId);
+    while (_routeTestReports.length >= 256) {
+      _routeTestReports.remove(_routeTestReports.keys.first);
+    }
+    _routeTestReports[current.deviceId] = report;
+    notifyListeners();
+    return report;
+  }
+
+  bool _noUnconfirmedRoutes(String deviceId) =>
+      _unconfirmedRoutes[deviceId]?.isEmpty ?? true;
+
+  /// A contact's probe: answered with the route it came by, within a bound.
+  Future<void> _handleRouteProbe(RelayEnvelope envelope) async {
+    final contact = _contactByDeviceId(envelope.senderDeviceId);
+    if (contact == null ||
+        !contact.canSendOutbound ||
+        contact.accountId != envelope.senderAccountId ||
+        envelope.conversationId !=
+            _crypto.conversationIdFor(contact.deviceId)) {
+      return;
+    }
+    final now = _now().toUtc();
+    final answered = _routeProbesAnswered[contact.deviceId] ??= [];
+    answered.removeWhere(
+      (at) => now.difference(at) > const Duration(minutes: 1),
+    );
+    if (answered.length >= _maxRouteProbesPerMinute) return;
+    final decoded = jsonDecode(
+      await _crypto.decryptMessage(contact: contact, envelope: envelope),
+    );
+    if (decoded is! Map<String, dynamic> ||
+        decoded['probeId'] != envelope.messageId) {
+      return;
+    }
+    answered.add(now);
+    final me = _requireIdentity();
+    final reply = await _crypto.encryptPayloadEnvelope(
+      kind: 'route_probe_reply',
+      messageId: _randomId('rprobe-reply'),
+      conversationId: envelope.conversationId,
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: contact.deviceId,
+      contact: contact,
+      plaintext: jsonEncode({
+        'probeId': envelope.messageId,
+        if (_ingressRoute case final route?) 'arrivedBy': route.name,
+      }),
+      createdAt: now,
+      acknowledgedMessageId: envelope.messageId,
+    );
+    // Not awaited: a slow way back must not hold up what else came in.
+    unawaited(
+      _deliverToContact(
+        contact: contact,
+        recipientDeviceId: contact.deviceId,
+        envelope: reply,
+        background: true,
+        allowForwarding: false,
+      ).then<void>((_) {}, onError: (_) {}),
+    );
+  }
+
+  Future<void> _handleRouteProbeReply(RelayEnvelope envelope) async {
+    final contact = _contactByDeviceId(envelope.senderDeviceId);
+    if (contact == null ||
+        contact.accountId != envelope.senderAccountId ||
+        envelope.conversationId !=
+            _crypto.conversationIdFor(contact.deviceId)) {
+      return;
+    }
+    final probeId = envelope.acknowledgedMessageId;
+    if (probeId == null || !_routeProbeWaiters.containsKey(probeId)) return;
+    final decoded = jsonDecode(
+      await _crypto.decryptMessage(contact: contact, envelope: envelope),
+    );
+    if (decoded is! Map<String, dynamic> || decoded['probeId'] != probeId) {
+      return;
+    }
+    final waiter = _routeProbeWaiters.remove(probeId);
+    if (waiter != null && !waiter.isCompleted) waiter.complete();
+    _reachability.noteTwoWaySuccess(contact.deviceId);
+  }
+
+  /// Counts a file block sent on [route] (bytes per route, for the message
+  /// details).
+  void _countServedBlock(
+    _OutboundAttachmentState state,
+    int index,
+    MessageRoute? route,
+  ) {
+    if (route == null) return;
+    final descriptor = state.descriptor;
+    final bytes = max(
+      0,
+      min(
+        descriptor.chunkSize,
+        descriptor.sizeBytes - index * descriptor.chunkSize,
+      ),
+    );
+    state.routeBytes[route] = (state.routeBytes[route] ?? 0) + bytes;
+  }
+
+  /// Whether [messageId] to [deviceId] still waits for its receipt.
+  bool _awaitsReceipt(String deviceId, String messageId, GroupRecord? group) {
+    if (group == null) {
+      return _messageById(deviceId, messageId)?.state.awaitsRecipientAck ??
+          false;
+    }
+    final message = _groupMessageById(group.groupId, messageId);
+    if (message == null || message.deleted) return false;
+    return message.recipientStates[deviceId]?.awaitsRecipientAck ?? true;
+  }
+
+  /// Records on the message that [route] took it (to [deviceId], in a
+  /// group).
+  void _traceOutbound(
+    String deviceId,
+    String messageId,
+    _DeliveryRoute route, {
+    GroupRecord? group,
+  }) {
+    final messageRoute = route.messageRoute;
+    if (messageRoute == null) return;
+    _traceMessage(
+      deviceId,
+      messageId,
+      RouteTrace(
+        route: messageRoute,
+        mark: route.path == TransportPathKind.storeForward
+            ? MessageRouteMark.stored
+            : MessageRouteMark.sent,
+        at: _now().toUtc(),
+        deviceId: group == null ? null : deviceId,
+      ),
+      group: group,
+    );
+  }
+
+  void _traceMessage(
+    String deviceId,
+    String messageId,
+    RouteTrace trace, {
+    GroupRecord? group,
+  }) {
+    if (group == null) {
+      final message = _messageById(deviceId, messageId);
+      if (message == null) return;
+      final traced = message.tracedWith(trace);
+      if (_sameTrace(traced, message.routeTrace)) return;
+      _upsertMessage(deviceId, message.copyWith(routeTrace: traced));
+    } else {
+      final message = _groupMessageById(group.groupId, messageId);
+      if (message == null) return;
+      final traced = message.tracedWith(trace);
+      if (_sameTrace(traced, message.routeTrace)) return;
+      _upsertGroupMessage(group.groupId, message.copyWith(routeTrace: traced));
+    }
+  }
+
+  static bool _sameTrace(List<RouteTrace> left, List<RouteTrace> right) {
+    if (left.length != right.length) return false;
+    for (var index = 0; index < left.length; index++) {
+      if (!identical(left[index], right[index])) return false;
+    }
+    return true;
+  }
+
+  /// The routes each recent incoming message arrived by (copies included),
+  /// first arrival first, and those already named in a receipt.
+  final LinkedHashMap<
+    String,
+    ({Map<MessageRoute, DateTime> arrived, Set<MessageRoute> acked})
+  >
+  _arrivals = LinkedHashMap();
+  static const int _maxArrivals = 2048;
+
+  /// Notes that [messageId] (authenticated) came by the route this batch
+  /// arrived on; true when that route is new for it.
+  bool _noteArrival(String messageId) {
+    final route = _ingressRoute;
+    if (route == null) return false;
+    var entry = _arrivals.remove(messageId);
+    entry ??= (arrived: <MessageRoute, DateTime>{}, acked: <MessageRoute>{});
+    _arrivals[messageId] = entry;
+    while (_arrivals.length > _maxArrivals) {
+      _arrivals.remove(_arrivals.keys.first);
+    }
+    if (entry.arrived.containsKey(route)) return false;
+    entry.arrived[route] = _now().toUtc();
+    return true;
+  }
+
+  /// Records on an outgoing message what a receipt from [deviceId] says:
+  /// the routes that reached them, and when they read it.
+  void _recordReceipt(
+    String deviceId,
+    String messageId, {
+    required bool read,
+    required DateTime at,
+    Set<MessageRoute>? arrivedBy,
+    GroupRecord? group,
+  }) {
+    final message = group == null
+        ? _messageById(deviceId, messageId)
+        : _groupMessageById(group.groupId, messageId);
+    if (message == null || !message.outbound) return;
+    var traced = message.routeTrace;
+    for (final route in arrivedBy ?? const <MessageRoute>{}) {
+      traced = message
+          .copyWith(routeTrace: traced)
+          .tracedWith(
+            RouteTrace(
+              route: route,
+              mark: MessageRouteMark.confirmed,
+              at: at,
+              deviceId: group == null ? null : deviceId,
+            ),
+          );
+    }
+    final readAt = read && !message.recipientReadAt.containsKey(deviceId)
+        ? {...message.recipientReadAt, deviceId: at}
+        : null;
+    if (_sameTrace(traced, message.routeTrace) && readAt == null) return;
+    final updated = message.copyWith(
+      routeTrace: traced,
+      recipientReadAt: readAt,
+    );
+    if (group == null) {
+      _upsertMessage(deviceId, updated);
+    } else {
+      _upsertGroupMessage(group.groupId, updated);
+    }
+  }
+
+  /// Shows on the incoming message that a copy came by this batch's route.
+  void _traceArrival(ContactRecord contact, RelayEnvelope envelope) {
+    final route = _ingressRoute;
+    if (route == null) return;
+    final group = envelope.kind == 'group_message'
+        ? _groupById(envelope.conversationId)
+        : null;
+    if (envelope.kind == 'group_message' && group == null) return;
+    _traceMessage(
+      contact.deviceId,
+      envelope.messageId,
+      RouteTrace(
+        route: route,
+        mark: MessageRouteMark.confirmed,
+        at: _now().toUtc(),
+      ),
+      group: group,
+    );
+  }
+
+  /// Copies that arrived while the first was still being read, by message
+  /// id, with the route each came by.
+  final Map<String, List<({RelayEnvelope envelope, MessageRoute route})>>
+  _overlappingCopies = {};
+
   String _outboundAttemptKey(String peerDeviceId, String messageId) {
     return '$peerDeviceId|$messageId';
   }
@@ -23349,6 +24325,7 @@ class MessengerController extends ChangeNotifier {
 
   void _clearOutboundAttempt(String peerDeviceId, String messageId) {
     final key = _outboundAttemptKey(peerDeviceId, messageId);
+    _copyStates.remove(key);
     _outboundAttemptedAt.remove(key);
     _outboundAttemptCount.remove(key);
     _envelopeOutbox.remove(key);
@@ -23458,6 +24435,13 @@ class MessengerController extends ChangeNotifier {
     bool irohFirst = false,
     bool background = false,
     bool allowForwarding = true,
+    // Routes this message already went on (an extra copy takes another).
+    Set<String> excludeRouteKeys = const {},
+    // An extra copy: the caller notes the route itself.
+    bool extraCopy = false,
+    // Kinds of direct routes to leave out (one LAN address is as good as
+    // another for a copy).
+    Set<PeerRouteKind> skipLegacyKinds = const {},
   }) async {
     // Defense in depth: the crypto layer already can't derive a shared
     // secret for a pending or archived contact (publicKeyBase64 is empty
@@ -23486,6 +24470,7 @@ class MessengerController extends ChangeNotifier {
             .where(
               (route) => allowRelayedPaths || route.kind != PeerRouteKind.relay,
             )
+            .where((route) => !skipLegacyKinds.contains(route.kind))
             .toList(growable: false);
     final canTryRegistry =
         _transportRegistry != null &&
@@ -23507,7 +24492,7 @@ class MessengerController extends ChangeNotifier {
         .toList(growable: false);
     Object? lastError;
     _DeliveryRoute? deliveredVia;
-    final attemptedRouteKeys = <String>{};
+    final attemptedRouteKeys = <String>{...excludeRouteKeys};
     // Routes that took messages no receipt confirmed (a one-way link: a
     // firewall dropping what arrives, say) go last, after every other.
     final suspects = _suspectRoutes(contact.deviceId);
@@ -23576,11 +24561,16 @@ class MessengerController extends ChangeNotifier {
           envelope: envelope,
           policies: registryPolicies,
           allowRelay: allowRelayedPaths,
-          skipRouteIds: suspectsToo ? const {} : suspects,
+          skipRouteIds: suspectsToo
+              ? excludeRouteKeys
+              : {...suspects, ...excludeRouteKeys},
         );
         if (deliveredVia?.transportKind == TransportKind.iroh) {
           _irohSkipUntil.remove(contact.deviceId);
         }
+      } on TransportSendCancelled {
+        // It arrived another way: no other route takes over.
+        rethrow;
       } catch (error) {
         lastError = error;
         if (!skipIroh && _canUseIrohForContact(contact)) {
@@ -23714,7 +24704,9 @@ class MessengerController extends ChangeNotifier {
       }
       throw lastError ?? StateError('No reachable route for recipient.');
     }
-    if (envelope.kind == 'direct_message' || envelope.kind == 'group_message') {
+    if (!extraCopy &&
+        (envelope.kind == 'direct_message' ||
+            envelope.kind == 'group_message')) {
       _noteHandedOff(contact.deviceId, envelope.messageId, result);
     }
     final deliveredEndpoint = result.endpoint;
@@ -25795,6 +26787,7 @@ class MessengerController extends ChangeNotifier {
     }
     await _handleAttachmentChunkBytes(
       sender,
+      route: MessageRoute.lanDirect,
       attachmentId: block.attachmentId,
       index: block.index,
       packedBytes: block.ciphertext,
@@ -27654,6 +28647,963 @@ class MessengerController extends ChangeNotifier {
     };
   }
 
+  // Multi-device accounts (M29).
+
+  /// Whether this identity has an account key yet.
+  bool get hasAccount => identity?.accountKeyPublicBase64 != null;
+
+  /// The account's devices, as this device last signed them.
+  AccountDeviceList? get accountDevices =>
+      AccountDeviceList.fromJson(identity?.accountDeviceList);
+
+  AccountKeys _accountKeys(IdentityRecord me) {
+    final public = me.accountKeyPublicBase64;
+    final private = me.accountKeyPrivateBase64;
+    if (public == null || private == null) {
+      throw StateError('This identity has no account key yet.');
+    }
+    return AccountKeys(publicKeyBase64: public, privateKeyBase64: private);
+  }
+
+  /// Gives this identity an account key, so other devices can join it.
+  /// Contacts learn it from the upgrade, signed by this device's key they
+  /// already pinned.
+  Future<void> createAccount({String deviceName = 'This device'}) async {
+    final me = _requireIdentity();
+    if (me.accountKeyPublicBase64 != null) return;
+    final signingPublic = me.signingPublicKeyBase64;
+    final signingPrivate = me.signingPrivateKeyBase64;
+    if (signingPublic == null || signingPrivate == null) {
+      throw StateError('This identity has no signing key.');
+    }
+    final account = await AccountKeys.generate();
+    final now = _now().toUtc();
+    final upgrade = await AccountUpgrade.create(
+      accountId: me.accountId,
+      deviceId: me.deviceId,
+      deviceSigningPublicKeyBase64: signingPublic,
+      deviceSigningPrivateKeyBase64: signingPrivate,
+      account: account,
+      issuedAt: now,
+    );
+    final cert = await DeviceCert.issue(
+      account: account,
+      accountId: me.accountId,
+      deviceId: me.deviceId,
+      encryptionKeyBase64: me.publicKeyBase64,
+      signingKeyBase64: signingPublic,
+      irohEndpointId: me.irohEndpointId,
+      name: deviceName,
+      // The original device has been there all along.
+      linkedAt: me.createdAt,
+      proofSignatureBase64: await _crypto.signInstallationBytes(
+        DeviceCert.proofBytes(
+          accountId: me.accountId,
+          accountKeyBase64: account.publicKeyBase64,
+          deviceId: me.deviceId,
+          encryptionKeyBase64: me.publicKeyBase64,
+          signingKeyBase64: signingPublic,
+          irohEndpointId: me.irohEndpointId,
+        ),
+      ),
+    );
+    final list = await AccountDeviceList.issue(
+      account: account,
+      accountId: me.accountId,
+      version: 1,
+      devices: [cert],
+      issuedAt: now,
+    );
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(
+        accountKeyPublicBase64: account.publicKeyBase64,
+        accountKeyPrivateBase64: account.privateKeyBase64,
+        accountUpgrade: upgrade.toJson(),
+        accountDeviceList: list.toJson(),
+      ),
+    );
+    await _saveSnapshotSilently(notify: true);
+    _advertiseProfileToContacts();
+  }
+
+  /// Signs a new device list ([change] edits the devices and revocations)
+  /// one version up, keeps it and tells contacts.
+  Future<AccountDeviceList> _reissueAccountDevices(
+    void Function(List<DeviceCert> devices, Map<String, DateTime> revoked)
+    change,
+  ) async {
+    final me = _requireIdentity();
+    final account = _accountKeys(me);
+    final current = accountDevices;
+    if (current == null) throw StateError('No account device list.');
+    final devices = List<DeviceCert>.of(current.devices);
+    final revoked = Map<String, DateTime>.of(current.revoked);
+    change(devices, revoked);
+    final list = await AccountDeviceList.issue(
+      account: account,
+      accountId: me.accountId,
+      version: current.version + 1,
+      devices: devices,
+      revoked: revoked,
+      issuedAt: _now().toUtc(),
+    );
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(accountDeviceList: list.toJson()),
+    );
+    await _saveSnapshotSilently(notify: true);
+    _advertiseProfileToContacts();
+    return list;
+  }
+
+  /// Whether this device may add or remove devices now (a device linked
+  /// in the last 24 hours may not).
+  bool get mayManageAccountDevices {
+    final me = identity;
+    if (me == null) return false;
+    return accountDevices?.deviceFor(me.deviceId)?.mayManageDevicesAt(_now()) ??
+        false;
+  }
+
+  /// Adds a device to the account (once linking has checked it is the
+  /// user's).
+  Future<void> addAccountDevice({
+    required String deviceId,
+    required String encryptionKeyBase64,
+    required String signingKeyBase64,
+    String? irohEndpointId,
+    required String name,
+    // The device's own signature on its keys (proof it holds them).
+    required String proofSignatureBase64,
+  }) async {
+    final me = _requireIdentity();
+    if (!mayManageAccountDevices) {
+      throw StateError(
+        'A device linked in the last 24 hours cannot add devices yet.',
+      );
+    }
+    if (deviceId == me.deviceId) {
+      throw ArgumentError('This device is already in the account.');
+    }
+    final cert = await DeviceCert.issue(
+      account: _accountKeys(me),
+      accountId: me.accountId,
+      deviceId: deviceId,
+      encryptionKeyBase64: encryptionKeyBase64,
+      signingKeyBase64: signingKeyBase64,
+      irohEndpointId: irohEndpointId,
+      name: name,
+      linkedAt: _now().toUtc(),
+      proofSignatureBase64: proofSignatureBase64,
+    );
+    if (!await cert.verify(_accountKeys(me).publicKeyBase64)) {
+      throw ArgumentError('The device did not prove it holds its keys.');
+    }
+    await _reissueAccountDevices((devices, revoked) {
+      if (revoked.containsKey(deviceId)) {
+        throw StateError('A revoked device cannot be added again.');
+      }
+      devices.removeWhere((device) => device.deviceId == deviceId);
+      if (devices.length >= maxAccountDevices) {
+        throw StateError('The account has $maxAccountDevices devices already.');
+      }
+      devices.add(cert);
+    });
+  }
+
+  /// Removes a lost or old device from the account for good: contacts stop
+  /// accepting it.
+  Future<void> revokeAccountDevice(String deviceId) async {
+    final me = _requireIdentity();
+    if (deviceId == me.deviceId) {
+      throw ArgumentError('This device cannot revoke itself.');
+    }
+    // Contacts know the account through its original device: it stays.
+    if (AccountUpgrade.fromJson(me.accountUpgrade)?.deviceId == deviceId) {
+      throw ArgumentError(
+        'The account\'s original device cannot be removed yet.',
+      );
+    }
+    if (!mayManageAccountDevices) {
+      throw StateError(
+        'A device linked in the last 24 hours cannot remove devices yet.',
+      );
+    }
+    await _reissueAccountDevices((devices, revoked) {
+      devices.removeWhere((device) => device.deviceId == deviceId);
+      revoked[deviceId] = _now().toUtc();
+    });
+  }
+
+  // Linking a new device (M29a).
+  //
+  // 1. The new device shows a QR code (its keys and a random secret).
+  // 2. The existing device scans it and sends an offer, signed by its
+  //    signing key over the link transcript.
+  // 3. The new device picks a random nonce and sends it, signed, only to
+  //    that offer's device. Both now show a code over all four keys, the
+  //    secret and the nonce (so nobody could pick keys to hit it).
+  // 4. The user confirms on both. The new device's confirmation (signed,
+  //    with its proof of holding its keys) goes to the existing device.
+  // 5. The existing device adds it to the account and sends the account
+  //    (keys, device list, contacts), signed. The new device accepts that
+  //    from the offer's device only, once.
+  // Everything is also sealed to the receiving device's key and the
+  // QR code's secret. A link lasts at most 10 minutes.
+
+  static const Duration _linkLifetime = Duration(minutes: 10);
+
+  _LinkAsNew? _linkAsNew;
+  _LinkAsExisting? _linkAsExisting;
+  Timer? _linkExpiry;
+
+  /// The code to compare on this device during a link, once known.
+  String? get linkCode => _linkAsNew?.code ?? _linkAsExisting?.code;
+
+  /// Where a link stands on this device, for the screens.
+  LinkState get linkState {
+    final asNew = _linkAsNew;
+    if (asNew != null) {
+      if (asNew.done) return LinkState.linked;
+      if (asNew.confirmed) return LinkState.waitingForOtherDevice;
+      return asNew.code == null
+          ? LinkState.showingQrCode
+          : LinkState.compareCode;
+    }
+    final asExisting = _linkAsExisting;
+    if (asExisting != null) {
+      if (asExisting.granted) return LinkState.linked;
+      if (asExisting.code == null) return LinkState.connecting;
+      return asExisting.confirmedHere
+          ? LinkState.waitingForOtherDevice
+          : LinkState.compareCode;
+    }
+    return LinkState.none;
+  }
+
+  /// Stops a link under way on this device.
+  void cancelLink() {
+    _linkExpiry?.cancel();
+    _linkExpiry = null;
+    _linkAsNew = null;
+    _linkAsExisting = null;
+    notifyListeners();
+  }
+
+  void _armLinkExpiry() {
+    _linkExpiry?.cancel();
+    _linkExpiry = Timer(_linkLifetime, () {
+      if (_disposed) return;
+      _linkAsNew = null;
+      _linkAsExisting = null;
+      _linkExpiry = null;
+      notifyListeners();
+    });
+  }
+
+  bool _linkExpired(DateTime startedAt) =>
+      _now().toUtc().difference(startedAt) > _linkLifetime;
+
+  /// On the new device: the QR code for the existing device to scan.
+  Future<String> startLinkAsNewDevice() async {
+    final me = _requireIdentity();
+    final signing = me.signingPublicKeyBase64;
+    if (signing == null) throw StateError('This device has no signing key.');
+    final invitation = LinkInvitation(
+      deviceId: me.deviceId,
+      encryptionKeyBase64: me.publicKeyBase64,
+      signingKeyBase64: signing,
+      irohEndpointId: me.irohEndpointId,
+      linkSecret: LinkInvitation.newSecret(),
+    );
+    _linkAsExisting = null;
+    _linkAsNew = _LinkAsNew(invitation, _now().toUtc());
+    _armLinkExpiry();
+    notifyListeners();
+    return invitation.encode();
+  }
+
+  /// On the existing device: starts linking the device whose QR code is
+  /// [qrText]. The code to compare shows once the new device answers.
+  Future<void> startLinkFromQrCode(String qrText) async {
+    final invitation = LinkInvitation.tryParse(qrText);
+    if (invitation == null) {
+      throw ArgumentError('This is not a Conest device link code.');
+    }
+    final me = _requireIdentity();
+    if (invitation.deviceId == me.deviceId) {
+      throw ArgumentError('That is this device.');
+    }
+    if (!hasAccount) await createAccount();
+    if (!mayManageAccountDevices) {
+      throw StateError(
+        'A device linked in the last 24 hours cannot link others yet.',
+      );
+    }
+    final current = _requireIdentity();
+    final link = _LinkAsExisting(invitation, _now().toUtc());
+    _linkAsNew = null;
+    _linkAsExisting = link;
+    _armLinkExpiry();
+    notifyListeners();
+    final transcript = _transcriptAsExisting(link, 'offer');
+    await _sendLinkMessage(
+      toDeviceId: invitation.deviceId,
+      encryptionKeyBase64: invitation.encryptionKeyBase64,
+      signingKeyBase64: invitation.signingKeyBase64,
+      irohEndpointId: invitation.irohEndpointId,
+      linkSecret: invitation.linkSecret,
+      purpose: 'offer',
+      body: {
+        'deviceId': current.deviceId,
+        'accountId': current.accountId,
+        'accountKey': current.accountKeyPublicBase64,
+        'name': current.displayName,
+        'encryptionKey': current.publicKeyBase64,
+        'signingKey': current.signingPublicKeyBase64,
+        if (current.irohEndpointId != null)
+          'irohEndpointId': current.irohEndpointId,
+        'signature': await _crypto.signInstallationBytes(transcript),
+      },
+    );
+  }
+
+  List<int> _transcriptAsExisting(
+    _LinkAsExisting link,
+    String step, {
+    String? bodyHash,
+  }) {
+    final me = _requireIdentity();
+    return linkTranscript(
+      step: step,
+      invitation: link.invitation,
+      existingDeviceId: me.deviceId,
+      existingEncryptionKeyBase64: me.publicKeyBase64,
+      existingSigningKeyBase64: me.signingPublicKeyBase64!,
+      accountId: me.accountId,
+      accountKeyBase64: me.accountKeyPublicBase64!,
+      nonceBase64: link.nonce,
+      bodyHashBase64: bodyHash,
+    );
+  }
+
+  List<int> _transcriptAsNew(
+    _LinkAsNew link,
+    _LinkOffer offer,
+    String step, {
+    String? bodyHash,
+  }) => linkTranscript(
+    step: step,
+    invitation: link.invitation,
+    existingDeviceId: offer.deviceId,
+    existingEncryptionKeyBase64: offer.encryptionKeyBase64,
+    existingSigningKeyBase64: offer.signingKeyBase64,
+    accountId: offer.accountId,
+    accountKeyBase64: offer.accountKeyBase64,
+    nonceBase64: link.nonce,
+    bodyHashBase64: bodyHash,
+  );
+
+  /// The user saw the same code on both devices and confirmed it here.
+  Future<void> confirmLinkCode() async {
+    final asNew = _linkAsNew;
+    final offer = asNew?.offer;
+    if (asNew != null && offer != null && asNew.code != null) {
+      if (_linkExpired(asNew.startedAt)) {
+        cancelLink();
+        throw StateError('The link took too long. Start again.');
+      }
+      asNew.confirmed = true;
+      notifyListeners();
+      final me = _requireIdentity();
+      await _sendLinkMessage(
+        toDeviceId: offer.deviceId,
+        encryptionKeyBase64: offer.encryptionKeyBase64,
+        signingKeyBase64: offer.signingKeyBase64,
+        irohEndpointId: offer.irohEndpointId,
+        linkSecret: asNew.invitation.linkSecret,
+        purpose: 'accept',
+        body: {
+          'signature': await _crypto.signInstallationBytes(
+            _transcriptAsNew(asNew, offer, 'accept'),
+          ),
+          // Proof this device holds its keys, for its certificate.
+          'proof': await _crypto.signInstallationBytes(
+            DeviceCert.proofBytes(
+              accountId: offer.accountId,
+              accountKeyBase64: offer.accountKeyBase64,
+              deviceId: me.deviceId,
+              encryptionKeyBase64: me.publicKeyBase64,
+              signingKeyBase64: me.signingPublicKeyBase64!,
+              irohEndpointId: me.irohEndpointId,
+            ),
+          ),
+        },
+      );
+      return;
+    }
+    final asExisting = _linkAsExisting;
+    if (asExisting == null || asExisting.code == null) {
+      throw StateError('No link is waiting for confirmation.');
+    }
+    if (_linkExpired(asExisting.startedAt)) {
+      cancelLink();
+      throw StateError('The link took too long. Start again.');
+    }
+    asExisting.confirmedHere = true;
+    notifyListeners();
+    if (asExisting.proof != null) await _sendLinkGrant(asExisting);
+  }
+
+  Future<void> _sendLinkMessage({
+    required String toDeviceId,
+    required String encryptionKeyBase64,
+    required String signingKeyBase64,
+    String? irohEndpointId,
+    required Uint8List linkSecret,
+    required String purpose,
+    required Map<String, Object?> body,
+  }) async {
+    final me = _requireIdentity();
+    final sealed = await sealLinkMessage(
+      purpose: purpose,
+      plaintext: utf8.encode(jsonEncode(body)),
+      recipientEncryptionKeyBase64: encryptionKeyBase64,
+      linkSecret: linkSecret,
+    );
+    final envelope = RelayEnvelope(
+      protocolVersion: 1,
+      kind: 'account_link',
+      messageId: _randomId('link'),
+      conversationId: 'account-link',
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: toDeviceId,
+      createdAt: _now().toUtc(),
+      payloadBase64: base64Encode(utf8.encode(jsonEncode(sealed))),
+    );
+    // Not a contact: a passing record with the keys the QR code (or the
+    // signed offer) gave, for the transports to find the device.
+    final peer = ContactRecord.fromJson({
+      'accountId': 'link',
+      'deviceId': toDeviceId,
+      'alias': 'Device being linked',
+      'displayName': '',
+      'bio': '',
+      'relayCapable': false,
+      'publicKeyBase64': encryptionKeyBase64,
+      'signingPublicKeyBase64': signingKeyBase64,
+      if (irohEndpointId != null) 'irohEndpointId': irohEndpointId,
+      'routeHints': const <Object>[],
+      'safetyNumber': '',
+      'trustedAt': _now().toUtc().toIso8601String(),
+      'pairingState': ContactPairingState.accepted.name,
+    });
+    await _deliverToContact(
+      contact: peer,
+      recipientDeviceId: toDeviceId,
+      envelope: envelope,
+      irohFirst: true,
+      allowForwarding: false,
+    );
+  }
+
+  Future<void> _handleAccountLink(RelayEnvelope envelope) async {
+    final me = identity;
+    if (me == null) return;
+    Object? sealed;
+    try {
+      sealed = jsonDecode(utf8.decode(base64Decode(envelope.payloadBase64!)));
+    } catch (_) {
+      return;
+    }
+    if (sealed is! Map) return;
+    Future<Map<String, dynamic>?> open(String purpose, Uint8List secret) async {
+      final bytes = await openLinkMessage(
+        purpose: purpose,
+        sealed: sealed,
+        encryptionPublicKeyBase64: me.publicKeyBase64,
+        encryptionPrivateKeyBase64: me.privateKeyBase64,
+        linkSecret: secret,
+      );
+      if (bytes == null) return null;
+      try {
+        final decoded = jsonDecode(utf8.decode(bytes));
+        return decoded is Map<String, dynamic> ? decoded : null;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    Future<bool> signedBy(
+      Object? signature,
+      String signingKey,
+      List<int> transcript,
+    ) async =>
+        signature is String &&
+        signature.length <= 128 &&
+        await verifyEd25519(
+          transcript,
+          signatureBase64: signature,
+          publicKeyBase64: signingKey,
+        );
+
+    final asNew = _linkAsNew;
+    if (asNew != null) {
+      if (asNew.done || _linkExpired(asNew.startedAt)) return;
+      final secret = asNew.invitation.linkSecret;
+      if (sealed['purpose'] == 'offer' && asNew.offer == null) {
+        final body = await open('offer', secret);
+        final offer = body == null ? null : _LinkOffer.fromJson(body);
+        if (offer == null ||
+            offer.deviceId != envelope.senderDeviceId ||
+            !await signedBy(
+              body!['signature'],
+              offer.signingKeyBase64,
+              _transcriptAsNew(asNew, offer, 'offer'),
+            ) ||
+            _linkAsNew != asNew ||
+            asNew.offer != null) {
+          return;
+        }
+        asNew.offer = offer;
+        asNew.nonce = base64Encode(LinkInvitation.newSecret());
+        asNew.code = await linkConfirmationCode(
+          existingSigningKeyBase64: offer.signingKeyBase64,
+          existingEncryptionKeyBase64: offer.encryptionKeyBase64,
+          newSigningKeyBase64: asNew.invitation.signingKeyBase64,
+          newEncryptionKeyBase64: asNew.invitation.encryptionKeyBase64,
+          linkSecret: secret,
+          nonceBase64: asNew.nonce!,
+        );
+        notifyListeners();
+        await _sendLinkMessage(
+          toDeviceId: offer.deviceId,
+          encryptionKeyBase64: offer.encryptionKeyBase64,
+          signingKeyBase64: offer.signingKeyBase64,
+          irohEndpointId: offer.irohEndpointId,
+          linkSecret: secret,
+          purpose: 'nonce',
+          body: {
+            'nonce': asNew.nonce,
+            'signature': await _crypto.signInstallationBytes(
+              _transcriptAsNew(asNew, offer, 'nonce'),
+            ),
+          },
+        );
+        return;
+      }
+      final offer = asNew.offer;
+      if (sealed['purpose'] == 'grant' &&
+          asNew.confirmed &&
+          offer != null &&
+          envelope.senderDeviceId == offer.deviceId) {
+        final body = await open('grant', secret);
+        final grant = body?['grant'];
+        if (body == null || grant is! Map<String, dynamic>) return;
+        final bodyHash = base64Encode(
+          sha256Bytes(accountSigningBytes('link-grant-body', grant)),
+        );
+        if (!await signedBy(
+          body['signature'],
+          offer.signingKeyBase64,
+          _transcriptAsNew(asNew, offer, 'grant', bodyHash: bodyHash),
+        )) {
+          return;
+        }
+        await _applyLinkGrant(asNew, offer, grant);
+      }
+      return;
+    }
+    final asExisting = _linkAsExisting;
+    if (asExisting == null ||
+        asExisting.granted ||
+        envelope.senderDeviceId != asExisting.invitation.deviceId ||
+        _linkExpired(asExisting.startedAt)) {
+      return;
+    }
+    final invitation = asExisting.invitation;
+    if (sealed['purpose'] == 'nonce' && asExisting.nonce == null) {
+      final body = await open('nonce', invitation.linkSecret);
+      final nonce = body?['nonce'];
+      if (body == null ||
+          nonce is! String ||
+          nonce.length > 64 ||
+          asExisting.nonce != null) {
+        return;
+      }
+      try {
+        if (base64Decode(nonce).length != 32) return;
+      } on FormatException {
+        return;
+      }
+      // Checked before it is kept: a forged nonce must not stall the
+      // real one.
+      final me = _requireIdentity();
+      final transcript = linkTranscript(
+        step: 'nonce',
+        invitation: invitation,
+        existingDeviceId: me.deviceId,
+        existingEncryptionKeyBase64: me.publicKeyBase64,
+        existingSigningKeyBase64: me.signingPublicKeyBase64!,
+        accountId: me.accountId,
+        accountKeyBase64: me.accountKeyPublicBase64!,
+        nonceBase64: nonce,
+      );
+      if (!await signedBy(
+            body['signature'],
+            invitation.signingKeyBase64,
+            transcript,
+          ) ||
+          asExisting.nonce != null) {
+        return;
+      }
+      asExisting.nonce = nonce;
+      final current = _requireIdentity();
+      asExisting.code = await linkConfirmationCode(
+        existingSigningKeyBase64: current.signingPublicKeyBase64!,
+        existingEncryptionKeyBase64: current.publicKeyBase64,
+        newSigningKeyBase64: invitation.signingKeyBase64,
+        newEncryptionKeyBase64: invitation.encryptionKeyBase64,
+        linkSecret: invitation.linkSecret,
+        nonceBase64: nonce,
+      );
+      notifyListeners();
+      return;
+    }
+    if (sealed['purpose'] == 'accept' &&
+        asExisting.nonce != null &&
+        asExisting.proof == null) {
+      final body = await open('accept', invitation.linkSecret);
+      final proof = body?['proof'];
+      if (body == null ||
+          proof is! String ||
+          proof.length > 128 ||
+          !await signedBy(
+            body['signature'],
+            invitation.signingKeyBase64,
+            _transcriptAsExisting(asExisting, 'accept'),
+          )) {
+        return;
+      }
+      asExisting.proof = proof;
+      notifyListeners();
+      if (asExisting.confirmedHere) await _sendLinkGrant(asExisting);
+    }
+  }
+
+  /// Both sides confirmed: the new device joins the account, and gets the
+  /// account (keys, device list, contacts), signed by this device.
+  Future<void> _sendLinkGrant(_LinkAsExisting link) async {
+    final proof = link.proof;
+    if (link.granted || proof == null || !link.confirmedHere) return;
+    link.granted = true;
+    final invitation = link.invitation;
+    await addAccountDevice(
+      deviceId: invitation.deviceId,
+      encryptionKeyBase64: invitation.encryptionKeyBase64,
+      signingKeyBase64: invitation.signingKeyBase64,
+      irohEndpointId: invitation.irohEndpointId,
+      name: 'New device',
+      proofSignatureBase64: proof,
+    );
+    final me = _requireIdentity();
+    final grant = <String, Object?>{
+      'accountId': me.accountId,
+      'displayName': me.displayName,
+      'bio': me.bio,
+      'accountKeyPublic': me.accountKeyPublicBase64,
+      'accountKeyPrivate': me.accountKeyPrivateBase64,
+      'accountUpgrade': me.accountUpgrade,
+      'accountDeviceList': me.accountDeviceList,
+      'contacts': [
+        for (final contact in _snapshot.contacts)
+          if (!contact.isArchived) contact.toJson(),
+      ],
+    };
+    final bodyHash = base64Encode(
+      sha256Bytes(accountSigningBytes('link-grant-body', grant)),
+    );
+    await _sendLinkMessage(
+      toDeviceId: invitation.deviceId,
+      encryptionKeyBase64: invitation.encryptionKeyBase64,
+      signingKeyBase64: invitation.signingKeyBase64,
+      irohEndpointId: invitation.irohEndpointId,
+      linkSecret: invitation.linkSecret,
+      purpose: 'grant',
+      body: {
+        'grant': grant,
+        'signature': await _crypto.signInstallationBytes(
+          _transcriptAsExisting(link, 'grant', bodyHash: bodyHash),
+        ),
+      },
+    );
+    notifyListeners();
+  }
+
+  /// On the new device: takes the account the existing device sent (once).
+  Future<void> _applyLinkGrant(
+    _LinkAsNew link,
+    _LinkOffer offer,
+    Map<String, dynamic> grant,
+  ) async {
+    if (link.done) return;
+    final me = _requireIdentity();
+    final accountId = grant['accountId'];
+    final accountKey = grant['accountKeyPublic'];
+    final accountPrivate = grant['accountKeyPrivate'];
+    final list = AccountDeviceList.fromJson(grant['accountDeviceList']);
+    if (accountId != offer.accountId ||
+        accountKey != offer.accountKeyBase64 ||
+        accountKey is! String ||
+        accountPrivate is! String ||
+        list == null ||
+        list.accountId != accountId ||
+        !await list.verify(accountKey)) {
+      return;
+    }
+    // This device and the offering device must both be in the list, with
+    // the keys this link was made with.
+    final mine = list.deviceFor(me.deviceId);
+    final existing = list.deviceFor(offer.deviceId);
+    if (mine == null ||
+        mine.encryptionKeyBase64 != me.publicKeyBase64 ||
+        mine.signingKeyBase64 != me.signingPublicKeyBase64 ||
+        existing == null ||
+        existing.signingKeyBase64 != offer.signingKeyBase64 ||
+        existing.encryptionKeyBase64 != offer.encryptionKeyBase64) {
+      return;
+    }
+    final contacts = <ContactRecord>[];
+    if (grant['contacts'] case final List raw) {
+      for (final item in raw.take(4096)) {
+        if (item is! Map<String, dynamic>) continue;
+        try {
+          final contact = ContactRecord.fromJson(item);
+          if (contact.deviceId != me.deviceId) contacts.add(contact);
+        } catch (_) {}
+      }
+    }
+    final displayName = grant['displayName'];
+    final bio = grant['bio'];
+    link.done = true;
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(
+        accountId: accountId as String,
+        displayName: displayName is String && displayName.length <= 128
+            ? displayName
+            : me.displayName,
+        bio: bio is String && bio.length <= 2048 ? bio : me.bio,
+        accountKeyPublicBase64: accountKey,
+        accountKeyPrivateBase64: accountPrivate,
+        accountUpgrade: grant['accountUpgrade'] is Map<String, dynamic>
+            ? grant['accountUpgrade'] as Map<String, dynamic>
+            : null,
+        accountDeviceList: list.toJson(),
+      ),
+      // The account's contacts replace what this new device had.
+      contacts: _dedupeContacts([...contacts, ..._snapshot.contacts]),
+    );
+    await _saveSnapshotSilently(notify: true);
+    setStatus('This device is now linked to your account.');
+    _advertiseProfileToContacts();
+  }
+
+  /// The chat a contact's messages belong to: their main record's, for
+  /// any of their devices.
+  String _chatIdFor(ContactRecord contact) =>
+      contact.accountAnchorDeviceId ?? contact.deviceId;
+
+  /// A message to a contact also goes to each of their other devices
+  /// (encrypted for each), so whichever they use has it.
+  void _sendToLinkedDevices(ContactRecord contact, ChatMessage message) {
+    if (contact.isLinkedDevice || contact.isArchived) return;
+    for (final device in linkedDevicesOf(contact.deviceId)) {
+      if (!device.canSendOutbound) continue;
+      unawaited(() async {
+        try {
+          final envelope = await _outboxEnvelope(
+            device,
+            message.id,
+            _crypto.encodeDirectMessagePayload(message),
+            () =>
+                _crypto.encryptDirectMessage(contact: device, message: message),
+          );
+          await _deliverToContact(
+            contact: device,
+            recipientDeviceId: device.deviceId,
+            envelope: envelope,
+            background: true,
+            allowForwarding: false,
+          );
+        } catch (_) {
+          // The next retry of the message tries again.
+        }
+      }());
+    }
+  }
+
+  /// The records of a contact's other devices (hidden from contact lists).
+  @visibleForTesting
+  List<ContactRecord> linkedDevicesOf(String deviceId) => [
+    for (final contact in _snapshot.contacts)
+      if (contact.accountAnchorDeviceId == deviceId) contact,
+  ];
+
+  /// Applies a contact's account statement (their account key and device
+  /// list) once [verifyAccountDevices] accepts it: each other device
+  /// becomes a hidden record, revoked ones go.
+  Future<void> _applyAccountDevices(
+    String senderDeviceId,
+    Object? statement,
+  ) async {
+    final sender = _contactByDeviceId(senderDeviceId);
+    if (sender == null || sender.isArchived || sender.pendingVerification) {
+      return;
+    }
+    final anchor = sender.isLinkedDevice
+        ? _contactByDeviceId(sender.accountAnchorDeviceId!)
+        : sender;
+    if (anchor == null || anchor.isLinkedDevice || anchor.isArchived) return;
+    final update = await verifyAccountDevices(
+      accountId: anchor.accountId,
+      anchorDeviceId: anchor.deviceId,
+      anchorSigningKeyBase64: anchor.signingPublicKeyBase64,
+      knownAccountKeyBase64: anchor.accountKeyBase64,
+      knownVersion: anchor.accountDeviceListVersion,
+      knownRevoked: anchor.accountRevokedDeviceIds,
+      fromAnchor: sender.deviceId == anchor.deviceId,
+      payload: statement,
+    );
+    if (update == null) return;
+    // The contact may have changed while this was being checked.
+    final current = _contactByDeviceId(anchor.deviceId);
+    if (current == null) return;
+    final list = update.list;
+    // Revocations only add up, to a bound: once full, a statement that
+    // would add more is refused (nothing already revoked is ever dropped).
+    final merged = {...current.accountRevokedDeviceIds, ...list.revoked.keys};
+    if (merged.length > maxRevokedDevices) {
+      appendDebugLog('Refused an account list: too many revoked devices.');
+      return;
+    }
+    if (update.revocationsOnly) {
+      // Only the new revocations count: their devices go for good.
+      final revoked = merged;
+      _snapshot = _snapshot.copyWith(
+        contacts: [
+          for (final contact in _snapshot.contacts)
+            if (contact.deviceId == current.deviceId)
+              current.copyWith(accountRevokedDeviceIds: revoked.toList())
+            else if (contact.accountAnchorDeviceId != current.deviceId ||
+                !revoked.contains(contact.deviceId))
+              contact,
+        ],
+      );
+      await _saveSnapshotSilently(notify: true);
+      return;
+    }
+    if (current.accountDeviceListVersion >= list.version) return;
+    final me = identity;
+    // Revocations only ever add up: a device revoked here stays revoked
+    // whatever a later list says.
+    final revoked = merged;
+    final updatedAnchor = current.copyWith(
+      accountKeyBase64: update.accountKeyBase64,
+      accountDeviceListVersion: list.version,
+      accountRevokedDeviceIds: revoked.toList(),
+      deviceName: list.deviceFor(current.deviceId)?.name,
+    );
+    final contacts = <ContactRecord>[
+      for (final contact in _snapshot.contacts)
+        if (contact.deviceId == current.deviceId)
+          updatedAnchor
+        // A device no longer in the list (revoked) goes.
+        else if (contact.accountAnchorDeviceId != current.deviceId ||
+            (list.deviceFor(contact.deviceId) != null &&
+                !revoked.contains(contact.deviceId)))
+          contact,
+    ];
+    final added = <DeviceCert>[];
+    for (final cert in list.devices) {
+      if (cert.deviceId == current.deviceId ||
+          cert.deviceId == me?.deviceId ||
+          revoked.contains(cert.deviceId)) {
+        continue;
+      }
+      final index = contacts.indexWhere((c) => c.deviceId == cert.deviceId);
+      // A separate contact with that device id is left alone.
+      if (index >= 0 &&
+          contacts[index].accountAnchorDeviceId != current.deviceId) {
+        continue;
+      }
+      final record = _linkedDeviceRecord(
+        updatedAnchor,
+        cert,
+        existing: index >= 0 ? contacts[index] : null,
+      );
+      if (record == null) continue;
+      if (index >= 0) {
+        contacts[index] = record;
+      } else {
+        contacts.add(record);
+        added.add(cert);
+      }
+    }
+    _snapshot = _snapshot.copyWith(contacts: contacts);
+    await _saveSnapshotSilently(notify: true);
+    for (final cert in added) {
+      setStatus('${current.alias} added a device: ${cert.name}.');
+    }
+  }
+
+  /// A hidden record for [cert], another device of [anchor]'s account: the
+  /// contact's settings, with the device's own keys and nothing yet known
+  /// about how to reach it.
+  ContactRecord? _linkedDeviceRecord(
+    ContactRecord anchor,
+    DeviceCert cert, {
+    ContactRecord? existing,
+  }) {
+    // Only what is the person's, plus the device's own keys; nothing about
+    // trust, verification, pairing or reachability is carried over.
+    final anchorJson = anchor.toJson();
+    final json = <String, dynamic>{
+      'accountId': anchor.accountId,
+      'deviceId': cert.deviceId,
+      'alias': anchor.alias,
+      'displayName': anchor.displayName,
+      'bio': anchor.bio,
+      'relayCapable': false,
+      'publicKeyBase64': cert.encryptionKeyBase64,
+      'signingPublicKeyBase64': cert.signingKeyBase64,
+      if (cert.irohEndpointId != null) 'irohEndpointId': cert.irohEndpointId,
+      'routeHints': existing?.toJson()['routeHints'] ?? const <Object>[],
+      'safetyNumber': '',
+      'trustedAt':
+          existing?.trustedAt.toUtc().toIso8601String() ??
+          _now().toUtc().toIso8601String(),
+      'pairingState': ContactPairingState.accepted.name,
+      if (anchorJson['routing'] != null) 'routing': anchorJson['routing'],
+      'accountAnchorDeviceId': anchor.deviceId,
+      'accountKey': anchor.accountKeyBase64,
+      'deviceName': cert.name,
+      if (existing != null) ...{
+        if (existing.toJson()['capabilities'] != null)
+          'capabilities': existing.toJson()['capabilities'],
+        if (existing.toJson()['featureCapabilities'] != null)
+          'featureCapabilities': existing.toJson()['featureCapabilities'],
+        'featureCapabilityVersion': existing.featureCapabilityVersion,
+        if (existing.toJson()['carrierAddresses'] != null)
+          'carrierAddresses': existing.toJson()['carrierAddresses'],
+      },
+    };
+    try {
+      return ContactRecord.fromJson(json);
+    } catch (_) {
+      return null;
+    }
+  }
+
   void _advertiseProfileToContacts() {
     // A dormant Conest (Matrix-only mode) sends nothing.
     if (!conestActive) return;
@@ -28021,6 +29971,8 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.groupFileCaptionsV2,
       ApplicationCapability.irohBlock1MiBV1,
       ApplicationCapability.attachmentCompleteRetryV1,
+      ApplicationCapability.multiRouteMessagesV1,
+      ApplicationCapability.routeProbeV1,
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,
@@ -28591,10 +30543,41 @@ class MessengerController extends ChangeNotifier {
     if (effectiveMessageId == null || effectiveMessageId.isEmpty) {
       return;
     }
+    // Each of the contact's devices with messages just read gets a read
+    // receipt for its newest one.
+    final newestBySender = <String, ChatMessage>{};
+    for (final message in conversation.messages) {
+      if (message.outbound ||
+          message.createdAt.isAfter(latestCreatedAt) ||
+          (currentReadAt != null &&
+              !message.createdAt.isAfter(currentReadAt))) {
+        continue;
+      }
+      final newest = newestBySender[message.senderDeviceId];
+      if (newest == null || message.createdAt.isAfter(newest.createdAt)) {
+        newestBySender[message.senderDeviceId] = message;
+      }
+    }
+    for (final MapEntry(key: senderId, value: message)
+        in newestBySender.entries) {
+      if (senderId == contact.deviceId) continue;
+      final sender = _contactByDeviceId(senderId);
+      if (sender == null || sender.accountAnchorDeviceId != contact.deviceId) {
+        continue;
+      }
+      await _sendReadReceipt(
+        contact: sender,
+        conversationId: message.conversationId,
+        acknowledgedMessageId: message.id,
+      );
+    }
+    final fromMain = newestBySender[contact.deviceId];
+    final mainId = newestBySender.isEmpty ? effectiveMessageId : fromMain?.id;
+    if (mainId == null) return;
     await _sendReadReceipt(
       contact: contact,
       conversationId: conversation.id,
-      acknowledgedMessageId: effectiveMessageId,
+      acknowledgedMessageId: mainId,
     );
   }
 
@@ -29272,10 +31255,21 @@ class MessengerController extends ChangeNotifier {
         recipientDeviceId != _lanLobbyMailboxId) {
       return;
     }
-    unawaited(_processLocalStoredEnvelope(envelope));
+    final peer = _localRelayNode.storingPeer;
+    unawaited(
+      _processLocalStoredEnvelope(
+        envelope,
+        // Anyone holding a copy could store it here from afar: only one
+        // stored from this network counts as having come by LAN.
+        fromLocalNetwork: peer == null || isLocalNetworkAddress(peer),
+      ),
+    );
   }
 
-  Future<void> _processLocalStoredEnvelope(RelayEnvelope envelope) async {
+  Future<void> _processLocalStoredEnvelope(
+    RelayEnvelope envelope, {
+    bool fromLocalNetwork = true,
+  }) async {
     if (!hasIdentity) {
       return;
     }
@@ -29283,7 +31277,9 @@ class MessengerController extends ChangeNotifier {
     final processed = await _processEnvelopes(
       [envelope],
       ingressKind: PeerRouteKind.lan,
-      route: MessageRoute.lanDirect,
+      route: fromLocalNetwork
+          ? MessageRoute.lanDirect
+          : MessageRoute.internetDirect,
     );
     if (processed > 0) {
       if (!highFrequencyTransfer) {
@@ -29394,12 +31390,22 @@ class MessengerController extends ChangeNotifier {
   @override
   void dispose() {
     _matrixClient?.dispose();
+    for (final subscription in _carrierReceiptSubscriptions.values) {
+      unawaited(subscription.cancel());
+    }
+    _carrierReceiptSubscriptions.clear();
     for (final carrier in _carrierTransports.values) {
       unawaited(carrier.detach());
     }
     unawaited(_userNotices.close());
     _scheduledMessageTimer?.cancel();
     _scheduledMessageTimer = null;
+    for (final timer in _routeReceiptTimers.values) {
+      timer.cancel();
+    }
+    _routeReceiptTimers.clear();
+    _linkExpiry?.cancel();
+    _linkExpiry = null;
     _lanAdvertiseTimer?.cancel();
     for (final timer in _lanRecheckTimers) {
       timer.cancel();
@@ -29589,6 +31595,9 @@ class _HeartbeatPassResult {
 }
 
 class _OutboundAttachmentState {
+  /// Bytes sent per route (blocks sent again count again).
+  final Map<MessageRoute, int> routeBytes = {};
+
   _OutboundAttachmentState({
     required this.messageId,
     required this.peerDeviceId,
@@ -29749,7 +31758,26 @@ enum OutboundDeliveryRoute {
   conestRelay,
 }
 
+/// The routes a message's copies already went on, across retries.
+class _CopyState {
+  final Set<String> routeKeys = {};
+  final Set<TransportKind> kinds = {};
+  final Set<PeerRouteKind> legacyKinds = {};
+  bool storedOnCarrier = false;
+  bool radioUsed = false;
+
+  void note(_DeliveryRoute route, {required bool storing}) {
+    routeKeys.add(route.routeKey);
+    kinds.add(route.transportKind);
+    if (route.endpoint?.kind case final kind?) legacyKinds.add(kind);
+    if (storing) storedOnCarrier = true;
+  }
+}
+
 class _InboundAttachmentState {
+  /// Bytes received per route.
+  final Map<MessageRoute, int> routeBytes = {};
+
   _InboundAttachmentState({
     required this.messageId,
     required this.peerDeviceId,
@@ -30273,4 +32301,110 @@ class _MatrixClientCarrierChannel implements MatrixCarrierChannel {
     content: frame,
     transactionId: transactionId,
   );
+}
+
+/// Where linking a device stands on this device.
+enum LinkState {
+  none,
+
+  /// The new device shows its QR code and waits for the existing one.
+  showingQrCode,
+
+  /// Both devices show a code for the user to compare.
+  compareCode,
+
+  /// Confirmed here; waiting for the other device.
+  waitingForOtherDevice,
+
+  /// Done.
+  linked,
+
+  /// The existing device sent its offer and waits for the new device.
+  connecting,
+}
+
+/// What the existing device said about itself in its (signed) offer.
+class _LinkOffer {
+  const _LinkOffer({
+    required this.deviceId,
+    required this.accountId,
+    required this.accountKeyBase64,
+    required this.name,
+    required this.encryptionKeyBase64,
+    required this.signingKeyBase64,
+    this.irohEndpointId,
+  });
+
+  final String deviceId;
+  final String accountId;
+  final String accountKeyBase64;
+  final String name;
+  final String encryptionKeyBase64;
+  final String signingKeyBase64;
+  final String? irohEndpointId;
+
+  static _LinkOffer? fromJson(Map<String, dynamic> json) {
+    bool key(Object? value) {
+      if (value is! String || value.length > 64) return false;
+      try {
+        return base64Decode(value).length == 32;
+      } on FormatException {
+        return false;
+      }
+    }
+
+    final deviceId = json['deviceId'];
+    final accountId = json['accountId'];
+    final name = json['name'];
+    final iroh = json['irohEndpointId'];
+    if (deviceId is! String ||
+        deviceId.isEmpty ||
+        deviceId.length > 128 ||
+        accountId is! String ||
+        accountId.isEmpty ||
+        accountId.length > 128 ||
+        name is! String ||
+        name.length > 128 ||
+        !key(json['encryptionKey']) ||
+        !key(json['signingKey']) ||
+        !key(json['accountKey']) ||
+        (iroh != null && (iroh is! String || iroh.length > 128))) {
+      return null;
+    }
+    return _LinkOffer(
+      deviceId: deviceId,
+      accountId: accountId,
+      accountKeyBase64: json['accountKey'] as String,
+      name: name,
+      encryptionKeyBase64: json['encryptionKey'] as String,
+      signingKeyBase64: json['signingKey'] as String,
+      irohEndpointId: iroh as String?,
+    );
+  }
+}
+
+class _LinkAsNew {
+  _LinkAsNew(this.invitation, this.startedAt);
+
+  final LinkInvitation invitation;
+  final DateTime startedAt;
+  _LinkOffer? offer;
+  String? nonce;
+  String? code;
+  bool confirmed = false;
+  bool done = false;
+}
+
+class _LinkAsExisting {
+  _LinkAsExisting(this.invitation, this.startedAt);
+
+  final LinkInvitation invitation;
+  final DateTime startedAt;
+  String? nonce;
+  String? code;
+  bool confirmedHere = false;
+
+  /// The new device's confirmation: its proof of holding its keys.
+  String? proof;
+  bool granted = false;
 }

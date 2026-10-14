@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:conest/src/meshtastic/protobuf.dart';
 import 'package:conest/src/meshtastic/radio.dart';
+import 'package:conest/src/meshtastic_carrier.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/fake_meshtastic.dart';
@@ -82,6 +83,50 @@ void main() {
       expect(got.single.portnum, 300);
       expect(got.single.payload, [9, 8, 7]);
       expect(got.single.pkiEncrypted, isTrue);
+    });
+
+    test('only the destination node confirms a frame', () async {
+      final mesh = FakeMesh();
+      mesh.device(0x22222222); // Bob's radio answers what asks for it.
+      final channel = MeshtasticCarrierChannel(
+        config: const MeshtasticCarrierConfig(
+          link: MeshtasticLink.tcp,
+          host: 'radio.local',
+        ),
+        connector: (_) async => mesh.device(0x11111111),
+        onFrame: (_, _) {},
+      );
+      final acks = <({int frameId, bool ok})>[];
+      final subscription = channel.frameAcks.listen(acks.add);
+      addTearDown(subscription.cancel);
+      channel.start();
+      addTearDown(channel.stop);
+      for (var i = 0; i < 100 && channel.localAddress == null; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      final id = await channel.sendTrackedFrame(
+        meshtasticAddress(0x22222222),
+        Uint8List.fromList([1, 2, 3]),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(acks.single.frameId, id);
+      expect(acks.single.ok, isTrue);
+
+      // A relay's implicit ack (from our own node) and a third node's
+      // forged one confirm nothing.
+      final other = await channel.sendTrackedFrame(
+        meshtasticAddress(0x33333333),
+        Uint8List.fromList([4]),
+      );
+      mesh.inject(0x11111111, 0x11111111, 5, const [], requestId: other);
+      mesh.inject(0x44444444, 0x11111111, 5, const [], requestId: other);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(acks.length, 1);
+      // Bob's real one still does, once.
+      mesh.inject(0x33333333, 0x11111111, 5, const [], requestId: other);
+      mesh.inject(0x33333333, 0x11111111, 5, const [], requestId: other);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(acks.length, 2);
     });
 
     test('a device that does not answer is refused', () async {

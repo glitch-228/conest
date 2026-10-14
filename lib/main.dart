@@ -52,6 +52,13 @@ import 'src/ui/meshtastic_carrier_panel.dart';
 import 'src/ui/nostr_carrier_panel.dart';
 import 'src/ui/nostr_chats_screen.dart';
 import 'src/ui/delta_chats_screen.dart';
+import 'src/ui/message_info_dialog.dart';
+import 'l10n/app_localizations.dart';
+import 'src/app_locales.dart';
+import 'src/ui/calls_list.dart';
+import 'src/ui/devices_panel.dart';
+import 'src/ui/route_test_panel.dart';
+import 'src/ui/user_mode_screen.dart';
 import 'src/windows_firewall.dart';
 import 'src/ui/reticulum_carrier_panel.dart';
 import 'src/ui/matrix_home_screen.dart';
@@ -840,6 +847,9 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
   late bool _controllerReady;
   late bool _controllerHasIdentity;
   late bool _controllerMatrixOnly;
+  late bool _controllerNeedsMode;
+  late UserMode _controllerUserMode;
+  String? _controllerLocale;
 
   @override
   void initState() {
@@ -849,6 +859,9 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     _controllerReady = widget.controller.isReady;
     _controllerHasIdentity = widget.controller.hasIdentity;
     _controllerMatrixOnly = widget.controller.appMode == AppMode.matrixOnly;
+    _controllerNeedsMode = widget.controller.needsUserModeChoice;
+    _controllerUserMode = widget.controller.userMode;
+    _controllerLocale = widget.controller.localeCode;
     widget.controller.addListener(_handleControllerChanged);
     widget.controller.setAppForegroundState(true);
     widget.updateService.addListener(_handleUpdateServiceChanged);
@@ -874,14 +887,25 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     final ready = widget.controller.isReady;
     final hasIdentity = widget.controller.hasIdentity;
     final matrixOnly = widget.controller.appMode == AppMode.matrixOnly;
+    final needsMode = widget.controller.needsUserModeChoice;
+    final userMode = widget.controller.userMode;
+    final locale = widget.controller.localeCode;
+    if (locale != _controllerLocale) {
+      _controllerLocale = locale;
+      if (mounted) setState(() {});
+    }
     if (ready == _controllerReady &&
         hasIdentity == _controllerHasIdentity &&
-        matrixOnly == _controllerMatrixOnly) {
+        matrixOnly == _controllerMatrixOnly &&
+        needsMode == _controllerNeedsMode &&
+        userMode == _controllerUserMode) {
       return;
     }
     _controllerReady = ready;
     _controllerHasIdentity = hasIdentity;
     _controllerMatrixOnly = matrixOnly;
+    _controllerNeedsMode = needsMode;
+    _controllerUserMode = userMode;
     if (mounted) setState(() {});
   }
 
@@ -979,15 +1003,39 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
               debugShowCheckedModeBanner: false,
               title: 'Conest',
               navigatorKey: _navigatorKey,
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              locale: _controllerLocale == null
+                  ? null
+                  : Locale(_controllerLocale!),
               theme: palette.themeData(
                 courier: widget.themeController.shell == ConestShell.courier,
               ),
+              // Simple mode reads larger.
+              builder: (context, child) {
+                if (_controllerUserMode != UserMode.minimal || child == null) {
+                  return child ?? const SizedBox.shrink();
+                }
+                final media = MediaQuery.of(context);
+                return MediaQuery(
+                  data: media.copyWith(
+                    textScaler: TextScaler.linear(
+                      media.textScaler.scale(1) < 1.15
+                          ? 1.15
+                          : media.textScaler.scale(1),
+                    ),
+                  ),
+                  child: child,
+                );
+              },
               home: _controllerReady
                   ? _controllerMatrixOnly
                         ? MatrixHomeScreen(
                             controller: widget.controller,
                             palette: palette,
                           )
+                        : _controllerHasIdentity && _controllerNeedsMode
+                        ? UserModeScreen(controller: widget.controller)
                         : _controllerHasIdentity
                         ? HomeScreen(
                             controller: widget.controller,
@@ -1191,15 +1239,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
     final localRelayPort = int.tryParse(_localRelayPortController.text.trim());
     if (displayName.isEmpty || localRelayPort == null) {
-      widget.controller.setStatus(
-        'Enter a display name and a valid local relay port.',
-      );
+      widget.controller.setStatus(l10nOf(context).onbNameRequired);
       return;
     }
     if (internetRelayHost.isNotEmpty && internetRelayPort == null) {
-      widget.controller.setStatus(
-        'If you set an internet relay host, the relay port must be valid too.',
-      );
+      widget.controller.setStatus(l10nOf(context).onbRelayPortInvalid);
       return;
     }
     setState(() {
@@ -1228,10 +1272,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Widget build(BuildContext context) {
     final palette = widget.palette;
     final relayModeNote = _isDesktopPlatform
-        ? 'Desktop nodes relay by default and advertise nearby LAN routes automatically.'
+        ? l10nOf(context).onbRelayDesktop
         : !kIsWeb && Platform.isAndroid
-        ? 'Android starts with relay mode off. Enable it in Settings only when you want this device to relay.'
-        : 'Relay mode can be enabled in Settings when this device should help carry traffic.';
+        ? l10nOf(context).onbRelayAndroid
+        : l10nOf(context).onbRelayOther;
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(gradient: palette.appGradient),
@@ -1274,7 +1318,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               ),
                               const SizedBox(height: 16),
                               Text(
-                                'Reach contacts directly over your network or the internet, end-to-end encrypted with forward secrecy. When the usual routes are blocked, Conest falls back to relays, Matrix, Nostr, email, Tor, LoRa radios or a Bluetooth mesh of nearby phones.',
+                                l10nOf(context).onbTagline,
                                 style: Theme.of(context).textTheme.titleMedium
                                     ?.copyWith(
                                       color: palette.inkSoft,
@@ -1284,11 +1328,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               const SizedBox(height: 24),
                               _FeatureStrip(
                                 palette: palette,
-                                items: const [
-                                  'Forward-secret chats',
-                                  'Direct over LAN and internet',
-                                  'Tor, mesh and radio fallbacks',
-                                  'Also a Matrix client',
+                                items: [
+                                  l10nOf(context).onbFeatureForwardSecret,
+                                  l10nOf(context).onbFeatureDirect,
+                                  l10nOf(context).onbFeatureFallbacks,
+                                  l10nOf(context).onbFeatureMatrix,
                                 ],
                               ),
                               const SizedBox(height: 18),
@@ -1318,7 +1362,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   Text(
-                                    'Create your first device',
+                                    l10nOf(context).onbCreateTitle,
                                     style: Theme.of(context)
                                         .textTheme
                                         .headlineSmall
@@ -1326,7 +1370,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                   ),
                                   const SizedBox(height: 8),
                                   Text(
-                                    'Only a display name is needed. The local port is for nearby (LAN) delivery and codephrase pairing. An internet relay is optional: contacts are reached over the internet without one. Turn on more routes later under Settings → Connectivity.',
+                                    l10nOf(context).onbCreateHelp,
                                     style: Theme.of(context)
                                         .textTheme
                                         .bodyMedium
@@ -1335,24 +1379,23 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                   const SizedBox(height: 18),
                                   TextField(
                                     controller: _displayNameController,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Display name',
+                                    decoration: InputDecoration(
+                                      labelText: l10nOf(context).onbDisplayName,
                                     ),
                                   ),
                                   const SizedBox(height: 12),
                                   TextField(
                                     controller: _localRelayPortController,
                                     keyboardType: TextInputType.number,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Local relay / LAN port',
+                                    decoration: InputDecoration(
+                                      labelText: l10nOf(context).onbLocalPort,
                                     ),
                                   ),
                                   const SizedBox(height: 12),
                                   TextField(
                                     controller: _internetRelayHostController,
-                                    decoration: const InputDecoration(
-                                      labelText:
-                                          'Internet relay host / URL (optional)',
+                                    decoration: InputDecoration(
+                                      labelText: l10nOf(context).onbRelayHost,
                                       hintText:
                                           'host auto-detects TCP/UDP; udp://host:port forces UDP',
                                     ),
@@ -1361,8 +1404,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                   TextField(
                                     controller: _internetRelayPortController,
                                     keyboardType: TextInputType.number,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Internet relay port',
+                                    decoration: InputDecoration(
+                                      labelText: l10nOf(context).onbRelayPort,
                                     ),
                                   ),
                                   const SizedBox(height: 18),
@@ -1378,8 +1421,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                         : const Icon(
                                             Icons.shield_moon_outlined,
                                           ),
-                                    label: const Text(
-                                      'Create encrypted device',
+                                    label: Text(
+                                      l10nOf(context).onbCreateButton,
                                     ),
                                   ),
                                   if (widget.controller.matrixAvailable) ...[
@@ -1391,15 +1434,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                               AppMode.matrixOnly,
                                             ),
                                       icon: const Icon(Icons.alternate_email),
-                                      label: const Text(
-                                        'Use as a Matrix client instead',
+                                      label: Text(
+                                        l10nOf(context).onbMatrixInstead,
                                       ),
                                     ),
                                     const SizedBox(height: 6),
                                     Text(
-                                      'Matrix chats only, with no Conest identity. You can '
-                                      'switch to Both (Conest and Matrix side by side) '
-                                      'later under Settings → Connectivity → App mode.',
+                                      l10nOf(context).onbMatrixHelp,
                                       style: Theme.of(context)
                                           .textTheme
                                           .bodySmall
@@ -1895,6 +1936,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Shared home-column selection handlers — used by the Signature sidebar and
   // the Garrison/Courier shells so all three drive the same chat panels.
+  /// The tab shown on phones in Standard mode (0 chats, 1 calls).
+  int _phoneTab = 0;
+
   void _selectHomeContact(ContactRecord contact) {
     setState(() {
       _lanLobbySelected = false;
@@ -3095,7 +3139,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           onSend: _sendLanLobbyMessage,
                         );
                       }
-                      return Row(
+                      final home = Row(
                         children: [
                           SizedBox(
                             width: isWide
@@ -3286,6 +3330,30 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                             ),
                         ],
+                      );
+                      // Standard mode on a phone: chats, calls and settings
+                      // as tabs, as the popular messengers have them.
+                      if (isWide ||
+                          widget.controller.userMode != UserMode.normal) {
+                        return home;
+                      }
+                      return _PhoneTabs(
+                        tab: _phoneTab,
+                        onTab: (tab) {
+                          if (tab == 2) {
+                            unawaited(_showSettings());
+                          } else {
+                            setState(() => _phoneTab = tab);
+                          }
+                        },
+                        chats: home,
+                        calls: CallsList(
+                          controller: widget.controller,
+                          onOpenContact: (contact) {
+                            setState(() => _phoneTab = 0);
+                            _selectHomeContact(contact);
+                          },
+                        ),
                       );
                     },
                   ),
@@ -4016,7 +4084,7 @@ class _CourierHomeState extends State<_CourierHome> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, 'delete'),
-            child: const Text('Delete'),
+            child: Text(l10nOf(context).menuDelete),
           ),
           if (folderIndex > 0)
             TextButton(
@@ -4565,14 +4633,17 @@ class _CourierHomeState extends State<_CourierHome> {
                 ),
                 const Spacer(),
                 IconButton(
-                  tooltip: 'Search',
+                  tooltip: l10nOf(context).actionSearch,
                   onPressed: _searchFocus.requestFocus,
                   icon: const Icon(Icons.search),
                 ),
               ],
             ),
           ),
-          if (!_showArchived && query.isEmpty)
+          // Simple mode: one list of chats, no filters or folders.
+          if (!_showArchived &&
+              query.isEmpty &&
+              widget.controller.userMode != UserMode.minimal)
             SizedBox(
               height: 42,
               child: ListView(
@@ -4652,7 +4723,7 @@ class _CourierHomeState extends State<_CourierHome> {
               focusNode: _searchFocus,
               onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
-                hintText: 'Search chats and messages',
+                hintText: l10nOf(context).searchChatsAndMessages,
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: query.isEmpty
                     ? null
@@ -4695,7 +4766,7 @@ class _CourierHomeState extends State<_CourierHome> {
                 if (!_showArchived && query.isEmpty && archivedCount > 0)
                   ListTile(
                     leading: const Icon(Icons.archive_outlined),
-                    title: const Text('Archived chats'),
+                    title: Text(l10nOf(context).archivedChats),
                     trailing: Text('$archivedCount'),
                     onTap: () => setState(() => _showArchived = true),
                   ),
@@ -4835,7 +4906,7 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
                       controller: _search,
                       onChanged: (_) => setState(() {}),
                       decoration: InputDecoration(
-                        hintText: 'Search contacts',
+                        hintText: l10nOf(context).searchContacts,
                         prefixIcon: const Icon(Icons.search),
                         suffixIcon: query.isEmpty
                             ? null
@@ -6408,7 +6479,7 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
         !_creating;
     return AdaptiveChatDialog(
       fullscreenOnMobile: widget.fullscreenOnMobile,
-      title: const Text('Create group'),
+      title: Text(l10nOf(context).groupCreate),
       content: SizedBox(
         width: 420,
         child: Column(
@@ -6417,7 +6488,9 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
             TextField(
               controller: _titleController,
               autofocus: true,
-              decoration: const InputDecoration(labelText: 'Group title'),
+              decoration: InputDecoration(
+                labelText: l10nOf(context).groupTitle,
+              ),
               onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 12),
@@ -6462,18 +6535,18 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
                                   _selectedRoles[contact.deviceId] = role;
                                 });
                               },
-                              items: const [
+                              items: [
                                 DropdownMenuItem(
                                   value: GroupMemberRole.member,
-                                  child: Text('Member'),
+                                  child: Text(l10nOf(context).roleMember),
                                 ),
                                 DropdownMenuItem(
                                   value: GroupMemberRole.moderator,
-                                  child: Text('Moderator'),
+                                  child: Text(l10nOf(context).roleModerator),
                                 ),
                                 DropdownMenuItem(
                                   value: GroupMemberRole.admin,
-                                  child: Text('Admin'),
+                                  child: Text(l10nOf(context).roleAdmin),
                                 ),
                               ],
                             )
@@ -6488,11 +6561,15 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
       actions: [
         TextButton(
           onPressed: _creating ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(l10nOf(context).actionCancel),
         ),
         FilledButton(
           onPressed: canCreate ? _create : null,
-          child: Text(_creating ? 'Creating' : 'Create'),
+          child: Text(
+            _creating
+                ? l10nOf(context).actionCreating
+                : l10nOf(context).actionCreate,
+          ),
         ),
       ],
     );
@@ -7084,8 +7161,8 @@ Future<void> _forwardTextMessage(
                     controller: search,
                     autofocus: true,
                     onChanged: (_) => setDialogState(() {}),
-                    decoration: const InputDecoration(
-                      hintText: 'Search chats',
+                    decoration: InputDecoration(
+                      hintText: l10nOf(context).searchChats,
                       prefixIcon: Icon(Icons.search),
                     ),
                   ),
@@ -7248,7 +7325,7 @@ Future<void> _forwardFile(
                 group.title.toLowerCase().contains(query),
           );
           return AlertDialog(
-            title: const Text('Forward attachment'),
+            title: Text(l10nOf(context).menuForwardAttachment),
             content: SizedBox(
               width: 420,
               height: 400,
@@ -7260,8 +7337,8 @@ Future<void> _forwardFile(
                     controller: search,
                     autofocus: true,
                     onChanged: (_) => setDialogState(() {}),
-                    decoration: const InputDecoration(
-                      hintText: 'Search chats',
+                    decoration: InputDecoration(
+                      hintText: l10nOf(context).searchChats,
                       prefixIcon: Icon(Icons.search),
                     ),
                   ),
@@ -8222,7 +8299,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('Delete'),
+              child: Text(l10nOf(context).menuDelete),
             ),
           ],
         ),
@@ -8372,7 +8449,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete'),
+            child: Text(l10nOf(context).menuDelete),
           ),
         ],
       ),
@@ -8986,7 +9063,8 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       ),
                     ),
                   ],
-                  if (message.effectiveRoute != null) ...[
+                  if (message.effectiveRoute != null &&
+                      controller.userMode.showsNetworkDetail) ...[
                     const SizedBox(width: 8),
                     _MessageRouteChip(
                       message: message,
@@ -9010,7 +9088,15 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     padding: EdgeInsets.zero,
                     child: const SizedBox.shrink(),
                     onSelected: (value) async {
-                      if (value == 'copy') {
+                      if (value == 'details') {
+                        await MessageInfoDialog.show(
+                          context,
+                          message: message,
+                          memberLabel: controller.groupMemberLabel,
+                          timestamp: formatTimestamp,
+                          showRoutes: controller.userMode.showsNetworkDetail,
+                        );
+                      } else if (value == 'copy') {
                         await _copyMessage(message);
                       } else if (value == 'forward') {
                         await _forwardTextMessage(
@@ -9098,13 +9184,20 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       }
                     },
                     itemBuilder: (context) => [
-                      const PopupMenuItem(value: 'reply', child: Text('Reply')),
+                      PopupMenuItem(
+                        value: 'details',
+                        child: Text(l10nOf(context).messageDetails),
+                      ),
+                      PopupMenuItem(
+                        value: 'reply',
+                        child: Text(l10nOf(context).menuReply),
+                      ),
                       if (!message.hasAttachment &&
                           message.groupFile == null &&
                           message.body.trim().isNotEmpty)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'react',
-                          child: Text('React 👍'),
+                          child: Text(l10nOf(context).menuReact),
                         ),
                       if (message.outbound &&
                           message.groupFile == null &&
@@ -9112,32 +9205,35 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           group.hasActiveMember(
                             controller.identity?.deviceId ?? '',
                           )) ...[
-                        const PopupMenuItem(value: 'edit', child: Text('Edit')),
-                        const PopupMenuItem(
+                        PopupMenuItem(
+                          value: 'edit',
+                          child: Text(l10nOf(context).menuEdit),
+                        ),
+                        PopupMenuItem(
                           value: 'delete',
-                          child: Text('Delete'),
+                          child: Text(l10nOf(context).menuDelete),
                         ),
                       ],
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'copy',
-                        child: Text('Copy message'),
+                        child: Text(l10nOf(context).menuCopyMessage),
                       ),
                       if (attachmentDescriptor != null && !outbound &&
                           !attachmentAvailable)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_download',
-                          child: Text('Download attachment'),
+                          child: Text(l10nOf(context).menuDownloadAttachment),
                         ),
                       if (attachmentAvailable)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_save',
-                          child: Text('Save attachment'),
+                          child: Text(l10nOf(context).menuSaveAttachment),
                         ),
                       if (attachmentDescriptor?.mimeType.startsWith('image/') == true &&
                           controller.attachmentBytesFor(attachmentDescriptor!.id) != null)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_copy_image',
-                          child: Text('Copy image'),
+                          child: Text(l10nOf(context).menuCopyImage),
                         ),
                       if (attachmentAvailable) ...[
                         const PopupMenuItem(
@@ -9154,26 +9250,26 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         ),
                         if (!controller.attachmentKeptOffline(attachmentDescriptor.id) &&
                             !attachmentInFlight)
-                          const PopupMenuItem(
+                          PopupMenuItem(
                             value: 'attachment_evict',
-                            child: Text('Free up local space'),
+                            child: Text(l10nOf(context).menuFreeUpSpace),
                           ),
                       ],
                       if (attachmentInFlight)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_cancel',
-                          child: Text('Cancel transfer'),
+                          child: Text(l10nOf(context).menuCancelTransfer),
                         ),
                       if (attachmentDescriptor != null && outbound &&
                           message.state == DeliveryState.failed)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_retry',
-                          child: Text('Retry transfer'),
+                          child: Text(l10nOf(context).menuRetryTransfer),
                         ),
                       if (attachmentDescriptor != null)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'forward_attachment',
-                          child: Text('Forward attachment'),
+                          child: Text(l10nOf(context).menuForwardAttachment),
                         ),
                       if (message.groupFile != null &&
                           controller.groupFilePathFor(message.id) != null)
@@ -9184,9 +9280,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       if (!message.hasAttachment &&
                           message.groupFile == null &&
                           message.body.trim().isNotEmpty)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'forward',
-                          child: Text('Forward'),
+                          child: Text(l10nOf(context).menuForward),
                         ),
                     ],
                   ),
@@ -9610,7 +9706,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       ),
                       const SizedBox(width: 12),
                       IconButton(
-                        tooltip: 'Schedule message',
+                        tooltip: l10nOf(context).composerSchedule,
                         onPressed: canSend ? _scheduleText : null,
                         icon: const Icon(Icons.schedule_send_outlined),
                       ),
@@ -10496,7 +10592,7 @@ class _ChatPanelState extends State<_ChatPanel> {
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete'),
+            child: Text(l10nOf(context).menuDelete),
           ),
         ],
       ),
@@ -10759,7 +10855,8 @@ class _ChatPanelState extends State<_ChatPanel> {
                       ),
                     ),
                   ],
-                  if (message.effectiveRoute != null) ...[
+                  if (message.effectiveRoute != null &&
+                      controller.userMode.showsNetworkDetail) ...[
                     const SizedBox(width: 8),
                     _MessageRouteChip(
                       message: message,
@@ -10805,33 +10902,11 @@ class _ChatPanelState extends State<_ChatPanel> {
                         if (value == 'copy') {
                           await _copyMessage(message);
                         } else if (value == 'details') {
-                          await showDialog<void>(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                              title: const Text('Message details'),
-                              content: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(formatTimestamp(message.createdAt)),
-                                  const SizedBox(height: 8),
-                                  Text(message.state.label),
-                                  if (message.effectiveRoute
-                                      case final route?) ...[
-                                    const SizedBox(height: 12),
-                                    _MessageRouteChip(message: message),
-                                    const SizedBox(height: 6),
-                                    Text(route.description),
-                                  ],
-                                ],
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context),
-                                  child: const Text('Close'),
-                                ),
-                              ],
-                            ),
+                          await MessageInfoDialog.show(
+                            context,
+                            message: message,
+                            timestamp: formatTimestamp,
+                            showRoutes: controller.userMode.showsNetworkDetail,
                           );
                         } else if (value == 'forward') {
                           await _forwardTextMessage(
@@ -10927,42 +11002,45 @@ class _ChatPanelState extends State<_ChatPanel> {
                       }
                     },
                     itemBuilder: (context) => [
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'details',
-                        child: Text('Message details'),
+                        child: Text(l10nOf(context).messageDetails),
                       ),
-                      const PopupMenuItem(value: 'reply', child: Text('Reply')),
+                      PopupMenuItem(
+                        value: 'reply',
+                        child: Text(l10nOf(context).menuReply),
+                      ),
                       if (message.state != DeliveryState.canceled)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'react',
-                          child: Text('React 👍'),
+                          child: Text(l10nOf(context).menuReact),
                         ),
                       if (!message.hasAttachment &&
                           message.body.trim().isNotEmpty)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'forward',
-                          child: Text('Forward'),
+                          child: Text(l10nOf(context).menuForward),
                         ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'copy',
-                        child: Text('Copy message'),
+                        child: Text(l10nOf(context).menuCopyMessage),
                       ),
                       if (attachmentDescriptor != null && !outbound &&
                           !attachmentAvailable)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_download',
-                          child: Text('Download attachment'),
+                          child: Text(l10nOf(context).menuDownloadAttachment),
                         ),
                       if (attachmentAvailable)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_save',
-                          child: Text('Save attachment'),
+                          child: Text(l10nOf(context).menuSaveAttachment),
                         ),
                       if (attachmentDescriptor?.mimeType.startsWith('image/') == true &&
                           controller.attachmentBytesFor(attachmentDescriptor!.id) != null)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_copy_image',
-                          child: Text('Copy image'),
+                          child: Text(l10nOf(context).menuCopyImage),
                         ),
                       if (attachmentAvailable) ...[
                         const PopupMenuItem(
@@ -10979,31 +11057,31 @@ class _ChatPanelState extends State<_ChatPanel> {
                         ),
                         if (!controller.attachmentKeptOffline(attachmentDescriptor.id) &&
                             !attachmentInFlight)
-                          const PopupMenuItem(
+                          PopupMenuItem(
                             value: 'attachment_evict',
-                            child: Text('Free up local space'),
+                            child: Text(l10nOf(context).menuFreeUpSpace),
                           ),
                       ],
                       if (attachmentInFlight)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_cancel',
-                          child: Text('Cancel transfer'),
+                          child: Text(l10nOf(context).menuCancelTransfer),
                         ),
                       if (attachmentDescriptor != null && outbound &&
                           message.state == DeliveryState.failed)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_retry',
-                          child: Text('Retry transfer'),
+                          child: Text(l10nOf(context).menuRetryTransfer),
                         ),
                       if (attachmentDescriptor != null)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'forward_attachment',
-                          child: Text('Forward attachment'),
+                          child: Text(l10nOf(context).menuForwardAttachment),
                         ),
                       if (outbound && message.state == DeliveryState.pending)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'cancel',
-                          child: Text('Cancel sending'),
+                          child: Text(l10nOf(context).menuCancelSending),
                         ),
                       if (controller.canSendViaPlainMatrix(
                         contact.deviceId,
@@ -11014,13 +11092,13 @@ class _ChatPanelState extends State<_ChatPanel> {
                           child: Text('Send via Matrix…'),
                         ),
                       if (outbound)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'edit',
-                          child: Text('Edit message'),
+                          child: Text(l10nOf(context).menuEditMessage),
                         ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'delete',
-                        child: Text('Delete message'),
+                        child: Text(l10nOf(context).menuDeleteMessage),
                       ),
                     ],
                   ),
@@ -11391,7 +11469,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                             ? widget.onAttach
                             : null,
                         icon: const Icon(Icons.attach_file_outlined),
-                        tooltip: 'Attach a file or image',
+                        tooltip: l10nOf(context).composerAttach,
                       ),
                       Expanded(
                         child: Shortcuts(
@@ -11546,7 +11624,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                         },
                       ),
                       IconButton(
-                        tooltip: 'Schedule message',
+                        tooltip: l10nOf(context).composerSchedule,
                         onPressed: contact.canSendOutbound
                             ? _scheduleText
                             : null,
@@ -11554,7 +11632,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                       ),
                       if (widget.telegramLayout)
                         IconButton.filled(
-                          tooltip: 'Send',
+                          tooltip: l10nOf(context).composerSend,
                           onPressed: contact.canComposeOutbound
                               ? widget.onSend
                               : null,
@@ -11659,7 +11737,7 @@ class _EditMessageDialogState extends State<_EditMessageDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Edit message'),
+      title: Text(l10nOf(context).menuEditMessage),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -12151,56 +12229,64 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
                   height: 1.5,
                 ),
               ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Available paths',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
+              if (widget.controller.userMode.showsNetworkDetail) ...[
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Available paths',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w700),
                       ),
                     ),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: _busy ? null : _checkPaths,
-                    icon: const Icon(Icons.network_check),
-                    label: const Text('Check Paths'),
-                  ),
-                  const SizedBox(width: 8),
-                  OutlinedButton.icon(
-                    onPressed: checks == null || _busy ? null : _copyPathState,
-                    icon: const Icon(Icons.copy),
-                    label: const Text('Copy State'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              if (checks == null)
-                Text(
-                  'Run a check to measure latency, availability, and reachability freshness. Paths are sorted by best direct/LAN route first, then relay fallback.',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: widget.palette.inkSoft,
-                  ),
-                )
-              else if (checks.isEmpty)
-                Text(
-                  'No route hints are advertised for this contact.',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: widget.palette.inkSoft,
-                  ),
-                )
-              else
-                Column(
-                  children: [
-                    for (final check in checks)
-                      _RouteHealthTile(
-                        check: check,
-                        palette: widget.palette,
-                        twoWayConfirmed: checkTwoWayConfirmed,
-                      ),
+                    OutlinedButton.icon(
+                      onPressed: _busy ? null : _checkPaths,
+                      icon: const Icon(Icons.network_check),
+                      label: const Text('Check Paths'),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: checks == null || _busy
+                          ? null
+                          : _copyPathState,
+                      icon: const Icon(Icons.copy),
+                      label: const Text('Copy State'),
+                    ),
                   ],
                 ),
+                const SizedBox(height: 8),
+                if (checks == null)
+                  Text(
+                    'Run a check to measure latency, availability, and reachability freshness. Paths are sorted by best direct/LAN route first, then relay fallback.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: widget.palette.inkSoft,
+                    ),
+                  )
+                else if (checks.isEmpty)
+                  Text(
+                    'No route hints are advertised for this contact.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: widget.palette.inkSoft,
+                    ),
+                  )
+                else
+                  Column(
+                    children: [
+                      for (final check in checks)
+                        _RouteHealthTile(
+                          check: check,
+                          palette: widget.palette,
+                          twoWayConfirmed: checkTwoWayConfirmed,
+                        ),
+                    ],
+                  ),
+                const SizedBox(height: 12),
+                RouteTestPanel(
+                  controller: widget.controller,
+                  contact: currentContact,
+                ),
+              ],
               if (_error != null) ...[
                 const SizedBox(height: 12),
                 Text(
@@ -12261,12 +12347,12 @@ class _AddContactDialogState extends State<AddContactDialog> {
   bool get _hasCodephrase => _codephraseController.text.trim().isNotEmpty;
   String get _submitLabel {
     if (_hasPayload) {
-      return 'Trust QR / payload';
+      return l10nOf(context).contactTrustPayload;
     }
     if (_hasCodephrase) {
-      return 'Find by codephrase';
+      return l10nOf(context).contactFindCodephrase;
     }
-    return 'Add contact';
+    return l10nOf(context).contactAdd;
   }
 
   @override
@@ -12315,26 +12401,30 @@ class _AddContactDialogState extends State<AddContactDialog> {
         return;
       }
       if (result.exchangeStatus == ContactExchangeStatus.manualActionRequired) {
-        keepContact = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Automatic exchange failed'),
-            content: Text(
-              'You added ${result.contact.alias}, but your invite could not be sent back automatically. Ask the other user to scan or enter your invite from their side, or abort and remove this one-sided contact now.',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('Abort'),
+        keepContact =
+            await showDialog<bool>(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: Text(l10nOf(context).contactExchangeFailed),
+                content: Text(
+                  l10nOf(
+                    context,
+                  ).contactExchangeFailedBody(result.contact.alias),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: Text(l10nOf(context).actionAbort),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.of(context).pop(true),
+                    child: Text(l10nOf(context).contactKeep),
+                  ),
+                ],
               ),
-              FilledButton(
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('Keep Contact'),
-              ),
-            ],
-          ),
-        ) ?? false;
+            ) ??
+            false;
         if (keepContact != true) {
           await widget.controller.removeContact(
             result.contact.deviceId,
@@ -12366,7 +12456,7 @@ class _AddContactDialogState extends State<AddContactDialog> {
       fullscreenOnMobile: widget.fullscreenOnMobile,
       scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-      title: const Text('Add contact'),
+      title: Text(l10nOf(context).contactAdd),
       content: SizedBox(
         width: 560,
         child: SingleChildScrollView(
@@ -12381,15 +12471,17 @@ class _AddContactDialogState extends State<AddContactDialog> {
               ),
               TextField(
                 controller: _aliasController,
-                decoration: const InputDecoration(labelText: 'Alias'),
+                decoration: InputDecoration(
+                  labelText: l10nOf(context).contactAlias,
+                ),
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: _payloadController,
                 minLines: 4,
                 maxLines: 7,
-                decoration: const InputDecoration(
-                  labelText: 'Invite payload or scanned QR',
+                decoration: InputDecoration(
+                  labelText: l10nOf(context).contactInvitePayload,
                   alignLabelWithHint: true,
                 ),
                 onChanged: (_) => setState(() {}),
@@ -12401,14 +12493,16 @@ class _AddContactDialogState extends State<AddContactDialog> {
                   child: OutlinedButton.icon(
                     onPressed: _scanPayload,
                     icon: const Icon(Icons.qr_code_scanner),
-                    label: const Text('Scan QR'),
+                    label: Text(l10nOf(context).contactScanQr),
                   ),
                 ),
               ],
               const SizedBox(height: 12),
               TextField(
                 controller: _codephraseController,
-                decoration: const InputDecoration(labelText: 'Codephrase only'),
+                decoration: InputDecoration(
+                  labelText: l10nOf(context).contactCodephrase,
+                ),
                 onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 12),
@@ -12462,7 +12556,7 @@ class _AddContactDialogState extends State<AddContactDialog> {
       actions: [
         TextButton(
           onPressed: _submitting ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(l10nOf(context).actionCancel),
         ),
         FilledButton(
           onPressed: _submitting ? null : _submit,
@@ -13840,6 +13934,9 @@ class SettingsDialog extends StatefulWidget {
 class _SettingsDialogState extends State<SettingsDialog> {
   String _settingsCategory = 'Personal / Preferences';
 
+  /// Simple mode shows only the personal settings until asked for all.
+  bool _showAllSettings = false;
+
   late final TextEditingController _displayNameController;
   late final TextEditingController _bioController;
   final TextEditingController _relayHostController = TextEditingController();
@@ -13957,13 +14054,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
     final report = widget.controller.relayCapabilityReport;
     final configuredRelays = widget.controller.configuredRelays;
     final contactRelays = widget.controller.discoveredContactRelayRoutes;
+    final simple =
+        widget.controller.userMode == UserMode.minimal && !_showAllSettings;
     final categorized =
-        widget.fullscreenOnMobile && MediaQuery.sizeOf(context).width < 700;
+        !simple &&
+        widget.fullscreenOnMobile &&
+        MediaQuery.sizeOf(context).width < 700;
     return AdaptiveChatDialog(
       fullscreenOnMobile: widget.fullscreenOnMobile,
       scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-      title: const Text('Settings'),
+      title: Text(l10nOf(context).tabSettings),
       content: SizedBox(
         width: 720,
         child: identity == null
@@ -13990,9 +14091,22 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 padding: const EdgeInsets.only(right: 8),
                                 child: ChoiceChip(
                                   label: Text(switch (category) {
-                                    'Personal / Preferences' => 'Personal',
-                                    'Network / Relay' => 'Relays',
-                                    'Danger' => 'Account',
+                                    'Personal / Preferences' => l10nOf(
+                                      context,
+                                    ).settingsPersonal,
+                                    'Storage' => l10nOf(
+                                      context,
+                                    ).settingsStorage,
+                                    'Connectivity' => l10nOf(
+                                      context,
+                                    ).settingsConnectivity,
+                                    'Network / Relay' => l10nOf(
+                                      context,
+                                    ).settingsRelays,
+                                    'Updates' => l10nOf(
+                                      context,
+                                    ).settingsUpdates,
+                                    'Danger' => l10nOf(context).settingsAccount,
                                     _ => category,
                                   }),
                                   selected: _settingsCategory == category,
@@ -14009,11 +14123,28 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     if (!categorized ||
                         _settingsCategory == 'Personal / Preferences')
                       _SettingsSection(
-                        title: 'Personal / Preferences',
+                        title: l10nOf(context).settingsPersonal,
                         palette: widget.palette,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            UserModeSelector(controller: widget.controller),
+                            const SizedBox(height: 12),
+                            LanguageSelector(
+                              controller: widget.controller,
+                              languages: appLanguageNames,
+                              aiTranslated: aiTranslatedLanguages,
+                            ),
+                            if (widget.controller.userMode == UserMode.minimal)
+                              SwitchListTile(
+                                key: const ValueKey('show-all-settings'),
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(l10nOf(context).settingsShowAll),
+                                value: _showAllSettings,
+                                onChanged: (value) =>
+                                    setState(() => _showAllSettings = value),
+                              ),
+                            const SizedBox(height: 12),
                             _ThemeModeSelector(
                               controller: widget.themeController,
                               palette: widget.palette,
@@ -14260,9 +14391,28 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                       ),
                     const SizedBox(height: 16),
-                    if (!categorized || _settingsCategory == 'Storage')
+                    if (!categorized ||
+                        _settingsCategory == 'Personal / Preferences') ...[
                       _SettingsSection(
-                        title: 'Storage',
+                        title: 'Devices',
+                        palette: widget.palette,
+                        child: DevicesPanel(
+                          controller: widget.controller,
+                          onScan: widget.controller.supportsScanner
+                              ? () => Navigator.of(context).push<String>(
+                                  MaterialPageRoute(
+                                    builder: (_) => const QrScanScreen(),
+                                  ),
+                                )
+                              : null,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                    if (!simple &&
+                        (!categorized || _settingsCategory == 'Storage'))
+                      _SettingsSection(
+                        title: l10nOf(context).settingsStorage,
                         palette: widget.palette,
                         child: SwitchListTile.adaptive(
                           value: identity.connectivity.storageReserveEnabled,
@@ -14280,9 +14430,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                       ),
                     const SizedBox(height: 16),
-                    if (!categorized || _settingsCategory == 'Connectivity')
+                    if (!simple &&
+                        (!categorized || _settingsCategory == 'Connectivity'))
                       _SettingsSection(
-                        title: 'Connectivity',
+                        title: l10nOf(context).settingsConnectivity,
                         palette: widget.palette,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -14547,9 +14698,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                       ),
                     const SizedBox(height: 16),
-                    if (!categorized || _settingsCategory == 'Network / Relay')
+                    if (!simple &&
+                        (!categorized ||
+                            _settingsCategory == 'Network / Relay'))
                       _SettingsSection(
-                        title: 'Network / Relay',
+                        title: l10nOf(context).settingsRelays,
                         palette: widget.palette,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -14764,9 +14917,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                       ),
                     const SizedBox(height: 16),
-                    if (!categorized || _settingsCategory == 'Updates')
+                    if (!simple &&
+                        (!categorized || _settingsCategory == 'Updates'))
                       _SettingsSection(
-                        title: 'Updates',
+                        title: l10nOf(context).settingsUpdates,
                         palette: widget.palette,
                         child: ListenableBuilder(
                           listenable: widget.updateService,
@@ -14897,9 +15051,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                       ),
                     const SizedBox(height: 16),
-                    if (!categorized || _settingsCategory == 'Danger')
+                    if (!simple &&
+                        (!categorized || _settingsCategory == 'Danger'))
                       _SettingsSection(
-                        title: 'Danger',
+                        title: l10nOf(context).settingsAccount,
                         palette: widget.palette,
                         child: OutlinedButton.icon(
                           onPressed: _busy ? null : _confirmReset,
@@ -20521,23 +20676,53 @@ class _MessageRouteChip extends StatelessWidget {
     final route = message.effectiveRoute;
     if (route == null) return const SizedBox.shrink();
     final detail = message.transportDetail;
+    // Every route it took (all members together, in a group), with the
+    // furthest each got: a filled dot arrived, a hollow one is on its way.
+    final reached = <MessageRoute, MessageRouteMark>{};
+    for (final trace in message.routeTrace) {
+      final mark = reached[trace.route];
+      if (mark == null || trace.mark.index > mark.index) {
+        reached[trace.route] = trace.mark;
+      }
+    }
+    final dots = reached.length > 1
+        ? reached.entries.toList()
+        : [MapEntry(route, MessageRouteMark.confirmed)];
+    final tooltip = reached.length > 1
+        ? [
+            for (final entry in reached.entries)
+              '${entry.key.label}: ${MessageInfoDialog.markLabel(entry.value, outbound: message.outbound)}',
+          ].join('\n')
+        : '${route.label}: ${route.description}'
+              '${detail == null || detail.isEmpty ? '' : '\n$detail'}';
     return Tooltip(
-      message:
-          '${route.label}: ${route.description}'
-          '${detail == null || detail.isEmpty ? '' : '\n$detail'}',
+      message: tooltip,
       child: compact
           ? Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  width: 7,
-                  height: 7,
-                  decoration: BoxDecoration(
-                    color: route.color,
-                    shape: BoxShape.circle,
+                for (final entry in dots.take(4)) ...[
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color:
+                          entry.value.index >=
+                              MessageRouteMark.reachedDevice.index
+                          ? entry.key.color
+                          : null,
+                      border: Border.all(color: entry.key.color, width: 1.2),
+                      shape: BoxShape.circle,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 3),
+                  const SizedBox(width: 2),
+                ],
+                if (dots.length > 4)
+                  Text(
+                    '+${dots.length - 4}',
+                    style: TextStyle(fontSize: 9, color: route.color),
+                  ),
+                const SizedBox(width: 1),
                 Text(
                   route.shortLabel,
                   style: TextStyle(
@@ -21196,7 +21381,10 @@ class _ScheduledMessagesScreen extends StatelessWidget {
                     }
                   },
                   itemBuilder: (_) => [
-                    const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                    PopupMenuItem(
+                      value: 'edit',
+                      child: Text(l10nOf(context).menuEdit),
+                    ),
                     const PopupMenuItem(value: 'send', child: Text('Send now')),
                     const PopupMenuItem(
                       value: 'reschedule',
@@ -21382,7 +21570,6 @@ class UserActivityForeground extends StatelessWidget {
   Widget build(BuildContext context) => Listener(
     behavior: HitTestBehavior.translucent,
     onPointerDown: _seen,
-    onPointerHover: _seen,
     onPointerSignal: _seen,
     child: child,
   );
@@ -21423,7 +21610,8 @@ class _WindowsFirewallTileState extends State<_WindowsFirewallTile> {
       _result ??
           'If messages and files from a phone on the same network never '
               'arrive (but yours reach it), Windows Firewall is blocking '
-              'them. This adds a rule for Conest; Windows asks to confirm.',
+              'them. This lets other devices on any network reach Conest '
+              'on this PC; Windows asks to confirm.',
     ),
     trailing: _busy
         ? const SizedBox(
@@ -21433,4 +21621,49 @@ class _WindowsFirewallTileState extends State<_WindowsFirewallTile> {
           )
         : TextButton(onPressed: _allow, child: const Text('Allow')),
   );
+}
+
+/// Chats, calls and settings as tabs (Standard mode on a phone).
+class _PhoneTabs extends StatelessWidget {
+  const _PhoneTabs({
+    required this.tab,
+    required this.onTab,
+    required this.chats,
+    required this.calls,
+  });
+
+  final int tab;
+  final ValueChanged<int> onTab;
+  final Widget chats;
+  final Widget calls;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Expanded(child: tab == 1 ? calls : chats),
+        NavigationBar(
+          key: const ValueKey('phone-tabs'),
+          selectedIndex: tab,
+          onDestinationSelected: onTab,
+          destinations: [
+            NavigationDestination(
+              icon: const Icon(Icons.chat_bubble_outline),
+              selectedIcon: const Icon(Icons.chat_bubble),
+              label: l10nOf(context).tabChats,
+            ),
+            NavigationDestination(
+              icon: const Icon(Icons.call_outlined),
+              selectedIcon: const Icon(Icons.call),
+              label: l10nOf(context).tabCalls,
+            ),
+            NavigationDestination(
+              icon: const Icon(Icons.settings_outlined),
+              label: l10nOf(context).tabSettings,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
 }

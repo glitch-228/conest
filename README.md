@@ -89,6 +89,15 @@ of them.
 - Signed in-app updates on a stable or nightly channel ("Receive unstable
   updates" in Settings); a nightly device can always move back to stable.
 
+## Translations
+
+Conest is available in English, Arabic, Persian, Indonesian, Russian and
+Simplified Chinese (Settings → Personal → Language). The translations other
+than English were made with AI and may contain mistakes; Settings says so
+for each of them. Help improve them on Weblate: see
+[TRANSLATING.md](TRANSLATING.md). Only part of the interface is translated
+so far (setup, modes, calls, message details); the rest follows.
+
 ## What Is Not Complete Yet
 
 - Several devices on one account (planned: per-device keys under an account

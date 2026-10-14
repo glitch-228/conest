@@ -233,9 +233,12 @@ class MeshtasticRadio {
     int hopLimit = 3,
     int channel = 0,
     Random? random,
+    // The packet's id, when the caller must know it before the radio
+    // can answer (see [newPacketId]).
+    int? id,
   }) async {
     if (_closed.isCompleted) throw StateError('The Meshtastic radio is gone.');
-    final id = 1 + (random ?? Random.secure()).nextInt(0x7ffffffe);
+    id ??= newPacketId(random);
     final data = ProtoWriter()
       ..uint(_Field.portnum, portnum)
       ..bytes(_Field.payload, payload);
@@ -249,6 +252,10 @@ class MeshtasticRadio {
     await _sendToRadio(ProtoWriter()..message(_Field.toRadioPacket, packet));
     return id;
   }
+
+  /// A random packet id (never 0).
+  static int newPacketId([Random? random]) =>
+      1 + (random ?? Random.secure()).nextInt(0x7ffffffe);
 
   Future<void> _askConfig([Random? random]) {
     final configId = 1 + (random ?? Random.secure()).nextInt(0x7ffffffe);
@@ -307,8 +314,11 @@ class MeshtasticRadio {
       if (decoded is! Uint8List || from is! int) return;
       final data = ProtoReader.fields(decoded);
       final portnum = data[_Field.portnum];
-      final payload = data[_Field.payload];
-      if (portnum is! int || payload is! Uint8List) return;
+      // An empty payload is left out of the encoding: a routing
+      // acknowledgement with no error has none.
+      final encoded = data[_Field.payload];
+      final payload = encoded is Uint8List ? encoded : Uint8List(0);
+      if (portnum is! int) return;
       _packets.add(
         MeshtasticPacket(
           from: from,
