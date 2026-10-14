@@ -43,6 +43,9 @@ dependencies:
   # Pinned because transfer admission relies on platform-specific free-space
   # reporting and should not change underneath a security release.
   disk_space_2: 1.0.12
+  flutter_localizations:
+    sdk: flutter
+  intl: any
 
 dev_dependencies:
   flutter_test:
@@ -56,6 +59,7 @@ dependency_overrides:
 
 flutter:
   uses-material-design: true
+  generate: true
   # Signature redesign typography — bundled OFL fonts (offline/deterministic,
   # no runtime fetch). Space Grotesk = display/body, JetBrains Mono = the mono
   # labels/chips/receipts. See assets/fonts/OFL.txt for licenses.

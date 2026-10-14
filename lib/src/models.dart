@@ -4765,6 +4765,22 @@ enum AppMode {
   matrixOnly,
 }
 
+/// How much of Conest a user sees. Append only.
+enum UserMode {
+  /// One chat list, large text, the fewest settings: for people who just
+  /// want to message.
+  minimal,
+
+  /// Like the popular messengers: delivered and read ticks, no routes.
+  normal,
+
+  /// Everything: routes, transports, diagnostics.
+  advanced;
+
+  /// Whether routes, transports and other network detail show.
+  bool get showsNetworkDetail => this == advanced;
+}
+
 class VaultSnapshot {
   VaultSnapshot({
     required this.identity,
@@ -4804,6 +4820,9 @@ class VaultSnapshot {
     this.hiddenChatNetworks = const <String>[],
     this.keepFileMetadata = false,
     this.randomFileNames = false,
+    this.userMode,
+    this.userModeChosen = true,
+    this.localeCode,
   });
 
   final IdentityRecord? identity;
@@ -4914,6 +4933,15 @@ class VaultSnapshot {
   /// removed before sending.
   final bool keepFileMetadata;
 
+  /// How much the app shows (null: advanced, as before modes existed).
+  final UserMode? userMode;
+
+  /// False only between creating a new identity and choosing a mode.
+  final bool userModeChosen;
+
+  /// The app's language (such as "ru"); null follows the device.
+  final String? localeCode;
+
   /// Send files under random names (the extension kept).
   final bool randomFileNames;
 
@@ -4992,6 +5020,10 @@ class VaultSnapshot {
     List<String>? hiddenChatNetworks,
     bool? keepFileMetadata,
     bool? randomFileNames,
+    UserMode? userMode,
+    bool? userModeChosen,
+    String? localeCode,
+    bool clearLocaleCode = false,
     bool clearMatrixSession = false,
     bool clearIdentity = false,
   }) {
@@ -5047,6 +5079,9 @@ class VaultSnapshot {
       hiddenChatNetworks: hiddenChatNetworks ?? this.hiddenChatNetworks,
       keepFileMetadata: keepFileMetadata ?? this.keepFileMetadata,
       randomFileNames: randomFileNames ?? this.randomFileNames,
+      userMode: userMode ?? this.userMode,
+      userModeChosen: userModeChosen ?? this.userModeChosen,
+      localeCode: clearLocaleCode ? null : localeCode ?? this.localeCode,
     );
   }
 
@@ -5126,6 +5161,9 @@ class VaultSnapshot {
         'hiddenChatNetworks': hiddenChatNetworks,
       if (keepFileMetadata) 'keepFileMetadata': true,
       if (randomFileNames) 'randomFileNames': true,
+      if (userMode != null) 'userMode': userMode!.name,
+      if (!userModeChosen) 'userModeChosen': false,
+      if (localeCode != null) 'localeCode': localeCode,
     };
   }
 
@@ -5192,6 +5230,13 @@ class VaultSnapshot {
       ],
       keepFileMetadata: json['keepFileMetadata'] == true,
       randomFileNames: json['randomFileNames'] == true,
+      userMode: UserMode.values.asNameMap()[json['userMode']],
+      userModeChosen: json['userModeChosen'] != false,
+      localeCode:
+          json['localeCode'] is String &&
+              (json['localeCode'] as String).length <= 16
+          ? json['localeCode'] as String
+          : null,
       contacts: (json['contacts'] as List<dynamic>? ?? const [])
           .cast<Map<String, dynamic>>()
           .map(ContactRecord.fromJson)

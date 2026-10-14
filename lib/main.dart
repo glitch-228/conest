@@ -53,7 +53,11 @@ import 'src/ui/nostr_carrier_panel.dart';
 import 'src/ui/nostr_chats_screen.dart';
 import 'src/ui/delta_chats_screen.dart';
 import 'src/ui/message_info_dialog.dart';
+import 'l10n/app_localizations.dart';
+import 'src/app_locales.dart';
+import 'src/ui/calls_list.dart';
 import 'src/ui/route_test_panel.dart';
+import 'src/ui/user_mode_screen.dart';
 import 'src/windows_firewall.dart';
 import 'src/ui/reticulum_carrier_panel.dart';
 import 'src/ui/matrix_home_screen.dart';
@@ -842,6 +846,9 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
   late bool _controllerReady;
   late bool _controllerHasIdentity;
   late bool _controllerMatrixOnly;
+  late bool _controllerNeedsMode;
+  late UserMode _controllerUserMode;
+  String? _controllerLocale;
 
   @override
   void initState() {
@@ -851,6 +858,9 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     _controllerReady = widget.controller.isReady;
     _controllerHasIdentity = widget.controller.hasIdentity;
     _controllerMatrixOnly = widget.controller.appMode == AppMode.matrixOnly;
+    _controllerNeedsMode = widget.controller.needsUserModeChoice;
+    _controllerUserMode = widget.controller.userMode;
+    _controllerLocale = widget.controller.localeCode;
     widget.controller.addListener(_handleControllerChanged);
     widget.controller.setAppForegroundState(true);
     widget.updateService.addListener(_handleUpdateServiceChanged);
@@ -876,14 +886,25 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     final ready = widget.controller.isReady;
     final hasIdentity = widget.controller.hasIdentity;
     final matrixOnly = widget.controller.appMode == AppMode.matrixOnly;
+    final needsMode = widget.controller.needsUserModeChoice;
+    final userMode = widget.controller.userMode;
+    final locale = widget.controller.localeCode;
+    if (locale != _controllerLocale) {
+      _controllerLocale = locale;
+      if (mounted) setState(() {});
+    }
     if (ready == _controllerReady &&
         hasIdentity == _controllerHasIdentity &&
-        matrixOnly == _controllerMatrixOnly) {
+        matrixOnly == _controllerMatrixOnly &&
+        needsMode == _controllerNeedsMode &&
+        userMode == _controllerUserMode) {
       return;
     }
     _controllerReady = ready;
     _controllerHasIdentity = hasIdentity;
     _controllerMatrixOnly = matrixOnly;
+    _controllerNeedsMode = needsMode;
+    _controllerUserMode = userMode;
     if (mounted) setState(() {});
   }
 
@@ -981,15 +1002,39 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
               debugShowCheckedModeBanner: false,
               title: 'Conest',
               navigatorKey: _navigatorKey,
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              locale: _controllerLocale == null
+                  ? null
+                  : Locale(_controllerLocale!),
               theme: palette.themeData(
                 courier: widget.themeController.shell == ConestShell.courier,
               ),
+              // Simple mode reads larger.
+              builder: (context, child) {
+                if (_controllerUserMode != UserMode.minimal || child == null) {
+                  return child ?? const SizedBox.shrink();
+                }
+                final media = MediaQuery.of(context);
+                return MediaQuery(
+                  data: media.copyWith(
+                    textScaler: TextScaler.linear(
+                      media.textScaler.scale(1) < 1.15
+                          ? 1.15
+                          : media.textScaler.scale(1),
+                    ),
+                  ),
+                  child: child,
+                );
+              },
               home: _controllerReady
                   ? _controllerMatrixOnly
                         ? MatrixHomeScreen(
                             controller: widget.controller,
                             palette: palette,
                           )
+                        : _controllerHasIdentity && _controllerNeedsMode
+                        ? UserModeScreen(controller: widget.controller)
                         : _controllerHasIdentity
                         ? HomeScreen(
                             controller: widget.controller,
@@ -1897,6 +1942,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Shared home-column selection handlers — used by the Signature sidebar and
   // the Garrison/Courier shells so all three drive the same chat panels.
+  /// The tab shown on phones in Standard mode (0 chats, 1 calls).
+  int _phoneTab = 0;
+
   void _selectHomeContact(ContactRecord contact) {
     setState(() {
       _lanLobbySelected = false;
@@ -3091,7 +3139,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           onSend: _sendLanLobbyMessage,
                         );
                       }
-                      return Row(
+                      final home = Row(
                         children: [
                           SizedBox(
                             width: isWide
@@ -3282,6 +3330,30 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                             ),
                         ],
+                      );
+                      // Standard mode on a phone: chats, calls and settings
+                      // as tabs, as the popular messengers have them.
+                      if (isWide ||
+                          widget.controller.userMode != UserMode.normal) {
+                        return home;
+                      }
+                      return _PhoneTabs(
+                        tab: _phoneTab,
+                        onTab: (tab) {
+                          if (tab == 2) {
+                            unawaited(_showSettings());
+                          } else {
+                            setState(() => _phoneTab = tab);
+                          }
+                        },
+                        chats: home,
+                        calls: CallsList(
+                          controller: widget.controller,
+                          onOpenContact: (contact) {
+                            setState(() => _phoneTab = 0);
+                            _selectHomeContact(contact);
+                          },
+                        ),
                       );
                     },
                   ),
@@ -4591,7 +4663,10 @@ class _CourierHomeState extends State<_CourierHome> {
               ],
             ),
           ),
-          if (!_showArchived && query.isEmpty)
+          // Simple mode: one list of chats, no filters or folders.
+          if (!_showArchived &&
+              query.isEmpty &&
+              widget.controller.userMode != UserMode.minimal)
             SizedBox(
               height: 42,
               child: ListView(
@@ -9005,7 +9080,8 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       ),
                     ),
                   ],
-                  if (message.effectiveRoute != null) ...[
+                  if (message.effectiveRoute != null &&
+                      controller.userMode.showsNetworkDetail) ...[
                     const SizedBox(width: 8),
                     _MessageRouteChip(
                       message: message,
@@ -9035,6 +9111,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           message: message,
                           memberLabel: controller.groupMemberLabel,
                           timestamp: formatTimestamp,
+                          showRoutes: controller.userMode.showsNetworkDetail,
                         );
                       } else if (value == 'copy') {
                         await _copyMessage(message);
@@ -10805,7 +10882,8 @@ class _ChatPanelState extends State<_ChatPanel> {
                       ),
                     ),
                   ],
-                  if (message.effectiveRoute != null) ...[
+                  if (message.effectiveRoute != null &&
+                      controller.userMode.showsNetworkDetail) ...[
                     const SizedBox(width: 8),
                     _MessageRouteChip(
                       message: message,
@@ -10855,6 +10933,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                             context,
                             message: message,
                             timestamp: formatTimestamp,
+                            showRoutes: controller.userMode.showsNetworkDetail,
                           );
                         } else if (value == 'forward') {
                           await _forwardTextMessage(
@@ -12174,61 +12253,64 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
                   height: 1.5,
                 ),
               ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Available paths',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
+              if (widget.controller.userMode.showsNetworkDetail) ...[
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Available paths',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w700),
                       ),
                     ),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: _busy ? null : _checkPaths,
-                    icon: const Icon(Icons.network_check),
-                    label: const Text('Check Paths'),
-                  ),
-                  const SizedBox(width: 8),
-                  OutlinedButton.icon(
-                    onPressed: checks == null || _busy ? null : _copyPathState,
-                    icon: const Icon(Icons.copy),
-                    label: const Text('Copy State'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              if (checks == null)
-                Text(
-                  'Run a check to measure latency, availability, and reachability freshness. Paths are sorted by best direct/LAN route first, then relay fallback.',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: widget.palette.inkSoft,
-                  ),
-                )
-              else if (checks.isEmpty)
-                Text(
-                  'No route hints are advertised for this contact.',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: widget.palette.inkSoft,
-                  ),
-                )
-              else
-                Column(
-                  children: [
-                    for (final check in checks)
-                      _RouteHealthTile(
-                        check: check,
-                        palette: widget.palette,
-                        twoWayConfirmed: checkTwoWayConfirmed,
-                      ),
+                    OutlinedButton.icon(
+                      onPressed: _busy ? null : _checkPaths,
+                      icon: const Icon(Icons.network_check),
+                      label: const Text('Check Paths'),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: checks == null || _busy
+                          ? null
+                          : _copyPathState,
+                      icon: const Icon(Icons.copy),
+                      label: const Text('Copy State'),
+                    ),
                   ],
                 ),
-              const SizedBox(height: 12),
-              RouteTestPanel(
-                controller: widget.controller,
-                contact: currentContact,
-              ),
+                const SizedBox(height: 8),
+                if (checks == null)
+                  Text(
+                    'Run a check to measure latency, availability, and reachability freshness. Paths are sorted by best direct/LAN route first, then relay fallback.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: widget.palette.inkSoft,
+                    ),
+                  )
+                else if (checks.isEmpty)
+                  Text(
+                    'No route hints are advertised for this contact.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: widget.palette.inkSoft,
+                    ),
+                  )
+                else
+                  Column(
+                    children: [
+                      for (final check in checks)
+                        _RouteHealthTile(
+                          check: check,
+                          palette: widget.palette,
+                          twoWayConfirmed: checkTwoWayConfirmed,
+                        ),
+                    ],
+                  ),
+                const SizedBox(height: 12),
+                RouteTestPanel(
+                  controller: widget.controller,
+                  contact: currentContact,
+                ),
+              ],
               if (_error != null) ...[
                 const SizedBox(height: 12),
                 Text(
@@ -13868,6 +13950,9 @@ class SettingsDialog extends StatefulWidget {
 class _SettingsDialogState extends State<SettingsDialog> {
   String _settingsCategory = 'Personal / Preferences';
 
+  /// Simple mode shows only the personal settings until asked for all.
+  bool _showAllSettings = false;
+
   late final TextEditingController _displayNameController;
   late final TextEditingController _bioController;
   final TextEditingController _relayHostController = TextEditingController();
@@ -13985,8 +14070,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
     final report = widget.controller.relayCapabilityReport;
     final configuredRelays = widget.controller.configuredRelays;
     final contactRelays = widget.controller.discoveredContactRelayRoutes;
+    final simple =
+        widget.controller.userMode == UserMode.minimal && !_showAllSettings;
     final categorized =
-        widget.fullscreenOnMobile && MediaQuery.sizeOf(context).width < 700;
+        !simple &&
+        widget.fullscreenOnMobile &&
+        MediaQuery.sizeOf(context).width < 700;
     return AdaptiveChatDialog(
       fullscreenOnMobile: widget.fullscreenOnMobile,
       scrollable: true,
@@ -14042,6 +14131,23 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            UserModeSelector(controller: widget.controller),
+                            const SizedBox(height: 12),
+                            LanguageSelector(
+                              controller: widget.controller,
+                              languages: appLanguageNames,
+                              aiTranslated: aiTranslatedLanguages,
+                            ),
+                            if (widget.controller.userMode == UserMode.minimal)
+                              SwitchListTile(
+                                key: const ValueKey('show-all-settings'),
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(l10nOf(context).settingsShowAll),
+                                value: _showAllSettings,
+                                onChanged: (value) =>
+                                    setState(() => _showAllSettings = value),
+                              ),
+                            const SizedBox(height: 12),
                             _ThemeModeSelector(
                               controller: widget.themeController,
                               palette: widget.palette,
@@ -14288,7 +14394,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                       ),
                     const SizedBox(height: 16),
-                    if (!categorized || _settingsCategory == 'Storage')
+                    if (!simple &&
+                        (!categorized || _settingsCategory == 'Storage'))
                       _SettingsSection(
                         title: 'Storage',
                         palette: widget.palette,
@@ -14308,7 +14415,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                       ),
                     const SizedBox(height: 16),
-                    if (!categorized || _settingsCategory == 'Connectivity')
+                    if (!simple &&
+                        (!categorized || _settingsCategory == 'Connectivity'))
                       _SettingsSection(
                         title: 'Connectivity',
                         palette: widget.palette,
@@ -14575,7 +14683,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                       ),
                     const SizedBox(height: 16),
-                    if (!categorized || _settingsCategory == 'Network / Relay')
+                    if (!simple &&
+                        (!categorized ||
+                            _settingsCategory == 'Network / Relay'))
                       _SettingsSection(
                         title: 'Network / Relay',
                         palette: widget.palette,
@@ -14792,7 +14902,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                       ),
                     const SizedBox(height: 16),
-                    if (!categorized || _settingsCategory == 'Updates')
+                    if (!simple &&
+                        (!categorized || _settingsCategory == 'Updates'))
                       _SettingsSection(
                         title: 'Updates',
                         palette: widget.palette,
@@ -14925,7 +15036,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                       ),
                     const SizedBox(height: 16),
-                    if (!categorized || _settingsCategory == 'Danger')
+                    if (!simple &&
+                        (!categorized || _settingsCategory == 'Danger'))
                       _SettingsSection(
                         title: 'Danger',
                         palette: widget.palette,
@@ -21510,4 +21622,49 @@ class _WindowsFirewallTileState extends State<_WindowsFirewallTile> {
           )
         : TextButton(onPressed: _allow, child: const Text('Allow')),
   );
+}
+
+/// Chats, calls and settings as tabs (Standard mode on a phone).
+class _PhoneTabs extends StatelessWidget {
+  const _PhoneTabs({
+    required this.tab,
+    required this.onTab,
+    required this.chats,
+    required this.calls,
+  });
+
+  final int tab;
+  final ValueChanged<int> onTab;
+  final Widget chats;
+  final Widget calls;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Expanded(child: tab == 1 ? calls : chats),
+        NavigationBar(
+          key: const ValueKey('phone-tabs'),
+          selectedIndex: tab,
+          onDestinationSelected: onTab,
+          destinations: [
+            NavigationDestination(
+              icon: const Icon(Icons.chat_bubble_outline),
+              selectedIcon: const Icon(Icons.chat_bubble),
+              label: l10nOf(context).tabChats,
+            ),
+            NavigationDestination(
+              icon: const Icon(Icons.call_outlined),
+              selectedIcon: const Icon(Icons.call),
+              label: l10nOf(context).tabCalls,
+            ),
+            NavigationDestination(
+              icon: const Icon(Icons.settings_outlined),
+              label: l10nOf(context).tabSettings,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
 }
