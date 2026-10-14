@@ -19,6 +19,7 @@ String _key(int fill) => base64Encode(List<int>.filled(32, fill));
 Future<String> _proof(
   ({String publicKey, String privateKey}) keys, {
   required String accountId,
+  required String accountKey,
   required String deviceId,
   required String encryptionKey,
   required String signingKey,
@@ -26,6 +27,7 @@ Future<String> _proof(
 }) => signEd25519(
   DeviceCert.proofBytes(
     accountId: accountId,
+    accountKeyBase64: accountKey,
     deviceId: deviceId,
     encryptionKeyBase64: encryptionKey,
     signingKeyBase64: signingKey,
@@ -59,6 +61,7 @@ void main() {
       proofSignatureBase64: await _proof(
         device,
         accountId: accountId,
+        accountKey: account.publicKeyBase64,
         deviceId: deviceId,
         encryptionKey: _key(1),
         signingKey: device.publicKey,
@@ -192,6 +195,7 @@ void main() {
         proofSignatureBase64: await _proof(
           mallory,
           accountId: 'acc-1',
+          accountKey: account.publicKeyBase64,
           deviceId: 'bob-phone',
           encryptionKey: _key(1),
           signingKey: bob.publicKey,
@@ -399,6 +403,7 @@ void main() {
         proofSignatureBase64: await _proof(
           anchor,
           accountId: 'acc-1',
+          accountKey: account.publicKeyBase64,
           deviceId: 'dev-1',
           encryptionKey: _key(1),
           signingKey: anchor.publicKey,
@@ -475,6 +480,7 @@ void main() {
         proofSignatureBase64: await _proof(
           malloryDevice,
           accountId: 'acc-1',
+          accountKey: mallory.publicKeyBase64,
           deviceId: 'dev-1',
           encryptionKey: _key(1),
           signingKey: s.anchor.publicKey,
@@ -522,6 +528,7 @@ void main() {
               proofSignatureBase64: await _proof(
                 s.anchor,
                 accountId: 'acc-1',
+                accountKey: mallory.publicKeyBase64,
                 deviceId: 'dev-1',
                 encryptionKey: _key(1),
                 signingKey: s.anchor.publicKey,
@@ -568,8 +575,8 @@ void main() {
           await check(
             await statement(s.account, null, [s.anchorCert], version: 3),
           ),
-          isNull,
-          reason: 'dev-0 would come back',
+          isNotNull,
+          reason: 'a list need not repeat known revocations: they merge',
         );
         expect(
           await check(

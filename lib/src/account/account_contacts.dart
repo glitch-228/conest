@@ -52,9 +52,12 @@ Future<AccountDevicesUpdate?> verifyAccountDevices({
 }) async {
   if (payload is! Map) return null;
   final list = AccountDeviceList.fromJson(payload['devices']);
+  // Revocations are merged, not required: a list need not repeat what
+  // this device knows (the owner may not have seen a stolen device's
+  // lists), and a revoked device stays revoked here whatever a list says.
   if (list == null ||
       list.accountId != accountId ||
-      !knownRevoked.every(list.revoked.containsKey) ||
+      knownRevoked.contains(anchorDeviceId) ||
       list.deviceFor(anchorDeviceId) == null) {
     return null;
   }

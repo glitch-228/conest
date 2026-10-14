@@ -2262,7 +2262,7 @@ class ContactRecord {
           : 0,
       accountRevokedDeviceIds: [
         if (json['accountRevokedDeviceIds'] case final List revoked)
-          for (final id in revoked.take(64))
+          for (final id in revoked.take(1024))
             if (id is String && id.length <= 128) id,
       ],
       accountAnchorDeviceId: json['accountAnchorDeviceId'] is String

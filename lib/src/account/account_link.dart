@@ -92,9 +92,11 @@ List<int> linkTranscript({
   required String existingEncryptionKeyBase64,
   required String existingSigningKeyBase64,
   required String accountId,
+  required String accountKeyBase64,
   String? nonceBase64,
   String? bodyHashBase64,
 }) => accountSigningBytes('link-$step', {
+  'accountKey': accountKeyBase64,
   'secretHash': base64Encode(sha256Bytes(invitation.linkSecret)),
   'newDeviceId': invitation.deviceId,
   'newEncryptionKey': invitation.encryptionKeyBase64,

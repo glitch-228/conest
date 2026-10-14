@@ -19,7 +19,7 @@ const int maxAccountDevices = 16;
 
 /// Most revoked devices one list remembers (they are never forgotten
 /// while the list grows; older ones fall off past this).
-const int maxRevokedDevices = 64;
+const int maxRevokedDevices = 1024;
 
 /// A device linked less than this long ago may not add or remove others.
 const Duration newDeviceManagementDelay = Duration(hours: 24);
@@ -304,12 +304,16 @@ class DeviceCert {
   /// The bytes a device signs to prove its keys ([proofSignatureBase64]).
   static List<int> proofBytes({
     required String accountId,
+    // The account key itself: an account id is only a name anyone can
+    // claim, the key is not.
+    required String accountKeyBase64,
     required String deviceId,
     required String encryptionKeyBase64,
     required String signingKeyBase64,
     String? irohEndpointId,
   }) => accountSigningBytes('device-proof', {
     'accountId': accountId,
+    'accountKey': accountKeyBase64,
     'deviceId': deviceId,
     'encryptionKey': encryptionKeyBase64,
     'signingKey': signingKeyBase64,
@@ -407,6 +411,7 @@ class DeviceCert {
       await verifyEd25519(
         proofBytes(
           accountId: accountId,
+          accountKeyBase64: accountKeyBase64,
           deviceId: deviceId,
           encryptionKeyBase64: encryptionKeyBase64,
           signingKeyBase64: signingKeyBase64,

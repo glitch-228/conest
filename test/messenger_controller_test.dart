@@ -15173,6 +15173,56 @@ void main() {
       expect(bob.linkCode, phone.linkCode);
     });
 
+    test('messages reach every device of the account, and one chat shows '
+        'them all', () async {
+      final (alice, bob, phone, advance) = await threeDevices();
+      advance(const Duration(hours: 25));
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () =>
+            phone.linkState == LinkState.compareCode &&
+            alice.linkState == LinkState.compareCode,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return phone.linkState == LinkState.linked &&
+            bob.linkedDevicesOf(aliceId).isNotEmpty;
+      }, reason: 'the phone was not linked and known');
+
+      // Bob writes to Alice: both her devices get it.
+      await bob.sendMessage(contact: bob.contacts.single, body: 'hi both');
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        return alice.messagesFor(bobId).any((m) => m.body == 'hi both') &&
+            phone.messagesFor(bobId).any((m) => m.body == 'hi both');
+      }, reason: 'not every device of Alice got it');
+
+      // Alice answers from her phone: Bob sees it in Alice's chat, and the
+      // phone gets his receipt.
+      await phone.sendMessage(
+        contact: phone.contacts.firstWhere((c) => c.deviceId == bobId),
+        body: 'from my phone',
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        unawaited(phone.pollNow());
+        final mine = phone
+            .messagesFor(bobId)
+            .where((m) => m.body == 'from my phone')
+            .firstOrNull;
+        return bob.messagesFor(aliceId).any((m) => m.body == 'from my phone') &&
+            mine != null &&
+            {DeliveryState.delivered, DeliveryState.read}.contains(mine.state);
+      }, reason: 'the phone\'s message did not reach Alice\'s chat at Bob');
+      expect(bob.contacts.length, 1);
+    });
+
     test('removing a contact removes their other devices', () async {
       final (alice, bob, phone, advance) = await threeDevices();
       advance(const Duration(hours: 25));
@@ -15305,6 +15355,7 @@ void main() {
         (await Ed25519().sign(
           DeviceCert.proofBytes(
             accountId: alice.identity!.accountId,
+            accountKeyBase64: alice.identity!.accountKeyPublicBase64!,
             deviceId: 'alice-phone',
             encryptionKeyBase64: phoneEncryptionKey,
             signingKeyBase64: phoneSigningKey,

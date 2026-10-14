@@ -17314,7 +17314,9 @@ class MessengerController extends ChangeNotifier {
           envelope: envelope,
         );
         _acceptedByTraffic(contact, sentAt: envelope.createdAt);
-        final existingConversation = _conversationFor(contact.deviceId);
+        // From any of the contact's devices, into the contact's one chat.
+        final chatId = _chatIdFor(contact);
+        final existingConversation = _conversationFor(chatId);
         final alreadyKnown = existingConversation.messages.any(
           (message) => message.id == envelope.messageId,
         );
@@ -17334,12 +17336,12 @@ class MessengerController extends ChangeNotifier {
             replySenderDisplayName: decodedMessage.replySenderDisplayName,
             route: _ingressRoute,
           );
-          _upsertMessage(contact.deviceId, inbound);
+          _upsertMessage(chatId, inbound);
           // They just reached us, so our waiting messages can reach them.
           _flushContactSoon(contact.deviceId);
-          await _applyDeferredDirectReactions(contact.deviceId, inbound.id);
+          await _applyDeferredDirectReactions(chatId, inbound.id);
           _showInboundMessageNotification(
-            contact: contact,
+            contact: _contactByDeviceId(chatId) ?? contact,
             body: decodedMessage.body,
           );
         }
@@ -17569,13 +17571,15 @@ class MessengerController extends ChangeNotifier {
           _crypto.conversationIdFor(contact.deviceId)) {
         return;
       }
-      final message = _messageById(contact.deviceId, target);
+      // A receipt from any of the contact's devices counts.
+      final chatId = _chatIdFor(contact);
+      final message = _messageById(chatId, target);
       if (message == null || !message.outbound) return;
       if (receipt == 'read') {
-        _markMessagesReadThroughMessage(contact.deviceId, target);
+        _markMessagesReadThroughMessage(chatId, target);
       } else {
-        _updateMessageState(contact.deviceId, target, DeliveryState.delivered);
-        _clearOutboundAttempt(contact.deviceId, target);
+        _updateMessageState(chatId, target, DeliveryState.delivered);
+        _clearOutboundAttempt(chatId, target);
       }
     }
     // When the ack was sent, not when it was fetched: one waiting on a relay
@@ -19748,20 +19752,6 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> _handleContactExchange(RelayEnvelope envelope) async {
     var existing = _contactByDeviceId(envelope.senderDeviceId);
-    // A first-contact request from a device id some contact's account
-    // claims: that claim proves nothing about this device, so it goes, and
-    // the request is handled as from anyone new (the user approves it).
-    if (envelope.protocolVersion == 1 &&
-        existing != null &&
-        existing.isLinkedDevice) {
-      _snapshot = _snapshot.copyWith(
-        contacts: [
-          for (final contact in _snapshot.contacts)
-            if (contact.deviceId != existing.deviceId) contact,
-        ],
-      );
-      existing = null;
-    }
     String payload;
     String? pairingRequestId;
     String? pairingResponse;
@@ -19780,12 +19770,6 @@ class MessengerController extends ChangeNotifier {
     // Their account key and device list (M29), read only from an
     // authenticated exchange.
     Object? accountStatement;
-    if (_isRevokedAccountDevice(
-      envelope.senderDeviceId,
-      envelope.senderAccountId,
-    )) {
-      return;
-    }
     if (envelope.protocolVersion == 1) {
       if (existing?.pendingVerification == true) return;
       final rawPayload = envelope.payloadBase64;
@@ -19893,6 +19877,19 @@ class MessengerController extends ChangeNotifier {
       appendDebugLog(
         'Rejected contact_exchange with an invalid ci6 signature from '
         '${envelope.senderDeviceId}.',
+      );
+      return;
+    }
+    // A first-contact request from a device id that one of our contacts'
+    // accounts lists (with other keys): ignored, never deleting that
+    // device. Anyone can sign an invite for any id with their own keys, so
+    // the request proves nothing about the listed device.
+    if (envelope.protocolVersion == 1 &&
+        existing != null &&
+        existing.isLinkedDevice &&
+        existing.signingPublicKeyBase64 != invite.signingPublicKeyBase64) {
+      appendDebugLog(
+        'Ignored a contact request from a device id another account lists.',
       );
       return;
     }
@@ -23237,6 +23234,7 @@ class MessengerController extends ChangeNotifier {
           : DeliveryState.relayed;
       _updateMessageState(contact.deviceId, message.id, state, route: route);
       _traceOutbound(contact.deviceId, message.id, route);
+      _sendToLinkedDevices(contact, message);
       _sendExtraCopies(contact: contact, envelope: envelope, first: route);
       _lastRelayStatus = '${route.label} accepted';
       await _persist(
@@ -28646,6 +28644,7 @@ class MessengerController extends ChangeNotifier {
       proofSignatureBase64: await _crypto.signInstallationBytes(
         DeviceCert.proofBytes(
           accountId: me.accountId,
+          accountKeyBase64: account.publicKeyBase64,
           deviceId: me.deviceId,
           encryptionKeyBase64: me.publicKeyBase64,
           signingKeyBase64: signingPublic,
@@ -28902,6 +28901,7 @@ class MessengerController extends ChangeNotifier {
       body: {
         'deviceId': current.deviceId,
         'accountId': current.accountId,
+        'accountKey': current.accountKeyPublicBase64,
         'name': current.displayName,
         'encryptionKey': current.publicKeyBase64,
         'signingKey': current.signingPublicKeyBase64,
@@ -28925,6 +28925,7 @@ class MessengerController extends ChangeNotifier {
       existingEncryptionKeyBase64: me.publicKeyBase64,
       existingSigningKeyBase64: me.signingPublicKeyBase64!,
       accountId: me.accountId,
+      accountKeyBase64: me.accountKeyPublicBase64!,
       nonceBase64: link.nonce,
       bodyHashBase64: bodyHash,
     );
@@ -28942,6 +28943,7 @@ class MessengerController extends ChangeNotifier {
     existingEncryptionKeyBase64: offer.encryptionKeyBase64,
     existingSigningKeyBase64: offer.signingKeyBase64,
     accountId: offer.accountId,
+    accountKeyBase64: offer.accountKeyBase64,
     nonceBase64: link.nonce,
     bodyHashBase64: bodyHash,
   );
@@ -28973,6 +28975,7 @@ class MessengerController extends ChangeNotifier {
           'proof': await _crypto.signInstallationBytes(
             DeviceCert.proofBytes(
               accountId: offer.accountId,
+              accountKeyBase64: offer.accountKeyBase64,
               deviceId: me.deviceId,
               encryptionKeyBase64: me.publicKeyBase64,
               signingKeyBase64: me.signingPublicKeyBase64!,
@@ -29143,7 +29146,7 @@ class MessengerController extends ChangeNotifier {
         final grant = body?['grant'];
         if (body == null || grant is! Map<String, dynamic>) return;
         final bodyHash = base64Encode(
-          sha256Bytes(utf8.encode(jsonEncode(grant))),
+          sha256Bytes(accountSigningBytes('link-grant-body', grant)),
         );
         if (!await signedBy(
           body['signature'],
@@ -29178,15 +29181,28 @@ class MessengerController extends ChangeNotifier {
       } on FormatException {
         return;
       }
-      asExisting.nonce = nonce;
+      // Checked before it is kept: a forged nonce must not stall the
+      // real one.
+      final me = _requireIdentity();
+      final transcript = linkTranscript(
+        step: 'nonce',
+        invitation: invitation,
+        existingDeviceId: me.deviceId,
+        existingEncryptionKeyBase64: me.publicKeyBase64,
+        existingSigningKeyBase64: me.signingPublicKeyBase64!,
+        accountId: me.accountId,
+        accountKeyBase64: me.accountKeyPublicBase64!,
+        nonceBase64: nonce,
+      );
       if (!await signedBy(
-        body['signature'],
-        invitation.signingKeyBase64,
-        _transcriptAsExisting(asExisting, 'nonce'),
-      )) {
-        asExisting.nonce = null;
+            body['signature'],
+            invitation.signingKeyBase64,
+            transcript,
+          ) ||
+          asExisting.nonce != null) {
         return;
       }
+      asExisting.nonce = nonce;
       final current = _requireIdentity();
       asExisting.code = await linkConfirmationCode(
         existingSigningKeyBase64: current.signingPublicKeyBase64!,
@@ -29249,7 +29265,9 @@ class MessengerController extends ChangeNotifier {
           if (!contact.isArchived) contact.toJson(),
       ],
     };
-    final bodyHash = base64Encode(sha256Bytes(utf8.encode(jsonEncode(grant))));
+    final bodyHash = base64Encode(
+      sha256Bytes(accountSigningBytes('link-grant-body', grant)),
+    );
     await _sendLinkMessage(
       toDeviceId: invitation.deviceId,
       encryptionKeyBase64: invitation.encryptionKeyBase64,
@@ -29280,6 +29298,7 @@ class MessengerController extends ChangeNotifier {
     final accountPrivate = grant['accountKeyPrivate'];
     final list = AccountDeviceList.fromJson(grant['accountDeviceList']);
     if (accountId != offer.accountId ||
+        accountKey != offer.accountKeyBase64 ||
         accountKey is! String ||
         accountPrivate is! String ||
         list == null ||
@@ -29330,18 +29349,43 @@ class MessengerController extends ChangeNotifier {
       contacts: _dedupeContacts([...contacts, ..._snapshot.contacts]),
     );
     await _saveSnapshotSilently(notify: true);
-    setStatus('This device is now linked to ${offer.name}\'s account.');
+    setStatus('This device is now linked to your account.');
     _advertiseProfileToContacts();
   }
 
-  /// A device some contact's account revoked: nothing from it is read.
-  bool _isRevokedAccountDevice(String deviceId, String accountId) =>
-      _snapshot.contacts.any(
-        (contact) =>
-            !contact.isLinkedDevice &&
-            contact.accountId == accountId &&
-            contact.accountRevokedDeviceIds.contains(deviceId),
-      );
+  /// The chat a contact's messages belong to: their main record's, for
+  /// any of their devices.
+  String _chatIdFor(ContactRecord contact) =>
+      contact.accountAnchorDeviceId ?? contact.deviceId;
+
+  /// A message to a contact also goes to each of their other devices
+  /// (encrypted for each), so whichever they use has it.
+  void _sendToLinkedDevices(ContactRecord contact, ChatMessage message) {
+    if (contact.isLinkedDevice) return;
+    for (final device in linkedDevicesOf(contact.deviceId)) {
+      if (!device.canSendOutbound) continue;
+      unawaited(() async {
+        try {
+          final envelope = await _outboxEnvelope(
+            device,
+            message.id,
+            _crypto.encodeDirectMessagePayload(message),
+            () =>
+                _crypto.encryptDirectMessage(contact: device, message: message),
+          );
+          await _deliverToContact(
+            contact: device,
+            recipientDeviceId: device.deviceId,
+            envelope: envelope,
+            background: true,
+            allowForwarding: false,
+          );
+        } catch (_) {
+          // The next retry of the message tries again.
+        }
+      }());
+    }
+  }
 
   /// The records of a contact's other devices (hidden from contact lists).
   @visibleForTesting
@@ -29401,10 +29445,13 @@ class MessengerController extends ChangeNotifier {
     }
     if (current.accountDeviceListVersion >= list.version) return;
     final me = identity;
+    // Revocations only ever add up: a device revoked here stays revoked
+    // whatever a later list says.
+    final revoked = {...current.accountRevokedDeviceIds, ...list.revoked.keys};
     final updatedAnchor = current.copyWith(
       accountKeyBase64: update.accountKeyBase64,
       accountDeviceListVersion: list.version,
-      accountRevokedDeviceIds: list.revoked.keys.toList(),
+      accountRevokedDeviceIds: revoked.toList(),
       deviceName: list.deviceFor(current.deviceId)?.name,
     );
     final contacts = <ContactRecord>[
@@ -29413,12 +29460,15 @@ class MessengerController extends ChangeNotifier {
           updatedAnchor
         // A device no longer in the list (revoked) goes.
         else if (contact.accountAnchorDeviceId != current.deviceId ||
-            list.deviceFor(contact.deviceId) != null)
+            (list.deviceFor(contact.deviceId) != null &&
+                !revoked.contains(contact.deviceId)))
           contact,
     ];
     final added = <DeviceCert>[];
     for (final cert in list.devices) {
-      if (cert.deviceId == current.deviceId || cert.deviceId == me?.deviceId) {
+      if (cert.deviceId == current.deviceId ||
+          cert.deviceId == me?.deviceId ||
+          revoked.contains(cert.deviceId)) {
         continue;
       }
       final index = contacts.indexWhere((c) => c.deviceId == cert.deviceId);
@@ -30432,6 +30482,24 @@ class MessengerController extends ChangeNotifier {
         readThroughMessageId ??
         _latestInboundMessageAtOrBefore(conversation, latestCreatedAt)?.id;
     if (effectiveMessageId == null || effectiveMessageId.isEmpty) {
+      return;
+    }
+    // A message one of the contact's other devices sent: the read receipt
+    // goes to that device.
+    final read = conversation.messages
+        .where((message) => message.id == effectiveMessageId)
+        .firstOrNull;
+    final sender = read == null
+        ? null
+        : _contactByDeviceId(read.senderDeviceId);
+    if (read != null &&
+        sender != null &&
+        sender.accountAnchorDeviceId == contact.deviceId) {
+      await _sendReadReceipt(
+        contact: sender,
+        conversationId: read.conversationId,
+        acknowledgedMessageId: effectiveMessageId,
+      );
       return;
     }
     await _sendReadReceipt(
@@ -32188,6 +32256,7 @@ class _LinkOffer {
   const _LinkOffer({
     required this.deviceId,
     required this.accountId,
+    required this.accountKeyBase64,
     required this.name,
     required this.encryptionKeyBase64,
     required this.signingKeyBase64,
@@ -32196,6 +32265,7 @@ class _LinkOffer {
 
   final String deviceId;
   final String accountId;
+  final String accountKeyBase64;
   final String name;
   final String encryptionKeyBase64;
   final String signingKeyBase64;
@@ -32225,12 +32295,14 @@ class _LinkOffer {
         name.length > 128 ||
         !key(json['encryptionKey']) ||
         !key(json['signingKey']) ||
+        !key(json['accountKey']) ||
         (iroh != null && (iroh is! String || iroh.length > 128))) {
       return null;
     }
     return _LinkOffer(
       deviceId: deviceId,
       accountId: accountId,
+      accountKeyBase64: json['accountKey'] as String,
       name: name,
       encryptionKeyBase64: json['encryptionKey'] as String,
       signingKeyBase64: json['signingKey'] as String,

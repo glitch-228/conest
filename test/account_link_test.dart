@@ -81,6 +81,7 @@ void main() {
           existingEncryptionKeyBase64: _key(3),
           existingSigningKeyBase64: _key(4),
           accountId: account,
+          accountKeyBase64: _key(5),
           nonceBase64: nonce,
         );
     expect(transcript(), transcript());
