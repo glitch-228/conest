@@ -3388,7 +3388,30 @@ class MessengerController extends ChangeNotifier {
         replySenderDisplayName: optional('replySenderDisplayName'),
       ),
     );
+    // Came through another member, not from its author: tell the author it
+    // arrived, so it stops resending (recent messages only, a few per
+    // catch-up).
+    final me = _requireIdentity();
+    if (event.authorDeviceId != me.deviceId &&
+        _now().toUtc().difference(at.toUtc()).abs() < const Duration(days: 1) &&
+        _historyReceiptsQueued < _maxHistoryReceiptsPerSync) {
+      _historyReceiptsQueued++;
+      _enqueuePendingAckDelivery(
+        PendingAckDelivery(
+          targetDeviceId: event.authorDeviceId,
+          acknowledgedMessageId: projectedId,
+          conversationId: groupId,
+          kind: PendingAckKind.delivered,
+          lastAttemptedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+          attempts: 0,
+        ),
+      );
+    }
   }
+
+  /// Receipts for messages that came through history, this catch-up.
+  int _historyReceiptsQueued = 0;
+  static const int _maxHistoryReceiptsPerSync = 64;
 
   bool _sameGroupReactions(
     Map<String, Set<String>> left,
@@ -3410,9 +3433,53 @@ class MessengerController extends ChangeNotifier {
     required String groupId,
     required String peerDeviceId,
   }) async {
+    _historyReceiptsQueued = 0;
     final count = await _groupHistory.synchronize(groupId, peerDeviceId);
     await _saveSnapshotSilently();
+    // New to this device: other members may not have it either (their
+    // author may not reach them). Tell them it changed; each pulls only
+    // what it lacks, so this ends once everyone has it.
+    if (count > 0) _announceGroupChangeSoon(groupId, except: peerDeviceId);
     return count;
+  }
+
+  /// Members not to tell, per group, while an announcement waits.
+  final Map<String, Set<String>> _groupAnnounceSkip = {};
+  final Map<String, Timer> _groupAnnounceTimers = {};
+  static const int _maxGroupAnnounceMembers = 32;
+
+  /// Tells the group's other members, within 2 s (several pulls at once
+  /// make one announcement), that this device has history they may lack.
+  void _announceGroupChangeSoon(String groupId, {required String except}) {
+    if (_disposed) return;
+    _groupAnnounceSkip.putIfAbsent(groupId, () => <String>{}).add(except);
+    _groupAnnounceTimers[groupId] ??= Timer(const Duration(seconds: 2), () {
+      _groupAnnounceTimers.remove(groupId);
+      final skip = _groupAnnounceSkip.remove(groupId) ?? const <String>{};
+      final group = _groupById(groupId);
+      final me = _snapshot.identity;
+      if (_disposed ||
+          group == null ||
+          me == null ||
+          group.localRemovedAt != null ||
+          !group.hasActiveMember(me.deviceId)) {
+        return;
+      }
+      final peers = [
+        for (final peer in group.activeMemberDeviceIds)
+          if (peer != me.deviceId && !skip.contains(peer)) peer,
+      ].take(_maxGroupAnnounceMembers);
+      for (final peer in peers) {
+        unawaited(
+          _groupHistory.announceChange(groupId, peer).catchError((
+            Object error,
+          ) {
+            if (!_disposed)
+              appendDebugLog('Group announcement waiting: $error');
+          }),
+        );
+      }
+    });
   }
 
   /// Returns a stable signed-event cursor; null means the retained journal has
@@ -9280,6 +9347,11 @@ class MessengerController extends ChangeNotifier {
       timer.cancel();
     }
     _groupHistoryTimers.clear();
+    for (final timer in _groupAnnounceTimers.values) {
+      timer.cancel();
+    }
+    _groupAnnounceTimers.clear();
+    _groupAnnounceSkip.clear();
     _groupHistoryLastSync.clear();
     _groupProjectionRestores.clear();
     await _groupHistoryService?.close();
@@ -32380,6 +32452,10 @@ class MessengerController extends ChangeNotifier {
       timer.cancel();
     }
     _groupHistoryTimers.clear();
+    for (final timer in _groupAnnounceTimers.values) {
+      timer.cancel();
+    }
+    _groupAnnounceTimers.clear();
     unawaited(_groupHistoryService?.close());
     _attachmentBlockWorker.close();
     _transferProgressUiTimer?.cancel();

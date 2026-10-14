@@ -17090,6 +17090,71 @@ void main() {
     });
   });
 
+  test('a group message reaches a member its author cannot reach, through '
+      'a member who can', () async {
+    final network = _InProcessIrohNetwork();
+    final relay = _FakeRelayClient();
+    Future<MessengerController> device(String name) async {
+      final controller = await _createController(
+        relayClient: relay,
+        displayName: name,
+        transportRegistryFactory: network.registry,
+      );
+      addTearDown(controller.dispose);
+      return controller;
+    }
+
+    final alice = await device('Alice');
+    final bob = await device('Bob');
+    final carol = await device('Carol');
+    await _pairControllers(alice, bob);
+    await _pairControllers(alice, carol);
+    final group = await alice.createGroup(
+      title: 'Relay',
+      members: alice.contacts,
+    );
+    await _waitForIroh(() {
+      unawaited(bob.pollNow());
+      unawaited(carol.pollNow());
+      return bob.visibleGroups.isNotEmpty && carol.visibleGroups.isNotEmpty;
+    });
+    // Everyone's history is in step before the link between Alice and
+    // Carol goes (no relays either).
+    await alice.sendGroupMessage(groupId: group.groupId, body: 'warm up');
+    await _waitForIroh(() {
+      unawaited(bob.pollNow());
+      unawaited(carol.pollNow());
+      return [bob, carol].every(
+        (d) =>
+            d.messagesForGroup(group.groupId).any((m) => m.body == 'warm up'),
+      );
+    });
+    relay.shouldFailStore = (_, _, _, _, _) => true;
+    final aliceIroh = alice.identity!.irohEndpointId!;
+    final carolIroh = carol.identity!.irohEndpointId!;
+    network.blockedPairs
+      ..add((aliceIroh, carolIroh))
+      ..add((carolIroh, aliceIroh));
+
+    await alice.sendGroupMessage(groupId: group.groupId, body: 'via Bob');
+    final deadline = DateTime.now().add(const Duration(seconds: 25));
+    bool reached() =>
+        carol.messagesForGroup(group.groupId).any((m) => m.body == 'via Bob');
+    while (!reached() && DateTime.now().isBefore(deadline)) {
+      await Future.wait([alice.pollNow(), bob.pollNow(), carol.pollNow()]);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    expect(reached(), isTrue, reason: 'Carol never got Alice\'s message');
+    expect(
+      carol
+          .messagesForGroup(group.groupId)
+          .where((m) => m.body == 'via Bob')
+          .single
+          .senderDeviceId,
+      alice.identity!.deviceId,
+    );
+  });
+
   group('Clocks that are off', () {
     Future<(MessengerController, MessengerController, MessengerController)>
     threeWithBobBehind() async {
