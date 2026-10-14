@@ -15080,6 +15080,86 @@ void main() {
     });
   });
 
+  group('Accounts with several devices', () {
+    test('a contact learns the account\'s other devices, and loses revoked '
+        'ones', () async {
+      var now = DateTime.now().toUtc();
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        nowProvider: () => now,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        nowProvider: () => now,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final aliceId = alice.identity!.deviceId;
+
+      await alice.createAccount(deviceName: 'Laptop');
+      expect(alice.accountDevices?.devices.single.name, 'Laptop');
+      // A brand-new identity waits a day before adding devices.
+      expect(alice.mayManageAccountDevices, isFalse);
+      now = now.add(const Duration(hours: 25));
+      expect(alice.mayManageAccountDevices, isTrue);
+
+      final phoneSigning = await Ed25519().newKeyPair();
+      final phoneSigningKey = base64Encode(
+        (await phoneSigning.extractPublicKey()).bytes,
+      );
+      final phoneEncryption = await X25519().newKeyPair();
+      await alice.addAccountDevice(
+        deviceId: 'alice-phone',
+        encryptionKeyBase64: base64Encode(
+          (await phoneEncryption.extractPublicKey()).bytes,
+        ),
+        signingKeyBase64: phoneSigningKey,
+        name: 'Pixel 8',
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.linkedDevicesOf(aliceId).isNotEmpty;
+      }, reason: 'Bob did not learn Alice\'s phone');
+      final phone = bob.linkedDevicesOf(aliceId).single;
+      expect(phone.deviceId, 'alice-phone');
+      expect(phone.deviceName, 'Pixel 8');
+      expect(phone.signingPublicKeyBase64, phoneSigningKey);
+      // Listed once: the phone is Alice, not a new contact.
+      expect(bob.contacts.map((c) => c.deviceId), [aliceId]);
+      expect(
+        bob.contacts.single.accountKeyBase64,
+        alice.identity!.accountKeyPublicBase64,
+      );
+
+      await alice.revokeAccountDevice('alice-phone');
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.linkedDevicesOf(aliceId).isEmpty;
+      }, reason: 'Bob kept the revoked phone');
+      expect(
+        bob.contacts.single.accountRevokedDeviceIds,
+        contains('alice-phone'),
+      );
+      // It cannot come back.
+      await expectLater(
+        alice.addAccountDevice(
+          deviceId: 'alice-phone',
+          encryptionKeyBase64: phone.publicKeyBase64,
+          signingKeyBase64: phoneSigningKey,
+          name: 'Pixel 8',
+        ),
+        throwsStateError,
+      );
+    });
+  });
+
   group('User modes', () {
     test('a new identity chooses a mode; older vaults stay advanced', () async {
       final vault = _MemoryVaultStore();

@@ -68,6 +68,8 @@ import 'radio/byte_link.dart';
 import 'ratchet.dart';
 import 'reachability_tracker.dart';
 import 'staged_attachment.dart';
+import 'account/account_contacts.dart';
+import 'account/account_model.dart';
 import 'energy_policy.dart';
 import 'route_test.dart';
 import 'voice_call_service.dart';
@@ -1009,7 +1011,11 @@ class MessengerController extends ChangeNotifier {
     await service.end(reason: 'Call rejected.');
   }
 
-  List<ContactRecord> get contacts => List.unmodifiable(_snapshot.contacts);
+  /// The contacts as listed: another device of a contact's account is
+  /// kept separately and not listed (see [ContactRecord.isLinkedDevice]).
+  List<ContactRecord> get contacts => List.unmodifiable(
+    _snapshot.contacts.where((contact) => !contact.isLinkedDevice),
+  );
 
   /// Every group the controller knows about, including ones the local user
   /// has left and ones they have explicitly removed from their list. Sidebar
@@ -14738,6 +14744,12 @@ class MessengerController extends ChangeNotifier {
       // a contact still on one of those ids moves to the current one.
       if (recipientKnowsIdentity && contact.retiredPairingRequestIds.isNotEmpty)
         'retiredPairingRequestIds': contact.retiredPairingRequestIds,
+      // This identity's account key and devices (M29), to known contacts.
+      if (recipientKnowsIdentity && me.accountDeviceList != null)
+        'account': {
+          if (me.accountUpgrade != null) 'upgrade': me.accountUpgrade,
+          'devices': me.accountDeviceList,
+        },
       // What members of groups we share may learn (the group owner passes
       // it on in our member profile).
       if (recipientKnowsIdentity)
@@ -19712,6 +19724,10 @@ class MessengerController extends ChangeNotifier {
     Map<TransportKind, String>? peerCarrierAddresses;
     Set<String> peerRetiredRequestIds = const {};
     Map<TransportKind, String>? peerGroupCarrierAddresses;
+    // Their account key and device list (M29), read only from an
+    // authenticated exchange.
+    Object? accountStatement;
+    if (_isRevokedAccountDevice(envelope.senderDeviceId)) return;
     if (envelope.protocolVersion == 1) {
       if (existing?.pendingVerification == true) return;
       final rawPayload = envelope.payloadBase64;
@@ -19796,6 +19812,7 @@ class MessengerController extends ChangeNotifier {
           peerGroupCarrierAddresses = _groupCarrierAddressesFromExchange(
             decodedExchange['groupCarrierAddresses'],
           );
+          accountStatement = decodedExchange['account'];
           final retired = decodedExchange['retiredPairingRequestIds'];
           if (retired is List && retired.length <= 16) {
             peerRetiredRequestIds = {
@@ -19820,6 +19837,9 @@ class MessengerController extends ChangeNotifier {
         '${envelope.senderDeviceId}.',
       );
       return;
+    }
+    if (accountStatement != null && envelope.protocolVersion != 1) {
+      await _applyAccountDevices(envelope.senderDeviceId, accountStatement);
     }
     final tombstone = _snapshot.contactRemovalTombstones[invite.deviceId];
     if (tombstone != null &&
@@ -28514,6 +28534,302 @@ class MessengerController extends ChangeNotifier {
                 isPlausibleCarrierAddress(entry.value as String))
           kind: entry.value as String,
     };
+  }
+
+  // Multi-device accounts (M29).
+
+  /// Whether this identity has an account key yet.
+  bool get hasAccount => identity?.accountKeyPublicBase64 != null;
+
+  /// The account's devices, as this device last signed them.
+  AccountDeviceList? get accountDevices =>
+      AccountDeviceList.fromJson(identity?.accountDeviceList);
+
+  AccountKeys _accountKeys(IdentityRecord me) {
+    final public = me.accountKeyPublicBase64;
+    final private = me.accountKeyPrivateBase64;
+    if (public == null || private == null) {
+      throw StateError('This identity has no account key yet.');
+    }
+    return AccountKeys(publicKeyBase64: public, privateKeyBase64: private);
+  }
+
+  /// Gives this identity an account key, so other devices can join it.
+  /// Contacts learn it from the upgrade, signed by this device's key they
+  /// already pinned.
+  Future<void> createAccount({String deviceName = 'This device'}) async {
+    final me = _requireIdentity();
+    if (me.accountKeyPublicBase64 != null) return;
+    final signingPublic = me.signingPublicKeyBase64;
+    final signingPrivate = me.signingPrivateKeyBase64;
+    if (signingPublic == null || signingPrivate == null) {
+      throw StateError('This identity has no signing key.');
+    }
+    final account = await AccountKeys.generate();
+    final now = _now().toUtc();
+    final upgrade = await AccountUpgrade.create(
+      accountId: me.accountId,
+      deviceId: me.deviceId,
+      deviceSigningPublicKeyBase64: signingPublic,
+      deviceSigningPrivateKeyBase64: signingPrivate,
+      account: account,
+      issuedAt: now,
+    );
+    final cert = await DeviceCert.issue(
+      account: account,
+      accountId: me.accountId,
+      deviceId: me.deviceId,
+      encryptionKeyBase64: me.publicKeyBase64,
+      signingKeyBase64: signingPublic,
+      irohEndpointId: me.irohEndpointId,
+      name: deviceName,
+      // The original device has been there all along.
+      linkedAt: me.createdAt,
+    );
+    final list = await AccountDeviceList.issue(
+      account: account,
+      accountId: me.accountId,
+      version: 1,
+      devices: [cert],
+      issuedAt: now,
+    );
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(
+        accountKeyPublicBase64: account.publicKeyBase64,
+        accountKeyPrivateBase64: account.privateKeyBase64,
+        accountUpgrade: upgrade.toJson(),
+        accountDeviceList: list.toJson(),
+      ),
+    );
+    await _saveSnapshotSilently(notify: true);
+    _advertiseProfileToContacts();
+  }
+
+  /// Signs a new device list ([change] edits the devices and revocations)
+  /// one version up, keeps it and tells contacts.
+  Future<AccountDeviceList> _reissueAccountDevices(
+    void Function(List<DeviceCert> devices, Map<String, DateTime> revoked)
+    change,
+  ) async {
+    final me = _requireIdentity();
+    final account = _accountKeys(me);
+    final current = accountDevices;
+    if (current == null) throw StateError('No account device list.');
+    final devices = List<DeviceCert>.of(current.devices);
+    final revoked = Map<String, DateTime>.of(current.revoked);
+    change(devices, revoked);
+    final list = await AccountDeviceList.issue(
+      account: account,
+      accountId: me.accountId,
+      version: current.version + 1,
+      devices: devices,
+      revoked: revoked,
+      issuedAt: _now().toUtc(),
+    );
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(accountDeviceList: list.toJson()),
+    );
+    await _saveSnapshotSilently(notify: true);
+    _advertiseProfileToContacts();
+    return list;
+  }
+
+  /// Whether this device may add or remove devices now (a device linked
+  /// in the last 24 hours may not).
+  bool get mayManageAccountDevices {
+    final me = identity;
+    if (me == null) return false;
+    return accountDevices?.deviceFor(me.deviceId)?.mayManageDevicesAt(_now()) ??
+        false;
+  }
+
+  /// Adds a device to the account (once linking has checked it is the
+  /// user's).
+  Future<void> addAccountDevice({
+    required String deviceId,
+    required String encryptionKeyBase64,
+    required String signingKeyBase64,
+    String? irohEndpointId,
+    required String name,
+  }) async {
+    final me = _requireIdentity();
+    if (!mayManageAccountDevices) {
+      throw StateError(
+        'A device linked in the last 24 hours cannot add devices yet.',
+      );
+    }
+    if (deviceId == me.deviceId) {
+      throw ArgumentError('This device is already in the account.');
+    }
+    final cert = await DeviceCert.issue(
+      account: _accountKeys(me),
+      accountId: me.accountId,
+      deviceId: deviceId,
+      encryptionKeyBase64: encryptionKeyBase64,
+      signingKeyBase64: signingKeyBase64,
+      irohEndpointId: irohEndpointId,
+      name: name,
+      linkedAt: _now().toUtc(),
+    );
+    await _reissueAccountDevices((devices, revoked) {
+      if (revoked.containsKey(deviceId)) {
+        throw StateError('A revoked device cannot be added again.');
+      }
+      devices.removeWhere((device) => device.deviceId == deviceId);
+      if (devices.length >= maxAccountDevices) {
+        throw StateError('The account has $maxAccountDevices devices already.');
+      }
+      devices.add(cert);
+    });
+  }
+
+  /// Removes a lost or old device from the account for good: contacts stop
+  /// accepting it.
+  Future<void> revokeAccountDevice(String deviceId) async {
+    final me = _requireIdentity();
+    if (deviceId == me.deviceId) {
+      throw ArgumentError('This device cannot revoke itself.');
+    }
+    if (!mayManageAccountDevices) {
+      throw StateError(
+        'A device linked in the last 24 hours cannot remove devices yet.',
+      );
+    }
+    await _reissueAccountDevices((devices, revoked) {
+      devices.removeWhere((device) => device.deviceId == deviceId);
+      revoked[deviceId] = _now().toUtc();
+    });
+  }
+
+  /// A device some contact's account revoked: nothing from it is read.
+  bool _isRevokedAccountDevice(String deviceId) => _snapshot.contacts.any(
+    (contact) => contact.accountRevokedDeviceIds.contains(deviceId),
+  );
+
+  /// The records of a contact's other devices (hidden from contact lists).
+  @visibleForTesting
+  List<ContactRecord> linkedDevicesOf(String deviceId) => [
+    for (final contact in _snapshot.contacts)
+      if (contact.accountAnchorDeviceId == deviceId) contact,
+  ];
+
+  /// Applies a contact's account statement (their account key and device
+  /// list) once [verifyAccountDevices] accepts it: each other device
+  /// becomes a hidden record, revoked ones go.
+  Future<void> _applyAccountDevices(
+    String senderDeviceId,
+    Object? statement,
+  ) async {
+    final sender = _contactByDeviceId(senderDeviceId);
+    if (sender == null || sender.isArchived || sender.pendingVerification) {
+      return;
+    }
+    final anchor = sender.isLinkedDevice
+        ? _contactByDeviceId(sender.accountAnchorDeviceId!)
+        : sender;
+    if (anchor == null || anchor.isLinkedDevice || anchor.isArchived) return;
+    final update = await verifyAccountDevices(
+      accountId: anchor.accountId,
+      anchorDeviceId: anchor.deviceId,
+      anchorSigningKeyBase64: anchor.signingPublicKeyBase64,
+      knownAccountKeyBase64: anchor.accountKeyBase64,
+      knownVersion: anchor.accountDeviceListVersion,
+      knownRevoked: anchor.accountRevokedDeviceIds,
+      fromAnchor: sender.deviceId == anchor.deviceId,
+      payload: statement,
+    );
+    if (update == null) return;
+    // The contact may have changed while this was being checked.
+    final current = _contactByDeviceId(anchor.deviceId);
+    if (current == null ||
+        current.accountDeviceListVersion >= update.list.version) {
+      return;
+    }
+    final list = update.list;
+    final me = identity;
+    final updatedAnchor = current.copyWith(
+      accountKeyBase64: update.accountKeyBase64,
+      accountDeviceListVersion: list.version,
+      accountRevokedDeviceIds: list.revoked.keys.toList(),
+      deviceName: list.deviceFor(current.deviceId)?.name,
+    );
+    final contacts = <ContactRecord>[
+      for (final contact in _snapshot.contacts)
+        if (contact.deviceId == current.deviceId)
+          updatedAnchor
+        // A device no longer in the list (revoked) goes.
+        else if (contact.accountAnchorDeviceId != current.deviceId ||
+            list.deviceFor(contact.deviceId) != null)
+          contact,
+    ];
+    final added = <DeviceCert>[];
+    for (final cert in list.devices) {
+      if (cert.deviceId == current.deviceId || cert.deviceId == me?.deviceId) {
+        continue;
+      }
+      final index = contacts.indexWhere((c) => c.deviceId == cert.deviceId);
+      // A separate contact with that device id is left alone.
+      if (index >= 0 &&
+          contacts[index].accountAnchorDeviceId != current.deviceId) {
+        continue;
+      }
+      final record = _linkedDeviceRecord(
+        updatedAnchor,
+        cert,
+        existing: index >= 0 ? contacts[index] : null,
+      );
+      if (record == null) continue;
+      if (index >= 0) {
+        contacts[index] = record;
+      } else {
+        contacts.add(record);
+        added.add(cert);
+      }
+    }
+    _snapshot = _snapshot.copyWith(contacts: contacts);
+    await _saveSnapshotSilently(notify: true);
+    for (final cert in added) {
+      setStatus('${current.alias} added a device: ${cert.name}.');
+    }
+  }
+
+  /// A hidden record for [cert], another device of [anchor]'s account: the
+  /// contact's settings, with the device's own keys and nothing yet known
+  /// about how to reach it.
+  ContactRecord? _linkedDeviceRecord(
+    ContactRecord anchor,
+    DeviceCert cert, {
+    ContactRecord? existing,
+  }) {
+    final base = existing ?? anchor;
+    final json = base.toJson()
+      ..['deviceId'] = cert.deviceId
+      ..['publicKeyBase64'] = cert.encryptionKeyBase64
+      ..['signingPublicKeyBase64'] = cert.signingKeyBase64
+      ..['irohEndpointId'] = cert.irohEndpointId
+      ..['accountAnchorDeviceId'] = anchor.deviceId
+      ..['accountKey'] = anchor.accountKeyBase64
+      ..['deviceName'] = cert.name
+      ..['alias'] = anchor.alias
+      ..['displayName'] = anchor.displayName
+      ..remove('accountDeviceListVersion')
+      ..remove('accountRevokedDeviceIds');
+    if (existing == null) {
+      json
+        ..['routeHints'] = const <Object>[]
+        ..remove('carrierAddresses')
+        ..remove('groupCarrierAddresses')
+        ..remove('pairingRequestId')
+        ..remove('retiredPairingRequestIds')
+        ..remove('matrixAddress')
+        ..remove('featureCapabilities')
+        ..remove('capabilities');
+    }
+    try {
+      return ContactRecord.fromJson(json);
+    } catch (_) {
+      return null;
+    }
   }
 
   void _advertiseProfileToContacts() {
