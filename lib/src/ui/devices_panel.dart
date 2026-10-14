@@ -19,6 +19,20 @@ class DevicesPanel extends StatelessWidget {
     return '${local.year}-${two(local.month)}-${two(local.day)}';
   }
 
+  String _subtitle(
+    String deviceId, {
+    required bool isThis,
+    required DateTime linkedAt,
+    DateTime? outOfTouchSince,
+  }) {
+    if (isThis) return 'This device';
+    if (outOfTouchSince != null) {
+      return 'Out of touch since ${_date(outOfTouchSince)}: nothing syncs '
+          'with it until you confirm it is still yours.';
+    }
+    return 'Linked ${_date(linkedAt)}';
+  }
+
   Future<void> _revoke(
     BuildContext context,
     String deviceId,
@@ -57,6 +71,10 @@ class DevicesPanel extends StatelessWidget {
     final theme = Theme.of(context);
     final me = controller.identity;
     final devices = controller.accountDevices?.devices ?? const [];
+    final unconfirmed = <String, DateTime>{
+      for (final device in controller.unconfirmedOwnDevices)
+        device.deviceId: device.inTouchAt ?? device.trustedAt,
+    };
     final muted = theme.textTheme.bodySmall?.copyWith(
       color: theme.colorScheme.onSurfaceVariant,
     );
@@ -74,15 +92,29 @@ class DevicesPanel extends StatelessWidget {
         for (final device in devices)
           ListTile(
             contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.devices_other),
+            leading: Icon(
+              unconfirmed.containsKey(device.deviceId)
+                  ? Icons.sync_disabled
+                  : Icons.devices_other,
+            ),
             title: Text(device.name),
             subtitle: Text(
-              device.deviceId == me?.deviceId
-                  ? 'This device'
-                  : 'Linked ${_date(device.linkedAt)}',
+              _subtitle(
+                device.deviceId,
+                isThis: device.deviceId == me?.deviceId,
+                linkedAt: device.linkedAt,
+                outOfTouchSince: unconfirmed[device.deviceId],
+              ),
             ),
             trailing: device.deviceId == me?.deviceId
                 ? null
+                : unconfirmed.containsKey(device.deviceId)
+                ? TextButton(
+                    key: ValueKey('confirm-device-${device.deviceId}'),
+                    onPressed: () =>
+                        controller.confirmOwnDevice(device.deviceId),
+                    child: const Text('Still mine'),
+                  )
                 : IconButton(
                     tooltip: 'Remove device',
                     icon: const Icon(Icons.link_off),
@@ -96,6 +128,34 @@ class DevicesPanel extends StatelessWidget {
             'This device was linked less than a day ago, so it cannot add or '
             'remove devices yet.',
             style: muted,
+          ),
+        if (devices.length > 1)
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Pause syncing with a device out of touch for',
+                  style: muted,
+                ),
+              ),
+              DropdownButton<int>(
+                key: const ValueKey('device-touch-days'),
+                value: me?.ownDeviceTouchDays,
+                items: [
+                  for (final days in {
+                    3,
+                    7,
+                    14,
+                    30,
+                    me?.ownDeviceTouchDays ?? 7,
+                  })
+                    DropdownMenuItem(value: days, child: Text('$days days')),
+                ],
+                onChanged: (days) {
+                  if (days != null) controller.setOwnDeviceTouchDays(days);
+                },
+              ),
+            ],
           ),
         const SizedBox(height: 8),
         Wrap(

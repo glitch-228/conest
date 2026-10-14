@@ -16621,6 +16621,71 @@ void main() {
       );
     });
 
+    test(
+      'a device long out of touch syncs nothing until confirmed on both',
+      () async {
+        final (alice, bob, phone, advance) = await threeDevices();
+        advance(const Duration(hours: 25));
+        final aliceId = alice.identity!.deviceId;
+        final bobId = bob.identity!.deviceId;
+        final phoneId = phone.identity!.deviceId;
+        final qr = await phone.startLinkAsNewDevice();
+        await alice.startLinkFromQrCode(qr);
+        await _waitForIroh(
+          () =>
+              phone.linkState == LinkState.compareCode &&
+              alice.linkState == LinkState.compareCode,
+        );
+        await phone.confirmLinkCode();
+        await alice.confirmLinkCode();
+        await _waitForIroh(() => phone.linkState == LinkState.linked);
+        expect(alice.unconfirmedOwnDevices, isEmpty);
+
+        // Eight days with no word between them.
+        advance(const Duration(days: 8));
+        expect(alice.unconfirmedOwnDevices.map((d) => d.deviceId), [phoneId]);
+        expect(phone.unconfirmedOwnDevices.map((d) => d.deviceId), [aliceId]);
+        await phone.sendMessage(contact: phone.contacts.single, body: 'unsure');
+        for (var i = 0; i < 10; i++) {
+          await Future.wait([alice.pollNow(), phone.pollNow(), bob.pollNow()]);
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+        expect(
+          alice.messagesFor(bobId).any((m) => m.body == 'unsure'),
+          isFalse,
+          reason: 'an unconfirmed device synced',
+        );
+        // Even one that sends anyway (it may not follow the rules) is not
+        // listened to.
+        await phone.sendAccountSyncForTesting(aliceId, {
+          'type': 'sent',
+          'chat': bobId,
+          'id': 'msg-forced',
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+          'payload': 'forced',
+        });
+        for (var i = 0; i < 10; i++) {
+          await alice.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+        expect(
+          alice.messagesFor(bobId).any((m) => m.id == 'msg-forced'),
+          isFalse,
+        );
+
+        // Confirmed on both: syncing resumes.
+        await alice.confirmOwnDevice(phoneId);
+        await phone.confirmOwnDevice(aliceId);
+        expect(alice.unconfirmedOwnDevices, isEmpty);
+        await phone.sendMessage(contact: phone.contacts.single, body: 'sure');
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          unawaited(phone.pollNow());
+          return alice.messagesFor(bobId).any((m) => m.body == 'sure');
+        }, reason: 'syncing did not resume');
+      },
+    );
+
     test('a device removed on one device is removed on the others', () async {
       var now = DateTime.now().toUtc();
       final network = _InProcessIrohNetwork();

@@ -976,7 +976,14 @@ class IdentityRecord {
     this.accountKeyPrivateBase64,
     this.accountUpgrade,
     this.accountDeviceList,
+    this.ownDeviceTouchDays = defaultOwnDeviceTouchDays,
   });
+
+  /// After how many days out of touch with this account's other devices a
+  /// device is unconfirmed (nothing syncs with it until the user says it
+  /// is still theirs).
+  final int ownDeviceTouchDays;
+  static const int defaultOwnDeviceTouchDays = 7;
 
   final String accountId;
   final String deviceId;
@@ -1077,6 +1084,7 @@ class IdentityRecord {
     String? accountKeyPrivateBase64,
     Map<String, Object?>? accountUpgrade,
     Map<String, Object?>? accountDeviceList,
+    int? ownDeviceTouchDays,
   }) {
     return IdentityRecord(
       accountId: accountId ?? this.accountId,
@@ -1119,6 +1127,7 @@ class IdentityRecord {
           accountKeyPrivateBase64 ?? this.accountKeyPrivateBase64,
       accountUpgrade: accountUpgrade ?? this.accountUpgrade,
       accountDeviceList: accountDeviceList ?? this.accountDeviceList,
+      ownDeviceTouchDays: ownDeviceTouchDays ?? this.ownDeviceTouchDays,
     );
   }
 
@@ -1161,6 +1170,8 @@ class IdentityRecord {
         'accountKeyPrivate': accountKeyPrivateBase64,
       if (accountUpgrade != null) 'accountUpgrade': accountUpgrade,
       if (accountDeviceList != null) 'accountDeviceList': accountDeviceList,
+      if (ownDeviceTouchDays != defaultOwnDeviceTouchDays)
+        'ownDeviceTouchDays': ownDeviceTouchDays,
     };
   }
 
@@ -1244,6 +1255,10 @@ class IdentityRecord {
       accountDeviceList: json['accountDeviceList'] is Map<String, dynamic>
           ? json['accountDeviceList'] as Map<String, dynamic>
           : null,
+      ownDeviceTouchDays: switch (json['ownDeviceTouchDays']) {
+        final int days when days >= 1 && days <= 365 => days,
+        _ => defaultOwnDeviceTouchDays,
+      },
     );
   }
 }
@@ -1826,6 +1841,7 @@ class ContactRecord {
     this.accountAnchorDeviceId,
     this.deviceName,
     this.ownDevice = false,
+    this.inTouchAt,
     this.routing = const ContactRoutingPreferences(),
     this.signingPublicKeyBase64,
     this.irohEndpointId,
@@ -1953,6 +1969,10 @@ class ContactRecord {
   /// device list): reached like a contact, for syncing only, never listed.
   final bool ownDevice;
 
+  /// For an own device: when it was last in touch with this one (or
+  /// confirmed by the user). Long out of touch, it is unconfirmed.
+  final DateTime? inTouchAt;
+
   /// Another device of a contact's account, not the contact as listed.
   bool get isLinkedDevice => accountAnchorDeviceId != null;
 
@@ -2000,6 +2020,7 @@ class ContactRecord {
     String? accountAnchorDeviceId,
     String? deviceName,
     bool? ownDevice,
+    DateTime? inTouchAt,
     bool clearRemoteRemovedAt = false,
     ContactRoutingPreferences? routing,
     String? signingPublicKeyBase64,
@@ -2056,6 +2077,7 @@ class ContactRecord {
           accountAnchorDeviceId ?? this.accountAnchorDeviceId,
       deviceName: deviceName ?? this.deviceName,
       ownDevice: ownDevice ?? this.ownDevice,
+      inTouchAt: inTouchAt ?? this.inTouchAt,
       routing: routing ?? this.routing,
       signingPublicKeyBase64:
           signingPublicKeyBase64 ?? this.signingPublicKeyBase64,
@@ -2175,6 +2197,7 @@ class ContactRecord {
         'accountAnchorDeviceId': accountAnchorDeviceId,
       if (deviceName != null) 'deviceName': deviceName,
       if (ownDevice) 'ownDevice': true,
+      if (inTouchAt != null) 'inTouchAt': inTouchAt!.toUtc().toIso8601String(),
       'routing': routing.toJson(),
       if (signingPublicKeyBase64 != null)
         'signingPublicKeyBase64': signingPublicKeyBase64,
@@ -2293,6 +2316,7 @@ class ContactRecord {
           ? json['deviceName'] as String
           : null,
       ownDevice: json['ownDevice'] == true,
+      inTouchAt: DateTime.tryParse(json['inTouchAt'] as String? ?? '')?.toUtc(),
       routing: json['routing'] is Map<String, dynamic>
           ? ContactRoutingPreferences.fromJson(
               json['routing'] as Map<String, dynamic>,

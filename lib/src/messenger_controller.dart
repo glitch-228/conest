@@ -20447,7 +20447,9 @@ class MessengerController extends ChangeNotifier {
     }
     if (accountStatement != null && envelope.protocolVersion != 1) {
       if (existing?.ownDevice ?? false) {
-        await _applyOwnAccountDevices(existing!, accountStatement);
+        if (isOwnDeviceUnconfirmed(existing!)) return;
+        _noteOwnDeviceInTouch(existing);
+        await _applyOwnAccountDevices(existing, accountStatement);
       } else {
         await _applyAccountDevices(envelope.senderDeviceId, accountStatement);
       }
@@ -20992,6 +20994,7 @@ class MessengerController extends ChangeNotifier {
       _cachePeerLanDirectFromPayload(sender.deviceId, routePayload);
     }
     _acceptedByTraffic(sender, sentAt: envelope.createdAt);
+    _noteOwnDeviceInTouch(sender);
     // Route updates are stamped when sent (never queued with an old time);
     // over a live route they arrive within moments. A reply echoes our own
     // time instead, so it says nothing about their clock.
@@ -22749,6 +22752,10 @@ class MessengerController extends ChangeNotifier {
       // What this account's devices tell each other waits for a device that
       // is away for days: retried ever more slowly, until it expires.
       final sync = entry.kind == PendingAckKind.accountSync;
+      if (sync) {
+        final target = _contactByDeviceId(entry.targetDeviceId);
+        if (target != null && isOwnDeviceUnconfirmed(target)) continue;
+      }
       // One failed sync send per device per pass: the rest wait with it.
       if (sync && unreachableOwnDevices.contains(entry.targetDeviceId)) {
         continue;
@@ -30203,6 +30210,52 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  /// Whether own device [device] has been out of touch longer than the
+  /// user's limit: nothing syncs with it until they confirm it.
+  bool isOwnDeviceUnconfirmed(ContactRecord device) {
+    if (!device.ownDevice) return false;
+    final days =
+        identity?.ownDeviceTouchDays ??
+        IdentityRecord.defaultOwnDeviceTouchDays;
+    final since = device.inTouchAt ?? device.trustedAt;
+    return _now().toUtc().difference(since.toUtc()) > Duration(days: days);
+  }
+
+  /// This account's devices that are unconfirmed.
+  List<ContactRecord> get unconfirmedOwnDevices => [
+    for (final device in ownDevices)
+      if (isOwnDeviceUnconfirmed(device)) device,
+  ];
+
+  /// [device] (an own device, still confirmed) was heard from: in touch.
+  void _noteOwnDeviceInTouch(ContactRecord device) {
+    if (!device.ownDevice || isOwnDeviceUnconfirmed(device)) return;
+    final now = _now().toUtc();
+    final last = device.inTouchAt;
+    // Saved at most every few minutes.
+    if (last != null && now.difference(last) < const Duration(minutes: 5)) {
+      return;
+    }
+    _replaceContactRecord(device.copyWith(inTouchAt: now));
+  }
+
+  /// The user says unconfirmed [deviceId] is still theirs: syncing resumes.
+  Future<void> confirmOwnDevice(String deviceId) async {
+    final device = _contactByDeviceId(deviceId);
+    if (device == null || !device.ownDevice) return;
+    _replaceContactRecord(device.copyWith(inTouchAt: _now().toUtc()));
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  /// After how many days out of touch an own device is unconfirmed.
+  Future<void> setOwnDeviceTouchDays(int days) async {
+    final me = _requireIdentity();
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(ownDeviceTouchDays: days.clamp(1, 365)),
+    );
+    await _saveSnapshotSilently(notify: true);
+  }
+
   /// Makes the own-device records match the device list: one per other
   /// listed device, with the keys the list certifies; others go.
   ///
@@ -30306,6 +30359,9 @@ class MessengerController extends ChangeNotifier {
       'accountKey': me.accountKeyPublicBase64,
       'deviceName': cert.name,
       'ownDevice': true,
+      // Counting starts when this device first knows it (or now, for
+      // devices linked before this was kept).
+      'inTouchAt': known['inTouchAt'] ?? _now().toUtc().toIso8601String(),
       for (final key in const [
         'capabilities',
         'featureCapabilities',
@@ -30570,7 +30626,9 @@ class MessengerController extends ChangeNotifier {
   /// same chat or message.
   void _syncToOwnDevices(Map<String, Object?> event) {
     if (!conestActive) return;
-    final devices = ownDevices.where((device) => device.canSendOutbound);
+    final devices = ownDevices.where(
+      (device) => device.canSendOutbound && !isOwnDeviceUnconfirmed(device),
+    );
     if (devices.isEmpty) return;
     final plaintext = jsonEncode({
       'events': [event],
@@ -30662,13 +30720,16 @@ class MessengerController extends ChangeNotifier {
         !sender.canSendOutbound ||
         sender.accountId != envelope.senderAccountId ||
         envelope.conversationId != _crypto.conversationIdFor(sender.deviceId) ||
-        accountDevices?.deviceFor(sender.deviceId) == null) {
+        accountDevices?.deviceFor(sender.deviceId) == null ||
+        // Long out of touch: nothing from it until the user confirms it.
+        isOwnDeviceUnconfirmed(sender)) {
       return;
     }
     final decoded = jsonDecode(
       await _crypto.decryptMessage(contact: sender, envelope: envelope),
     );
     if (decoded is! Map<String, dynamic>) return;
+    _noteOwnDeviceInTouch(sender);
     final events = decoded['events'];
     if (events is! List) return;
     var changed = false;
