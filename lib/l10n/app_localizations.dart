@@ -351,6 +351,150 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'This translation was made with AI and may contain mistakes. You can help improve it on Weblate.'**
   String get settingsAiTranslated;
+
+  /// Message menu: reply to this message.
+  ///
+  /// In en, this message translates to:
+  /// **'Reply'**
+  String get menuReply;
+
+  /// Message menu: react with a thumbs-up. Keep the emoji.
+  ///
+  /// In en, this message translates to:
+  /// **'React 👍'**
+  String get menuReact;
+
+  /// Message menu: forward to another chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Forward'**
+  String get menuForward;
+
+  /// Message menu: copy the text.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy message'**
+  String get menuCopyMessage;
+
+  /// Message menu: download a received file.
+  ///
+  /// In en, this message translates to:
+  /// **'Download attachment'**
+  String get menuDownloadAttachment;
+
+  /// Message menu: save a file to the device.
+  ///
+  /// In en, this message translates to:
+  /// **'Save attachment'**
+  String get menuSaveAttachment;
+
+  /// Message menu: copy the picture to the clipboard.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy image'**
+  String get menuCopyImage;
+
+  /// Message menu: delete this device's copy of a file (it can be downloaded again).
+  ///
+  /// In en, this message translates to:
+  /// **'Free up local space'**
+  String get menuFreeUpSpace;
+
+  /// Message menu: stop a file that is being sent or received.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel transfer'**
+  String get menuCancelTransfer;
+
+  /// Message menu: try a failed file transfer again.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry transfer'**
+  String get menuRetryTransfer;
+
+  /// Message menu: forward the file to another chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Forward attachment'**
+  String get menuForwardAttachment;
+
+  /// Message menu: stop a message that has not gone out yet.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel sending'**
+  String get menuCancelSending;
+
+  /// Message menu: change the text of your message.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit message'**
+  String get menuEditMessage;
+
+  /// Message menu: delete the message.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete message'**
+  String get menuDeleteMessage;
+
+  /// Menu item: change something.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit'**
+  String get menuEdit;
+
+  /// Menu item: delete something.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete'**
+  String get menuDelete;
+
+  /// Tooltip of the paperclip button in the message box.
+  ///
+  /// In en, this message translates to:
+  /// **'Attach a file or image'**
+  String get composerAttach;
+
+  /// Tooltip: send the message later at a chosen time.
+  ///
+  /// In en, this message translates to:
+  /// **'Schedule message'**
+  String get composerSchedule;
+
+  /// Tooltip of the send button.
+  ///
+  /// In en, this message translates to:
+  /// **'Send'**
+  String get composerSend;
+
+  /// Hint in the search box of the chat list.
+  ///
+  /// In en, this message translates to:
+  /// **'Search chats and messages'**
+  String get searchChatsAndMessages;
+
+  /// Hint in a search box for chats.
+  ///
+  /// In en, this message translates to:
+  /// **'Search chats'**
+  String get searchChats;
+
+  /// Hint in a search box for contacts.
+  ///
+  /// In en, this message translates to:
+  /// **'Search contacts'**
+  String get searchContacts;
+
+  /// Entry that opens the archived chats.
+  ///
+  /// In en, this message translates to:
+  /// **'Archived chats'**
+  String get archivedChats;
+
+  /// Tooltip of a search button.
+  ///
+  /// In en, this message translates to:
+  /// **'Search'**
+  String get actionSearch;
 }
 
 class _AppLocalizationsDelegate

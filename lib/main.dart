@@ -4083,7 +4083,7 @@ class _CourierHomeState extends State<_CourierHome> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, 'delete'),
-            child: const Text('Delete'),
+            child: Text(l10nOf(context).menuDelete),
           ),
           if (folderIndex > 0)
             TextButton(
@@ -4632,7 +4632,7 @@ class _CourierHomeState extends State<_CourierHome> {
                 ),
                 const Spacer(),
                 IconButton(
-                  tooltip: 'Search',
+                  tooltip: l10nOf(context).actionSearch,
                   onPressed: _searchFocus.requestFocus,
                   icon: const Icon(Icons.search),
                 ),
@@ -4722,7 +4722,7 @@ class _CourierHomeState extends State<_CourierHome> {
               focusNode: _searchFocus,
               onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
-                hintText: 'Search chats and messages',
+                hintText: l10nOf(context).searchChatsAndMessages,
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: query.isEmpty
                     ? null
@@ -4765,7 +4765,7 @@ class _CourierHomeState extends State<_CourierHome> {
                 if (!_showArchived && query.isEmpty && archivedCount > 0)
                   ListTile(
                     leading: const Icon(Icons.archive_outlined),
-                    title: const Text('Archived chats'),
+                    title: Text(l10nOf(context).archivedChats),
                     trailing: Text('$archivedCount'),
                     onTap: () => setState(() => _showArchived = true),
                   ),
@@ -4905,7 +4905,7 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
                       controller: _search,
                       onChanged: (_) => setState(() {}),
                       decoration: InputDecoration(
-                        hintText: 'Search contacts',
+                        hintText: l10nOf(context).searchContacts,
                         prefixIcon: const Icon(Icons.search),
                         suffixIcon: query.isEmpty
                             ? null
@@ -7154,8 +7154,8 @@ Future<void> _forwardTextMessage(
                     controller: search,
                     autofocus: true,
                     onChanged: (_) => setDialogState(() {}),
-                    decoration: const InputDecoration(
-                      hintText: 'Search chats',
+                    decoration: InputDecoration(
+                      hintText: l10nOf(context).searchChats,
                       prefixIcon: Icon(Icons.search),
                     ),
                   ),
@@ -7318,7 +7318,7 @@ Future<void> _forwardFile(
                 group.title.toLowerCase().contains(query),
           );
           return AlertDialog(
-            title: const Text('Forward attachment'),
+            title: Text(l10nOf(context).menuForwardAttachment),
             content: SizedBox(
               width: 420,
               height: 400,
@@ -7330,8 +7330,8 @@ Future<void> _forwardFile(
                     controller: search,
                     autofocus: true,
                     onChanged: (_) => setDialogState(() {}),
-                    decoration: const InputDecoration(
-                      hintText: 'Search chats',
+                    decoration: InputDecoration(
+                      hintText: l10nOf(context).searchChats,
                       prefixIcon: Icon(Icons.search),
                     ),
                   ),
@@ -8292,7 +8292,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('Delete'),
+              child: Text(l10nOf(context).menuDelete),
             ),
           ],
         ),
@@ -8442,7 +8442,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete'),
+            child: Text(l10nOf(context).menuDelete),
           ),
         ],
       ),
@@ -9177,17 +9177,20 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       }
                     },
                     itemBuilder: (context) => [
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'details',
-                        child: Text('Message details'),
+                        child: Text(l10nOf(context).messageDetails),
                       ),
-                      const PopupMenuItem(value: 'reply', child: Text('Reply')),
+                      PopupMenuItem(
+                        value: 'reply',
+                        child: Text(l10nOf(context).menuReply),
+                      ),
                       if (!message.hasAttachment &&
                           message.groupFile == null &&
                           message.body.trim().isNotEmpty)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'react',
-                          child: Text('React 👍'),
+                          child: Text(l10nOf(context).menuReact),
                         ),
                       if (message.outbound &&
                           message.groupFile == null &&
@@ -9195,32 +9198,35 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           group.hasActiveMember(
                             controller.identity?.deviceId ?? '',
                           )) ...[
-                        const PopupMenuItem(value: 'edit', child: Text('Edit')),
-                        const PopupMenuItem(
+                        PopupMenuItem(
+                          value: 'edit',
+                          child: Text(l10nOf(context).menuEdit),
+                        ),
+                        PopupMenuItem(
                           value: 'delete',
-                          child: Text('Delete'),
+                          child: Text(l10nOf(context).menuDelete),
                         ),
                       ],
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'copy',
-                        child: Text('Copy message'),
+                        child: Text(l10nOf(context).menuCopyMessage),
                       ),
                       if (attachmentDescriptor != null && !outbound &&
                           !attachmentAvailable)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_download',
-                          child: Text('Download attachment'),
+                          child: Text(l10nOf(context).menuDownloadAttachment),
                         ),
                       if (attachmentAvailable)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_save',
-                          child: Text('Save attachment'),
+                          child: Text(l10nOf(context).menuSaveAttachment),
                         ),
                       if (attachmentDescriptor?.mimeType.startsWith('image/') == true &&
                           controller.attachmentBytesFor(attachmentDescriptor!.id) != null)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_copy_image',
-                          child: Text('Copy image'),
+                          child: Text(l10nOf(context).menuCopyImage),
                         ),
                       if (attachmentAvailable) ...[
                         const PopupMenuItem(
@@ -9237,26 +9243,26 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         ),
                         if (!controller.attachmentKeptOffline(attachmentDescriptor.id) &&
                             !attachmentInFlight)
-                          const PopupMenuItem(
+                          PopupMenuItem(
                             value: 'attachment_evict',
-                            child: Text('Free up local space'),
+                            child: Text(l10nOf(context).menuFreeUpSpace),
                           ),
                       ],
                       if (attachmentInFlight)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_cancel',
-                          child: Text('Cancel transfer'),
+                          child: Text(l10nOf(context).menuCancelTransfer),
                         ),
                       if (attachmentDescriptor != null && outbound &&
                           message.state == DeliveryState.failed)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_retry',
-                          child: Text('Retry transfer'),
+                          child: Text(l10nOf(context).menuRetryTransfer),
                         ),
                       if (attachmentDescriptor != null)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'forward_attachment',
-                          child: Text('Forward attachment'),
+                          child: Text(l10nOf(context).menuForwardAttachment),
                         ),
                       if (message.groupFile != null &&
                           controller.groupFilePathFor(message.id) != null)
@@ -9267,9 +9273,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       if (!message.hasAttachment &&
                           message.groupFile == null &&
                           message.body.trim().isNotEmpty)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'forward',
-                          child: Text('Forward'),
+                          child: Text(l10nOf(context).menuForward),
                         ),
                     ],
                   ),
@@ -9693,7 +9699,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       ),
                       const SizedBox(width: 12),
                       IconButton(
-                        tooltip: 'Schedule message',
+                        tooltip: l10nOf(context).composerSchedule,
                         onPressed: canSend ? _scheduleText : null,
                         icon: const Icon(Icons.schedule_send_outlined),
                       ),
@@ -10571,7 +10577,7 @@ class _ChatPanelState extends State<_ChatPanel> {
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete'),
+            child: Text(l10nOf(context).menuDelete),
           ),
         ],
       ),
@@ -10981,42 +10987,45 @@ class _ChatPanelState extends State<_ChatPanel> {
                       }
                     },
                     itemBuilder: (context) => [
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'details',
-                        child: Text('Message details'),
+                        child: Text(l10nOf(context).messageDetails),
                       ),
-                      const PopupMenuItem(value: 'reply', child: Text('Reply')),
+                      PopupMenuItem(
+                        value: 'reply',
+                        child: Text(l10nOf(context).menuReply),
+                      ),
                       if (message.state != DeliveryState.canceled)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'react',
-                          child: Text('React 👍'),
+                          child: Text(l10nOf(context).menuReact),
                         ),
                       if (!message.hasAttachment &&
                           message.body.trim().isNotEmpty)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'forward',
-                          child: Text('Forward'),
+                          child: Text(l10nOf(context).menuForward),
                         ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'copy',
-                        child: Text('Copy message'),
+                        child: Text(l10nOf(context).menuCopyMessage),
                       ),
                       if (attachmentDescriptor != null && !outbound &&
                           !attachmentAvailable)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_download',
-                          child: Text('Download attachment'),
+                          child: Text(l10nOf(context).menuDownloadAttachment),
                         ),
                       if (attachmentAvailable)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_save',
-                          child: Text('Save attachment'),
+                          child: Text(l10nOf(context).menuSaveAttachment),
                         ),
                       if (attachmentDescriptor?.mimeType.startsWith('image/') == true &&
                           controller.attachmentBytesFor(attachmentDescriptor!.id) != null)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_copy_image',
-                          child: Text('Copy image'),
+                          child: Text(l10nOf(context).menuCopyImage),
                         ),
                       if (attachmentAvailable) ...[
                         const PopupMenuItem(
@@ -11033,31 +11042,31 @@ class _ChatPanelState extends State<_ChatPanel> {
                         ),
                         if (!controller.attachmentKeptOffline(attachmentDescriptor.id) &&
                             !attachmentInFlight)
-                          const PopupMenuItem(
+                          PopupMenuItem(
                             value: 'attachment_evict',
-                            child: Text('Free up local space'),
+                            child: Text(l10nOf(context).menuFreeUpSpace),
                           ),
                       ],
                       if (attachmentInFlight)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_cancel',
-                          child: Text('Cancel transfer'),
+                          child: Text(l10nOf(context).menuCancelTransfer),
                         ),
                       if (attachmentDescriptor != null && outbound &&
                           message.state == DeliveryState.failed)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_retry',
-                          child: Text('Retry transfer'),
+                          child: Text(l10nOf(context).menuRetryTransfer),
                         ),
                       if (attachmentDescriptor != null)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'forward_attachment',
-                          child: Text('Forward attachment'),
+                          child: Text(l10nOf(context).menuForwardAttachment),
                         ),
                       if (outbound && message.state == DeliveryState.pending)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'cancel',
-                          child: Text('Cancel sending'),
+                          child: Text(l10nOf(context).menuCancelSending),
                         ),
                       if (controller.canSendViaPlainMatrix(
                         contact.deviceId,
@@ -11068,13 +11077,13 @@ class _ChatPanelState extends State<_ChatPanel> {
                           child: Text('Send via Matrix…'),
                         ),
                       if (outbound)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'edit',
-                          child: Text('Edit message'),
+                          child: Text(l10nOf(context).menuEditMessage),
                         ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'delete',
-                        child: Text('Delete message'),
+                        child: Text(l10nOf(context).menuDeleteMessage),
                       ),
                     ],
                   ),
@@ -11445,7 +11454,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                             ? widget.onAttach
                             : null,
                         icon: const Icon(Icons.attach_file_outlined),
-                        tooltip: 'Attach a file or image',
+                        tooltip: l10nOf(context).composerAttach,
                       ),
                       Expanded(
                         child: Shortcuts(
@@ -11600,7 +11609,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                         },
                       ),
                       IconButton(
-                        tooltip: 'Schedule message',
+                        tooltip: l10nOf(context).composerSchedule,
                         onPressed: contact.canSendOutbound
                             ? _scheduleText
                             : null,
@@ -11608,7 +11617,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                       ),
                       if (widget.telegramLayout)
                         IconButton.filled(
-                          tooltip: 'Send',
+                          tooltip: l10nOf(context).composerSend,
                           onPressed: contact.canComposeOutbound
                               ? widget.onSend
                               : null,
@@ -11713,7 +11722,7 @@ class _EditMessageDialogState extends State<_EditMessageDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Edit message'),
+      title: Text(l10nOf(context).menuEditMessage),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -21318,7 +21327,10 @@ class _ScheduledMessagesScreen extends StatelessWidget {
                     }
                   },
                   itemBuilder: (_) => [
-                    const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                    PopupMenuItem(
+                      value: 'edit',
+                      child: Text(l10nOf(context).menuEdit),
+                    ),
                     const PopupMenuItem(value: 'send', child: Text('Send now')),
                     const PopupMenuItem(
                       value: 'reschedule',

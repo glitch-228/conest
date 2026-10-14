@@ -157,4 +157,76 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get settingsAiTranslated =>
       'This translation was made with AI and may contain mistakes. You can help improve it on Weblate.';
+
+  @override
+  String get menuReply => 'Reply';
+
+  @override
+  String get menuReact => 'React 👍';
+
+  @override
+  String get menuForward => 'Forward';
+
+  @override
+  String get menuCopyMessage => 'Copy message';
+
+  @override
+  String get menuDownloadAttachment => 'Download attachment';
+
+  @override
+  String get menuSaveAttachment => 'Save attachment';
+
+  @override
+  String get menuCopyImage => 'Copy image';
+
+  @override
+  String get menuFreeUpSpace => 'Free up local space';
+
+  @override
+  String get menuCancelTransfer => 'Cancel transfer';
+
+  @override
+  String get menuRetryTransfer => 'Retry transfer';
+
+  @override
+  String get menuForwardAttachment => 'Forward attachment';
+
+  @override
+  String get menuCancelSending => 'Cancel sending';
+
+  @override
+  String get menuEditMessage => 'Edit message';
+
+  @override
+  String get menuDeleteMessage => 'Delete message';
+
+  @override
+  String get menuEdit => 'Edit';
+
+  @override
+  String get menuDelete => 'Delete';
+
+  @override
+  String get composerAttach => 'Attach a file or image';
+
+  @override
+  String get composerSchedule => 'Schedule message';
+
+  @override
+  String get composerSend => 'Send';
+
+  @override
+  String get searchChatsAndMessages => 'Search chats and messages';
+
+  @override
+  String get searchChats => 'Search chats';
+
+  @override
+  String get searchContacts => 'Search contacts';
+
+  @override
+  String get archivedChats => 'Archived chats';
+
+  @override
+  String get actionSearch => 'Search';
 }

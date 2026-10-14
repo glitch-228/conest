@@ -151,4 +151,76 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settingsAiTranslated => '此翻译由 AI 完成，可能有错误。你可以在 Weblate 上帮助改进。';
+
+  @override
+  String get menuReply => '回复';
+
+  @override
+  String get menuReact => '回应 👍';
+
+  @override
+  String get menuForward => '转发';
+
+  @override
+  String get menuCopyMessage => '复制消息';
+
+  @override
+  String get menuDownloadAttachment => '下载附件';
+
+  @override
+  String get menuSaveAttachment => '保存附件';
+
+  @override
+  String get menuCopyImage => '复制图片';
+
+  @override
+  String get menuFreeUpSpace => '释放本地空间';
+
+  @override
+  String get menuCancelTransfer => '取消传输';
+
+  @override
+  String get menuRetryTransfer => '重试传输';
+
+  @override
+  String get menuForwardAttachment => '转发附件';
+
+  @override
+  String get menuCancelSending => '取消发送';
+
+  @override
+  String get menuEditMessage => '编辑消息';
+
+  @override
+  String get menuDeleteMessage => '删除消息';
+
+  @override
+  String get menuEdit => '编辑';
+
+  @override
+  String get menuDelete => '删除';
+
+  @override
+  String get composerAttach => '附加文件或图片';
+
+  @override
+  String get composerSchedule => '定时发送';
+
+  @override
+  String get composerSend => '发送';
+
+  @override
+  String get searchChatsAndMessages => '搜索聊天和消息';
+
+  @override
+  String get searchChats => '搜索聊天';
+
+  @override
+  String get searchContacts => '搜索联系人';
+
+  @override
+  String get archivedChats => '已归档的聊天';
+
+  @override
+  String get actionSearch => '搜索';
 }

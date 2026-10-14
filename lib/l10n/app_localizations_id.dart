@@ -159,4 +159,76 @@ class AppLocalizationsId extends AppLocalizations {
   @override
   String get settingsAiTranslated =>
       'Terjemahan ini dibuat dengan AI dan mungkin berisi kesalahan. Kamu bisa membantu memperbaikinya di Weblate.';
+
+  @override
+  String get menuReply => 'Balas';
+
+  @override
+  String get menuReact => 'Reaksi 👍';
+
+  @override
+  String get menuForward => 'Teruskan';
+
+  @override
+  String get menuCopyMessage => 'Salin pesan';
+
+  @override
+  String get menuDownloadAttachment => 'Unduh lampiran';
+
+  @override
+  String get menuSaveAttachment => 'Simpan lampiran';
+
+  @override
+  String get menuCopyImage => 'Salin gambar';
+
+  @override
+  String get menuFreeUpSpace => 'Kosongkan ruang lokal';
+
+  @override
+  String get menuCancelTransfer => 'Batalkan transfer';
+
+  @override
+  String get menuRetryTransfer => 'Coba transfer lagi';
+
+  @override
+  String get menuForwardAttachment => 'Teruskan lampiran';
+
+  @override
+  String get menuCancelSending => 'Batalkan pengiriman';
+
+  @override
+  String get menuEditMessage => 'Edit pesan';
+
+  @override
+  String get menuDeleteMessage => 'Hapus pesan';
+
+  @override
+  String get menuEdit => 'Edit';
+
+  @override
+  String get menuDelete => 'Hapus';
+
+  @override
+  String get composerAttach => 'Lampirkan berkas atau gambar';
+
+  @override
+  String get composerSchedule => 'Jadwalkan pesan';
+
+  @override
+  String get composerSend => 'Kirim';
+
+  @override
+  String get searchChatsAndMessages => 'Cari obrolan dan pesan';
+
+  @override
+  String get searchChats => 'Cari obrolan';
+
+  @override
+  String get searchContacts => 'Cari kontak';
+
+  @override
+  String get archivedChats => 'Obrolan yang diarsipkan';
+
+  @override
+  String get actionSearch => 'Cari';
 }

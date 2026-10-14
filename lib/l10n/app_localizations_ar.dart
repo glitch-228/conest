@@ -157,4 +157,76 @@ class AppLocalizationsAr extends AppLocalizations {
   @override
   String get settingsAiTranslated =>
       'أُنجزت هذه الترجمة بالذكاء الاصطناعي وقد تحتوي على أخطاء. يمكنك المساعدة في تحسينها على Weblate.';
+
+  @override
+  String get menuReply => 'رد';
+
+  @override
+  String get menuReact => 'تفاعل 👍';
+
+  @override
+  String get menuForward => 'إعادة توجيه';
+
+  @override
+  String get menuCopyMessage => 'نسخ الرسالة';
+
+  @override
+  String get menuDownloadAttachment => 'تنزيل المرفق';
+
+  @override
+  String get menuSaveAttachment => 'حفظ المرفق';
+
+  @override
+  String get menuCopyImage => 'نسخ الصورة';
+
+  @override
+  String get menuFreeUpSpace => 'تحرير المساحة المحلية';
+
+  @override
+  String get menuCancelTransfer => 'إلغاء النقل';
+
+  @override
+  String get menuRetryTransfer => 'إعادة محاولة النقل';
+
+  @override
+  String get menuForwardAttachment => 'إعادة توجيه المرفق';
+
+  @override
+  String get menuCancelSending => 'إلغاء الإرسال';
+
+  @override
+  String get menuEditMessage => 'تعديل الرسالة';
+
+  @override
+  String get menuDeleteMessage => 'حذف الرسالة';
+
+  @override
+  String get menuEdit => 'تعديل';
+
+  @override
+  String get menuDelete => 'حذف';
+
+  @override
+  String get composerAttach => 'إرفاق ملف أو صورة';
+
+  @override
+  String get composerSchedule => 'جدولة الرسالة';
+
+  @override
+  String get composerSend => 'إرسال';
+
+  @override
+  String get searchChatsAndMessages => 'البحث في المحادثات والرسائل';
+
+  @override
+  String get searchChats => 'البحث في المحادثات';
+
+  @override
+  String get searchContacts => 'البحث في جهات الاتصال';
+
+  @override
+  String get archivedChats => 'المحادثات المؤرشفة';
+
+  @override
+  String get actionSearch => 'بحث';
 }

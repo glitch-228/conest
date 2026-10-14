@@ -159,4 +159,76 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get settingsAiTranslated =>
       'Этот перевод сделан с помощью ИИ и может содержать ошибки. Помочь улучшить его можно на Weblate.';
+
+  @override
+  String get menuReply => 'Ответить';
+
+  @override
+  String get menuReact => 'Реакция 👍';
+
+  @override
+  String get menuForward => 'Переслать';
+
+  @override
+  String get menuCopyMessage => 'Копировать сообщение';
+
+  @override
+  String get menuDownloadAttachment => 'Скачать вложение';
+
+  @override
+  String get menuSaveAttachment => 'Сохранить вложение';
+
+  @override
+  String get menuCopyImage => 'Копировать изображение';
+
+  @override
+  String get menuFreeUpSpace => 'Освободить место';
+
+  @override
+  String get menuCancelTransfer => 'Отменить передачу';
+
+  @override
+  String get menuRetryTransfer => 'Повторить передачу';
+
+  @override
+  String get menuForwardAttachment => 'Переслать вложение';
+
+  @override
+  String get menuCancelSending => 'Отменить отправку';
+
+  @override
+  String get menuEditMessage => 'Изменить сообщение';
+
+  @override
+  String get menuDeleteMessage => 'Удалить сообщение';
+
+  @override
+  String get menuEdit => 'Изменить';
+
+  @override
+  String get menuDelete => 'Удалить';
+
+  @override
+  String get composerAttach => 'Прикрепить файл или изображение';
+
+  @override
+  String get composerSchedule => 'Запланировать сообщение';
+
+  @override
+  String get composerSend => 'Отправить';
+
+  @override
+  String get searchChatsAndMessages => 'Поиск по чатам и сообщениям';
+
+  @override
+  String get searchChats => 'Поиск чатов';
+
+  @override
+  String get searchContacts => 'Поиск контактов';
+
+  @override
+  String get archivedChats => 'Архив чатов';
+
+  @override
+  String get actionSearch => 'Поиск';
 }

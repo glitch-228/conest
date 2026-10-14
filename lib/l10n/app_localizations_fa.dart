@@ -159,4 +159,76 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get settingsAiTranslated =>
       'این ترجمه با هوش مصنوعی انجام شده و ممکن است اشتباه داشته باشد. می‌توانید در Weblate به بهتر شدن آن کمک کنید.';
+
+  @override
+  String get menuReply => 'پاسخ';
+
+  @override
+  String get menuReact => 'واکنش 👍';
+
+  @override
+  String get menuForward => 'بازارسال';
+
+  @override
+  String get menuCopyMessage => 'کپی پیام';
+
+  @override
+  String get menuDownloadAttachment => 'دانلود پیوست';
+
+  @override
+  String get menuSaveAttachment => 'ذخیره پیوست';
+
+  @override
+  String get menuCopyImage => 'کپی تصویر';
+
+  @override
+  String get menuFreeUpSpace => 'آزادسازی فضا';
+
+  @override
+  String get menuCancelTransfer => 'لغو انتقال';
+
+  @override
+  String get menuRetryTransfer => 'تلاش دوباره انتقال';
+
+  @override
+  String get menuForwardAttachment => 'بازارسال پیوست';
+
+  @override
+  String get menuCancelSending => 'لغو ارسال';
+
+  @override
+  String get menuEditMessage => 'ویرایش پیام';
+
+  @override
+  String get menuDeleteMessage => 'حذف پیام';
+
+  @override
+  String get menuEdit => 'ویرایش';
+
+  @override
+  String get menuDelete => 'حذف';
+
+  @override
+  String get composerAttach => 'پیوست فایل یا تصویر';
+
+  @override
+  String get composerSchedule => 'زمان‌بندی پیام';
+
+  @override
+  String get composerSend => 'ارسال';
+
+  @override
+  String get searchChatsAndMessages => 'جستجو در گفتگوها و پیام‌ها';
+
+  @override
+  String get searchChats => 'جستجوی گفتگوها';
+
+  @override
+  String get searchContacts => 'جستجوی مخاطبان';
+
+  @override
+  String get archivedChats => 'گفتگوهای بایگانی‌شده';
+
+  @override
+  String get actionSearch => 'جستجو';
 }
