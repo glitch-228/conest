@@ -193,6 +193,10 @@ Commit and push after each phase, with the tests green.
 
 - Phase F research complete: notes/GROUP-CALLS-MATRIX.md documents legacy/current MatrixRTC, focus discovery, OpenID/JWT authorization, encrypted media-key transport and a future migration/vote/dual-path design. Upstream prebuilt libwebrtc archives are 114–163 MB compressed; this is build/download cost, not final binary growth. The <25 MB shipped-size gate is unmeasured; MatrixRTC media/to-device APIs and linked-group room mapping are absent. Stop at the design note as explicitly permitted; no Matrix-call UI or transport settings are advertised.
 
+- Oct 14 continuation: a partial full-suite run exposed group-only startup failure under load. Reproduced a pending admission being terminally closed by the 1.5 s liveness timeout before its first key. Initial admission now retries while awaiting an authenticated roster. Also reproduced initial-tag preparation throwing on early microphone frames; cipher drops them until ready. Both regressions failed on old code and with the guards sabotaged, then passed after restoration. Full-suite checkpoint: 979 passed, 18 skipped, only the documented local native-Iroh failure; logs persist under ignored .buildlog/ so they survive interruption.
+- Oct 14 reviewer caught an over-broad first fix: an admitted member awaiting a rotated key still needs to replace a silent coordinator. Liveness authority now depends on local membership in the authenticated roster, independently of media/key readiness. The new dropped-key/coordinator-outage regression failed with the connected-only guard, and passes with admission-based authority; media privacy gates remain unchanged. Three startup/key-recovery sabotage checks pass and restore cleanly (22 recovery/UI negative checks total).
+- Oct 14 restored focused validation: 76 group, recovery, crypto, ownership, widget, NS, feature-model and existing 1:1 sound tests pass.
+
 ## Handoff
 
 - Branch and final commit:

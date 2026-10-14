@@ -123,6 +123,34 @@ void main() {
   );
 
   test(
+    'pending admission survives slow signalling until its first key arrives',
+    () async {
+      final net = await network(3);
+      await net.connect(['p0']);
+      final joining = net.peers['p1']!;
+      final gate = Completer<void>();
+      net.signalGates[('p1', 'p0', 'join')] = gate.future;
+      addTearDown(() {
+        if (!gate.isCompleted) gate.complete();
+      });
+      net.blockedLinks.add(('p0', 'p1'));
+      await joining.service.join('group');
+      await net.advance(const Duration(seconds: 6));
+      expect(joining.service.active, isNotNull);
+      expect(joining.service.active!.connected, false);
+      expect(joining.service.active!.term, 0);
+      expect(joining.service.active!.coordinator, 'p0');
+      net.blockedLinks.clear();
+      gate.complete();
+      await net.advance(const Duration(seconds: 2));
+      expect(joining.service.active!.connected, true);
+      await net.peers['p0']!.service.sendAudio(Uint8List.fromList([8]));
+      await net.flush();
+      expect(joining.media.played.single.$3, [8]);
+    },
+  );
+
+  test(
     'unjoined observer expires discovery without electing or tombstoning a live call',
     () async {
       final net = await network(3);

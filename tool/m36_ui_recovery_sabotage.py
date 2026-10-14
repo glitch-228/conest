@@ -2,11 +2,14 @@
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 FLUTTER = '/home/glitch/.local/share/flutter-sdk/bin/flutter'
 
 
 def check(path, mutation, test, file='test/group_call_recovery_test.dart'):
+    if sys.argv[1:] and test not in sys.argv[1:]:
+        return
     path = Path(path)
     original = path.read_text()
     try:
@@ -25,6 +28,17 @@ def check(path, mutation, test, file='test/group_call_recovery_test.dart'):
 
 
 service = 'lib/src/group_call/group_call_service.dart'
+check(service, lambda s: s.replace('final silent = admitted',
+      'final silent = true', 1),
+      'pending admission survives slow signalling until its first key arrives')
+check(service, lambda s: s.replace('final silent = admitted',
+      'final silent = room.connected', 1),
+      'admitted listener replaces a dead coordinator while its rotated key is pending',
+      'test/group_call_pending_key_test.dart')
+check('lib/src/group_call/group_call_crypto.dart', lambda s: s.replace(
+      '        _tag == null ||\n', '', 1),
+      'cipher drops early capture while its initial tag is being prepared',
+      'test/group_call_crypto_test.dart')
 def lose_receive_admission_guard(s):
     split = s.index('final frame = await room.cipher.decrypt(bytes);')
     return s[:split] + s[split:].replace('          !room.connected ||\n', '', 1).replace(

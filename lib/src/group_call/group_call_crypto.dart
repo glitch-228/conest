@@ -126,6 +126,7 @@ class GroupCallCipher {
     final state = _current;
     if (_closed ||
         state == null ||
+        _tag == null ||
         payload.isEmpty ||
         payload.length > maxPayloadBytes) {
       return null;

@@ -90,7 +90,7 @@ jobs:
           flutter test test/build_info_test.dart test/transport_test.dart test/feature_models_test.dart test/voice_call_sound_cues_test.dart
       - name: Verify encrypted group calls and shared audio ownership
         run: |
-          flutter test test/group_call_test.dart test/group_call_topology_test.dart test/group_call_recovery_test.dart test/group_call_media_ownership_test.dart test/group_call_screen_test.dart test/voice_noise_suppression_test.dart
+          flutter test test/group_call_test.dart test/group_call_crypto_test.dart test/group_call_topology_test.dart test/group_call_recovery_test.dart test/group_call_pending_key_test.dart test/group_call_media_ownership_test.dart test/group_call_screen_test.dart test/voice_noise_suppression_test.dart
           flutter test test/messenger_controller_test.dart --plain-name 'group-only members join encrypted voice calls over Iroh'
           flutter test test/messenger_controller_test.dart --plain-name 'empty group ticks preserve a live Android 1:1 foreground call'
           flutter test test/messenger_controller_test.dart --plain-name 'repeated group service replacements retain every pending hardware cleanup'

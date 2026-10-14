@@ -1305,8 +1305,15 @@ class GroupCallService {
         }
         continue;
       }
+      // Only an authenticated roster admission gives this device authority to
+      // remove silent peers. An admitted device retains it while a rotated key
+      // is pending; an initial join must wait for the coordinator's roster.
+      final admitted = room.participants.any(
+        (p) => p.deviceId == localDeviceId,
+      );
       final currentForwarder = room.forwarder;
-      if (currentForwarder != null &&
+      if (admitted &&
+          currentForwarder != null &&
           currentForwarder != localDeviceId &&
           now().difference(room.mediaSeen[currentForwarder] ?? room.startedAt) >
               const Duration(milliseconds: 1500)) {
@@ -1315,20 +1322,24 @@ class GroupCallService {
         );
         room.lastStatsSent = null;
       }
-      final silent = room.participants
-          .where(
-            (p) =>
-                p.deviceId != localDeviceId &&
-                now().difference(room.seen[p.deviceId] ?? room.startedAt) >
-                    Duration(
-                      milliseconds:
-                          p.deviceId == room.coordinator ||
-                              p.deviceId == room.forwarder
-                          ? 1500
-                          : 5000,
-                    ),
-          )
-          .toList();
+      final silent = admitted
+          ? room.participants
+                .where(
+                  (p) =>
+                      p.deviceId != localDeviceId &&
+                      now().difference(
+                            room.seen[p.deviceId] ?? room.startedAt,
+                          ) >
+                          Duration(
+                            milliseconds:
+                                p.deviceId == room.coordinator ||
+                                    p.deviceId == room.forwarder
+                                ? 1500
+                                : 5000,
+                          ),
+                )
+                .toList()
+          : const <GroupCallParticipant>[];
       for (final peer in silent) {
         await _remove(room, peer.deviceId);
       }
