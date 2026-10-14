@@ -28,7 +28,7 @@
 ### Phase 3 — upstream merge
 - Fetched origin and merged `origin/feature/matrix-client` (`f3489bc9020c46186946ef99e09766754c1bb198`). Resolved three overlapping insertion conflicts in the sanitizer and its two existing test files.
 - Retained upstream's oversized-Office consent rule and oversized plain-ZIP regression test, implemented using the new bounded ZIP directory reader. Retained upstream route-trace tests alongside Q4b's test registrations. No upstream release notes or version were manually edited.
-- Post-merge syntax-only validation passed for all 16 changed Dart files and whitespace checks passed. Repeated analyze/full test attempts still fail at VM startup. Final bundle will be verified and test-imported from the original base before delivery.
+- Post-merge syntax-only validation passed for all 16 changed Dart files and whitespace checks passed. Repeated analyze/full test attempts still fail at VM startup. Bundle verification and a clean test-import from the original base succeeded; the imported tip matched the exported branch and git connectivity checks passed. The final handoff-only refresh receives the same verification before delivery.
 
 ## Handoff
 
