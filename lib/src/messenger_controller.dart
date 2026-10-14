@@ -17313,9 +17313,14 @@ class MessengerController extends ChangeNotifier {
           contact: contact,
           envelope: envelope,
         );
-        _acceptedByTraffic(contact, sentAt: envelope.createdAt);
-        // From any of the contact's devices, into the contact's one chat.
+        // From any of the contact's devices, into the contact's one chat;
+        // none while that contact is archived or gone.
         final chatId = _chatIdFor(contact);
+        if (contact.isLinkedDevice) {
+          final anchor = _contactByDeviceId(chatId);
+          if (anchor == null || anchor.isArchived) continue;
+        }
+        _acceptedByTraffic(contact, sentAt: envelope.createdAt);
         final existingConversation = _conversationFor(chatId);
         final alreadyKnown = existingConversation.messages.any(
           (message) => message.id == envelope.messageId,
@@ -23202,6 +23207,9 @@ class MessengerController extends ChangeNotifier {
       return true;
     }
     _noteOutboundAttempt(contact.deviceId, message.id);
+    // Their other devices get it too, whether or not the main one can be
+    // reached now (each try, until a receipt comes).
+    _sendToLinkedDevices(contact, message);
     try {
       final envelope = await _outboxEnvelope(
         contact,
@@ -23234,7 +23242,6 @@ class MessengerController extends ChangeNotifier {
           : DeliveryState.relayed;
       _updateMessageState(contact.deviceId, message.id, state, route: route);
       _traceOutbound(contact.deviceId, message.id, route);
-      _sendToLinkedDevices(contact, message);
       _sendExtraCopies(contact: contact, envelope: envelope, first: route);
       _lastRelayStatus = '${route.label} accepted';
       await _persist(
@@ -29361,7 +29368,7 @@ class MessengerController extends ChangeNotifier {
   /// A message to a contact also goes to each of their other devices
   /// (encrypted for each), so whichever they use has it.
   void _sendToLinkedDevices(ContactRecord contact, ChatMessage message) {
-    if (contact.isLinkedDevice) return;
+    if (contact.isLinkedDevice || contact.isArchived) return;
     for (final device in linkedDevicesOf(contact.deviceId)) {
       if (!device.canSendOutbound) continue;
       unawaited(() async {
@@ -29424,12 +29431,16 @@ class MessengerController extends ChangeNotifier {
     final current = _contactByDeviceId(anchor.deviceId);
     if (current == null) return;
     final list = update.list;
+    // Revocations only add up, to a bound: once full, a statement that
+    // would add more is refused (nothing already revoked is ever dropped).
+    final merged = {...current.accountRevokedDeviceIds, ...list.revoked.keys};
+    if (merged.length > maxRevokedDevices) {
+      appendDebugLog('Refused an account list: too many revoked devices.');
+      return;
+    }
     if (update.revocationsOnly) {
       // Only the new revocations count: their devices go for good.
-      final revoked = {
-        ...current.accountRevokedDeviceIds,
-        ...list.revoked.keys,
-      };
+      final revoked = merged;
       _snapshot = _snapshot.copyWith(
         contacts: [
           for (final contact in _snapshot.contacts)
@@ -29447,7 +29458,7 @@ class MessengerController extends ChangeNotifier {
     final me = identity;
     // Revocations only ever add up: a device revoked here stays revoked
     // whatever a later list says.
-    final revoked = {...current.accountRevokedDeviceIds, ...list.revoked.keys};
+    final revoked = merged;
     final updatedAnchor = current.copyWith(
       accountKeyBase64: update.accountKeyBase64,
       accountDeviceListVersion: list.version,
@@ -30484,28 +30495,41 @@ class MessengerController extends ChangeNotifier {
     if (effectiveMessageId == null || effectiveMessageId.isEmpty) {
       return;
     }
-    // A message one of the contact's other devices sent: the read receipt
-    // goes to that device.
-    final read = conversation.messages
-        .where((message) => message.id == effectiveMessageId)
-        .firstOrNull;
-    final sender = read == null
-        ? null
-        : _contactByDeviceId(read.senderDeviceId);
-    if (read != null &&
-        sender != null &&
-        sender.accountAnchorDeviceId == contact.deviceId) {
+    // Each of the contact's devices with messages just read gets a read
+    // receipt for its newest one.
+    final newestBySender = <String, ChatMessage>{};
+    for (final message in conversation.messages) {
+      if (message.outbound ||
+          message.createdAt.isAfter(latestCreatedAt) ||
+          (currentReadAt != null &&
+              !message.createdAt.isAfter(currentReadAt))) {
+        continue;
+      }
+      final newest = newestBySender[message.senderDeviceId];
+      if (newest == null || message.createdAt.isAfter(newest.createdAt)) {
+        newestBySender[message.senderDeviceId] = message;
+      }
+    }
+    for (final MapEntry(key: senderId, value: message)
+        in newestBySender.entries) {
+      if (senderId == contact.deviceId) continue;
+      final sender = _contactByDeviceId(senderId);
+      if (sender == null || sender.accountAnchorDeviceId != contact.deviceId) {
+        continue;
+      }
       await _sendReadReceipt(
         contact: sender,
-        conversationId: read.conversationId,
-        acknowledgedMessageId: effectiveMessageId,
+        conversationId: message.conversationId,
+        acknowledgedMessageId: message.id,
       );
-      return;
     }
+    final fromMain = newestBySender[contact.deviceId];
+    final mainId = newestBySender.isEmpty ? effectiveMessageId : fromMain?.id;
+    if (mainId == null) return;
     await _sendReadReceipt(
       contact: contact,
       conversationId: conversation.id,
-      acknowledgedMessageId: effectiveMessageId,
+      acknowledgedMessageId: mainId,
     );
   }
 
