@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'file_privacy_controller_cases.dart';
+
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -17569,6 +17571,8 @@ void main() {
       final path = await bob.attachmentCachePathFor(message!.attachment!.id);
       return (message!.attachment!.fileName, await File(path!).readAsBytes());
     }
+
+    registerFilePrivacyControllerTests(pair: pair, received: received);
 
     test('a file records how much of it each route carried, on both '
         'sides', () async {
