@@ -29,6 +29,7 @@ import 'package:conest/src/email/mail_socket.dart';
 import 'package:conest/src/account/account_model.dart';
 import 'package:conest/src/energy_policy.dart';
 import 'package:conest/src/ui/devices_panel.dart';
+import 'package:conest/src/connection_map.dart';
 import 'package:conest/src/debug_auto_run.dart';
 import 'package:conest/src/transport_exchange_test.dart';
 import 'package:conest/src/ui/connections_screen.dart';
@@ -10294,6 +10295,9 @@ void main() {
         relayClient: relayClient,
         displayName: 'Alice',
         nowProvider: () => now,
+        // On mains power: background upkeep is not slowed (see the energy
+        // test for that).
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
       );
       addTearDown(controller.dispose);
 
@@ -16707,9 +16711,27 @@ void main() {
     );
 
     test('a contact device its account lost touch with is flagged', () async {
-      final (alice, bob, phone, advance) = await threeDevices();
-      advance(const Duration(hours: 25));
+      var now = DateTime.now().toUtc();
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+          nowProvider: () => now,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      final phone = await make('Phone');
+      await _pairControllers(alice, bob);
+      now = now.add(const Duration(hours: 25));
       final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
       final phoneId = phone.identity!.deviceId;
       final qr = await phone.startLinkAsNewDevice();
       await alice.startLinkFromQrCode(qr);
@@ -16725,28 +16747,46 @@ void main() {
         return phone.linkState == LinkState.linked &&
             bob.linkedDevicesOf(aliceId).isNotEmpty;
       });
-      // Alice's laptop tells Bob it is in touch with her phone.
-      await alice.checkContactRoutes(
-        alice.contacts.firstWhere((c) => c.deviceId == bob.identity!.deviceId),
-      );
+      ContactRecord bobAt(MessengerController device) =>
+          device.contacts.firstWhere((c) => c.deviceId == bobId);
+      Future<void> bobReads() async {
+        for (var i = 0; i < 10; i++) {
+          await bob.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+      }
+
+      // The laptop tells Bob it counts the phone as Alice's.
+      await alice.checkContactRoutes(bobAt(alice));
       await _waitForIroh(() {
         unawaited(bob.pollNow());
         return bob.linkedDevicesOf(aliceId).single.siblingsHeardAt != null;
-      }, reason: 'Bob never heard how the phone is doing');
+      }, reason: 'Bob never heard the laptop vouch for the phone');
       expect(bob.contactDeviceOutOfTouchSince(phoneId), isNull);
 
-      // Nine days of silence from the phone; the laptop still talks to Bob.
-      advance(const Duration(days: 9));
-      await alice.checkContactRoutes(
-        alice.contacts.firstWhere((c) => c.deviceId == bob.identity!.deviceId),
-      );
-      for (var i = 0; i < 10; i++) {
-        await bob.pollNow();
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-      }
+      // Nine days later the laptop no longer counts the phone (they have
+      // not been in touch): the phone is flagged.
+      now = now.add(const Duration(days: 9));
+      await alice.checkContactRoutes(bobAt(alice));
+      await bobReads();
       expect(bob.contactDeviceOutOfTouchSince(phoneId), isNotNull);
-      // The laptop itself is not flagged (nobody reported on it).
-      expect(bob.contactDeviceOutOfTouchSince(aliceId), isNull);
+
+      // Then the laptop goes in a drawer (gone from the network) and only
+      // the phone talks: the laptop is flagged, the active phone (which no
+      // other device has reported on lately) is not.
+      final laptopIroh = alice.identity!.irohEndpointId!;
+      relay.shouldFailStore = (_, _, _, _, envelope) =>
+          envelope.senderDeviceId == aliceId;
+      for (final other in [bob, phone]) {
+        network.blockedPairs
+          ..add((laptopIroh, other.identity!.irohEndpointId!))
+          ..add((other.identity!.irohEndpointId!, laptopIroh));
+      }
+      now = now.add(const Duration(days: 3));
+      await phone.checkContactRoutes(bobAt(phone));
+      await bobReads();
+      expect(bob.contactDeviceOutOfTouchSince(aliceId), isNotNull);
+      expect(bob.contactDeviceOutOfTouchSince(phoneId), isNull);
     });
 
     test('own devices carry for each other: a message the laptop cannot '
@@ -17751,6 +17791,10 @@ void main() {
       saver.setAppForegroundState(true);
       mains.setAppForegroundState(true);
       expect(saver.pollIntervalForTesting, mains.pollIntervalForTesting);
+      expect(
+        saver.heartbeatIntervalForTesting(),
+        mains.heartbeatIntervalForTesting(),
+      );
     },
   );
 
@@ -17844,6 +17888,15 @@ void main() {
     final reported = bob.connectionMap.reported[alice.identity!.deviceId]!;
     expect(reported.keys, contains(carol.identity!.deviceId));
     expect(reported.keys, isNot(contains(dan.identity!.deviceId)));
+    // Whatever Alice sends, Bob keeps nothing about devices he does not
+    // share a group with her (Dan): a report naming him is dropped.
+    bob.receiveLinksForTesting(alice.identity!.deviceId, {
+      dan.identity!.deviceId: 'twoWay',
+      carol.identity!.deviceId: 'failing',
+    });
+    final kept = bob.connectionMap.reported[alice.identity!.deviceId]!;
+    expect(kept.keys, isNot(contains(dan.identity!.deviceId)));
+    expect(kept[carol.identity!.deviceId]?.status, LinkStatus.failing);
     await tester.pumpWidget(
       MaterialApp(home: ConnectionsScreen(controller: bob)),
     );

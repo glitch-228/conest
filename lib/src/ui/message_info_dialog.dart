@@ -68,8 +68,8 @@ class MessageInfoDialog extends StatelessWidget {
   static String outOfTouchLabel(DateTime since) {
     final local = since.toLocal();
     String two(int value) => value.toString().padLeft(2, '0');
-    return 'Not recently confirmed: their other devices have not heard from '
-        'this one since ${local.year}-${two(local.month)}-${two(local.day)}.';
+    return 'Not recently confirmed: their other devices last counted this '
+        'one as theirs on ${local.year}-${two(local.month)}-${two(local.day)}.';
   }
 
   /// "Their clock is about 2 h behind; times here are by this device."

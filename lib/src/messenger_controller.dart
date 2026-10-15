@@ -3782,9 +3782,24 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final now = _now();
-    DateTime lastTalk(ContactRecord contact) =>
-        lastMessageFor(contact.deviceId)?.createdAt ??
-        DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    // Talk in a chat or in a shared group counts.
+    final groupTalk = <String, DateTime>{};
+    for (final group in _activeGroups) {
+      for (final message in _groupConversation(group.groupId).messages) {
+        final last = groupTalk[message.senderDeviceId];
+        if (last == null || message.createdAt.isAfter(last)) {
+          groupTalk[message.senderDeviceId] = message.createdAt;
+        }
+      }
+    }
+    DateTime lastTalk(ContactRecord contact) {
+      final direct = lastMessageFor(contact.deviceId)?.createdAt;
+      final inGroups = groupTalk[contact.deviceId];
+      final latest = [?direct, ?inGroups];
+      return latest.isEmpty
+          ? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true)
+          : latest.reduce((a, b) => a.isAfter(b) ? a : b);
+    }
     final candidates = [
       for (final contact in contacts)
         if (contact.canSendOutbound &&
@@ -3803,7 +3818,12 @@ class MessengerController extends ChangeNotifier {
       if (_disposed) return;
       _quietRecheckAt[contact.deviceId] = now;
       try {
-        await checkContactRoutes(contact, persist: false, fast: true);
+        await checkContactRoutes(
+          contact,
+          persist: false,
+          fast: true,
+          markActivity: false,
+        );
       } catch (error) {
         recordError(
           'route',
@@ -3840,24 +3860,37 @@ class MessengerController extends ChangeNotifier {
     return LinkStatus.unknown;
   }
 
-  /// Devices [contact] knows too: members of groups shared with it, and
-  /// this account's other devices (which it knows as this person's).
+  /// Devices [contact] knows too: members of groups this device and it
+  /// are both still in.
   Set<String> _devicesKnownTo(ContactRecord contact) {
     final me = identity;
+    if (me == null) return const {};
     return {
-      for (final group in groups)
+      for (final group in _activeGroups)
         if (group.hasActiveMember(contact.deviceId))
           ...group.activeMemberDeviceIds,
-      for (final device in ownDevices) device.deviceId,
-    }..removeAll({contact.deviceId, ?me?.deviceId});
+    }..removeAll({contact.deviceId, me.deviceId});
+  }
+
+  /// Groups this device is still in.
+  Iterable<GroupRecord> get _activeGroups {
+    final me = identity;
+    return me == null
+        ? const []
+        : visibleGroups.where(
+            (group) =>
+                group.localRemovedAt == null &&
+                group.hasActiveMember(me.deviceId),
+          );
   }
 
   Map<String, String>? _linksToShareWith(ContactRecord contact) {
     final links = <String, String>{
-      for (final deviceId in _devicesKnownTo(contact).take(32))
-        if (linkStatusFor(deviceId) case final status
-            when status != LinkStatus.unknown)
-          deviceId: status.name,
+      for (final (deviceId, status) in [
+        for (final deviceId in _devicesKnownTo(contact))
+          (deviceId, linkStatusFor(deviceId)),
+      ].where((link) => link.$2 != LinkStatus.unknown).take(32))
+        deviceId: status.name,
     };
     return links.isEmpty ? null : links;
   }
@@ -3866,13 +3899,27 @@ class MessengerController extends ChangeNotifier {
   Map<String, String>? linksToShareWithForTesting(ContactRecord contact) =>
       _linksToShareWith(contact);
 
+  @visibleForTesting
+  void receiveLinksForTesting(String fromDeviceId, Map<String, String> links) =>
+      _applyReportedLinks(
+        _contactByDeviceId(fromDeviceId)!,
+        links,
+        sentAt: _now(),
+      );
+
   /// Reporter → device → what it said (recent only; in memory).
   final Map<String, Map<String, ReportedLink>> _reportedLinks = {};
 
-  void _applyReportedLinks(ContactRecord sender, Object? links) {
+  void _applyReportedLinks(
+    ContactRecord sender,
+    Object? links, {
+    required DateTime sentAt,
+  }) {
     if (links is! Map || links.length > 32) return;
     final known = {..._devicesKnownTo(sender), ?identity?.deviceId};
-    final now = _now().toUtc();
+    // As of when they sent it (a copy that waited on a relay is older).
+    final current = _now().toUtc();
+    final now = sentAt.toUtc().isAfter(current) ? current : sentAt.toUtc();
     final kept = <String, ReportedLink>{};
     for (final MapEntry(key: id, value: status) in links.entries) {
       final parsed = LinkStatus.tryParse(status);
@@ -3889,12 +3936,15 @@ class MessengerController extends ChangeNotifier {
 
   /// Who reaches whom, as far as this device knows.
   ConnectionMap get connectionMap {
-    final me = _requireIdentity();
+    final me = identity;
+    if (me == null) {
+      return const ConnectionMap(self: '', mine: {}, reported: {});
+    }
     final now = _now().toUtc();
     final peers = <String>{
       for (final contact in contacts) contact.deviceId,
       for (final device in ownDevices) device.deviceId,
-      for (final group in groups) ...group.activeMemberDeviceIds,
+      for (final group in _activeGroups) ...group.activeMemberDeviceIds,
     }..remove(me.deviceId);
     final names = <String, String>{
       for (final contact in _snapshot.contacts)
@@ -4470,7 +4520,8 @@ class MessengerController extends ChangeNotifier {
     ..._localApplicationCapabilities().map((capability) => capability.name),
     // Only the contacts this device carries for learn that it does (own
     // devices always: they carry for each other).
-    if (contact.routing.carryForContact || contact.ownDevice)
+    if (contact.routing.carryForContact ||
+        (contact.ownDevice && !isOwnDeviceUnconfirmed(contact)))
       ApplicationCapability.forwardForContactsV1.name,
   ];
 
@@ -8452,8 +8503,10 @@ class MessengerController extends ChangeNotifier {
     bool persist = true,
     bool exchangeRouteUpdate = true,
     bool fast = false,
+    // A background re-check does not count as the user being active.
+    bool markActivity = true,
   }) async {
-    _markRuntimeActivity();
+    if (markActivity) _markRuntimeActivity();
     await _refreshLanAddresses(persist: false);
     await _ensureLocalRelayRunning();
     await _ensurePairingBeaconRunning();
@@ -16178,7 +16231,9 @@ class MessengerController extends ChangeNotifier {
       'capabilityDigest': _capabilityDigest(_capabilityNamesFor(contact)),
       // When this account's other devices were last in touch with this
       // one (by day): contacts can tell a device its account lost.
-      'devicesInTouch': ?_ownDevicesInTouchReport(),
+      // Which of this account's other devices this one still counts as
+      // confirmed (no dates): contacts can tell a device its account lost.
+      'devicesConfirmed': ?_ownDevicesConfirmedReport(),
       // How this device's links to devices the contact also knows fare
       // (its group mates, this account's devices): for its Connections
       // map. Nobody else is named.
@@ -21483,8 +21538,16 @@ class MessengerController extends ChangeNotifier {
     }
     _acceptedByTraffic(sender, sentAt: envelope.createdAt);
     _noteOwnDeviceInTouch(sender);
-    _applySiblingTouchReport(sender, routePayload?['devicesInTouch']);
-    _applyReportedLinks(sender, routePayload?['links']);
+    _applySiblingTouchReport(
+      sender,
+      routePayload?['devicesConfirmed'],
+      sentAt: sentAt ?? envelope.createdAt,
+    );
+    _applyReportedLinks(
+      sender,
+      routePayload?['links'],
+      sentAt: sentAt ?? envelope.createdAt,
+    );
     // Route updates are stamped when sent (never queued with an old time);
     // over a live route they arrive within moments. A reply echoes our own
     // time instead, so it says nothing about their clock.
@@ -30733,61 +30796,87 @@ class MessengerController extends ChangeNotifier {
       if (isOwnDeviceUnconfirmed(device)) device,
   ];
 
-  /// Own devices still confirmed, and the day each was last in touch.
-  Map<String, String>? _ownDevicesInTouchReport() {
-    final report = <String, String>{
-      for (final device in ownDevices.take(16))
-        if (!isOwnDeviceUnconfirmed(device))
-          device.deviceId: (device.inTouchAt ?? device.trustedAt)
-              .toUtc()
-              .toIso8601String()
-              .substring(0, 10),
-    };
-    return report.isEmpty ? null : report;
+  /// This account's other devices this one still counts as confirmed.
+  List<String>? _ownDevicesConfirmedReport() {
+    final devices = ownDevices;
+    // None to report on at all: nothing said. Some, none confirmed: an
+    // empty list (that says something).
+    if (devices.isEmpty) return null;
+    return [
+      for (final device in devices)
+        if (!isOwnDeviceUnconfirmed(device)) device.deviceId,
+    ].take(16).toList();
   }
 
-  /// [sender] (one of a contact's devices) says when its account's other
-  /// devices were last in touch with it; a device's own word about itself
-  /// does not count.
-  void _applySiblingTouchReport(ContactRecord sender, Object? report) {
-    if (report is! Map || report.length > 16 || sender.ownDevice) return;
+  /// Per contact account (main record's device id): each of its devices'
+  /// latest report of which of its siblings it counts as confirmed (in
+  /// memory: after a restart nothing is judged until fresh reports come).
+  final Map<String, Map<String, (DateTime, Set<String>)>> _accountReports = {};
+
+  /// [sender] (one of a contact's devices) says which of its account's
+  /// other devices it still counts as confirmed. A device's word about
+  /// itself does not count.
+  void _applySiblingTouchReport(
+    ContactRecord sender,
+    Object? report, {
+    required DateTime sentAt,
+  }) {
+    if (sender.ownDevice || report is! List || report.length > 16) return;
     final anchorId = sender.accountAnchorDeviceId ?? sender.deviceId;
-    final now = _now().toUtc();
+    // Only the same account's devices (its main record or a linked one).
+    bool sameAccount(ContactRecord record) =>
+        !record.ownDevice &&
+        (record.deviceId == anchorId ||
+            record.accountAnchorDeviceId == anchorId);
+    final ids = <String>{
+      for (final id in report)
+        if (id is String && id != sender.deviceId) id,
+    };
+    // As of when it was said (a copy that waited on a relay is older); a
+    // newer report from that device is never replaced by an older one.
+    final current = _now().toUtc();
+    final said = sentAt.toUtc().isAfter(current) ? current : sentAt.toUtc();
+    final held = _accountReports[anchorId]?[sender.deviceId];
+    if (held != null && !said.isAfter(held.$1)) return;
+    _accountReports.putIfAbsent(anchorId, () => {})[sender.deviceId] = (
+      said,
+      ids,
+    );
     var changed = false;
-    for (final MapEntry(key: id, value: day) in report.entries) {
-      if (id is! String || day is! String || id == sender.deviceId) continue;
+    for (final id in ids) {
       final record = _contactByDeviceId(id);
-      // Only the same account's devices (its main record or a linked one).
-      if (record == null ||
-          record.ownDevice ||
-          (record.deviceId != anchorId &&
-              record.accountAnchorDeviceId != anchorId)) {
-        continue;
-      }
-      var at = DateTime.tryParse(day)?.toUtc();
-      if (at == null) continue;
-      if (at.isAfter(now)) at = now;
-      final held = record.siblingsHeardAt;
-      if (held != null && !at.isAfter(held)) continue;
-      _replaceContactRecord(record.copyWith(siblingsHeardAt: at));
+      if (record == null || !sameAccount(record)) continue;
+      final heard = record.siblingsHeardAt;
+      if (heard != null && !said.isAfter(heard)) continue;
+      _replaceContactRecord(record.copyWith(siblingsHeardAt: said));
       changed = true;
     }
     if (changed) unawaited(_saveSnapshotSilently(debounce: true));
   }
 
-  /// When [deviceId] (a contact's device) was last heard of by its
-  /// account's other devices, if longer ago than the limit; else null.
+  /// When [deviceId] (a contact's device) was last counted as confirmed by
+  /// its account's other devices, if they have since stopped (their recent
+  /// reports leave it out); else null. Their own limit decides, not ours.
   DateTime? contactDeviceOutOfTouchSince(String deviceId) {
     final record = _contactByDeviceId(deviceId);
-    final heard = record?.siblingsHeardAt;
-    if (record == null || record.ownDevice || heard == null) return null;
-    final days =
-        identity?.ownDeviceTouchDays ??
-        IdentityRecord.defaultOwnDeviceTouchDays;
-    // A day of slack: reports are by day.
-    return _now().toUtc().difference(heard) > Duration(days: days + 1)
-        ? heard
-        : null;
+    return record == null ? null : _outOfTouchSinceFor(record);
+  }
+
+  DateTime? _outOfTouchSinceFor(ContactRecord record) {
+    if (record.ownDevice) return null;
+    // Last counted as theirs (or, never reported on, since first known).
+    final heard = record.siblingsHeardAt ?? record.trustedAt.toUtc();
+    final anchorId = record.accountAnchorDeviceId ?? record.deviceId;
+    final now = _now().toUtc();
+    final recent = [
+      for (final MapEntry(key: reporter, value: report)
+          in (_accountReports[anchorId] ?? const {}).entries)
+        if (reporter != record.deviceId &&
+            now.difference(report.$1) < const Duration(days: 2))
+          report.$2,
+    ];
+    if (recent.isEmpty) return null;
+    return recent.any((ids) => ids.contains(record.deviceId)) ? null : heard;
   }
 
   /// [device] (an own device, still confirmed) was heard from: in touch.
@@ -30836,7 +30925,7 @@ class MessengerController extends ChangeNotifier {
   void _noticeUnconfirmedOwnDevices() {
     for (final record in _snapshot.contacts) {
       if (record.ownDevice || record.isArchived) continue;
-      if (contactDeviceOutOfTouchSince(record.deviceId) == null) {
+      if (_outOfTouchSinceFor(record) == null) {
         _unconfirmedNoticed.remove('contact|${record.deviceId}');
         continue;
       }

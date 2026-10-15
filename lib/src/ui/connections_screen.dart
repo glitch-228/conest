@@ -163,6 +163,8 @@ class _MapPainter extends CustomPainter {
         id == map.self ? 10 : 7,
         Paint()..color = id == map.self ? scheme.primary : scheme.secondary,
       );
+      // Too many to name readably: the list below names them.
+      if (at.length > 13 && id != map.self) continue;
       final name = map.nameOf(id);
       final text = TextPainter(
         text: TextSpan(
@@ -176,5 +178,5 @@ class _MapPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_MapPainter old) => true;
+  bool shouldRepaint(_MapPainter old) => old.map != map || old.scheme != scheme;
 }
