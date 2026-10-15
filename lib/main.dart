@@ -12,6 +12,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -59,6 +60,7 @@ import 'src/app_locales.dart';
 import 'src/ui/calls_list.dart';
 import 'src/ui/devices_panel.dart';
 import 'src/ui/error_history_screen.dart';
+import 'src/debug_auto_run.dart';
 import 'src/ui/route_test_panel.dart';
 import 'src/ui/user_mode_screen.dart';
 import 'src/windows_firewall.dart';
@@ -86,7 +88,46 @@ export 'src/conest_theme.dart'
         ConestThemeMode,
         ThemePreferenceStore;
 
-Future<void> main() async {
+/// A debug build started for automatic tests (`--debug-run=routes`, or the
+/// Android `conestDebugRun` extra) runs them and writes a report.
+Future<void> _startDebugRunIfAsked(
+  MessengerController controller,
+  PlatformBridge platformBridge,
+  List<String> args, {
+  required String dataRoot,
+}) async {
+  final request =
+      DebugRunRequest.fromArgs(args) ??
+      DebugRunRequest.fromExtra(await platformBridge.debugRunRequest());
+  if (request == null) return;
+  try {
+    final path = await runDebugRequest(
+      controller,
+      request,
+      defaultReportPath: () async {
+        final external = Platform.isAndroid
+            ? await getExternalStorageDirectory()
+            : null;
+        return '${external?.path ?? dataRoot}/conest-debug-report.json';
+      },
+    );
+    stdout.writeln('Conest debug report: $path');
+  } catch (error) {
+    controller.recordError('test', 'Automatic run failed: $error');
+  }
+  if (request.exitAfter && !Platform.isAndroid) {
+    controller.savePendingChangesForLifecycle();
+    // Time for the vault and the error history to reach the disk.
+    await Future<void>.delayed(const Duration(seconds: 2));
+    exit(0);
+  }
+}
+
+/// The command line this run was started with (desktop).
+List<String> _launchArgs = const [];
+
+Future<void> main(List<String> args) async {
+  _launchArgs = args;
   WidgetsFlutterBinding.ensureInitialized();
   final storageResolver = AppStorageResolver();
   final storageResolution = await storageResolver.resolve();
@@ -190,6 +231,16 @@ Future<void> _runConestWithProfile(
     automaticStartupChecksEnabled: profile.automaticStartupChecksEnabled,
   );
   await controller.initialize();
+  if (buildInfo.channel == UpdateChannel.debug) {
+    unawaited(
+      _startDebugRunIfAsked(
+        controller,
+        platformBridge,
+        _launchArgs,
+        dataRoot: profile.dataRoot.path,
+      ),
+    );
+  }
   // nightly.9: forward platform connectivity changes (Wi-Fi ↔ VPN ↔
   // cellular) so the controller can re-probe in-flight transfers
   // immediately instead of waiting out the 60 s stall timer against a

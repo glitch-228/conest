@@ -566,6 +566,17 @@ class PlatformBridge {
     }
   }
 
+  /// On Android, the automatic tests a debug build was started for
+  /// (`adb shell am start … --es conestDebugRun routes`); null otherwise.
+  Future<String?> debugRunRequest() async {
+    if (!_supportsAndroidSystemCalls) return null;
+    try {
+      return await _channel.invokeMethod<String>('debugRunRequest');
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
   /// Where Android extracted the app's native libraries, which may also
   /// hold bundled helper programs (such as Tor's pluggable transports).
   Future<String?> nativeLibraryDirectory() async {

@@ -29,6 +29,8 @@ import 'package:conest/src/email/mail_socket.dart';
 import 'package:conest/src/account/account_model.dart';
 import 'package:conest/src/energy_policy.dart';
 import 'package:conest/src/ui/devices_panel.dart';
+import 'package:conest/src/debug_auto_run.dart';
+import 'package:conest/src/transport_exchange_test.dart';
 import 'package:conest/src/ui/error_history_screen.dart';
 import 'package:conest/src/ui/user_mode_screen.dart';
 import 'package:conest/src/group_file_crypto.dart';
@@ -14360,7 +14362,7 @@ void main() {
         }
         expect(seenByBob(), isNot(contains(TransportKind.deltaChat)));
       },
-      timeout: const Timeout(Duration(minutes: 4)),
+      timeout: const Timeout(Duration(minutes: 2)),
     );
 
     test(
@@ -17462,6 +17464,137 @@ void main() {
     await tester.pump();
     expect(find.text('Nothing recorded.'), findsOneWidget);
   });
+
+  test(
+    'a full transport test knows each route in both directions',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      var bobLater = Duration.zero;
+      Future<MessengerController> device(
+        String name, {
+        DateTime Function()? now,
+      }) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+          nowProvider: now,
+          debugBuildId: 'test@abc',
+          keepErrorHistory: true,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await device('Alice');
+      final bob = await device(
+        'Bob',
+        now: () => DateTime.now().toUtc().add(bobLater),
+      );
+      await _pairControllers(alice, bob);
+      var polling = true;
+      addTearDown(() => polling = false);
+      unawaited(() async {
+        while (polling) {
+          await Future.wait([
+            alice.pollNow(),
+            bob.pollNow(),
+          ]).catchError((_) => const <void>[]);
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }());
+      final report = await alice.runTransportExchangeTest(
+        alice.contacts.single,
+        remoteTimeout: const Duration(seconds: 30),
+      );
+      expect(report.remote, isNotNull, reason: report.remoteError);
+      expect(report.directions['irohDirect'], RouteDirections.twoWay);
+      expect(report.local.inventory, isNotEmpty);
+      expect(report.remote!.inventory, isNotEmpty);
+      expect(alice.errorHistoryEntries.any((e) => e.kind == 'test'), isTrue);
+
+      // Alice's Iroh no longer reaches Bob; his still reaches her.
+      network.blockedPairs.add((
+        alice.identity!.irohEndpointId!,
+        bob.identity!.irohEndpointId!,
+      ));
+      // Bob answers one test a minute.
+      bobLater = const Duration(minutes: 2);
+      final oneWay = await alice.runTransportExchangeTest(
+        alice.contacts.single,
+        remoteTimeout: const Duration(seconds: 30),
+      );
+      expect(oneWay.remote, isNotNull, reason: oneWay.remoteError);
+      expect(oneWay.directions['irohDirect'], isNot(RouteDirections.twoWay));
+      expect(oneWay.remote!.results['irohDirect']?.roundTripMs, isNotNull);
+    },
+    timeout: const Timeout(Duration(minutes: 4)),
+  );
+
+  test(
+    'a debug build started for tests runs them and writes a report',
+    () async {
+      expect(DebugRunRequest.fromArgs(const ['--other']), isNull);
+      expect(DebugRunRequest.fromArgs(const ['--debug-run=nonsense']), isNull);
+      final parsed = DebugRunRequest.fromArgs(const [
+        '--debug-run=routes',
+        '--debug-report=/tmp/x.json',
+        '--debug-wait=0',
+        '--debug-exit',
+      ])!;
+      expect(parsed.reportPath, '/tmp/x.json');
+      expect(parsed.exitAfter, isTrue);
+      expect(parsed.wait, Duration.zero);
+      expect(DebugRunRequest.fromExtra('routes')?.what, 'routes');
+      expect(DebugRunRequest.fromExtra('rm -rf'), isNull);
+
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> device(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+          debugBuildId: 'test@abc',
+          keepErrorHistory: true,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await device('Alice');
+      final bob = await device('Bob');
+      await _pairControllers(alice, bob);
+      var polling = true;
+      addTearDown(() => polling = false);
+      unawaited(() async {
+        while (polling) {
+          await Future.wait([
+            alice.pollNow(),
+            bob.pollNow(),
+          ]).catchError((_) => const <void>[]);
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }());
+      final root = Directory.systemTemp.createTempSync('conest_debug_run_');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final path = await runDebugRequest(
+        alice,
+        const DebugRunRequest(what: 'routes', wait: Duration.zero),
+        defaultReportPath: () async => '${root.path}/report.json',
+      );
+      final report = jsonDecode(File(path).readAsStringSync()) as Map;
+      expect(report['build'], 'test@abc');
+      final contacts = report['contacts'] as List;
+      expect(contacts.single['contact'], 'Bob');
+      expect(
+        (contacts.single['report'] as Map)['directions'],
+        containsPair('irohDirect', 'twoWay'),
+      );
+      expect(report['errorHistory'], isA<String>());
+    },
+  );
 
   group('Clocks that are off', () {
     Future<(MessengerController, MessengerController, MessengerController)>

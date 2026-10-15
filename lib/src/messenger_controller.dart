@@ -79,6 +79,7 @@ import 'account/account_link.dart';
 import 'account/account_model.dart';
 import 'energy_policy.dart';
 import 'error_history.dart';
+import 'transport_exchange_test.dart';
 import 'route_test.dart';
 import 'voice_call_service.dart';
 import 'voice_call_sound_cues.dart';
@@ -335,6 +336,7 @@ const Set<String> _v2PairwiseKinds = <String>{
   'route_probe_reply',
   'account_link',
   'account_sync',
+  'debug_transport_test',
 };
 
 /// Outcome of a [`MessengerController.refreshDefaultRelays`] call.
@@ -3498,6 +3500,203 @@ class MessengerController extends ChangeNotifier {
       _announceGroupChangeSoon(groupId, except: peerDeviceId);
     }
     return count;
+  }
+
+  // Full transport tests (debug builds, Q6): this device probes every route
+  // to a contact while the contact does the same the other way and reports
+  // back, so each route is known in both directions.
+
+  /// Whether this build runs full transport tests (debug builds only).
+  bool get transportExchangeTestsAvailable => _debugBuildId != null;
+
+  final Map<String, TransportExchangeReport> _transportReports = {};
+  final Map<String, Completer<({TransportTestSide? side, String? error})>>
+  _transportTestWaiters = {};
+  final Map<String, DateTime> _transportTestAnsweredAt = {};
+
+  TransportExchangeReport? transportReportFor(String deviceId) =>
+      _transportReports[deviceId];
+
+  Future<TransportExchangeReport> runTransportExchangeTest(
+    ContactRecord contact, {
+    Duration remoteTimeout = const Duration(seconds: 90),
+  }) async {
+    if (_debugBuildId == null) {
+      throw StateError('Only debug builds run full transport tests.');
+    }
+    final me = _requireIdentity();
+    final current = _contactByDeviceId(contact.deviceId) ?? contact;
+    final testId = _randomId('ttest');
+    final waiter = Completer<({TransportTestSide? side, String? error})>();
+    _transportTestWaiters[testId] = waiter;
+    String? remoteError;
+    try {
+      // Asked first, so both sides probe at the same time.
+      await _sendDebugTransportTest(current, {
+        'type': 'request',
+        'testId': testId,
+      });
+    } catch (error) {
+      remoteError = 'the request did not go: $error';
+    }
+    RouteTestReport local;
+    try {
+      local = await testContactRoutes(current);
+    } catch (error) {
+      local = RouteTestReport(measuredAt: _now().toUtc(), results: const []);
+      recordError('test', 'Route test to ${current.alias} failed: $error');
+    }
+    final answer = remoteError != null
+        ? null
+        : await waiter.future
+              .then<({TransportTestSide? side, String? error})?>((a) => a)
+              .timeout(remoteTimeout, onTimeout: () => null);
+    _transportTestWaiters.remove(testId);
+    final report = TransportExchangeReport(
+      measuredAt: _now().toUtc(),
+      local: TransportTestSide.fromReport(
+        me.deviceId,
+        local,
+        inventory: _transportInventoryFor(current),
+        errors: _recentErrorsAbout(current),
+      ),
+      remote: answer?.side,
+      remoteError:
+          remoteError ??
+          answer?.error ??
+          (answer == null ? 'no report came back' : null),
+    );
+    _transportReports[current.deviceId] = report;
+    _errorHistory?.add('test', report.toText());
+    notifyListeners();
+    return report;
+  }
+
+  Future<void> _sendDebugTransportTest(
+    ContactRecord contact,
+    Map<String, Object?> payload,
+  ) async {
+    final me = _requireIdentity();
+    final envelope = await _crypto.encryptPayloadEnvelope(
+      kind: 'debug_transport_test',
+      messageId: _randomId('ttest-msg'),
+      conversationId: _crypto.conversationIdFor(contact.deviceId),
+      senderAccountId: me.accountId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: contact.deviceId,
+      contact: contact,
+      plaintext: jsonEncode(payload),
+      createdAt: _now().toUtc(),
+    );
+    await _deliverToContact(
+      contact: contact,
+      recipientDeviceId: contact.deviceId,
+      envelope: envelope,
+    );
+  }
+
+  Future<void> _handleDebugTransportTest(RelayEnvelope envelope) async {
+    if (_debugBuildId == null) return;
+    final contact = _contactByDeviceId(envelope.senderDeviceId);
+    if (contact == null ||
+        !contact.canSendOutbound ||
+        contact.accountId != envelope.senderAccountId ||
+        envelope.conversationId !=
+            _crypto.conversationIdFor(contact.deviceId)) {
+      return;
+    }
+    final decoded = jsonDecode(
+      await _crypto.decryptMessage(contact: contact, envelope: envelope),
+    );
+    if (decoded is! Map<String, dynamic>) return;
+    final testId = decoded['testId'];
+    if (testId is! String || testId.isEmpty || testId.length > 160) return;
+    switch (decoded['type']) {
+      case 'request':
+        // At most one a minute from each contact.
+        final now = _now();
+        final last = _transportTestAnsweredAt[contact.deviceId];
+        if (last != null && now.difference(last) < const Duration(minutes: 1)) {
+          return;
+        }
+        _transportTestAnsweredAt[contact.deviceId] = now;
+        unawaited(() async {
+          final me = _requireIdentity();
+          Map<String, Object?> reply;
+          try {
+            final report = await testContactRoutes(contact);
+            reply = {
+              'type': 'report',
+              'testId': testId,
+              'side': TransportTestSide.fromReport(
+                me.deviceId,
+                report,
+                inventory: _transportInventoryFor(contact),
+                errors: _recentErrorsAbout(contact),
+              ).toJson(),
+            };
+          } catch (error) {
+            reply = {
+              'type': 'report',
+              'testId': testId,
+              'error': '$error'.length > 400
+                  ? '$error'.substring(0, 400)
+                  : '$error',
+            };
+          }
+          try {
+            await _sendDebugTransportTest(contact, reply);
+          } catch (error) {
+            recordError(
+              'test',
+              'Transport test report to ${contact.alias} not sent: $error',
+            );
+          }
+        }());
+      case 'report':
+        final waiter = _transportTestWaiters[testId];
+        if (waiter == null || waiter.isCompleted) return;
+        final side = TransportTestSide.fromJson(decoded['side']);
+        waiter.complete((
+          side: side?.deviceId == contact.deviceId ? side : null,
+          error: decoded['error'] is String
+              ? decoded['error'] as String
+              : (side == null ? 'their report could not be read' : null),
+        ));
+    }
+  }
+
+  /// What this device has for reaching [contact], as lines of text.
+  List<String> _transportInventoryFor(ContactRecord contact) {
+    final me = identity;
+    if (me == null) return const [];
+    final connectivity = me.connectivity;
+    return [
+      'build ${_debugBuildId ?? '-'}',
+      'lan ${connectivity.lanEnabled ? 'on' : 'off'}, '
+          'internet ${connectivity.onlineEnabled ? 'on' : 'off'}, '
+          'iroh relay ${connectivity.irohRelayEnabled ? 'on' : 'off'}',
+      'network ${_networkCostClass.name}, energy '
+          '${_energyPolicy.modeFor(_networkCostClass).name}',
+      for (final route in _candidateRoutesForContact(contact).take(24))
+        'route ${route.kind.name} ${route.label}',
+      for (final kind in _carrierTransports.keys)
+        'carrier ${kind.name}'
+            '${contact.carrierAddress(kind) == null ? ' (they have none)' : ''}',
+      if (contact.irohEndpointId != null) 'their iroh endpoint known',
+    ].take(TransportTestSide.maxLines).toList();
+  }
+
+  /// The latest errors that name [contact].
+  List<String> _recentErrorsAbout(ContactRecord contact) {
+    final id = _shortId(contact.deviceId);
+    return [
+      for (final entry in errorHistoryEntries.reversed)
+        if (entry.kind != 'log' &&
+            entry.kind != 'test' &&
+            (entry.text.contains(contact.alias) || entry.text.contains(id)))
+          entry.format(),
+    ].take(20).toList();
   }
 
   /// Whether an announcement naming [heads] would make this device pull.
@@ -17816,6 +18015,12 @@ class MessengerController extends ChangeNotifier {
 
         if (envelope.kind == 'account_sync') {
           await _handleAccountSync(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'debug_transport_test') {
+          await _handleDebugTransportTest(envelope);
           _markSeen(envelope.messageId);
           continue;
         }
