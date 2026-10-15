@@ -54,6 +54,7 @@ import 'src/ui/meshtastic_carrier_panel.dart';
 import 'src/ui/nostr_carrier_panel.dart';
 import 'src/ui/nostr_chats_screen.dart';
 import 'src/ui/delta_chats_screen.dart';
+import 'src/ui/delta_attachment_card.dart';
 import 'src/ui/message_info_dialog.dart';
 import 'l10n/app_localizations.dart';
 import 'src/app_locales.dart';
@@ -76,6 +77,7 @@ import 'src/voice_message_service.dart';
 import 'src/swipe_to_reply.dart';
 import 'src/transport.dart';
 import 'src/ui/seal_avatar.dart';
+import 'src/ui/delta_content_widgets.dart' show deltaListAvatar;
 import 'src/ui/signature_decoration.dart';
 import 'src/ui/signature_panels.dart';
 import 'src/ui/signature_widgets.dart';
@@ -4889,6 +4891,7 @@ class _CourierHomeState extends State<_CourierHome> {
                 for (final entry in entries)
                   _CourierRow(
                     key: ValueKey('courier-chat-${entry.seed}'),
+                    avatar: deltaListAvatar(widget.controller, entry.seed),
                     palette: widget.palette,
                     seed: entry.seed,
                     title: entry.title,
@@ -5098,6 +5101,7 @@ class _CourierRow extends StatelessWidget {
     required this.selected,
     required this.onTap,
     this.seed,
+    this.avatar,
     this.icon,
     this.at,
     this.isGroup = false,
@@ -5123,6 +5127,7 @@ class _CourierRow extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
   final String? seed;
+  final Widget? avatar;
   final IconData? icon;
   final DateTime? at;
   final bool isGroup;
@@ -5146,12 +5151,13 @@ class _CourierRow extends StatelessWidget {
                 height: 44,
                 child: Stack(
                   children: [
-                    SealAvatar(
-                      seed: seed!,
-                      palette: palette,
-                      size: 44,
-                      label: title,
-                    ),
+                    avatar ??
+                        SealAvatar(
+                          seed: seed!,
+                          palette: palette,
+                          size: 44,
+                          label: title,
+                        ),
                     if (isGroup && memberCount > 0)
                       Positioned(
                         right: 0,
@@ -18875,6 +18881,50 @@ class _StorageReserveOverrideButton extends StatelessWidget {
   );
 }
 
+/// Delta uses the same file viewer, save/forward menu and voice player.
+Widget buildDeltaAttachment(
+  BuildContext context,
+  MessengerController controller,
+  AttachmentDescriptor descriptor,
+  bool outgoing,
+) {
+  final palette = ConestPalette(brightness: Theme.of(context).brightness);
+  final row = _AttachmentRow(
+    descriptor: descriptor,
+    outbound: outgoing,
+    palette: palette,
+    controller: controller,
+    messageState: DeliveryState.delivered,
+    localContent: true,
+    onForward: () =>
+        _forwardAttachment(context, controller, palette, descriptor),
+  );
+  return DeltaAttachmentCard(
+    controller: controller,
+    descriptor: descriptor,
+    save: row._saveLocalFileToDisk,
+    forward: () => _forwardAttachment(context, controller, palette, descriptor),
+    open: () async {
+      if (descriptor.voiceMetadata != null) {
+        final path = await controller.attachmentCachePathFor(descriptor.id);
+        if (path != null) {
+          await controller.voiceMessageService.togglePlayback(
+            path,
+            itemId: descriptor.id,
+          );
+        }
+      } else if (row._isImage) {
+        await row._openPathImage(context);
+      } else if (row._isVideo) {
+        await row._openVideoPlayer(context);
+      } else {
+        await openDeltaCachedFile(controller, descriptor);
+      }
+    },
+    child: row,
+  );
+}
+
 class _AttachmentRow extends StatelessWidget {
   const _AttachmentRow({
     required this.descriptor,
@@ -18885,6 +18935,7 @@ class _AttachmentRow extends StatelessWidget {
     this.conversationPeerDeviceId,
     this.onForward,
     this.onDelete,
+    this.localContent = false,
   });
 
   final AttachmentDescriptor descriptor;
@@ -18892,6 +18943,7 @@ class _AttachmentRow extends StatelessWidget {
   final ConestPalette palette;
   final MessengerController controller;
   final DeliveryState messageState;
+  final bool localContent;
 
   /// Set on 1:1 chat bubbles so the full-screen viewer can list every
   /// other image in the same conversation for swipe navigation. Null
@@ -18933,19 +18985,20 @@ class _AttachmentRow extends StatelessWidget {
 
   bool get _isImage => descriptor.mimeType.startsWith('image/');
   bool get _isVideo =>
-      descriptor.mimeType.startsWith('video/') ||
-      const {
-        '.3gp',
-        '.avi',
-        '.m4v',
-        '.mkv',
-        '.mov',
-        '.mp4',
-        '.mpeg',
-        '.mpg',
-        '.webm',
-        '.wmv',
-      }.contains(p.extension(descriptor.fileName).toLowerCase());
+      descriptor.voiceMetadata == null &&
+      (descriptor.mimeType.startsWith('video/') ||
+          const {
+            '.3gp',
+            '.avi',
+            '.m4v',
+            '.mkv',
+            '.mov',
+            '.mp4',
+            '.mpeg',
+            '.mpg',
+            '.webm',
+            '.wmv',
+          }.contains(p.extension(descriptor.fileName).toLowerCase()));
 
   /// Wraps an image/video thumbnail so it never overflows its parent. In a
   /// tight (bounded-height) context — e.g. the album grid's square cells —
@@ -19397,9 +19450,11 @@ class _AttachmentRow extends StatelessWidget {
     // attachment bubble. Reject early so the user sees an explicit error
     // rather than an empty card.
     if (descriptor.fileName.isEmpty ||
-        descriptor.effectiveChunkCount <= 0 ||
         descriptor.fileHashBase64.isEmpty ||
-        descriptor.encryptionKeyBase64.isEmpty) {
+        (localContent
+            ? !controller.deltaAttachmentAvailableLocally(descriptor)
+            : descriptor.effectiveChunkCount <= 0 ||
+                  descriptor.encryptionKeyBase64.isEmpty)) {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
@@ -19412,9 +19467,11 @@ class _AttachmentRow extends StatelessWidget {
           children: [
             Icon(Icons.error_outline, size: 18, color: palette.danger),
             const SizedBox(width: 8),
-            Text(
-              'Attachment metadata unavailable',
-              style: TextStyle(color: palette.danger),
+            Flexible(
+              child: Text(
+                'Attachment metadata unavailable',
+                style: TextStyle(color: palette.danger),
+              ),
             ),
           ],
         ),
@@ -19837,9 +19894,10 @@ class _AttachmentRow extends StatelessWidget {
               builder: (context, snapshot) {
                 final service = controller.voiceMessageService;
                 final isCurrent = service.playingItemId == descriptor.id;
-                final fraction =
-                    ((snapshot.data?.inMilliseconds ?? 0) / voice.durationMs)
-                        .clamp(0.0, 1.0);
+                final fraction = voice.durationMs <= 0
+                    ? 0.0
+                    : ((snapshot.data?.inMilliseconds ?? 0) / voice.durationMs)
+                          .clamp(0.0, 1.0);
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [

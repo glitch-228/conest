@@ -54,10 +54,26 @@ class _IoMailSocket implements MailSocket {
 
 /// Reads CRLF-terminated lines and counted byte blocks from a [MailSocket].
 class MailLineReader {
-  MailLineReader(Stream<Uint8List> input) {
+  MailLineReader(
+    Stream<Uint8List> input, {
+    this.maxBufferedBytes = 64 * 1024 * 1024,
+    this.maxBufferedChunks = 4096,
+  }) {
     _subscription = input.listen(
       (chunk) {
+        if (chunk.isEmpty) return;
+        if (_chunks.length >= maxBufferedChunks ||
+            chunk.length > maxBufferedBytes - _queuedBytes - _pending.length) {
+          _error = const FormatException('Mail server input buffer exceeded.');
+          _chunks.clear();
+          _queuedBytes = 0;
+          _pending = Uint8List(0);
+          unawaited(_subscription.cancel());
+          _wake();
+          return;
+        }
         _chunks.add(chunk);
+        _queuedBytes += chunk.length;
         _wake();
       },
       onError: (Object error) {
@@ -73,9 +89,12 @@ class MailLineReader {
 
   /// Longest line accepted; a server sending more is cut off.
   static const int maxLineBytes = 256 * 1024;
+  final int maxBufferedBytes;
+  final int maxBufferedChunks;
 
   late final StreamSubscription<Uint8List> _subscription;
   final List<Uint8List> _chunks = [];
+  var _queuedBytes = 0;
   Uint8List _pending = Uint8List(0);
   Completer<void>? _waiter;
   Object? _error;
@@ -102,6 +121,7 @@ class MailLineReader {
       builder.add(chunk);
     }
     _chunks.clear();
+    _queuedBytes = 0;
     _pending = builder.takeBytes();
   }
 
@@ -134,6 +154,9 @@ class MailLineReader {
       _absorb();
       final end = _indexOfCrlf(max(0, scanned - 1));
       if (end >= 0) {
+        if (end > maxLineBytes) {
+          throw const FormatException('Mail server line is too long.');
+        }
         final line = latin1.decode(Uint8List.sublistView(_pending, 0, end));
         _pending = Uint8List.sublistView(_pending, end + 2);
         return line;

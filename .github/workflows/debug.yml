@@ -103,6 +103,10 @@ jobs:
             --plain-name "matching debug builds auto-accept, verify, report, and clean a real LAN test"
           flutter test test/messenger_controller_test.dart \
             --plain-name "automatic file test stops before sending when debug builds differ"
+      - name: Verify Delta Chat files and signed message changes
+        run: |
+          flutter test test/delta_mail_test.dart test/delta_protocol_test.dart test/delta_content_test.dart test/delta_content_widgets_test.dart test/delta_parser_limits_test.dart test/delta_avatar_store_test.dart test/pgp_test.dart test/email_carrier_test.dart
+          flutter test test/messenger_controller_test.dart --plain-name "Delta"
 
   matrix:
     if: ${{ !inputs.quick_build }}

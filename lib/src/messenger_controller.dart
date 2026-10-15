@@ -40,6 +40,7 @@ import 'nostr_chats.dart';
 import 'delta_chats.dart';
 import 'delta_protocol.dart';
 import 'email/pgp.dart';
+import 'email/delta_content.dart';
 import 'nostr_direct.dart';
 import 'radio_chats.dart';
 import 'carrier.dart';
@@ -107,6 +108,7 @@ import 'storage_capacity.dart';
 import 'tor_carrier.dart';
 import 'transport.dart';
 
+part 'delta_attachments_controller.dart';
 part 'group_call/group_call_controller.dart';
 
 const bool experimentalAndroidBackgroundRuntimeAvailable = bool.fromEnvironment(
@@ -5330,6 +5332,7 @@ class MessengerController extends ChangeNotifier {
           key: key,
           self: config['addr'] as String,
           selfName: _snapshot.identity?.displayName,
+          saveFile: _saveDeltaAttachment,
           tokens:
               DeltaTokens.fromJson(config['tokens']) ??
               DeltaTokens.create(Random.secure()),
@@ -5348,17 +5351,33 @@ class MessengerController extends ChangeNotifier {
   /// Runs [change] on the Delta Chat chats, one change at a time, then
   /// sends its mail.
   Future<DeltaStep?> _deltaRun(
-    Future<DeltaStep> Function(DeltaProtocol protocol, DeltaChats chats) change,
-  ) {
+    Future<DeltaStep> Function(DeltaProtocol protocol, DeltaChats chats)
+    change, {
+    bool retryMailOnSaveFailure = false,
+  }) {
     final result = _deltaQueue.then((_) async {
-      final protocol = await _startDeltaChat();
+      final DeltaProtocol? protocol;
+      try {
+        protocol = await _startDeltaChat();
+        await flushPendingChanges();
+      } catch (_) {
+        if (retryMailOnSaveFailure) throw const OtherMailRetryException();
+        rethrow;
+      }
       if (protocol == null) return null;
       final tokens = protocol.tokens;
       final step = await change(protocol, deltaChats);
-      await _saveDeltaChats(
-        step.chats,
-        tokens: protocol.tokens == tokens ? null : protocol.tokens,
-      );
+      try {
+        await _saveDeltaChats(
+          step.chats,
+          tokens: protocol.tokens == tokens ? null : protocol.tokens,
+        );
+      } catch (_) {
+        if (retryMailOnSaveFailure && (step.consumed || step.retry)) {
+          throw const OtherMailRetryException();
+        }
+        rethrow;
+      }
       unawaited(_sendDeltaMails(step.mails));
       return step;
     });
@@ -5372,7 +5391,9 @@ class MessengerController extends ChangeNotifier {
     if (!deltaChatEnabled) return false;
     final step = await _deltaRun(
       (protocol, chats) => protocol.receive(chats, raw),
+      retryMailOnSaveFailure: true,
     );
+    if (step?.retry ?? false) throw const OtherMailRetryException();
     return step?.consumed ?? false;
   }
 
@@ -5410,7 +5431,8 @@ class MessengerController extends ChangeNotifier {
             },
     );
     _deltaChatsCache = (json, chats);
-    await _saveSnapshotSilently(notify: true, debounce: true);
+    _recordDeltaCacheReferences();
+    await _saveSnapshotSilently(notify: true);
   }
 
   Future<DeltaStep> _deltaRequired(
@@ -6858,6 +6880,8 @@ class MessengerController extends ChangeNotifier {
       onCursor: (validity, uid) => _saveEmailCursor(config.mail, validity, uid),
       onStatusChanged: notifyListeners,
       onOtherMail: _onOtherMail,
+      otherMailMaxBytes: () =>
+          deltaChatEnabled ? DeltaLimits.fileMailBytes : maxCarrierMailBytes,
     );
     await adapter.detach();
     adapter.attach(channel);
@@ -7576,6 +7600,7 @@ class MessengerController extends ChangeNotifier {
         }
       }
     }
+    _addDeltaCacheKeys(cacheAttachmentIds);
     final referencedCacheKeys = cacheAttachmentIds.keys.toSet();
     final referencedInternalPaths = <String>{
       for (final session in _snapshot.transferSessions)
@@ -12903,7 +12928,8 @@ class MessengerController extends ChangeNotifier {
   }
 
   AttachmentDescriptor? attachmentDescriptorFor(String attachmentId) =>
-      messageForAttachment(attachmentId)?.attachment;
+      messageForAttachment(attachmentId)?.attachment ??
+      _deltaAttachmentDescriptorFor(attachmentId);
 
   /// Makes [contactDeviceId] look like a build without [capability].
   @visibleForTesting
@@ -13386,6 +13412,9 @@ class MessengerController extends ChangeNotifier {
         }
       }
     }
+    references += _deltaAttachments
+        .where((a) => a.fileHashBase64 == fileHashBase64)
+        .length;
     return references;
   }
 
