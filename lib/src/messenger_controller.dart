@@ -4292,8 +4292,9 @@ class MessengerController extends ChangeNotifier {
   /// in an exchange, and digests in route updates).
   List<String> _capabilityNamesFor(ContactRecord contact) => [
     ..._localApplicationCapabilities().map((capability) => capability.name),
-    // Only the contacts this device carries for learn that it does.
-    if (contact.routing.carryForContact)
+    // Only the contacts this device carries for learn that it does (own
+    // devices always: they carry for each other).
+    if (contact.routing.carryForContact || contact.ownDevice)
       ApplicationCapability.forwardForContactsV1.name,
   ];
 
@@ -25780,7 +25781,8 @@ class MessengerController extends ChangeNotifier {
   List<ContactRecord> _forwardersFor(ContactRecord recipient) => [
     for (final contact in _snapshot.contacts)
       if (contact.deviceId != recipient.deviceId &&
-          !contact.ownDevice &&
+          // Own devices carry for each other while confirmed.
+          !(contact.ownDevice && isOwnDeviceUnconfirmed(contact)) &&
           contact.canSendOutbound &&
           !contact.isArchived &&
           contact.featureCapabilities.contains(
@@ -25941,7 +25943,10 @@ class MessengerController extends ChangeNotifier {
     if (sender == null || sender.isArchived || !sender.canSendOutbound) {
       return true;
     }
-    if (!sender.routing.carryForContact) {
+    // Contacts the user agreed to carry for, and this account's own
+    // (confirmed) devices: a mesh of one's own devices.
+    final ownConfirmed = sender.ownDevice && !isOwnDeviceUnconfirmed(sender);
+    if (!sender.routing.carryForContact && !ownConfirmed) {
       appendDebugLog('Not carrying for ${sender.alias}: not allowed.');
       return false;
     }

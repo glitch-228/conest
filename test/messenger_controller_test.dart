@@ -16748,6 +16748,70 @@ void main() {
       expect(bob.contactDeviceOutOfTouchSince(aliceId), isNull);
     });
 
+    test('own devices carry for each other: a message the laptop cannot '
+        'deliver goes through the phone', () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      var now = DateTime.now().toUtc();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+          nowProvider: () => now,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      final phone = await make('Phone');
+      await _pairControllers(alice, bob);
+      now = now.add(const Duration(hours: 25));
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () =>
+            phone.linkState == LinkState.compareCode &&
+            alice.linkState == LinkState.compareCode,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      final phoneId = phone.identity!.deviceId;
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        unawaited(bob.pollNow());
+        return phone.linkState == LinkState.linked &&
+            alice.ownDevices.any(
+              (d) =>
+                  d.deviceId == phoneId &&
+                  d.featureCapabilities.contains(
+                    ApplicationCapability.forwardForContactsV1,
+                  ),
+            ) &&
+            bob.linkedDevicesOf(alice.identity!.deviceId).isNotEmpty;
+      }, reason: 'the phone never offered to carry');
+      // The laptop reaches neither Bob nor any relay; the phone reaches Bob.
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      network.blockedPairs
+        ..add((alice.identity!.irohEndpointId!, bob.identity!.irohEndpointId!))
+        ..add((bob.identity!.irohEndpointId!, alice.identity!.irohEndpointId!));
+      await alice.sendMessage(
+        contact: alice.contacts.single,
+        body: 'via my phone',
+      );
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        unawaited(bob.pollNow());
+        return bob
+            .messagesFor(alice.identity!.deviceId)
+            .any((m) => m.body == 'via my phone');
+      }, reason: 'the phone did not carry it');
+    });
+
     test('a device removed on one device is removed on the others', () async {
       var now = DateTime.now().toUtc();
       final network = _InProcessIrohNetwork();
