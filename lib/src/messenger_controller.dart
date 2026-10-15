@@ -3746,6 +3746,77 @@ class MessengerController extends ChangeNotifier {
   @visibleForTesting
   int groupNoticesSent = 0;
 
+  Timer? _networkRecheckTimer;
+  final Map<String, DateTime> _quietRecheckAt = {};
+  DateTime? _lastPeriodicRecheck;
+  static const int _maxQuietRecheckContacts = 5;
+
+  /// On mains power or an unmetered network, routes to the usual contacts
+  /// are re-checked every 30 minutes, so a route that stopped working (or
+  /// started) is noticed before a message waits on it.
+  void _maybePeriodicRouteRecheck() {
+    if (_energyPolicy.modeFor(_networkCostClass) != EnergyMode.unconstrained) {
+      return;
+    }
+    final now = _now();
+    final last = _lastPeriodicRecheck;
+    if (last == null) {
+      _lastPeriodicRecheck = now;
+      return;
+    }
+    if (now.difference(last) < const Duration(minutes: 30)) return;
+    _lastPeriodicRecheck = now;
+    unawaited(_quietRouteRecheck('periodic'));
+  }
+
+  /// Re-checks the routes to the contacts talked with most recently (a
+  /// few, each at most every 10 minutes), in the background. Not in
+  /// battery saver, nor on a metered network while in the background.
+  Future<void> _quietRouteRecheck(String reason) async {
+    if (_disposed || !conestActive || !hasIdentity) return;
+    final mode = _energyPolicy.modeFor(_networkCostClass);
+    if (mode == EnergyMode.saver ||
+        _networkCostClass == NetworkCostClass.offline ||
+        (_networkCostClass == NetworkCostClass.metered && !_appInForeground)) {
+      return;
+    }
+    final now = _now();
+    DateTime lastTalk(ContactRecord contact) =>
+        lastMessageFor(contact.deviceId)?.createdAt ??
+        DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    final candidates = [
+      for (final contact in contacts)
+        if (contact.canSendOutbound &&
+            now.difference(lastTalk(contact)) < const Duration(days: 14) &&
+            (_quietRecheckAt[contact.deviceId] == null ||
+                now.difference(_quietRecheckAt[contact.deviceId]!) >=
+                    const Duration(minutes: 10)))
+          contact,
+    ]..sort((a, b) => lastTalk(b).compareTo(lastTalk(a)));
+    final chosen = candidates.take(_maxQuietRecheckContacts).toList();
+    if (chosen.isEmpty) return;
+    appendDebugLog(
+      'Re-checking routes to ${chosen.length} contacts after $reason.',
+    );
+    for (final contact in chosen) {
+      if (_disposed) return;
+      _quietRecheckAt[contact.deviceId] = now;
+      try {
+        await checkContactRoutes(contact, persist: false, fast: true);
+      } catch (error) {
+        recordError(
+          'route',
+          'Route re-check to ${contact.alias} failed: $error',
+          subject: contact.deviceId,
+        );
+      }
+    }
+  }
+
+  /// Contacts whose routes were re-checked quietly (for tests).
+  @visibleForTesting
+  Set<String> get quietlyRecheckedForTesting => _quietRecheckAt.keys.toSet();
+
   /// When each group last pulled from a member at random.
   final Map<String, DateTime> _groupSlowCatchUpAt = {};
   static const Duration _groupSlowCatchUpInterval = Duration(minutes: 20);
@@ -15011,6 +15082,13 @@ class MessengerController extends ChangeNotifier {
     // An address learned on the old interface is no longer trusted as a LAN
     // destination. Both peers exchange fresh, authenticated endpoint hints.
     _peerLanDirect.clear();
+    // The routes that worked before may not now (a VPN, another network, a
+    // network that blocks some): re-check the usual contacts, quietly.
+    _networkRecheckTimer?.cancel();
+    _networkRecheckTimer = Timer(const Duration(seconds: 5), () {
+      _networkRecheckTimer = null;
+      unawaited(_quietRouteRecheck('network change ($label)'));
+    });
     _schedulePendingContactPairingRetries(force: true);
     for (final session in _groupFileSessions.values.toList(growable: false)) {
       unawaited(
@@ -16203,6 +16281,7 @@ class MessengerController extends ChangeNotifier {
       await _retryUnacknowledgedMessages();
       _catchUpGroupsNow();
       _noticeUnconfirmedOwnDevices();
+      _maybePeriodicRouteRecheck();
       final heartbeatResult = await _runHeartbeatPass();
 
       _lastRelayStatus = _networkSummary(
@@ -33298,6 +33377,7 @@ class MessengerController extends ChangeNotifier {
     _voiceCallDatagramSubscription = null;
     savePendingChangesForLifecycle();
     _disposed = true;
+    _networkRecheckTimer?.cancel();
     unawaited(_errorHistory?.close());
     for (final timer in _groupHistoryTimers.values) {
       timer.cancel();

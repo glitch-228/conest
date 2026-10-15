@@ -17753,6 +17753,34 @@ void main() {
     },
   );
 
+  test('after a network change the usual contacts are re-checked, not in '
+      'battery saver', () async {
+    final relay = _FakeRelayClient();
+    Future<MessengerController> device(String name, EnergyMode mode) async {
+      final controller = await _createController(
+        relayClient: relay,
+        displayName: name,
+        energyPolicy: EnergyPolicy.fixed(mode),
+      );
+      addTearDown(controller.dispose);
+      return controller;
+    }
+
+    final alice = await device('Alice', EnergyMode.limited);
+    final saver = await device('Saver', EnergyMode.saver);
+    final bob = await device('Bob', EnergyMode.limited);
+    await _pairControllers(alice, bob);
+    await _pairControllers(saver, bob);
+    for (final sender in [alice, saver]) {
+      await sender.sendMessage(contact: sender.contacts.single, body: 'hello');
+    }
+    alice.onConnectivityChanged(interfaceLabel: 'wifi');
+    saver.onConnectivityChanged(interfaceLabel: 'wifi');
+    await Future<void>.delayed(const Duration(seconds: 7));
+    expect(alice.quietlyRecheckedForTesting, {bob.identity!.deviceId});
+    expect(saver.quietlyRecheckedForTesting, isEmpty);
+  });
+
   group('Clocks that are off', () {
     Future<(MessengerController, MessengerController, MessengerController)>
     threeWithBobBehind() async {
