@@ -88,24 +88,36 @@ class ConestBackgroundService : Service() {
             ACTION_STOP_TRANSFER -> transferActive = false
         }
         if (!backgroundEnabled && !callsEnabled && !hasCall() && !transferActive) {
+            // Started with startForegroundService, a service must call
+            // startForeground before it stops, even with nothing to show;
+            // otherwise Android kills the app (ForegroundServiceDidNot-
+            // StartInTimeException).
+            promoteToForeground()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            var types = 0
-            if (transferActive || backgroundEnabled || callsEnabled || hasCall()) {
-                types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            }
-            if (callUsesMicrophone()) {
-                types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            }
-            startForeground(NOTIFICATION_ID, buildNotification(), types)
-        } else {
-            startForeground(NOTIFICATION_ID, buildNotification())
-        }
+        promoteToForeground()
         callAudioHandle?.let(::startVoiceCallAudio)
         return START_STICKY
+    }
+
+    private fun promoteToForeground() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                if (callUsesMicrophone()) {
+                    types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                }
+                startForeground(NOTIFICATION_ID, buildNotification(), types)
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification())
+            }
+        } catch (error: Exception) {
+            // Not allowed now (for example from the background on newer
+            // Android): the service carries on without its notification.
+            android.util.Log.w("Conest", "Foreground service not started: $error")
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

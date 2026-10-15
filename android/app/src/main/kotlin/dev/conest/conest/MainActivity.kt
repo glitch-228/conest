@@ -474,10 +474,17 @@ class MainActivity : FlutterActivity() {
             putExtra(ConestBackgroundService.EXTRA_CALL_STATE, callState)
             putExtra(ConestBackgroundService.EXTRA_CALL_INCOMING, incoming)
         }
-        if (runtimeEnabled || callsEnabled) {
-            startService(intent)
-        } else {
+        // A foreground start only when there is something to show (the
+        // runtime, calls, or a call in progress); otherwise a plain update.
+        val callInProgress = callState != "idle" && callState != "ended"
+        if (runtimeEnabled || callsEnabled || callInProgress) {
             startConestForegroundService(intent)
+        } else {
+            try {
+                startService(intent)
+            } catch (error: IllegalStateException) {
+                // In the background with nothing to run: nothing to update.
+            }
         }
     }
 
