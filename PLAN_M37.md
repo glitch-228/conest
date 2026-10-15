@@ -122,6 +122,8 @@ The Bluetooth mesh (bitchat-compatible) should work on desktops and laptops too,
 - Rust CI `38726148815` is green, including the callback regression tests and nine Rust sabotage checks. Full local Flutter run: 1120 passed, 18 skipped, only the documented native-Iroh-without-library failure. No other tests failed; analyzer reports 29 pre-existing issues, none added in M37 code.
 - Debug `38724947316`: Linux and Android artifacts built successfully. Windows compiler rejected a TypedEventHandler and temporary IBuffers held across await in Send link workers; scoped those COM values before await rather than adding unsafe trait implementations. Tor/Matrix header failures were fixed above.
 - Final reviewer found a P2 cancellation issue: a ready link could be cached while its returned writer was still waiting behind another peer's lookup, then lose that writer on timeout. Admission now synchronously starts each writer before the next await. Added a stalled-peer cancellation regression and a tenth Rust sabotage mutation. Final reviewer recheck and latest-base verification pending.
+- Merged latest base `b6a23c2` cleanly into `74d4638`. Post-merge analyzer still reports only the same 29 baseline issues; full Flutter tests are running again.
+- Reviewer verified cancellation fix, then identified a residual first-write delay behind unrelated subscriber lookups. First-write inspection now focuses on that session only and preserves unrelated cached links; periodic full inspection is capped at two seconds. Added a stalled-before-and-after-target regression plus two sabotage checks (focused admission and partial-snapshot retention), bringing Rust negative checks to twelve. Final review and CI pending.
 
 ## Handoff
 

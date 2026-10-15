@@ -246,7 +246,10 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
                         core.status.peripheral = advertising;
                         core.status.problem = if advertising { None } else { Some(PERIPHERAL_WARNING.into()) };
                     }
-                    refresh_subscribers(&state, characteristic, &mut subscribers, &mut tasks, None).await?;
+                    // Periodic enumeration must not block first writes behind
+                    // eight sequential per-peer lookups. Admitted writers
+                    // survive cancellation; the next snapshot resumes work.
+                    if let Ok(result) = timeout(Duration::from_secs(2), refresh_subscribers(&state, characteristic, &mut subscribers, &mut tasks, None)).await { result?; }
                 }
             }
             Some(peer) = found.recv() => {

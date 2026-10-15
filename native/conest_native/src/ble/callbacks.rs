@@ -38,21 +38,38 @@ impl Subscribers {
         shared: &Shared,
         adapter: &A,
         available_workers: usize,
+        admit: F,
+    ) -> Result<usize, A::Error> {
+        self.inspect(shared, adapter, available_workers, None, admit)
+            .await
+    }
+
+    async fn inspect<A: PeripheralAdapter, F: FnMut(u64, A::Client)>(
+        &mut self,
+        shared: &Shared,
+        adapter: &A,
+        available_workers: usize,
+        wanted: Option<&str>,
         mut admit: F,
     ) -> Result<usize, A::Error> {
         let count = adapter.count()?.min(MAX_LINKS);
         self.0
             .retain(|_, id| shared.core.lock().unwrap().contains(*id));
         let mut seen = BTreeSet::new();
-        let mut complete = true;
+        let mut complete = wanted.is_none();
         let mut added = 0;
         for index in 0..count {
+            let mut requested = false;
             let result: Result<(), A::Error> = async {
                 let client = adapter.client(index)?;
                 let key = adapter.key(&client)?;
                 if key.is_empty() || key.len() > 512 {
                     return Ok(());
                 }
+                if wanted.is_some_and(|wanted| wanted != key) {
+                    return Ok(());
+                }
+                requested = wanted.is_some();
                 seen.insert(key.clone());
                 let limit = adapter.limit(&client)?;
                 if let Some(id) = self.id(shared, &key) {
@@ -88,6 +105,9 @@ impl Subscribers {
             if result.is_err() {
                 complete = false;
             }
+            if requested {
+                break;
+            }
         }
         if complete {
             self.0.retain(|key, id| {
@@ -113,7 +133,7 @@ impl Subscribers {
         if self.id(shared, key).is_some() {
             return Ok(0);
         }
-        self.refresh(shared, adapter, available_workers, admit)
+        self.inspect(shared, adapter, available_workers, Some(key), admit)
             .await
     }
 }
@@ -261,6 +281,38 @@ mod tests {
         let mut core = shared.core.lock().unwrap();
         assert!(core.enqueue(id, &[1, 2, 3]));
         assert_eq!(core.take_write(writers[0]), Some(vec![1, 2, 3]));
+    }
+
+    #[tokio::test]
+    async fn first_write_never_waits_for_unrelated_slow_subscribers() {
+        let shared = shared();
+        let mut subscribers = Subscribers::default();
+        subscribers
+            .refresh(
+                &shared,
+                &MockAdapter(vec![Ok(("healthy".into(), 1, 182))]),
+                8,
+                |_, _| {},
+            )
+            .await
+            .unwrap();
+        let healthy = subscribers.id(&shared, "healthy").unwrap();
+        let adapter = MockAdapter(vec![
+            Ok(("stall".into(), 3, 182)),
+            Ok(("fast".into(), 2, 182)),
+            Ok(("stall".into(), 4, 182)),
+        ]);
+        let mut writers = Vec::new();
+        let admitted = tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            subscribers.before_write(&shared, &adapter, "fast", 8, |id, _| writers.push(id)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(admitted, 1);
+        assert_eq!(writers, vec![subscribers.id(&shared, "fast").unwrap()]);
+        assert_eq!(subscribers.id(&shared, "healthy"), Some(healthy));
     }
 
     #[tokio::test]
