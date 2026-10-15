@@ -3,7 +3,7 @@
 Conest is a serverless messenger for Linux, Windows and Android. Contacts
 reach each other directly over the local network or the internet, and fall
 back to whatever still works when that fails: relays, Matrix, Nostr, email,
-Tor, LoRa radios or a Bluetooth mesh of nearby phones. Every route carries
+Tor, LoRa radios or a Bluetooth mesh of nearby devices. Every route carries
 messages end-to-end encrypted by Conest.
 
 It can also be used as a Matrix client, alongside Conest chats or instead
@@ -41,7 +41,7 @@ of them.
   - email (a free chatmail account or your own mailbox, OpenPGP),
   - Tor onion services, with obfs4, webtunnel, snowflake or meek bridges,
   - LoRa radios: Reticulum, Meshtastic and MeshCore,
-  - a Bluetooth mesh with nearby phones (bitchat-compatible).
+  - a Bluetooth mesh with nearby devices (bitchat-compatible).
 - Both sides need a route on for it to be used. Routes enabled later reach
   existing contacts automatically.
 - Routes are ranked per contact by what works and how fast; a contact can
@@ -73,12 +73,15 @@ of them.
   directly and on the radio's channels.
 - Verifying Matrix users in direct chats, as Element does.
 
-**bitchat users nearby** (Android, with the Bluetooth mesh on)
+**bitchat users nearby** (Android, Linux and Windows, with the Bluetooth mesh on)
 - Read bitchat's mesh chat; with "Reachable by bitchat users", chat
   privately with bitchat users on iPhone and Android and write in the mesh
   chat, under a separate identity that changes weekly.
 - "Share internet with bitchat users" lets phones nearby without internet
   use bitchat's location channels through yours.
+- Desktop Bluetooth adapters, including USB dongles, use the system's
+  Bluetooth stack. Adapters without advertising support can still connect
+  to phones; Settings → Connectivity shows the adapter state and warning.
 
 **Files you send**
 - Location, camera, author and date details are removed from photos,
@@ -108,7 +111,7 @@ so far (setup, modes, calls, message details); the rest follows.
   routes in parallel.
 - Relay protocol v2 with registration for large files and call relaying.
 - Background notifications on Android and a background runtime on by
-  default; Linux Bluetooth mesh.
+  default.
 - Beam receive sessions do not survive an app restart.
 - Device testing of the newer routes (Tor bridges, radios, Bluetooth mesh,
   email) and of 2 GiB transfers on every platform is ongoing.
