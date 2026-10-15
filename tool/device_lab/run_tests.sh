@@ -20,17 +20,18 @@ stamp=$(date -u +%Y%m%dT%H%M%SZ)
 case "$kind" in
   android)
     package=${PACKAGE:-dev.conest.conest.debug}
-    remote=/storage/emulated/0/Android/data/$package/files/conest-debug-report.json
-    adb shell rm -f "$remote" || true
+    # The report stays private to the app; a debug build lets run-as read it.
+    remote=files/conest-debug-report.json
+    adb shell run-as "$package" rm -f "$remote" || true
     adb shell am force-stop "$package"
     adb shell am start -n "$package/dev.conest.conest.MainActivity" \
       --es conestDebugRun routes >/dev/null
     echo "Started on Android; waiting for the report…"
     for _ in $(seq 1 120); do
-      if adb shell test -s "$remote"; then break; fi
+      if adb shell run-as "$package" test -s "$remote"; then break; fi
       sleep 5
     done
-    adb pull "$remote" "$out/android-$stamp.json"
+    adb exec-out run-as "$package" cat "$remote" > "$out/android-$stamp.json"
     ;;
   linux)
     bundle=${2:?path to the Linux bundle directory}

@@ -16678,10 +16678,24 @@ void main() {
           isFalse,
         );
 
-        // Confirmed on both: syncing resumes.
-        await alice.confirmOwnDevice(phoneId);
+        // Confirmed on the phone first: what it held back goes to the
+        // laptop, which keeps it until confirmed there too.
         await phone.confirmOwnDevice(aliceId);
+        for (var i = 0; i < 20; i++) {
+          await Future.wait([alice.pollNow(), phone.pollNow()]);
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+        expect(
+          alice.messagesFor(bobId).any((m) => m.body == 'unsure'),
+          isFalse,
+        );
+        await alice.confirmOwnDevice(phoneId);
         expect(alice.unconfirmedOwnDevices, isEmpty);
+        expect(
+          alice.messagesFor(bobId).any((m) => m.body == 'unsure'),
+          isTrue,
+          reason: 'what was sent while unconfirmed was lost',
+        );
         await phone.sendMessage(contact: phone.contacts.single, body: 'sure');
         await _waitForIroh(() {
           unawaited(alice.pollNow());

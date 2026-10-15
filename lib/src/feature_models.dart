@@ -33,6 +33,9 @@ enum ApplicationCapability {
 
   /// Encrypted group voice calls over authenticated Iroh datagrams.
   groupVoiceCallsV1,
+
+  /// A debug build that runs full transport tests (debug_transport_test).
+  debugTransportTestV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

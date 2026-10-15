@@ -18,7 +18,13 @@ class ErrorHistoryEntry {
     required this.at,
     required this.kind,
     required this.text,
+    this.subject,
   });
+
+  /// The device it is about, when one (matched exactly, never by name).
+  final String? subject;
+
+  bool get isLog => kind == 'log';
 
   final DateTime at;
 
@@ -31,6 +37,7 @@ class ErrorHistoryEntry {
     'at': at.toUtc().toIso8601String(),
     'kind': kind,
     'text': text,
+    if (subject != null) 'subject': subject,
   };
 
   static ErrorHistoryEntry? fromJson(Object? json) {
@@ -39,7 +46,13 @@ class ErrorHistoryEntry {
     final kind = json['kind'];
     final text = json['text'];
     if (at == null || kind is! String || text is! String) return null;
-    return ErrorHistoryEntry(at: at.toUtc(), kind: kind, text: text);
+    final subject = json['subject'];
+    return ErrorHistoryEntry(
+      at: at.toUtc(),
+      kind: kind,
+      text: text,
+      subject: subject is String ? subject : null,
+    );
   }
 
   String format() => '${at.toUtc().toIso8601String()}  [$kind]  $text';
@@ -49,9 +62,10 @@ class ErrorHistory {
   ErrorHistory({
     this.file,
     this.key,
-    this.capacity = 2000,
-    this.maxBytes = 1 << 20,
-    this.flushDelay = const Duration(seconds: 10),
+    this.capacity = 1000,
+    this.logCapacity = 1000,
+    this.maxBytes = 512 * 1024,
+    this.flushDelay = const Duration(seconds: 30),
     DateTime Function()? now,
   }) : _now = now ?? DateTime.now;
 
@@ -61,7 +75,10 @@ class ErrorHistory {
   /// 32-byte key for the file (required with [file]).
   final List<int>? key;
 
+  /// Errors kept (and debug-log lines, separately: a chatty log never
+  /// pushes errors out).
   final int capacity;
+  final int logCapacity;
   final int maxBytes;
   final Duration flushDelay;
   final DateTime Function() _now;
@@ -77,7 +94,7 @@ class ErrorHistory {
 
   List<ErrorHistoryEntry> get entries => List.unmodifiable(_entries);
 
-  void add(String kind, String text) {
+  void add(String kind, String text, {String? subject}) {
     final trimmed = text.length > maxEntryChars
         ? '${text.substring(0, maxEntryChars)}…'
         : text;
@@ -85,6 +102,7 @@ class ErrorHistory {
       at: _now().toUtc(),
       kind: kind,
       text: trimmed,
+      subject: subject,
     );
     _entries.add(entry);
     _bytes += _sizeOf(entry);
@@ -114,9 +132,29 @@ class ErrorHistory {
       entry.text.length + entry.kind.length + 40;
 
   void _trim() {
-    while (_entries.isNotEmpty &&
-        (_entries.length > capacity || _bytes > maxBytes)) {
-      _bytes -= _sizeOf(_entries.removeAt(0));
+    void dropOldest(bool log) {
+      final index = _entries.indexWhere((entry) => entry.isLog == log);
+      if (index >= 0) _bytes -= _sizeOf(_entries.removeAt(index));
+    }
+
+    var logs = _entries.where((entry) => entry.isLog).length;
+    var errors = _entries.length - logs;
+    while (logs > logCapacity) {
+      dropOldest(true);
+      logs--;
+    }
+    while (errors > capacity) {
+      dropOldest(false);
+      errors--;
+    }
+    // Over the size: log lines go first.
+    while (_bytes > maxBytes && _entries.isNotEmpty) {
+      if (logs > 0) {
+        dropOldest(true);
+        logs--;
+      } else {
+        dropOldest(false);
+      }
     }
   }
 
@@ -148,8 +186,7 @@ class ErrorHistory {
       final decoded = jsonDecode(utf8.decode(clear));
       if (decoded is! List) return;
       final loaded = [
-        for (final item in decoded)
-          ?ErrorHistoryEntry.fromJson(item),
+        for (final item in decoded) ?ErrorHistoryEntry.fromJson(item),
       ];
       _entries.insertAll(0, loaded);
       _bytes = _entries.fold(0, (sum, entry) => sum + _sizeOf(entry));
@@ -189,6 +226,16 @@ class ErrorHistory {
       // Kept in memory; the next change tries again.
       _dirty = true;
     }
+  }
+
+  /// Forgets everything without writing again (the file goes with the
+  /// vault).
+  void discard() {
+    _flushTimer?.cancel();
+    _flushTimer = null;
+    _entries.clear();
+    _bytes = 0;
+    _dirty = false;
   }
 
   Future<void> close() async {

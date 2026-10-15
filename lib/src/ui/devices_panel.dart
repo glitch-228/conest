@@ -109,11 +109,25 @@ class DevicesPanel extends StatelessWidget {
             trailing: device.deviceId == me?.deviceId
                 ? null
                 : unconfirmed.containsKey(device.deviceId)
-                ? TextButton(
-                    key: ValueKey('confirm-device-${device.deviceId}'),
-                    onPressed: () =>
-                        controller.confirmOwnDevice(device.deviceId),
-                    child: const Text('Still mine'),
+                // Possibly not theirs any more: both choices.
+                ? Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextButton(
+                        key: ValueKey('confirm-device-${device.deviceId}'),
+                        onPressed: () =>
+                            controller.confirmOwnDevice(device.deviceId),
+                        child: const Text('Still mine'),
+                      ),
+                      IconButton(
+                        tooltip: 'Remove device',
+                        icon: const Icon(Icons.link_off),
+                        onPressed: controller.mayManageAccountDevices
+                            ? () =>
+                                  _revoke(context, device.deviceId, device.name)
+                            : null,
+                      ),
+                    ],
                   )
                 : IconButton(
                     tooltip: 'Remove device',

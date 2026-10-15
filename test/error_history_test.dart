@@ -39,6 +39,16 @@ void main() {
     expect(other.entries, isEmpty);
   });
 
+  test('the debug log never pushes errors out', () {
+    final history = ErrorHistory(capacity: 5, logCapacity: 5);
+    history.add('send', 'the one error', subject: 'dev-bob');
+    for (var i = 0; i < 50; i++) {
+      history.add('log', 'chatter $i');
+    }
+    expect(history.entries.where((e) => !e.isLog).single.subject, 'dev-bob');
+    expect(history.entries.where((e) => e.isLog).length, 5);
+  });
+
   test('bounded by size, and exported with a filter', () {
     final history = ErrorHistory(maxBytes: 500);
     for (var i = 0; i < 20; i++) {
@@ -47,7 +57,8 @@ void main() {
     expect(history.entries.length, lessThan(20));
     final sends = history.exportText(filter: 'send').split('\n');
     expect(sends, everyElement(contains('[send]')));
-    expect(history.exportText(), contains('line 19'));
+    // Over the size, log lines go before errors.
+    expect(history.exportText(), contains('line 18'));
     final roomy = ErrorHistory()..add('error', 'y' * 10000);
     expect(roomy.entries.last.text.length, ErrorHistory.maxEntryChars + 1);
   });

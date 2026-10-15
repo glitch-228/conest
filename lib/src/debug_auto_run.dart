@@ -104,7 +104,13 @@ Future<String> runDebugRequest(
   };
   final file = File(path);
   await file.parent.create(recursive: true);
-  await file.writeAsString(const JsonEncoder.withIndent('  ').convert(report));
+  // Whole or not at all: a script waiting for the file never reads half.
+  final temporary = File('$path.tmp');
+  await temporary.writeAsString(
+    const JsonEncoder.withIndent('  ').convert(report),
+    flush: true,
+  );
+  await temporary.rename(file.path);
   controller.recordError(
     'test',
     'Automatic ${request.what} run written to $path',

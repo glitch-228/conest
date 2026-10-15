@@ -212,8 +212,12 @@ class MainActivity : FlutterActivity() {
                 // `adb shell am start -n dev.conest.conest/.MainActivity
                 // --es conestDebugRun routes` asks for the automatic tests;
                 // only debug-channel builds act on it (checked in Dart).
-                "debugRunRequest" ->
-                    result.success(intent?.getStringExtra("conestDebugRun"))
+                // Read once: a restart or Recents does not run it again.
+                "debugRunRequest" -> {
+                    val request = intent?.getStringExtra("conestDebugRun")
+                    intent?.removeExtra("conestDebugRun")
+                    result.success(request)
+                }
                 "showToast" -> {
                     val text = call.argument<String>("text") ?: ""
                     val long = call.argument<Boolean>("long") ?: false

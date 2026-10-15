@@ -3530,14 +3530,20 @@ class MessengerController extends ChangeNotifier {
     final waiter = Completer<({TransportTestSide? side, String? error})>();
     _transportTestWaiters[testId] = waiter;
     String? remoteError;
-    try {
-      // Asked first, so both sides probe at the same time.
-      await _sendDebugTransportTest(current, {
-        'type': 'request',
-        'testId': testId,
-      });
-    } catch (error) {
-      remoteError = 'the request did not go: $error';
+    if (!current.featureCapabilities.contains(
+      ApplicationCapability.debugTransportTestV1,
+    )) {
+      remoteError = 'their build does not run transport tests';
+    } else {
+      try {
+        // Asked first, so both sides probe at the same time.
+        await _sendDebugTransportTest(current, {
+          'type': 'request',
+          'testId': testId,
+        });
+      } catch (error) {
+        remoteError = 'the request did not go: $error';
+      }
     }
     RouteTestReport local;
     try {
@@ -3617,6 +3623,13 @@ class MessengerController extends ChangeNotifier {
         final now = _now();
         final last = _transportTestAnsweredAt[contact.deviceId];
         if (last != null && now.difference(last) < const Duration(minutes: 1)) {
+          unawaited(
+            _sendDebugTransportTest(contact, {
+              'type': 'report',
+              'testId': testId,
+              'error': 'busy: one test a minute',
+            }).catchError((Object _) {}),
+          );
           return;
         }
         _transportTestAnsweredAt[contact.deviceId] = now;
@@ -3661,7 +3674,11 @@ class MessengerController extends ChangeNotifier {
           side: side?.deviceId == contact.deviceId ? side : null,
           error: decoded['error'] is String
               ? decoded['error'] as String
-              : (side == null ? 'their report could not be read' : null),
+              : side == null
+              ? 'their report could not be read'
+              : side.deviceId != contact.deviceId
+              ? 'their report named another device'
+              : null,
         ));
     }
   }
@@ -3687,17 +3704,13 @@ class MessengerController extends ChangeNotifier {
     ].take(TransportTestSide.maxLines).toList();
   }
 
-  /// The latest errors that name [contact].
-  List<String> _recentErrorsAbout(ContactRecord contact) {
-    final id = _shortId(contact.deviceId);
-    return [
-      for (final entry in errorHistoryEntries.reversed)
-        if (entry.kind != 'log' &&
-            entry.kind != 'test' &&
-            (entry.text.contains(contact.alias) || entry.text.contains(id)))
-          entry.format(),
-    ].take(20).toList();
-  }
+  /// The latest errors about [contact] (recorded with its device id, so
+  /// nothing about anyone else goes to it).
+  List<String> _recentErrorsAbout(ContactRecord contact) => [
+    for (final entry in errorHistoryEntries.reversed)
+      if (entry.subject == contact.deviceId && entry.kind != 'test')
+        entry.format(),
+  ].take(20).toList();
 
   /// Whether an announcement naming [heads] would make this device pull.
   @visibleForTesting
@@ -7659,10 +7672,13 @@ class MessengerController extends ChangeNotifier {
 
   /// Something failed: into the debug log, and the error history as an
   /// error of [kind] ('send', 'receive', 'carrier', …).
-  void recordError(String kind, String text) {
+  void recordError(String kind, String text, {String? subject}) {
     _appendDebugLine(text);
-    _errorHistory?.add(kind, text);
+    _errorHistory?.add(kind, text, subject: subject);
   }
+
+  /// Writes the error history now (before the app exits).
+  Future<void> flushErrorHistory() async => _errorHistory?.flush();
 
   void appendDebugLog(String line) {
     _appendDebugLine(line);
@@ -9786,6 +9802,10 @@ class MessengerController extends ChangeNotifier {
   /// of the display-name screen. Failures inside the hook are swallowed;
   /// the user can manually restart the app if needed.
   Future<void> resetIdentity({Future<void> Function()? onPostReset}) async {
+    // What went wrong before belongs to the old identity: gone with it.
+    _errorHistory?.discard();
+    _errorHistory = null;
+    _parkedOwnSync.clear();
     _scheduledMessageTimer?.cancel();
     _scheduledMessageTimer = null;
     for (final timer in _groupHistoryTimers.values) {
@@ -16160,6 +16180,7 @@ class MessengerController extends ChangeNotifier {
       displayableProcessed += lobbyProcessed;
       await _retryUnacknowledgedMessages();
       _catchUpGroupsNow();
+      _noticeUnconfirmedOwnDevices();
       final heartbeatResult = await _runHeartbeatPass();
 
       _lastRelayStatus = _networkSummary(
@@ -18144,6 +18165,7 @@ class MessengerController extends ChangeNotifier {
               '${_boundedLogValue(envelope.messageId)} from '
               '${_shortId(envelope.senderDeviceId)}: '
               '${_envelopeProcessingError(envelope.kind, error)}',
+          subject: envelope.senderDeviceId,
         );
       } finally {
         _inFlightEnvelopeIds.remove(envelope.messageId);
@@ -20700,9 +20722,12 @@ class MessengerController extends ChangeNotifier {
     }
     if (accountStatement != null && envelope.protocolVersion != 1) {
       if (existing?.ownDevice ?? false) {
-        if (isOwnDeviceUnconfirmed(existing!)) return;
-        _noteOwnDeviceInTouch(existing);
-        await _applyOwnAccountDevices(existing, accountStatement);
+        // An unconfirmed device's list waits; the rest of the exchange
+        // (routes, carriers) still counts.
+        if (!isOwnDeviceUnconfirmed(existing!)) {
+          _noteOwnDeviceInTouch(existing);
+          await _applyOwnAccountDevices(existing, accountStatement);
+        }
       } else {
         await _applyAccountDevices(envelope.senderDeviceId, accountStatement);
       }
@@ -25651,6 +25676,7 @@ class MessengerController extends ChangeNotifier {
           '${_boundedLogValue(envelope.kind)} to ${contact.alias} '
               '(${_shortId(contact.deviceId)}) found no route: '
               '${lastError ?? 'none'}',
+          subject: contact.deviceId,
         );
       }
       throw lastError ?? StateError('No reachable route for recipient.');
@@ -30478,8 +30504,11 @@ class MessengerController extends ChangeNotifier {
     final days =
         identity?.ownDeviceTouchDays ??
         IdentityRecord.defaultOwnDeviceTouchDays;
-    final since = device.inTouchAt ?? device.trustedAt;
-    return _now().toUtc().difference(since.toUtc()) > Duration(days: days);
+    final now = _now().toUtc();
+    var since = (device.inTouchAt ?? device.trustedAt).toUtc();
+    // A time ahead of now (a clock that was ahead) counts as now.
+    if (since.isAfter(now)) since = now;
+    return now.difference(since) > Duration(days: days);
   }
 
   /// This account's devices that are unconfirmed.
@@ -30493,19 +30522,52 @@ class MessengerController extends ChangeNotifier {
     if (!device.ownDevice || isOwnDeviceUnconfirmed(device)) return;
     final now = _now().toUtc();
     final last = device.inTouchAt;
-    // Saved at most every few minutes.
-    if (last != null && now.difference(last) < const Duration(minutes: 5)) {
+    // Saved at most every few minutes (and at once when it was ahead).
+    if (last != null &&
+        !last.isAfter(now) &&
+        now.difference(last) < const Duration(minutes: 5)) {
       return;
     }
     _replaceContactRecord(device.copyWith(inTouchAt: now));
   }
 
-  /// The user says unconfirmed [deviceId] is still theirs: syncing resumes.
+  /// Sync from own devices that were unconfirmed, kept for when the user
+  /// confirms them (in memory, a few per device).
+  final Map<String, List<RelayEnvelope>> _parkedOwnSync = {};
+  static const int _maxParkedOwnSync = 128;
+
+  /// Own devices the user was told have gone quiet.
+  final Set<String> _unconfirmedNoticed = {};
+
+  /// The user says unconfirmed [deviceId] is still theirs: syncing resumes,
+  /// and what it sent while unconfirmed is taken.
   Future<void> confirmOwnDevice(String deviceId) async {
     final device = _contactByDeviceId(deviceId);
     if (device == null || !device.ownDevice) return;
     _replaceContactRecord(device.copyWith(inTouchAt: _now().toUtc()));
+    _unconfirmedNoticed.remove(deviceId);
     await _saveSnapshotSilently(notify: true);
+    // What was queued for it while unconfirmed goes now.
+    unawaited(_retryPendingAckDeliveries(force: true));
+    for (final envelope in _parkedOwnSync.remove(deviceId) ?? const []) {
+      try {
+        await _handleAccountSync(envelope);
+      } catch (error) {
+        appendDebugLog('A kept sync message could not be read: $error');
+      }
+    }
+  }
+
+  /// Tells the user once when one of their devices has gone quiet.
+  void _noticeUnconfirmedOwnDevices() {
+    for (final device in unconfirmedOwnDevices) {
+      if (!_unconfirmedNoticed.add(device.deviceId)) continue;
+      setStatus(
+        '${device.deviceName ?? device.alias} has been out of touch for a '
+        'while: nothing syncs with it until you confirm it in Settings → '
+        'Devices.',
+      );
+    }
   }
 
   /// After how many days out of touch an own device is unconfirmed.
@@ -30887,9 +30949,8 @@ class MessengerController extends ChangeNotifier {
   /// same chat or message.
   void _syncToOwnDevices(Map<String, Object?> event) {
     if (!conestActive) return;
-    final devices = ownDevices.where(
-      (device) => device.canSendOutbound && !isOwnDeviceUnconfirmed(device),
-    );
+    // Unconfirmed devices get theirs queued, not sent (until confirmed).
+    final devices = ownDevices.where((device) => device.canSendOutbound);
     if (devices.isEmpty) return;
     final plaintext = jsonEncode({
       'events': [event],
@@ -30934,16 +30995,34 @@ class MessengerController extends ChangeNotifier {
       );
     }
     for (final device in devices) {
+      final payload = QueuedEnvelopePayload(
+        kind: 'account_sync',
+        messageId: _randomId('sync'),
+        conversationId: _crypto.conversationIdFor(device.deviceId),
+        plaintext: plaintext,
+        createdAt: _now().toUtc(),
+      );
+      if (isOwnDeviceUnconfirmed(device)) {
+        _enqueuePendingAckDelivery(
+          PendingAckDelivery(
+            targetDeviceId: device.deviceId,
+            acknowledgedMessageId: payload.messageId,
+            conversationId: payload.conversationId,
+            kind: PendingAckKind.accountSync,
+            lastAttemptedAt: DateTime.fromMillisecondsSinceEpoch(
+              0,
+              isUtc: true,
+            ),
+            attempts: 0,
+            payload: payload,
+          ),
+        );
+        continue;
+      }
       unawaited(
         _enqueueAndDeliverEnvelope(
           contact: device,
-          payload: QueuedEnvelopePayload(
-            kind: 'account_sync',
-            messageId: _randomId('sync'),
-            conversationId: _crypto.conversationIdFor(device.deviceId),
-            plaintext: plaintext,
-            createdAt: _now().toUtc(),
-          ),
+          payload: payload,
           kind: PendingAckKind.accountSync,
         ).catchError((Object _) {}),
       );
@@ -30981,9 +31060,17 @@ class MessengerController extends ChangeNotifier {
         !sender.canSendOutbound ||
         sender.accountId != envelope.senderAccountId ||
         envelope.conversationId != _crypto.conversationIdFor(sender.deviceId) ||
-        accountDevices?.deviceFor(sender.deviceId) == null ||
-        // Long out of touch: nothing from it until the user confirms it.
-        isOwnDeviceUnconfirmed(sender)) {
+        accountDevices?.deviceFor(sender.deviceId) == null) {
+      return;
+    }
+    // Long out of touch: nothing from it until the user confirms it; what
+    // it sent meanwhile waits (a few), so confirming loses nothing.
+    if (isOwnDeviceUnconfirmed(sender)) {
+      final parked = _parkedOwnSync.putIfAbsent(sender.deviceId, () => []);
+      if (parked.length < _maxParkedOwnSync &&
+          !parked.any((e) => e.messageId == envelope.messageId)) {
+        parked.add(envelope);
+      }
       return;
     }
     final decoded = jsonDecode(
@@ -31634,6 +31721,7 @@ class MessengerController extends ChangeNotifier {
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.groupVoiceCallsV1,
       if (_ratchet != null) ApplicationCapability.ratchetV1,
+      if (_debugBuildId != null) ApplicationCapability.debugTransportTestV1,
     };
     return ApplicationCapability.values
         .where(enabled.contains)

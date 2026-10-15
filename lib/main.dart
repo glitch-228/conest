@@ -104,12 +104,10 @@ Future<void> _startDebugRunIfAsked(
     final path = await runDebugRequest(
       controller,
       request,
-      defaultReportPath: () async {
-        final external = Platform.isAndroid
-            ? await getExternalStorageDirectory()
-            : null;
-        return '${external?.path ?? dataRoot}/conest-debug-report.json';
-      },
+      // Private to the app (on Android, pulled with `adb exec-out run-as`).
+      defaultReportPath: () async => Platform.isAndroid
+          ? '${(await getApplicationSupportDirectory()).path}/conest-debug-report.json'
+          : '$dataRoot/conest-debug-report.json',
     );
     stdout.writeln('Conest debug report: $path');
   } catch (error) {
@@ -117,7 +115,8 @@ Future<void> _startDebugRunIfAsked(
   }
   if (request.exitAfter && !Platform.isAndroid) {
     controller.savePendingChangesForLifecycle();
-    // Time for the vault and the error history to reach the disk.
+    await controller.flushErrorHistory();
+    // Time for the vault to reach the disk.
     await Future<void>.delayed(const Duration(seconds: 2));
     exit(0);
   }
