@@ -177,6 +177,11 @@ abstract final class DeltaMail {
   /// costs two).
   static const int maxKeyChecks = 160;
 
+  // Displayed text has a smaller budget than file-bearing plaintext. Check
+  // bytes before charset decoding and lines before unflowing any output.
+  static const int maxTextBytes = 256 * 1024;
+  static const int maxTextLines = 16384;
+
   /// A new Message-ID (without brackets) at [domain].
   static String newMessageId(String domain, Random random) {
     const alphabet =
@@ -508,6 +513,8 @@ abstract final class DeltaMail {
       return null; // damaged beyond what the parsers check
     } on ArgumentError {
       return null;
+    } on FormatException {
+      return null;
     }
   }
 
@@ -689,6 +696,9 @@ abstract final class DeltaMail {
         return;
       }
       if (entity.disposition == 'reaction' && entity.mimeType == 'text/plain') {
+        if (entity.body.length > maxTextBytes) {
+          throw const FormatException('Delta text too large');
+        }
         reaction = true;
         reactionText = deltaReaction(entity.text);
         return;
@@ -764,21 +774,32 @@ abstract final class DeltaMail {
         entity.disposition == 'reaction') {
       return '';
     }
+    if (entity.body.length > maxTextBytes) {
+      throw const FormatException('Delta text too large');
+    }
     var text = entity.text.replaceAll('\r\n', '\n');
     if (entity.parameters['format']?.toLowerCase() == 'flowed') {
       final deleteSpace = entity.parameters['delsp']?.toLowerCase() == 'yes';
-      final lines = text.split('\n');
       final out = StringBuffer();
-      for (var index = 0; index < lines.length; index++) {
-        var line = lines[index];
+      var start = 0;
+      var lines = 0;
+      while (start < text.length) {
+        if (++lines > maxTextLines) {
+          throw const FormatException('Too many Delta text lines');
+        }
+        final newline = text.indexOf('\n', start);
+        final end = newline < 0 ? text.length : newline;
+        var line = text.substring(start, end);
         if (line.startsWith(' ')) line = line.substring(1); // space-stuffed
         final soft = line.endsWith(' ') && line != '-- ';
         if (soft) {
           out.write(deleteSpace ? line.substring(0, line.length - 1) : line);
         } else {
           out.write(line);
-          if (index < lines.length - 1) out.write('\n');
+          if (newline >= 0) out.write('\n');
         }
+        if (newline < 0) break;
+        start = newline + 1;
       }
       text = out.toString();
     }

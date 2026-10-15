@@ -131,7 +131,11 @@ String? deltaMessageId(String? value) {
 }
 
 String deltaReaction(String value) {
-  final token = value.trim().split(RegExp(r'[\x09-\x0d ]+')).first;
+  final trimmed = value.trim();
+  final end =
+      RegExp(r'[\x09-\x0d ]').firstMatch(trimmed)?.start ?? trimmed.length;
+  if (end >= 30) return '';
+  final token = trimmed.substring(0, end);
   return utf8.encode(token).length < 30 &&
           !RegExp(r'[\x00-\x1f\x7f]').hasMatch(token)
       ? token

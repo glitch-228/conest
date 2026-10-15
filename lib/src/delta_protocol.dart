@@ -395,6 +395,7 @@ class DeltaProtocol {
         (read.reaction ||
             read.receiptsFor.isNotEmpty ||
             read.secureJoin != null ||
+            read.postMessageId != null ||
             const [
               'chat-edit',
               'chat-delete',

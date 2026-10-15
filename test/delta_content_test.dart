@@ -202,6 +202,7 @@ void main() {
           'reaction',
           'Chat-Edit',
           'Chat-Delete',
+          'Chat-Post-Message-ID',
           'Secure-Join',
           'Chat-Group-Member-Added',
           'Chat-Group-Member-Removed',
@@ -250,6 +251,24 @@ void main() {
         expect(saved, isEmpty);
       },
     );
+    test('$kind oversized flowed edits leave the original intact', () async {
+      final before = chats.chats[chatKey()]!.messages.single;
+      final step = await receive(
+        await coreMail(
+          grouped: grouped,
+          headers: [('Chat-Edit', '<original@example.org>')],
+          parts: [
+            'Content-Type: text/plain; format=flowed; delsp=yes\r\n'
+                'Content-Transfer-Encoding: base64\r\n\r\n'
+                '${base64Lines(utf8.encode('x' * (DeltaProtocol.maxTextChars * 4 + 1)))}',
+          ],
+        ),
+      );
+      expect(step.consumed, isTrue);
+      final after = chats.chats[chatKey()]!.messages.single;
+      expect(after.text, before.text);
+      expect(after.editedAt, isNull);
+    });
     test('$kind exact file mail saves bytes and uses actual MIME', () async {
       final step = await receive(
         await coreMail(
@@ -368,6 +387,65 @@ void main() {
       expect(chats.chats[chatKey()]!.messages.first.text, 'Original');
     });
   }
+
+  test(
+    'Delta text byte budgets apply before decoding plain and flowed text',
+    () async {
+      for (final format in ['', '; format=flowed']) {
+        final mail = await coreMail(
+          parts: [
+            'Content-Type: text/plain; charset=utf-8$format\r\n'
+                'Content-Transfer-Encoding: base64\r\n\r\n'
+                '${base64Lines(Uint8List(DeltaMail.maxTextBytes + 1)..fillRange(0, DeltaMail.maxTextBytes + 1, 120))}',
+            filePart(photo),
+          ],
+        );
+        expect(await DeltaMail.read(mail, bob, now: clock), isNull);
+        expect((await receive(mail)).consumed, isFalse);
+        expect(saved, isEmpty);
+      }
+    },
+  );
+
+  test('Delta flowed text line budget rejects excess soft lines', () async {
+    final mail = await coreMail(
+      parts: [
+        'Content-Type: text/plain; format=flowed; delsp=yes\r\n'
+            'Content-Transfer-Encoding: base64\r\n\r\n'
+            '${base64Lines(utf8.encode(' a \n' * (DeltaMail.maxTextLines + 1)))}',
+        filePart(photo),
+      ],
+    );
+    expect(await DeltaMail.read(mail, bob, now: clock), isNull);
+    expect((await receive(mail)).consumed, isFalse);
+    expect(saved, isEmpty);
+  });
+
+  test(
+    'Delta flowed scanning retains stuffing, delsp and signature semantics',
+    () async {
+      final mail = await coreMail(
+        parts: [
+          'Content-Type: text/plain; format=flowed; delsp=yes\r\n'
+              'Content-Transfer-Encoding: base64\r\n\r\n'
+              '${base64Lines(utf8.encode(' hello \r\nworld\n  indented\n-- \nsig\r\n'))}',
+        ],
+      );
+      final read = (await DeltaMail.read(mail, bob, now: clock))!;
+      expect(read.text, 'helloworld\n indented\n-- \nsig');
+    },
+  );
+
+  test('Delta reactions have the same pre-decode text budget', () async {
+    final mail = await coreMail(
+      reaction: true,
+      headers: [('In-Reply-To', '<original@example.org>')],
+      text: '👍 ${'x ' * (DeltaMail.maxTextBytes ~/ 2)}',
+    );
+    expect(await DeltaMail.read(mail, bob, now: clock), isNull);
+    expect((await receive(mail)).consumed, isFalse);
+    expect(chats.chats[fp(alice)]!.messages.single.reactions, isEmpty);
+  });
 
   test(
     'another group member cannot edit or delete an author message',

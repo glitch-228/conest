@@ -9,6 +9,8 @@ import 'dart:typed_data';
 import 'email/delta_content.dart';
 import 'models.dart' show AttachmentDescriptor;
 
+part 'delta_avatar_store.dart';
+
 /// Someone on Delta Chat, known by their key.
 class DeltaPeer {
   const DeltaPeer({
@@ -64,7 +66,7 @@ class DeltaPeer {
     if (avatarAt != null) 'avatarAt': avatarAt!.toUtc().toIso8601String(),
   };
 
-  static DeltaPeer? fromJson(Object? json) {
+  static DeltaPeer? fromJson(Object? json, {bool loadAvatar = true}) {
     if (json is! Map<String, dynamic>) return null;
     final fingerprint = json['fingerprint'];
     final addr = json['addr'];
@@ -84,9 +86,11 @@ class DeltaPeer {
       name: json['name'] as String?,
       verified: json['verified'] == true,
       avatarAt: DateTime.tryParse(json['avatarAt'] as String? ?? ''),
-      avatar: deltaAvatar(
-        json['avatar'] is String ? 'base64:${json['avatar']}' : null,
-      ),
+      avatar: !loadAvatar
+          ? null
+          : deltaAvatar(
+              json['avatar'] is String ? 'base64:${json['avatar']}' : null,
+            ),
     );
   }
 }
@@ -429,7 +433,7 @@ class DeltaChat {
       'pendingControls': [for (final c in pendingControls) c.toJson()],
   };
 
-  static DeltaChat? fromJson(Object? json) {
+  static DeltaChat? fromJson(Object? json, {bool loadAvatar = true}) {
     if (json is! Map<String, dynamic>) return null;
     final key = json['key'];
     if (key is! String) return null;
@@ -465,9 +469,11 @@ class DeltaChat {
           ?DeltaPendingControl.fromJson(c),
       ],
       avatarAt: DateTime.tryParse(json['avatarAt'] as String? ?? ''),
-      avatar: deltaAvatar(
-        json['avatar'] is String ? 'base64:${json['avatar']}' : null,
-      ),
+      avatar: !loadAvatar
+          ? null
+          : deltaAvatar(
+              json['avatar'] is String ? 'base64:${json['avatar']}' : null,
+            ),
     );
   }
 }
@@ -541,6 +547,10 @@ class DeltaChats {
   static const int maxDeleted = 500;
   static const int maxChats = 500;
 
+  /// Shared by peer and group avatars, including their base64 vault cost.
+  static const int maxAvatarEncodedBytes = 8 * 1024 * 1024;
+  static const int maxAvatars = 128;
+
   /// By fingerprint.
   final Map<String, DeltaPeer> peers;
   final Map<String, DeltaChat> chats;
@@ -563,12 +573,14 @@ class DeltaChats {
     List<DeltaJoin>? joins,
     Map<String, DateTime>? deleted,
     List<DeltaPendingControl>? detachedControls,
-  }) => DeltaChats(
-    peers: peers ?? this.peers,
-    chats: chats ?? this.chats,
-    joins: joins ?? this.joins,
-    deleted: deleted ?? this.deleted,
-    detachedControls: detachedControls ?? this.detachedControls,
+  }) => _boundedDeltaAvatars(
+    DeltaChats(
+      peers: peers ?? this.peers,
+      chats: chats ?? this.chats,
+      joins: joins ?? this.joins,
+      deleted: deleted ?? this.deleted,
+      detachedControls: detachedControls ?? this.detachedControls,
+    ),
   );
 
   /// [peer] remembered (merged with what was known).
@@ -790,38 +802,54 @@ class DeltaChats {
   static DeltaChats fromJson(Object? json) {
     if (json is! Map<String, dynamic>) return const DeltaChats();
     final deleted = json['deleted'];
-    return DeltaChats(
-      peers: {
-        for (final peer in [
-          for (final json in json['peers'] as List? ?? const [])
-            ?DeltaPeer.fromJson(json),
-        ])
-          peer.fingerprint: peer,
-      },
-      chats: {
-        for (final chat in [
-          for (final json in json['chats'] as List? ?? const [])
-            ?DeltaChat.fromJson(json),
-        ])
-          chat.key: chat,
-      },
-      joins: [
-        for (final join in json['joins'] as List? ?? const [])
-          ?DeltaJoin.fromJson(join),
-      ],
-      detachedControls: [
-        for (final c in (json['detachedControls'] as List? ?? const []).take(
-          128,
-        ))
-          if (DeltaPendingControl.fromJson(c) case final control?)
-            if (control.kind == 'delete' && control.chatKey.isNotEmpty) control,
-      ],
-      deleted: {
-        if (deleted is Map<String, dynamic>)
-          for (final MapEntry(:key, :value) in deleted.entries)
-            if (DateTime.tryParse(value is String ? value : '') case final at?)
-              key: at.toUtc(),
-      },
+    final peerRows = {
+      for (final row in json['peers'] as List? ?? const [])
+        if (row is Map<String, dynamic> && row['fingerprint'] is String)
+          row['fingerprint'] as String: row,
+    };
+    final chatRows = {
+      for (final row in json['chats'] as List? ?? const [])
+        if (row is Map<String, dynamic> && row['key'] is String)
+          row['key'] as String: row,
+    };
+    return _boundedDeltaAvatars(
+      DeltaChats(
+        peers: {
+          for (final peer in [
+            for (final row in peerRows.values)
+              ?DeltaPeer.fromJson(row, loadAvatar: false),
+          ])
+            peer.fingerprint: peer,
+        },
+        chats: {
+          for (final chat in [
+            for (final row in chatRows.values)
+              ?DeltaChat.fromJson(row, loadAvatar: false),
+          ])
+            chat.key: chat,
+        },
+        joins: [
+          for (final join in json['joins'] as List? ?? const [])
+            ?DeltaJoin.fromJson(join),
+        ],
+        detachedControls: [
+          for (final c in (json['detachedControls'] as List? ?? const []).take(
+            128,
+          ))
+            if (DeltaPendingControl.fromJson(c) case final control?)
+              if (control.kind == 'delete' && control.chatKey.isNotEmpty)
+                control,
+        ],
+        deleted: {
+          if (deleted is Map<String, dynamic>)
+            for (final MapEntry(:key, :value) in deleted.entries)
+              if (DateTime.tryParse(value is String ? value : '')
+                  case final at?)
+                key: at.toUtc(),
+        },
+      ),
+      peerRows: peerRows,
+      chatRows: chatRows,
     );
   }
 }
