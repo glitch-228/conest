@@ -1,3 +1,4 @@
+import 'localized_ui_text.dart';
 import 'package:flutter/material.dart';
 
 import '../bitchat_chats.dart';
@@ -36,26 +37,24 @@ class BitchatChatsScreen extends StatelessWidget {
             chats.nicknameOf(peer) ??
             peer.substring(0, 8);
         return Scaffold(
-          appBar: AppBar(title: const Text('bitchat nearby')),
+          appBar: AppBar(title:  Text(localizedUiText(context, 'bitchat nearby'))),
           body: ListView(
             children: [
               if (!controller.bitchatReachable)
-                const ListTile(
+                 ListTile(
                   leading: Icon(Icons.visibility_off_outlined),
-                  title: Text('You are hidden'),
+                  title: Text(localizedUiText(context, 'You are hidden')),
                   subtitle: Text(
-                    'You read the mesh chat, but bitchat users cannot see '
-                    'you or write to you. Turn on "Reachable by bitchat '
-                    'users" in Settings → Connectivity to write.',
+                    localizedUiText(context, 'You read the mesh chat, but bitchat users cannot see ' 'you or write to you. Turn on "Reachable by bitchat ' 'users" in Settings → Connectivity to write.'),
                   ),
                 ),
               ListTile(
                 key: const ValueKey('bitchat-mesh-chat'),
                 leading: const Icon(Icons.cell_tower),
-                title: const Text('Mesh chat'),
+                title:  Text(localizedUiText(context, 'Mesh chat')),
                 subtitle: Text(
                   chats.mesh.isEmpty
-                      ? 'Everyone nearby, over Bluetooth'
+                      ? localizedUiText(context, 'Everyone nearby, over Bluetooth')
                       : chats.mesh.last.text,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -65,11 +64,10 @@ class BitchatChatsScreen extends StatelessWidget {
               ),
               const Divider(),
               if (peers.isEmpty)
-                const ListTile(
-                  title: Text('No bitchat users nearby yet'),
+                 ListTile(
+                  title: Text(localizedUiText(context, 'No bitchat users nearby yet')),
                   subtitle: Text(
-                    'Phones in Bluetooth range that announce themselves '
-                    'show up here.',
+                    localizedUiText(context, 'Phones in Bluetooth range that announce themselves ' 'show up here.'),
                   ),
                 ),
               for (final peer in peers)
@@ -82,7 +80,7 @@ class BitchatChatsScreen extends StatelessWidget {
                   title: Text(name(peer)),
                   subtitle: Text(
                     chats.direct[peer]?.last.text ??
-                        (nearbyIds.contains(peer) ? 'Nearby' : ''),
+                        (nearbyIds.contains(peer) ? localizedUiText(context, 'Nearby') : ''),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -126,7 +124,7 @@ class _Unread extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) =>
-      count == 0 ? const SizedBox.shrink() : Badge(label: Text('$count'));
+      count == 0 ? const SizedBox.shrink() : Badge(label: Text(localizedUiText(context, '$count')));
 }
 
 class _BitchatChatScreen extends StatefulWidget {
@@ -208,7 +206,7 @@ class _BitchatChatScreenState extends State<_BitchatChatScreen> {
         actions: [
           if (!_mesh)
             IconButton(
-              tooltip: 'Delete chat',
+              tooltip: localizedUiText(context, 'Delete chat'),
               icon: const Icon(Icons.delete_outline),
               onPressed: () async {
                 await widget.controller.deleteBitchatChat(widget.chatKey);
@@ -220,27 +218,24 @@ class _BitchatChatScreenState extends State<_BitchatChatScreen> {
       body: Column(
         children: [
           if (_mesh)
-            const Padding(
+             Padding(
               padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: Text(
-                'Everyone in Bluetooth range reads this chat, and anyone can '
-                'relay it. Messages are signed, not encrypted.',
+                localizedUiText(context, 'Everyone in Bluetooth range reads this chat, and anyone can ' 'relay it. Messages are signed, not encrypted.'),
               ),
             )
           else
-            const Padding(
+             Padding(
               padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: Text(
-                'Encrypted between the two phones (bitchat\'s Noise), with '
-                'forward secrecy only while you are both nearby.',
+                localizedUiText(context, 'Encrypted between the two phones (bitchat\'s Noise), with ' 'forward secrecy only while you are both nearby.'),
               ),
             ),
           if (!_mesh && _earlierIdentity)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: Text(
-                'This chat was with an earlier bitchat identity of yours. '
-                'Writing now tells them your new one is the same person.',
+                localizedUiText(context, 'This chat was with an earlier bitchat identity of yours. ' 'Writing now tells them your new one is the same person.'),
                 style: TextStyle(color: theme.colorScheme.error),
               ),
             ),
@@ -261,8 +256,8 @@ class _BitchatChatScreenState extends State<_BitchatChatScreen> {
                     final message = messages[messages.length - 1 - index];
                     return Align(
                       alignment: message.outgoing
-                          ? Alignment.centerRight
-                          : Alignment.centerLeft,
+                          ? AlignmentDirectional.centerEnd
+                          : AlignmentDirectional.centerStart,
                       child: Card(
                         color: message.outgoing
                             ? theme.colorScheme.primaryContainer
@@ -276,8 +271,7 @@ class _BitchatChatScreenState extends State<_BitchatChatScreen> {
                                 // The id's start tells people with the same
                                 // name apart, as bitchat shows it.
                                 Text(
-                                  '${message.nickname}'
-                                  '#${message.peerId.substring(0, 4)}',
+                                  localizedUiText(context, '${message.nickname}' '#${message.peerId.substring(0, 4)}'),
                                   style: theme.textTheme.labelMedium,
                                 ),
                               Text(message.text),
@@ -288,10 +282,10 @@ class _BitchatChatScreenState extends State<_BitchatChatScreen> {
                                   ).format(context),
                                   if (message.outgoing && !_mesh)
                                     switch (message.state) {
-                                      BitchatMessageState.sent => 'sent',
+                                      BitchatMessageState.sent => localizedUiText(context, 'sent'),
                                       BitchatMessageState.delivered =>
-                                        'delivered',
-                                      BitchatMessageState.read => 'read',
+                                        localizedUiText(context, 'delivered'),
+                                      BitchatMessageState.read => localizedUiText(context, 'read'),
                                     },
                                 ].join(' · '),
                                 style: theme.textTheme.labelSmall,
@@ -329,14 +323,14 @@ class _BitchatChatScreenState extends State<_BitchatChatScreen> {
                       maxLines: 4,
                       decoration: InputDecoration(
                         hintText: widget.controller.bitchatReachable
-                            ? 'Message'
-                            : 'Hidden: turn on "Reachable by bitchat users"',
+                            ? localizedUiText(context, 'Message')
+                            : localizedUiText(context, 'Hidden: turn on "Reachable by bitchat users"'),
                       ),
                       onSubmitted: (_) => _send(),
                     ),
                   ),
                   IconButton(
-                    tooltip: 'Send',
+                    tooltip: localizedUiText(context, 'Send'),
                     icon: const Icon(Icons.send),
                     onPressed: widget.controller.bitchatReachable
                         ? _send

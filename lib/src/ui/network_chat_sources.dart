@@ -1,3 +1,4 @@
+import 'localized_ui_text.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -64,7 +65,7 @@ abstract class NetworkChatSource {
   /// Whether it has chats to show right now (signed in, turned on).
   bool get active;
 
-  List<NetworkChat> chats();
+  List<NetworkChat> chats([BuildContext? context]);
 }
 
 /// The networks available to [controller], whether shown or not.
@@ -107,7 +108,7 @@ class RadioChatSource extends NetworkChatSource {
   bool get active => _active();
 
   @override
-  List<NetworkChat> chats() {
+  List<NetworkChat> chats([BuildContext? context]) {
     if (!active) return const [];
     final chats = access.chats();
     return [
@@ -116,7 +117,7 @@ class RadioChatSource extends NetworkChatSource {
           network: id,
           id: key,
           title: access.title(key),
-          preview: messages.lastOrNull?.text ?? 'New chat',
+          preview: messages.lastOrNull?.text ?? localizedUiText(context, 'New chat'),
           at: messages.lastOrNull?.at.toLocal(),
           unread: chats.unread[key] ?? 0,
           isGroup: RadioChats.isChannel(key),
@@ -144,14 +145,14 @@ class NostrChatSource extends NetworkChatSource {
       controller.conestActive && controller.nostrDirectConfig != null;
 
   @override
-  List<NetworkChat> chats() => [
+  List<NetworkChat> chats([BuildContext? context]) => [
     if (active)
       for (final chat in controller.nostrChats.chats.values)
         NetworkChat(
           network: id,
           id: chat.key,
           title: nostrChatTitle(controller, chat),
-          preview: chat.messages.lastOrNull?.text ?? 'New chat',
+          preview: chat.messages.lastOrNull?.text ?? localizedUiText(context, 'New chat'),
           at: chat.messages.lastOrNull?.at.toLocal(),
           unread: chat.unread,
           isGroup: chat.isGroup,
@@ -179,14 +180,14 @@ class DeltaChatSource extends NetworkChatSource {
   bool get active => controller.conestActive && controller.deltaChatEnabled;
 
   @override
-  List<NetworkChat> chats() => [
+  List<NetworkChat> chats([BuildContext? context]) => [
     if (active)
       for (final chat in controller.deltaChats.chats.values)
         NetworkChat(
           network: id,
           id: chat.key,
           title: deltaChatTitle(controller, chat),
-          preview: chat.messages.lastOrNull?.text ?? 'New chat',
+          preview: chat.messages.lastOrNull?.text ?? localizedUiText(context, 'New chat'),
           at: chat.messages.lastOrNull?.at.toLocal(),
           unread: chat.unread,
           isGroup: chat.isGroup,
@@ -217,7 +218,7 @@ class MatrixChatSource extends NetworkChatSource {
       (controller.matrixClient?.signedIn ?? false);
 
   @override
-  List<NetworkChat> chats() {
+  List<NetworkChat> chats([BuildContext? context]) {
     final matrix = controller.matrixClient;
     if (matrix == null || !active) return const [];
     return [
@@ -227,7 +228,7 @@ class MatrixChatSource extends NetworkChatSource {
           return NetworkChat(
             network: id,
             id: room.roomId,
-            title: room.invited ? 'Invitation: ${room.name}' : room.name,
+            title: room.invited ? localizedUiText(context, 'Invitation: ${room.name}') : room.name,
             preview: room.invited
                 ? 'Matrix invitation'
                 : last == null
@@ -275,7 +276,7 @@ class BitchatChatSource extends NetworkChatSource {
   bool get active => controller.bitchatCarrierConfig != null;
 
   @override
-  List<NetworkChat> chats() {
+  List<NetworkChat> chats([BuildContext? context]) {
     if (!active) return const [];
     final chats = controller.bitchatChats;
     final nearby = {
@@ -344,7 +345,7 @@ class NetworkChatsSettings extends StatelessWidget {
       children: [
         const SizedBox(height: 12),
         Text(
-          'Chats from other networks',
+          localizedUiText(context, 'Chats from other networks'),
           style: Theme.of(
             context,
           ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
@@ -353,10 +354,9 @@ class NetworkChatsSettings extends StatelessWidget {
           SwitchListTile.adaptive(
             key: ValueKey('network-chats-${source.id}'),
             contentPadding: EdgeInsets.zero,
-            title: Text('Show ${source.label} chats in the chat list'),
-            subtitle: const Text(
-              'With a filter of their own. Off: open them from the '
-              'network\'s settings only.',
+            title: Text(localizedUiText(context, 'Show ${source.label} chats in the chat list')),
+            subtitle:  Text(
+              localizedUiText(context, 'With a filter of their own. Off: open them from the ' 'network\'s settings only.'),
             ),
             value: controller.showsChatNetwork(source.id),
             onChanged: (value) =>

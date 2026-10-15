@@ -1,3 +1,4 @@
+import 'localized_ui_text.dart';
 import 'package:flutter/material.dart';
 
 import '../conest_theme.dart';
@@ -113,7 +114,7 @@ class MonoSectionLabel extends StatelessWidget {
     return Padding(
       padding: padding,
       child: Text(
-        '// ${label.toUpperCase()}',
+        localizedUiText(context, '// ${label.toUpperCase()}'),
         style: TextStyle(
           fontFamily: ConestPalette.monoFont,
           fontSize: 10,

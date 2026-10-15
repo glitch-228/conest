@@ -1,3 +1,4 @@
+import 'localized_ui_text.dart';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
@@ -41,19 +42,18 @@ class DevicesPanel extends StatelessWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Remove $name?'),
-        content: const Text(
-          'Your contacts will stop accepting anything from that device. '
-          'It cannot be added back; link it again as a new device instead.',
+        title: Text(localizedUiText(context, 'Remove $name?')),
+        content:  Text(
+          localizedUiText(context, 'Your contacts will stop accepting anything from that device. ' 'It cannot be added back; link it again as a new device instead.'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child:  Text(localizedUiText(context, 'Cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Remove'),
+            child:  Text(localizedUiText(context, 'Remove')),
           ),
         ],
       ),
@@ -84,9 +84,8 @@ class DevicesPanel extends StatelessWidget {
       children: [
         Text(
           devices.length > 1
-              ? 'This account is on ${devices.length} devices.'
-              : 'Use Conest on more than one device: link a phone, tablet or '
-                    'computer to this account. Your contacts see one person.',
+              ? localizedUiText(context, 'This account is on ${devices.length} devices.')
+              : localizedUiText(context, 'Use Conest on more than one device: link a phone, tablet or ' 'computer to this account. Your contacts see one person.'),
           style: muted,
         ),
         for (final device in devices)
@@ -117,10 +116,10 @@ class DevicesPanel extends StatelessWidget {
                         key: ValueKey('confirm-device-${device.deviceId}'),
                         onPressed: () =>
                             controller.confirmOwnDevice(device.deviceId),
-                        child: const Text('Still mine'),
+                        child:  Text(localizedUiText(context, 'Still mine')),
                       ),
                       IconButton(
-                        tooltip: 'Remove device',
+                        tooltip: localizedUiText(context, 'Remove device'),
                         icon: const Icon(Icons.link_off),
                         onPressed: controller.mayManageAccountDevices
                             ? () =>
@@ -130,7 +129,7 @@ class DevicesPanel extends StatelessWidget {
                     ],
                   )
                 : IconButton(
-                    tooltip: 'Remove device',
+                    tooltip: localizedUiText(context, 'Remove device'),
                     icon: const Icon(Icons.link_off),
                     onPressed: controller.mayManageAccountDevices
                         ? () => _revoke(context, device.deviceId, device.name)
@@ -139,8 +138,7 @@ class DevicesPanel extends StatelessWidget {
           ),
         if (devices.length > 1 && !controller.mayManageAccountDevices)
           Text(
-            'This device was linked less than a day ago, so it cannot add or '
-            'remove devices yet.',
+            localizedUiText(context, 'This device was linked less than a day ago, so it cannot add or ' 'remove devices yet.'),
             style: muted,
           ),
         if (devices.length > 1)
@@ -148,7 +146,7 @@ class DevicesPanel extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  'Pause syncing with a device out of touch for',
+                  localizedUiText(context, 'Pause syncing with a device out of touch for'),
                   style: muted,
                 ),
               ),
@@ -163,7 +161,7 @@ class DevicesPanel extends StatelessWidget {
                     30,
                     me?.ownDeviceTouchDays ?? 7,
                   })
-                    DropdownMenuItem(value: days, child: Text('$days days')),
+                    DropdownMenuItem(value: days, child: Text(localizedUiText(context, '$days days'))),
                 ],
                 onChanged: (days) {
                   if (days != null) controller.setOwnDeviceTouchDays(days);
@@ -184,7 +182,7 @@ class DevicesPanel extends StatelessWidget {
                     LinkExistingDialog(controller: controller, onScan: onScan),
               ),
               icon: const Icon(Icons.add_link),
-              label: const Text('Link a device'),
+              label:  Text(localizedUiText(context, 'Link a device')),
             ),
             if (devices.length <= 1)
               TextButton.icon(
@@ -194,7 +192,7 @@ class DevicesPanel extends StatelessWidget {
                   builder: (_) => LinkNewDeviceDialog(controller: controller),
                 ),
                 icon: const Icon(Icons.qr_code),
-                label: const Text('Link this device to my account'),
+                label:  Text(localizedUiText(context, 'Link this device to my account')),
               ),
           ],
         ),
@@ -216,7 +214,7 @@ class _CompareCode extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Text('Check that both devices show this code:'),
+         Text(localizedUiText(context, 'Check that both devices show this code:')),
         const SizedBox(height: 12),
         Text(
           grouped,
@@ -227,7 +225,7 @@ class _CompareCode extends StatelessWidget {
         FilledButton(
           key: const ValueKey('link-codes-match'),
           onPressed: onConfirm,
-          child: const Text('The codes match'),
+          child:  Text(localizedUiText(context, 'The codes match')),
         ),
       ],
     );
@@ -278,20 +276,17 @@ class _LinkExistingDialogState extends State<LinkExistingDialog> {
         final state = widget.controller.linkState;
         final code = widget.controller.linkCode;
         return AlertDialog(
-          title: const Text('Link a device'),
+          title:  Text(localizedUiText(context, 'Link a device')),
           content: SingleChildScrollView(
             child: switch (state) {
-              LinkState.linked => const Text(
-                'Linked. The new device now has your account and contacts; '
-                'your contacts will see it as you.',
+              LinkState.linked =>  Text(
+                localizedUiText(context, 'Linked. The new device now has your account and contacts; ' 'your contacts will see it as you.'),
               ),
-              LinkState.waitingForOtherDevice => const Text(
-                'Confirm the code on the new device too.',
+              LinkState.waitingForOtherDevice =>  Text(
+                localizedUiText(context, 'Confirm the code on the new device too.'),
               ),
-              LinkState.connecting => const Text(
-                'Waiting for the new device to answer. If no code appears, '
-                'make sure the new device still shows its code, and that '
-                'both are on the same network or online.',
+              LinkState.connecting =>  Text(
+                localizedUiText(context, 'Waiting for the new device to answer. If no code appears, ' 'make sure the new device still shows its code, and that ' 'both are on the same network or online.'),
               ),
               LinkState.compareCode when code != null => _CompareCode(
                 code: code,
@@ -301,9 +296,8 @@ class _LinkExistingDialogState extends State<LinkExistingDialog> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'On the new device, open Settings → Devices → Link this '
-                    'device to my account, then scan the code it shows.',
+                   Text(
+                    localizedUiText(context, 'On the new device, open Settings → Devices → Link this ' 'device to my account, then scan the code it shows.'),
                   ),
                   const SizedBox(height: 12),
                   if (widget.onScan != null)
@@ -315,13 +309,13 @@ class _LinkExistingDialogState extends State<LinkExistingDialog> {
                               if (text != null) await _start(text);
                             },
                       icon: const Icon(Icons.qr_code_scanner),
-                      label: const Text('Scan code'),
+                      label:  Text(localizedUiText(context, 'Scan code')),
                     ),
                   TextField(
                     key: const ValueKey('link-code-input'),
                     controller: _code,
-                    decoration: const InputDecoration(
-                      labelText: 'Or paste the code',
+                    decoration:  InputDecoration(
+                      labelText: localizedUiText(context, 'Or paste the code'),
                     ),
                     onSubmitted: _start,
                   ),
@@ -343,14 +337,14 @@ class _LinkExistingDialogState extends State<LinkExistingDialog> {
             if (state == LinkState.none)
               TextButton(
                 onPressed: _busy ? null : () => _start(_code.text),
-                child: const Text('Continue'),
+                child:  Text(localizedUiText(context, 'Continue')),
               ),
             TextButton(
               onPressed: () {
                 if (state != LinkState.linked) widget.controller.cancelLink();
                 Navigator.pop(context);
               },
-              child: Text(state == LinkState.linked ? 'Done' : 'Cancel'),
+              child: Text(state == LinkState.linked ? localizedUiText(context, 'Done') : localizedUiText(context, 'Cancel')),
             ),
           ],
         );
@@ -394,14 +388,14 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
         final code = widget.controller.linkCode;
         final qr = _qr;
         return AlertDialog(
-          title: const Text('Link this device'),
+          title:  Text(localizedUiText(context, 'Link this device')),
           content: SingleChildScrollView(
             child: switch (state) {
-              LinkState.linked => const Text(
-                'This device is now linked to your account.',
+              LinkState.linked =>  Text(
+                localizedUiText(context, 'This device is now linked to your account.'),
               ),
-              LinkState.waitingForOtherDevice => const Text(
-                'Waiting for the other device…',
+              LinkState.waitingForOtherDevice =>  Text(
+                localizedUiText(context, 'Waiting for the other device…'),
               ),
               LinkState.compareCode when code != null => _CompareCode(
                 code: code,
@@ -410,10 +404,8 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
               _ => Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text(
-                    'On the device you already use, open Settings → Devices → '
-                    'Link a device and scan this code. Both devices should be '
-                    'on the same network or online.',
+                   Text(
+                    localizedUiText(context, 'On the device you already use, open Settings → Devices → ' 'Link a device and scan this code. Both devices should be ' 'on the same network or online.'),
                   ),
                   const SizedBox(height: 12),
                   if (qr == null)
@@ -443,7 +435,7 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
                 if (state != LinkState.linked) widget.controller.cancelLink();
                 Navigator.pop(context);
               },
-              child: Text(state == LinkState.linked ? 'Done' : 'Cancel'),
+              child: Text(state == LinkState.linked ? localizedUiText(context, 'Done') : localizedUiText(context, 'Cancel')),
             ),
           ],
         );

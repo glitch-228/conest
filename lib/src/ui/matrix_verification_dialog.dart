@@ -1,3 +1,4 @@
+import 'localized_ui_text.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -84,7 +85,7 @@ class _MatrixVerificationDialogState extends State<MatrixVerificationDialog> {
               if (emoji is Map)
                 (
                   symbol: emoji['symbol'] as String? ?? '?',
-                  description: emoji['description'] as String? ?? '',
+                  description: emoji[localizedUiText(context, 'description')] as String? ?? '',
                 ),
           ];
           _status =
@@ -156,8 +157,8 @@ class _MatrixVerificationDialogState extends State<MatrixVerificationDialog> {
     return AlertDialog(
       title: Text(
         widget.otherName == null
-            ? 'Verify this session'
-            : 'Verify ${widget.otherName}',
+            ? localizedUiText(context, 'Verify this session')
+            : localizedUiText(context, 'Verify ${widget.otherName}'),
       ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -200,16 +201,16 @@ class _MatrixVerificationDialogState extends State<MatrixVerificationDialog> {
         if (_emojis.isNotEmpty && !_finished && !_confirmed) ...[
           TextButton(
             onPressed: _busy ? null : () => _answer(match: false),
-            child: const Text("They don't match"),
+            child:  Text(localizedUiText(context, "They don't match")),
           ),
           FilledButton(
             onPressed: _busy ? null : () => _answer(match: true),
-            child: const Text('They match'),
+            child:  Text(localizedUiText(context, 'They match')),
           ),
         ] else
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: Text(_finished ? 'Close' : 'Cancel'),
+            child: Text(_finished ? localizedUiText(context, 'Close') : localizedUiText(context, 'Cancel')),
           ),
       ],
     );

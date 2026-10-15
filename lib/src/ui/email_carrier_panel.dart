@@ -1,3 +1,4 @@
+import 'localized_ui_text.dart';
 import 'package:flutter/material.dart';
 
 import '../email_carrier.dart';
@@ -106,11 +107,9 @@ class _EmailCarrierPanelState extends State<EmailCarrierPanel> {
         SwitchListTile.adaptive(
           key: const ValueKey('email-carrier-switch'),
           contentPadding: EdgeInsets.zero,
-          title: const Text('Email'),
-          subtitle: const Text(
-            'Carry messages as encrypted email when other routes fail, '
-            'like Delta Chat. The mail servers see both addresses and when, '
-            'not what. Your contacts learn the address automatically.',
+          title:  Text(localizedUiText(context, 'Email')),
+          subtitle:  Text(
+            localizedUiText(context, 'Carry messages as encrypted email when other routes fail, ' 'like Delta Chat. The mail servers see both addresses and when, ' 'not what. Your contacts learn the address automatically.'),
           ),
           value: config != null,
           onChanged: _busy
@@ -152,7 +151,7 @@ class _EmailCarrierPanelState extends State<EmailCarrierPanel> {
             onChanged: _busy
                 ? null
                 : (value) => setState(() => _ownAccount = value ?? false),
-            title: const Text('Use my own email account instead'),
+            title:  Text(localizedUiText(context, 'Use my own email account instead')),
           ),
           if (_ownAccount) ...[
             field(_mail, 'Email address', keyboard: TextInputType.emailAddress),

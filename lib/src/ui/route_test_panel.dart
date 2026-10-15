@@ -1,3 +1,4 @@
+import 'localized_ui_text.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -106,7 +107,7 @@ class _RouteTestPanelState extends State<RouteTestPanel> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.speed),
-            label: Text(_running ? 'Testing routes…' : 'Test Routes'),
+            label: Text(_running ? localizedUiText(context, 'Testing routes…') : localizedUiText(context, 'Test Routes')),
           ),
         ),
         if (!supported)
@@ -114,10 +115,8 @@ class _RouteTestPanelState extends State<RouteTestPanel> {
             padding: const EdgeInsets.only(top: 6),
             child: Text(
               _asking
-                  ? 'Checking whether their app can take route tests…'
-                  : 'Their app did not say it can take route tests. If '
-                        'they run this version too, they may not be '
-                        'reachable right now.',
+                  ? localizedUiText(context, 'Checking whether their app can take route tests…')
+                  : localizedUiText(context, 'Their app did not say it can take route tests. If ' 'they run this version too, they may not be ' 'reachable right now.'),
               style: muted,
             ),
           ),
@@ -134,7 +133,7 @@ class _RouteTestPanelState extends State<RouteTestPanel> {
         if (report != null) ...[
           const SizedBox(height: 8),
           if (report.results.isEmpty)
-            Text('No route took the test.', style: muted)
+            Text(localizedUiText(context, 'No route took the test.'), style: muted)
           else
             for (final result in report.results)
               Padding(
@@ -161,8 +160,7 @@ class _RouteTestPanelState extends State<RouteTestPanel> {
               ),
           const SizedBox(height: 4),
           Text(
-            'Tested ${TimeOfDay.fromDateTime(report.measuredAt.toLocal()).format(context)}. '
-            'Routes that answer go first for messages.',
+            localizedUiText(context, 'Tested ${TimeOfDay.fromDateTime(report.measuredAt.toLocal()).format(context)}. ' 'Routes that answer go first for messages.'),
             style: muted,
           ),
         ],

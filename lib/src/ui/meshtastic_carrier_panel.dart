@@ -1,3 +1,4 @@
+import 'localized_ui_text.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -26,7 +27,7 @@ class _MeshtasticCarrierPanelState extends State<MeshtasticCarrierPanel> {
   );
   late final _port = TextEditingController(
     text:
-        '${widget.controller.meshtasticCarrierConfig?.port ?? defaultMeshtasticPort}',
+        localizedUiText(context, '${widget.controller.meshtasticCarrierConfig?.port ?? defaultMeshtasticPort}'),
   );
   List<(String, String)> _devices = const [];
   bool _busy = false;
@@ -104,11 +105,9 @@ class _MeshtasticCarrierPanelState extends State<MeshtasticCarrierPanel> {
         SwitchListTile.adaptive(
           key: const ValueKey('meshtastic-carrier-switch'),
           contentPadding: EdgeInsets.zero,
-          title: const Text('Meshtastic'),
-          subtitle: const Text(
-            'Carry short messages over a Meshtastic LoRa mesh, without the '
-            'internet, through your Meshtastic radio. Contacts need Conest '
-            'with a radio in the same mesh.',
+          title:  Text(localizedUiText(context, 'Meshtastic')),
+          subtitle:  Text(
+            localizedUiText(context, 'Carry short messages over a Meshtastic LoRa mesh, without the ' 'internet, through your Meshtastic radio. Contacts need Conest ' 'with a radio in the same mesh.'),
           ),
           value: config != null,
           onChanged: _busy
@@ -131,7 +130,7 @@ class _MeshtasticCarrierPanelState extends State<MeshtasticCarrierPanel> {
             title: Text(
               channel?.nodeNum == null
                   ? config.label
-                  : '${config.label} · !${meshtasticAddress(channel!.nodeNum!)}',
+                  : localizedUiText(context, '${config.label} · !${meshtasticAddress(channel!.nodeNum!)}'),
             ),
             subtitle: channel?.lastError == null
                 ? null
@@ -140,13 +139,13 @@ class _MeshtasticCarrierPanelState extends State<MeshtasticCarrierPanel> {
         SegmentedButton<MeshtasticLink>(
           segments: [
             if (serialAvailable)
-              const ButtonSegment(
+               ButtonSegment(
                 value: MeshtasticLink.serial,
-                label: Text('USB'),
+                label: Text(localizedUiText(context, 'USB')),
               ),
-            const ButtonSegment(
+             ButtonSegment(
               value: MeshtasticLink.tcp,
-              label: Text('Network'),
+              label: Text(localizedUiText(context, 'Network')),
             ),
           ],
           selected: {_link},
@@ -166,7 +165,7 @@ class _MeshtasticCarrierPanelState extends State<MeshtasticCarrierPanel> {
               OutlinedButton.icon(
                 onPressed: _busy ? null : () => _run(_findDevices),
                 icon: const Icon(Icons.search, size: 18),
-                label: const Text('Find devices'),
+                label:  Text(localizedUiText(context, 'Find devices')),
               ),
               for (final (id, name) in _devices)
                 ActionChip(
@@ -184,8 +183,8 @@ class _MeshtasticCarrierPanelState extends State<MeshtasticCarrierPanel> {
                 enabled: !_busy,
                 decoration: InputDecoration(
                   labelText: _link == MeshtasticLink.serial
-                      ? 'USB device'
-                      : 'Radio address',
+                      ? localizedUiText(context, 'USB device')
+                      : localizedUiText(context, 'Radio address'),
                   isDense: true,
                 ),
               ),
@@ -197,8 +196,8 @@ class _MeshtasticCarrierPanelState extends State<MeshtasticCarrierPanel> {
                   controller: _port,
                   enabled: !_busy,
                   keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'TCP port',
+                  decoration:  InputDecoration(
+                    labelText: localizedUiText(context, 'TCP port'),
                     isDense: true,
                   ),
                 ),
@@ -211,18 +210,16 @@ class _MeshtasticCarrierPanelState extends State<MeshtasticCarrierPanel> {
             padding: const EdgeInsets.only(top: 8),
             child: FilledButton.tonal(
               onPressed: _busy ? null : () => _run(_save),
-              child: const Text('Save'),
+              child:  Text(localizedUiText(context, 'Save')),
             ),
           ),
         if (config != null)
           SwitchListTile.adaptive(
             key: const ValueKey('meshtastic-app-messages'),
             contentPadding: EdgeInsets.zero,
-            title: const Text('Messages with Meshtastic app users'),
-            subtitle: const Text(
-              'Read and write the Meshtastic apps\' own messages through this '
-              'radio: direct ones, and its channels as group chats. They are '
-              'protected only as Meshtastic protects them.',
+            title:  Text(localizedUiText(context, 'Messages with Meshtastic app users')),
+            subtitle:  Text(
+              localizedUiText(context, 'Read and write the Meshtastic apps\' own messages through this ' 'radio: direct ones, and its channels as group chats. They are ' 'protected only as Meshtastic protects them.'),
             ),
             value: widget.controller.meshtasticAppMessages,
             onChanged: _busy
@@ -236,12 +233,12 @@ class _MeshtasticCarrierPanelState extends State<MeshtasticCarrierPanel> {
             key: const ValueKey('meshtastic-chats'),
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.forum_outlined),
-            title: const Text('Meshtastic chats'),
+            title:  Text(localizedUiText(context, 'Meshtastic chats')),
             trailing: widget.controller.meshtasticChats.totalUnread == 0
                 ? const Icon(Icons.chevron_right)
                 : Badge(
                     label: Text(
-                      '${widget.controller.meshtasticChats.totalUnread}',
+                      localizedUiText(context, '${widget.controller.meshtasticChats.totalUnread}'),
                     ),
                   ),
             onTap: () => Navigator.of(context).push(

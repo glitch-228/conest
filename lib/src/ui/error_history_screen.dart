@@ -1,3 +1,4 @@
+import 'localized_ui_text.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -46,7 +47,7 @@ class _ErrorHistoryScreenState extends State<ErrorHistoryScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(const SnackBar(content: Text('Copied the error history.')));
+    ).showSnackBar( SnackBar(content: Text(localizedUiText(context, 'Copied the error history.'))));
   }
 
   Future<void> _save() async {
@@ -57,7 +58,7 @@ class _ErrorHistoryScreenState extends State<ErrorHistoryScreen> {
         'conest-errors-${DateTime.now().toUtc().toIso8601String().replaceAll(':', '-')}.txt';
     try {
       final path = await FilePicker.saveFile(
-        dialogTitle: 'Save the error history',
+        dialogTitle: localizedUiText(context, 'Save the error history'),
         fileName: name,
         bytes: bytes,
       );
@@ -76,21 +77,21 @@ class _ErrorHistoryScreenState extends State<ErrorHistoryScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Error history'),
+        title:  Text(localizedUiText(context, 'Error history')),
         actions: [
           IconButton(
             key: const ValueKey('error-history-copy'),
-            tooltip: 'Copy',
+            tooltip: localizedUiText(context, 'Copy'),
             icon: const Icon(Icons.copy),
             onPressed: _copy,
           ),
           IconButton(
-            tooltip: 'Save to a file',
+            tooltip: localizedUiText(context, 'Save to a file'),
             icon: const Icon(Icons.save_alt),
             onPressed: _save,
           ),
           IconButton(
-            tooltip: 'Clear',
+            tooltip: localizedUiText(context, 'Clear'),
             icon: const Icon(Icons.delete_outline),
             onPressed: () => widget.controller.clearErrorHistory(),
           ),
@@ -116,8 +117,8 @@ class _ErrorHistoryScreenState extends State<ErrorHistoryScreen> {
                 child: TextField(
                   key: const ValueKey('error-history-filter'),
                   controller: _filter,
-                  decoration: const InputDecoration(
-                    labelText: 'Filter',
+                  decoration:  InputDecoration(
+                    labelText: localizedUiText(context, 'Filter'),
                     prefixIcon: Icon(Icons.search),
                   ),
                   onChanged: (_) => setState(() {}),
@@ -125,13 +126,13 @@ class _ErrorHistoryScreenState extends State<ErrorHistoryScreen> {
               ),
               SwitchListTile(
                 key: const ValueKey('error-history-errors-only'),
-                title: const Text('Errors only (hide the debug log)'),
+                title:  Text(localizedUiText(context, 'Errors only (hide the debug log)')),
                 value: _errorsOnly,
                 onChanged: (value) => setState(() => _errorsOnly = value),
               ),
               Expanded(
                 child: entries.isEmpty
-                    ? const Center(child: Text('Nothing recorded.'))
+                    ?  Center(child: Text(localizedUiText(context, 'Nothing recorded.')))
                     : ListView.builder(
                         itemCount: entries.length,
                         itemBuilder: (context, index) {
@@ -140,7 +141,7 @@ class _ErrorHistoryScreenState extends State<ErrorHistoryScreen> {
                             dense: true,
                             title: SelectableText(entry.text),
                             subtitle: Text(
-                              '${entry.at.toLocal()}  ·  ${entry.kind}',
+                              localizedUiText(context, '${entry.at.toLocal()}  ·  ${entry.kind}'),
                               style: theme.textTheme.bodySmall,
                             ),
                           );

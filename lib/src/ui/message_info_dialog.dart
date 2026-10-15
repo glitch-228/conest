@@ -1,3 +1,4 @@
+import 'localized_ui_text.dart';
 import 'package:flutter/material.dart';
 
 import '../app_locales.dart';
@@ -108,9 +109,7 @@ class MessageInfoDialog extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.only(top: 4),
           child: Text(
-            '${trace.route.label}: ${markLabel(trace.mark, outbound: outbound)} '
-            '${_time(trace.at)}'
-            '${trace.bytes == null ? '' : ', ${sizeLabel(trace.bytes!)}'}',
+            localizedUiText(context, '${trace.route.label}: ${markLabel(trace.mark, outbound: outbound)} ' '${_time(trace.at)}' '${trace.bytes == null ? '' : ', ${sizeLabel(trace.bytes!)}'}'),
             style: style,
           ),
         ),
@@ -173,7 +172,7 @@ class MessageInfoDialog extends StatelessWidget {
       } else if (message.effectiveRoute case final route?) {
         children
           ..add(const SizedBox(height: 12))
-          ..add(Text('Route: ${route.label}'));
+          ..add(Text(localizedUiText(context, 'Route: ${route.label}')));
       }
       final readAt = message.recipientReadAt[message.recipientDeviceId];
       if (outbound && readAt != null) {

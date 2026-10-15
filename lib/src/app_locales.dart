@@ -20,6 +20,6 @@ const Set<String> aiTranslatedLanguages = {'ar', 'fa', 'id', 'ru', 'zh'};
 
 /// The app's strings for [context]; English where no localizations are
 /// set up above it (a widget shown on its own, as in tests).
-AppLocalizations l10nOf(BuildContext context) =>
-    Localizations.of<AppLocalizations>(context, AppLocalizations) ??
+AppLocalizations l10nOf(BuildContext? context) =>
+    (context == null ? null : Localizations.of<AppLocalizations>(context, AppLocalizations)) ??
     lookupAppLocalizations(const Locale('en'));

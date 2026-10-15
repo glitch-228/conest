@@ -1,3 +1,4 @@
+import 'ui/localized_ui_text.dart';
 // ignore_for_file: prefer_initializing_formals
 
 import 'dart:async';
@@ -638,8 +639,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
           SnackBar(
             content: Text(
-              'Image is larger than the '
-              '${widget.maxBytes ~/ (1024 * 1024)} MB cap.',
+              localizedUiText(context, 'Image is larger than the ' '${widget.maxBytes ~/ (1024 * 1024)} MB cap.'),
             ),
           ),
         );
@@ -681,7 +681,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
           SnackBar(
             content: Text(
-              'Image is larger than the ${widget.maxBytes ~/ (1024 * 1024)} MB cap.',
+              localizedUiText(context, 'Image is larger than the ${widget.maxBytes ~/ (1024 * 1024)} MB cap.'),
             ),
           ),
         );
@@ -702,7 +702,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         SnackBar(
           content: Text(
-            'File is larger than the ${widget.maxBytes ~/ (1024 * 1024)} MB cap.',
+            localizedUiText(context, 'File is larger than the ${widget.maxBytes ~/ (1024 * 1024)} MB cap.'),
           ),
         ),
       );
@@ -745,12 +745,12 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
                     IconButton(
                       onPressed: _clearSelection,
                       icon: const Icon(Icons.close),
-                      tooltip: 'Clear selection',
+                      tooltip: localizedUiText(context, 'Clear selection'),
                     ),
                     const SizedBox(width: 4),
                     Expanded(
                       child: Text(
-                        '${_selected.length} selected',
+                        localizedUiText(context, '${_selected.length} selected'),
                         style: Theme.of(context).textTheme.titleMedium,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -763,7 +763,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
                               dimension: 16,
                               child: CircularProgressIndicator(strokeWidth: 2),
                             ),
-                      label: Text(_preparing ?? 'Send ${_selected.length}'),
+                      label: Text(_preparing ?? localizedUiText(context, 'Send ${_selected.length}')),
                     ),
                   ],
                 ),
@@ -784,7 +784,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
                   onPressed: () =>
                       Navigator.of(context).pop(MediaPickerResult.fallback()),
                   icon: const Icon(Icons.folder_outlined),
-                  label: const Text('Browse files…'),
+                  label:  Text(localizedUiText(context, 'Browse files…')),
                 ),
               ),
             ),
@@ -807,7 +807,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
             for (final album in _albums)
               DropdownMenuItem(
                 value: album.id,
-                child: Text(album.isAll ? 'Recent' : album.name),
+                child: Text(album.isAll ? localizedUiText(context, 'Recent') : album.name),
               ),
           ],
           onChanged: (id) {
@@ -835,7 +835,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
         children: [
           Expanded(
             child: Text(
-              'Conest sees only the photos you picked.',
+              localizedUiText(context, 'Conest sees only the photos you picked.'),
               style: theme.textTheme.bodySmall,
             ),
           ),
@@ -844,11 +844,11 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
               await _library.presentLimited();
               if (mounted) await _reload();
             },
-            child: const Text('Select more'),
+            child:  Text(localizedUiText(context, 'Select more')),
           ),
           TextButton(
             onPressed: _library.openSettings,
-            child: const Text('Allow all'),
+            child:  Text(localizedUiText(context, 'Allow all')),
           ),
         ],
       ),
@@ -902,7 +902,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
                     controller: _captionControllerFor(asset.id),
                     style: const TextStyle(fontSize: 13),
                     decoration: InputDecoration(
-                      hintText: 'Caption…',
+                      hintText: localizedUiText(context, 'Caption…'),
                       hintStyle: TextStyle(color: widget.palette.inkSoft),
                       isDense: true,
                       contentPadding: const EdgeInsets.symmetric(
@@ -939,7 +939,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
             Icon(Icons.lock_outline, color: widget.palette.inkSoft, size: 36),
             const SizedBox(height: 12),
             Text(
-              'Photos permission denied. Use "Browse files…" to send any file, or grant access in system settings.',
+              localizedUiText(context, 'Photos permission denied. Use "Browse files…" to send any file, or grant access in system settings.'),
               textAlign: TextAlign.center,
               style: Theme.of(
                 context,
@@ -948,7 +948,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
             const SizedBox(height: 12),
             OutlinedButton(
               onPressed: _library.openSettings,
-              child: const Text('Open settings'),
+              child:  Text(localizedUiText(context, 'Open settings')),
             ),
           ],
         ),
@@ -959,7 +959,7 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
         padding: const EdgeInsets.all(24),
         child: Center(
           child: Text(
-            'No photos or videos here.',
+            localizedUiText(context, 'No photos or videos here.'),
             style: Theme.of(
               context,
             ).textTheme.bodyMedium?.copyWith(color: widget.palette.inkSoft),
@@ -1079,7 +1079,7 @@ class _AssetTileState extends State<_AssetTile> {
                 radius: 12,
                 backgroundColor: widget.palette.primary,
                 child: Text(
-                  '${widget.selectionIndex!}',
+                  localizedUiText(context, '${widget.selectionIndex!}'),
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 12,
@@ -1156,18 +1156,18 @@ class _MediaEditorScreenState extends State<MediaEditorScreen> {
     final discard = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Discard changes?'),
-        content: const Text(
-          'Your edits will be lost. The original image stays in your gallery.',
+        title:  Text(localizedUiText(context, 'Discard changes?')),
+        content:  Text(
+          localizedUiText(context, 'Your edits will be lost. The original image stays in your gallery.'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Keep editing'),
+            child:  Text(localizedUiText(context, 'Keep editing')),
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Discard'),
+            child:  Text(localizedUiText(context, 'Discard')),
           ),
         ],
       ),
@@ -1215,8 +1215,8 @@ class _MediaEditorScreenState extends State<MediaEditorScreen> {
       if (decoded == null) {
         if (mounted) {
           ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-            const SnackBar(
-              content: Text('Could not decode the image to rotate it.'),
+             SnackBar(
+              content: Text(localizedUiText(context, 'Could not decode the image to rotate it.')),
             ),
           );
           setState(() => _busy = false);
@@ -1236,7 +1236,7 @@ class _MediaEditorScreenState extends State<MediaEditorScreen> {
       if (mounted) {
         ScaffoldMessenger.maybeOf(
           context,
-        )?.showSnackBar(SnackBar(content: Text('Rotation failed: $error')));
+        )?.showSnackBar(SnackBar(content: Text(localizedUiText(context, 'Rotation failed: $error'))));
         setState(() => _busy = false);
       }
     }
@@ -1261,24 +1261,24 @@ class _MediaEditorScreenState extends State<MediaEditorScreen> {
         appBar: AppBar(
           backgroundColor: Colors.black,
           foregroundColor: Colors.white,
-          title: const Text('Edit'),
+          title:  Text(localizedUiText(context, 'Edit')),
           actions: [
             IconButton(
               onPressed: _busy ? null : () => _rotate(-1),
               icon: const Icon(Icons.rotate_left),
-              tooltip: 'Rotate left',
+              tooltip: localizedUiText(context, 'Rotate left'),
             ),
             IconButton(
               onPressed: _busy ? null : () => _rotate(1),
               icon: const Icon(Icons.rotate_right),
-              tooltip: 'Rotate right',
+              tooltip: localizedUiText(context, 'Rotate right'),
             ),
             IconButton(
               onPressed: _busy
                   ? null
                   : () => setState(() => _cropMode = !_cropMode),
               icon: Icon(_cropMode ? Icons.check : Icons.crop),
-              tooltip: _cropMode ? 'Apply crop' : 'Crop',
+              tooltip: _cropMode ? localizedUiText(context, 'Apply crop') : localizedUiText(context, 'Crop'),
             ),
             IconButton(
               onPressed: _busy
@@ -1291,7 +1291,7 @@ class _MediaEditorScreenState extends State<MediaEditorScreen> {
                       }
                     },
               icon: const Icon(Icons.send),
-              tooltip: 'Send',
+              tooltip: localizedUiText(context, 'Send'),
             ),
           ],
         ),

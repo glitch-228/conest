@@ -1,3 +1,4 @@
+import 'src/ui/localized_ui_text.dart';
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
@@ -330,7 +331,7 @@ class ConestAlreadyRunningApp extends StatelessWidget {
             );
             return MaterialApp(
               debugShowCheckedModeBanner: false,
-              title: 'Conest',
+              title: localizedUiText(context, 'Conest'),
               theme: palette.themeData(
                 courier: themeController.shell == ConestShell.courier,
               ),
@@ -354,13 +355,13 @@ class ConestAlreadyRunningApp extends StatelessWidget {
                               ),
                               const SizedBox(height: 18),
                               Text(
-                                'Conest is already running',
+                                localizedUiText(context, 'Conest is already running'),
                                 style: Theme.of(context).textTheme.headlineSmall
                                     ?.copyWith(fontWeight: FontWeight.w800),
                               ),
                               const SizedBox(height: 10),
                               Text(
-                                'Close the existing Conest window first. A second instance would race the local relay port and encrypted vault.',
+                                localizedUiText(context, 'Close the existing Conest window first. A second instance would race the local relay port and encrypted vault.'),
                                 style: TextStyle(
                                   color: palette.inkSoft,
                                   height: 1.35,
@@ -482,7 +483,7 @@ class _ConestBootstrapAppState extends State<ConestBootstrapApp> {
                   );
             return MaterialApp(
               debugShowCheckedModeBanner: false,
-              title: 'Conest',
+              title: localizedUiText(context, 'Conest'),
               theme: palette.themeData(
                 courier: widget.themeController.shell == ConestShell.courier,
               ),
@@ -611,13 +612,13 @@ class _FirstLaunchStorageScreenState extends State<FirstLaunchStorageScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          'Choose where Conest stores data',
+                          localizedUiText(context, 'Choose where Conest stores data'),
                           style: Theme.of(context).textTheme.headlineSmall
                               ?.copyWith(fontWeight: FontWeight.w800),
                         ),
                         const SizedBox(height: 10),
                         Text(
-                          'Ghost mode is best-effort privacy: OS launch history, crash logs, network metadata, shell history, recent files, and platform caches are outside app control.',
+                          localizedUiText(context, 'Ghost mode is best-effort privacy: OS launch history, crash logs, network metadata, shell history, recent files, and platform caches are outside app control.'),
                           style: TextStyle(color: palette.inkSoft, height: 1.4),
                         ),
                         const SizedBox(height: 18),
@@ -630,19 +631,19 @@ class _FirstLaunchStorageScreenState extends State<FirstLaunchStorageScreen> {
                           },
                           child: Column(
                             children: [
-                              const RadioListTile<AppStorageMode>(
+                               RadioListTile<AppStorageMode>(
                                 value: AppStorageMode.device,
-                                title: Text('Default on this device'),
+                                title: Text(localizedUiText(context, 'Default on this device')),
                                 subtitle: Text(
-                                  'Use the normal app data folder and this device keychain when auto-unlock is selected.',
+                                  localizedUiText(context, 'Use the normal app data folder and this device keychain when auto-unlock is selected.'),
                                 ),
                               ),
                               if (widget.portableSupported)
-                                const RadioListTile<AppStorageMode>(
+                                 RadioListTile<AppStorageMode>(
                                   value: AppStorageMode.portable,
-                                  title: Text('Ghost/portable beside the app'),
+                                  title: Text(localizedUiText(context, 'Ghost/portable beside the app')),
                                   subtitle: Text(
-                                    'Store Conest-controlled files in a conest_data folder next to the app.',
+                                    localizedUiText(context, 'Store Conest-controlled files in a conest_data folder next to the app.'),
                                   ),
                                 ),
                             ],
@@ -650,7 +651,7 @@ class _FirstLaunchStorageScreenState extends State<FirstLaunchStorageScreen> {
                         ),
                         const Divider(height: 28),
                         Text(
-                          'Vault unlock',
+                          localizedUiText(context, 'Vault unlock'),
                           style: Theme.of(context).textTheme.titleMedium
                               ?.copyWith(fontWeight: FontWeight.w800),
                         ),
@@ -665,26 +666,26 @@ class _FirstLaunchStorageScreenState extends State<FirstLaunchStorageScreen> {
                           child: Column(
                             children: [
                               if (selectedPortable)
-                                const RadioListTile<VaultUnlockMode>(
+                                 RadioListTile<VaultUnlockMode>(
                                   value: VaultUnlockMode.keyFile,
-                                  title: Text('Key file auto-unlock'),
+                                  title: Text(localizedUiText(context, 'Key file auto-unlock')),
                                   subtitle: Text(
-                                    'Keeps the key beside the vault. Anyone with the folder can open it.',
+                                    localizedUiText(context, 'Keeps the key beside the vault. Anyone with the folder can open it.'),
                                   ),
                                 )
                               else
-                                const RadioListTile<VaultUnlockMode>(
+                                 RadioListTile<VaultUnlockMode>(
                                   value: VaultUnlockMode.secureStorage,
-                                  title: Text('Auto-unlock with this device'),
+                                  title: Text(localizedUiText(context, 'Auto-unlock with this device')),
                                   subtitle: Text(
-                                    'Stores the vault key in the platform secure store.',
+                                    localizedUiText(context, 'Stores the vault key in the platform secure store.'),
                                   ),
                                 ),
-                              const RadioListTile<VaultUnlockMode>(
+                               RadioListTile<VaultUnlockMode>(
                                 value: VaultUnlockMode.passphrase,
-                                title: Text('Passphrase unlock'),
+                                title: Text(localizedUiText(context, 'Passphrase unlock')),
                                 subtitle: Text(
-                                  'Ask for a passphrase on each launch. Forgotten passphrases cannot be recovered.',
+                                  localizedUiText(context, 'Ask for a passphrase on each launch. Forgotten passphrases cannot be recovered.'),
                                 ),
                               ),
                             ],
@@ -696,8 +697,8 @@ class _FirstLaunchStorageScreenState extends State<FirstLaunchStorageScreen> {
                             key: firstLaunchPassphraseFieldKey,
                             controller: _passphraseController,
                             obscureText: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Passphrase',
+                            decoration:  InputDecoration(
+                              labelText: localizedUiText(context, 'Passphrase'),
                             ),
                           ),
                           const SizedBox(height: 12),
@@ -705,8 +706,8 @@ class _FirstLaunchStorageScreenState extends State<FirstLaunchStorageScreen> {
                             key: firstLaunchConfirmPassphraseFieldKey,
                             controller: _confirmPassphraseController,
                             obscureText: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Confirm passphrase',
+                            decoration:  InputDecoration(
+                              labelText: localizedUiText(context, 'Confirm passphrase'),
                             ),
                           ),
                         ],
@@ -727,7 +728,7 @@ class _FirstLaunchStorageScreenState extends State<FirstLaunchStorageScreen> {
                                     strokeWidth: 2,
                                   ),
                                 )
-                              : const Text('Continue'),
+                              :  Text(localizedUiText(context, 'Continue')),
                         ),
                       ],
                     ),
@@ -812,13 +813,13 @@ class _PassphraseUnlockScreenState extends State<PassphraseUnlockScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Text(
-                          'Unlock Conest',
+                          localizedUiText(context, 'Unlock Conest'),
                           style: Theme.of(context).textTheme.headlineSmall
                               ?.copyWith(fontWeight: FontWeight.w800),
                         ),
                         const SizedBox(height: 10),
                         Text(
-                          'Enter the passphrase for this vault.',
+                          localizedUiText(context, 'Enter the passphrase for this vault.'),
                           style: TextStyle(color: palette.inkSoft),
                         ),
                         const SizedBox(height: 18),
@@ -827,8 +828,8 @@ class _PassphraseUnlockScreenState extends State<PassphraseUnlockScreen> {
                           controller: _passphraseController,
                           obscureText: true,
                           onSubmitted: (_) => _unlock(),
-                          decoration: const InputDecoration(
-                            labelText: 'Passphrase',
+                          decoration:  InputDecoration(
+                            labelText: localizedUiText(context, 'Passphrase'),
                           ),
                         ),
                         if (error != null) ...[
@@ -848,7 +849,7 @@ class _PassphraseUnlockScreenState extends State<PassphraseUnlockScreen> {
                                     strokeWidth: 2,
                                   ),
                                 )
-                              : const Text('Unlock'),
+                              :  Text(localizedUiText(context, 'Unlock')),
                         ),
                       ],
                     ),
@@ -1054,7 +1055,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
             );
             return MaterialApp(
               debugShowCheckedModeBanner: false,
-              title: 'Conest',
+              title: localizedUiText(context, 'Conest'),
               navigatorKey: _navigatorKey,
               localizationsDelegates: AppLocalizations.localizationsDelegates,
               supportedLocales: AppLocalizations.supportedLocales,
@@ -1140,15 +1141,15 @@ class UpdatePromptDialog extends StatelessWidget {
         final available = updateService.availableUpdate;
         if (available == null) {
           return AlertDialog(
-            title: const Text('Updates'),
+            title:  Text(localizedUiText(context, 'Updates')),
             content: Text(
               updateService.statusMessage ??
-                  'No update is available right now.',
+                  localizedUiText(context, 'No update is available right now.'),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Close'),
+                child:  Text(localizedUiText(context, 'Close')),
               ),
             ],
           );
@@ -1158,7 +1159,7 @@ class UpdatePromptDialog extends StatelessWidget {
             ? 'Download & Install'
             : 'Download & Restart';
         return AlertDialog(
-          title: const Text('Update Available'),
+          title:  Text(localizedUiText(context, 'Update Available')),
           content: SizedBox(
             width: 420,
             child: Column(
@@ -1166,16 +1167,16 @@ class UpdatePromptDialog extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${available.release.tagName} is available on the ${available.release.prerelease ? 'nightly' : 'stable'} channel.',
+                  localizedUiText(context, '${available.release.tagName} is available on the ${available.release.prerelease ? 'nightly' : 'stable'} channel.'),
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  'Current build: ${updateService.buildInfo.displayVersion}',
+                  localizedUiText(context, 'Current build: ${updateService.buildInfo.displayVersion}'),
                 ),
                 if ((available.releaseNotes ?? '').trim().isNotEmpty) ...[
                   const SizedBox(height: 14),
                   Text(
-                    "What's new",
+                    localizedUiText(context, "What's new"),
                     style: Theme.of(context).textTheme.titleSmall,
                   ),
                   const SizedBox(height: 6),
@@ -1227,7 +1228,7 @@ class UpdatePromptDialog extends StatelessWidget {
                       );
                       Navigator.of(context).pop();
                     },
-              child: const Text('Later'),
+              child:  Text(localizedUiText(context, 'Later')),
             ),
             FilledButton(
               onPressed: updateService.isDownloading
@@ -1265,10 +1266,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final _displayNameController = TextEditingController();
   final _internetRelayHostController = TextEditingController();
   final _internetRelayPortController = TextEditingController(
-    text: '$defaultRelayPort',
+    text: localizedUiText(context, '$defaultRelayPort'),
   );
   final _localRelayPortController = TextEditingController(
-    text: '$defaultRelayPort',
+    text: localizedUiText(context, '$defaultRelayPort'),
   );
   bool _submitting = false;
 
@@ -1352,7 +1353,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Conest',
+                                localizedUiText(context, 'Conest'),
                                 style: Theme.of(context).textTheme.displaySmall
                                     ?.copyWith(
                                       color: palette.textPrimary,
@@ -1361,7 +1362,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               ),
                               const SizedBox(height: 6),
                               Text(
-                                '◢ SERVERLESS SECURE MESSENGER',
+                                localizedUiText(context, '◢ SERVERLESS SECURE MESSENGER'),
                                 style: TextStyle(
                                   fontFamily: ConestPalette.monoFont,
                                   fontSize: 11,
@@ -1450,7 +1451,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                     decoration: InputDecoration(
                                       labelText: l10nOf(context).onbRelayHost,
                                       hintText:
-                                          'host auto-detects TCP/UDP; udp://host:port forces UDP',
+                                          localizedUiText(context, 'host auto-detects TCP/UDP; udp://host:port forces UDP'),
                                     ),
                                   ),
                                   const SizedBox(height: 12),
@@ -1595,24 +1596,20 @@ class _HomeScreenState extends State<HomeScreen> {
     final accept = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Verification request'),
+        title:  Text(localizedUiText(context, 'Verification request')),
         content: Text(
           own
-              ? 'Your Matrix session ${event['fromDevice'] ?? ''} wants to '
-                    'verify this one. Accept only if you started it.'
-              : '$userId wants to verify you, comparing emojis. Check the '
-                    'whole address: look-alike ones exist. Accept only if you '
-                    'can compare with them in person or on a call; verifying '
-                    'marks their keys as trusted.',
+              ? localizedUiText(context, 'Your Matrix session ${event['fromDevice'] ?? ''} wants to ' 'verify this one. Accept only if you started it.')
+              : localizedUiText(context, '$userId wants to verify you, comparing emojis. Check the ' 'whole address: look-alike ones exist. Accept only if you ' 'can compare with them in person or on a call; verifying ' 'marks their keys as trusted.'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Ignore'),
+            child:  Text(localizedUiText(context, 'Ignore')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Verify'),
+            child:  Text(localizedUiText(context, 'Verify')),
           ),
         ],
       ),
@@ -1630,7 +1627,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Could not verify: $error')));
+        ).showSnackBar(SnackBar(content: Text(localizedUiText(context, 'Could not verify: $error'))));
       }
       return;
     }
@@ -1897,7 +1894,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final selected = await showDialog<String>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('Call audio output'),
+          title:  Text(localizedUiText(context, 'Call audio output')),
           content: SizedBox(
             width: 440,
             child: ListView(
@@ -1914,7 +1911,7 @@ class _HomeScreenState extends State<HomeScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
+              child:  Text(localizedUiText(context, 'Cancel')),
             ),
           ],
         ),
@@ -2304,25 +2301,20 @@ class _HomeScreenState extends State<HomeScreen> {
           builder: (dialogContext) => AlertDialog(
             title: Text(
               error.keepsMetadata
-                  ? 'Send with its details?'
-                  : 'Send without resumable copy?',
+                  ? localizedUiText(context, 'Send with its details?')
+                  : localizedUiText(context, 'Send without resumable copy?'),
             ),
             content: Text(
-              '${attachment.fileName} could not be copied into private '
-              'transfer storage.\n\n$error\n\nThe app can read the original '
-              'file directly, but the transfer cannot resume after restart '
-              'if that file moves or its permission expires.'
-              '${error.keepsMetadata ? '\n\nIts location, camera, author and '
-                        'date details will be sent with it.' : ''}',
+              localizedUiText(context, '${attachment.fileName} could not be copied into private ' 'transfer storage.\n\n$error\n\nThe app can read the original ' 'file directly, but the transfer cannot resume after restart ' 'if that file moves or its permission expires.' '${error.keepsMetadata ? '\n\nIts location, camera, author and ' 'date details will be sent with it.' : ''}'),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(dialogContext).pop(false),
-                child: const Text('Cancel'),
+                child:  Text(localizedUiText(context, 'Cancel')),
               ),
               FilledButton(
                 onPressed: () => Navigator.of(dialogContext).pop(true),
-                child: const Text('Send from original'),
+                child:  Text(localizedUiText(context, 'Send from original')),
               ),
             ],
           ),
@@ -2431,7 +2423,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final before = tc.text.substring(0, start);
       final after = tc.text.substring(end);
       tc.value = TextEditingValue(
-        text: '$before$text$after',
+        text: localizedUiText(context, '$before$text$after'),
         selection: TextSelection.collapsed(offset: start + text.length),
       );
     } catch (error) {
@@ -3063,7 +3055,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ? null
             : FloatingActionButton.small(
                 heroTag: 'global-transfers',
-                tooltip: 'Transfers',
+                tooltip: localizedUiText(context, 'Transfers'),
                 onPressed: _showTransfers,
                 child: Badge(
                   isLabelVisible: widget.controller.transferSnapshots.any(
@@ -3072,7 +3064,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         entry.phase == TransferPhase.paused,
                   ),
                   label: Text(
-                    '${widget.controller.transferSnapshots.where((entry) => entry.phase.isActive || entry.phase == TransferPhase.paused).length}',
+                    localizedUiText(context, '${widget.controller.transferSnapshots.where((entry) => entry.phase.isActive || entry.phase == TransferPhase.paused).length}'),
                   ),
                   child: const Icon(Icons.downloading_outlined),
                 ),
@@ -3556,7 +3548,7 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                     Align(
                       alignment: Alignment.topRight,
                       child: IconButton(
-                        tooltip: 'Minimize call',
+                        tooltip: localizedUiText(context, 'Minimize call'),
                         onPressed: widget.onMinimize,
                         icon: const Icon(Icons.keyboard_arrow_down),
                       ),
@@ -3570,7 +3562,7 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                     ),
                     const SizedBox(height: 24),
                     Text(
-                      widget.contact?.alias ?? 'Unknown contact',
+                      widget.contact?.alias ?? localizedUiText(context, 'Unknown contact'),
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.headlineMedium
                           ?.copyWith(fontWeight: FontWeight.w700),
@@ -3603,7 +3595,7 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                               widget.controller.acceptVoiceCall,
                             ),
                             icon: const Icon(Icons.call),
-                            label: const Text('Accept'),
+                            label:  Text(localizedUiText(context, 'Accept')),
                           ),
                         if (incoming)
                           OutlinedButton.icon(
@@ -3611,7 +3603,7 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                               widget.controller.rejectVoiceCall,
                             ),
                             icon: const Icon(Icons.call_end),
-                            label: const Text('Reject'),
+                            label:  Text(localizedUiText(context, 'Reject')),
                           ),
                         if (connected)
                           OutlinedButton.icon(
@@ -3621,11 +3613,11 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                             icon: Icon(
                               call.muted ? Icons.mic_off : Icons.mic,
                             ),
-                            label: Text(call.muted ? 'Unmute' : 'Mute'),
+                            label: Text(call.muted ? localizedUiText(context, 'Unmute') : localizedUiText(context, 'Mute')),
                           ),
                         if (connected)
                           FilterChip(
-                            label: const Text('Noise suppression'),
+                            label:  Text(localizedUiText(context, 'Noise suppression')),
                             selected:
                                 widget
                                     .controller
@@ -3651,8 +3643,8 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                             ),
                             label: Text(
                               call.speakerphoneEnabled
-                                  ? 'Speaker on'
-                                  : 'Speaker off',
+                                  ? localizedUiText(context, 'Speaker on')
+                                  : localizedUiText(context, 'Speaker off'),
                             ),
                           ),
                         if (connected &&
@@ -3660,13 +3652,13 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                           OutlinedButton.icon(
                             onPressed: widget.onChooseOutput,
                             icon: const Icon(Icons.speaker_outlined),
-                            label: const Text('Audio output'),
+                            label:  Text(localizedUiText(context, 'Audio output')),
                           ),
                         if (ended)
                           FilledButton.icon(
                             onPressed: widget.onMinimize,
                             icon: const Icon(Icons.check),
-                            label: const Text('Done'),
+                            label:  Text(localizedUiText(context, 'Done')),
                           )
                         else if (!incoming)
                           FilledButton.icon(
@@ -3681,8 +3673,8 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                             label: Text(
                               call.outgoing &&
                                       call.state == VoiceCallState.ringing
-                                  ? 'Cancel call'
-                                  : 'Hang up',
+                                  ? localizedUiText(context, 'Cancel call')
+                                  : localizedUiText(context, 'Hang up'),
                             ),
                           ),
                       ],
@@ -3730,13 +3722,13 @@ class _CallReturnBar extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                '${call.state == VoiceCallState.reconnecting ? 'Reconnecting' : call.state == VoiceCallState.connected ? 'Call active' : 'Call'}${contact == null ? '' : ' · ${contact!.alias}'} · Return to call',
+                localizedUiText(context, '${call.state == VoiceCallState.reconnecting ? 'Reconnecting' : call.state == VoiceCallState.connected ? 'Call active' : 'Call'}${contact == null ? '' : ' · ${contact!.alias}'} · Return to call'),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
             ),
             IconButton(
-              tooltip: 'Hang up',
+              tooltip: localizedUiText(context, 'Hang up'),
               onPressed: onHangUp,
               icon: Icon(Icons.call_end, color: palette.danger),
             ),
@@ -3779,7 +3771,7 @@ class _ContactDetailsPane extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      'Contact details',
+                      localizedUiText(context, 'Contact details'),
                       style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
@@ -3787,7 +3779,7 @@ class _ContactDetailsPane extends StatelessWidget {
                   ),
                   IconButton(
                     onPressed: onClose,
-                    tooltip: 'Close details',
+                    tooltip: localizedUiText(context, 'Close details'),
                     icon: const Icon(Icons.close),
                   ),
                 ],
@@ -3827,17 +3819,17 @@ class _ContactDetailsPane extends StatelessWidget {
                 expand: true,
               ),
               const SizedBox(height: 12),
-              _DetailsValue(label: 'Route', value: contact.routeSummary),
+              _DetailsValue(label: localizedUiText(context, 'Route'), value: contact.routeSummary),
               _DetailsValue(
-                label: 'Safety number',
+                label: localizedUiText(context, 'Safety number'),
                 value: contact.shortSafetyNumber,
               ),
               _DetailsValue(
-                label: 'Iroh endpoint',
+                label: localizedUiText(context, 'Iroh endpoint'),
                 value: contact.irohEndpointId ?? 'Not pinned',
               ),
               _DetailsValue(
-                label: 'Device',
+                label: localizedUiText(context, 'Device'),
                 value: contact.deviceId,
                 monospace: true,
               ),
@@ -3845,7 +3837,7 @@ class _ContactDetailsPane extends StatelessWidget {
               FilledButton.tonalIcon(
                 onPressed: onOpenFullProfile,
                 icon: const Icon(Icons.open_in_new),
-                label: const Text('Open full profile'),
+                label:  Text(localizedUiText(context, 'Open full profile')),
               ),
             ],
           ),
@@ -3887,7 +3879,7 @@ class _GroupDetailsPane extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      'Group details',
+                      localizedUiText(context, 'Group details'),
                       style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
@@ -3895,7 +3887,7 @@ class _GroupDetailsPane extends StatelessWidget {
                   ),
                   IconButton(
                     onPressed: onClose,
-                    tooltip: 'Close details',
+                    tooltip: localizedUiText(context, 'Close details'),
                     icon: const Icon(Icons.close),
                   ),
                 ],
@@ -3920,7 +3912,7 @@ class _GroupDetailsPane extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(
-                '${members.length} active member${members.length == 1 ? '' : 's'}',
+                localizedUiText(context, '${members.length} active member${members.length == 1 ? '' : 's'}'),
                 textAlign: TextAlign.center,
                 style: Theme.of(
                   context,
@@ -3943,14 +3935,14 @@ class _GroupDetailsPane extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                   subtitle: Text(
-                    member == group.ownerDeviceId ? 'Owner' : 'Member',
+                    member == group.ownerDeviceId ? localizedUiText(context, 'Owner') : localizedUiText(context, 'Member'),
                   ),
                 ),
               const SizedBox(height: 12),
               FilledButton.tonalIcon(
                 onPressed: onOpenFullDetails,
                 icon: const Icon(Icons.settings_outlined),
-                label: const Text('Open group settings'),
+                label:  Text(localizedUiText(context, 'Open group settings')),
               ),
             ],
           ),
@@ -4113,22 +4105,22 @@ class _CourierHomeState extends State<_CourierHome> {
     final value = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('New folder'),
+        title:  Text(localizedUiText(context, 'New folder')),
         content: TextField(
           controller: name,
           autofocus: true,
           maxLength: 48,
-          decoration: const InputDecoration(hintText: 'Folder name'),
+          decoration:  InputDecoration(hintText: localizedUiText(context, 'Folder name')),
           onSubmitted: (value) => Navigator.pop(context, value),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child:  Text(localizedUiText(context, 'Cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, name.text),
-            child: const Text('Create'),
+            child:  Text(localizedUiText(context, 'Create')),
           ),
         ],
       ),
@@ -4142,7 +4134,7 @@ class _CourierHomeState extends State<_CourierHome> {
       if (mounted)
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('$error')));
+        ).showSnackBar(SnackBar(content: Text(localizedUiText(context, '$error'))));
     }
   }
 
@@ -4154,17 +4146,17 @@ class _CourierHomeState extends State<_CourierHome> {
     final action = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Edit ${folder.name}'),
+        title: Text(localizedUiText(context, 'Edit ${folder.name}')),
         content: TextField(
           controller: name,
           autofocus: true,
           maxLength: 48,
-          decoration: const InputDecoration(labelText: 'Folder name'),
+          decoration:  InputDecoration(labelText: localizedUiText(context, 'Folder name')),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child:  Text(localizedUiText(context, 'Cancel')),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, 'delete'),
@@ -4173,17 +4165,17 @@ class _CourierHomeState extends State<_CourierHome> {
           if (folderIndex > 0)
             TextButton(
               onPressed: () => Navigator.pop(context, 'moveUp'),
-              child: const Text('Move earlier'),
+              child:  Text(localizedUiText(context, 'Move earlier')),
             ),
           if (folderIndex >= 0 &&
               folderIndex < widget.controller.chatFolders.length - 1)
             TextButton(
               onPressed: () => Navigator.pop(context, 'moveDown'),
-              child: const Text('Move later'),
+              child:  Text(localizedUiText(context, 'Move later')),
             ),
           FilledButton(
             onPressed: () => Navigator.pop(context, 'save'),
-            child: const Text('Save'),
+            child:  Text(localizedUiText(context, 'Save')),
           ),
         ],
       ),
@@ -4307,7 +4299,7 @@ class _CourierHomeState extends State<_CourierHome> {
           };
           return StatefulBuilder(
             builder: (context, setDialogState) => AlertDialog(
-              title: const Text('Add to folder'),
+              title:  Text(localizedUiText(context, 'Add to folder')),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -4330,11 +4322,11 @@ class _CourierHomeState extends State<_CourierHome> {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel'),
+                  child:  Text(localizedUiText(context, 'Cancel')),
                 ),
                 FilledButton(
                   onPressed: () => Navigator.pop(context, values),
-                  child: const Text('Save'),
+                  child:  Text(localizedUiText(context, 'Save')),
                 ),
               ],
             ),
@@ -4367,7 +4359,7 @@ class _CourierHomeState extends State<_CourierHome> {
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not save chat settings: $error')),
+          SnackBar(content: Text(localizedUiText(context, 'Could not save chat settings: $error'))),
         );
       }
     }
@@ -4404,13 +4396,13 @@ class _CourierHomeState extends State<_CourierHome> {
                 children: [
                   SealAvatar(
                     seed: me?.deviceId ?? 'me',
-                    label: me?.displayName ?? 'Conest',
+                    label: me?.displayName ?? localizedUiText(context, 'Conest'),
                     palette: widget.palette,
                     size: 64,
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    me?.displayName ?? 'Conest',
+                    me?.displayName ?? localizedUiText(context, 'Conest'),
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   if (me?.bio.isNotEmpty == true)
@@ -4620,7 +4612,7 @@ class _CourierHomeState extends State<_CourierHome> {
     if (_activeFolderId == 'all') {
       for (final source in networks) {
         if (_source != 'all' && _source != source.id) continue;
-        for (final chat in source.chats()) {
+        for (final chat in source.chats(context)) {
           if (!chat.matches(query)) continue;
           entries.add((
             seed: '${source.id}:${chat.id}',
@@ -4681,7 +4673,7 @@ class _CourierHomeState extends State<_CourierHome> {
       drawer: _drawer(),
       floatingActionButton: FloatingActionButton(
         heroTag: 'courier-new-chat',
-        tooltip: 'New message',
+        tooltip: localizedUiText(context, 'New message'),
         onPressed: _newChat,
         backgroundColor: widget.palette.primary,
         foregroundColor: widget.palette.onPrimary,
@@ -4694,7 +4686,7 @@ class _CourierHomeState extends State<_CourierHome> {
             child: Row(
               children: [
                 IconButton(
-                  tooltip: _showArchived ? 'Back to chats' : 'Navigation menu',
+                  tooltip: _showArchived ? localizedUiText(context, 'Back to chats') : localizedUiText(context, 'Navigation menu'),
                   onPressed: () {
                     if (_showArchived) {
                       setState(() => _showArchived = false);
@@ -4707,7 +4699,7 @@ class _CourierHomeState extends State<_CourierHome> {
                 const SizedBox(width: 8),
                 Flexible(
                   child: Text(
-                    _showArchived ? 'Archived chats' : 'Conest',
+                    _showArchived ? localizedUiText(context, 'Archived chats') : localizedUiText(context, 'Conest'),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.titleLarge?.copyWith(
@@ -4753,7 +4745,7 @@ class _CourierHomeState extends State<_CourierHome> {
                     ]
                   else
                     ChoiceChip(
-                      label: const Text('All chats'),
+                      label:  Text(localizedUiText(context, 'All chats')),
                       selected: _activeFolderId == 'all',
                       onSelected: (_) => setState(() {
                         _activeFolderId = 'all';
@@ -4784,7 +4776,7 @@ class _CourierHomeState extends State<_CourierHome> {
                   const SizedBox(width: 8),
                   ActionChip(
                     avatar: const Icon(Icons.add, size: 18),
-                    label: const Text('New folder'),
+                    label:  Text(localizedUiText(context, 'New folder')),
                     onPressed: _createFolder,
                   ),
                 ],
@@ -4792,11 +4784,11 @@ class _CourierHomeState extends State<_CourierHome> {
             ),
           if (_activeFolderId != 'all' && query.isNotEmpty)
             Align(
-              alignment: Alignment.centerLeft,
+              alignment: AlignmentDirectional.centerStart,
               child: TextButton.icon(
                 onPressed: () => setState(() => _activeFolderId = 'all'),
                 icon: const Icon(Icons.search),
-                label: const Text('Search all chats'),
+                label:  Text(localizedUiText(context, 'Search all chats')),
               ),
             ),
           Padding(
@@ -4812,7 +4804,7 @@ class _CourierHomeState extends State<_CourierHome> {
                 suffixIcon: query.isEmpty
                     ? null
                     : IconButton(
-                        tooltip: 'Clear search',
+                        tooltip: localizedUiText(context, 'Clear search'),
                         icon: const Icon(Icons.close),
                         onPressed: () => setState(_search.clear),
                       ),
@@ -4838,11 +4830,11 @@ class _CourierHomeState extends State<_CourierHome> {
                       Icons.person_add_alt_1_outlined,
                       color: widget.palette.primary,
                     ),
-                    title: const Text('Contact requests'),
-                    subtitle: const Text('Review people who want to connect'),
+                    title:  Text(localizedUiText(context, 'Contact requests')),
+                    subtitle:  Text(localizedUiText(context, 'Review people who want to connect')),
                     trailing: Badge(
                       label: Text(
-                        '${widget.controller.pendingContactRequests.length}',
+                        localizedUiText(context, '${widget.controller.pendingContactRequests.length}'),
                       ),
                     ),
                     onTap: _showRequests,
@@ -4851,7 +4843,7 @@ class _CourierHomeState extends State<_CourierHome> {
                   ListTile(
                     leading: const Icon(Icons.archive_outlined),
                     title: Text(l10nOf(context).archivedChats),
-                    trailing: Text('$archivedCount'),
+                    trailing: Text(localizedUiText(context, '$archivedCount')),
                     onTap: () => setState(() => _showArchived = true),
                   ),
                 if (!_showArchived &&
@@ -4867,7 +4859,7 @@ class _CourierHomeState extends State<_CourierHome> {
                   _CourierRow(
                     palette: widget.palette,
                     icon: Icons.forum_outlined,
-                    title: 'LAN lobby',
+                    title: localizedUiText(context, 'LAN lobby'),
                     preview: 'Free-for-all local chat · untrusted',
                     unread: widget.controller.unreadLanLobbyCount,
                     selected: widget.lanLobbySelected,
@@ -4878,11 +4870,11 @@ class _CourierHomeState extends State<_CourierHome> {
                   Padding(
                     padding: const EdgeInsets.all(16),
                     child: query.isNotEmpty
-                        ? const Text('No chats found')
+                        ?  Text(localizedUiText(context, 'No chats found'))
                         : _showArchived
-                        ? const Text('No archived chats')
+                        ?  Text(localizedUiText(context, 'No archived chats'))
                         : !showConest
-                        ? const Text('No Matrix chats yet')
+                        ?  Text(localizedUiText(context, 'No Matrix chats yet'))
                         : _EmptyContactsState(palette: widget.palette),
                   ),
                 for (final entry in entries)
@@ -4962,7 +4954,7 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
     return Scaffold(
       backgroundColor: widget.palette.panel,
       appBar: AppBar(
-        title: const Text('New message'),
+        title:  Text(localizedUiText(context, 'New message')),
         backgroundColor: widget.palette.panel,
       ),
       body: ListenableBuilder(
@@ -4995,7 +4987,7 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
                         suffixIcon: query.isEmpty
                             ? null
                             : IconButton(
-                                tooltip: 'Clear search',
+                                tooltip: localizedUiText(context, 'Clear search'),
                                 icon: const Icon(Icons.close),
                                 onPressed: () => setState(_search.clear),
                               ),
@@ -5008,17 +5000,17 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
                         if (query.isEmpty) ...[
                           ListTile(
                             leading: const Icon(Icons.group_add_outlined),
-                            title: const Text('New group'),
+                            title:  Text(localizedUiText(context, 'New group')),
                             onTap: () => Navigator.pop(context, 'group'),
                           ),
                           ListTile(
                             leading: const Icon(Icons.person_add_alt_1),
-                            title: const Text('Add contact'),
+                            title:  Text(localizedUiText(context, 'Add contact')),
                             onTap: () => Navigator.pop(context, 'contact'),
                           ),
                           ListTile(
                             leading: const Icon(Icons.center_focus_strong),
-                            title: const Text('Add with Conest Beam'),
+                            title:  Text(localizedUiText(context, 'Add with Conest Beam')),
                             onTap: () => Navigator.pop(context, 'beam'),
                           ),
                           const Divider(),
@@ -5028,8 +5020,8 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
                             padding: const EdgeInsets.all(24),
                             child: Text(
                               query.isEmpty
-                                  ? 'Add a contact to start a conversation'
-                                  : 'No contacts found',
+                                  ? localizedUiText(context, 'Add a contact to start a conversation')
+                                  : localizedUiText(context, 'No contacts found'),
                             ),
                           ),
                         for (final contact in contacts)
@@ -5167,7 +5159,7 @@ class _CourierRow extends StatelessWidget {
                             ),
                           ),
                           child: Text(
-                            '$memberCount',
+                            localizedUiText(context, '$memberCount'),
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 9,
@@ -5208,7 +5200,7 @@ class _CourierRow extends StatelessWidget {
                       ),
                       if (badge != null)
                         Container(
-                          margin: const EdgeInsets.only(right: 6),
+                          margin: const EdgeInsetsDirectional.only(end: 6),
                           padding: const EdgeInsets.symmetric(
                             horizontal: 5,
                             vertical: 1,
@@ -5228,7 +5220,7 @@ class _CourierRow extends StatelessWidget {
                         ),
                       if (muted)
                         Padding(
-                          padding: const EdgeInsets.only(right: 6),
+                          padding: const EdgeInsetsDirectional.only(end: 6),
                           child: Icon(
                             Icons.notifications_off,
                             size: 14,
@@ -5237,7 +5229,7 @@ class _CourierRow extends StatelessWidget {
                         ),
                       if (pinned)
                         Padding(
-                          padding: const EdgeInsets.only(right: 6),
+                          padding: const EdgeInsetsDirectional.only(end: 6),
                           child: Icon(
                             Icons.push_pin,
                             size: 14,
@@ -5315,7 +5307,7 @@ class _CourierPresenceMark extends StatelessWidget {
       ContactReachabilityState.unknown => palette.danger,
     };
     return Padding(
-      padding: const EdgeInsets.only(right: 2),
+      padding: const EdgeInsetsDirectional.only(end: 2),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -5473,7 +5465,7 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
               children: [
                 _railCell(
                   selected: _cellGroupId == null,
-                  tooltip: 'Direct messages',
+                  tooltip: localizedUiText(context, 'Direct messages'),
                   onTap: () => setState(() => _cellGroupId = null),
                   child: Icon(
                     Icons.forum_outlined,
@@ -5502,7 +5494,7 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
                   ),
                 _railCell(
                   selected: false,
-                  tooltip: 'New group',
+                  tooltip: localizedUiText(context, 'New group'),
                   onTap: widget.onCreateGroup,
                   child: Icon(Icons.add, color: palette.primary, size: 22),
                 ),
@@ -5528,24 +5520,24 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
           child: Row(
             children: [
               Text(
-                'Direct messages',
+                localizedUiText(context, 'Direct messages'),
                 style: Theme.of(
                   context,
                 ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
               const Spacer(),
               IconButton(
-                tooltip: 'Conest Beam',
+                tooltip: localizedUiText(context, 'Conest Beam'),
                 onPressed: () => unawaited(widget.onShowBeam()),
                 icon: const Icon(Icons.center_focus_strong),
               ),
               IconButton(
-                tooltip: 'My invite',
+                tooltip: localizedUiText(context, 'My invite'),
                 onPressed: () => unawaited(widget.onShowInvite()),
                 icon: const Icon(Icons.qr_code_2),
               ),
               IconButton(
-                tooltip: 'Settings',
+                tooltip: localizedUiText(context, 'Settings'),
                 onPressed: () => unawaited(widget.onShowSettings()),
                 icon: const Icon(Icons.settings_outlined),
               ),
@@ -5565,7 +5557,7 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
               _CourierRow(
                 palette: palette,
                 icon: Icons.forum_outlined,
-                title: 'LAN lobby',
+                title: localizedUiText(context, 'LAN lobby'),
                 preview: 'Free-for-all local chat · untrusted',
                 unread: controller.unreadLanLobbyCount,
                 selected: widget.lanLobbySelected,
@@ -5632,7 +5624,7 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
                 ),
               ),
               IconButton(
-                tooltip: 'Group details',
+                tooltip: localizedUiText(context, 'Group details'),
                 onPressed: () => widget.onGroupDetails(group),
                 icon: const Icon(Icons.groups_2_outlined),
               ),
@@ -5647,14 +5639,14 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
               onPressed: () => widget.onGroupSelected(group),
               icon: const Icon(Icons.chat_bubble_outline),
               label: Text(
-                'Open #${group.title.toLowerCase().replaceAll(' ', '-')}',
+                localizedUiText(context, 'Open #${group.title.toLowerCase().replaceAll(' ', '-')}'),
               ),
             ),
           ),
         ),
         MonoSectionLabel(
           palette: palette,
-          label: 'Members · ${memberIds.length}',
+          label: localizedUiText(context, 'Members · ${memberIds.length}'),
         ),
         Expanded(
           child: ListView(
@@ -5670,7 +5662,7 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
                   ),
                   title: Text(controller.groupMemberLabel(deviceId)),
                   subtitle: Text(
-                    group.roleFor(deviceId)?.label ?? 'Member',
+                    group.roleFor(deviceId)?.label ?? localizedUiText(context, 'Member'),
                     style: TextStyle(
                       fontFamily: ConestPalette.monoFont,
                       fontSize: 11,
@@ -5787,7 +5779,7 @@ class _Sidebar extends StatelessWidget {
                         children: [
                           Expanded(
                             child: Text(
-                              preview?.bodyPreview ?? 'No messages yet',
+                              preview?.bodyPreview ?? localizedUiText(context, 'No messages yet'),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(context).textTheme.bodySmall
@@ -5838,7 +5830,7 @@ class _Sidebar extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 12),
           child: Text(
-            'No activity yet — pair a contact to start the log.',
+            localizedUiText(context, 'No activity yet — pair a contact to start the log.'),
             style: TextStyle(
               fontFamily: ConestPalette.monoFont,
               fontSize: 11,
@@ -5909,7 +5901,7 @@ class _Sidebar extends StatelessWidget {
                               ),
                             ),
                             child: Text(
-                              outbound ? 'SENT' : 'RECV',
+                              outbound ? localizedUiText(context, 'SENT') : localizedUiText(context, 'RECV'),
                               style: TextStyle(
                                 fontFamily: ConestPalette.monoFont,
                                 fontSize: 8,
@@ -5969,7 +5961,7 @@ class _Sidebar extends StatelessWidget {
         children: [
           StatusStrip(
             palette: palette,
-            title: 'Node · online',
+            title: localizedUiText(context, 'Node · online'),
             detail:
                 '$lanSummary · '
                 '${identity.hasInternetRelay ? 'relay ✓' : 'relay optional'} · '
@@ -6011,7 +6003,7 @@ class _Sidebar extends StatelessWidget {
                                   ?.copyWith(fontWeight: FontWeight.w700),
                             ),
                             Text(
-                              'device ${identity.deviceIdShort}',
+                              localizedUiText(context, 'device ${identity.deviceIdShort}'),
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(color: palette.inkSoft),
                             ),
@@ -6022,12 +6014,12 @@ class _Sidebar extends StatelessWidget {
                         IconButton(
                           onPressed: onShowDebug,
                           icon: const Icon(Icons.bug_report_outlined),
-                          tooltip: 'Debug',
+                          tooltip: localizedUiText(context, 'Debug'),
                         ),
                       IconButton(
                         onPressed: onShowSettings,
                         icon: const Icon(Icons.settings_outlined),
-                        tooltip: 'Settings',
+                        tooltip: localizedUiText(context, 'Settings'),
                       ),
                     ],
                   ),
@@ -6061,7 +6053,7 @@ class _Sidebar extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   _StatusChip(
-                    label: 'safety ${identity.shortSafetyNumber}',
+                    label: localizedUiText(context, 'safety ${identity.shortSafetyNumber}'),
                     palette: palette,
                     icon: Icons.verified_user_outlined,
                     expand: true,
@@ -6073,7 +6065,7 @@ class _Sidebar extends StatelessWidget {
                         child: OutlinedButton.icon(
                           onPressed: onShowInvite,
                           icon: const Icon(Icons.qr_code_2),
-                          label: const Text('My invite'),
+                          label:  Text(localizedUiText(context, 'My invite')),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -6081,7 +6073,7 @@ class _Sidebar extends StatelessWidget {
                         child: FilledButton.icon(
                           onPressed: onAddContact,
                           icon: const Icon(Icons.person_add_alt_1),
-                          label: const Text('Add'),
+                          label:  Text(localizedUiText(context, 'Add')),
                         ),
                       ),
                     ],
@@ -6092,14 +6084,14 @@ class _Sidebar extends StatelessWidget {
                     child: OutlinedButton.icon(
                       onPressed: onShowBeam,
                       icon: const Icon(Icons.center_focus_strong),
-                      label: const Text('Conest Beam'),
+                      label:  Text(localizedUiText(context, 'Conest Beam')),
                     ),
                   ),
                   const SizedBox(height: 4),
                   TextButton.icon(
                     onPressed: onPoll,
                     icon: const Icon(Icons.sync),
-                    label: const Text('Poll routes now'),
+                    label:  Text(localizedUiText(context, 'Poll routes now')),
                   ),
                 ],
               ),
@@ -6146,13 +6138,13 @@ class _Sidebar extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'LAN lobby',
+                          localizedUiText(context, 'LAN lobby'),
                           style: Theme.of(context).textTheme.titleMedium
                               ?.copyWith(fontWeight: FontWeight.w700),
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          'Free-for-all local chat • untrusted',
+                          localizedUiText(context, 'Free-for-all local chat • untrusted'),
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(color: palette.inkSoft),
                         ),
@@ -6164,7 +6156,7 @@ class _Sidebar extends StatelessWidget {
                     _UnreadBadge(count: lanLobbyUnreadCount, palette: palette),
                   ],
                   Text(
-                    '${controller.lanLobbyMessages.length}',
+                    localizedUiText(context, '${controller.lanLobbyMessages.length}'),
                     style: Theme.of(
                       context,
                     ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
@@ -6177,7 +6169,7 @@ class _Sidebar extends StatelessWidget {
           Row(
             children: [
               Text(
-                'Groups',
+                localizedUiText(context, 'Groups'),
                 style: Theme.of(
                   context,
                 ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
@@ -6186,10 +6178,10 @@ class _Sidebar extends StatelessWidget {
               IconButton(
                 onPressed: controller.contacts.isEmpty ? null : onCreateGroup,
                 icon: const Icon(Icons.group_add_outlined),
-                tooltip: 'Create group',
+                tooltip: localizedUiText(context, 'Create group'),
               ),
               Text(
-                '${controller.visibleGroups.length}',
+                localizedUiText(context, '${controller.visibleGroups.length}'),
                 style: Theme.of(
                   context,
                 ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
@@ -6202,8 +6194,8 @@ class _Sidebar extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 12),
               child: Text(
                 controller.contacts.isEmpty
-                    ? 'Add trusted contacts before creating a group.'
-                    : 'No groups yet.',
+                    ? localizedUiText(context, 'Add trusted contacts before creating a group.')
+                    : localizedUiText(context, 'No groups yet.'),
                 style: Theme.of(
                   context,
                 ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
@@ -6273,20 +6265,20 @@ class _Sidebar extends StatelessWidget {
                                 visualDensity: VisualDensity.compact,
                                 onPressed: () => onGroupDetails(group),
                                 icon: const Icon(Icons.groups_2_outlined),
-                                tooltip: 'Group details',
+                                tooltip: localizedUiText(context, 'Group details'),
                               ),
                             ],
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            '${group.activeMemberDeviceIds.length} member(s)',
+                            localizedUiText(context, '${group.activeMemberDeviceIds.length} member(s)'),
                             style: Theme.of(context).textTheme.bodySmall
                                 ?.copyWith(color: palette.inkSoft),
                           ),
                           const SizedBox(height: 6),
                           Text(
                             preview == null
-                                ? 'No messages yet'
+                                ? localizedUiText(context, 'No messages yet')
                                 : preview.bodyPreview,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
@@ -6324,14 +6316,14 @@ class _Sidebar extends StatelessWidget {
             Row(
               children: [
                 Text(
-                  'Contacts',
+                  localizedUiText(context, 'Contacts'),
                   style: Theme.of(
                     context,
                   ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 const Spacer(),
                 Text(
-                  '${controller.contacts.length}',
+                  localizedUiText(context, '${controller.contacts.length}'),
                   style: Theme.of(
                     context,
                   ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
@@ -6432,7 +6424,7 @@ class _Sidebar extends StatelessWidget {
                                         onPressed: () =>
                                             onContactProfile(contact),
                                         icon: const Icon(Icons.badge_outlined),
-                                        tooltip: 'Contact profile',
+                                        tooltip: localizedUiText(context, 'Contact profile'),
                                       ),
                                     ],
                                   ),
@@ -6452,7 +6444,7 @@ class _Sidebar extends StatelessWidget {
                                   const SizedBox(height: 6),
                                   Text(
                                     preview == null
-                                        ? 'No messages yet'
+                                        ? localizedUiText(context, 'No messages yet')
                                         : preview.bodyPreview,
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
@@ -6477,7 +6469,7 @@ class _Sidebar extends StatelessWidget {
           if (controller.statusMessage != null) ...[
             const SizedBox(height: 12),
             Align(
-              alignment: Alignment.centerLeft,
+              alignment: AlignmentDirectional.centerStart,
               child: Text(
                 controller.statusMessage!,
                 style: Theme.of(
@@ -6691,21 +6683,21 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
       final selected = await showDialog<bool>(
         context: context,
         builder: (context) => SimpleDialog(
-          title: const Text('History for new members'),
+          title:  Text(localizedUiText(context, 'History for new members')),
           children: [
-            const Padding(
+             Padding(
               padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
               child: Text(
-                'Applies to future admissions. History already received cannot be withdrawn.',
+                localizedUiText(context, 'Applies to future admissions. History already received cannot be withdrawn.'),
               ),
             ),
             SimpleDialogOption(
               onPressed: () => Navigator.pop(context, true),
-              child: Text('${includeEarlier ? '✓ ' : ''}All retained history'),
+              child: Text(localizedUiText(context, '${includeEarlier ? '✓ ' : ''}All retained history')),
             ),
             SimpleDialogOption(
               onPressed: () => Navigator.pop(context, false),
-              child: Text('${!includeEarlier ? '✓ ' : ''}Since admission'),
+              child: Text(localizedUiText(context, '${!includeEarlier ? '✓ ' : ''}Since admission')),
             ),
           ],
         ),
@@ -6798,23 +6790,20 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
     final choice = await showDialog<_DeleteGroupChoice>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Delete "${group.title}"'),
-        content: const Text(
-          'Choose how to wind down this group. Transferring ownership '
-          'keeps the group alive under a new owner and demotes you to '
-          'admin. Deleting for everyone removes the group from every '
-          "member's list and cannot be undone.",
+        title: Text(localizedUiText(context, 'Delete "${group.title}"')),
+        content:  Text(
+          localizedUiText(context, 'Choose how to wind down this group. Transferring ownership ' 'keeps the group alive under a new owner and demotes you to ' 'admin. Deleting for everyone removes the group from every ' "member's list and cannot be undone."),
         ),
         actions: [
           TextButton(
             onPressed: () =>
                 Navigator.of(context).pop(_DeleteGroupChoice.cancel),
-            child: const Text('Cancel'),
+            child:  Text(localizedUiText(context, 'Cancel')),
           ),
           TextButton(
             onPressed: () =>
                 Navigator.of(context).pop(_DeleteGroupChoice.transfer),
-            child: const Text('Transfer ownership…'),
+            child:  Text(localizedUiText(context, 'Transfer ownership…')),
           ),
           FilledButton.tonal(
             style: FilledButton.styleFrom(
@@ -6823,7 +6812,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
             ),
             onPressed: () =>
                 Navigator.of(context).pop(_DeleteGroupChoice.delete),
-            child: const Text('Delete for everyone'),
+            child:  Text(localizedUiText(context, 'Delete for everyone')),
           ),
         ],
       ),
@@ -6858,7 +6847,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
         String? selected = candidates.first;
         return StatefulBuilder(
           builder: (context, setLocalState) => AlertDialog(
-            title: const Text('Transfer ownership'),
+            title:  Text(localizedUiText(context, 'Transfer ownership')),
             content: SizedBox(
               width: 360,
               child: ListView(
@@ -6870,7 +6859,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
                       leading: Icon(_roleIcon(group.roleFor(deviceId))),
                       title: Text(widget.controller.groupMemberLabel(deviceId)),
                       subtitle: Text(
-                        group.roleFor(deviceId)?.label ?? 'Member',
+                        group.roleFor(deviceId)?.label ?? localizedUiText(context, 'Member'),
                       ),
                       trailing: Icon(
                         selected == deviceId
@@ -6885,13 +6874,13 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Cancel'),
+                child:  Text(localizedUiText(context, 'Cancel')),
               ),
               FilledButton(
                 onPressed: selected == null
                     ? null
                     : () => Navigator.of(context).pop(selected),
-                child: const Text('Transfer'),
+                child:  Text(localizedUiText(context, 'Transfer')),
               ),
             ],
           ),
@@ -6921,17 +6910,14 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Delete "${group.title}" for everyone?'),
-        content: const Text(
-          'Every member will be removed from the group and the group '
-          "will be marked left in each member's list. Local message "
-          'history is not deleted automatically — each member can clear '
-          'it via Remove from list. This cannot be undone.',
+        title: Text(localizedUiText(context, 'Delete "${group.title}" for everyone?')),
+        content:  Text(
+          localizedUiText(context, 'Every member will be removed from the group and the group ' "will be marked left in each member's list. Local message " 'history is not deleted automatically — each member can clear ' 'it via Remove from list. This cannot be undone.'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
+            child:  Text(localizedUiText(context, 'Cancel')),
           ),
           FilledButton.tonal(
             style: FilledButton.styleFrom(
@@ -6939,7 +6925,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
               foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
             ),
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete for everyone'),
+            child:  Text(localizedUiText(context, 'Delete for everyone')),
           ),
         ],
       ),
@@ -6961,16 +6947,14 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Remove this group?'),
-        content: const Text(
-          'Remove this group from your list? This deletes the local '
-          'message history. Other members will not be notified — they '
-          'already see you as having left.',
+        title:  Text(localizedUiText(context, 'Remove this group?')),
+        content:  Text(
+          localizedUiText(context, 'Remove this group from your list? This deletes the local ' 'message history. Other members will not be notified — they ' 'already see you as having left.'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
+            child:  Text(localizedUiText(context, 'Cancel')),
           ),
           FilledButton.tonal(
             style: FilledButton.styleFrom(
@@ -6978,7 +6962,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
               foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
             ),
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Remove'),
+            child:  Text(localizedUiText(context, 'Remove')),
           ),
         ],
       ),
@@ -7019,27 +7003,27 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
       children: [
         if (canChangeRole)
           PopupMenuButton<GroupMemberRole>(
-            tooltip: 'Change role',
+            tooltip: localizedUiText(context, 'Change role'),
             icon: const Icon(Icons.manage_accounts_outlined),
             initialValue: role,
             onSelected: (value) => _setRole(deviceId, value),
-            itemBuilder: (context) => const [
+            itemBuilder: (context) =>  [
               PopupMenuItem(
                 value: GroupMemberRole.member,
-                child: Text('Member'),
+                child: Text(localizedUiText(context, 'Member')),
               ),
               PopupMenuItem(
                 value: GroupMemberRole.moderator,
-                child: Text('Moderator'),
+                child: Text(localizedUiText(context, 'Moderator')),
               ),
-              PopupMenuItem(value: GroupMemberRole.admin, child: Text('Admin')),
+              PopupMenuItem(value: GroupMemberRole.admin, child: Text(localizedUiText(context, 'Admin'))),
             ],
           ),
         if (canRemove)
           IconButton(
             onPressed: () => _removeMember(deviceId),
             icon: const Icon(Icons.person_remove_outlined),
-            tooltip: 'Remove member',
+            tooltip: localizedUiText(context, 'Remove member'),
           ),
       ],
     );
@@ -7084,7 +7068,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
           shrinkWrap: true,
           children: [
             Text(
-              '${activeIds.length} member(s) • owner ${widget.controller.groupMemberLabel(group.ownerDeviceId)}',
+              localizedUiText(context, '${activeIds.length} member(s) • owner ${widget.controller.groupMemberLabel(group.ownerDeviceId)}'),
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: widget.palette.inkSoft),
@@ -7095,16 +7079,16 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
                 contentPadding: EdgeInsets.zero,
                 leading: Icon(_roleIcon(group.roleFor(deviceId))),
                 title: Text(widget.controller.groupMemberLabel(deviceId)),
-                subtitle: Text(group.roleFor(deviceId)?.label ?? 'Member'),
+                subtitle: Text(group.roleFor(deviceId)?.label ?? localizedUiText(context, 'Member')),
                 trailing: _memberTrailing(deviceId, group.roleFor(deviceId)),
               ),
             if (myId == group.ownerDeviceId && !group.isDissolved)
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.history),
-                title: const Text('History for new members'),
-                subtitle: const Text(
-                  'Choose what future members can catch up on',
+                title:  Text(localizedUiText(context, 'History for new members')),
+                subtitle:  Text(
+                  localizedUiText(context, 'Choose what future members can catch up on'),
                 ),
                 onTap: _savingHistoryVisibility ? null : _editHistoryVisibility,
                 trailing: _savingHistoryVisibility
@@ -7129,7 +7113,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
               const SizedBox(height: 6),
               Center(
                 child: Text(
-                  '// GROUP TRUST FANOUT · mint = paired',
+                  localizedUiText(context, '// GROUP TRUST FANOUT · mint = paired'),
                   style: TextStyle(
                     fontFamily: ConestPalette.monoFont,
                     fontSize: 10,
@@ -7142,7 +7126,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
             if (_canAddMembers && addable.isNotEmpty) ...[
               const Divider(),
               Text(
-                'Add trusted contact',
+                localizedUiText(context, 'Add trusted contact'),
                 style: Theme.of(context).textTheme.titleSmall,
               ),
               const SizedBox(height: 8),
@@ -7156,7 +7140,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
                         ? null
                         : () => _addMember(contact),
                     icon: const Icon(Icons.person_add_alt_1),
-                    tooltip: 'Add member',
+                    tooltip: localizedUiText(context, 'Add member'),
                   ),
                 ),
             ],
@@ -7173,7 +7157,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
             ),
             onPressed: _deleteGroup,
             icon: const Icon(Icons.delete_forever_outlined),
-            label: const Text('Delete group…'),
+            label:  Text(localizedUiText(context, 'Delete group…')),
           )
         else if (_currentDeviceId != null &&
             group.roleFor(_currentDeviceId!) != GroupMemberRole.owner &&
@@ -7181,7 +7165,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
           TextButton.icon(
             onPressed: _leave,
             icon: const Icon(Icons.logout),
-            label: const Text('Leave'),
+            label:  Text(localizedUiText(context, 'Leave')),
           )
         else if (_currentDeviceId != null &&
             !group.hasActiveMember(_currentDeviceId!) &&
@@ -7192,11 +7176,11 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
             ),
             onPressed: _removeFromList,
             icon: const Icon(Icons.delete_outline),
-            label: const Text('Remove from list'),
+            label:  Text(localizedUiText(context, 'Remove from list')),
           ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Close'),
+          child:  Text(localizedUiText(context, 'Close')),
         ),
       ],
     );
@@ -7229,7 +7213,7 @@ Future<void> _forwardTextMessage(
                 group.title.toLowerCase().contains(query),
           );
           return AlertDialog(
-            title: const Text('Forward message'),
+            title:  Text(localizedUiText(context, 'Forward message')),
             content: SizedBox(
               width: 420,
               height: 400,
@@ -7259,11 +7243,11 @@ Future<void> _forwardTextMessage(
                           ListTile(
                             key: const ValueKey('forward-to-saved'),
                             leading: const Icon(Icons.bookmark_outline),
-                            title: const Text('Saved messages'),
+                            title:  Text(localizedUiText(context, 'Saved messages')),
                             onTap: () => Navigator.pop(context, saved),
                           ),
                         if (contacts.isEmpty && groups.isEmpty)
-                          const ListTile(title: Text('No available chats')),
+                           ListTile(title: Text(localizedUiText(context, 'No available chats'))),
                         for (final contact in contacts)
                           ListTile(
                             leading: SealAvatar(
@@ -7290,7 +7274,7 @@ Future<void> _forwardTextMessage(
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
+                child:  Text(localizedUiText(context, 'Cancel')),
               ),
             ],
           );
@@ -7314,13 +7298,13 @@ Future<void> _forwardTextMessage(
     if (context.mounted) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Forwarded message queued')));
+      ).showSnackBar( SnackBar(content: Text(localizedUiText(context, 'Forwarded message queued'))));
     }
   } catch (error) {
     if (context.mounted) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Could not forward: $error')));
+      ).showSnackBar(SnackBar(content: Text(localizedUiText(context, 'Could not forward: $error'))));
     }
   }
 }
@@ -7435,11 +7419,11 @@ Future<void> _forwardFile(
                           ListTile(
                             key: const ValueKey('forward-to-saved'),
                             leading: const Icon(Icons.bookmark_outline),
-                            title: const Text('Saved messages'),
+                            title:  Text(localizedUiText(context, 'Saved messages')),
                             onTap: () => Navigator.pop(context, saved),
                           ),
                         if (contacts.isEmpty && groups.isEmpty)
-                          const ListTile(title: Text('No available chats')),
+                           ListTile(title: Text(localizedUiText(context, 'No available chats'))),
                         for (final contact in contacts)
                           ListTile(
                             leading: SealAvatar(
@@ -7466,7 +7450,7 @@ Future<void> _forwardFile(
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
+                child:  Text(localizedUiText(context, 'Cancel')),
               ),
             ],
           );
@@ -7503,13 +7487,13 @@ Future<void> _forwardFile(
     }
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Forwarded attachment queued')),
+         SnackBar(content: Text(localizedUiText(context, 'Forwarded attachment queued'))),
       );
     }
   } catch (error) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not forward attachment: $error')),
+        SnackBar(content: Text(localizedUiText(context, 'Could not forward attachment: $error'))),
       );
     }
   }
@@ -7546,7 +7530,7 @@ class _TelegramChatHeader extends StatelessWidget {
         children: [
           if (onBack != null)
             IconButton(
-              tooltip: 'Back',
+              tooltip: localizedUiText(context, 'Back'),
               onPressed: onBack,
               icon: const Icon(Icons.arrow_back),
             ),
@@ -7592,30 +7576,30 @@ class _TelegramChatHeader extends StatelessWidget {
             ),
           ),
           IconButton(
-            tooltip: 'Search messages',
+            tooltip: localizedUiText(context, 'Search messages'),
             onPressed: onSearch,
             icon: const Icon(Icons.search),
           ),
           if (onCall != null)
             IconButton(
-              tooltip: 'Start voice call (experimental)',
+              tooltip: localizedUiText(context, 'Start voice call (experimental)'),
               onPressed: onCall,
               icon: const Icon(Icons.call_outlined),
             ),
           PopupMenuButton<String>(
-            tooltip: 'Chat options',
+            tooltip: localizedUiText(context, 'Chat options'),
             icon: const Icon(Icons.more_vert),
             onSelected: (action) =>
                 action == 'details' ? onDetails() : onConnectionDetails?.call(),
             itemBuilder: (_) => [
-              const PopupMenuItem(
+               PopupMenuItem(
                 value: 'details',
-                child: Text('Chat details'),
+                child: Text(localizedUiText(context, 'Chat details')),
               ),
               if (onConnectionDetails != null)
-                const PopupMenuItem(
+                 PopupMenuItem(
                   value: 'connection',
-                  child: Text('Connection details'),
+                  child: Text(localizedUiText(context, 'Connection details')),
                 ),
             ],
           ),
@@ -7753,7 +7737,7 @@ class _VoicePreviewPlayerState extends State<_VoicePreviewPlayer> {
           Row(
             children: [
               IconButton(
-                tooltip: playing ? 'Pause preview' : 'Play preview',
+                tooltip: playing ? localizedUiText(context, 'Pause preview') : localizedUiText(context, 'Play preview'),
                 onPressed: () => unawaited(_run(_service.playPreview)),
                 icon: Icon(
                   playing
@@ -7767,13 +7751,13 @@ class _VoicePreviewPlayerState extends State<_VoicePreviewPlayer> {
                   onChanged: (value) => unawaited(_seek(value)),
                 ),
               ),
-              Text('${_clock(position)} / ${_clock(total)}'),
+              Text(localizedUiText(context, '${_clock(position)} / ${_clock(total)}')),
             ],
           ),
           Row(
             children: [
               IconButton(
-                tooltip: volume == 0 ? 'Unmute preview' : 'Mute preview',
+                tooltip: volume == 0 ? localizedUiText(context, 'Unmute preview') : localizedUiText(context, 'Mute preview'),
                 onPressed: () => unawaited(
                   _run(() => _service.setPlaybackVolume(volume == 0 ? 1 : 0)),
                 ),
@@ -7788,7 +7772,7 @@ class _VoicePreviewPlayerState extends State<_VoicePreviewPlayer> {
               Expanded(
                 child: Slider(
                   value: volume,
-                  label: '${(volume * 100).round()}%',
+                  label: localizedUiText(context, '${(volume * 100).round()}%'),
                   divisions: 20,
                   onChanged: (value) =>
                       unawaited(_run(() => _service.setPlaybackVolume(value))),
@@ -7835,8 +7819,8 @@ class _GroupVoiceControls extends StatelessWidget {
               children: [
             IconButton(
               tooltip: isCurrent && service.isPlaying
-                  ? 'Pause voice message'
-                  : 'Play voice message',
+                  ? localizedUiText(context, 'Pause voice message')
+                  : localizedUiText(context, 'Play voice message'),
               onPressed: path == null
                   ? null
                   : () => unawaited(
@@ -7863,10 +7847,10 @@ class _GroupVoiceControls extends StatelessWidget {
                         ),
                       ),
                     )
-                  : Text('Voice message · $label'),
+                  : Text(localizedUiText(context, 'Voice message · $label')),
             ),
             PopupMenuButton<double>(
-              tooltip: 'Playback speed',
+              tooltip: localizedUiText(context, 'Playback speed'),
               icon: const Icon(Icons.speed),
               onSelected: (rate) => unawaited(
                 service
@@ -7885,11 +7869,11 @@ class _GroupVoiceControls extends StatelessWidget {
             ),
             if (isCurrent && service.playbackError != null)
               Align(
-                alignment: Alignment.centerLeft,
+                alignment: AlignmentDirectional.centerStart,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Text(
-                    'Playback failed: ${service.playbackError}',
+                    localizedUiText(context, 'Playback failed: ${service.playbackError}'),
                     style: TextStyle(color: palette.danger, fontSize: 12),
                   ),
                 ),
@@ -7966,12 +7950,12 @@ class _VoiceComposerPanel extends StatelessWidget {
                   child: Text(
                     voice.error ??
                         (voice.state == VoiceRecordingState.starting
-                            ? 'Preparing microphone…'
+                            ? localizedUiText(context, 'Preparing microphone…')
                             : voice.state == VoiceRecordingState.stopping
-                            ? 'Preparing preview…'
+                            ? localizedUiText(context, 'Preparing preview…')
                             : preview
-                            ? 'Voice message preview · ${_duration(duration)}'
-                            : 'Recording${locked ? ' · locked' : ''} · ${_duration(voice.elapsed)}'),
+                            ? localizedUiText(context, 'Voice message preview · ${_duration(duration)}')
+                            : localizedUiText(context, 'Recording${locked ? ' · locked' : ''} · ${_duration(voice.elapsed)}')),
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ),
@@ -7983,19 +7967,19 @@ class _VoiceComposerPanel extends StatelessWidget {
                   ),
                 if (recording)
                   IconButton(
-                    tooltip: 'Stop recording',
+                    tooltip: localizedUiText(context, 'Stop recording'),
                     onPressed: onStop,
                     icon: const Icon(Icons.stop_circle_outlined),
                   ),
                 IconButton(
-                  tooltip: 'Delete recording',
+                  tooltip: localizedUiText(context, 'Delete recording'),
                   onPressed: onCancel,
                   icon: const Icon(Icons.delete_outline),
                 ),
                 if (preview)
                   FilledButton(
                     onPressed: sending ? null : onSend,
-                    child: Text(sending ? 'Sending…' : 'Send'),
+                    child: Text(sending ? localizedUiText(context, 'Sending…') : localizedUiText(context, 'Send')),
                   ),
               ],
             ),
@@ -8030,14 +8014,14 @@ class _VoiceComposerPanel extends StatelessWidget {
               if (service.playingItemId == _VoicePreviewPlayer.itemId &&
                   service.playbackError != null)
                 Text(
-                  'Playback failed: ${service.playbackError}',
+                  localizedUiText(context, 'Playback failed: ${service.playbackError}'),
                   style: TextStyle(color: palette.danger),
                 ),
               Align(
-                alignment: Alignment.centerRight,
+                alignment: AlignmentDirectional.centerEnd,
                 child: PopupMenuButton<double>(
                   initialValue: service.playbackRate,
-                  tooltip: 'Playback speed',
+                  tooltip: localizedUiText(context, 'Playback speed'),
                   onSelected: (rate) => unawaited(
                     service.setPlaybackRate(rate).catchError((Object error) {
                       service.reportRecordingError(error);
@@ -8048,7 +8032,7 @@ class _VoiceComposerPanel extends StatelessWidget {
                     PopupMenuItem(value: 1.5, child: Text('1.5×')),
                     PopupMenuItem(value: 2, child: Text('2×')),
                   ],
-                  child: Text('${service.playbackRate}×'),
+                  child: Text(localizedUiText(context, '${service.playbackRate}×')),
                 ),
               ),
             ],
@@ -8299,34 +8283,34 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: const Text('New poll'),
+          title:  Text(localizedUiText(context, 'New poll')),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(
                 controller: question,
-                decoration: const InputDecoration(labelText: 'Question'),
+                decoration:  InputDecoration(labelText: localizedUiText(context, 'Question')),
               ),
               TextField(
                 controller: options,
                 minLines: 2,
                 maxLines: 6,
-                decoration: const InputDecoration(
-                  labelText: 'Options (one per line)',
+                decoration:  InputDecoration(
+                  labelText: localizedUiText(context, 'Options (one per line)'),
                 ),
               ),
               DropdownButton<PollChoiceMode>(
                 value: mode,
                 onChanged: (value) =>
                     setDialogState(() => mode = value ?? mode),
-                items: const [
+                items:  [
                   DropdownMenuItem(
                     value: PollChoiceMode.single,
-                    child: Text('Single choice'),
+                    child: Text(localizedUiText(context, 'Single choice')),
                   ),
                   DropdownMenuItem(
                     value: PollChoiceMode.multiple,
-                    child: Text('Multiple choice'),
+                    child: Text(localizedUiText(context, 'Multiple choice')),
                   ),
                 ],
               ),
@@ -8335,7 +8319,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
+              child:  Text(localizedUiText(context, 'Cancel')),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, (
@@ -8343,7 +8327,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                 options.text.split('\n'),
                 mode,
               )),
-              child: const Text('Create'),
+              child:  Text(localizedUiText(context, 'Create')),
             ),
           ],
         ),
@@ -8371,15 +8355,14 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('Delete message?'),
+          title:  Text(localizedUiText(context, 'Delete message?')),
           content: Text(
-            'This removes the message for group members when they synchronize.'
-            '${compatibility == null ? '' : '\n\n$compatibility'}',
+            localizedUiText(context, 'This removes the message for group members when they synchronize.' '${compatibility == null ? '' : '\n\n$compatibility'}'),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
+              child:  Text(localizedUiText(context, 'Cancel')),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
@@ -8411,7 +8394,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('$error')));
+        ).showSnackBar(SnackBar(content: Text(localizedUiText(context, '$error'))));
       }
     }
   }
@@ -8460,8 +8443,8 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       _flashMessage(target);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not locate this message in the current chat'),
+         SnackBar(
+          content: Text(localizedUiText(context, 'Could not locate this message in the current chat')),
         ),
       );
     }
@@ -8521,15 +8504,14 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete selected messages?'),
+        title:  Text(localizedUiText(context, 'Delete selected messages?')),
         content: Text(
-          'Delete ${selected.length} message${selected.length == 1 ? '' : 's'} '
-          'for the group?',
+          localizedUiText(context, 'Delete ${selected.length} message${selected.length == 1 ? '' : 's'} ' 'for the group?'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child:  Text(localizedUiText(context, 'Cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
@@ -8900,7 +8882,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
               widget.onReplyToMessage(message);
             },
       child: Align(
-        alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
+        alignment: outbound ? AlignmentDirectional.centerEnd : AlignmentDirectional.centerStart,
         child: AnimatedContainer(
           duration: _replyFlashDuration,
           curve: Curves.easeOut,
@@ -9090,7 +9072,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         children: [
                           for (final entry in message.reactions.entries)
                             ActionChip(
-                              label: Text('${entry.key} ${entry.value.length}'),
+                              label: Text(localizedUiText(context, '${entry.key} ${entry.value.length}')),
                               onPressed: () => unawaited(
                                 controller
                                     .toggleGroupReaction(
@@ -9128,7 +9110,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                   if (!outbound && unread) ...[
                     const SizedBox(width: 6),
                     Text(
-                      'new',
+                      localizedUiText(context, 'new'),
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
                         fontFamily: ConestPalette.monoFont,
                         color: palette.unread,
@@ -9139,7 +9121,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                   if (message.isEdited) ...[
                     const SizedBox(width: 6),
                     Text(
-                      'edited',
+                      localizedUiText(context, 'edited'),
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
                         color: outbound
                             ? palette.outboundMeta
@@ -9168,7 +9150,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                   ],
                   PopupMenuButton<String>(
                     key: _messageActionKey(message.id),
-                    tooltip: 'Message actions',
+                    tooltip: localizedUiText(context, 'Message actions'),
                     padding: EdgeInsets.zero,
                     child: const SizedBox.shrink(),
                     onSelected: (value) async {
@@ -9323,16 +9305,16 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           child: Text(l10nOf(context).menuCopyImage),
                         ),
                       if (attachmentAvailable) ...[
-                        const PopupMenuItem(
+                         PopupMenuItem(
                           value: 'attachment_copy_path',
-                          child: Text('Copy cache path'),
+                          child: Text(localizedUiText(context, 'Copy cache path')),
                         ),
                         PopupMenuItem(
                           value: 'attachment_keep_offline',
                           child: Text(
                             controller.attachmentKeptOffline(attachmentDescriptor.id)
-                                ? 'Stop keeping offline'
-                                : 'Keep offline',
+                                ? localizedUiText(context, 'Stop keeping offline')
+                                : localizedUiText(context, 'Keep offline'),
                           ),
                         ),
                         if (!controller.attachmentKeptOffline(attachmentDescriptor.id) &&
@@ -9360,9 +9342,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         ),
                       if (message.groupFile != null &&
                           controller.groupFilePathFor(message.id) != null)
-                        const PopupMenuItem(
+                         PopupMenuItem(
                           value: 'forward_group_file',
-                          child: Text('Forward file'),
+                          child: Text(localizedUiText(context, 'Forward file')),
                         ),
                       if (!message.hasAttachment &&
                           message.groupFile == null &&
@@ -9420,7 +9402,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                 onSearch: _searchMessages,
                 palette: palette,
                 title: group.title,
-                subtitle: '${group.activeMemberDeviceIds.length} members',
+                subtitle: localizedUiText(context, '${group.activeMemberDeviceIds.length} members'),
                 seed: group.groupId,
                 onBack: widget.onBack,
                 onDetails: widget.onShowDetails,
@@ -9453,7 +9435,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            '${group.activeMemberDeviceIds.length} member(s) • owner ${controller.groupMemberLabel(group.ownerDeviceId)}',
+                            localizedUiText(context, '${group.activeMemberDeviceIds.length} member(s) • owner ${controller.groupMemberLabel(group.ownerDeviceId)}'),
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: Theme.of(context).textTheme.bodySmall
@@ -9463,7 +9445,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       ),
                     ),
                     _StatusChip(
-                      label: 'pairwise',
+                      label: localizedUiText(context, 'pairwise'),
                       palette: palette,
                       icon: Icons.lock_outline,
                     ),
@@ -9475,7 +9457,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     IconButton(
                       onPressed: widget.onShowDetails,
                       icon: const Icon(Icons.groups_2_outlined),
-                      tooltip: 'Group details',
+                      tooltip: localizedUiText(context, 'Group details'),
                     ),
                   ],
                 ),
@@ -9523,8 +9505,8 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                               icon: const Icon(Icons.history),
                               label: Text(
                                 _loadingHistory
-                                    ? 'Loading history…'
-                                    : 'Load older messages',
+                                    ? localizedUiText(context, 'Loading history…')
+                                    : localizedUiText(context, 'Load older messages'),
                               ),
                             ),
                           );
@@ -9630,7 +9612,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       if (widget.onAttach != null) ...[
                         PopupMenuButton<String>(
                           enabled: canSend,
-                          tooltip: 'Share or schedule a group file',
+                          tooltip: localizedUiText(context, 'Share or schedule a group file'),
                           icon: const Icon(Icons.attach_file_outlined),
                           onSelected: (action) {
                             if (action == 'schedule') {
@@ -9639,14 +9621,14 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                               widget.onAttach?.call();
                             }
                           },
-                          itemBuilder: (_) => const [
+                          itemBuilder: (_) =>  [
                             PopupMenuItem(
                               value: 'send',
-                              child: Text('Share file now'),
+                              child: Text(localizedUiText(context, 'Share file now')),
                             ),
                             PopupMenuItem(
                               value: 'schedule',
-                              child: Text('Schedule file'),
+                              child: Text(localizedUiText(context, 'Schedule file')),
                             ),
                           ],
                         ),
@@ -9701,20 +9683,20 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                                         : _beginGroupVoiceRecording)
                                   : null,
                               tooltip: foreignRecording
-                                  ? 'Recording belongs to another conversation'
+                                  ? localizedUiText(context, 'Recording belongs to another conversation')
                                   : foreignPreview
-                                  ? 'Finish the voice preview in its original chat'
+                                  ? localizedUiText(context, 'Finish the voice preview in its original chat')
                                   : preview
-                                  ? 'Review unsent voice message'
+                                  ? localizedUiText(context, 'Review unsent voice message')
                                   : _voiceRecordingStarting
-                                  ? 'Cancel microphone startup'
+                                  ? localizedUiText(context, 'Cancel microphone startup')
                                   : _voiceRecordingCancelGesture
-                                  ? 'Release to discard recording'
+                                  ? localizedUiText(context, 'Release to discard recording')
                                   : _voiceRecordingLocked
-                                  ? 'Recording locked · tap to finish'
+                                  ? localizedUiText(context, 'Recording locked · tap to finish')
                                   : recording
-                                  ? 'Release to stop · slide left to cancel · slide up to lock'
-                                  : 'Hold to record a group voice message',
+                                  ? localizedUiText(context, 'Release to stop · slide left to cancel · slide up to lock')
+                                  : localizedUiText(context, 'Hold to record a group voice message'),
                               icon: Icon(
                                 _voiceRecordingCancelGesture
                                     ? Icons.delete_outline
@@ -9743,7 +9725,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                               )
                             : null,
                         icon: const Icon(Icons.poll_outlined),
-                        tooltip: 'Create poll',
+                        tooltip: localizedUiText(context, 'Create poll'),
                       ),
                       Expanded(
                         child: Shortcuts(
@@ -9782,9 +9764,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                               decoration: InputDecoration(
                                 hintText: canSend
                                     ? activeReplyTarget == null
-                                          ? 'Write to group'
-                                          : 'Write a reply'
-                                    : 'You are no longer in this group',
+                                          ? localizedUiText(context, 'Write to group')
+                                          : localizedUiText(context, 'Write a reply')
+                                    : localizedUiText(context, 'You are no longer in this group'),
                               ),
                               onSubmitted: (_) {
                                 if (canSend) {
@@ -9798,7 +9780,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                                 if (widget.onSmartPaste != null) {
                                   items.add(
                                     ContextMenuButtonItem(
-                                      label: 'Paste media',
+                                      label: localizedUiText(context, 'Paste media'),
                                       onPressed: () {
                                         ContextMenuController.removeAny();
                                         widget.onSmartPaste!();
@@ -9824,7 +9806,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       FilledButton.icon(
                         onPressed: canSend ? widget.onSend : null,
                         icon: const Icon(Icons.north_east),
-                        label: const Text('Send'),
+                        label:  Text(localizedUiText(context, 'Send')),
                       ),
                     ],
                   ),
@@ -9870,7 +9852,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                   ),
                   alignment: Alignment.center,
                   child: Text(
-                    'Drop to share this file with the group',
+                    localizedUiText(context, 'Drop to share this file with the group'),
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       color: palette.primary,
                       fontWeight: FontWeight.w700,
@@ -9925,11 +9907,11 @@ class _GroupPollCard extends StatelessWidget {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
+              child:  Text(localizedUiText(context, 'Cancel')),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, selected.toList()),
-              child: const Text('Vote'),
+              child:  Text(localizedUiText(context, 'Vote')),
             ),
           ],
         ),
@@ -9996,7 +9978,7 @@ class _GroupPollCard extends StatelessWidget {
                               textAlign: TextAlign.left,
                             ),
                           ),
-                          Text('${counts[index]}'),
+                          Text(localizedUiText(context, '${counts[index]}')),
                         ],
                       ),
                     ),
@@ -10031,7 +10013,7 @@ class _GroupPollCard extends StatelessWidget {
                     (Object error) => controller.setStatus('$error'),
                   ),
                 ),
-                child: const Text('Choose options'),
+                child:  Text(localizedUiText(context, 'Choose options')),
               ),
             if (canParticipate &&
                 !closed &&
@@ -10041,7 +10023,7 @@ class _GroupPollCard extends StatelessWidget {
                         .isNotEmpty ==
                     true)
               Align(
-                alignment: Alignment.centerRight,
+                alignment: AlignmentDirectional.centerEnd,
                 child: TextButton(
                   onPressed: () => unawaited(
                     controller
@@ -10054,25 +10036,25 @@ class _GroupPollCard extends StatelessWidget {
                           (Object error) => controller.setStatus('$error'),
                         ),
                   ),
-                  child: const Text('Retract vote'),
+                  child:  Text(localizedUiText(context, 'Retract vote')),
                 ),
               ),
             Text(
-              closed ? 'Closed' : 'Visible votes',
+              closed ? localizedUiText(context, 'Closed') : localizedUiText(context, 'Visible votes'),
               style: Theme.of(
                 context,
               ).textTheme.labelSmall?.copyWith(color: palette.inkSoft),
             ),
             if (closed && (projection?.unconfirmedVotes.isNotEmpty ?? false))
               Text(
-                '${projection!.unconfirmedVotes.length} vote(s) were not in the creator’s close checkpoint.',
+                localizedUiText(context, '${projection!.unconfirmedVotes.length} vote(s) were not in the creator’s close checkpoint.'),
                 style: Theme.of(
                   context,
                 ).textTheme.labelSmall?.copyWith(color: palette.inkSoft),
               ),
             if (!canParticipate)
               Text(
-                'Voting is unavailable with this Conest version.',
+                localizedUiText(context, 'Voting is unavailable with this Conest version.'),
                 style: Theme.of(
                   context,
                 ).textTheme.labelSmall?.copyWith(color: palette.inkSoft),
@@ -10081,7 +10063,7 @@ class _GroupPollCard extends StatelessWidget {
                 !closed &&
                 controller.identity?.deviceId == poll.creatorDeviceId)
               Align(
-                alignment: Alignment.centerRight,
+                alignment: AlignmentDirectional.centerEnd,
                 child: TextButton.icon(
                   onPressed: () => unawaited(
                     controller
@@ -10091,7 +10073,7 @@ class _GroupPollCard extends StatelessWidget {
                         ),
                   ),
                   icon: const Icon(Icons.lock_outline, size: 16),
-                  label: const Text('Close poll'),
+                  label:  Text(localizedUiText(context, 'Close poll')),
                 ),
               ),
           ],
@@ -10367,14 +10349,14 @@ class _ChatPanelState extends State<_ChatPanel> {
     final lanActive = lanUp;
     return [
       RouteInspectorPath(
-        label: 'LAN',
+        label: localizedUiText(context, 'LAN'),
         detail: lanUp ? '${rtt(lanRtt)} · 0 hops' : 'unreachable',
         color: palette.primary,
         active: lanActive,
         available: lanUp,
       ),
       RouteInspectorPath(
-        label: 'RELAY',
+        label: localizedUiText(context, 'RELAY'),
         detail: relayUp ? '${rtt(relayRtt)} · 2 hops' : 'unreachable',
         color: palette.secondary,
         active: !lanActive && relayUp,
@@ -10426,8 +10408,8 @@ class _ChatPanelState extends State<_ChatPanel> {
       _flashMessage(target);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not locate this message in the current chat'),
+         SnackBar(
+          content: Text(localizedUiText(context, 'Could not locate this message in the current chat')),
         ),
       );
     }
@@ -10696,16 +10678,16 @@ class _ChatPanelState extends State<_ChatPanel> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete message?'),
+        title:  Text(localizedUiText(context, 'Delete message?')),
         content: Text(
           message.outbound && message.state != DeliveryState.pending
-              ? 'This removes the message here and asks the contact to remove their copy if reachable.'
-              : 'This removes the message from this device.',
+              ? localizedUiText(context, 'This removes the message here and asks the contact to remove their copy if reachable.')
+              : localizedUiText(context, 'This removes the message from this device.'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
+            child:  Text(localizedUiText(context, 'Cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
@@ -10839,7 +10821,7 @@ class _ChatPanelState extends State<_ChatPanel> {
               }
             },
       child: Align(
-        alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
+        alignment: outbound ? AlignmentDirectional.centerEnd : AlignmentDirectional.centerStart,
         child: AnimatedContainer(
           duration: _replyFlashDuration,
           curve: Curves.easeOut,
@@ -10915,7 +10897,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                         children: [
                           for (final entry in message.reactions.entries)
                             ActionChip(
-                              label: Text('${entry.key} ${entry.value.length}'),
+                              label: Text(localizedUiText(context, '${entry.key} ${entry.value.length}')),
                               onPressed: () => unawaited(
                                 controller
                                     .toggleMessageReaction(
@@ -10953,7 +10935,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                   if (!outbound && unread) ...[
                     const SizedBox(width: 6),
                     Text(
-                      'new',
+                      localizedUiText(context, 'new'),
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
                         fontFamily: ConestPalette.monoFont,
                         color: palette.unread,
@@ -10964,7 +10946,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                   if (message.isEdited) ...[
                     const SizedBox(width: 6),
                     Text(
-                      'edited',
+                      localizedUiText(context, 'edited'),
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
                         color: outbound
                             ? palette.outboundMeta
@@ -10985,7 +10967,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                     message,
                   ))
                     IconButton(
-                      tooltip: 'Not delivered yet. Send via Matrix…',
+                      tooltip: localizedUiText(context, 'Not delivered yet. Send via Matrix…'),
                       visualDensity: VisualDensity.compact,
                       iconSize: 16,
                       onPressed: () => _sendViaPlainMatrix(
@@ -11000,7 +10982,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                     const SizedBox(width: 8),
                     Tooltip(
                       message: message.route == MessageRoute.plainMatrix
-                          ? 'Sent as a plain Matrix message'
+                          ? localizedUiText(context, 'Sent as a plain Matrix message')
                           : message.state.label,
                       child: Icon(
                         message.state.icon,
@@ -11011,7 +10993,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                   ],
                   PopupMenuButton<String>(
                     key: _messageActionKey(message.id),
-                    tooltip: 'Message actions',
+                    tooltip: localizedUiText(context, 'Message actions'),
                     padding: EdgeInsets.zero,
                     child: const SizedBox.shrink(),
                     onSelected: (value) async {
@@ -11163,16 +11145,16 @@ class _ChatPanelState extends State<_ChatPanel> {
                           child: Text(l10nOf(context).menuCopyImage),
                         ),
                       if (attachmentAvailable) ...[
-                        const PopupMenuItem(
+                         PopupMenuItem(
                           value: 'attachment_copy_path',
-                          child: Text('Copy cache path'),
+                          child: Text(localizedUiText(context, 'Copy cache path')),
                         ),
                         PopupMenuItem(
                           value: 'attachment_keep_offline',
                           child: Text(
                             controller.attachmentKeptOffline(attachmentDescriptor.id)
-                                ? 'Stop keeping offline'
-                                : 'Keep offline',
+                                ? localizedUiText(context, 'Stop keeping offline')
+                                : localizedUiText(context, 'Keep offline'),
                           ),
                         ),
                         if (!controller.attachmentKeptOffline(attachmentDescriptor.id) &&
@@ -11207,9 +11189,9 @@ class _ChatPanelState extends State<_ChatPanel> {
                         contact.deviceId,
                         message,
                       ))
-                        const PopupMenuItem(
+                         PopupMenuItem(
                           value: 'plain_matrix',
-                          child: Text('Send via Matrix…'),
+                          child: Text(localizedUiText(context, 'Send via Matrix…')),
                         ),
                       if (outbound)
                         PopupMenuItem(
@@ -11275,7 +11257,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                 palette: palette,
                 title: contact.alias,
                 subtitle: saved
-                    ? 'Only on this device'
+                    ? localizedUiText(context, 'Only on this device')
                     : reachabilityState.label,
                 seed: contact.deviceId,
                 onBack: widget.onBack,
@@ -11344,8 +11326,8 @@ class _ChatPanelState extends State<_ChatPanel> {
                               const SizedBox(height: 4),
                               Text(
                                 saved
-                                    ? 'Notes, files and forwards, only on this device'
-                                    : '${contact.routeSummary} • safety ${contact.shortSafetyNumber}',
+                                    ? localizedUiText(context, 'Notes, files and forwards, only on this device')
+                                    : localizedUiText(context, '${contact.routeSummary} • safety ${contact.shortSafetyNumber}'),
                                 maxLines: compactHeader ? 3 : 2,
                                 overflow: TextOverflow.ellipsis,
                                 style: Theme.of(context).textTheme.bodySmall
@@ -11375,14 +11357,14 @@ class _ChatPanelState extends State<_ChatPanel> {
                           () => _routeInspectorOpen = !_routeInspectorOpen,
                         ),
                         icon: const Icon(Icons.route_outlined),
-                        tooltip: 'Route inspector',
+                        tooltip: localizedUiText(context, 'Route inspector'),
                         isSelected: _routeInspectorOpen,
                         color: _routeInspectorOpen ? palette.primary : null,
                       ),
                       IconButton(
                         onPressed: widget.onShowProfile,
                         icon: const Icon(Icons.badge_outlined),
-                        tooltip: 'Contact profile',
+                        tooltip: localizedUiText(context, 'Contact profile'),
                       ),
                       ],
                     ];
@@ -11627,15 +11609,14 @@ class _ChatPanelState extends State<_ChatPanel> {
                               enabled: contact.canComposeOutbound,
                               decoration: InputDecoration(
                                 hintText: !contact.canComposeOutbound
-                                    ? 'This contact request is blocked.'
+                                    ? localizedUiText(context, 'This contact request is blocked.')
                                     : !contact.canSendOutbound
-                                    ? 'Message saved here until the contact accepts.'
+                                    ? localizedUiText(context, 'Message saved here until the contact accepts.')
                                     : activeReplyTarget == null
                                     ? (widget.telegramLayout
-                                          ? 'Message'
-                                          : 'Write an encrypted message')
-                                    : 'Write a reply'
-                                          ' or add a caption',
+                                          ? localizedUiText(context, 'Message')
+                                          : localizedUiText(context, 'Write an encrypted message'))
+                                    : localizedUiText(context, 'Write a reply' ' or add a caption'),
                               ),
                               onSubmitted: (_) => widget.onSend(),
                               contextMenuBuilder: (context, editableTextState) {
@@ -11645,7 +11626,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                                 if (widget.onSmartPaste != null) {
                                   items.add(
                                     ContextMenuButtonItem(
-                                      label: 'Paste media',
+                                      label: localizedUiText(context, 'Paste media'),
                                       onPressed: () {
                                         ContextMenuController.removeAny();
                                         widget.onSmartPaste!();
@@ -11701,20 +11682,20 @@ class _ChatPanelState extends State<_ChatPanel> {
                                 : (_) => unawaited(_releaseVoiceRecording()),
                             child: IconButton(
                               tooltip: foreignRecording
-                                  ? 'Recording belongs to another conversation'
+                                  ? localizedUiText(context, 'Recording belongs to another conversation')
                                   : foreignPreview
-                                  ? 'Finish the voice preview in its original chat'
+                                  ? localizedUiText(context, 'Finish the voice preview in its original chat')
                                   : preview
-                                  ? 'Review unsent voice message'
+                                  ? localizedUiText(context, 'Review unsent voice message')
                                   : _voiceRecordingStarting
-                                  ? 'Cancel microphone startup'
+                                  ? localizedUiText(context, 'Cancel microphone startup')
                                   : _voiceRecordingCancelGesture
-                                  ? 'Release to discard recording'
+                                  ? localizedUiText(context, 'Release to discard recording')
                                   : _voiceRecordingLocked
-                                  ? 'Recording locked · tap to finish'
+                                  ? localizedUiText(context, 'Recording locked · tap to finish')
                                   : recording
-                                  ? 'Release to stop · slide left to cancel · slide up to lock'
-                                  : 'Hold to record a voice message',
+                                  ? localizedUiText(context, 'Release to stop · slide left to cancel · slide up to lock')
+                                  : localizedUiText(context, 'Hold to record a voice message'),
                               onPressed:
                                   contact.canSendOutbound &&
                                       !foreignPreview &&
@@ -11764,7 +11745,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                             ? widget.onSend
                               : null,
                           icon: const Icon(Icons.north_east),
-                          label: const Text('Send'),
+                          label:  Text(localizedUiText(context, 'Send')),
                         ),
                     ],
                   ),
@@ -11814,7 +11795,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                   ),
                   alignment: Alignment.center,
                   child: Text(
-                    'Drop files to send (max ${MessengerController.maxAttachmentsPerSend})',
+                    localizedUiText(context, 'Drop files to send (max ${MessengerController.maxAttachmentsPerSend})'),
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       color: palette.primary,
                       fontWeight: FontWeight.w700,
@@ -11871,20 +11852,20 @@ class _EditMessageDialogState extends State<_EditMessageDialog> {
             maxLines: 6,
             autofocus: true,
             onChanged: (_) => setState(() {}),
-            decoration: const InputDecoration(labelText: 'Message'),
+            decoration:  InputDecoration(labelText: localizedUiText(context, 'Message')),
           ),
         ],
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child:  Text(localizedUiText(context, 'Cancel')),
         ),
         FilledButton(
           onPressed: _controller.text.trim().isEmpty
               ? null
               : () => Navigator.of(context).pop(_controller.text),
-          child: const Text('Save'),
+          child:  Text(localizedUiText(context, 'Save')),
         ),
       ],
     );
@@ -11940,13 +11921,13 @@ class _LanLobbyPanel extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'LAN lobby',
+                          localizedUiText(context, 'LAN lobby'),
                           style: Theme.of(context).textTheme.headlineSmall
                               ?.copyWith(fontWeight: FontWeight.w700),
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          'Free-for-all local chat. Messages are session-signed but people here are not trusted contacts.',
+                          localizedUiText(context, 'Free-for-all local chat. Messages are session-signed but people here are not trusted contacts.'),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodySmall
@@ -11956,7 +11937,7 @@ class _LanLobbyPanel extends StatelessWidget {
                     ),
                   ),
                   _StatusChip(
-                    label: 'LAN only',
+                    label: localizedUiText(context, 'LAN only'),
                     palette: palette,
                     icon: Icons.lan_outlined,
                   ),
@@ -11970,7 +11951,7 @@ class _LanLobbyPanel extends StatelessWidget {
                       child: Padding(
                         padding: const EdgeInsets.all(24),
                         child: Text(
-                          'No LAN lobby messages yet. Nearby Conest peers will receive messages while they are on this LAN.',
+                          localizedUiText(context, 'No LAN lobby messages yet. Nearby Conest peers will receive messages while they are on this LAN.'),
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.bodyMedium
                               ?.copyWith(color: palette.inkSoft),
@@ -11992,8 +11973,8 @@ class _LanLobbyPanel extends StatelessWidget {
                             (outbound ? 'You' : message.senderDeviceId);
                         return Align(
                           alignment: outbound
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
+                              ? AlignmentDirectional.centerEnd
+                              : AlignmentDirectional.centerStart,
                           child: Container(
                             constraints: const BoxConstraints(maxWidth: 560),
                             margin: const EdgeInsets.only(bottom: 12),
@@ -12015,7 +11996,7 @@ class _LanLobbyPanel extends StatelessWidget {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  outbound ? 'You' : '$sender • untrusted',
+                                  outbound ? localizedUiText(context, 'You') : localizedUiText(context, '$sender • untrusted'),
                                   style: Theme.of(context).textTheme.labelSmall
                                       ?.copyWith(
                                         color: outbound
@@ -12048,7 +12029,7 @@ class _LanLobbyPanel extends StatelessWidget {
                                 if (!outbound && unread) ...[
                                   const SizedBox(width: 6),
                                   Text(
-                                    'new',
+                                    localizedUiText(context, 'new'),
                                     style: Theme.of(context)
                                         .textTheme
                                         .labelSmall
@@ -12077,8 +12058,8 @@ class _LanLobbyPanel extends StatelessWidget {
                       controller: composerController,
                       minLines: 1,
                       maxLines: 5,
-                      decoration: const InputDecoration(
-                        hintText: 'Write to nearby LAN users',
+                      decoration:  InputDecoration(
+                        hintText: localizedUiText(context, 'Write to nearby LAN users'),
                       ),
                       onSubmitted: (_) => onSend(),
                     ),
@@ -12087,7 +12068,7 @@ class _LanLobbyPanel extends StatelessWidget {
                   FilledButton.icon(
                     onPressed: onSend,
                     icon: const Icon(Icons.campaign_outlined),
-                    label: const Text('Broadcast'),
+                    label:  Text(localizedUiText(context, 'Broadcast')),
                   ),
                 ],
               ),
@@ -12249,18 +12230,18 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Remove ${widget.contact.alias}?'),
-        content: const Text(
-          'This removes the local contact and message history. The app will also try to send a removal notice so this contact disappears on the other side.',
+        title: Text(localizedUiText(context, 'Remove ${widget.contact.alias}?')),
+        content:  Text(
+          localizedUiText(context, 'This removes the local contact and message history. The app will also try to send a removal notice so this contact disappears on the other side.'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
+            child:  Text(localizedUiText(context, 'Cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Remove'),
+            child:  Text(localizedUiText(context, 'Remove')),
           ),
         ],
       ),
@@ -12295,7 +12276,7 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
       fullscreenOnMobile: widget.fullscreenOnMobile,
       scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-      title: const Text('Contact profile'),
+      title:  Text(localizedUiText(context, 'Contact profile')),
       content: SizedBox(
         width: 680,
         child: SingleChildScrollView(
@@ -12311,7 +12292,7 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
                     width: 260,
                     child: TextField(
                       controller: _aliasController,
-                      decoration: const InputDecoration(labelText: 'Alias'),
+                      decoration:  InputDecoration(labelText: localizedUiText(context, 'Alias')),
                     ),
                   ),
                   SizedBox(
@@ -12320,8 +12301,8 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
                       controller: _bioController,
                       minLines: 1,
                       maxLines: 4,
-                      decoration: const InputDecoration(
-                        labelText: 'Description / bio',
+                      decoration:  InputDecoration(
+                        labelText: localizedUiText(context, 'Description / bio'),
                       ),
                     ),
                   ),
@@ -12355,7 +12336,7 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
                   children: [
                     Expanded(
                       child: Text(
-                        'Available paths',
+                        localizedUiText(context, 'Available paths'),
                         style: Theme.of(context).textTheme.titleMedium
                             ?.copyWith(fontWeight: FontWeight.w700),
                       ),
@@ -12363,7 +12344,7 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
                     OutlinedButton.icon(
                       onPressed: _busy ? null : _checkPaths,
                       icon: const Icon(Icons.network_check),
-                      label: const Text('Check Paths'),
+                      label:  Text(localizedUiText(context, 'Check Paths')),
                     ),
                     const SizedBox(width: 8),
                     OutlinedButton.icon(
@@ -12371,21 +12352,21 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
                           ? null
                           : _copyPathState,
                       icon: const Icon(Icons.copy),
-                      label: const Text('Copy State'),
+                      label:  Text(localizedUiText(context, 'Copy State')),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
                 if (checks == null)
                   Text(
-                    'Run a check to measure latency, availability, and reachability freshness. Paths are sorted by best direct/LAN route first, then relay fallback.',
+                    localizedUiText(context, 'Run a check to measure latency, availability, and reachability freshness. Paths are sorted by best direct/LAN route first, then relay fallback.'),
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: widget.palette.inkSoft,
                     ),
                   )
                 else if (checks.isEmpty)
                   Text(
-                    'No route hints are advertised for this contact.',
+                    localizedUiText(context, 'No route hints are advertised for this contact.'),
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: widget.palette.inkSoft,
                     ),
@@ -12423,15 +12404,15 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
       actions: [
         TextButton(
           onPressed: _busy ? null : _confirmRemove,
-          child: const Text('Remove Contact'),
+          child:  Text(localizedUiText(context, 'Remove Contact')),
         ),
         TextButton(
           onPressed: _busy ? null : () => Navigator.of(context).pop(),
-          child: const Text('Close'),
+          child:  Text(localizedUiText(context, 'Close')),
         ),
         FilledButton(
           onPressed: _busy ? null : _saveProfile,
-          child: const Text('Save Profile'),
+          child:  Text(localizedUiText(context, 'Save Profile')),
         ),
       ],
     );
@@ -12587,7 +12568,7 @@ class _AddContactDialogState extends State<AddContactDialog> {
                 controller: widget.controller,
                 palette: widget.palette,
                 message:
-                    'Connectivity is off. Turn on LAN or Online to exchange this invite.',
+                    localizedUiText(context, 'Connectivity is off. Turn on LAN or Online to exchange this invite.'),
               ),
               TextField(
                 controller: _aliasController,
@@ -12609,7 +12590,7 @@ class _AddContactDialogState extends State<AddContactDialog> {
               if (widget.controller.supportsScanner) ...[
                 const SizedBox(height: 12),
                 Align(
-                  alignment: Alignment.centerLeft,
+                  alignment: AlignmentDirectional.centerStart,
                   child: OutlinedButton.icon(
                     onPressed: _scanPayload,
                     icon: const Icon(Icons.qr_code_scanner),
@@ -12627,9 +12608,9 @@ class _AddContactDialogState extends State<AddContactDialog> {
               ),
               const SizedBox(height: 12),
               Align(
-                alignment: Alignment.centerLeft,
+                alignment: AlignmentDirectional.centerStart,
                 child: Text(
-                  'Either input is enough on its own. Scan or paste a QR invite to trust it directly, or enter only the current codephrase to discover the sender over nearby LAN routes or the configured relay. If automatic exchange fails, the app will suggest asking the other side to add you back or aborting.',
+                  localizedUiText(context, 'Either input is enough on its own. Scan or paste a QR invite to trust it directly, or enter only the current codephrase to discover the sender over nearby LAN routes or the configured relay. If automatic exchange fails, the app will suggest asking the other side to add you back or aborting.'),
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: widget.palette.inkSoft,
                   ),
@@ -12638,9 +12619,9 @@ class _AddContactDialogState extends State<AddContactDialog> {
               if (preview != null) ...[
                 const SizedBox(height: 16),
                 Align(
-                  alignment: Alignment.centerLeft,
+                  alignment: AlignmentDirectional.centerStart,
                   child: Text(
-                    'Invite preview',
+                    localizedUiText(context, 'Invite preview'),
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
@@ -12648,9 +12629,9 @@ class _AddContactDialogState extends State<AddContactDialog> {
                 ),
                 const SizedBox(height: 8),
                 Align(
-                  alignment: Alignment.centerLeft,
+                  alignment: AlignmentDirectional.centerStart,
                   child: Text(
-                    '${preview.displayName}${preview.bio.isEmpty ? '' : ' • ${preview.bio}'} • ${preview.routeHints.isEmpty ? 'no routes advertised' : preview.routeHints.map((route) => '${route.kind.name}:${route.label}').join(' • ')}',
+                    localizedUiText(context, '${preview.displayName}${preview.bio.isEmpty ? '' : ' • ${preview.bio}'} • ${preview.routeHints.isEmpty ? 'no routes advertised' : preview.routeHints.map((route) => '${route.kind.name}:${route.label}').join(' • ')}'),
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: widget.palette.inkSoft,
                     ),
@@ -12660,7 +12641,7 @@ class _AddContactDialogState extends State<AddContactDialog> {
               if (_error != null) ...[
                 const SizedBox(height: 12),
                 Align(
-                  alignment: Alignment.centerLeft,
+                  alignment: AlignmentDirectional.centerStart,
                   child: Text(
                     _error!,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -12856,7 +12837,7 @@ class _InviteScreenState extends State<InviteScreen> {
                           children: [
                             Expanded(
                               child: Text(
-                                'Share invite',
+                                localizedUiText(context, 'Share invite'),
                                 style: Theme.of(context).textTheme.headlineSmall
                                     ?.copyWith(fontWeight: FontWeight.w700),
                               ),
@@ -12864,7 +12845,7 @@ class _InviteScreenState extends State<InviteScreen> {
                             IconButton(
                               onPressed: () => Navigator.of(context).pop(),
                               icon: const Icon(Icons.close),
-                              tooltip: 'Close',
+                              tooltip: localizedUiText(context, 'Close'),
                             ),
                           ],
                         ),
@@ -12873,18 +12854,14 @@ class _InviteScreenState extends State<InviteScreen> {
                           controller: widget.controller,
                           palette: palette,
                           message:
-                              'Connectivity is off. Turn on LAN or Online before sharing this invite.',
+                              localizedUiText(context, 'Connectivity is off. Turn on LAN or Online before sharing this invite.'),
                         ),
                         if (!widget.controller.invitesReachOverInternet)
                           Padding(
                             key: const ValueKey('invite-lan-only'),
                             padding: const EdgeInsets.only(bottom: 12),
                             child: Text(
-                              'This invite works only on the same network: '
-                              'no internet route is on. Turn on Iroh relays, '
-                              'a Conest relay or a carrier (Nostr, email) in '
-                              'Settings → Connectivity so contacts can add you '
-                              'from anywhere.',
+                              localizedUiText(context, 'This invite works only on the same network: ' 'no internet route is on. Turn on Iroh relays, ' 'a Conest relay or a carrier (Nostr, email) in ' 'Settings → Connectivity so contacts can add you ' 'from anywhere.'),
                               style: TextStyle(
                                 color: Theme.of(context).colorScheme.error,
                               ),
@@ -12909,11 +12886,7 @@ class _InviteScreenState extends State<InviteScreen> {
                                 ),
                                 const SizedBox(height: 10),
                                 Text(
-                                  'This invite also lists your routes for '
-                                  'blocked networks, which makes it too large '
-                                  'for one QR code. Show it as Beam, an '
-                                  'animated QR the other camera reads in a '
-                                  'few seconds.',
+                                  localizedUiText(context, 'This invite also lists your routes for ' 'blocked networks, which makes it too large ' 'for one QR code. Show it as Beam, an ' 'animated QR the other camera reads in a ' 'few seconds.'),
                                   textAlign: TextAlign.center,
                                   style: Theme.of(context).textTheme.bodyMedium,
                                 ),
@@ -12921,12 +12894,12 @@ class _InviteScreenState extends State<InviteScreen> {
                                 FilledButton.icon(
                                   onPressed: _showAsBeam,
                                   icon: const Icon(Icons.animation_outlined),
-                                  label: const Text('Show as Beam'),
+                                  label:  Text(localizedUiText(context, 'Show as Beam')),
                                 ),
                                 TextButton(
                                   onPressed: () =>
                                       setState(() => _qrDespiteSize = true),
-                                  child: const Text('Show the QR anyway'),
+                                  child:  Text(localizedUiText(context, 'Show the QR anyway')),
                                 ),
                               ],
                             ),
@@ -12974,12 +12947,12 @@ class _InviteScreenState extends State<InviteScreen> {
                                   OutlinedButton.icon(
                                     onPressed: _openFullscreenQr,
                                     icon: const Icon(Icons.open_in_full),
-                                    label: const Text('Open Fullscreen QR'),
+                                    label:  Text(localizedUiText(context, 'Open Fullscreen QR')),
                                   ),
                                   OutlinedButton.icon(
                                     onPressed: _showAsBeam,
                                     icon: const Icon(Icons.animation_outlined),
-                                    label: const Text('Show as Beam'),
+                                    label:  Text(localizedUiText(context, 'Show as Beam')),
                                   ),
                                 ],
                               ),
@@ -13003,14 +12976,14 @@ class _InviteScreenState extends State<InviteScreen> {
                                 ),
                                 const SizedBox(height: 10),
                                 Text(
-                                  'QR rendering is deferred on Windows.',
+                                  localizedUiText(context, 'QR rendering is deferred on Windows.'),
                                   textAlign: TextAlign.center,
                                   style: Theme.of(context).textTheme.bodyMedium
                                       ?.copyWith(fontWeight: FontWeight.w700),
                                 ),
                                 const SizedBox(height: 8),
                                 Text(
-                                  'Use the codephrase below, or render the QR after this page is open.',
+                                  localizedUiText(context, 'Use the codephrase below, or render the QR after this page is open.'),
                                   textAlign: TextAlign.center,
                                   style: Theme.of(context).textTheme.bodySmall
                                       ?.copyWith(color: palette.inkSoft),
@@ -13020,7 +12993,7 @@ class _InviteScreenState extends State<InviteScreen> {
                                   onPressed: () =>
                                       setState(() => _showQr = true),
                                   icon: const Icon(Icons.qr_code_2),
-                                  label: const Text('Show QR'),
+                                  label:  Text(localizedUiText(context, 'Show QR')),
                                 ),
                               ],
                             ),
@@ -13048,14 +13021,14 @@ class _InviteScreenState extends State<InviteScreen> {
                         ),
                         const SizedBox(height: 12),
                         Text(
-                          'Scanning the compact QR is enough on its own. If the camera still struggles, open it full screen or use only the current codephrase.',
+                          localizedUiText(context, 'Scanning the compact QR is enough on its own. If the camera still struggles, open it full screen or use only the current codephrase.'),
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(color: palette.inkSoft),
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          'QR payload: ${_payload.length} characters',
+                          localizedUiText(context, 'QR payload: ${_payload.length} characters'),
                           style: Theme.of(context).textTheme.labelSmall
                               ?.copyWith(color: palette.inkSoft),
                         ),
@@ -13063,8 +13036,7 @@ class _InviteScreenState extends State<InviteScreen> {
                           const SizedBox(height: 6),
                           if (!_legacy)
                             Text(
-                              'Also lists your addresses on: '
-                              '${_invite.carrierHints.keys.map((kind) => kind.label).join(', ')}.',
+                              localizedUiText(context, 'Also lists your addresses on: ' '${_invite.carrierHints.keys.map((kind) => kind.label).join(', ')}.'),
                               textAlign: TextAlign.center,
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(color: palette.inkSoft),
@@ -13073,11 +13045,9 @@ class _InviteScreenState extends State<InviteScreen> {
                             key: const ValueKey('invite-legacy'),
                             contentPadding: EdgeInsets.zero,
                             dense: true,
-                            title: const Text('Legacy invite'),
-                            subtitle: const Text(
-                              'For contacts on Conest 0.3.11 or older. It '
-                              'leaves out your routes for blocked networks; '
-                              'they arrive once you are connected.',
+                            title:  Text(localizedUiText(context, 'Legacy invite')),
+                            subtitle:  Text(
+                              localizedUiText(context, 'For contacts on Conest 0.3.11 or older. It ' 'leaves out your routes for blocked networks; ' 'they arrive once you are connected.'),
                             ),
                             value: _legacy,
                             onChanged: (value) =>
@@ -13095,7 +13065,7 @@ class _InviteScreenState extends State<InviteScreen> {
                                   ),
                                 )
                               : const Icon(Icons.refresh),
-                          label: const Text('Rotate Codephrase Now'),
+                          label:  Text(localizedUiText(context, 'Rotate Codephrase Now')),
                         ),
                         if (_error != null) ...[
                           const SizedBox(height: 10),
@@ -13202,7 +13172,7 @@ class _BeamHubScreenState extends State<BeamHubScreen> {
   Future<ContactRecord?> _chooseContact() => showDialog<ContactRecord>(
     context: context,
     builder: (context) => SimpleDialog(
-      title: const Text('Encrypt for contact'),
+      title:  Text(localizedUiText(context, 'Encrypt for contact')),
       children: [
         for (final contact in widget.controller.contacts.where(
           (entry) => entry.canSendOutbound && entry.hasPinnedIrohIdentity,
@@ -13218,15 +13188,15 @@ class _BeamHubScreenState extends State<BeamHubScreen> {
                 size: 36,
               ),
               title: Text(contact.alias),
-              subtitle: Text('Pinned · ${contact.shortSafetyNumber}'),
+              subtitle: Text(localizedUiText(context, 'Pinned · ${contact.shortSafetyNumber}')),
             ),
           ),
         if (!widget.controller.contacts.any(
           (entry) => entry.canSendOutbound && entry.hasPinnedIrohIdentity,
         ))
-          const Padding(
+           Padding(
             padding: EdgeInsets.all(20),
-            child: Text('No verified ci6 contacts are available yet.'),
+            child: Text(localizedUiText(context, 'No verified ci6 contacts are available yet.')),
           ),
       ],
     ),
@@ -13236,19 +13206,18 @@ class _BeamHubScreenState extends State<BeamHubScreen> {
     final allowed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Public optical transfer'),
-        content: const Text(
-          'Anyone who can see the display may reconstruct this file. It is '
-          'signed for integrity but it is not confidential.',
+        title:  Text(localizedUiText(context, 'Public optical transfer')),
+        content:  Text(
+          localizedUiText(context, 'Anyone who can see the display may reconstruct this file. It is ' 'signed for integrity but it is not confidential.'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
+            child:  Text(localizedUiText(context, 'Cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Choose public file'),
+            child:  Text(localizedUiText(context, 'Choose public file')),
           ),
         ],
       ),
@@ -13322,30 +13291,28 @@ class _BeamHubScreenState extends State<BeamHubScreen> {
   Widget build(BuildContext context) {
     final palette = widget.palette;
     return Scaffold(
-      appBar: AppBar(title: const Text('Conest Beam')),
+      appBar: AppBar(title:  Text(localizedUiText(context, 'Conest Beam'))),
       body: DecoratedBox(
         decoration: BoxDecoration(gradient: palette.appGradient),
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
             Text(
-              'Close-up transfer',
+              localizedUiText(context, 'Close-up transfer'),
               style: Theme.of(
                 context,
               ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
             Text(
-              'A looping LT fountain stream survives missed, duplicate, and '
-              'out-of-order QR frames. The final file is hash-checked before '
-              'you can accept it.',
+              localizedUiText(context, 'A looping LT fountain stream survives missed, duplicate, and ' 'out-of-order QR frames. The final file is hash-checked before ' 'you can accept it.'),
               style: TextStyle(color: palette.inkSoft),
             ),
             const SizedBox(height: 20),
             _BeamActionCard(
               palette: palette,
               icon: Icons.download_outlined,
-              title: 'Receive Beam',
+              title: localizedUiText(context, 'Receive Beam'),
               detail: widget.controller.supportsScanner
                   ? 'Scan animated frames and review before import.'
                   : 'Uses the native desktop camera when bundled, with manual cb1 input as a fallback.',
@@ -13354,14 +13321,14 @@ class _BeamHubScreenState extends State<BeamHubScreen> {
             _BeamActionCard(
               palette: palette,
               icon: Icons.lock_outline,
-              title: 'Send encrypted file',
+              title: localizedUiText(context, 'Send encrypted file'),
               detail: 'Pairwise encrypted for a verified ci6 contact.',
               onTap: _busy ? null : _prepareEncrypted,
             ),
             _BeamActionCard(
               palette: palette,
               icon: Icons.public,
-              title: 'Send public file',
+              title: localizedUiText(context, 'Send public file'),
               detail: 'Not confidential. The receiver must explicitly accept.',
               warning: true,
               onTap: _busy ? null : _preparePublic,
@@ -13369,7 +13336,7 @@ class _BeamHubScreenState extends State<BeamHubScreen> {
             _BeamActionCard(
               palette: palette,
               icon: Icons.person_add_alt_1,
-              title: 'Beam contact invite',
+              title: localizedUiText(context, 'Beam contact invite'),
               detail: 'Signed ci6 invite with a fingerprint comparison.',
               onTap: _busy ? null : _prepareInvite,
             ),
@@ -13495,10 +13462,10 @@ class _BeamSenderScreenState extends State<BeamSenderScreen> {
                 const SizedBox(height: 12),
                 Text(
                   public
-                      ? 'PUBLIC · visible to anyone nearby'
+                      ? localizedUiText(context, 'PUBLIC · visible to anyone nearby')
                       : manifest.mode == BeamMode.contactEncrypted
-                      ? 'CONTACT ENCRYPTED'
-                      : 'SIGNED CONTACT INVITE',
+                      ? localizedUiText(context, 'CONTACT ENCRYPTED')
+                      : localizedUiText(context, 'SIGNED CONTACT INVITE'),
                   style: TextStyle(
                     color: public ? Colors.red.shade700 : Colors.black87,
                     fontWeight: FontWeight.w800,
@@ -13507,9 +13474,7 @@ class _BeamSenderScreenState extends State<BeamSenderScreen> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'Frame ${widget.transfer.encoder.frameIndex} · '
-                  '${widget.transfer.encoder.sourceBlockCount} source blocks · '
-                  '${manifest.senderFingerprint}',
+                  localizedUiText(context, 'Frame ${widget.transfer.encoder.frameIndex} · ' '${widget.transfer.encoder.sourceBlockCount} source blocks · ' '${manifest.senderFingerprint}'),
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: Colors.black54,
@@ -13517,8 +13482,8 @@ class _BeamSenderScreenState extends State<BeamSenderScreen> {
                   ),
                 ),
                 const SizedBox(height: 6),
-                const Text(
-                  'Keep this screen visible until the receiver reports 100%.',
+                 Text(
+                  localizedUiText(context, 'Keep this screen visible until the receiver reports 100%.'),
                   style: TextStyle(color: Colors.black87),
                 ),
               ],
@@ -13702,7 +13667,7 @@ class _BeamReceiverScreenState extends State<BeamReceiverScreen> {
   Widget build(BuildContext context) {
     final result = _result;
     return Scaffold(
-      appBar: AppBar(title: const Text('Receive Conest Beam')),
+      appBar: AppBar(title:  Text(localizedUiText(context, 'Receive Conest Beam'))),
       body: result == null
           ? Column(
               children: [
@@ -13727,14 +13692,13 @@ class _BeamReceiverScreenState extends State<BeamReceiverScreen> {
                               color: widget.palette.primary,
                             ),
                             const SizedBox(height: 16),
-                            const Text(
-                              'Desktop camera active',
+                             Text(
+                              localizedUiText(context, 'Desktop camera active'),
                               style: TextStyle(fontWeight: FontWeight.w700),
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              'Point this camera at the animated Beam QR. '
-                              'Only decoded cb1 frames leave the native scanner.',
+                              localizedUiText(context, 'Point this camera at the animated Beam QR. ' 'Only decoded cb1 frames leave the native scanner.'),
                               textAlign: TextAlign.center,
                               style: TextStyle(color: widget.palette.inkSoft),
                             ),
@@ -13749,9 +13713,7 @@ class _BeamReceiverScreenState extends State<BeamReceiverScreen> {
                       child: Padding(
                         padding: const EdgeInsets.all(24),
                         child: Text(
-                          'Native desktop camera capture is unavailable. Paste '
-                          'cb1 frames below; the protocol decoder and '
-                          'verification path are identical.',
+                          localizedUiText(context, 'Native desktop camera capture is unavailable. Paste ' 'cb1 frames below; the protocol decoder and ' 'verification path are identical.'),
                           textAlign: TextAlign.center,
                           style: TextStyle(color: widget.palette.inkSoft),
                         ),
@@ -13765,9 +13727,7 @@ class _BeamReceiverScreenState extends State<BeamReceiverScreen> {
                       LinearProgressIndicator(value: _progress.fraction),
                       const SizedBox(height: 8),
                       Text(
-                        '${_progress.solvedBlocks}/${_progress.sourceBlockCount} '
-                        'blocks · ${_progress.distinctFrames} frames · '
-                        '$_invalidFrames invalid',
+                        localizedUiText(context, '${_progress.solvedBlocks}/${_progress.sourceBlockCount} ' 'blocks · ${_progress.distinctFrames} frames · ' '$_invalidFrames invalid'),
                       ),
                       if (_scanner == null) ...[
                         const SizedBox(height: 10),
@@ -13775,8 +13735,8 @@ class _BeamReceiverScreenState extends State<BeamReceiverScreen> {
                           controller: _frameController,
                           minLines: 2,
                           maxLines: 4,
-                          decoration: const InputDecoration(
-                            labelText: 'Paste one cb1 frame',
+                          decoration:  InputDecoration(
+                            labelText: localizedUiText(context, 'Paste one cb1 frame'),
                           ),
                         ),
                         const SizedBox(height: 8),
@@ -13785,7 +13745,7 @@ class _BeamReceiverScreenState extends State<BeamReceiverScreen> {
                             _addFrame(_frameController.text);
                             _frameController.clear();
                           },
-                          child: const Text('Add frame'),
+                          child:  Text(localizedUiText(context, 'Add frame')),
                         ),
                       ],
                       if (_error != null) ...[
@@ -13858,7 +13818,7 @@ class _BeamApprovalView extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         Text(
-          invite != null ? 'Signed contact invite' : manifest.fileName,
+          invite != null ? localizedUiText(context, 'Signed contact invite') : manifest.fileName,
           textAlign: TextAlign.center,
           style: Theme.of(
             context,
@@ -13867,11 +13827,10 @@ class _BeamApprovalView extends StatelessWidget {
         const SizedBox(height: 8),
         Text(
           public
-              ? 'PUBLIC / UNTRUSTED. The signature proves that all frames '
-                    'came from one key; it does not prove who owns that key.'
+              ? localizedUiText(context, 'PUBLIC / UNTRUSTED. The signature proves that all frames ' 'came from one key; it does not prove who owns that key.')
               : result.contactTrusted
-              ? 'Encrypted and authenticated as a pinned Conest contact.'
-              : 'Signature valid. Compare the fingerprint in person.',
+              ? localizedUiText(context, 'Encrypted and authenticated as a pinned Conest contact.')
+              : localizedUiText(context, 'Signature valid. Compare the fingerprint in person.'),
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: 12),
@@ -13887,30 +13846,30 @@ class _BeamApprovalView extends StatelessWidget {
           const SizedBox(height: 18),
           TextField(
             controller: aliasController,
-            decoration: const InputDecoration(labelText: 'Contact alias'),
+            decoration:  InputDecoration(labelText: localizedUiText(context, 'Contact alias')),
           ),
           CheckboxListTile(
             value: fingerprintCompared,
             onChanged: (value) => onFingerprintChanged(value ?? false),
-            title: const Text('We compared this fingerprint in person'),
+            title:  Text(localizedUiText(context, 'We compared this fingerprint in person')),
             contentPadding: EdgeInsets.zero,
           ),
           FilledButton.icon(
             onPressed: saving || !fingerprintCompared ? null : onAcceptInvite,
             icon: const Icon(Icons.person_add_alt_1),
-            label: const Text('Trust and add contact'),
+            label:  Text(localizedUiText(context, 'Trust and add contact')),
           ),
         ] else ...[
           const SizedBox(height: 18),
           FilledButton.icon(
             onPressed: saving || savedPath != null ? null : onSave,
             icon: const Icon(Icons.save_alt),
-            label: Text(public ? 'Accept and save public file' : 'Save file'),
+            label: Text(public ? localizedUiText(context, 'Accept and save public file') : localizedUiText(context, 'Save file')),
           ),
         ],
         if (savedPath != null) ...[
           const SizedBox(height: 12),
-          const Text('Saved in private Conest storage:'),
+           Text(localizedUiText(context, 'Saved in private Conest storage:')),
           SelectableText(savedPath!),
         ],
         if (error != null) ...[
@@ -13971,11 +13930,11 @@ class FullscreenQrScreen extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Align(
-                      alignment: Alignment.centerRight,
+                      alignment: AlignmentDirectional.centerEnd,
                       child: IconButton(
                         onPressed: () => Navigator.of(context).pop(),
                         icon: const Icon(Icons.close),
-                        tooltip: 'Close',
+                        tooltip: localizedUiText(context, 'Close'),
                       ),
                     ),
                     QrImageView(
@@ -13994,7 +13953,7 @@ class FullscreenQrScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 18),
                     Text(
-                      'Fullscreen compact invite QR',
+                      localizedUiText(context, 'Fullscreen compact invite QR'),
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         color: Colors.black,
@@ -14012,7 +13971,7 @@ class FullscreenQrScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      '${payload.length} characters. Increase screen brightness if scanning is unreliable.',
+                      localizedUiText(context, '${payload.length} characters. Increase screen brightness if scanning is unreliable.'),
                       textAlign: TextAlign.center,
                       style: Theme.of(
                         context,
@@ -14061,7 +14020,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
   late final TextEditingController _bioController;
   final TextEditingController _relayHostController = TextEditingController();
   final TextEditingController _relayPortController = TextEditingController(
-    text: '$defaultRelayPort',
+    text: localizedUiText(context, '$defaultRelayPort'),
   );
   late final TextEditingController _localRelayPortController;
   late final TextEditingController _irohRelayUrlsController;
@@ -14077,7 +14036,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     );
     _bioController = TextEditingController(text: identity?.bio ?? '');
     _localRelayPortController = TextEditingController(
-      text: '${identity?.localRelayPort ?? defaultRelayPort}',
+      text: localizedUiText(context, '${identity?.localRelayPort ?? defaultRelayPort}'),
     );
     _irohRelayUrlsController = TextEditingController(
       text: identity?.connectivity.irohRelayUrls.join('\n') ?? '',
@@ -14140,18 +14099,18 @@ class _SettingsDialogState extends State<SettingsDialog> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Reset identity'),
-        content: const Text(
-          'This clears the encrypted vault, removes contacts and messages, and returns the app to the first-launch state.',
+        title:  Text(localizedUiText(context, 'Reset identity')),
+        content:  Text(
+          localizedUiText(context, 'This clears the encrypted vault, removes contacts and messages, and returns the app to the first-launch state.'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
+            child:  Text(localizedUiText(context, 'Cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Reset'),
+            child:  Text(localizedUiText(context, 'Reset')),
           ),
         ],
       ),
@@ -14188,7 +14147,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       content: SizedBox(
         width: 720,
         child: identity == null
-            ? const Text('No identity is active.')
+            ?  Text(localizedUiText(context, 'No identity is active.'))
             : SingleChildScrollView(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -14208,25 +14167,25 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               'Danger',
                             ])
                               Padding(
-                                padding: const EdgeInsets.only(right: 8),
+                                padding: const EdgeInsetsDirectional.only(end: 8),
                                 child: ChoiceChip(
                                   label: Text(switch (category) {
-                                    'Personal / Preferences' => l10nOf(
+                                    localizedUiText(context, 'Personal / Preferences') => l10nOf(
                                       context,
                                     ).settingsPersonal,
-                                    'Storage' => l10nOf(
+                                    localizedUiText(context, 'Storage') => l10nOf(
                                       context,
                                     ).settingsStorage,
-                                    'Connectivity' => l10nOf(
+                                    localizedUiText(context, 'Connectivity') => l10nOf(
                                       context,
                                     ).settingsConnectivity,
-                                    'Network / Relay' => l10nOf(
+                                    localizedUiText(context, 'Network / Relay') => l10nOf(
                                       context,
                                     ).settingsRelays,
-                                    'Updates' => l10nOf(
+                                    localizedUiText(context, 'Updates') => l10nOf(
                                       context,
                                     ).settingsUpdates,
-                                    'Danger' => l10nOf(context).settingsAccount,
+                                    localizedUiText(context, 'Danger') => l10nOf(context).settingsAccount,
                                     _ => category,
                                   }),
                                   selected: _settingsCategory == category,
@@ -14279,8 +14238,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   width: 280,
                                   child: TextField(
                                     controller: _displayNameController,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Display name',
+                                    decoration:  InputDecoration(
+                                      labelText: localizedUiText(context, 'Display name'),
                                     ),
                                   ),
                                 ),
@@ -14293,7 +14252,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                                 _displayNameController.text,
                                               ),
                                         ),
-                                  child: const Text('Save Name'),
+                                  child:  Text(localizedUiText(context, 'Save Name')),
                                 ),
                               ],
                             ),
@@ -14309,8 +14268,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     controller: _bioController,
                                     minLines: 1,
                                     maxLines: 4,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Description / bio',
+                                    decoration:  InputDecoration(
+                                      labelText: localizedUiText(context, 'Description / bio'),
                                     ),
                                   ),
                                 ),
@@ -14322,7 +14281,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             _bioController.text,
                                           ),
                                         ),
-                                  child: const Text('Save Bio'),
+                                  child:  Text(localizedUiText(context, 'Save Bio')),
                                 ),
                               ],
                             ),
@@ -14336,9 +14295,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                       () => widget.controller
                                           .updateNotificationsEnabled(value),
                                     ),
-                              title: const Text('Message notifications'),
-                              subtitle: const Text(
-                                'Show a system notification when a direct message arrives.',
+                              title:  Text(localizedUiText(context, 'Message notifications')),
+                              subtitle:  Text(
+                                localizedUiText(context, 'Show a system notification when a direct message arrives.'),
                               ),
                             ),
                             if (widget
@@ -14364,7 +14323,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             value,
                                           ),
                                     ),
-                              title: const Text('Experimental voice calls'),
+                              title:  Text(localizedUiText(context, 'Experimental voice calls')),
                               subtitle: Text(
                                 widget
                                             .controller
@@ -14372,8 +14331,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             ?.media
                                             .available ==
                                         true
-                                    ? 'Allows one-to-one Iroh voice calls on this device. Turn off to stop placing and receiving calls.'
-                                    : 'Voice-call audio is unavailable in this build.',
+                                    ? localizedUiText(context, 'Allows one-to-one Iroh voice calls on this device. Turn off to stop placing and receiving calls.')
+                                    : localizedUiText(context, 'Voice-call audio is unavailable in this build.'),
                               ),
                             ),
                             if (!kIsWeb && Platform.isAndroid)
@@ -14392,11 +14351,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                               value,
                                             ),
                                       ),
-                                title: const Text(
-                                  'Experimental Android background receive',
+                                title:  Text(
+                                  localizedUiText(context, 'Experimental Android background receive'),
                                 ),
-                                subtitle: const Text(
-                                  'Disabled in release builds: the foreground service does not yet host a headless Flutter receiver.',
+                                subtitle:  Text(
+                                  localizedUiText(context, 'Disabled in release builds: the foreground service does not yet host a headless Flutter receiver.'),
                                 ),
                               ),
                             if (!kIsWeb &&
@@ -14430,11 +14389,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                               value,
                                             ),
                                       ),
-                                title: const Text(
-                                  'Allow voice calls in background',
+                                title:  Text(
+                                  localizedUiText(context, 'Allow voice calls in background'),
                                 ),
-                                subtitle: const Text(
-                                  'Keeps call signaling active and shows an ongoing call notification while the Conest service runs. Requires Experimental voice calls; Android battery policy or force-stop can still end availability.',
+                                subtitle:  Text(
+                                  localizedUiText(context, 'Keeps call signaling active and shows an ongoing call notification while the Conest service runs. Requires Experimental voice calls; Android battery policy or force-stop can still end availability.'),
                                 ),
                               ),
                             if (kDebugMode)
@@ -14447,28 +14406,25 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                         () => widget.controller
                                             .updateSuppressReadReceipts(value),
                                       ),
-                                title: const Text(
-                                  "Don't send read confirmations",
+                                title:  Text(
+                                  localizedUiText(context, "Don't send read confirmations"),
                                 ),
-                                subtitle: const Text(
-                                  'Debug-only. Delivery acknowledgements still send; incoming read confirmations are still processed.',
+                                subtitle:  Text(
+                                  localizedUiText(context, 'Debug-only. Delivery acknowledgements still send; incoming read confirmations are still processed.'),
                                 ),
                               ),
                             const SizedBox(height: 12),
                             Text(
-                              'Privacy of files you send',
+                              localizedUiText(context, 'Privacy of files you send'),
                               style: Theme.of(context).textTheme.titleSmall,
                             ),
                             SwitchListTile.adaptive(
                               key: const ValueKey('strip-file-metadata'),
                               contentPadding: EdgeInsets.zero,
                               value: widget.controller.removesFileMetadata,
-                              title: const Text('Remove metadata from files'),
-                              subtitle: const Text(
-                                'Before sending, removes location, camera, '
-                                'author and date details from photos, videos, '
-                                'PDFs and office documents. Pictures are not '
-                                're-compressed. Other files are sent as they are.',
+                              title:  Text(localizedUiText(context, 'Remove metadata from files')),
+                              subtitle:  Text(
+                                localizedUiText(context, 'Before sending, removes location, camera, ' 'author and date details from photos, videos, ' 'PDFs and office documents. Pictures are not ' 're-compressed. Other files are sent as they are.'),
                               ),
                               onChanged: (value) => unawaited(
                                 widget.controller
@@ -14482,13 +14438,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               key: const ValueKey('random-file-names'),
                               contentPadding: EdgeInsets.zero,
                               value: widget.controller.randomizesFileNames,
-                              title: const Text(
-                                'Send files under random names',
+                              title:  Text(
+                                localizedUiText(context, 'Send files under random names'),
                               ),
-                              subtitle: const Text(
-                                'Replaces file names with random letters (the '
-                                'type, such as .jpg, stays), for you and the '
-                                'recipient.',
+                              subtitle:  Text(
+                                localizedUiText(context, 'Replaces file names with random letters (the ' 'type, such as .jpg, stays), for you and the ' 'recipient.'),
                               ),
                               onChanged: (value) => unawaited(
                                 widget.controller
@@ -14514,7 +14468,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     if (!categorized ||
                         _settingsCategory == 'Personal / Preferences') ...[
                       _SettingsSection(
-                        title: 'Devices',
+                        title: localizedUiText(context, 'Devices'),
                         palette: widget.palette,
                         child: DevicesPanel(
                           controller: widget.controller,
@@ -14543,9 +14497,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   () => widget.controller
                                       .updateStorageReserveEnabled(value),
                                 ),
-                          title: const Text('Keep 10% of storage free'),
-                          subtitle: const Text(
-                            'Reserve free space for other apps. When off, transfers can use this space but must still fit on disk.',
+                          title:  Text(localizedUiText(context, 'Keep 10% of storage free')),
+                          subtitle:  Text(
+                            localizedUiText(context, 'Reserve free space for other apps. When off, transfers can use this space but must still fit on disk.'),
                           ),
                         ),
                       ),
@@ -14571,9 +14525,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             ),
                                           ),
                                     ),
-                              title: const Text('LAN'),
-                              subtitle: const Text(
-                                'Same-network listener, pairing beacons, LAN delivery.',
+                              title:  Text(localizedUiText(context, 'LAN')),
+                              subtitle:  Text(
+                                localizedUiText(context, 'Same-network listener, pairing beacons, LAN delivery.'),
                               ),
                             ),
                             SwitchListTile.adaptive(
@@ -14589,9 +14543,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             ),
                                           ),
                                     ),
-                              title: const Text('Online'),
-                              subtitle: const Text(
-                                'Iroh messaging and file transfers over the internet. Custom Conest relays are optional.',
+                              title:  Text(localizedUiText(context, 'Online')),
+                              subtitle:  Text(
+                                localizedUiText(context, 'Iroh messaging and file transfers over the internet. Custom Conest relays are optional.'),
                               ),
                             ),
                             SwitchListTile.adaptive(
@@ -14608,9 +14562,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             ),
                                           ),
                                     ),
-                              title: const Text('Iroh relay fallback'),
-                              subtitle: const Text(
-                                'Use Iroh’s built-in relays for messages and files when direct connections cannot get through. Both peers must be online.',
+                              title:  Text(localizedUiText(context, 'Iroh relay fallback')),
+                              subtitle:  Text(
+                                localizedUiText(context, 'Use Iroh’s built-in relays for messages and files when direct connections cannot get through. Both peers must be online.'),
                               ),
                             ),
                             SwitchListTile.adaptive(
@@ -14626,11 +14580,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             value,
                                           ),
                                     ),
-                              title: const Text(
-                                'Limit Iroh files to 100 MiB (recommended)',
+                              title:  Text(
+                                localizedUiText(context, 'Limit Iroh files to 100 MiB (recommended)'),
                               ),
-                              subtitle: const Text(
-                                'Applies to direct online and Iroh relay transfers. Disable for larger files; they may take a long time. LAN transfers keep their larger limit.',
+                              subtitle:  Text(
+                                localizedUiText(context, 'Applies to direct online and Iroh relay transfers. Disable for larger files; they may take a long time. LAN transfers keep their larger limit.'),
                               ),
                             ),
                             SwitchListTile.adaptive(
@@ -14647,18 +14601,18 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             value,
                                           ),
                                     ),
-                              title: const Text(
-                                'Share email and Matrix addresses with group members',
+                              title:  Text(
+                                localizedUiText(context, 'Share email and Matrix addresses with group members'),
                               ),
-                              subtitle: const Text(
-                                'Lets members of your groups who are not your contacts reach you by email or Matrix. Off: they only learn your Nostr, Tor and radio addresses, which do not name you. Turning it off stops sharing from now on; members who already saw an address may keep it.',
+                              subtitle:  Text(
+                                localizedUiText(context, 'Lets members of your groups who are not your contacts reach you by email or Matrix. Off: they only learn your Nostr, Tor and radio addresses, which do not name you. Turning it off stops sharing from now on; members who already saw an address may keep it.'),
                               ),
                             ),
                             ListTile(
                               contentPadding: EdgeInsets.zero,
-                              title: const Text('Automatic downloads'),
-                              subtitle: const Text(
-                                'Verified contacts only. Limits adapt to Wi-Fi/Ethernet, cellular, and roaming.',
+                              title:  Text(localizedUiText(context, 'Automatic downloads')),
+                              subtitle:  Text(
+                                localizedUiText(context, 'Verified contacts only. Limits adapt to Wi-Fi/Ethernet, cellular, and roaming.'),
                               ),
                               trailing: DropdownButton<AutoDownloadPreset>(
                                 value:
@@ -14683,18 +14637,18 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                           ),
                                         );
                                       },
-                                items: const [
+                                items:  [
                                   DropdownMenuItem(
                                     value: AutoDownloadPreset.low,
-                                    child: Text('Low'),
+                                    child: Text(localizedUiText(context, 'Low')),
                                   ),
                                   DropdownMenuItem(
                                     value: AutoDownloadPreset.medium,
-                                    child: Text('Medium'),
+                                    child: Text(localizedUiText(context, 'Medium')),
                                   ),
                                   DropdownMenuItem(
                                     value: AutoDownloadPreset.high,
-                                    child: Text('High'),
+                                    child: Text(localizedUiText(context, 'High')),
                                   ),
                                 ],
                               ),
@@ -14713,10 +14667,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                         identity.connectivity.irohRelayEnabled,
                                     minLines: 1,
                                     maxLines: 4,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Custom Iroh relay URLs',
+                                    decoration:  InputDecoration(
+                                      labelText: localizedUiText(context, 'Custom Iroh relay URLs'),
                                       helperText:
-                                          'One HTTPS URL per line; blank uses the standard N0 relay set.',
+                                          localizedUiText(context, 'One HTTPS URL per line; blank uses the standard N0 relay set.'),
                                     ),
                                   ),
                                 ),
@@ -14748,7 +14702,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                                 ),
                                               );
                                         }),
-                                  child: const Text('Save Iroh relays'),
+                                  child:  Text(localizedUiText(context, 'Save Iroh relays')),
                                 ),
                               ],
                             ),
@@ -14788,7 +14742,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             TorCarrierPanel(controller: widget.controller),
                             const SizedBox(height: 12),
                             Text(
-                              'Transport policy',
+                              localizedUiText(context, 'Transport policy'),
                               style: Theme.of(context).textTheme.titleSmall
                                   ?.copyWith(fontWeight: FontWeight.w700),
                             ),
@@ -14805,8 +14759,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             const SizedBox(height: 8),
                             Text(
                               identity.connectivity.anyEnabled
-                                  ? 'Per-contact routing is intersected with these flags. Turning off either restricts traffic; turning off both makes the app idle.'
-                                  : 'Connectivity is fully off — the app will not send or receive.',
+                                  ? localizedUiText(context, 'Per-contact routing is intersected with these flags. Turning off either restricts traffic; turning off both makes the app idle.')
+                                  : localizedUiText(context, 'Connectivity is fully off — the app will not send or receive.'),
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(
                                     color: identity.connectivity.anyEnabled
@@ -14869,7 +14823,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                       widget.controller.checkRelayAvailability,
                                     ),
                               icon: const Icon(Icons.network_check),
-                              label: const Text('Check Availability'),
+                              label:  Text(localizedUiText(context, 'Check Availability')),
                             ),
                             const SizedBox(height: 12),
                             SwitchListTile.adaptive(
@@ -14881,9 +14835,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                       () => widget.controller
                                           .updateRelayModeEnabled(value),
                                     ),
-                              title: const Text('Run this device as a relay'),
-                              subtitle: const Text(
-                                'Allow trusted contacts to use this device as a relay.',
+                              title:  Text(localizedUiText(context, 'Run this device as a relay')),
+                              subtitle:  Text(
+                                localizedUiText(context, 'Allow trusted contacts to use this device as a relay.'),
                               ),
                             ),
                             SwitchListTile.adaptive(
@@ -14895,9 +14849,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                       () => widget.controller
                                           .updateAutoUseContactRelays(value),
                                     ),
-                              title: const Text('Auto-use contacts as relays'),
+                              title:  Text(localizedUiText(context, 'Auto-use contacts as relays')),
                               subtitle: Text(
-                                '${contactRelays.length} candidate route(s) are available right now.',
+                                localizedUiText(context, '${contactRelays.length} candidate route(s) are available right now.'),
                               ),
                             ),
                             const SizedBox(height: 8),
@@ -14910,8 +14864,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   child: TextField(
                                     controller: _localRelayPortController,
                                     keyboardType: TextInputType.number,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Local relay port',
+                                    decoration:  InputDecoration(
+                                      labelText: localizedUiText(context, 'Local relay port'),
                                     ),
                                   ),
                                 ),
@@ -14931,7 +14885,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                           await widget.controller
                                               .updateLocalRelayPort(port);
                                         }),
-                                  child: const Text('Save Port'),
+                                  child:  Text(localizedUiText(context, 'Save Port')),
                                 ),
                               ],
                             ),
@@ -14950,14 +14904,14 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               palette: widget.palette,
                             ),
                             Text(
-                              'Configured relays',
+                              localizedUiText(context, 'Configured relays'),
                               style: Theme.of(context).textTheme.titleMedium
                                   ?.copyWith(fontWeight: FontWeight.w800),
                             ),
                             const SizedBox(height: 8),
                             if (configuredRelays.isEmpty)
                               Text(
-                                'No relays added yet.',
+                                localizedUiText(context, 'No relays added yet.'),
                                 style: Theme.of(context).textTheme.bodySmall
                                     ?.copyWith(color: widget.palette.inkSoft),
                               )
@@ -14992,8 +14946,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   width: 220,
                                   child: TextField(
                                     controller: _relayHostController,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Relay host / URL',
+                                    decoration:  InputDecoration(
+                                      labelText: localizedUiText(context, 'Relay host / URL'),
                                       hintText: 'udp://host:port forces UDP',
                                     ),
                                   ),
@@ -15003,8 +14957,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   child: TextField(
                                     controller: _relayPortController,
                                     keyboardType: TextInputType.number,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Relay port',
+                                    decoration:  InputDecoration(
+                                      labelText: localizedUiText(context, 'Relay port'),
                                     ),
                                   ),
                                 ),
@@ -15029,7 +14983,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                           _relayPortController.text =
                                               '$defaultRelayPort';
                                         }),
-                                  child: const Text('Detect & Add Relay'),
+                                  child:  Text(localizedUiText(context, 'Detect & Add Relay')),
                                 ),
                               ],
                             ),
@@ -15057,7 +15011,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'Current build: ${buildInfo.displayVersion} • ${buildInfo.channelLabel}',
+                                  localizedUiText(context, 'Current build: ${buildInfo.displayVersion} • ${buildInfo.channelLabel}'),
                                   style: Theme.of(context).textTheme.bodyLarge
                                       ?.copyWith(fontWeight: FontWeight.w700),
                                 ),
@@ -15065,7 +15019,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     buildInfo.commit!.isNotEmpty) ...[
                                   const SizedBox(height: 6),
                                   Text(
-                                    'commit ${buildInfo.commit}',
+                                    localizedUiText(context, 'commit ${buildInfo.commit}'),
                                     style: Theme.of(context).textTheme.bodySmall
                                         ?.copyWith(
                                           color: widget.palette.inkSoft,
@@ -15079,10 +15033,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     leading: const Icon(
                                       Icons.bug_report_outlined,
                                     ),
-                                    title: const Text('Error history'),
-                                    subtitle: const Text(
-                                      'What went wrong, kept across restarts '
-                                      'on this build, to copy for a bug report.',
+                                    title:  Text(localizedUiText(context, 'Error history')),
+                                    subtitle:  Text(
+                                      localizedUiText(context, 'What went wrong, kept across restarts ' 'on this build, to copy for a bug report.'),
                                     ),
                                     onTap: () => ErrorHistoryScreen.show(
                                       context,
@@ -15106,19 +15059,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                                   value,
                                                 ),
                                           ),
-                                    title: const Text(
-                                      'Receive unstable updates',
+                                    title:  Text(
+                                      localizedUiText(context, 'Receive unstable updates'),
                                     ),
-                                    subtitle: const Text(
-                                      'Also offer nightly builds: newer '
-                                      'features, less tested. A newer stable '
-                                      'release is always offered.',
+                                    subtitle:  Text(
+                                      localizedUiText(context, 'Also offer nightly builds: newer ' 'features, less tested. A newer stable ' 'release is always offered.'),
                                     ),
                                   ),
                                 if (available != null) ...[
                                   const SizedBox(height: 10),
                                   Text(
-                                    'Available: ${available.release.tagName}',
+                                    localizedUiText(context, 'Available: ${available.release.tagName}'),
                                   ),
                                 ],
                                 if (updateService.isDownloading) ...[
@@ -15166,8 +15117,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                       icon: const Icon(Icons.system_update_alt),
                                       label: Text(
                                         updateService.isChecking
-                                            ? 'Checking...'
-                                            : 'Check for Updates',
+                                            ? localizedUiText(context, 'Checking...')
+                                            : localizedUiText(context, 'Check for Updates'),
                                       ),
                                     ),
                                     if (available != null)
@@ -15196,7 +15147,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         child: OutlinedButton.icon(
                           onPressed: _busy ? null : _confirmReset,
                           icon: const Icon(Icons.restart_alt),
-                          label: const Text('Reset App Identity'),
+                          label:  Text(localizedUiText(context, 'Reset App Identity')),
                         ),
                       ),
                     if (_error != null) ...[
@@ -15215,7 +15166,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       actions: [
         TextButton(
           onPressed: _busy ? null : () => Navigator.of(context).pop(),
-          child: const Text('Close'),
+          child:  Text(localizedUiText(context, 'Close')),
         ),
       ],
     );
@@ -15247,17 +15198,14 @@ class _RelayIdentityMismatchBanner extends StatelessWidget {
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text('Trust new identity for $relayId?'),
+        title: Text(localizedUiText(context, 'Trust new identity for $relayId?')),
         content: Text(
-          'The relay is now signing with a different Ed25519 public key '
-          '(${_shortFingerprint(announcedKey)}). Only continue if the '
-          'operator has confirmed they rotated the key — otherwise this '
-          'could be a man-in-the-middle.',
+          localizedUiText(context, 'The relay is now signing with a different Ed25519 public key ' '(${_shortFingerprint(announcedKey)}). Only continue if the ' 'operator has confirmed they rotated the key — otherwise this ' 'could be a man-in-the-middle.'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
+            child:  Text(localizedUiText(context, 'Cancel')),
           ),
           FilledButton.tonal(
             style: FilledButton.styleFrom(
@@ -15269,7 +15217,7 @@ class _RelayIdentityMismatchBanner extends StatelessWidget {
               ).colorScheme.onErrorContainer,
             ),
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Trust new key'),
+            child:  Text(localizedUiText(context, 'Trust new key')),
           ),
         ],
       ),
@@ -15309,7 +15257,7 @@ class _RelayIdentityMismatchBanner extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Relay identity changed',
+                localizedUiText(context, 'Relay identity changed'),
                 style: Theme.of(context).textTheme.titleSmall?.copyWith(
                   color: Theme.of(context).colorScheme.onErrorContainer,
                   fontWeight: FontWeight.w700,
@@ -15317,8 +15265,7 @@ class _RelayIdentityMismatchBanner extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                'A configured relay is signing with a new key. Verify with the '
-                'operator before trusting it.',
+                localizedUiText(context, 'A configured relay is signing with a new key. Verify with the ' 'operator before trusting it.'),
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Theme.of(context).colorScheme.onErrorContainer,
                 ),
@@ -15331,7 +15278,7 @@ class _RelayIdentityMismatchBanner extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          '${entry.key} → ${_shortFingerprint(entry.value)}',
+                          localizedUiText(context, '${entry.key} → ${_shortFingerprint(entry.value)}'),
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(
                                 fontFamily: 'monospace',
@@ -15349,7 +15296,7 @@ class _RelayIdentityMismatchBanner extends StatelessWidget {
                           relayId: entry.key,
                           announcedKey: entry.value,
                         ),
-                        child: const Text('Trust new key'),
+                        child:  Text(localizedUiText(context, 'Trust new key')),
                       ),
                     ],
                   ),
@@ -15373,7 +15320,7 @@ class _ContactRequestsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Scaffold(
     backgroundColor: palette.panel,
-    appBar: AppBar(title: const Text('Contact requests')),
+    appBar: AppBar(title:  Text(localizedUiText(context, 'Contact requests'))),
     body: SafeArea(
       child: Center(
         child: ConstrainedBox(
@@ -15383,7 +15330,7 @@ class _ContactRequestsScreen extends StatelessWidget {
             builder: (context, _) {
               final requests = controller.pendingContactRequests;
               if (requests.isEmpty) {
-                return const Center(child: Text('No pending contact requests'));
+                return  Center(child: Text(localizedUiText(context, 'No pending contact requests')));
               }
               return ListView.separated(
                 padding: const EdgeInsets.all(16),
@@ -15428,7 +15375,7 @@ class _PendingContactRequestCard extends StatelessWidget {
     } catch (error) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not review request: $error')),
+          SnackBar(content: Text(localizedUiText(context, 'Could not review request: $error'))),
         );
       }
       return;
@@ -15437,13 +15384,13 @@ class _PendingContactRequestCard extends StatelessWidget {
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text('Add ${invite.displayName}?'),
+        title: Text(localizedUiText(context, 'Add ${invite.displayName}?')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Verify the person and compare this safety number through another channel before accepting.',
+             Text(
+              localizedUiText(context, 'Verify the person and compare this safety number through another channel before accepting.'),
             ),
             const SizedBox(height: 16),
             SelectableText(
@@ -15455,11 +15402,11 @@ class _PendingContactRequestCard extends StatelessWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
+            child:  Text(localizedUiText(context, 'Cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Add contact'),
+            child:  Text(localizedUiText(context, 'Add contact')),
           ),
         ],
       ),
@@ -15471,7 +15418,7 @@ class _PendingContactRequestCard extends StatelessWidget {
       if (!context.mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Could not add contact: $error')));
+      ).showSnackBar(SnackBar(content: Text(localizedUiText(context, 'Could not add contact: $error'))));
     }
   }
 
@@ -15481,7 +15428,7 @@ class _PendingContactRequestCard extends StatelessWidget {
     } catch (error) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not reject request: $error')),
+          SnackBar(content: Text(localizedUiText(context, 'Could not reject request: $error'))),
         );
       }
       return;
@@ -15489,7 +15436,7 @@ class _PendingContactRequestCard extends StatelessWidget {
     if (!context.mounted) return;
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(const SnackBar(content: Text('Contact request rejected.')));
+    ).showSnackBar( SnackBar(content: Text(localizedUiText(context, 'Contact request rejected.'))));
   }
 
   @override
@@ -15515,7 +15462,7 @@ class _PendingContactRequestCard extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Contact request from $name',
+                  localizedUiText(context, 'Contact request from $name'),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(
@@ -15527,7 +15474,7 @@ class _PendingContactRequestCard extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            'Unverified · ${request.senderDeviceId.length > 12 ? request.senderDeviceId.substring(0, 12) : request.senderDeviceId}',
+            localizedUiText(context, 'Unverified · ${request.senderDeviceId.length > 12 ? request.senderDeviceId.substring(0, 12) : request.senderDeviceId}'),
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 8),
@@ -15536,11 +15483,11 @@ class _PendingContactRequestCard extends StatelessWidget {
             children: [
               FilledButton.tonal(
                 onPressed: invite == null ? null : () => _approve(context),
-                child: const Text('Review'),
+                child:  Text(localizedUiText(context, 'Review')),
               ),
               TextButton(
                 onPressed: () => _reject(context),
-                child: const Text('Reject'),
+                child:  Text(localizedUiText(context, 'Reject')),
               ),
             ],
           ),
@@ -15570,7 +15517,7 @@ class _ContactPairingStatusBanner extends StatelessWidget {
     } catch (error) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Contact request failed: $error')),
+          SnackBar(content: Text(localizedUiText(context, 'Contact request failed: $error'))),
         );
       }
     }
@@ -15606,7 +15553,7 @@ class _ContactPairingStatusBanner extends StatelessWidget {
               context,
               () => controller.retryContactPairingNow(contact.deviceId),
             ),
-            child: Text(blocked ? 'Request again' : 'Retry'),
+            child: Text(blocked ? localizedUiText(context, 'Request again') : localizedUiText(context, 'Retry')),
           ),
           if (!blocked)
             TextButton(
@@ -15614,7 +15561,7 @@ class _ContactPairingStatusBanner extends StatelessWidget {
                 context,
                 () => controller.cancelContactPairing(contact.deviceId),
               ),
-              child: const Text('Cancel'),
+              child:  Text(localizedUiText(context, 'Cancel')),
             ),
           if (blocked)
             TextButton(
@@ -15625,7 +15572,7 @@ class _ContactPairingStatusBanner extends StatelessWidget {
                   notifyPeer: false,
                 ),
               ),
-              child: const Text('Discard chat'),
+              child:  Text(localizedUiText(context, 'Discard chat')),
             ),
         ],
       ),
@@ -15651,25 +15598,20 @@ class _PendingVerificationBanner extends StatelessWidget {
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Confirm identity replacement?'),
+        title:  Text(localizedUiText(context, 'Confirm identity replacement?')),
         content: Text(
           predecessor == null
-              ? 'Trust ${contact.alias} as a fresh contact? Verify the safety '
-                    'number out of band first — accepting now archives any '
-                    'previous "${contact.displayName}" entries as read-only.'
-              : 'Trust this as a reinstall of "${predecessor.alias}"? '
-                    'The previous contact will be archived (history kept '
-                    'read-only); the new contact takes over. This cannot be '
-                    'undone.',
+              ? localizedUiText(context, 'Trust ${contact.alias} as a fresh contact? Verify the safety ' 'number out of band first — accepting now archives any ' 'previous "${contact.displayName}" entries as read-only.')
+              : localizedUiText(context, 'Trust this as a reinstall of "${predecessor.alias}"? ' 'The previous contact will be archived (history kept ' 'read-only); the new contact takes over. This cannot be ' 'undone.'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
+            child:  Text(localizedUiText(context, 'Cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text("It's them"),
+            child:  Text(localizedUiText(context, "It's them")),
           ),
         ],
       ),
@@ -15681,7 +15623,7 @@ class _PendingVerificationBanner extends StatelessWidget {
       if (!context.mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Confirm failed: $error')));
+      ).showSnackBar(SnackBar(content: Text(localizedUiText(context, 'Confirm failed: $error'))));
     }
   }
 
@@ -15689,15 +15631,14 @@ class _PendingVerificationBanner extends StatelessWidget {
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Reject this identity?'),
-        content: const Text(
-          'This deletes the new contact and any held inbound messages. '
-          'Use this if you believe this is impersonation.',
+        title:  Text(localizedUiText(context, 'Reject this identity?')),
+        content:  Text(
+          localizedUiText(context, 'This deletes the new contact and any held inbound messages. ' 'Use this if you believe this is impersonation.'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
+            child:  Text(localizedUiText(context, 'Cancel')),
           ),
           FilledButton.tonal(
             style: FilledButton.styleFrom(
@@ -15709,7 +15650,7 @@ class _PendingVerificationBanner extends StatelessWidget {
               ).colorScheme.onErrorContainer,
             ),
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Reject'),
+            child:  Text(localizedUiText(context, 'Reject')),
           ),
         ],
       ),
@@ -15721,7 +15662,7 @@ class _PendingVerificationBanner extends StatelessWidget {
       if (!context.mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Reject failed: $error')));
+      ).showSnackBar(SnackBar(content: Text(localizedUiText(context, 'Reject failed: $error'))));
     }
   }
 
@@ -15743,8 +15684,7 @@ class _PendingVerificationBanner extends StatelessWidget {
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              'This contact may be a reset of "$predecessorAlias". Verify '
-              'their safety number out of band before exchanging messages.',
+              localizedUiText(context, 'This contact may be a reset of "$predecessorAlias". Verify ' 'their safety number out of band before exchanging messages.'),
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: Theme.of(context).colorScheme.onErrorContainer,
               ),
@@ -15753,11 +15693,11 @@ class _PendingVerificationBanner extends StatelessWidget {
           const SizedBox(width: 8),
           TextButton(
             onPressed: () => _confirm(context),
-            child: const Text("It's them"),
+            child:  Text(localizedUiText(context, "It's them")),
           ),
           TextButton(
             onPressed: () => _reject(context),
-            child: const Text('Not them'),
+            child:  Text(localizedUiText(context, 'Not them')),
           ),
         ],
       ),
@@ -15797,14 +15737,14 @@ class _DefaultRelaysControlsCardState
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Imported relays from ${result.url}.')),
+        SnackBar(content: Text(localizedUiText(context, 'Imported relays from ${result.url}.'))),
       );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           backgroundColor: Theme.of(context).colorScheme.errorContainer,
-          content: Text('Import failed: $error'),
+          content: Text(localizedUiText(context, 'Import failed: $error')),
         ),
       );
     } finally {
@@ -15816,18 +15756,18 @@ class _DefaultRelaysControlsCardState
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Remove imported list?'),
+        title:  Text(localizedUiText(context, 'Remove imported list?')),
         content: Text(
-          'This will remove ${source.routeKeys.length} relay route(s) imported from ${source.url}.',
+          localizedUiText(context, 'This will remove ${source.routeKeys.length} relay route(s) imported from ${source.url}.'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
+            child:  Text(localizedUiText(context, 'Cancel')),
           ),
           FilledButton.tonal(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Remove'),
+            child:  Text(localizedUiText(context, 'Remove')),
           ),
         ],
       ),
@@ -15839,7 +15779,7 @@ class _DefaultRelaysControlsCardState
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Remove failed: $error')));
+      ).showSnackBar(SnackBar(content: Text(localizedUiText(context, 'Remove failed: $error'))));
     }
   }
 
@@ -15859,16 +15799,15 @@ class _DefaultRelaysControlsCardState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'No bundled Conest relays. Online connections use Iroh; '
-                'you can also configure your own relay.',
+               Text(
+                localizedUiText(context, 'No bundled Conest relays. Online connections use Iroh; ' 'you can also configure your own relay.'),
               ),
               const Divider(height: 24),
               Row(
                 children: [
                   Expanded(
                     child: Text(
-                      'Imported relay lists',
+                      localizedUiText(context, 'Imported relay lists'),
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
@@ -15882,7 +15821,7 @@ class _DefaultRelaysControlsCardState
                             height: 16,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Text('Import from URL…'),
+                        :  Text(localizedUiText(context, 'Import from URL…')),
                   ),
                 ],
               ),
@@ -15890,7 +15829,7 @@ class _DefaultRelaysControlsCardState
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
-                    'No imported lists.',
+                    localizedUiText(context, 'No imported lists.'),
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: widget.palette.inkSoft,
                     ),
@@ -15904,7 +15843,7 @@ class _DefaultRelaysControlsCardState
                       children: [
                         Expanded(
                           child: Text(
-                            '${source.url} · ${source.isSigned ? "signed" : "unsigned"} · ${source.routeKeys.length} route(s)',
+                            localizedUiText(context, '${source.url} · ${source.isSigned ? "signed" : "unsigned"} · ${source.routeKeys.length} route(s)'),
                             style: Theme.of(context).textTheme.bodySmall
                                 ?.copyWith(fontFamily: 'monospace'),
                             overflow: TextOverflow.ellipsis,
@@ -15913,7 +15852,7 @@ class _DefaultRelaysControlsCardState
                         const SizedBox(width: 8),
                         TextButton(
                           onPressed: () => _removeSource(source),
-                          child: const Text('Remove'),
+                          child:  Text(localizedUiText(context, 'Remove')),
                         ),
                       ],
                     ),
@@ -15954,7 +15893,7 @@ class _ImportRelaysDialogState extends State<_ImportRelaysDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Import relay list from URL'),
+      title:  Text(localizedUiText(context, 'Import relay list from URL')),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -15962,21 +15901,21 @@ class _ImportRelaysDialogState extends State<_ImportRelaysDialog> {
           TextField(
             controller: _urlController,
             autofocus: true,
-            decoration: const InputDecoration(
-              labelText: 'JSON URL',
+            decoration:  InputDecoration(
+              labelText: localizedUiText(context, 'JSON URL'),
               hintText: 'https://example.com/relays.json',
             ),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _publicKeyController,
-            decoration: const InputDecoration(
-              labelText: "Operator's public key (optional, base64)",
+            decoration:  InputDecoration(
+              labelText: localizedUiText(context, "Operator's public key (optional, base64)"),
             ),
           ),
           const SizedBox(height: 8),
           Text(
-            'Leave blank to import unsigned (untrusted; pre-flight probes still gate use). Provide the operator\'s key for cryptographically trusted imports — the signature is fetched from <URL>.ed25519.sig.',
+            localizedUiText(context, 'Leave blank to import unsigned (untrusted; pre-flight probes still gate use). Provide the operator\'s key for cryptographically trusted imports — the signature is fetched from <URL>.ed25519.sig.'),
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -15984,7 +15923,7 @@ class _ImportRelaysDialogState extends State<_ImportRelaysDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child:  Text(localizedUiText(context, 'Cancel')),
         ),
         FilledButton(
           onPressed: () {
@@ -15998,7 +15937,7 @@ class _ImportRelaysDialogState extends State<_ImportRelaysDialog> {
               ),
             );
           },
-          child: const Text('Import'),
+          child:  Text(localizedUiText(context, 'Import')),
         ),
       ],
     );
@@ -16041,7 +15980,7 @@ class _SettingsSection extends StatelessWidget {
           // Signature settings header — mono `// SECTION` in place of the
           // old titleLarge, matching the design's SectionLabel vocabulary.
           Text(
-            '// ${title.toUpperCase()}',
+            localizedUiText(context, '// ${title.toUpperCase()}'),
             style: TextStyle(
               fontFamily: ConestPalette.monoFont,
               fontSize: 11,
@@ -16137,7 +16076,7 @@ class _RelayHealthDashboard extends StatelessWidget {
                   Expanded(
                     child: RelayStat(
                       palette: palette,
-                      label: 'OK',
+                      label: localizedUiText(context, 'OK'),
                       value: '$ok',
                       color: palette.success,
                     ),
@@ -16145,7 +16084,7 @@ class _RelayHealthDashboard extends StatelessWidget {
                   Expanded(
                     child: RelayStat(
                       palette: palette,
-                      label: 'WARN',
+                      label: localizedUiText(context, 'WARN'),
                       value: '$warn',
                       color: palette.warning,
                     ),
@@ -16153,7 +16092,7 @@ class _RelayHealthDashboard extends StatelessWidget {
                   Expanded(
                     child: RelayStat(
                       palette: palette,
-                      label: 'DOWN',
+                      label: localizedUiText(context, 'DOWN'),
                       value: '$down',
                       color: palette.danger,
                     ),
@@ -16161,7 +16100,7 @@ class _RelayHealthDashboard extends StatelessWidget {
                   Expanded(
                     child: RelayStat(
                       palette: palette,
-                      label: 'AVG RTT',
+                      label: localizedUiText(context, 'AVG RTT'),
                       value: avgRtt,
                       color: palette.textPrimary,
                     ),
@@ -16235,7 +16174,7 @@ class _ThemeModeSelector extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Theme',
+              localizedUiText(context, 'Theme'),
               style: Theme.of(
                 context,
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
@@ -16263,8 +16202,8 @@ class _ThemeModeSelector extends StatelessWidget {
             Text(
               controller.mode == ConestThemeMode.adaptive &&
                       palette.usingDynamicColor
-                  ? 'Adaptive is using system dynamic colors.'
-                  : 'Mint and pink remain the Conest fallback accents.',
+                  ? localizedUiText(context, 'Adaptive is using system dynamic colors.')
+                  : localizedUiText(context, 'Mint and pink remain the Conest fallback accents.'),
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
@@ -16273,7 +16212,7 @@ class _ThemeModeSelector extends StatelessWidget {
             Row(
               children: [
                 Text(
-                  'Decoration',
+                  localizedUiText(context, 'Decoration'),
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                   ),
@@ -16300,15 +16239,14 @@ class _ThemeModeSelector extends StatelessWidget {
                   unawaited(controller.setDecorationIntensity(value)),
             ),
             Text(
-              'Ambient grid, scanlines, corner reticles and the status '
-              'readout. Clean ↔ full atmosphere.',
+              localizedUiText(context, 'Ambient grid, scanlines, corner reticles and the status ' 'readout. Clean ↔ full atmosphere.'),
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
             ),
             const SizedBox(height: 16),
             Text(
-              'Shell',
+              localizedUiText(context, 'Shell'),
               style: Theme.of(
                 context,
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
@@ -16337,7 +16275,7 @@ class _ThemeModeSelector extends StatelessWidget {
             if (controller.shell == ConestShell.signature) ...[
               const SizedBox(height: 16),
               Text(
-                'Home layout',
+                localizedUiText(context, 'Home layout'),
                 style: Theme.of(
                   context,
                 ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
@@ -17180,7 +17118,7 @@ class _RoutePill extends StatelessWidget {
         border: Border.all(color: palette.stroke),
       ),
       child: Text(
-        '${route.kind.name}:${route.label}',
+        localizedUiText(context, '${route.kind.name}:${route.label}'),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
@@ -17250,7 +17188,7 @@ class _SignatureQrFrame extends StatelessWidget {
                 border: Border.all(color: _ink),
               ),
               child: Text(
-                'CONEST · ci5 · ${DateTime.now().year}',
+                localizedUiText(context, 'CONEST · ci5 · ${DateTime.now().year}'),
                 style: const TextStyle(
                   fontFamily: ConestPalette.monoFont,
                   fontSize: 8,
@@ -17291,14 +17229,14 @@ class _QrFallback extends StatelessWidget {
               Icon(Icons.qr_code_2_outlined, color: palette.inkSoft, size: 36),
               const SizedBox(height: 10),
               Text(
-                'QR unavailable',
+                localizedUiText(context, 'QR unavailable'),
                 style: Theme.of(
                   context,
                 ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 8),
               Text(
-                'Use the codephrase or payload below.',
+                localizedUiText(context, 'Use the codephrase or payload below.'),
                 textAlign: TextAlign.center,
                 style: Theme.of(
                   context,
@@ -17362,17 +17300,17 @@ class _RouteHealthTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${check.route.kind.name.toUpperCase()} ${check.route.label}',
+                  localizedUiText(context, '${check.route.kind.name.toUpperCase()} ${check.route.label}'),
                   style: Theme.of(
                     context,
                   ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 Text(
                   usable
-                      ? 'two-way confirmed${latency == null ? '' : ' • ${latency.inMilliseconds}ms'}'
+                      ? localizedUiText(context, 'two-way confirmed${latency == null ? '' : ' • ${latency.inMilliseconds}ms'}')
                       : available
-                      ? 'path accepts send; waiting for peer reply${latency == null ? '' : ' • ${latency.inMilliseconds}ms'}'
-                      : check.error ?? 'unavailable',
+                      ? localizedUiText(context, 'path accepts send; waiting for peer reply${latency == null ? '' : ' • ${latency.inMilliseconds}ms'}')
+                      : check.error ?? localizedUiText(context, 'unavailable'),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(
@@ -17384,10 +17322,10 @@ class _RouteHealthTile extends StatelessWidget {
           ),
           Text(
             usable
-                ? 'usable'
+                ? localizedUiText(context, 'usable')
                 : available
-                ? 'one-way'
-                : 'skip',
+                ? localizedUiText(context, 'one-way')
+                : localizedUiText(context, 'skip'),
             style: Theme.of(
               context,
             ).textTheme.labelSmall?.copyWith(color: palette.inkSoft),
@@ -17415,7 +17353,7 @@ class _EmptyContactsState extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Text(
-            'Share your invite, then either scan the QR code or enter only the current codephrase on the other device to add the contact.',
+            localizedUiText(context, 'Share your invite, then either scan the QR code or enter only the current codephrase on the other device to add the contact.'),
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyLarge?.copyWith(
               color: palette.inkSoft,
@@ -17455,14 +17393,14 @@ class _EmptyChatState extends StatelessWidget {
                   Icon(Icons.lock_outline, size: 52, color: palette.inkSoft),
                   const SizedBox(height: 16),
                   Text(
-                    'Start with one trusted contact',
+                    localizedUiText(context, 'Start with one trusted contact'),
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'This release pairs through a QR invite alone or through a codephrase alone, prefers nearby LAN routes, and falls back to internet relay routes after that.',
+                    localizedUiText(context, 'This release pairs through a QR invite alone or through a codephrase alone, prefers nearby LAN routes, and falls back to internet relay routes after that.'),
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                       color: palette.inkSoft,
@@ -17652,9 +17590,9 @@ class _ConnectivityChip extends StatelessWidget {
         const GlobalConnectivityPreferences();
     if (!global.anyEnabled) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(
+         SnackBar(
           content: Text(
-            'Connectivity is off. Enable LAN or Online in Settings.',
+            localizedUiText(context, 'Connectivity is off. Enable LAN or Online in Settings.'),
           ),
         ),
       );
@@ -17663,7 +17601,7 @@ class _ConnectivityChip extends StatelessWidget {
     await showDialog<void>(
       context: context,
       builder: (_) => _ConnectivityDialog(
-        title: 'Routing — ${contact.alias}',
+        title: localizedUiText(context, 'Routing — ${contact.alias}'),
         initial: contact.routing,
         global: global,
         kinds: controller.configurableTransports,
@@ -17776,10 +17714,10 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
             onChanged: widget.global.lanEnabled
                 ? (v) => setState(() => _lan = v ?? false)
                 : null,
-            title: const Text('LAN'),
+            title:  Text(localizedUiText(context, 'LAN')),
             subtitle: widget.global.lanEnabled
-                ? const Text('Same-network delivery')
-                : const Text('Disabled by global setting'),
+                ?  Text(localizedUiText(context, 'Same-network delivery'))
+                :  Text(localizedUiText(context, 'Disabled by global setting')),
             contentPadding: EdgeInsets.zero,
           ),
           SwitchListTile.adaptive(
@@ -17787,12 +17725,12 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
             onChanged: _online && widget.global.irohRelayEnabled
                 ? (value) => setState(() => _irohRelay = value)
                 : null,
-            title: const Text('Allow Iroh relay fallback'),
+            title:  Text(localizedUiText(context, 'Allow Iroh relay fallback')),
             subtitle: widget.global.irohRelayEnabled
-                ? const Text(
-                    'Visible and online-only; direct Iroh is preferred.',
+                ?  Text(
+                    localizedUiText(context, 'Visible and online-only; direct Iroh is preferred.'),
                   )
-                : const Text('Disabled by global setting'),
+                :  Text(localizedUiText(context, 'Disabled by global setting')),
             contentPadding: EdgeInsets.zero,
           ),
           const SizedBox(height: 8),
@@ -17809,22 +17747,22 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
             onChanged: widget.global.onlineEnabled
                 ? (v) => setState(() => _online = v ?? false)
                 : null,
-            title: const Text('Online'),
+            title:  Text(localizedUiText(context, 'Online')),
             subtitle: widget.global.onlineEnabled
-                ? const Text('Relay / internet delivery')
-                : const Text('Disabled by global setting'),
+                ?  Text(localizedUiText(context, 'Relay / internet delivery'))
+                :  Text(localizedUiText(context, 'Disabled by global setting')),
             contentPadding: EdgeInsets.zero,
           ),
           if (_lan && _online) ...[
             const SizedBox(height: 8),
-            const Text('Prefer'),
+             Text(localizedUiText(context, 'Prefer')),
             const SizedBox(height: 4),
             SegmentedButton<RoutingPreference>(
-              segments: const [
-                ButtonSegment(value: RoutingPreference.lan, label: Text('LAN')),
+              segments:  [
+                ButtonSegment(value: RoutingPreference.lan, label: Text(localizedUiText(context, 'LAN'))),
                 ButtonSegment(
                   value: RoutingPreference.online,
-                  label: Text('Online'),
+                  label: Text(localizedUiText(context, 'Online')),
                 ),
               ],
               selected: {_preferred},
@@ -17836,11 +17774,9 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
             key: const ValueKey('carry-for-contact'),
             value: _carry,
             onChanged: (value) => setState(() => _carry = value),
-            title: const Text('Carry their messages'),
-            subtitle: const Text(
-              'When this contact cannot reach someone but this device can, '
-              'pass their messages on. You see only who they are for and '
-              'when; the content stays encrypted.',
+            title:  Text(localizedUiText(context, 'Carry their messages')),
+            subtitle:  Text(
+              localizedUiText(context, 'When this contact cannot reach someone but this device can, ' 'pass their messages on. You see only who they are for and ' 'when; the content stays encrypted.'),
             ),
             contentPadding: EdgeInsets.zero,
           ),
@@ -17851,7 +17787,7 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child:  Text(localizedUiText(context, 'Cancel')),
         ),
         FilledButton(
           onPressed: canSave
@@ -17869,7 +17805,7 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
                   Navigator.of(context).pop();
                 }
               : null,
-          child: const Text('Save'),
+          child:  Text(localizedUiText(context, 'Save')),
         ),
       ],
     );
@@ -17907,10 +17843,10 @@ class _TransportPolicySelector extends StatelessWidget {
               DropdownMenuItem(
                 value: policy,
                 child: Text(switch (policy) {
-                  TransportPolicy.automatic => 'Automatic',
-                  TransportPolicy.preferred => 'Preferred',
-                  TransportPolicy.disabled => 'Disabled',
-                  TransportPolicy.askBeforeUse => 'Ask first',
+                  TransportPolicy.automatic => localizedUiText(context, 'Automatic'),
+                  TransportPolicy.preferred => localizedUiText(context, 'Preferred'),
+                  TransportPolicy.disabled => localizedUiText(context, 'Disabled'),
+                  TransportPolicy.askBeforeUse => localizedUiText(context, 'Ask first'),
                 }),
               ),
           ],
@@ -18241,7 +18177,7 @@ class _AlbumBubble extends StatelessWidget {
           ? () => onToggleSelection!(members)
           : null,
       child: Align(
-        alignment: outbound ? Alignment.centerRight : Alignment.centerLeft,
+        alignment: outbound ? AlignmentDirectional.centerEnd : AlignmentDirectional.centerStart,
         child: Container(
           constraints: const BoxConstraints(maxWidth: 520),
           margin: const EdgeInsets.only(bottom: 12),
@@ -18306,7 +18242,7 @@ class _AlbumBubble extends StatelessWidget {
                         }
                       },
                       child: Text(
-                        'Retry failed',
+                        localizedUiText(context, 'Retry failed'),
                         style: TextStyle(
                           color: outbound
                               ? palette.outboundText
@@ -18324,7 +18260,7 @@ class _AlbumBubble extends StatelessWidget {
                   right: -8,
                   top: -8,
                   child: PopupMenuButton<String>(
-                    tooltip: 'Album actions',
+                    tooltip: localizedUiText(context, 'Album actions'),
                     icon: Icon(
                       Icons.more_horiz,
                       size: 18,
@@ -18344,13 +18280,13 @@ class _AlbumBubble extends StatelessWidget {
                     },
                     itemBuilder: (_) => [
                       if (anyInFlight)
-                        const PopupMenuItem(
+                         PopupMenuItem(
                           value: 'cancel',
-                          child: Text('Cancel album'),
+                          child: Text(localizedUiText(context, 'Cancel album')),
                         ),
-                      const PopupMenuItem(
+                       PopupMenuItem(
                         value: 'delete',
-                        child: Text('Delete album'),
+                        child: Text(localizedUiText(context, 'Delete album')),
                       ),
                     ],
                   ),
@@ -18429,28 +18365,28 @@ class _MessageSelectionBar extends StatelessWidget {
           IconButton(
             onPressed: onCancel,
             icon: const Icon(Icons.close),
-            tooltip: 'Cancel selection',
+            tooltip: localizedUiText(context, 'Cancel selection'),
           ),
           const SizedBox(width: 4),
           Text(
-            '$count selected',
+            localizedUiText(context, '$count selected'),
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const Spacer(),
           IconButton(
             onPressed: onCopy,
             icon: const Icon(Icons.copy_outlined),
-            tooltip: 'Copy',
+            tooltip: localizedUiText(context, 'Copy'),
           ),
           IconButton(
             onPressed: onSave,
             icon: const Icon(Icons.download_outlined),
-            tooltip: 'Save attachments',
+            tooltip: localizedUiText(context, 'Save attachments'),
           ),
           IconButton(
             onPressed: onDelete,
             icon: const Icon(Icons.delete_outline),
-            tooltip: 'Delete',
+            tooltip: localizedUiText(context, 'Delete'),
             color: onDelete != null
                 ? Theme.of(context).colorScheme.error
                 : null,
@@ -18509,18 +18445,18 @@ class _TransfersScreen extends StatelessWidget {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          title: const Text('Cancel and clear all transfers?'),
+          title:  Text(localizedUiText(context, 'Cancel and clear all transfers?')),
           content: Text(
-            'This will cancel $activeCount active transfer${activeCount == 1 ? '' : 's'} and clear the transfer list. Chat messages and completed downloaded files will stay.',
+            localizedUiText(context, 'This will cancel $activeCount active transfer${activeCount == 1 ? '' : 's'} and clear the transfer list. Chat messages and completed downloaded files will stay.'),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Keep transfers'),
+              child:  Text(localizedUiText(context, 'Keep transfers')),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Cancel and clear'),
+              child:  Text(localizedUiText(context, 'Cancel and clear')),
             ),
           ],
         ),
@@ -18552,10 +18488,10 @@ class _TransfersScreen extends StatelessWidget {
             .toList(growable: false);
         return Scaffold(
           appBar: AppBar(
-            title: const Text('Transfers'),
+            title:  Text(localizedUiText(context, 'Transfers')),
             actions: [
               IconButton(
-                tooltip: 'Pause all',
+                tooltip: localizedUiText(context, 'Pause all'),
                 onPressed:
                     active.any(
                       (entry) => entry.phase.isActive && !entry.pausedByPeer,
@@ -18565,14 +18501,14 @@ class _TransfersScreen extends StatelessWidget {
                 icon: const Icon(Icons.pause_circle_outline),
               ),
               IconButton(
-                tooltip: 'Resume all',
+                tooltip: localizedUiText(context, 'Resume all'),
                 onPressed: active.any((entry) => entry.pausedByMe)
                     ? () => unawaited(controller.resumeAllTransfers())
                     : null,
                 icon: const Icon(Icons.play_circle_outline),
               ),
               IconButton(
-                tooltip: 'Cancel and clear all transfers',
+                tooltip: localizedUiText(context, 'Cancel and clear all transfers'),
                 onPressed: snapshots.isEmpty
                     ? null
                     : () => unawaited(
@@ -18584,7 +18520,7 @@ class _TransfersScreen extends StatelessWidget {
                 icon: const Icon(Icons.delete_sweep_outlined),
               ),
               IconButton(
-                tooltip: 'Clear completed',
+                tooltip: localizedUiText(context, 'Clear completed'),
                 onPressed: recent.isEmpty
                     ? null
                     : controller.clearCompletedTransfers,
@@ -18593,12 +18529,12 @@ class _TransfersScreen extends StatelessWidget {
             ],
           ),
           body: snapshots.isEmpty
-              ? const Center(child: Text('No transfers yet.'))
+              ?  Center(child: Text(localizedUiText(context, 'No transfers yet.')))
               : ListView(
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
                   children: [
                     if (active.isNotEmpty) ...[
-                      _TransferSectionLabel(label: 'Active (${active.length})'),
+                      _TransferSectionLabel(label: localizedUiText(context, 'Active (${active.length})')),
                       for (final snapshot in active)
                         _TransferManagerTile(
                           snapshot: snapshot,
@@ -18611,7 +18547,7 @@ class _TransfersScreen extends StatelessWidget {
                     ],
                     if (recent.isNotEmpty) ...[
                       const SizedBox(height: 12),
-                      _TransferSectionLabel(label: 'Recent (${recent.length})'),
+                      _TransferSectionLabel(label: localizedUiText(context, 'Recent (${recent.length})')),
                       for (final snapshot in recent)
                         _TransferManagerTile(
                           snapshot: snapshot,
@@ -18707,7 +18643,7 @@ class _TransferManagerTile extends StatelessWidget {
                           style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                         Text(
-                          '${controller.transferConversationLabel(snapshot.id)} · ${phaseLabel(snapshot.phase)}',
+                          localizedUiText(context, '${controller.transferConversationLabel(snapshot.id)} · ${phaseLabel(snapshot.phase)}'),
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
@@ -18715,7 +18651,7 @@ class _TransferManagerTile extends StatelessWidget {
                   ),
                   if (snapshot.queuePriority > 1)
                     IconButton(
-                      tooltip: 'Move to top',
+                      tooltip: localizedUiText(context, 'Move to top'),
                       onPressed: () =>
                           controller.prioritizeTransfer(snapshot.id),
                       icon: const Icon(Icons.vertical_align_top),
@@ -18725,8 +18661,8 @@ class _TransferManagerTile extends StatelessWidget {
                     IconButton(
                       tooltip:
                           controller.attachmentAcceptanceInProgress(snapshot.id)
-                          ? 'Preparing download'
-                          : 'Download',
+                          ? localizedUiText(context, 'Preparing download')
+                          : localizedUiText(context, 'Download'),
                       onPressed:
                           controller.attachmentAcceptanceInProgress(snapshot.id)
                           ? null
@@ -18743,14 +18679,14 @@ class _TransferManagerTile extends StatelessWidget {
                     )
                   else if (snapshot.pausedByMe)
                     IconButton(
-                      tooltip: 'Resume',
+                      tooltip: localizedUiText(context, 'Resume'),
                       onPressed: () =>
                           unawaited(controller.resumeAttachment(snapshot.id)),
                       icon: const Icon(Icons.play_circle_outline),
                     )
                   else if (snapshot.phase.isActive)
                     IconButton(
-                      tooltip: 'Pause',
+                      tooltip: localizedUiText(context, 'Pause'),
                       onPressed: snapshot.pausedByPeer
                           ? null
                           : () => unawaited(
@@ -18761,13 +18697,13 @@ class _TransferManagerTile extends StatelessWidget {
                   if (snapshot.phase == TransferPhase.failed ||
                       snapshot.phase == TransferPhase.unavailable)
                     IconButton(
-                      tooltip: 'Retry',
+                      tooltip: localizedUiText(context, 'Retry'),
                       onPressed: () => controller.retryAttachment(snapshot.id),
                       icon: const Icon(Icons.refresh),
                     ),
                   if (canCancel)
                     IconButton(
-                      tooltip: 'Cancel',
+                      tooltip: localizedUiText(context, 'Cancel'),
                       onPressed: () =>
                           unawaited(controller.cancelTransfer(snapshot.id)),
                       icon: const Icon(Icons.close),
@@ -18808,7 +18744,7 @@ class _TransferManagerTile extends StatelessWidget {
               )) ...[
                 const SizedBox(height: 10),
                 Align(
-                  alignment: Alignment.centerLeft,
+                  alignment: AlignmentDirectional.centerStart,
                   child: FilledButton.tonalIcon(
                     onPressed: () => unawaited(
                       controller.continueLargeTransferOverIrohRelay(
@@ -18816,7 +18752,7 @@ class _TransferManagerTile extends StatelessWidget {
                       ),
                     ),
                     icon: const Icon(Icons.cloud_upload_outlined),
-                    label: const Text('Continue over Iroh relay'),
+                    label:  Text(localizedUiText(context, 'Continue over Iroh relay')),
                   ),
                 ),
               ],
@@ -18847,7 +18783,7 @@ class _StorageReserveOverrideButton extends StatelessWidget {
               ignoreStorageReserve: true,
             ),
           ),
-    child: const Text('Download anyway'),
+    child:  Text(localizedUiText(context, 'Download anyway')),
   );
 }
 
@@ -19023,7 +18959,7 @@ class _AttachmentRow extends StatelessWidget {
     try {
       final defaultDir = await _conestDownloadsDir();
       final path = await FilePicker.saveFile(
-        dialogTitle: 'Save $safeFileName',
+        dialogTitle: localizedUiText(context, 'Save $safeFileName'),
         fileName: safeFileName,
         bytes: bytes,
         initialDirectory: defaultDir?.path,
@@ -19389,7 +19325,7 @@ class _AttachmentRow extends StatelessWidget {
             Icon(Icons.error_outline, size: 18, color: palette.danger),
             const SizedBox(width: 8),
             Text(
-              'Attachment metadata unavailable',
+              localizedUiText(context, 'Attachment metadata unavailable'),
               style: TextStyle(color: palette.danger),
             ),
           ],
@@ -19457,11 +19393,11 @@ class _AttachmentRow extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               accepting
-                  ? '${sizeMb.toStringAsFixed(1)} MB · preparing download…'
+                  ? localizedUiText(context, '${sizeMb.toStringAsFixed(1)} MB · preparing download…')
                   : descriptor.sizeBytes >
                         MessengerController.maxAttachmentSizeBytes
-                  ? '${sizeMb.toStringAsFixed(1)} MB · direct route required'
-                  : '${sizeMb.toStringAsFixed(1)} MB · tap to download',
+                  ? localizedUiText(context, '${sizeMb.toStringAsFixed(1)} MB · direct route required')
+                  : localizedUiText(context, '${sizeMb.toStringAsFixed(1)} MB · tap to download'),
               style: TextStyle(color: metaColor),
             ),
             if (snapshot?.error case final error?) ...[
@@ -19479,7 +19415,7 @@ class _AttachmentRow extends StatelessWidget {
                           controller.acceptIncomingAttachment(descriptor.id),
                         ),
                   child: accepting
-                      ? const Row(
+                      ?  Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             SizedBox.square(
@@ -19487,10 +19423,10 @@ class _AttachmentRow extends StatelessWidget {
                               child: CircularProgressIndicator(strokeWidth: 2),
                             ),
                             SizedBox(width: 8),
-                            Text('Preparing download…'),
+                            Text(localizedUiText(context, 'Preparing download…')),
                           ],
                         )
-                      : const Text('Download'),
+                      :  Text(localizedUiText(context, 'Download')),
                 ),
                 if (controller.canDownloadIgnoringStorageReserve(descriptor.id))
                   _StorageReserveOverrideButton(
@@ -19503,7 +19439,7 @@ class _AttachmentRow extends StatelessWidget {
                       : () => unawaited(
                           controller.rejectIncomingAttachment(descriptor.id),
                         ),
-                  child: const Text('Reject'),
+                  child:  Text(localizedUiText(context, 'Reject')),
                 ),
               ],
             ),
@@ -19682,9 +19618,8 @@ class _AttachmentRow extends StatelessWidget {
                   const SizedBox(height: 6),
                   Text(
                     progress != null
-                        ? 'Transferring · ${(progress * 100).toStringAsFixed(0)}% · '
-                              '${_formatBytes(descriptor.sizeBytes)}'
-                        : 'Transferring · ${_formatBytes(descriptor.sizeBytes)}',
+                        ? localizedUiText(context, 'Transferring · ${(progress * 100).toStringAsFixed(0)}% · ' '${_formatBytes(descriptor.sizeBytes)}')
+                        : localizedUiText(context, 'Transferring · ${_formatBytes(descriptor.sizeBytes)}'),
                     style: Theme.of(
                       context,
                     ).textTheme.labelSmall?.copyWith(color: metaColor),
@@ -19735,7 +19670,7 @@ class _AttachmentRow extends StatelessWidget {
                         right: 8,
                         bottom: 8,
                         child: Text(
-                          '${descriptor.fileName} · ${_formatBytes(descriptor.sizeBytes)}',
+                          localizedUiText(context, '${descriptor.fileName} · ${_formatBytes(descriptor.sizeBytes)}'),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -19835,11 +19770,11 @@ class _AttachmentRow extends StatelessWidget {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Voice message',
+                                localizedUiText(context, 'Voice message'),
                                 style: TextStyle(color: textColor),
                               ),
                               Text(
-                                '$durationLabel · ${_formatBytes(descriptor.sizeBytes)}',
+                                localizedUiText(context, '$durationLabel · ${_formatBytes(descriptor.sizeBytes)}'),
                                 style: TextStyle(color: metaColor),
                               ),
                             ],
@@ -19847,7 +19782,7 @@ class _AttachmentRow extends StatelessWidget {
                         ),
                         if (hasLocalFile)
                           PopupMenuButton<double>(
-                            tooltip: 'Playback speed',
+                            tooltip: localizedUiText(context, 'Playback speed'),
                             icon: Icon(Icons.speed, color: textColor, size: 20),
                             onSelected: (rate) => unawaited(
                               service
@@ -19886,9 +19821,9 @@ class _AttachmentRow extends StatelessWidget {
                       ),
                     if (isCurrent && service.playbackError != null)
                       Align(
-                        alignment: Alignment.centerLeft,
+                        alignment: AlignmentDirectional.centerStart,
                         child: Text(
-                          'Playback failed: ${service.playbackError}',
+                          localizedUiText(context, 'Playback failed: ${service.playbackError}'),
                           style: TextStyle(
                             color: palette.danger,
                             fontSize: 12,
@@ -20041,7 +19976,7 @@ class _AttachmentRow extends StatelessWidget {
                 children: [
                   if (outbound)
                     Padding(
-                      padding: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsetsDirectional.only(end: 8),
                       child: _RouteChip(
                         route: controller.lastDeliveryRouteFor(descriptor.id),
                       ),
@@ -20055,7 +19990,7 @@ class _AttachmentRow extends StatelessWidget {
                         size: 22,
                         color: metaColor,
                       ),
-                      tooltip: pauseState.pausedByMe ? 'Resume' : 'Pause',
+                      tooltip: pauseState.pausedByMe ? localizedUiText(context, 'Resume') : localizedUiText(context, 'Pause'),
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(
@@ -20079,7 +20014,7 @@ class _AttachmentRow extends StatelessWidget {
                         size: 22,
                         color: metaColor,
                       ),
-                      tooltip: 'Cancel',
+                      tooltip: localizedUiText(context, 'Cancel'),
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(
@@ -20221,7 +20156,7 @@ class _StagedAttachmentTray extends StatelessWidget {
                 }
                 return Padding(
                   key: ValueKey(item.id),
-                  padding: const EdgeInsets.only(right: 8),
+                  padding: const EdgeInsetsDirectional.only(end: 8),
                   child: Stack(
                     clipBehavior: Clip.none,
                     children: [
@@ -20245,7 +20180,7 @@ class _StagedAttachmentTray extends StatelessWidget {
                             shape: BoxShape.circle,
                           ),
                           child: Text(
-                            '${i + 1}',
+                            localizedUiText(context, '${i + 1}'),
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 11,
@@ -20258,7 +20193,7 @@ class _StagedAttachmentTray extends StatelessWidget {
                         left: 2,
                         bottom: 2,
                         child: PopupMenuButton<AttachmentPresentation>(
-                          tooltip: 'Send mode',
+                          tooltip: localizedUiText(context, 'Send mode'),
                           initialValue: item.presentation,
                           onSelected: (presentation) =>
                               controller.setStagedPresentation(
@@ -20266,14 +20201,14 @@ class _StagedAttachmentTray extends StatelessWidget {
                                 stagedId: item.id,
                                 presentation: presentation,
                               ),
-                          itemBuilder: (context) => const [
+                          itemBuilder: (context) =>  [
                             PopupMenuItem(
                               value: AttachmentPresentation.media,
-                              child: Text('Send as media'),
+                              child: Text(localizedUiText(context, 'Send as media')),
                             ),
                             PopupMenuItem(
                               value: AttachmentPresentation.file,
-                              child: Text('Send as file'),
+                              child: Text(localizedUiText(context, 'Send as file')),
                             ),
                           ],
                           child: Container(
@@ -20287,8 +20222,8 @@ class _StagedAttachmentTray extends StatelessWidget {
                             ),
                             child: Text(
                               item.presentation == AttachmentPresentation.media
-                                  ? 'MEDIA'
-                                  : 'FILE',
+                                  ? localizedUiText(context, 'MEDIA')
+                                  : localizedUiText(context, 'FILE'),
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 8,
@@ -20397,10 +20332,10 @@ class _TransferOverlay extends StatelessWidget {
                     const SizedBox(height: 6),
                     Text(
                       pausedByMe
-                          ? 'Paused'
+                          ? localizedUiText(context, 'Paused')
                           : pausedByPeer
-                          ? 'Paused by peer'
-                          : (pct != null ? '$pct%' : ''),
+                          ? localizedUiText(context, 'Paused by peer')
+                          : (pct != null ? localizedUiText(context, '$pct%') : ''),
                       style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.w600,
@@ -20458,7 +20393,7 @@ class _PathImageViewerScreen extends StatelessWidget {
         title: Text(title),
         actions: [
           IconButton(
-            tooltip: 'Save',
+            tooltip: localizedUiText(context, 'Save'),
             onPressed: () => unawaited(onSave()),
             icon: const Icon(Icons.download_outlined),
           ),
@@ -20476,9 +20411,9 @@ class _PathImageViewerScreen extends StatelessWidget {
                 File(path),
                 cacheWidth: cacheWidth,
                 fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) => const Center(
+                errorBuilder: (context, error, stackTrace) =>  Center(
                   child: Text(
-                    'Could not decode this image.',
+                    localizedUiText(context, 'Could not decode this image.'),
                     style: TextStyle(color: Colors.white),
                   ),
                 ),
@@ -20555,20 +20490,20 @@ class _ImageViewerScreenState extends State<_ImageViewerScreen> {
         foregroundColor: Colors.white,
         title: Text(
           widget.pages.length > 1
-              ? '${activePage.fileName}  ·  ${_index + 1}/${widget.pages.length}'
+              ? localizedUiText(context, '${activePage.fileName}  ·  ${_index + 1}/${widget.pages.length}')
               : activePage.fileName,
         ),
         actions: [
           if (widget.onCopy != null)
             IconButton(
               icon: const Icon(Icons.copy_outlined),
-              tooltip: 'Copy',
+              tooltip: localizedUiText(context, 'Copy'),
               onPressed: () => widget.onCopy!(activePage),
             ),
           if (widget.onSave != null)
             IconButton(
               icon: const Icon(Icons.download_outlined),
-              tooltip: 'Save',
+              tooltip: localizedUiText(context, 'Save'),
               onPressed: () => widget.onSave!(activePage),
             ),
         ],
@@ -20634,23 +20569,23 @@ class _RouteChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final info = switch (route) {
       OutboundDeliveryRoute.lanDirect => (
-        label: 'LAN',
+        label: localizedUiText(context, 'LAN'),
         color: const Color(0xFF4ADE80),
       ),
       OutboundDeliveryRoute.irohDirect => (
-        label: 'direct',
+        label: localizedUiText(context, 'direct'),
         color: const Color(0xFF22D3EE),
       ),
       OutboundDeliveryRoute.irohRelay => (
-        label: 'Iroh relay',
+        label: localizedUiText(context, 'Iroh relay'),
         color: const Color(0xFFC084FC),
       ),
       OutboundDeliveryRoute.conestRelay => (
-        label: 'relay',
+        label: localizedUiText(context, 'relay'),
         color: const Color(0xFFFBBF24),
       ),
       OutboundDeliveryRoute.unknown => (
-        label: 'routing',
+        label: localizedUiText(context, 'routing'),
         color: const Color(0xFF94A3B8),
       ),
     };
@@ -20744,22 +20679,18 @@ Future<void> _sendViaPlainMatrix(
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
-      title: const Text('Send via Matrix?'),
+      title:  Text(localizedUiText(context, 'Send via Matrix?')),
       content: Text(
-        '${contact.alias} cannot be reached over Conest right now. Send this '
-        'message to $userId as an ordinary Matrix message instead?\n\n'
-        'It goes to your Matrix direct chat with them, not through Conest '
-        'encryption: the homeserver can read it unless that chat is '
-        'encrypted. Conest stops trying to deliver it.',
+        localizedUiText(context, '${contact.alias} cannot be reached over Conest right now. Send this ' 'message to $userId as an ordinary Matrix message instead?\n\n' 'It goes to your Matrix direct chat with them, not through Conest ' 'encryption: the homeserver can read it unless that chat is ' 'encrypted. Conest stops trying to deliver it.'),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context, false),
-          child: const Text('Keep waiting'),
+          child:  Text(localizedUiText(context, 'Keep waiting')),
         ),
         FilledButton(
           onPressed: () => Navigator.pop(context, true),
-          child: const Text('Send via Matrix'),
+          child:  Text(localizedUiText(context, 'Send via Matrix')),
         ),
       ],
     ),
@@ -20783,8 +20714,8 @@ class _MessageRouteLegend extends StatelessWidget {
   Widget build(BuildContext context) {
     return ExpansionTile(
       tilePadding: EdgeInsets.zero,
-      title: const Text('Message routes'),
-      subtitle: const Text('What the coloured marks on messages mean'),
+      title:  Text(localizedUiText(context, 'Message routes')),
+      subtitle:  Text(localizedUiText(context, 'What the coloured marks on messages mean')),
       children: [
         for (final route in MessageRoute.values)
           if (route.carrierKind?.userVisible ?? true)
@@ -20856,7 +20787,7 @@ class _MessageRouteChip extends StatelessWidget {
                 ],
                 if (dots.length > 4)
                   Text(
-                    '+${dots.length - 4}',
+                    localizedUiText(context, '+${dots.length - 4}'),
                     style: TextStyle(fontSize: 9, color: route.color),
                   ),
                 const SizedBox(width: 1),
@@ -20906,7 +20837,7 @@ class _QueueBadge extends StatelessWidget {
       ),
       alignment: Alignment.center,
       child: Text(
-        '$position',
+        localizedUiText(context, '$position'),
         style: const TextStyle(
           color: Colors.white,
           fontSize: 11,
@@ -21075,7 +21006,7 @@ class _VideoPlayerScreenState extends State<_VideoPlayerScreen> {
           if (widget.onSave != null)
             IconButton(
               icon: const Icon(Icons.download_outlined),
-              tooltip: 'Save',
+              tooltip: localizedUiText(context, 'Save'),
               onPressed: () => widget.onSave!(),
             ),
         ],
@@ -21107,7 +21038,7 @@ class _VideoPlayerScreenState extends State<_VideoPlayerScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        'Could not play this video: $_initError',
+                        localizedUiText(context, 'Could not play this video: $_initError'),
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Colors.white70),
                       ),
@@ -21115,7 +21046,7 @@ class _VideoPlayerScreenState extends State<_VideoPlayerScreen> {
                       FilledButton.icon(
                         onPressed: _openInSystemPlayer,
                         icon: const Icon(Icons.open_in_new),
-                        label: const Text('Open in default player'),
+                        label:  Text(localizedUiText(context, 'Open in default player')),
                       ),
                     ],
                   ),
@@ -21200,7 +21131,7 @@ class _GroupLeftBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
-        'You left',
+        localizedUiText(context, 'You left'),
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
           color: palette.inkSoft,
           fontWeight: FontWeight.w700,
@@ -21339,7 +21270,7 @@ class _ComposerReplyPreview extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Replying to $senderLabel',
+                  localizedUiText(context, 'Replying to $senderLabel'),
                   style: Theme.of(context).textTheme.labelMedium?.copyWith(
                     color: palette.primary,
                     fontWeight: FontWeight.w700,
@@ -21360,7 +21291,7 @@ class _ComposerReplyPreview extends StatelessWidget {
           ),
           IconButton(
             onPressed: onCancel,
-            tooltip: 'Cancel reply',
+            tooltip: localizedUiText(context, 'Cancel reply'),
             icon: const Icon(Icons.close),
           ),
         ],
@@ -21403,7 +21334,7 @@ class _ScheduledMessagesScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Scheduled messages')),
+      appBar: AppBar(title:  Text(localizedUiText(context, 'Scheduled messages'))),
       body: ListenableBuilder(
         listenable: controller,
         builder: (context, _) {
@@ -21415,7 +21346,7 @@ class _ScheduledMessagesScreen extends StatelessWidget {
               )
               .toList(growable: false);
           if (entries.isEmpty) {
-            return const Center(child: Text('No scheduled messages'));
+            return  Center(child: Text(localizedUiText(context, 'No scheduled messages')));
           }
           return ListView.separated(
             padding: const EdgeInsets.all(16),
@@ -21434,13 +21365,13 @@ class _ScheduledMessagesScreen extends StatelessWidget {
                 ),
                 title: Text(
                   entry.body.isEmpty
-                      ? (entry.attachmentFileName ?? 'Scheduled attachment')
+                      ? (entry.attachmentFileName ?? localizedUiText(context, 'Scheduled attachment'))
                       : entry.body,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
                 subtitle: Text(
-                  '${entry.conversationKind} • ${entry.scheduledAtUtc.toLocal()}\n${entry.failureReason ?? entry.state.name}',
+                  localizedUiText(context, '${entry.conversationKind} • ${entry.scheduledAtUtc.toLocal()}\n${entry.failureReason ?? entry.state.name}'),
                 ),
                 isThreeLine: true,
                 trailing: PopupMenuButton<String>(
@@ -21450,7 +21381,7 @@ class _ScheduledMessagesScreen extends StatelessWidget {
                       final body = await showDialog<String>(
                         context: context,
                         builder: (dialogContext) => AlertDialog(
-                          title: const Text('Edit scheduled message'),
+                          title:  Text(localizedUiText(context, 'Edit scheduled message')),
                           content: TextField(
                             controller: editor,
                             autofocus: true,
@@ -21458,19 +21389,19 @@ class _ScheduledMessagesScreen extends StatelessWidget {
                             maxLines: 5,
                             decoration: InputDecoration(
                               hintText: entry.attachmentPath == null
-                                  ? 'Message'
-                                  : 'Caption',
+                                  ? localizedUiText(context, 'Message')
+                                  : localizedUiText(context, 'Caption'),
                             ),
                           ),
                           actions: [
                             TextButton(
                               onPressed: () => Navigator.pop(dialogContext),
-                              child: const Text('Cancel'),
+                              child:  Text(localizedUiText(context, 'Cancel')),
                             ),
                             FilledButton(
                               onPressed: () =>
                                   Navigator.pop(dialogContext, editor.text),
-                              child: const Text('Save'),
+                              child:  Text(localizedUiText(context, 'Save')),
                             ),
                           ],
                         ),
@@ -21522,12 +21453,12 @@ class _ScheduledMessagesScreen extends StatelessWidget {
                       value: 'edit',
                       child: Text(l10nOf(context).menuEdit),
                     ),
-                    const PopupMenuItem(value: 'send', child: Text('Send now')),
-                    const PopupMenuItem(
+                     PopupMenuItem(value: 'send', child: Text(localizedUiText(context, 'Send now'))),
+                     PopupMenuItem(
                       value: 'reschedule',
-                      child: Text('Reschedule'),
+                      child: Text(localizedUiText(context, 'Reschedule')),
                     ),
-                    const PopupMenuItem(value: 'cancel', child: Text('Cancel')),
+                     PopupMenuItem(value: 'cancel', child: Text(localizedUiText(context, 'Cancel'))),
                   ],
                 ),
               );
@@ -21611,15 +21542,15 @@ class _ShareTargetDialog extends StatelessWidget {
     return AlertDialog(
       title: Text(
         count == 0
-            ? 'Share text to…'
+            ? localizedUiText(context, 'Share text to…')
             : count == 1
-            ? 'Share ${shared.files.single.name} to…'
-            : 'Share $count files to…',
+            ? localizedUiText(context, 'Share ${shared.files.single.name} to…')
+            : localizedUiText(context, 'Share $count files to…'),
       ),
       content: SizedBox(
         width: 380,
         child: contacts.isEmpty && groups.isEmpty
-            ? const Text('No chats to share into yet.')
+            ?  Text(localizedUiText(context, 'No chats to share into yet.'))
             : ListView(
                 shrinkWrap: true,
                 children: [
@@ -21641,7 +21572,7 @@ class _ShareTargetDialog extends StatelessWidget {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child:  Text(localizedUiText(context, 'Cancel')),
         ),
       ],
     );
@@ -21746,13 +21677,10 @@ class _WindowsFirewallTileState extends State<_WindowsFirewallTile> {
     key: const ValueKey('windows-firewall'),
     contentPadding: EdgeInsets.zero,
     leading: const Icon(Icons.shield_outlined),
-    title: const Text('Let devices on this network reach this PC'),
+    title:  Text(localizedUiText(context, 'Let devices on this network reach this PC')),
     subtitle: Text(
       _result ??
-          'If messages and files from a phone on the same network never '
-              'arrive (but yours reach it), Windows Firewall is blocking '
-              'them. This lets other devices on any network reach Conest '
-              'on this PC; Windows asks to confirm.',
+          localizedUiText(context, 'If messages and files from a phone on the same network never ' 'arrive (but yours reach it), Windows Firewall is blocking ' 'them. This lets other devices on any network reach Conest ' 'on this PC; Windows asks to confirm.'),
     ),
     trailing: _busy
         ? const SizedBox(
@@ -21760,7 +21688,7 @@ class _WindowsFirewallTileState extends State<_WindowsFirewallTile> {
             height: 20,
             child: CircularProgressIndicator(strokeWidth: 2),
           )
-        : TextButton(onPressed: _allow, child: const Text('Allow')),
+        : TextButton(onPressed: _allow, child:  Text(localizedUiText(context, 'Allow'))),
   );
 }
 

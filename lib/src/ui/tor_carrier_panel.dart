@@ -1,3 +1,4 @@
+import 'localized_ui_text.dart';
 import 'package:flutter/material.dart';
 
 import '../messenger_controller.dart';
@@ -79,11 +80,9 @@ class _TorCarrierPanelState extends State<TorCarrierPanel> {
         SwitchListTile.adaptive(
           key: const ValueKey('tor-carrier-switch'),
           contentPadding: EdgeInsets.zero,
-          title: const Text('Tor'),
-          subtitle: const Text(
-            'Reach contacts through Tor onion services: neither side nor '
-            'the network learns where the other is. Slower than other '
-            'routes; add bridges where Tor is blocked.',
+          title:  Text(localizedUiText(context, 'Tor')),
+          subtitle:  Text(
+            localizedUiText(context, 'Reach contacts through Tor onion services: neither side nor ' 'the network learns where the other is. Slower than other ' 'routes; add bridges where Tor is blocked.'),
           ),
           value: config != null,
           onChanged: _busy
@@ -97,21 +96,16 @@ class _TorCarrierPanelState extends State<TorCarrierPanel> {
           maxLines: 6,
           enabled: !_busy,
           decoration: InputDecoration(
-            labelText: 'Bridges (optional, one per line)',
+            labelText: localizedUiText(context, 'Bridges (optional, one per line)'),
             hintText: _transports == false
-                ? '192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413'
-                : 'obfs4 192.0.2.1:443 '
-                      '4352E58420E68F5E40BF7C74FADDCCD9D1349413 '
-                      'cert=… iat-mode=0',
+                ? localizedUiText(context, '192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413')
+                : localizedUiText(context, 'obfs4 192.0.2.1:443 ' '4352E58420E68F5E40BF7C74FADDCCD9D1349413 ' 'cert=… iat-mode=0'),
             hintMaxLines: 3,
             helperText: switch (_transports) {
               true =>
-                'Lines from bridges.torproject.org, starting with the '
-                    'type: obfs4, webtunnel, snowflake or meek_lite (or '
-                    'plain bridges: address and fingerprint).',
+                localizedUiText(context, 'Lines from bridges.torproject.org, starting with the ' 'type: obfs4, webtunnel, snowflake or meek_lite (or ' 'plain bridges: address and fingerprint).'),
               false =>
-                'Plain bridges only (address and fingerprint) in '
-                    'this build.',
+                localizedUiText(context, 'Plain bridges only (address and fingerprint) in ' 'this build.'),
               null => null,
             },
             helperMaxLines: 2,
@@ -123,7 +117,7 @@ class _TorCarrierPanelState extends State<TorCarrierPanel> {
             child: TextButton(
               key: const ValueKey('tor-bridges-save'),
               onPressed: _busy ? null : () => _run(_enable),
-              child: const Text('Use these bridges'),
+              child:  Text(localizedUiText(context, 'Use these bridges')),
             ),
           ),
         if (config != null)

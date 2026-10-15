@@ -1,3 +1,4 @@
+import 'localized_ui_text.dart';
 import 'package:flutter/material.dart';
 
 import '../messenger_controller.dart';
@@ -30,17 +31,17 @@ class AppModeSelector extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'App mode',
+          localizedUiText(context, 'App mode'),
           style: Theme.of(
             context,
           ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 8),
         SegmentedButton<AppMode>(
-          segments: const [
-            ButtonSegment(value: AppMode.conest, label: Text('Conest')),
-            ButtonSegment(value: AppMode.both, label: Text('Both')),
-            ButtonSegment(value: AppMode.matrixOnly, label: Text('Matrix')),
+          segments:  [
+            ButtonSegment(value: AppMode.conest, label: Text(localizedUiText(context, 'Conest'))),
+            ButtonSegment(value: AppMode.both, label: Text(localizedUiText(context, 'Both'))),
+            ButtonSegment(value: AppMode.matrixOnly, label: Text(localizedUiText(context, 'Matrix'))),
           ],
           selected: {mode},
           onSelectionChanged: (selection) =>
@@ -63,21 +64,18 @@ class AppModeSelector extends StatelessWidget {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('Use Conest as a Matrix client only?'),
-          content: const Text(
-            'Your Conest chats are hidden and Conest stops connecting on this '
-            'device until you switch back. Nothing is deleted. Contacts '
-            "cannot reach you over Conest meanwhile; their apps keep "
-            'retrying and deliver when you switch back.',
+          title:  Text(localizedUiText(context, 'Use Conest as a Matrix client only?')),
+          content:  Text(
+            localizedUiText(context, 'Your Conest chats are hidden and Conest stops connecting on this ' 'device until you switch back. Nothing is deleted. Contacts ' "cannot reach you over Conest meanwhile; their apps keep " 'retrying and deliver when you switch back.'),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
+              child:  Text(localizedUiText(context, 'Cancel')),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('Switch'),
+              child:  Text(localizedUiText(context, 'Switch')),
             ),
           ],
         ),
@@ -90,7 +88,7 @@ class AppModeSelector extends StatelessWidget {
       if (context.mounted) {
         ScaffoldMessenger.maybeOf(
           context,
-        )?.showSnackBar(SnackBar(content: Text('$error')));
+        )?.showSnackBar(SnackBar(content: Text(localizedUiText(context, '$error'))));
       }
     }
   }
