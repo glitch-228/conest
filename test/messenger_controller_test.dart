@@ -17653,6 +17653,42 @@ void main() {
     },
   );
 
+  test(
+    'background upkeep slows down on battery and more in battery saver',
+    () async {
+      Future<MessengerController> device(EnergyMode mode) async {
+        final controller = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: mode.name,
+          energyPolicy: EnergyPolicy.fixed(mode),
+        );
+        addTearDown(controller.dispose);
+        controller.setAppForegroundState(false);
+        return controller;
+      }
+
+      final mains = await device(EnergyMode.unconstrained);
+      final battery = await device(EnergyMode.limited);
+      final saver = await device(EnergyMode.saver);
+      expect(
+        battery.heartbeatIntervalForTesting(),
+        mains.heartbeatIntervalForTesting() * 2,
+      );
+      expect(
+        saver.heartbeatIntervalForTesting(),
+        mains.heartbeatIntervalForTesting() * 4,
+      );
+      final mainsPoll = mains.pollIntervalForTesting;
+      if (mainsPoll != null) {
+        expect(saver.pollIntervalForTesting, mainsPoll * 4);
+      }
+      // In the foreground nothing slows down.
+      saver.setAppForegroundState(true);
+      mains.setAppForegroundState(true);
+      expect(saver.pollIntervalForTesting, mains.pollIntervalForTesting);
+    },
+  );
+
   group('Clocks that are off', () {
     Future<(MessengerController, MessengerController, MessengerController)>
     threeWithBobBehind() async {

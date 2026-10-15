@@ -2050,11 +2050,29 @@ class MessengerController extends ChangeNotifier {
         !kIsWeb && !Platform.isAndroid
             ? (awaitingRecipientAckCount > 0
                   ? _foregroundActivePollInterval
-                  : _desktopBackgroundPollInterval)
-            : _backgroundEnabledPollInterval,
+                  : _desktopBackgroundPollInterval * _backgroundEnergyFactor)
+            : _backgroundEnabledPollInterval * _backgroundEnergyFactor,
       _RuntimeMode.backgroundDisabledAndroid => null,
     };
   }
+
+  @visibleForTesting
+  Duration? get pollIntervalForTesting => _currentPollInterval();
+
+  @visibleForTesting
+  Duration heartbeatIntervalForTesting() =>
+      _heartbeatIntervalForCurrentRuntime(_requireIdentity());
+
+  /// How much slower background upkeep (polls, heartbeats) runs on this
+  /// power: as is on mains or an unmetered network, half as often on
+  /// battery, a quarter as often in battery saver. Nothing the user waits
+  /// for (an open chat, a transfer) slows down.
+  int get _backgroundEnergyFactor =>
+      switch (_energyPolicy.modeFor(_networkCostClass)) {
+        EnergyMode.unconstrained => 1,
+        EnergyMode.limited => 2,
+        EnergyMode.saver => 4,
+      };
 
   /// When a transfer last moved through a relay that has to be polled, per
   /// contact; the fast transfer poll runs only for a while after that.
@@ -2092,9 +2110,9 @@ class MessengerController extends ChangeNotifier {
   Duration _heartbeatIntervalForCurrentRuntime(IdentityRecord me) {
     if (!_appInForeground) {
       if (!kIsWeb && Platform.isAndroid) {
-        return _backgroundHeartbeatInterval;
+        return _backgroundHeartbeatInterval * _backgroundEnergyFactor;
       }
-      return _foregroundIdleHeartbeatInterval;
+      return _foregroundIdleHeartbeatInterval * _backgroundEnergyFactor;
     }
     return switch (_runtimeMode) {
       _RuntimeMode.foregroundActive => _heartbeatInterval,
