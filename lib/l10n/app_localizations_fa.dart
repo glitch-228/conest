@@ -375,142 +375,142 @@ class AppLocalizationsFa extends AppLocalizations {
   String get contactKeep => 'نگه‌داشتن مخاطب';
 
   @override
-  String get uiPassphrase89950C => 'Passphrase';
+  String get uiPassphrase89950C => 'گذرواژه';
 
   @override
-  String get uiConfirmPassphraseEBAAC0 => 'Confirm passphrase';
+  String get uiConfirmPassphraseEBAAC0 => 'تأیید گذرواژه';
 
   @override
-  String get uiUnlock1526A1 => 'Unlock';
+  String get uiUnlock1526A1 => 'باز کردن قفل';
 
   @override
-  String get uiUpdateAvailable67FD3A => 'Update Available';
+  String get uiUpdateAvailable67FD3A => 'به‌روزرسانی موجود است';
 
   @override
-  String get uiLater56E2F5 => 'Later';
+  String get uiLater56E2F5 => 'بعداً';
 
   @override
   String get uiHostAutoDetectsTCPUDP663D30 =>
-      'host auto-detects TCP/UDP; udp://host:port forces UDP';
+      'میزبان TCP/UDP را خودکار تشخیص می‌دهد؛ udp://host:port استفاده از UDP را اجباری می‌کند';
 
   @override
-  String get uiVerificationRequestDA06F9 => 'Verification request';
+  String get uiVerificationRequestDA06F9 => 'درخواست تأیید';
 
   @override
-  String get uiIgnore98F55D => 'Ignore';
+  String get uiIgnore98F55D => 'نادیده گرفتن';
 
   @override
-  String get uiVerifyDDA6AC => 'Verify';
+  String get uiVerifyDDA6AC => 'تأیید';
 
   @override
   String uiCouldNotReadValueValue695755(String value, String value2) {
-    return 'Could not read $value: $value2';
+    return 'خواندن $value ممکن نشد: $value2';
   }
 
   @override
   String uiCouldNotShareValueValue7BA3A3(String value, String value2) {
-    return 'Could not share $value: $value2';
+    return 'اشتراک‌گذاری $value ممکن نشد: $value2';
   }
 
   @override
   String uiCouldNotSaveSidebarWidthB4DACB(String value) {
-    return 'Could not save sidebar width: $value';
+    return 'ذخیرهٔ پهنای نوار کناری ممکن نشد: $value';
   }
 
   @override
   String get uiNoAudioOutputDevicesWere17E473 =>
-      'No audio output devices were found.';
+      'هیچ دستگاه خروجی صدا پیدا نشد.';
 
   @override
-  String get uiCallAudioOutput0C276F => 'Call audio output';
+  String get uiCallAudioOutput0C276F => 'خروجی صدای تماس';
 
   @override
   String uiCallAudioRoutedToValueFFFBE8(String value) {
-    return 'Call audio routed to $value.';
+    return 'صدای تماس به $value هدایت شد.';
   }
 
   @override
   String uiCouldNotChangeCallAudio6CE7B1(String value) {
-    return 'Could not change call audio output: $value';
+    return 'تغییر خروجی صدای تماس ممکن نشد: $value';
   }
 
   @override
   String uiCouldNotOpenInviteValue6C4D06(String value) {
-    return 'Could not open invite: $value';
+    return 'باز کردن دعوت ممکن نشد: $value';
   }
 
   @override
   String uiCouldNotSendAttachmentValueEFF771(String value) {
-    return 'Could not send attachment: $value';
+    return 'ارسال پیوست ممکن نشد: $value';
   }
 
   @override
   String uiCouldNotSendMessageValue042C4F(String value) {
-    return 'Could not send message: $value';
+    return 'ارسال پیام ممکن نشد: $value';
   }
 
   @override
-  String get uiSendFromOriginalFFF29A => 'Send from original';
+  String get uiSendFromOriginalFFF29A => 'ارسال از فایل اصلی';
 
   @override
   String uiCouldNotSendGroupMessageB6C7D1(String value) {
-    return 'Could not send group message: $value';
+    return 'ارسال پیام گروه ممکن نشد: $value';
   }
 
   @override
   String uiCouldNotSendLANLobby8E7487(String value) {
-    return 'Could not send LAN lobby message: $value';
+    return 'ارسال پیام گفت‌وگوی محلی ممکن نشد: $value';
   }
 
   @override
   String uiCouldNotStageValuePathless514094(String value) {
-    return 'Could not stage $value: pathless drops are limited to 8 MB to protect memory.';
+    return 'آماده‌سازی $value ممکن نشد: برای محافظت از حافظه، فایل‌های رهاشدهٔ بدون مسیر به ۸ MB محدودند.';
   }
 
   @override
   String get uiSelectAGroupBeforeDropping9DAB4C =>
-      'Select a group before dropping files.';
+      'پیش از رها کردن فایل‌ها، گروهی را انتخاب کنید.';
 
   @override
   String uiValueLocalFilePathUnavailable217177(String value) {
-    return '$value: local file path unavailable.';
+    return '$value: مسیر فایل محلی در دسترس نیست.';
   }
 
   @override
   String uiValueSentWithoutIt7E0635(String value) {
-    return '$value Sent without it.';
+    return '$value بدون آن ارسال شد.';
   }
 
   @override
-  String get uiGroupFileScheduledB1DC66 => 'Group file scheduled.';
+  String get uiGroupFileScheduledB1DC66 => 'فایل گروه زمان‌بندی شد.';
 
   @override
   String uiCouldNotScheduleValueValue25CED3(String value, String value2) {
-    return 'Could not schedule $value: $value2';
+    return 'زمان‌بندی $value ممکن نشد: $value2';
   }
 
   @override
   String uiCouldNotOpenFilePicker8FF0C0(String value) {
-    return 'Could not open file picker: $value';
+    return 'باز کردن انتخابگر فایل ممکن نشد: $value';
   }
 
   @override
   String uiValuePickerReturnedNoData4670CA(String value) {
-    return '$value: picker returned no data.';
+    return '$value: انتخابگر داده‌ای برنگرداند.';
   }
 
   @override
   String uiOnlyTheFirstValueFiles45FC47(String value, String value2) {
-    return 'Only the first $value files will be staged (got $value2).';
+    return 'فقط $value فایل نخست آماده می‌شوند ($value2 فایل دریافت شد).';
   }
 
   @override
   String uiValueSkippedValueMBExceeds487B2A(String value, String value2) {
-    return '$value skipped: $value2 MB exceeds the $value MB cap.';
+    return 'از $value گذشتیم: حجم $value2 MB از سقف $value MB بیشتر است.';
   }
 
   @override
-  String get uiTransfers812412 => 'Transfers';
+  String get uiTransfers812412 => 'انتقال‌ها';
 
   @override
   String uiValue75CED7(String value) {
@@ -518,1027 +518,1036 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiPreparingCallE86D6C => 'Preparing call…';
+  String get uiPreparingCallE86D6C => 'در حال آماده‌سازی تماس…';
 
   @override
-  String get uiCallingACD4A6 => 'Calling…';
+  String get uiCallingACD4A6 => 'در حال تماس…';
 
   @override
-  String get uiIncomingVoiceCallF68FD3 => 'Incoming voice call';
+  String get uiIncomingVoiceCallF68FD3 => 'تماس صوتی ورودی';
 
   @override
-  String get uiConnectingFD3E79 => 'Connecting…';
+  String get uiConnectingFD3E79 => 'در حال اتصال…';
 
   @override
-  String get uiReconnecting8A8B95 => 'Reconnecting…';
+  String get uiReconnecting8A8B95 => 'در حال اتصال دوباره…';
 
   @override
-  String get uiCallEnded9933A4 => 'Call ended';
+  String get uiCallEnded9933A4 => 'تماس پایان یافت';
 
   @override
   String uiVoiceCallValue06FE1F(String value) {
-    return 'Voice call: $value';
+    return 'تماس صوتی: $value';
   }
 
   @override
-  String get uiMinimizeCall6CB0F0 => 'Minimize call';
+  String get uiMinimizeCall6CB0F0 => 'کوچک کردن تماس';
 
   @override
-  String get uiAcceptBB54DB => 'Accept';
+  String get uiAcceptBB54DB => 'پذیرش';
 
   @override
-  String get uiReject2B03B5 => 'Reject';
+  String get uiReject2B03B5 => 'رد کردن';
 
   @override
-  String get uiNoiseSuppression71DE3C => 'Noise suppression';
+  String get uiNoiseSuppression71DE3C => 'کاهش نویز';
 
   @override
-  String get uiAudioOutput2B89CC => 'Audio output';
+  String get uiAudioOutput2B89CC => 'خروجی صدا';
 
   @override
-  String get uiDoneE9B450 => 'Done';
+  String get uiDoneE9B450 => 'تمام';
 
   @override
-  String get uiHangUp66BE99 => 'Hang up';
+  String get uiHangUp66BE99 => 'پایان تماس';
 
   @override
-  String get uiCloseDetails433DA6 => 'Close details';
+  String get uiCloseDetails433DA6 => 'بستن جزئیات';
 
   @override
-  String get uiOpenFullProfile35063C => 'Open full profile';
+  String get uiOpenFullProfile35063C => 'باز کردن نمایهٔ کامل';
 
   @override
-  String get uiOpenGroupSettings0B568E => 'Open group settings';
+  String get uiOpenGroupSettings0B568E => 'باز کردن تنظیمات گروه';
 
   @override
-  String get uiNewFolderA71199 => 'New folder';
+  String get uiNewFolderA71199 => 'پوشهٔ تازه';
 
   @override
-  String get uiFolderNameB2CE02 => 'Folder name';
+  String get uiFolderNameB2CE02 => 'نام پوشه';
 
   @override
-  String get uiMoveEarlier07DD6F => 'Move earlier';
+  String get uiMoveEarlier07DD6F => 'انتقال به قبل';
 
   @override
-  String get uiMoveLaterBB4C84 => 'Move later';
+  String get uiMoveLaterBB4C84 => 'انتقال به بعد';
 
   @override
-  String get uiSaveEFC007 => 'Save';
+  String get uiSaveEFC007 => 'ذخیره';
 
   @override
-  String get uiAddToFolderBFAD96 => 'Add to folder';
+  String get uiAddToFolderBFAD96 => 'افزودن به پوشه';
 
   @override
-  String get uiNewMessage1ED2E7 => 'New message';
+  String get uiNewMessage1ED2E7 => 'پیام تازه';
 
   @override
-  String get uiBackToChats8DE6F6 => 'Back to chats';
+  String get uiBackToChats8DE6F6 => 'بازگشت به گفت‌وگوها';
 
   @override
-  String get uiNavigationMenu6609F1 => 'Navigation menu';
+  String get uiNavigationMenu6609F1 => 'منوی پیمایش';
 
   @override
-  String get uiAllChats398E5B => 'All chats';
+  String get uiAllChats398E5B => 'همهٔ گفت‌وگوها';
 
   @override
-  String get uiSearchAllChatsC825C8 => 'Search all chats';
+  String get uiSearchAllChatsC825C8 => 'جست‌وجو در همهٔ گفت‌وگوها';
 
   @override
-  String get uiClearSearch67300D => 'Clear search';
+  String get uiClearSearch67300D => 'پاک کردن جست‌وجو';
 
   @override
-  String get uiContactRequests082691 => 'Contact requests';
+  String get uiContactRequests082691 => 'درخواست‌های ارتباط';
 
   @override
   String get uiReviewPeopleWhoWantTo24A8CB =>
-      'Review people who want to connect';
+      'بررسی افرادی که می‌خواهند ارتباط بگیرند';
 
   @override
-  String get uiNoChatsFoundC6BD82 => 'No chats found';
+  String get uiNoChatsFoundC6BD82 => 'گفت‌وگویی پیدا نشد';
 
   @override
-  String get uiNoArchivedChatsEAE7F0 => 'No archived chats';
+  String get uiNoArchivedChatsEAE7F0 => 'گفت‌وگوی بایگانی‌شده‌ای نیست';
 
   @override
-  String get uiNoMatrixChatsYet23B023 => 'No Matrix chats yet';
+  String get uiNoMatrixChatsYet23B023 => 'هنوز گفت‌وگوی Matrix ندارید';
 
   @override
-  String get uiNewGroupF9850C => 'New group';
+  String get uiNewGroupF9850C => 'گروه تازه';
 
   @override
-  String get uiAddWithConestBeam19D1E2 => 'Add with Conest Beam';
+  String get uiAddWithConestBeam19D1E2 => 'افزودن با Conest Beam';
 
   @override
-  String get uiDirectMessagesE7596A => 'Direct messages';
+  String get uiDirectMessagesE7596A => 'پیام‌های مستقیم';
 
   @override
   String get uiConestBeamE98B77 => 'Conest Beam';
 
   @override
-  String get uiMyInviteF80A7A => 'My invite';
+  String get uiMyInviteF80A7A => 'دعوت من';
 
   @override
-  String get uiGroupDetailsDF844A => 'Group details';
+  String get uiGroupDetailsDF844A => 'جزئیات گروه';
 
   @override
-  String get uiDebugBD604D => 'Debug';
+  String get uiDebugBD604D => 'اشکال‌زدایی';
 
   @override
-  String get uiAdd61CC55 => 'Add';
+  String get uiAdd61CC55 => 'افزودن';
 
   @override
-  String get uiPollRoutesNow22318F => 'Poll routes now';
+  String get uiPollRoutesNow22318F => 'بررسی مسیرها اکنون';
 
   @override
-  String get uiContactProfile1B3A0E => 'Contact profile';
+  String get uiContactProfile1B3A0E => 'نمایهٔ مخاطب';
 
   @override
-  String get uiHistoryForNewMembersF419F2 => 'History for new members';
+  String get uiHistoryForNewMembersF419F2 => 'تاریخچه برای اعضای تازه';
 
   @override
   String get uiChooseHowToWindDownF7399D =>
-      'Choose how to wind down this group. Transferring ownership keeps the group alive under a new owner and demotes you to admin. Deleting for everyone removes the group from every member\'s list and cannot be undone.';
+      'روش پایان دادن به این گروه را انتخاب کنید. انتقال مالکیت، گروه را با مالک تازه نگه می‌دارد و شما مدیر می‌شوید. حذف برای همه، گروه را از فهرست همهٔ اعضا پاک می‌کند و برگشت‌پذیر نیست.';
 
   @override
-  String get uiTransferOwnershipA563C9 => 'Transfer ownership…';
+  String get uiTransferOwnershipA563C9 => 'انتقال مالکیت…';
 
   @override
-  String get uiDeleteForEveryoneE055A8 => 'Delete for everyone';
+  String get uiDeleteForEveryoneE055A8 => 'حذف برای همه';
 
   @override
   String get uiNoOtherActiveMembersToF9DE12 =>
-      'No other active members to transfer ownership to.';
+      'عضو فعال دیگری برای انتقال مالکیت وجود ندارد.';
 
   @override
-  String get uiTransferOwnershipA6819E => 'Transfer ownership';
+  String get uiTransferOwnershipA6819E => 'انتقال مالکیت';
 
   @override
-  String get uiTransferCBB4CC => 'Transfer';
+  String get uiTransferCBB4CC => 'انتقال';
 
   @override
   String uiOwnershipTransferredToValue14A10D(String value) {
-    return 'Ownership transferred to $value.';
+    return 'مالکیت به $value منتقل شد.';
   }
 
   @override
   String get uiEveryMemberWillBeRemoved75A3FC =>
-      'Every member will be removed from the group and the group will be marked left in each member\'s list. Local message history is not deleted automatically — each member can clear it via Remove from list. This cannot be undone.';
+      'همهٔ اعضا حذف می‌شوند و گروه در فهرست هر عضو ترک‌شده نشان داده می‌شود. تاریخچهٔ محلی پیام‌ها خودکار پاک نمی‌شود؛ هر عضو می‌تواند آن را با «حذف از فهرست» پاک کند. این کار برگشت‌پذیر نیست.';
 
   @override
-  String get uiRemoveThisGroup38C4E8 => 'Remove this group?';
+  String get uiRemoveThisGroup38C4E8 => 'این گروه حذف شود؟';
 
   @override
   String get uiRemoveThisGroupFromYourDA7898 =>
-      'Remove this group from your list? This deletes the local message history. Other members will not be notified — they already see you as having left.';
+      'این گروه از فهرست شما حذف شود؟ تاریخچهٔ محلی پیام‌ها پاک می‌شود. دیگر اعضا مطلع نمی‌شوند؛ آن‌ها پیش‌تر خروج شما را دیده‌اند.';
 
   @override
-  String get uiRemoveE96390 => 'Remove';
+  String get uiRemoveE96390 => 'حذف';
 
   @override
-  String get uiChangeRole2B9BFD => 'Change role';
+  String get uiChangeRole2B9BFD => 'تغییر نقش';
 
   @override
-  String get uiRemoveMember1C31D1 => 'Remove member';
+  String get uiRemoveMember1C31D1 => 'حذف عضو';
 
   @override
   String get uiChooseWhatFutureMembersCanC38992 =>
-      'Choose what future members can catch up on';
+      'انتخاب کنید اعضای آینده چه تاریخچه‌ای را دریافت کنند';
 
   @override
-  String get uiAddMember170AD0 => 'Add member';
+  String get uiAddMember170AD0 => 'افزودن عضو';
 
   @override
-  String get uiDeleteGroup043336 => 'Delete group…';
+  String get uiDeleteGroup043336 => 'حذف گروه…';
 
   @override
-  String get uiLeave7E3520 => 'Leave';
+  String get uiLeave7E3520 => 'خروج';
 
   @override
-  String get uiRemoveFromList23A976 => 'Remove from list';
+  String get uiRemoveFromList23A976 => 'حذف از فهرست';
 
   @override
-  String get uiForwardMessage482959 => 'Forward message';
+  String get uiForwardMessage482959 => 'بازفرست پیام';
 
   @override
-  String get uiSavedMessagesC0FA7E => 'Saved messages';
+  String get uiSavedMessagesC0FA7E => 'پیام‌های ذخیره‌شده';
 
   @override
   String get uiThisAttachmentIsNotAvailableFE641A =>
-      'This attachment is not available locally yet.';
+      'این پیوست هنوز به‌صورت محلی در دسترس نیست.';
 
   @override
   String get uiDownloadThisFileBeforeForwarding60D7B5 =>
-      'Download this file before forwarding it.';
+      'پیش از بازفرستادن، این فایل را بارگیری کنید.';
 
   @override
-  String get uiSearchMessagesABEA65 => 'Search messages';
+  String get uiSearchMessagesABEA65 => 'جست‌وجوی پیام‌ها';
 
   @override
-  String get uiStartVoiceCallExperimental6DE320 =>
-      'Start voice call (experimental)';
+  String get uiStartVoiceCallExperimental6DE320 => 'شروع تماس صوتی (آزمایشی)';
 
   @override
-  String get uiChatOptionsA40D0F => 'Chat options';
+  String get uiChatOptionsA40D0F => 'گزینه‌های گفت‌وگو';
 
   @override
-  String get uiPausePreview805180 => 'Pause preview';
+  String get uiPausePreview805180 => 'مکث پیش‌نمایش';
 
   @override
-  String get uiPlayPreview47BB44 => 'Play preview';
+  String get uiPlayPreview47BB44 => 'پخش پیش‌نمایش';
 
   @override
-  String get uiUnmutePreview12A31A => 'Unmute preview';
+  String get uiUnmutePreview12A31A => 'وصل صدای پیش‌نمایش';
 
   @override
-  String get uiMutePreviewCE44BD => 'Mute preview';
+  String get uiMutePreviewCE44BD => 'قطع صدای پیش‌نمایش';
 
   @override
-  String get uiPauseVoiceMessageECD12D => 'Pause voice message';
+  String get uiPauseVoiceMessageECD12D => 'مکث پیام صوتی';
 
   @override
-  String get uiPlayVoiceMessageB16684 => 'Play voice message';
+  String get uiPlayVoiceMessageB16684 => 'پخش پیام صوتی';
 
   @override
-  String get uiPlaybackSpeed6FF42B => 'Playback speed';
+  String get uiPlaybackSpeed6FF42B => 'سرعت پخش';
 
   @override
-  String get uiStopRecordingEE0D9D => 'Stop recording';
+  String get uiStopRecordingEE0D9D => 'توقف ضبط';
 
   @override
-  String get uiDeleteRecording8B58CE => 'Delete recording';
+  String get uiDeleteRecording8B58CE => 'حذف ضبط';
 
   @override
   String uiCouldNotLoadOlderGroup1A192E(String value) {
-    return 'Could not load older group history: $value';
+    return 'بارگذاری تاریخچهٔ قدیمی‌تر گروه ممکن نشد: $value';
   }
 
   @override
   String uiMessageScheduledForValueD2D788(String value) {
-    return 'Message scheduled for $value.';
+    return 'پیام برای $value زمان‌بندی شد.';
   }
 
   @override
-  String get uiNewPoll6D62BD => 'New poll';
+  String get uiNewPoll6D62BD => 'نظرسنجی تازه';
 
   @override
-  String get uiQuestion002FF5 => 'Question';
+  String get uiQuestion002FF5 => 'پرسش';
 
   @override
-  String get uiOptionsOnePerLine62FF3D => 'Options (one per line)';
+  String get uiOptionsOnePerLine62FF3D => 'گزینه‌ها (هرکدام در یک خط)';
 
   @override
-  String get uiDeleteMessageD536CF => 'Delete message?';
+  String get uiDeleteMessageD536CF => 'پیام حذف شود؟';
 
   @override
-  String get uiDeleteSelectedMessages190A5F => 'Delete selected messages?';
+  String get uiDeleteSelectedMessages190A5F => 'پیام‌های انتخاب‌شده حذف شوند؟';
 
   @override
   String uiDeleteFailedForOneMessage26C302(String value) {
-    return 'Delete failed for one message: $value';
+    return 'حذف یک پیام ناموفق بود: $value';
   }
 
   @override
   String get uiNothingToCopyFromTheEC27E3 =>
-      'Nothing to copy from the selected messages.';
+      'چیزی برای کپی از پیام‌های انتخاب‌شده نیست.';
 
   @override
-  String uiCopiedValueMessageSC97E6E(String value) {
-    return 'Copied $value message(s).';
+  String uiCopiedValueMessageSC97E6E(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value پیام کپی شد.',
+      one: '$value پیام کپی شد.',
+    );
+    return '$_temp0';
   }
 
   @override
   String get uiNoSelectedAttachmentIsReady536B54 =>
-      'No selected attachment is ready yet — still transferring.';
+      'هیچ پیوست انتخاب‌شده‌ای آماده نیست؛ انتقال ادامه دارد.';
 
   @override
-  String get uiCopiedMessageText9DC18F => 'Copied message text.';
+  String get uiCopiedMessageText9DC18F => 'متن پیام کپی شد.';
 
   @override
   String get uiTheGroupFileIsNotF8A236 =>
-      'The group file is not available locally.';
+      'فایل گروه به‌صورت محلی در دسترس نیست.';
 
   @override
   String uiSavedValue0463E5(String value) {
-    return 'Saved $value.';
+    return '$value ذخیره شد.';
   }
 
   @override
   String uiCouldNotSaveValueValue178005(String value, String value2) {
-    return 'Could not save $value: $value2';
+    return 'ذخیرهٔ $value ممکن نشد: $value2';
   }
 
   @override
   String get uiTheAndroidFileSaverIsDF910B =>
-      'The Android file saver is unavailable.';
+      'ذخیره‌کنندهٔ فایل Android در دسترس نیست.';
 
   @override
   String get uiOpeningFilesIsUnavailableOnC6ADA2 =>
-      'Opening files is unavailable on this platform.';
+      'باز کردن فایل در این سکو ممکن نیست.';
 
   @override
   String uiCouldNotOpenValueValue283326(String value, String value2) {
-    return 'Could not open $value: $value2';
+    return 'باز کردن $value ممکن نشد: $value2';
   }
 
   @override
-  String get uiYou905CB3 => 'You';
+  String get uiYou905CB3 => 'شما';
 
   @override
-  String get uiMessage68F414 => 'Message';
+  String get uiMessage68F414 => 'پیام';
 
   @override
-  String get uiMessageActions949184 => 'Message actions';
+  String get uiMessageActions949184 => 'عملیات پیام';
 
   @override
   String get uiTheAttachmentIsStillDownloadingF77317 =>
-      'The attachment is still downloading.';
+      'بارگیری پیوست هنوز ادامه دارد.';
 
   @override
-  String get uiShareOrScheduleAGroup2989F0 => 'Share or schedule a group file';
+  String get uiShareOrScheduleAGroup2989F0 =>
+      'اشتراک‌گذاری یا زمان‌بندی فایل گروه';
 
   @override
   String get uiRecordingBelongsToAnotherConversation87E802 =>
-      'Recording belongs to another conversation';
+      'ضبط متعلق به گفت‌وگوی دیگری است';
 
   @override
   String get uiFinishTheVoicePreviewIn142571 =>
-      'Finish the voice preview in its original chat';
+      'پیش‌نمایش صوت را در گفت‌وگوی اصلی آن تمام کنید';
 
   @override
-  String get uiReviewUnsentVoiceMessage24931C => 'Review unsent voice message';
+  String get uiReviewUnsentVoiceMessage24931C => 'بررسی پیام صوتی ارسال‌نشده';
 
   @override
-  String get uiCancelMicrophoneStartup9E9F8A => 'Cancel microphone startup';
+  String get uiCancelMicrophoneStartup9E9F8A => 'لغو راه‌اندازی میکروفن';
 
   @override
   String get uiReleaseToDiscardRecording4C5C71 =>
-      'Release to discard recording';
+      'برای دور انداختن ضبط رها کنید';
 
   @override
   String get uiRecordingLockedTapToFinish40CD88 =>
-      'Recording locked · tap to finish';
+      'ضبط قفل شده · برای پایان بزنید';
 
   @override
   String get uiReleaseToStopSlideLeft4686F1 =>
-      'Release to stop · slide left to cancel · slide up to lock';
+      'برای توقف رها کنید · برای لغو به چپ بکشید · برای قفل به بالا بکشید';
 
   @override
-  String get uiHoldToRecordAGroupC11B32 =>
-      'Hold to record a group voice message';
+  String get uiHoldToRecordAGroupC11B32 => 'برای ضبط پیام صوتی گروه نگه دارید';
 
   @override
-  String get uiCreatePoll8F5663 => 'Create poll';
+  String get uiCreatePoll8F5663 => 'ساخت نظرسنجی';
 
   @override
-  String get uiWriteToGroup5878DB => 'Write to group';
+  String get uiWriteToGroup5878DB => 'نوشتن در گروه';
 
   @override
-  String get uiWriteAReply0A58E1 => 'Write a reply';
+  String get uiWriteAReply0A58E1 => 'نوشتن پاسخ';
 
   @override
-  String get uiYouAreNoLongerIn571DA7 => 'You are no longer in this group';
+  String get uiYouAreNoLongerIn571DA7 => 'دیگر عضو این گروه نیستید';
 
   @override
-  String get uiVote64F872 => 'Vote';
+  String get uiVote64F872 => 'رأی دادن';
 
   @override
-  String get uiChooseOptionsEA120E => 'Choose options';
+  String get uiChooseOptionsEA120E => 'انتخاب گزینه‌ها';
 
   @override
-  String get uiRetractVoteA5DA11 => 'Retract vote';
+  String get uiRetractVoteA5DA11 => 'پس گرفتن رأی';
 
   @override
-  String get uiClosePollA6A189 => 'Close poll';
+  String get uiClosePollA6A189 => 'بستن نظرسنجی';
 
   @override
   String get uiScheduleOneAttachmentAtAC580C3 =>
-      'Schedule one attachment at a time.';
+      'هر بار یک پیوست را زمان‌بندی کنید.';
 
   @override
   String get uiNotDeliveredYetSendViaF056E1 =>
-      'Not delivered yet. Send via Matrix…';
+      'هنوز تحویل نشده. ارسال از Matrix…';
 
   @override
   String get uiVoiceCallsAreTurnedOff692843 =>
-      'Voice calls are turned off. Enable them in Settings to call.';
+      'تماس صوتی خاموش است. برای تماس آن را در تنظیمات روشن کنید.';
 
   @override
   String get uiVoiceCallAudioIsUnavailable0B6C43 =>
-      'Voice-call audio is unavailable in this build.';
+      'صدای تماس در این نسخه در دسترس نیست.';
 
   @override
-  String get uiRouteInspector0E65DE => 'Route inspector';
+  String get uiRouteInspector0E65DE => 'بازرس مسیر';
 
   @override
   String get uiThisContactRequestIsBlocked944F7D =>
-      'This contact request is blocked.';
+      'این درخواست ارتباط مسدود شده است.';
 
   @override
   String get uiMessageSavedHereUntilTheA49A2C =>
-      'Message saved here until the contact accepts.';
+      'پیام تا پذیرش مخاطب اینجا ذخیره می‌شود.';
 
   @override
-  String get uiWriteAnEncryptedMessage9F7705 => 'Write an encrypted message';
+  String get uiWriteAnEncryptedMessage9F7705 => 'نوشتن پیام رمزگذاری‌شده';
 
   @override
-  String get uiWriteAReplyOrAddFC0A42 => 'Write a reply or add a caption';
+  String get uiWriteAReplyOrAddFC0A42 => 'نوشتن پاسخ یا افزودن شرح';
 
   @override
-  String get uiHoldToRecordAVoice06B1B5 => 'Hold to record a voice message';
+  String get uiHoldToRecordAVoice06B1B5 => 'برای ضبط پیام صوتی نگه دارید';
 
   @override
-  String get uiWriteToNearbyLANUsers291142 => 'Write to nearby LAN users';
+  String get uiWriteToNearbyLANUsers291142 =>
+      'نوشتن به کاربران نزدیک شبکهٔ محلی';
 
   @override
-  String get uiBroadcast77CA3F => 'Broadcast';
+  String get uiBroadcast77CA3F => 'پخش همگانی';
 
   @override
   String get uiThisRemovesTheLocalContact0D6D1E =>
-      'This removes the local contact and message history. The app will also try to send a removal notice so this contact disappears on the other side.';
+      'مخاطب و تاریخچهٔ پیام محلی حذف می‌شود. برنامه تلاش می‌کند اعلان حذف هم بفرستد تا این ارتباط در دستگاه طرف مقابل نیز حذف شود.';
 
   @override
-  String get uiDescriptionBio505243 => 'Description / bio';
+  String get uiDescriptionBio505243 => 'توضیح / دربارهٔ من';
 
   @override
-  String get uiCheckPaths917FF3 => 'Check Paths';
+  String get uiCheckPaths917FF3 => 'بررسی مسیرها';
 
   @override
-  String get uiCopyState9BFD16 => 'Copy State';
+  String get uiCopyState9BFD16 => 'کپی وضعیت';
 
   @override
-  String get uiRemoveContact7F9A8A => 'Remove Contact';
+  String get uiRemoveContact7F9A8A => 'حذف مخاطب';
 
   @override
-  String get uiSaveProfile909BF3 => 'Save Profile';
+  String get uiSaveProfile909BF3 => 'ذخیرهٔ نمایه';
 
   @override
-  String get uiShowAsBeam74375F => 'Show as Beam';
+  String get uiShowAsBeam74375F => 'نمایش با Beam';
 
   @override
-  String get uiShowTheQRAnyway0B0CDF => 'Show the QR anyway';
+  String get uiShowTheQRAnyway0B0CDF => 'با این حال نمایش QR';
 
   @override
-  String get uiOpenFullscreenQRC5418D => 'Open Fullscreen QR';
+  String get uiOpenFullscreenQRC5418D => 'نمایش QR تمام‌صفحه';
 
   @override
-  String get uiShowQRCFBAC6 => 'Show QR';
+  String get uiShowQRCFBAC6 => 'نمایش QR';
 
   @override
-  String get uiLegacyInviteC61C5D => 'Legacy invite';
+  String get uiLegacyInviteC61C5D => 'دعوت قدیمی';
 
   @override
   String get uiForContactsOnConestOr486754 =>
-      'For contacts on Conest 0.3.11 or older. It leaves out your routes for blocked networks; they arrive once you are connected.';
+      'برای مخاطبان دارای Conest 0.3.11 یا قدیمی‌تر. مسیرهای شبکه‌های مسدود شما در آن نیست؛ پس از اتصال می‌رسند.';
 
   @override
-  String get uiRotateCodephraseNow89B2D5 => 'Rotate Codephrase Now';
+  String get uiRotateCodephraseNow89B2D5 => 'تغییر عبارت اتصال اکنون';
 
   @override
-  String get uiEncryptForContactE07450 => 'Encrypt for contact';
+  String get uiEncryptForContactE07450 => 'رمزگذاری برای مخاطب';
 
   @override
-  String get uiPublicOpticalTransfer58E3F4 => 'Public optical transfer';
+  String get uiPublicOpticalTransfer58E3F4 => 'انتقال نوری عمومی';
 
   @override
   String get uiAnyoneWhoCanSeeTheFAB2D0 =>
-      'Anyone who can see the display may reconstruct this file. It is signed for integrity but it is not confidential.';
+      'هر کس نمایشگر را ببیند می‌تواند این فایل را بازسازی کند. برای بررسی یکپارچگی امضا شده، اما محرمانه نیست.';
 
   @override
-  String get uiChoosePublicFile6E2739 => 'Choose public file';
+  String get uiChoosePublicFile6E2739 => 'انتخاب فایل عمومی';
 
   @override
   String get uiKeepThisScreenVisibleUntil2261B8 =>
-      'Keep this screen visible until the receiver reports 100%.';
+      'این صفحه را تا اعلام دریافت ۱۰۰٪ باز نگه دارید.';
 
   @override
-  String get uiReceiveConestBeamB05BCB => 'Receive Conest Beam';
+  String get uiReceiveConestBeamB05BCB => 'دریافت Conest Beam';
 
   @override
-  String get uiDesktopCameraActiveDA0F15 => 'Desktop camera active';
+  String get uiDesktopCameraActiveDA0F15 => 'دوربین رایانه فعال است';
 
   @override
-  String get uiPasteOneCbFrame66EA2B => 'Paste one cb1 frame';
+  String get uiPasteOneCbFrame66EA2B => 'چسباندن یک فریم cb1';
 
   @override
-  String get uiAddFrame2BBA30 => 'Add frame';
+  String get uiAddFrame2BBA30 => 'افزودن فریم';
 
   @override
-  String get uiContactAliasE07C25 => 'Contact alias';
+  String get uiContactAliasE07C25 => 'نام مستعار مخاطب';
 
   @override
   String get uiWeComparedThisFingerprintIn952BEB =>
-      'We compared this fingerprint in person';
+      'این اثر انگشت را حضوری مقایسه کردیم';
 
   @override
-  String get uiTrustAndAddContact0962A2 => 'Trust and add contact';
+  String get uiTrustAndAddContact0962A2 => 'اعتماد و افزودن مخاطب';
 
   @override
   String get uiSavedInPrivateConestStorage4C1334 =>
-      'Saved in private Conest storage:';
+      'در فضای خصوصی Conest ذخیره شد:';
 
   @override
-  String get uiResetIdentity8B0224 => 'Reset identity';
+  String get uiResetIdentity8B0224 => 'بازنشانی هویت';
 
   @override
   String get uiThisClearsTheEncryptedVault864B3D =>
-      'This clears the encrypted vault, removes contacts and messages, and returns the app to the first-launch state.';
+      'این کار گاوصندوق رمزگذاری‌شده، مخاطبان و پیام‌ها را پاک می‌کند و برنامه را به حالت نخستین اجرا برمی‌گرداند.';
 
   @override
-  String get uiReset44C57A => 'Reset';
+  String get uiReset44C57A => 'بازنشانی';
 
   @override
-  String get uiNoIdentityIsActive6B2EE3 => 'No identity is active.';
+  String get uiNoIdentityIsActive6B2EE3 => 'هیچ هویتی فعال نیست.';
 
   @override
-  String get uiSaveNameE73831 => 'Save Name';
+  String get uiSaveNameE73831 => 'ذخیرهٔ نام';
 
   @override
-  String get uiSaveBioBE2711 => 'Save Bio';
+  String get uiSaveBioBE2711 => 'ذخیرهٔ دربارهٔ من';
 
   @override
-  String get uiMessageNotifications595635 => 'Message notifications';
+  String get uiMessageNotifications595635 => 'اعلان‌های پیام';
 
   @override
   String get uiShowASystemNotificationWhen90113B =>
-      'Show a system notification when a direct message arrives.';
+      'هنگام دریافت پیام مستقیم، اعلان سیستم نشان داده شود.';
 
   @override
-  String get uiExperimentalVoiceCalls51098B => 'Experimental voice calls';
+  String get uiExperimentalVoiceCalls51098B => 'تماس صوتی آزمایشی';
 
   @override
   String get uiExperimentalAndroidBackgroundReceive60828A =>
-      'Experimental Android background receive';
+      'دریافت پس‌زمینهٔ آزمایشی در Android';
 
   @override
   String get uiDisabledInReleaseBuildsThe45B7DF =>
-      'Disabled in release builds: the foreground service does not yet host a headless Flutter receiver.';
+      'در نسخه‌های انتشار غیرفعال است: سرویس پیش‌زمینه هنوز دریافت‌کنندهٔ بی‌واسط Flutter را اجرا نمی‌کند.';
 
   @override
   String get uiAllowVoiceCallsInBackground73C5C5 =>
-      'Allow voice calls in background';
+      'اجازهٔ تماس صوتی در پس‌زمینه';
 
   @override
   String get uiKeepsCallSignalingActiveAndC0A342 =>
-      'Keeps call signaling active and shows an ongoing call notification while the Conest service runs. Requires Experimental voice calls; Android battery policy or force-stop can still end availability.';
+      'تا وقتی سرویس Conest اجراست، سیگنال‌دهی تماس را فعال نگه می‌دارد و اعلان تماس نشان می‌دهد. به تماس صوتی آزمایشی نیاز دارد؛ سیاست باتری Android یا توقف اجباری همچنان می‌تواند دسترسی را قطع کند.';
 
   @override
-  String get uiDonTSendReadConfirmations230076 =>
-      'Don\'t send read confirmations';
+  String get uiDonTSendReadConfirmations230076 => 'تأیید خواندن فرستاده نشود';
 
   @override
   String get uiDebugOnlyDeliveryAcknowledgementsStill7D6A9C =>
-      'Debug-only. Delivery acknowledgements still send; incoming read confirmations are still processed.';
+      'فقط برای اشکال‌زدایی. تأیید تحویل همچنان ارسال و تأییدهای خواندن دریافتی پردازش می‌شوند.';
 
   @override
-  String get uiRemoveMetadataFromFilesA4860E => 'Remove metadata from files';
+  String get uiRemoveMetadataFromFilesA4860E => 'حذف فرادادهٔ فایل‌ها';
 
   @override
   String get uiBeforeSendingRemovesLocationCamera4E390D =>
-      'Before sending, removes location, camera, author and date details from photos, videos, PDFs and office documents. Pictures are not re-compressed. Other files are sent as they are.';
+      'پیش از ارسال، اطلاعات مکان، دوربین، نویسنده و تاریخ را از عکس، ویدیو، PDF و اسناد اداری حذف می‌کند. تصاویر دوباره فشرده نمی‌شوند. دیگر فایل‌ها بدون تغییر ارسال می‌شوند.';
 
   @override
-  String get uiSendFilesUnderRandomNames5F79D4 =>
-      'Send files under random names';
+  String get uiSendFilesUnderRandomNames5F79D4 => 'ارسال فایل‌ها با نام تصادفی';
 
   @override
   String get uiReplacesFileNamesWithRandom16F099 =>
-      'Replaces file names with random letters (the type, such as .jpg, stays), for you and the recipient.';
+      'برای شما و گیرنده، نام فایل‌ها را با حروف تصادفی جایگزین می‌کند؛ پسوند مانند .jpg باقی می‌ماند.';
 
   @override
-  String get uiKeepOfStorageFreeF00434 => 'Keep 10% of storage free';
+  String get uiKeepOfStorageFreeF00434 => '۱۰٪ فضای ذخیره‌سازی خالی بماند';
 
   @override
   String get uiReserveFreeSpaceForOther1AC9CF =>
-      'Reserve free space for other apps. When off, transfers can use this space but must still fit on disk.';
+      'فضای خالی برای برنامه‌های دیگر نگه می‌دارد. در حالت خاموش انتقال‌ها می‌توانند از این فضا استفاده کنند، ولی همچنان باید در دیسک جا شوند.';
 
   @override
   String get uiLAN2ECD17 => 'LAN';
 
   @override
   String get uiSameNetworkListenerPairingBeacons5CF0A2 =>
-      'Same-network listener, pairing beacons, LAN delivery.';
+      'دریافت در شبکهٔ مشترک، اعلان جفت‌سازی و تحویل محلی.';
 
   @override
-  String get uiOnlineC3E839 => 'Online';
+  String get uiOnlineC3E839 => 'آنلاین';
 
   @override
   String get uiIrohMessagingAndFileTransfersC4D635 =>
-      'Iroh messaging and file transfers over the internet. Custom Conest relays are optional.';
+      'پیام‌رسانی و انتقال فایل Iroh از اینترنت. رله‌های سفارشی Conest اختیاری‌اند.';
 
   @override
-  String get uiIrohRelayFallbackE954F7 => 'Iroh relay fallback';
+  String get uiIrohRelayFallbackE954F7 => 'مسیر جایگزین رلهٔ Iroh';
 
   @override
   String get uiUseIrohSBuiltIn631E03 =>
-      'Use Iroh’s built-in relays for messages and files when direct connections cannot get through. Both peers must be online.';
+      'وقتی اتصال مستقیم ممکن نیست، از رله‌های داخلی Iroh برای پیام و فایل استفاده شود. هر دو طرف باید آنلاین باشند.';
 
   @override
   String get uiLimitIrohFilesToMiBB58353 =>
-      'Limit Iroh files to 100 MiB (recommended)';
+      'محدود کردن فایل‌های Iroh به ۱۰۰ MiB (پیشنهادی)';
 
   @override
   String get uiAppliesToDirectOnlineAnd28F6F1 =>
-      'Applies to direct online and Iroh relay transfers. Disable for larger files; they may take a long time. LAN transfers keep their larger limit.';
+      'برای انتقال مستقیم آنلاین و رلهٔ Iroh است. برای فایل بزرگ‌تر خاموش کنید؛ ممکن است زمان زیادی ببرد. سقف بزرگ‌تر انتقال محلی باقی می‌ماند.';
 
   @override
   String get uiShareEmailAndMatrixAddressesD762EE =>
-      'Share email and Matrix addresses with group members';
+      'اشتراک نشانی ایمیل و Matrix با اعضای گروه';
 
   @override
   String get uiLetsMembersOfYourGroups9912A5 =>
-      'Lets members of your groups who are not your contacts reach you by email or Matrix. Off: they only learn your Nostr, Tor and radio addresses, which do not name you. Turning it off stops sharing from now on; members who already saw an address may keep it.';
+      'به اعضای گروه که مخاطب شما نیستند امکان تماس با ایمیل یا Matrix می‌دهد. در حالت خاموش فقط نشانی‌های Nostr، Tor و رادیو را می‌گیرند که نام شما را نشان نمی‌دهند. خاموش کردن، اشتراک‌های آینده را متوقف می‌کند؛ نشانی دیده‌شده ممکن است نزد اعضا بماند.';
 
   @override
-  String get uiAutomaticDownloads5E777B => 'Automatic downloads';
+  String get uiAutomaticDownloads5E777B => 'بارگیری خودکار';
 
   @override
   String get uiVerifiedContactsOnlyLimitsAdapt8A1876 =>
-      'Verified contacts only. Limits adapt to Wi-Fi/Ethernet, cellular, and roaming.';
+      'فقط مخاطبان تأییدشده. سقف‌ها با Wi-Fi/Ethernet، دادهٔ همراه و رومینگ سازگار می‌شوند.';
 
   @override
-  String get uiCustomIrohRelayURLsDBF979 => 'Custom Iroh relay URLs';
+  String get uiCustomIrohRelayURLsDBF979 => 'نشانی‌های رلهٔ سفارشی Iroh';
 
   @override
   String get uiOneHTTPSURLPerLineDA8E70 =>
-      'One HTTPS URL per line; blank uses the standard N0 relay set.';
+      'هر خط یک نشانی HTTPS؛ خالی یعنی مجموعهٔ پیش‌فرض رله‌های N0.';
 
   @override
-  String get uiSaveIrohRelaysC144AD => 'Save Iroh relays';
+  String get uiSaveIrohRelaysC144AD => 'ذخیرهٔ رله‌های Iroh';
 
   @override
-  String get uiCheckAvailabilityFCC1A6 => 'Check Availability';
+  String get uiCheckAvailabilityFCC1A6 => 'بررسی دسترسی';
 
   @override
-  String get uiRunThisDeviceAsA9DEA14 => 'Run this device as a relay';
+  String get uiRunThisDeviceAsA9DEA14 => 'اجرای این دستگاه به‌عنوان رله';
 
   @override
   String get uiAllowTrustedContactsToUse001771 =>
-      'Allow trusted contacts to use this device as a relay.';
+      'به مخاطبان مورد اعتماد اجازه دهید از این دستگاه به‌عنوان رله استفاده کنند.';
 
   @override
-  String get uiAutoUseContactsAsRelaysC62C06 => 'Auto-use contacts as relays';
+  String get uiAutoUseContactsAsRelaysC62C06 =>
+      'استفادهٔ خودکار از مخاطبان به‌عنوان رله';
 
   @override
-  String get uiLocalRelayPort28A73C => 'Local relay port';
+  String get uiLocalRelayPort28A73C => 'درگاه رلهٔ محلی';
 
   @override
-  String get uiSavePort1876F6 => 'Save Port';
+  String get uiSavePort1876F6 => 'ذخیرهٔ درگاه';
 
   @override
-  String get uiRelayHostURLF11441 => 'Relay host / URL';
+  String get uiRelayHostURLF11441 => 'میزبان / نشانی رله';
 
   @override
-  String get uiRelayPortEA05DA => 'Relay port';
+  String get uiRelayPortEA05DA => 'درگاه رله';
 
   @override
-  String get uiDetectAddRelayE825AD => 'Detect & Add Relay';
+  String get uiDetectAddRelayE825AD => 'یافتن و افزودن رله';
 
   @override
-  String get uiErrorHistory25AFF8 => 'Error history';
+  String get uiErrorHistory25AFF8 => 'تاریخچهٔ خطا';
 
   @override
   String get uiWhatWentWrongKeptAcross27FC1F =>
-      'What went wrong, kept across restarts on this build, to copy for a bug report.';
+      'خطاها در این نسخه پس از راه‌اندازی دوباره نگه داشته می‌شوند تا برای گزارش اشکال کپی کنید.';
 
   @override
-  String get uiReceiveUnstableUpdatesBF7122 => 'Receive unstable updates';
+  String get uiReceiveUnstableUpdatesBF7122 => 'دریافت به‌روزرسانی ناپایدار';
 
   @override
   String get uiAlsoOfferNightlyBuildsNewerA7FAB0 =>
-      'Also offer nightly builds: newer features, less tested. A newer stable release is always offered.';
+      'نسخه‌های شبانه را هم پیشنهاد می‌دهد: قابلیت تازه‌تر با آزمون کمتر. نسخهٔ پایدار جدیدتر همیشه پیشنهاد می‌شود.';
 
   @override
-  String get uiResetAppIdentity2E0F86 => 'Reset App Identity';
+  String get uiResetAppIdentity2E0F86 => 'بازنشانی هویت برنامه';
 
   @override
-  String get uiTrustNewKeyA181BE => 'Trust new key';
+  String get uiTrustNewKeyA181BE => 'اعتماد به کلید تازه';
 
   @override
   String get uiVerifyThePersonAndCompare738F28 =>
-      'Verify the person and compare this safety number through another channel before accepting.';
+      'پیش از پذیرش، شخص را تأیید و شمارهٔ ایمنی را از راه دیگری مقایسه کنید.';
 
   @override
-  String get uiReviewE29A79 => 'Review';
+  String get uiReviewE29A79 => 'بررسی';
 
   @override
-  String get uiDiscardChat319267 => 'Discard chat';
+  String get uiDiscardChat319267 => 'دور انداختن گفت‌وگو';
 
   @override
-  String get uiConfirmIdentityReplacement0219C5 =>
-      'Confirm identity replacement?';
+  String get uiConfirmIdentityReplacement0219C5 => 'جایگزینی هویت تأیید شود؟';
 
   @override
-  String get uiItSThem394960 => 'It\'s them';
+  String get uiItSThem394960 => 'خود اوست';
 
   @override
-  String get uiRejectThisIdentityCB604F => 'Reject this identity?';
+  String get uiRejectThisIdentityCB604F => 'این هویت رد شود؟';
 
   @override
   String get uiThisDeletesTheNewContactBB4444 =>
-      'This deletes the new contact and any held inbound messages. Use this if you believe this is impersonation.';
+      'مخاطب تازه و پیام‌های دریافتی نگه‌داشته‌شده حذف می‌شوند. اگر به جعل هویت مشکوکید از این گزینه استفاده کنید.';
 
   @override
-  String get uiNotThem685593 => 'Not them';
+  String get uiNotThem685593 => 'او نیست';
 
   @override
-  String get uiRemoveImportedList36FC81 => 'Remove imported list?';
+  String get uiRemoveImportedList36FC81 => 'فهرست واردشده حذف شود؟';
 
   @override
   String get uiNoBundledConestRelaysOnline46529B =>
-      'No bundled Conest relays. Online connections use Iroh; you can also configure your own relay.';
+      'رلهٔ Conest همراه برنامه نیست. اتصال‌های آنلاین از Iroh استفاده می‌کنند؛ رلهٔ خودتان را هم می‌توانید تنظیم کنید.';
 
   @override
-  String get uiImportFromURL3F7B77 => 'Import from URL…';
+  String get uiImportFromURL3F7B77 => 'وارد کردن از نشانی…';
 
   @override
-  String get uiImportRelayListFromURL86E363 => 'Import relay list from URL';
+  String get uiImportRelayListFromURL86E363 => 'وارد کردن فهرست رله از نشانی';
 
   @override
-  String get uiJSONURL6918BA => 'JSON URL';
+  String get uiJSONURL6918BA => 'نشانی JSON';
 
   @override
   String get uiOperatorSPublicKeyOptionalA80E7A =>
-      'Operator\'s public key (optional, base64)';
+      'کلید عمومی گرداننده (اختیاری، base64)';
 
   @override
-  String get uiImportD6FBC9 => 'Import';
+  String get uiImportD6FBC9 => 'وارد کردن';
 
   @override
-  String get uiCLEAN2F3D27 => 'CLEAN';
+  String get uiCLEAN2F3D27 => 'ساده';
 
   @override
-  String get uiSUBTLEBB048B => 'SUBTLE';
+  String get uiSUBTLEBB048B => 'ملایم';
 
   @override
-  String get uiDEFAULTC18920 => 'DEFAULT';
+  String get uiDEFAULTC18920 => 'پیش‌فرض';
 
   @override
-  String get uiFULLCC0A74 => 'FULL';
+  String get uiFULLCC0A74 => 'کامل';
 
   @override
-  String get uiLANFirstB360D1 => 'LAN first';
+  String get uiLANFirstB360D1 => 'نخست شبکهٔ محلی';
 
   @override
-  String get uiLANOnly94945D => 'LAN only';
+  String get uiLANOnly94945D => 'فقط شبکهٔ محلی';
 
   @override
-  String get uiOnlineFirst346B6D => 'Online first';
+  String get uiOnlineFirst346B6D => 'نخست آنلاین';
 
   @override
-  String get uiOnlineOnlyF79CB9 => 'Online only';
+  String get uiOnlineOnlyF79CB9 => 'فقط آنلاین';
 
   @override
-  String get uiOfflineE01FA7 => 'Offline';
+  String get uiOfflineE01FA7 => 'آفلاین';
 
   @override
   String get uiUsesLANWhenAvailableFallsA810EF =>
-      'Uses LAN when available, falls back to Online.';
+      'اگر ممکن باشد از شبکهٔ محلی وگرنه از اینترنت استفاده می‌کند.';
 
   @override
   String get uiUsesLANOnlyNoRelay589D55 =>
-      'Uses LAN only. No relay traffic for this contact.';
+      'فقط شبکهٔ محلی. برای این مخاطب ترافیک رله‌ای نیست.';
 
   @override
   String get uiUsesOnlineWhenAvailableFallsCE2CAF =>
-      'Uses Online when available, falls back to LAN.';
+      'اگر ممکن باشد از اینترنت وگرنه از شبکهٔ محلی استفاده می‌کند.';
 
   @override
   String get uiUsesOnlineOnlyNoLAN193810 =>
-      'Uses Online only. No LAN traffic for this contact.';
+      'فقط آنلاین. برای این مخاطب ترافیک شبکهٔ محلی نیست.';
 
   @override
   String get uiNoTransportSelectedThisContact7969EB =>
-      'No transport selected — this contact is unreachable.';
+      'هیچ مسیر انتقالی انتخاب نشده؛ مخاطب در دسترس نیست.';
 
   @override
   String get uiGlobalConnectivityIsOffAdjustA7C644 =>
-      'Global connectivity is off — adjust Settings to send.';
+      'اتصال کلی خاموش است؛ برای ارسال تنظیمات را تغییر دهید.';
 
   @override
-  String get uiSameNetworkDelivery94E793 => 'Same-network delivery';
+  String get uiSameNetworkDelivery94E793 => 'تحویل در شبکهٔ مشترک';
 
   @override
-  String get uiDisabledByGlobalSetting2CB06C => 'Disabled by global setting';
+  String get uiDisabledByGlobalSetting2CB06C => 'با تنظیم سراسری غیرفعال است';
 
   @override
-  String get uiAllowIrohRelayFallback35227B => 'Allow Iroh relay fallback';
+  String get uiAllowIrohRelayFallback35227B => 'اجازهٔ مسیر جایگزین رلهٔ Iroh';
 
   @override
   String get uiVisibleAndOnlineOnlyDirectEA8902 =>
-      'Visible and online-only; direct Iroh is preferred.';
+      'قابل مشاهده و فقط آنلاین؛ اتصال مستقیم Iroh ترجیح دارد.';
 
   @override
-  String get uiRelayInternetDeliveryD64AB6 => 'Relay / internet delivery';
+  String get uiRelayInternetDeliveryD64AB6 => 'تحویل با رله / اینترنت';
 
   @override
-  String get uiPrefer13F662 => 'Prefer';
+  String get uiPrefer13F662 => 'ترجیح';
 
   @override
-  String get uiCarryTheirMessages22FD33 => 'Carry their messages';
+  String get uiCarryTheirMessages22FD33 => 'انتقال پیام‌های او';
 
   @override
   String get uiWhenThisContactCannotReach5C3FF8 =>
-      'When this contact cannot reach someone but this device can, pass their messages on. You see only who they are for and when; the content stays encrypted.';
+      'اگر این مخاطب به کسی دسترسی ندارد ولی دستگاه شما دارد، پیام‌هایش را منتقل کنید. فقط گیرنده و زمان را می‌بینید؛ محتوا رمزگذاری‌شده می‌ماند.';
 
   @override
-  String uiSaveValueFileSToB46C57(String value) {
-    return 'Save $value file(s) to…';
+  String uiSaveValueFileSToB46C57(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'ذخیرهٔ $value فایل در…',
+      one: 'ذخیرهٔ $value فایل در…',
+    );
+    return '$_temp0';
   }
 
   @override
-  String get uiSaveCanceled1939D0 => 'Save canceled.';
+  String get uiSaveCanceled1939D0 => 'ذخیره لغو شد.';
 
   @override
-  String get uiAlbumActions7B6D70 => 'Album actions';
+  String get uiAlbumActions7B6D70 => 'عملیات آلبوم';
 
   @override
-  String get uiCancelSelectionF7F56C => 'Cancel selection';
+  String get uiCancelSelectionF7F56C => 'لغو انتخاب';
 
   @override
-  String get uiCopyAF74F7 => 'Copy';
+  String get uiCopyAF74F7 => 'کپی';
 
   @override
-  String get uiSaveAttachments5A74EA => 'Save attachments';
+  String get uiSaveAttachments5A74EA => 'ذخیرهٔ پیوست‌ها';
 
   @override
   String get uiCancelAndClearAllTransfers01B81D =>
-      'Cancel and clear all transfers?';
+      'همهٔ انتقال‌ها لغو و پاک شوند؟';
 
   @override
-  String get uiKeepTransfersDB8CC7 => 'Keep transfers';
+  String get uiKeepTransfersDB8CC7 => 'نگه داشتن انتقال‌ها';
 
   @override
-  String get uiCancelAndClearCCF59C => 'Cancel and clear';
+  String get uiCancelAndClearCCF59C => 'لغو و پاک کردن';
 
   @override
-  String get uiPauseAll6F6099 => 'Pause all';
+  String get uiPauseAll6F6099 => 'مکث همه';
 
   @override
-  String get uiResumeAll039916 => 'Resume all';
+  String get uiResumeAll039916 => 'ادامهٔ همه';
 
   @override
   String get uiCancelAndClearAllTransfersACEBB3 =>
-      'Cancel and clear all transfers';
+      'لغو و پاک کردن همهٔ انتقال‌ها';
 
   @override
-  String get uiClearCompletedE63FC1 => 'Clear completed';
+  String get uiClearCompletedE63FC1 => 'پاک کردن موارد کامل';
 
   @override
-  String get uiMoveToTop44AFA6 => 'Move to top';
+  String get uiMoveToTop44AFA6 => 'انتقال به بالا';
 
   @override
-  String get uiPreparingDownloadF9B13B => 'Preparing download';
+  String get uiPreparingDownloadF9B13B => 'آماده‌سازی بارگیری';
 
   @override
-  String get uiDownloadA479C9 => 'Download';
+  String get uiDownloadA479C9 => 'بارگیری';
 
   @override
-  String get uiResumeB3BD0B => 'Resume';
+  String get uiResumeB3BD0B => 'ادامه';
 
   @override
-  String get uiPause781961 => 'Pause';
+  String get uiPause781961 => 'مکث';
 
   @override
-  String get uiRetry9F5CD8 => 'Retry';
+  String get uiRetry9F5CD8 => 'تلاش دوباره';
 
   @override
-  String get uiContinueOverIrohRelay949702 => 'Continue over Iroh relay';
+  String get uiContinueOverIrohRelay949702 => 'ادامه با رلهٔ Iroh';
 
   @override
-  String get uiDownloadAnyway42859F => 'Download anyway';
+  String get uiDownloadAnyway42859F => 'با این حال بارگیری شود';
 
   @override
-  String get uiPreparing96A9B7 => 'Preparing';
+  String get uiPreparing96A9B7 => 'آماده‌سازی';
 
   @override
-  String get uiQueued6A5998 => 'Queued';
+  String get uiQueued6A5998 => 'در صف';
 
   @override
-  String get uiWaiting33D306 => 'Waiting';
+  String get uiWaiting33D306 => 'در انتظار';
 
   @override
-  String get uiTransferring73F753 => 'Transferring';
+  String get uiTransferring73F753 => 'در حال انتقال';
 
   @override
-  String get uiReconnecting9D80F9 => 'Reconnecting';
+  String get uiReconnecting9D80F9 => 'اتصال دوباره';
 
   @override
-  String get uiPausedC7DFB6 => 'Paused';
+  String get uiPausedC7DFB6 => 'متوقف‌شده';
 
   @override
-  String get uiVerifying536244 => 'Verifying';
+  String get uiVerifying536244 => 'در حال بررسی';
 
   @override
-  String get uiComplete1F5A1A => 'Complete';
+  String get uiComplete1F5A1A => 'کامل';
 
   @override
-  String get uiCanceledF840AC => 'Canceled';
+  String get uiCanceledF840AC => 'لغوشده';
 
   @override
-  String get uiUnavailable2C9C1F => 'Unavailable';
+  String get uiUnavailable2C9C1F => 'در دسترس نیست';
 
   @override
   String uiSavedValueToValue08F152(String value, String value2) {
-    return 'Saved $value to $value2.';
+    return '$value در $value2 ذخیره شد.';
   }
 
   @override
   String uiGallerySaveFailedValueFalling0B82BB(String value) {
-    return 'Gallery save failed ($value); falling back to file dialog.';
+    return 'ذخیره در گالری ناموفق بود ($value)؛ از پنجرهٔ ذخیرهٔ فایل استفاده می‌شود.';
   }
 
   @override
   String uiSaveValue5769AA(String value) {
-    return 'Save $value';
+    return 'ذخیرهٔ $value';
   }
 
   @override
   String uiSaveFailedValue534182(String value) {
-    return 'Save failed: $value';
+    return 'ذخیره ناموفق بود: $value';
   }
 
   @override
   String get uiTheAttachmentFileIsNotA67009 =>
-      'The attachment file is not available locally.';
+      'فایل پیوست به‌صورت محلی در دسترس نیست.';
 
   @override
   String uiCopiedValueToClipboard669D0B(String value) {
-    return 'Copied $value to clipboard.';
+    return '$value در بریده‌دان کپی شد.';
   }
 
   @override
   String uiCopiedValueTextOnlySystemB51B8D(String value) {
-    return 'Copied \"$value\" (text only — system clipboard binary surface unavailable).';
+    return '«$value» کپی شد (فقط متن؛ بخش دودویی بریده‌دان سیستم در دسترس نیست).';
   }
 
   @override
   String uiCopyFailedValueFilenameCopiedF71C87(String value) {
-    return 'Copy failed: $value. Filename copied as text fallback.';
+    return 'کپی ناموفق بود: $value. نام فایل به‌جای آن به‌صورت متن کپی شد.';
   }
 
   @override
   String get uiCachePathIsNotReady0404B5 =>
-      'Cache path is not ready yet — still transferring.';
+      'مسیر حافظهٔ نهان هنوز آماده نیست؛ انتقال ادامه دارد.';
 
   @override
   String uiCachePathCopiedValue4CC1C4(String value) {
-    return 'Cache path copied: $value';
+    return 'مسیر حافظهٔ نهان کپی شد: $value';
   }
 
   @override
   String get uiVideoIsnTCachedLocally8920DD =>
-      'Video isn\'t cached locally yet — wait for the transfer to finish.';
+      'ویدیو هنوز محلی ذخیره نشده؛ تا پایان انتقال صبر کنید.';
 
   @override
   String uiCouldNotOpenVideoIn054087(String value) {
-    return 'Could not open video in the system player: $value';
+    return 'باز کردن ویدیو در پخش‌کنندهٔ سیستم ممکن نشد: $value';
   }
 
   @override
-  String get uiImageIsNotAvailableLocally12017F =>
-      'Image is not available locally.';
+  String get uiImageIsNotAvailableLocally12017F => 'تصویر محلی در دسترس نیست.';
 
   @override
   String uiVideoStillTransferringValue3F4049(String value) {
-    return 'Video still transferring ($value%).';
+    return 'انتقال ویدیو ادامه دارد ($value٪).';
   }
 
   @override
   String get uiVoiceMessageBytesAreNotF8339B =>
-      'Voice message bytes are not ready.';
+      'داده‌های پیام صوتی آماده نیست.';
 
   @override
-  String get uiSendMode265A2D => 'Send mode';
+  String get uiSendMode265A2D => 'حالت ارسال';
 
   @override
-  String get uiLANRelayA05D48 => 'LAN relay';
+  String get uiLANRelayA05D48 => 'رلهٔ شبکهٔ محلی';
 
   @override
-  String get uiLobbyFDB6D9 => 'Lobby';
+  String get uiLobbyFDB6D9 => 'لابی';
 
   @override
-  String get uiDirectBC8152 => 'Direct';
+  String get uiDirectBC8152 => 'مستقیم';
 
   @override
   String get uiIroh84642D => 'Iroh';
 
   @override
-  String get uiIrohRelayB128EA => 'Iroh relay';
+  String get uiIrohRelayB128EA => 'رلهٔ Iroh';
 
   @override
-  String get uiRelay9F537F => 'Relay';
+  String get uiRelay9F537F => 'رله';
 
   @override
   String get uiMatrix58947E => 'Matrix';
 
   @override
-  String get uiPlainMatrixBA9DE1 => 'Plain Matrix';
+  String get uiPlainMatrixBA9DE1 => 'Matrix عادی';
 
   @override
   String get uiNostr4D3AD8 => 'Nostr';
 
   @override
-  String get uiEmail84ADD5 => 'Email';
+  String get uiEmail84ADD5 => 'ایمیل';
 
   @override
   String get uiReticulumC27E52 => 'Reticulum';
@@ -1556,207 +1565,206 @@ class AppLocalizationsFa extends AppLocalizations {
   String get uiTorED7088 => 'Tor';
 
   @override
-  String get uiViaContactCF1F8E => 'Via contact';
+  String get uiViaContactCF1F8E => 'از طریق مخاطب';
 
   @override
-  String get uiSendViaMatrix062A08 => 'Send via Matrix?';
+  String get uiSendViaMatrix062A08 => 'از Matrix ارسال شود؟';
 
   @override
-  String get uiKeepWaiting9BE1AB => 'Keep waiting';
+  String get uiKeepWaiting9BE1AB => 'ادامهٔ انتظار';
 
   @override
-  String get uiSendViaMatrix638038 => 'Send via Matrix';
+  String get uiSendViaMatrix638038 => 'ارسال از Matrix';
 
   @override
   String uiNotSentViaMatrixValue99F62C(String value) {
-    return 'Not sent via Matrix: $value';
+    return 'از Matrix ارسال نشد: $value';
   }
 
   @override
-  String get uiMessageRoutesFBF32C => 'Message routes';
+  String get uiMessageRoutesFBF32C => 'مسیرهای پیام';
 
   @override
-  String get uiWhatTheColouredMarksOnA10C8E =>
-      'What the coloured marks on messages mean';
+  String get uiWhatTheColouredMarksOnA10C8E => 'معنای نشانه‌های رنگی پیام‌ها';
 
   @override
-  String get uiOpenInDefaultPlayerE64C20 => 'Open in default player';
+  String get uiOpenInDefaultPlayerE64C20 => 'باز کردن در پخش‌کنندهٔ پیش‌فرض';
 
   @override
-  String get uiCancelReplyBD62D2 => 'Cancel reply';
+  String get uiCancelReplyBD62D2 => 'لغو پاسخ';
 
   @override
-  String get uiScheduledMessages98CEF4 => 'Scheduled messages';
+  String get uiScheduledMessages98CEF4 => 'پیام‌های زمان‌بندی‌شده';
 
   @override
-  String get uiEditScheduledMessage62AF88 => 'Edit scheduled message';
+  String get uiEditScheduledMessage62AF88 => 'ویرایش پیام زمان‌بندی‌شده';
 
   @override
-  String get uiCaption3428D9 => 'Caption';
+  String get uiCaption3428D9 => 'شرح';
 
   @override
-  String get uiNoChatsToShareIntoB50F2F => 'No chats to share into yet.';
+  String get uiNoChatsToShareIntoB50F2F =>
+      'هنوز گفت‌وگویی برای اشتراک‌گذاری نیست.';
 
   @override
   String get uiLetDevicesOnThisNetwork42E2F0 =>
-      'Let devices on this network reach this PC';
+      'اجازهٔ دسترسی دستگاه‌های این شبکه به رایانه';
 
   @override
-  String get uiAllow3AD0E3 => 'Allow';
+  String get uiAllow3AD0E3 => 'اجازه';
 
   @override
-  String get uiKeepSignedIn611A13 => 'Keep signed in';
+  String get uiKeepSignedIn611A13 => 'واردشده بماند';
 
   @override
-  String get uiSignOutHereA6F129 => 'Sign out here';
+  String get uiSignOutHereA6F129 => 'خروج از این دستگاه';
 
   @override
-  String get uiMatrixPassword34E218 => 'Matrix password';
+  String get uiMatrixPassword34E218 => 'گذرواژهٔ Matrix';
 
   @override
-  String get uiPassword8BE3C9 => 'Password';
+  String get uiPassword8BE3C9 => 'رمز عبور';
 
   @override
   String get uiYourServerAsksForIt1594FA =>
-      'Your server asks for it to create signing keys.';
+      'سرور برای ساخت کلیدهای امضا آن را می‌خواهد.';
 
   @override
-  String get uiRecoveryIsAlreadySetUp371F7F => 'Recovery is already set up';
+  String get uiRecoveryIsAlreadySetUp371F7F => 'بازیابی از پیش تنظیم شده';
 
   @override
-  String get uiOK9CE3BD => 'OK';
+  String get uiOK9CE3BD => 'باشه';
 
   @override
-  String get uiSaveYourRecoveryKey7851B3 => 'Save your recovery key';
+  String get uiSaveYourRecoveryKey7851B3 => 'کلید بازیابی را ذخیره کنید';
 
   @override
   String get uiKeepThisKeySomewhereSafe0C0DFE =>
-      'Keep this key somewhere safe. You need it to read encrypted Matrix history on a new device. It is shown only once.';
+      'این کلید را جای امن نگه دارید. برای خواندن تاریخچهٔ رمزگذاری‌شدهٔ Matrix در دستگاه تازه لازم است. فقط یک‌بار نشان داده می‌شود.';
 
   @override
-  String get uiISavedIt3E2255 => 'I saved it';
+  String get uiISavedIt3E2255 => 'ذخیره کردم';
 
   @override
-  String get uiEnterRecoveryKey4521B6 => 'Enter recovery key';
+  String get uiEnterRecoveryKey4521B6 => 'وارد کردن کلید بازیابی';
 
   @override
   String get uiEsTFromAnotherMatrixAppFCA0C9 =>
-      'EsT… (from another Matrix app or this one)';
+      'EsT… (از برنامهٔ Matrix دیگر یا همین برنامه)';
 
   @override
-  String get uiSignOutDC1649 => 'Sign out';
+  String get uiSignOutDC1649 => 'خروج';
 
   @override
-  String get uiSetUpRecoveryFD3804 => 'Set up recovery';
+  String get uiSetUpRecoveryFD3804 => 'تنظیم بازیابی';
 
   @override
-  String get uiVerifyWithAnotherSession9ED031 => 'Verify with another session';
+  String get uiVerifyWithAnotherSession9ED031 => 'تأیید با نشست دیگر';
 
   @override
   String get uiShowJoinsLeavesAndProfile9FA764 =>
-      'Show joins, leaves and profile changes';
+      'نمایش ورود، خروج و تغییرات نمایه';
 
   @override
   String get uiInMatrixRoomsCollapsedIntoD20CAB =>
-      'In Matrix rooms, collapsed into one line';
+      'در اتاق‌های Matrix در یک خط جمع می‌شوند';
 
   @override
-  String get uiMatrixUser70A560 => 'Matrix user';
+  String get uiMatrixUser70A560 => 'کاربر Matrix';
 
   @override
-  String get uiForExampleNameMatrixOrg63C60A => 'For example @name:matrix.org';
+  String get uiForExampleNameMatrixOrg63C60A => 'مثلاً @name:matrix.org';
 
   @override
-  String get uiHomeserverOptional70DF85 => 'Homeserver (optional)';
+  String get uiHomeserverOptional70DF85 => 'سرور خانگی (اختیاری)';
 
   @override
-  String get uiFoundFromTheUserId69A3AB => 'Found from the user id when blank';
+  String get uiFoundFromTheUserId69A3AB =>
+      'اگر خالی باشد از شناسهٔ کاربر پیدا می‌شود';
 
   @override
-  String get uiSignInToMatrix652C8F => 'Sign in to Matrix';
+  String get uiSignInToMatrix652C8F => 'ورود به Matrix';
 
   @override
-  String get uiSignInWithBrowserC995DF => 'Sign in with browser';
+  String get uiSignInWithBrowserC995DF => 'ورود با مرورگر';
 
   @override
-  String get uiFinishSigningInInYour9F41A4 =>
-      'Finish signing in in your browser.';
+  String get uiFinishSigningInInYour9F41A4 => 'ورود را در مرورگر تمام کنید.';
 
   @override
-  String get uiCopyLink2F84EE => 'Copy link';
+  String get uiCopyLink2F84EE => 'کپی پیوند';
 
   @override
-  String get uiThisDeviceFA5A6D => 'This device';
+  String get uiThisDeviceFA5A6D => 'این دستگاه';
 
   @override
   String uiOutOfTouchSinceValueA037FD(String value) {
-    return 'Out of touch since $value: nothing syncs with it until you confirm it is still yours.';
+    return 'از $value بی‌خبر است: تا تأیید نکنید هنوز مال شماست، چیزی همگام نمی‌شود.';
   }
 
   @override
   String uiLinkedValueDCADF7(String value) {
-    return 'Linked $value';
+    return 'پیوندشده $value';
   }
 
   @override
   String get uiYourContactsWillStopAccepting5B0F03 =>
-      'Your contacts will stop accepting anything from that device. It cannot be added back; link it again as a new device instead.';
+      'مخاطبان دیگر چیزی از این دستگاه نمی‌پذیرند. نمی‌توان آن را برگرداند؛ دوباره به‌عنوان دستگاه تازه پیوند دهید.';
 
   @override
-  String get uiStillMine38C8AE => 'Still mine';
+  String get uiStillMine38C8AE => 'هنوز مال من است';
 
   @override
-  String get uiRemoveDeviceA9C39D => 'Remove device';
+  String get uiRemoveDeviceA9C39D => 'حذف دستگاه';
 
   @override
-  String get uiLinkADeviceE71635 => 'Link a device';
+  String get uiLinkADeviceE71635 => 'پیوند دستگاه';
 
   @override
-  String get uiLinkThisDeviceToMy888A1A => 'Link this device to my account';
+  String get uiLinkThisDeviceToMy888A1A => 'پیوند این دستگاه به حساب من';
 
   @override
   String get uiCheckThatBothDevicesShow031E51 =>
-      'Check that both devices show this code:';
+      'بررسی کنید هر دو دستگاه این کد را نشان دهند:';
 
   @override
-  String get uiTheCodesMatch32C407 => 'The codes match';
+  String get uiTheCodesMatch32C407 => 'کدها یکسان‌اند';
 
   @override
   String get uiLinkedTheNewDeviceNow9900E5 =>
-      'Linked. The new device now has your account and contacts; your contacts will see it as you.';
+      'پیوند انجام شد. دستگاه تازه اکنون حساب و مخاطبان شما را دارد؛ مخاطبان آن را به‌عنوان شما می‌بینند.';
 
   @override
   String get uiConfirmTheCodeOnThe17BB1F =>
-      'Confirm the code on the new device too.';
+      'کد را در دستگاه تازه هم تأیید کنید.';
 
   @override
   String get uiWaitingForTheNewDevice75283F =>
-      'Waiting for the new device to answer. If no code appears, make sure the new device still shows its code, and that both are on the same network or online.';
+      'منتظر پاسخ دستگاه تازه هستیم. اگر کدی ظاهر نشد، مطمئن شوید دستگاه تازه همچنان کدش را نشان می‌دهد و هر دو در یک شبکه یا آنلاین‌اند.';
 
   @override
   String get uiOnTheNewDeviceOpen29AF5E =>
-      'On the new device, open Settings → Devices → Link this device to my account, then scan the code it shows.';
+      'در دستگاه تازه، تنظیمات ← دستگاه‌ها ← پیوند این دستگاه به حساب من را باز کنید، سپس کد نمایش‌داده‌شده را اسکن کنید.';
 
   @override
-  String get uiScanCode4596C2 => 'Scan code';
+  String get uiScanCode4596C2 => 'اسکن کد';
 
   @override
-  String get uiOrPasteTheCodeE72792 => 'Or paste the code';
+  String get uiOrPasteTheCodeE72792 => 'یا کد را بچسبانید';
 
   @override
-  String get uiLinkThisDeviceBF5E5C => 'Link this device';
+  String get uiLinkThisDeviceBF5E5C => 'پیوند این دستگاه';
 
   @override
   String get uiThisDeviceIsNowLinked7EA826 =>
-      'This device is now linked to your account.';
+      'این دستگاه اکنون به حساب شما پیوند دارد.';
 
   @override
-  String get uiWaitingForTheOtherDeviceB39C3F =>
-      'Waiting for the other device…';
+  String get uiWaitingForTheOtherDeviceB39C3F => 'در انتظار دستگاه دیگر…';
 
   @override
   String get uiOnTheDeviceYouAlready92C421 =>
-      'On the device you already use, open Settings → Devices → Link a device and scan this code. Both devices should be on the same network or online.';
+      'در دستگاهی که از قبل استفاده می‌کنید، تنظیمات ← دستگاه‌ها ← پیوند دستگاه را باز و این کد را اسکن کنید. هر دو دستگاه باید در یک شبکه یا آنلاین باشند.';
 
   @override
   String get uiDeltaChat8BDA67 => 'Delta Chat';
@@ -1766,127 +1774,127 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get uiWithAFilterOfTheir4FD18E =>
-      'With a filter of their own. Off: open them from the network\'s settings only.';
+      'با فیلتر جداگانه. در حالت خاموش، فقط از تنظیمات همان شبکه باز می‌شوند.';
 
   @override
-  String get uiYourDeltaChatInviteEE073F => 'Your Delta Chat invite';
+  String get uiYourDeltaChatInviteEE073F => 'دعوت Delta Chat شما';
 
   @override
   String get uiShowTheQRCodeTo0769AD =>
-      'Show the QR code to a Delta Chat user, or send the link. Whoever has it can start a verified chat with you.';
+      'کد QR را به کاربر Delta Chat نشان دهید یا پیوند را بفرستید. هر کس آن را داشته باشد می‌تواند گفت‌وگویی تأییدشده با شما شروع کند.';
 
   @override
-  String get uiShowQRCode2DF2DD => 'Show QR code';
+  String get uiShowQRCode2DF2DD => 'نمایش کد QR';
 
   @override
-  String get uiDeltaChatChats8EBCBC => 'Delta Chat chats';
+  String get uiDeltaChatChats8EBCBC => 'گفت‌وگوهای Delta Chat';
 
   @override
-  String get uiGroup171A06 => 'Group';
+  String get uiGroup171A06 => 'گروه';
 
   @override
-  String get uiJoinWithAnInviteC76024 => 'Join with an invite';
+  String get uiJoinWithAnInviteC76024 => 'پیوستن با دعوت';
 
   @override
-  String get uiJoinE0D731 => 'Join';
+  String get uiJoinE0D731 => 'پیوستن';
 
   @override
-  String get uiNewDeltaChatGroup7D5142 => 'New Delta Chat group';
+  String get uiNewDeltaChatGroup7D5142 => 'گروه تازهٔ Delta Chat';
 
   @override
-  String get uiGroupNameEBB7E1 => 'Group name';
+  String get uiGroupNameEBB7E1 => 'نام گروه';
 
   @override
-  String get uiMembers1CB449 => 'Members';
+  String get uiMembers1CB449 => 'اعضا';
 
   @override
-  String get uiGroupInviteD64669 => 'Group invite';
+  String get uiGroupInviteD64669 => 'دعوت گروه';
 
   @override
-  String get uiYouAreNotInThisCF5BD5 => 'You are not in this group';
+  String get uiYouAreNotInThisCF5BD5 => 'شما عضو این گروه نیستید';
 
   @override
-  String get uiStartGroupCallC2A083 => 'Start group call';
+  String get uiStartGroupCallC2A083 => 'شروع تماس گروهی';
 
   @override
-  String get uiJoinGroupCallC9ECF8 => 'Join group call';
+  String get uiJoinGroupCallC9ECF8 => 'پیوستن به تماس گروهی';
 
   @override
-  String get uiPushToTalk032E78 => 'Push-to-talk';
+  String get uiPushToTalk032E78 => 'فشار برای صحبت';
 
   @override
   String get uiCarryMessagesOverAReticulum1CE915 =>
-      'Carry messages over a Reticulum network, for example LoRa radios (RNode) without the internet, through a node running rnsd with a TCP server interface. Conest keeps a Reticulum identity of its own; your contacts learn it automatically.';
+      'انتقال پیام از شبکهٔ Reticulum، مانند رادیوهای LoRa ‏(RNode) بدون اینترنت، از طریق گرهی که rnsd را با رابط سرور TCP اجرا می‌کند. Conest هویت Reticulum جداگانه دارد؛ مخاطبان آن را خودکار دریافت می‌کنند.';
 
   @override
-  String get uiNodeAddressRnsdCD61E2 => 'Node address (rnsd)';
+  String get uiNodeAddressRnsdCD61E2 => 'نشانی گره (rnsd)';
 
   @override
-  String get uiUSBDeviceB47FF0 => 'USB device';
+  String get uiUSBDeviceB47FF0 => 'دستگاه USB';
 
   @override
-  String get uiRNodeAddress691283 => 'RNode address';
+  String get uiRNodeAddress691283 => 'نشانی RNode';
 
   @override
-  String get uiBluetoothAddress0E2BED => 'Bluetooth address';
+  String get uiBluetoothAddress0E2BED => 'نشانی Bluetooth';
 
   @override
-  String get uiTCPPortDE05BE => 'TCP port';
+  String get uiTCPPortDE05BE => 'درگاه TCP';
 
   @override
-  String get uiEU233558 => 'EU 869.525';
+  String get uiEU233558 => 'اروپا 869.525';
 
   @override
-  String get uiUS5ED166 => 'US 914.875';
+  String get uiUS5ED166 => 'آمریکا 914.875';
 
   @override
   String get uiUseConestAsAMatrix6A44C5 =>
-      'Use Conest as a Matrix client only?';
+      'Conest فقط به‌عنوان کارخواه Matrix استفاده شود؟';
 
   @override
   String get uiYourConestChatsAreHiddenCFD853 =>
-      'Your Conest chats are hidden and Conest stops connecting on this device until you switch back. Nothing is deleted. Contacts cannot reach you over Conest meanwhile; their apps keep retrying and deliver when you switch back.';
+      'گفت‌وگوهای Conest پنهان و اتصال آن در این دستگاه تا بازگشت شما متوقف می‌شود. چیزی حذف نمی‌شود. مخاطبان در این مدت با Conest به شما دسترسی ندارند؛ برنامه‌هایشان تلاش می‌کنند و پس از بازگشت شما تحویل می‌دهند.';
 
   @override
-  String get uiSwitch3E44C9 => 'Switch';
+  String get uiSwitch3E44C9 => 'تغییر';
 
   @override
-  String get uiSealAnimatedRings29BE2D => 'Seal (animated rings)';
+  String get uiSealAnimatedRings29BE2D => 'مهر (حلقه‌های متحرک)';
 
   @override
-  String get uiSigilRuneA0B8A7 => 'Sigil (rune)';
+  String get uiSigilRuneA0B8A7 => 'نشان (رون)';
 
   @override
-  String get uiBlockiePixelHashA265BA => 'Blockie (pixel hash)';
+  String get uiBlockiePixelHashA265BA => 'بلوک پیکسلی (هش)';
 
   @override
-  String get uiMonogramInitials8C6019 => 'Monogram (initials)';
+  String get uiMonogramInitials8C6019 => 'حروف آغازین';
 
   @override
-  String get uiNewMatrixChatC065C8 => 'New Matrix chat';
+  String get uiNewMatrixChatC065C8 => 'گفت‌وگوی تازهٔ Matrix';
 
   @override
   String get uiNameMatrixOrgD0BB06 => '@name:matrix.org';
 
   @override
-  String get uiStartChat18BB58 => 'Start chat';
+  String get uiStartChat18BB58 => 'شروع گفت‌وگو';
 
   @override
-  String get uiCopyText06A76C => 'Copy text';
+  String get uiCopyText06A76C => 'کپی متن';
 
   @override
   String uiVerifyValue1B6B79(String value) {
-    return 'Verify $value';
+    return 'تأیید $value';
   }
 
   @override
-  String get uiAttachAFileAE85E4 => 'Attach a file';
+  String get uiAttachAFileAE85E4 => 'پیوست فایل';
 
   @override
-  String get uiMessageDeleted3271A7 => 'Message deleted';
+  String get uiMessageDeleted3271A7 => 'پیام حذف شد';
 
   @override
-  String get uiUnableToDecryptFDF88B => 'Unable to decrypt';
+  String get uiUnableToDecryptFDF88B => 'رمزگشایی ممکن نشد';
 
   @override
   String uiValueCF9C0A(String value) {
@@ -1904,107 +1912,108 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiDeclineB59CF9 => 'Decline';
+  String get uiDeclineB59CF9 => 'رد کردن';
 
   @override
   String get uiCarryMessagesAsEncryptedEmail0D19EA =>
-      'Carry messages as encrypted email when other routes fail, like Delta Chat. The mail servers see both addresses and when, not what. Your contacts learn the address automatically.';
+      'وقتی مسیرهای دیگر کار نکنند، پیام‌ها مانند Delta Chat با ایمیل رمزگذاری‌شده منتقل می‌شوند. سرورهای ایمیل هر دو نشانی و زمان را می‌بینند، نه محتوا را. مخاطبان نشانی را خودکار می‌گیرند.';
 
   @override
-  String get uiUseMyOwnEmailAccountE78C1D => 'Use my own email account instead';
+  String get uiUseMyOwnEmailAccountE78C1D =>
+      'به‌جای آن از حساب ایمیل خودم استفاده کنم';
 
   @override
-  String get uiNostrRelaysBD8BAD => 'Nostr relays';
+  String get uiNostrRelaysBD8BAD => 'رله‌های Nostr';
 
   @override
   String get uiCarryMessagesThroughPublicNostr729B94 =>
-      'Carry messages through public Nostr relays when other routes fail. Relays see that someone writes to you and when, not who or what. Uses a separate key; your contacts learn it automatically.';
+      'وقتی مسیرهای دیگر کار نکنند، پیام از رله‌های عمومی Nostr می‌گذرد. رله‌ها می‌بینند کسی چه وقت به شما می‌نویسد، نه هویت او یا محتوا را. کلید جداگانه‌ای دارد؛ مخاطبان خودکار آن را می‌گیرند.';
 
   @override
   String get uiRelaysYouReadFromOne020C0A =>
-      'Relays you read from (one per line, up to 4)';
+      'رله‌های دریافت (هر خط یکی، حداکثر ۴)';
 
   @override
-  String get uiSaveRelays91CBA8 => 'Save relays';
+  String get uiSaveRelays91CBA8 => 'ذخیرهٔ رله‌ها';
 
   @override
-  String get uiDefaultRelays5C909F => 'Default relays';
+  String get uiDefaultRelays5C909F => 'رله‌های پیش‌فرض';
 
   @override
-  String get uiNewChat009BF6 => 'New chat';
+  String get uiNewChat009BF6 => 'گفت‌وگوی تازه';
 
   @override
-  String get uiNodeAddress896F20 => 'Node address';
+  String get uiNodeAddress896F20 => 'نشانی گره';
 
   @override
-  String get uiDeleteChatDB9121 => 'Delete chat';
+  String get uiDeleteChatDB9121 => 'حذف گفت‌وگو';
 
   @override
-  String get uiTurnOnAppMessagesTo7DCA13 => 'Turn on app messages to write';
+  String get uiTurnOnAppMessagesTo7DCA13 =>
+      'برای نوشتن پیام‌های برنامه را روشن کنید';
 
   @override
-  String get uiBitchatNearbyD0C416 => 'bitchat nearby';
+  String get uiBitchatNearbyD0C416 => 'bitchat نزدیک';
 
   @override
-  String get uiMeshChat7BF668 => 'Mesh chat';
+  String get uiMeshChat7BF668 => 'گفت‌وگوی مش';
 
   @override
   String get uiHiddenTurnOnReachableBy0103C9 =>
-      'Hidden: turn on \"Reachable by bitchat users\"';
+      'پنهان: «دسترسی کاربران bitchat به شما» را روشن کنید';
 
   @override
-  String get uiTheyDonTMatch27EF0C => 'They don\'t match';
+  String get uiTheyDonTMatch27EF0C => 'یکسان نیستند';
 
   @override
-  String get uiTheyMatch6FB8EB => 'They match';
+  String get uiTheyMatch6FB8EB => 'یکسان‌اند';
 
   @override
-  String get uiNameBitchatUsersSee1CE7E3 => 'Name bitchat users see';
+  String get uiNameBitchatUsersSee1CE7E3 => 'نامی که کاربران bitchat می‌بینند';
 
   @override
   String get uiANameYouChooseStays17E677 =>
-      'A name you choose stays when your identity changes, so people nearby can tell it is still you. Leave it empty for a new \"anon\" name with each identity.';
+      'نام انتخابی شما با تغییر هویت باقی می‌ماند، پس افراد نزدیک می‌فهمند که هنوز خود شما هستید. برای نام تازهٔ \"anon\" با هر هویت، آن را خالی بگذارید.';
 
   @override
-  String get uiBluetoothMeshC8B7F1 => 'Bluetooth mesh';
+  String get uiBluetoothMeshC8B7F1 => 'شبکهٔ مش Bluetooth';
 
   @override
   String get uiReachContactsNearbyWithoutAny9E9649 =>
-      'Reach contacts nearby without any network: messages hop from phone to phone over Bluetooth, through Conest and bitchat users alike, and this phone relays for others. This phone does not show up in bitchat, and what it sends looks like any bitchat private message, with ids that change every hour.';
+      'بدون هیچ شبکه‌ای با مخاطبان نزدیک ارتباط بگیرید: پیام‌ها با Bluetooth از دستگاهی به دستگاه دیگر، میان کاربران Conest وbitchat می‌روند و این دستگاه هم پیام دیگران را منتقل می‌کند. این دستگاه در bitchat دیده نمی‌شود و پیام‌هایش مانند هر پیام خصوصی bitchat هستند، با شناسه‌هایی که هر ساعت تغییر می‌کنند.';
 
   @override
-  String get uiReachableByBitchatUsers568021 => 'Reachable by bitchat users';
+  String get uiReachableByBitchatUsers568021 => 'دسترسی کاربران bitchat به شما';
 
   @override
   String get uiShareInternetWithBitchatUsers572F90 =>
-      'Share internet with bitchat users';
+      'اشتراک اینترنت با کاربران bitchat';
 
   @override
-  String get uiChangeNameE46692 => 'Change name';
+  String get uiChangeNameE46692 => 'تغییر نام';
 
   @override
-  String get uiNewIdentityA119CF => 'New identity';
+  String get uiNewIdentityA119CF => 'هویت جدید';
 
   @override
-  String get uiBitchatChatsC74EC3 => 'bitchat chats';
+  String get uiBitchatChatsC74EC3 => 'گفت‌وگوهای bitchat';
 
   @override
   String get uiTheMatrixClientIsNot01A5B4 =>
-      'The Matrix client is not available on this device, so Conest cannot run in Matrix-only mode here.';
+      'کارخواه Matrix در این دستگاه در دسترس نیست؛ Conest نمی‌تواند اینجا در حالت فقط Matrix اجرا شود.';
 
   @override
-  String get uiUseConest12EEF3 => 'Use Conest';
+  String get uiUseConest12EEF3 => 'استفاده از Conest';
 
   @override
-  String get uiSearchRoomsCCE4F9 => 'Search rooms';
+  String get uiSearchRoomsCCE4F9 => 'جست‌وجوی اتاق‌ها';
 
   @override
   String get uiReachContactsThroughTorOnion8B8A98 =>
-      'Reach contacts through Tor onion services: neither side nor the network learns where the other is. Slower than other routes; add bridges where Tor is blocked.';
+      'با سرویس‌های onion در Tor به مخاطبان برسید: هیچ طرف و نیز شبکه، مکان طرف دیگر را نمی‌فهمد. از مسیرهای دیگر کندتر است؛ اگر Tor مسدود است پل اضافه کنید.';
 
   @override
-  String get uiBridgesOptionalOnePerLine110291 =>
-      'Bridges (optional, one per line)';
+  String get uiBridgesOptionalOnePerLine110291 => 'پل‌ها (اختیاری، هر خط یکی)';
 
   @override
   String get uiEEFEBFE80B7A =>
@@ -2016,102 +2025,102 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get uiLinesFromBridgesTorprojectOrgF08389 =>
-      'Lines from bridges.torproject.org, starting with the type: obfs4, webtunnel, snowflake or meek_lite (or plain bridges: address and fingerprint).';
+      'خط‌هایی از bridges.torproject.org با نوع آغازین: obfs4، webtunnel، snowflake یا meek_lite (یا پل عادی: نشانی و اثر انگشت).';
 
   @override
   String get uiPlainBridgesOnlyAddressAnd7F0B60 =>
-      'Plain bridges only (address and fingerprint) in this build.';
+      'این نسخه فقط پل عادی (نشانی و اثر انگشت) دارد.';
 
   @override
-  String get uiUseTheseBridgesC1FA11 => 'Use these bridges';
+  String get uiUseTheseBridgesC1FA11 => 'استفاده از این پل‌ها';
 
   @override
-  String get uiNostrPrivateMessagesDF74A3 => 'Nostr private messages';
+  String get uiNostrPrivateMessagesDF74A3 => 'پیام‌های خصوصی Nostr';
 
   @override
   String get uiChatWithAnyoneOnNostrA867BC =>
-      'Chat with anyone on Nostr (0xchat, Amethyst, Damus and other apps that use NIP-17), one to one or in small groups. A Nostr account of its own, never linked to your Conest contacts. End-to-end encrypted, but without forward secrecy.';
+      'با هر کاربر Nostr ‏(0xchat، Amethyst، Damus و دیگر برنامه‌های NIP-17)، دونفره یا در گروه کوچک گفت‌وگو کنید. حساب Nostr جداگانه‌ای دارد که به مخاطبان Conest پیوند ندارد. سرتاسر رمزگذاری شده، اما بدون محرمانگی پیشرو.';
 
   @override
-  String get uiYourNostrAddress5CF7C6 => 'Your Nostr address';
+  String get uiYourNostrAddress5CF7C6 => 'نشانی Nostr شما';
 
   @override
-  String get uiCopyWithYourRelaysD49669 => 'Copy (with your relays)';
+  String get uiCopyWithYourRelaysD49669 => 'کپی (همراه رله‌های شما)';
 
   @override
-  String get uiNostrChats3D786C => 'Nostr chats';
+  String get uiNostrChats3D786C => 'گفت‌وگوهای Nostr';
 
   @override
-  String get uiNewNostrChat68199C => 'New Nostr chat';
+  String get uiNewNostrChat68199C => 'گفت‌وگوی تازهٔ Nostr';
 
   @override
-  String get uiNpubSeveralForAGroupE6ED77 => 'npub1… (several for a group)';
+  String get uiNpubSeveralForAGroupE6ED77 => 'npub1… (چند نشانی برای گروه)';
 
   @override
   String get uiCarryShortMessagesOverAFA94B6 =>
-      'Carry short messages over a MeshCore LoRa mesh through your companion radio, without the internet. Conest adds your contacts to the radio so it accepts their messages.';
+      'پیام کوتاه را بدون اینترنت از مش LoRa در MeshCore و رادیوی همراه بفرستید. Conest مخاطبان را به رادیو می‌افزاید تا پیامشان پذیرفته شود.';
 
   @override
   String get uiMessagesWithMeshCoreAppUsersDE77BA =>
-      'Messages with MeshCore app users';
+      'پیام با کاربران برنامهٔ MeshCore';
 
   @override
   String get uiReadAndWriteTheMeshCore98E60E =>
-      'Read and write the MeshCore apps\' own messages through this radio: with its contacts, and on its channels as group chats. They are protected only as MeshCore protects them.';
+      'پیام‌های برنامه‌های MeshCore را از این رادیو بخوانید و بنویسید: با مخاطبانش و در کانال‌ها به‌صورت گروهی. محافظت آن‌ها فقط به‌اندازهٔ MeshCore است.';
 
   @override
-  String get uiMeshCoreChats82C29C => 'MeshCore chats';
+  String get uiMeshCoreChats82C29C => 'گفت‌وگوهای MeshCore';
 
   @override
-  String get uiSendWithItsDetailsF287FB => 'Send with its details?';
+  String get uiSendWithItsDetailsF287FB => 'با جزئیاتش ارسال شود؟';
 
   @override
-  String get uiSendAnyway911263 => 'Send anyway';
+  String get uiSendAnyway911263 => 'با این حال ارسال شود';
 
   @override
-  String get uiSaveTheErrorHistory0B3413 => 'Save the error history';
+  String get uiSaveTheErrorHistory0B3413 => 'ذخیرهٔ تاریخچهٔ خطا';
 
   @override
   String uiSavedTheErrorHistoryTo5271C5(String value) {
-    return 'Saved the error history to $value.';
+    return 'تاریخچهٔ خطا در $value ذخیره شد.';
   }
 
   @override
   String uiSavingTheErrorHistoryFailed72A33A(String value) {
-    return 'Saving the error history failed: $value';
+    return 'ذخیرهٔ تاریخچهٔ خطا ناموفق بود: $value';
   }
 
   @override
-  String get uiSaveToAFile5BB648 => 'Save to a file';
+  String get uiSaveToAFile5BB648 => 'ذخیره در فایل';
 
   @override
-  String get uiClear719EA3 => 'Clear';
+  String get uiClear719EA3 => 'پاک کردن';
 
   @override
-  String get uiFilterD7DECF => 'Filter';
+  String get uiFilterD7DECF => 'فیلتر';
 
   @override
   String get uiErrorsOnlyHideTheDebugECA1DD =>
-      'Errors only (hide the debug log)';
+      'فقط خطاها (پنهان کردن گزارش اشکال‌زدایی)';
 
   @override
   String uiValueH171B92(String value) {
-    return '$value h';
+    return '$value ساعت';
   }
 
   @override
   String uiValueMin439C52(String value) {
-    return '$value min';
+    return '$value دقیقه';
   }
 
   @override
   String uiTheirClockIsAboutValueF406F1(String value) {
-    return 'Their clock is about $value $value; times here are by this device.';
+    return 'ساعت او حدود $value $value اختلاف دارد؛ زمان‌های اینجا بر اساس این دستگاه‌اند.';
   }
 
   @override
   String uiValueB7CFB44(String value) {
-    return '$value B';
+    return '$value بایت';
   }
 
   @override
@@ -2130,101 +2139,101 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiSent27E770 => 'sent';
+  String get uiSent27E770 => 'ارسال شد';
 
   @override
-  String get uiWaitingOnTheRelayED66FF => 'waiting on the relay';
+  String get uiWaitingOnTheRelayED66FF => 'در انتظار رله';
 
   @override
-  String get uiReachedTheirDevice0FE289 => 'reached their device';
+  String get uiReachedTheirDevice0FE289 => 'به دستگاه او رسید';
 
   @override
-  String get uiDeliveredF81891 => 'delivered';
+  String get uiDeliveredF81891 => 'تحویل شد';
 
   @override
-  String get uiReceived38428A => 'received';
+  String get uiReceived38428A => 'دریافت شد';
 
   @override
   String get uiCarryShortMessagesOverADD8570 =>
-      'Carry short messages over a Meshtastic LoRa mesh, without the internet, through your Meshtastic radio. Contacts need Conest with a radio in the same mesh.';
+      'پیام کوتاه را بدون اینترنت از مش LoRa در Meshtastic و رادیوی Meshtastic بفرستید. مخاطبان باید Conest و رادیویی در همان مش داشته باشند.';
 
   @override
-  String get uiFindDevices98771A => 'Find devices';
+  String get uiFindDevices98771A => 'یافتن دستگاه‌ها';
 
   @override
-  String get uiRadioAddressD288E6 => 'Radio address';
+  String get uiRadioAddressD288E6 => 'نشانی رادیو';
 
   @override
   String get uiMessagesWithMeshtasticAppUsers812B3A =>
-      'Messages with Meshtastic app users';
+      'پیام با کاربران برنامهٔ Meshtastic';
 
   @override
   String get uiReadAndWriteTheMeshtastic995E5D =>
-      'Read and write the Meshtastic apps\' own messages through this radio: direct ones, and its channels as group chats. They are protected only as Meshtastic protects them.';
+      'پیام‌های برنامه‌های Meshtastic را از این رادیو بخوانید و بنویسید: پیام مستقیم و کانال‌ها به‌صورت گروهی. محافظت آن‌ها فقط به‌اندازهٔ Meshtastic است.';
 
   @override
-  String get uiMeshtasticChats46BEF8 => 'Meshtastic chats';
+  String get uiMeshtasticChats46BEF8 => 'گفت‌وگوهای Meshtastic';
 
   @override
-  String get uiClearSelection247FD6 => 'Clear selection';
+  String get uiClearSelection247FD6 => 'پاک کردن انتخاب';
 
   @override
-  String get uiBrowseFilesAF7C13 => 'Browse files…';
+  String get uiBrowseFilesAF7C13 => 'مرور فایل‌ها…';
 
   @override
-  String get uiSelectMoreE38EF3 => 'Select more';
+  String get uiSelectMoreE38EF3 => 'انتخاب بیشتر';
 
   @override
-  String get uiAllowAllA16326 => 'Allow all';
+  String get uiAllowAllA16326 => 'اجازه به همه';
 
   @override
-  String get uiCaptionDA5C59 => 'Caption…';
+  String get uiCaptionDA5C59 => 'شرح…';
 
   @override
-  String get uiOpenSettingsFD7108 => 'Open settings';
+  String get uiOpenSettingsFD7108 => 'باز کردن تنظیمات';
 
   @override
-  String get uiDiscardChangesD3F0B4 => 'Discard changes?';
+  String get uiDiscardChangesD3F0B4 => 'تغییرات دور انداخته شوند؟';
 
   @override
   String get uiYourEditsWillBeLostB34663 =>
-      'Your edits will be lost. The original image stays in your gallery.';
+      'ویرایش‌ها از دست می‌روند. تصویر اصلی در گالری می‌ماند.';
 
   @override
-  String get uiKeepEditingD4D9E3 => 'Keep editing';
+  String get uiKeepEditingD4D9E3 => 'ادامهٔ ویرایش';
 
   @override
-  String get uiDiscard36FFF6 => 'Discard';
+  String get uiDiscard36FFF6 => 'دور انداختن';
 
   @override
-  String get uiRotateLeft6F72F3 => 'Rotate left';
+  String get uiRotateLeft6F72F3 => 'چرخش به چپ';
 
   @override
-  String get uiRotateRightB75F23 => 'Rotate right';
+  String get uiRotateRightB75F23 => 'چرخش به راست';
 
   @override
-  String get uiApplyCropA43CCF => 'Apply crop';
+  String get uiApplyCropA43CCF => 'اعمال برش';
 
   @override
-  String get uiCropC5DB3D => 'Crop';
+  String get uiCropC5DB3D => 'برش';
 
   @override
-  String get uiVerifiedDownloadProgressBED7C2 => 'Verified download progress';
+  String get uiVerifiedDownloadProgressBED7C2 => 'پیشرفت بارگیری تأییدشده';
 
   @override
-  String get uiSharingWithGroup2AED71 => 'Sharing with group';
+  String get uiSharingWithGroup2AED71 => 'در حال اشتراک با گروه';
 
   @override
-  String get uiOpenCF9B77 => 'Open';
+  String get uiOpenCF9B77 => 'باز کردن';
 
   @override
-  String get uiStopSharing0E45AE => 'Stop sharing';
+  String get uiStopSharing0E45AE => 'توقف اشتراک';
 
   @override
-  String get uiRemoveLocalCopy80FA01 => 'Remove local copy';
+  String get uiRemoveLocalCopy80FA01 => 'حذف نسخهٔ محلی';
 
   @override
-  String get uiScanInviteEFC78A => 'Scan Invite';
+  String get uiScanInviteEFC78A => 'اسکن دعوت';
 
   @override
   String uiValueValue176D15(String value, String value2) {
@@ -2233,7 +2242,7 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String uiDefaultRelayValueBD3FD1(String value) {
-    return 'default relay $value';
+    return 'رلهٔ پیش‌فرض $value';
   }
 
   @override
@@ -2242,16 +2251,16 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiConversation2A20C7 => 'Conversation';
+  String get uiConversation2A20C7 => 'گفت‌وگو';
 
   @override
   String uiSharedValueWithTheGroup163418(String value) {
-    return 'Shared $value with the group as a regular attachment; some members need an update for voice playback.';
+    return '$value به‌صورت پیوست معمولی با گروه به اشتراک گذاشته شد؛ برخی اعضا برای پخش صدا باید به‌روزرسانی کنند.';
   }
 
   @override
   String uiSharedValueWithTheGroupAE4134(String value) {
-    return 'Shared $value with the group.';
+    return '$value با گروه به اشتراک گذاشته شد.';
   }
 
   @override
@@ -2264,15 +2273,15 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiNone3C6B18 => '(none)';
+  String get uiNone3C6B18 => '(هیچ)';
 
   @override
   String uiLANNodeValueOn5D539E(String value) {
-    return 'LAN node :$value on';
+    return 'گره شبکهٔ محلی در درگاه $value روشن است';
   }
 
   @override
-  String get uiLANNodeUnavailable9CFA32 => 'LAN node unavailable';
+  String get uiLANNodeUnavailable9CFA32 => 'گره شبکهٔ محلی در دسترس نیست';
 
   @override
   String uiLANValueA8EEF3(String value) {
@@ -2281,16 +2290,16 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String uiRelayValueDownD6B267(String value) {
-    return 'relay $value down';
+    return 'رلهٔ $value از دسترس خارج است';
   }
 
   @override
   String uiRelayValueA6D70A(String value) {
-    return 'relay $value';
+    return 'رلهٔ $value';
   }
 
   @override
-  String get uiNoInternetRelay55D2CE => 'no internet relay';
+  String get uiNoInternetRelay55D2CE => 'رلهٔ اینترنت نیست';
 
   @override
   String uiValueValue42DC94(String value, String value2) {
@@ -2299,47 +2308,53 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String uiValueHasBeenOutOf039D48(String value) {
-    return '$value has been out of touch for a while: nothing syncs with it until you confirm it in Settings → Devices.';
+    return 'مدتی است از $value بی‌خبریم: تا آن را در تنظیمات ← دستگاه‌ها تأیید نکنید چیزی همگام نمی‌شود.';
   }
 
   @override
   String uiValueIsOneOfYourE4FD9C(String value) {
-    return '$value is one of your own devices now; its old chat is no longer listed.';
+    return '$value اکنون یکی از دستگاه‌های شماست؛ گفت‌وگوی قدیمی آن دیگر در فهرست نیست.';
   }
 
   @override
   String uiYourDevicesDisagreeOnWhich2E7001(String value) {
-    return 'Your devices disagree on which devices are in the account, and together there would be more than $value. Remove one in Settings → Devices.';
+    return 'دستگاه‌هایتان دربارهٔ اعضای حساب اختلاف دارند و مجموعشان بیش از $value می‌شود. یکی را در تنظیمات ← دستگاه‌ها حذف کنید.';
   }
 
   @override
   String uiValueAddedADeviceValue710908(String value, String value2) {
-    return '$value added a device: $value2.';
+    return '$value دستگاهی افزود: $value2.';
   }
 
   @override
   String uiUnknownValue9B520C(String value) {
-    return 'Unknown $value';
+    return '$value نامشخص';
   }
 
   @override
   String uiReadByAllValue43BA5A(String value) {
-    return 'Read by all $value';
+    return 'همهٔ $value نفر خواندند';
   }
 
   @override
   String uiDeliveredToAllValue71E077(String value) {
-    return 'Delivered to all $value';
+    return 'به همهٔ $value نفر تحویل شد';
   }
 
   @override
   String uiAcceptedByValueOfValue826A0E(String value, String value2) {
-    return 'Accepted by $value of $value2';
+    return '$value از $value2 نفر پذیرفتند';
   }
 
   @override
-  String uiWaitingForValueMemberS5A8BA6(String value) {
-    return 'Waiting for $value member(s)';
+  String uiWaitingForValueMemberS5A8BA6(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'در انتظار $value عضو',
+      one: 'در انتظار $value عضو',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -2356,35 +2371,35 @@ class AppLocalizationsFa extends AppLocalizations {
     String value2,
     String value3,
   ) {
-    return '$value skipped: $value2 MB exceeds the $value3 MB cap.';
+    return 'از $value گذشتیم: حجم $value2 MB از سقف $value3 MB بیشتر است.';
   }
 
   @override
-  String get uiRoute499952 => 'Route';
+  String get uiRoute499952 => 'مسیر';
 
   @override
-  String get uiSafetyNumber5ED2D3 => 'Safety number';
+  String get uiSafetyNumber5ED2D3 => 'شمارهٔ ایمنی';
 
   @override
-  String get uiIrohEndpoint72F674 => 'Iroh endpoint';
+  String get uiIrohEndpoint72F674 => 'نقطهٔ پایانی Iroh';
 
   @override
-  String get uiDeviceA5A74A => 'Device';
+  String get uiDeviceA5A74A => 'دستگاه';
 
   @override
-  String get uiLANLobbyC16DC8 => 'LAN lobby';
+  String get uiLANLobbyC16DC8 => 'لابی شبکهٔ محلی';
 
   @override
   String uiMembersValue541E72(String value) {
-    return 'Members · $value';
+    return 'اعضا · $value';
   }
 
   @override
-  String get uiNodeOnlineFAC64A => 'Node · online';
+  String get uiNodeOnlineFAC64A => 'گره · آنلاین';
 
   @override
   String uiSafetyValueC542B8(String value) {
-    return 'safety $value';
+    return 'ایمنی $value';
   }
 
   @override
@@ -2393,47 +2408,53 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String uiValueMembersCEF563(String value) {
-    return '$value members';
+  String uiValueMembersCEF563(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value عضو',
+      one: '$value عضو',
+    );
+    return '$_temp0';
   }
 
   @override
-  String get uiPairwise64A0EF => 'pairwise';
+  String get uiPairwise64A0EF => 'جفت‌به‌جفت';
 
   @override
-  String get uiPasteMedia4831DE => 'Paste media';
+  String get uiPasteMedia4831DE => 'چسباندن رسانه';
 
   @override
-  String get uiRELAYA1C0CF => 'RELAY';
+  String get uiRELAYA1C0CF => 'رله';
 
   @override
-  String get uiSentAsAPlainMatrixAAE694 => 'Sent as a plain Matrix message';
+  String get uiSentAsAPlainMatrixAAE694 => 'به‌صورت پیام عادی Matrix ارسال شد';
 
   @override
-  String get uiOnlyOnThisDevice7D64C4 => 'Only on this device';
+  String get uiOnlyOnThisDevice7D64C4 => 'فقط در این دستگاه';
 
   @override
   String get uiConnectivityIsOffTurnOnE42D4A =>
-      'Connectivity is off. Turn on LAN or Online to exchange this invite.';
+      'اتصال خاموش است. برای تبادل دعوت، شبکهٔ محلی یا آنلاین را روشن کنید.';
 
   @override
   String get uiConnectivityIsOffTurnOnFA573F =>
-      'Connectivity is off. Turn on LAN or Online before sharing this invite.';
+      'اتصال خاموش است. پیش از اشتراک دعوت، شبکهٔ محلی یا آنلاین را روشن کنید.';
 
   @override
-  String get uiReceiveBeam2CB58B => 'Receive Beam';
+  String get uiReceiveBeam2CB58B => 'دریافت Beam';
 
   @override
-  String get uiSendEncryptedFile99D424 => 'Send encrypted file';
+  String get uiSendEncryptedFile99D424 => 'ارسال فایل رمزگذاری‌شده';
 
   @override
-  String get uiSendPublicFileF81389 => 'Send public file';
+  String get uiSendPublicFileF81389 => 'ارسال فایل عمومی';
 
   @override
-  String get uiBeamContactInvite2BAB4C => 'Beam contact invite';
+  String get uiBeamContactInvite2BAB4C => 'دعوت مخاطب با Beam';
 
   @override
-  String get uiDevicesDF485C => 'Devices';
+  String get uiDevicesDF485C => 'دستگاه‌ها';
 
   @override
   String get uiWARNC2FD77 => 'WARN';
@@ -2446,47 +2467,48 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String uiRoutingValueFC4557(String value) {
-    return 'Routing — $value';
+    return 'مسیریابی — $value';
   }
 
   @override
   String uiActiveValueC78B63(String value) {
-    return 'Active ($value)';
+    return 'فعال ($value)';
   }
 
   @override
   String uiRecentValueB82237(String value) {
-    return 'Recent ($value)';
+    return 'اخیر ($value)';
   }
 
   @override
-  String get uiDirect24A173 => 'direct';
+  String get uiDirect24A173 => 'مستقیم';
 
   @override
-  String get uiRelayBD28B2 => 'relay';
+  String get uiRelayBD28B2 => 'رله';
 
   @override
-  String get uiRoutingECF60A => 'routing';
+  String get uiRoutingECF60A => 'مسیریابی';
 
   @override
   String uiInvitationValue6F0633(String value) {
-    return 'Invitation: $value';
+    return 'دعوت: $value';
   }
 
   @override
-  String get uiMeshChatNearbyA35A63 => 'Mesh chat (nearby)';
+  String get uiMeshChatNearbyA35A63 => 'گفت‌وگوی مش (نزدیک)';
 
   @override
-  String get uiVerifiedWithAnInviteBD826F => 'Verified with an invite';
+  String get uiVerifiedWithAnInviteBD826F => 'با دعوت تأیید شده';
 
   @override
-  String get uiHoldToTalkOrHold74FC22 => 'Hold to talk, or hold Space';
+  String get uiHoldToTalkOrHold74FC22 =>
+      'برای صحبت نگه دارید یا Space را نگه دارید';
 
   @override
-  String get uiEndToEndEncryptedMatrix9E4418 => 'End-to-end encrypted (Matrix)';
+  String get uiEndToEndEncryptedMatrix9E4418 => 'رمزگذاری سرتاسری (Matrix)';
 
   @override
-  String get uiVerifiedAED3B8 => 'Verified';
+  String get uiVerifiedAED3B8 => 'تأییدشده';
 
   @override
   String uiValueValue64684F(String value, String value2) {
@@ -2494,22 +2516,22 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiPrimaryChannel53B8E1 => 'Primary channel';
+  String get uiPrimaryChannel53B8E1 => 'کانال اصلی';
 
   @override
   String uiChannelValue76ED1D(String value) {
-    return 'Channel $value';
+    return 'کانال $value';
   }
 
   @override
-  String get uiPublicChannelA9795B => 'Public channel';
+  String get uiPublicChannelA9795B => 'کانال عمومی';
 
   @override
-  String get uiDescriptionCB3291 => 'description';
+  String get uiDescriptionCB3291 => 'توضیح';
 
   @override
   String uiTheirClockIsAboutValue7DB956(String value, String value2) {
-    return 'Their clock is about $value $value2; times here are by this device.';
+    return 'ساعت او حدود $value $value2 اختلاف دارد؛ زمان‌های اینجا بر اساس این دستگاه‌اند.';
   }
 
   @override
@@ -2529,126 +2551,132 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiConestTransfer406028 => 'Conest transfer';
+  String get uiConestTransfer406028 => 'انتقال Conest';
 
   @override
-  String uiValueConestTransfersF846F8(String value) {
-    return '$value Conest transfers';
+  String uiValueConestTransfersF846F8(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value انتقال Conest',
+      one: '$value انتقال Conest',
+    );
+    return '$_temp0';
   }
 
   @override
   String uiViaValueValue37232D(String value, String value2) {
-    return 'via $value ($value2)';
+    return 'از $value ($value2)';
   }
 
   @override
   String get uiBackThroughTheContactWhoD09BD0 =>
-      'back through the contact who passed their message on';
+      'بازگشت از مخاطبی که پیام او را منتقل کرد';
 
   @override
   String uiConestRelayValue4FB2DB(String value) {
-    return 'Conest relay $value';
+    return 'رلهٔ Conest ‏$value';
   }
 
   @override
-  String get uiConestIsAlreadyRunningEE8037 => 'Conest is already running';
+  String get uiConestIsAlreadyRunningEE8037 => 'Conest از قبل اجراست';
 
   @override
   String get uiCloseTheExistingConestWindow83B30B =>
-      'Close the existing Conest window first. A second instance would race the local relay port and encrypted vault.';
+      'ابتدا پنجرهٔ باز Conest را ببندید. اجرای دوم بر سر درگاه رلهٔ محلی و گاوصندوق رمزگذاری‌شده رقابت می‌کند.';
 
   @override
   String get uiChooseWhereConestStoresData0CF613 =>
-      'Choose where Conest stores data';
+      'محل ذخیرهٔ داده‌های Conest را انتخاب کنید';
 
   @override
   String get uiGhostModeIsBestEffort694912 =>
-      'Ghost mode is best-effort privacy: OS launch history, crash logs, network metadata, shell history, recent files, and platform caches are outside app control.';
+      'حالت شبح حریم خصوصی را تا حد امکان حفظ می‌کند: سابقهٔ اجرای سیستم، گزارش خرابی، فرادادهٔ شبکه، تاریخچهٔ پوسته، فایل‌های اخیر و حافظهٔ نهان سیستم در کنترل برنامه نیستند.';
 
   @override
-  String get uiDefaultOnThisDevice10343F => 'Default on this device';
+  String get uiDefaultOnThisDevice10343F => 'پیش‌فرض این دستگاه';
 
   @override
   String get uiUseTheNormalAppDataF44F79 =>
-      'Use the normal app data folder and this device keychain when auto-unlock is selected.';
+      'در صورت انتخاب بازگشایی خودکار، از پوشهٔ معمول دادهٔ برنامه و کلیددان این دستگاه استفاده کنید.';
 
   @override
-  String get uiGhostPortableBesideTheApp31A40D =>
-      'Ghost/portable beside the app';
+  String get uiGhostPortableBesideTheApp31A40D => 'شبح / قابل‌حمل کنار برنامه';
 
   @override
   String get uiStoreConestControlledFilesIn7DA307 =>
-      'Store Conest-controlled files in a conest_data folder next to the app.';
+      'فایل‌های تحت کنترل Conest در پوشهٔ conest_data کنار برنامه ذخیره شوند.';
 
   @override
-  String get uiVaultUnlock602BF6 => 'Vault unlock';
+  String get uiVaultUnlock602BF6 => 'بازگشایی گاوصندوق';
 
   @override
-  String get uiKeyFileAutoUnlock66AC4A => 'Key file auto-unlock';
+  String get uiKeyFileAutoUnlock66AC4A => 'بازگشایی خودکار با فایل کلید';
 
   @override
   String get uiKeepsTheKeyBesideTheB045D9 =>
-      'Keeps the key beside the vault. Anyone with the folder can open it.';
+      'کلید کنار گاوصندوق می‌ماند. هر کس پوشه را داشته باشد می‌تواند آن را باز کند.';
 
   @override
-  String get uiAutoUnlockWithThisDeviceE7F781 => 'Auto-unlock with this device';
+  String get uiAutoUnlockWithThisDeviceE7F781 =>
+      'بازگشایی خودکار با این دستگاه';
 
   @override
   String get uiStoresTheVaultKeyInC7B1CD =>
-      'Stores the vault key in the platform secure store.';
+      'کلید گاوصندوق در ذخیره‌ساز امن سیستم نگه داشته می‌شود.';
 
   @override
-  String get uiPassphraseUnlock13B14C => 'Passphrase unlock';
+  String get uiPassphraseUnlock13B14C => 'بازگشایی با گذرواژه';
 
   @override
   String get uiAskForAPassphraseOn4BA25C =>
-      'Ask for a passphrase on each launch. Forgotten passphrases cannot be recovered.';
+      'در هر اجرا گذرواژه می‌خواهد. گذرواژهٔ فراموش‌شده قابل بازیابی نیست.';
 
   @override
-  String get uiUnlockConest033EB6 => 'Unlock Conest';
+  String get uiUnlockConest033EB6 => 'بازگشایی Conest';
 
   @override
   String get uiEnterThePassphraseForThis891200 =>
-      'Enter the passphrase for this vault.';
+      'گذرواژهٔ این گاوصندوق را وارد کنید.';
 
   @override
   String get uiNoUpdateIsAvailableRightA5EB48 =>
-      'No update is available right now.';
+      'اکنون به‌روزرسانی‌ای موجود نیست.';
 
   @override
   String uiValueIsAvailableOnTheD338C4(String value, String value2) {
-    return '$value is available on the $value2 channel.';
+    return '$value در کانال $value2 موجود است.';
   }
 
   @override
   String uiCurrentBuildValue2FD415(String value) {
-    return 'Current build: $value';
+    return 'نسخهٔ فعلی: $value';
   }
 
   @override
-  String get uiWhatSNew4D8DC5 => 'What\'s new';
+  String get uiWhatSNew4D8DC5 => 'تازه‌ها';
 
   @override
-  String get uiSERVERLESSSECUREMESSENGER1E1891 =>
-      '◢ SERVERLESS SECURE MESSENGER';
+  String get uiSERVERLESSSECUREMESSENGER1E1891 => '◢ پیام‌رسان امن بدون سرور';
 
   @override
   String uiYourMatrixSessionValueWants580E45(String value) {
-    return 'Your Matrix session $value wants to verify this one. Accept only if you started it.';
+    return 'نشست Matrix شما $value می‌خواهد این نشست را تأیید کند. فقط اگر خودتان شروع کرده‌اید بپذیرید.';
   }
 
   @override
   String uiValueWantsToVerifyYou61FD9D(String value) {
-    return '$value wants to verify you, comparing emojis. Check the whole address: look-alike ones exist. Accept only if you can compare with them in person or on a call; verifying marks their keys as trusted.';
+    return '$value می‌خواهد با مقایسهٔ شکلک‌ها شما را تأیید کند. نشانی کامل را بررسی کنید؛ نشانی‌های شبیه وجود دارند. فقط اگر حضوری یا در تماس می‌توانید مقایسه کنید بپذیرید؛ تأیید، کلیدهای او را مورد اعتماد می‌کند.';
   }
 
   @override
   String uiCouldNotVerifyValue3AE1C4(String value) {
-    return 'Could not verify: $value';
+    return 'تأیید ممکن نشد: $value';
   }
 
   @override
-  String get uiSendWithoutResumableCopy0475F4 => 'Send without resumable copy?';
+  String get uiSendWithoutResumableCopy0475F4 =>
+      'بدون نسخهٔ قابل‌ادامه ارسال شود؟';
 
   @override
   String uiValueCouldNotBeCopied06F61A(
@@ -2656,129 +2684,146 @@ class AppLocalizationsFa extends AppLocalizations {
     String value2,
     String value3,
   ) {
-    return '$value could not be copied into private transfer storage.\n\n$value2\n\nThe app can read the original file directly, but the transfer cannot resume after restart if that file moves or its permission expires.$value3';
+    return 'کپی $value به فضای خصوصی انتقال ممکن نشد.\n\n$value2\n\nبرنامه می‌تواند فایل اصلی را مستقیم بخواند، ولی اگر فایل جابه‌جا یا مجوزش منقضی شود، انتقال پس از راه‌اندازی دوباره ادامه نمی‌یابد.$value3';
   }
 
   @override
-  String get uiUnmute7044C3 => 'Unmute';
+  String get uiUnmute7044C3 => 'وصل صدا';
 
   @override
-  String get uiMute0F0973 => 'Mute';
+  String get uiMute0F0973 => 'قطع صدا';
 
   @override
-  String get uiSpeakerOn93982E => 'Speaker on';
+  String get uiSpeakerOn93982E => 'بلندگو روشن';
 
   @override
-  String get uiSpeakerOff97823A => 'Speaker off';
+  String get uiSpeakerOff97823A => 'بلندگو خاموش';
 
   @override
-  String get uiCancelCallCE6C16 => 'Cancel call';
+  String get uiCancelCallCE6C16 => 'لغو تماس';
 
   @override
   String uiValueValueReturnToCall49F82C(String value, String value2) {
-    return '$value$value2 · Return to call';
+    return '$value$value2 · بازگشت به تماس';
   }
 
   @override
-  String get uiContactDetailsD4EC65 => 'Contact details';
+  String get uiContactDetailsD4EC65 => 'جزئیات مخاطب';
 
   @override
-  String uiValueActiveMemberValue6700F2(String value, String value2) {
-    return '$value active member$value2';
+  String uiValueActiveMemberValue6700F2(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value عضو فعال',
+      one: '$value عضو فعال',
+    );
+    return '$_temp0';
   }
 
   @override
-  String get uiOwner89FF31 => 'Owner';
+  String get uiOwner89FF31 => 'مالک';
 
   @override
   String uiEditValue75BE00(String value) {
-    return 'Edit $value';
+    return 'ویرایش $value';
   }
 
   @override
   String uiCouldNotSaveChatSettings2372B2(String value) {
-    return 'Could not save chat settings: $value';
+    return 'ذخیرهٔ تنظیمات گفت‌وگو ممکن نشد: $value';
   }
 
   @override
   String get uiAddAContactToStart165431 =>
-      'Add a contact to start a conversation';
+      'برای شروع گفت‌وگو مخاطبی اضافه کنید';
 
   @override
-  String get uiNoContactsFound816015 => 'No contacts found';
+  String get uiNoContactsFound816015 => 'مخاطبی پیدا نشد';
 
   @override
   String uiOpenValue8DF02B(String value) {
-    return 'Open #$value';
+    return 'باز کردن #$value';
   }
 
   @override
-  String get uiNoMessagesYetC04921 => 'No messages yet';
+  String get uiNoMessagesYetC04921 => 'هنوز پیامی نیست';
 
   @override
   String get uiNoActivityYetPairA7F5366 =>
-      'No activity yet — pair a contact to start the log.';
+      'هنوز فعالیتی نیست؛ برای شروع گزارش مخاطبی جفت کنید.';
 
   @override
-  String get uiSENT5AD0CD => 'SENT';
+  String get uiSENT5AD0CD => 'ارسال';
 
   @override
-  String get uiRECVBFC296 => 'RECV';
+  String get uiRECVBFC296 => 'دریافت';
 
   @override
   String uiDeviceValue11AEA9(String value) {
-    return 'device $value';
+    return 'دستگاه $value';
   }
 
   @override
-  String get uiFreeForAllLocalChat5485CC =>
-      'Free-for-all local chat • untrusted';
+  String get uiFreeForAllLocalChat5485CC => 'گفت‌وگوی محلی آزاد • نامطمئن';
 
   @override
-  String get uiGroupsAE9629 => 'Groups';
+  String get uiGroupsAE9629 => 'گروه‌ها';
 
   @override
   String get uiAddTrustedContactsBeforeCreating1084CC =>
-      'Add trusted contacts before creating a group.';
+      'پیش از ساخت گروه مخاطبان مورد اعتماد را اضافه کنید.';
 
   @override
-  String get uiNoGroupsYet5009C6 => 'No groups yet.';
+  String get uiNoGroupsYet5009C6 => 'هنوز گروهی نیست.';
 
   @override
-  String uiValueMemberSE75249(String value) {
-    return '$value member(s)';
+  String uiValueMemberSE75249(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value عضو',
+      one: '$value عضو',
+    );
+    return '$_temp0';
   }
 
   @override
-  String get uiContactsB0DD61 => 'Contacts';
+  String get uiContactsB0DD61 => 'مخاطبان';
 
   @override
   String get uiAppliesToFutureAdmissionsHistory78E3A0 =>
-      'Applies to future admissions. History already received cannot be withdrawn.';
+      'برای پذیرش‌های آینده است. تاریخچه‌ای که دریافت شده پس گرفته نمی‌شود.';
 
   @override
   String uiValueAllRetainedHistory5E25F4(String value) {
-    return '${value}All retained history';
+    return '$valueتمام تاریخچهٔ نگه‌داشته‌شده';
   }
 
   @override
   String uiValueSinceAdmissionB2617B(String value) {
-    return '${value}Since admission';
+    return '$valueاز زمان پذیرش';
   }
 
   @override
   String uiDeleteValueF0396B(String value) {
-    return 'Delete \"$value\"';
+    return 'حذف «$value»';
   }
 
   @override
   String uiDeleteValueForEveryone12E724(String value) {
-    return 'Delete \"$value\" for everyone?';
+    return '«$value» برای همه حذف شود؟';
   }
 
   @override
-  String uiValueMemberSOwnerValueE42E13(String value, String value2) {
-    return '$value member(s) • owner $value2';
+  String uiValueMemberSOwnerValueE42E13(int value, String value2) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value عضو • مالک $value2',
+      one: '$value عضو • مالک $value2',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -2786,32 +2831,34 @@ class AppLocalizationsFa extends AppLocalizations {
       '// GROUP TRUST FANOUT · mint = paired';
 
   @override
-  String get uiAddTrustedContact126717 => 'Add trusted contact';
+  String get uiAddTrustedContact126717 => 'افزودن مخاطب مورد اعتماد';
 
   @override
-  String get uiNoAvailableChats1FAA40 => 'No available chats';
+  String get uiNoAvailableChats1FAA40 => 'گفت‌وگوی در دسترسی نیست';
 
   @override
-  String get uiForwardedMessageQueuedC82DA4 => 'Forwarded message queued';
+  String get uiForwardedMessageQueuedC82DA4 =>
+      'پیام بازفرست‌شده در صف قرار گرفت';
 
   @override
   String uiCouldNotForwardValue80193D(String value) {
-    return 'Could not forward: $value';
+    return 'بازفرستادن ممکن نشد: $value';
   }
 
   @override
-  String get uiForwardedAttachmentQueued57C88B => 'Forwarded attachment queued';
+  String get uiForwardedAttachmentQueued57C88B =>
+      'پیوست بازفرست‌شده در صف قرار گرفت';
 
   @override
   String uiCouldNotForwardAttachmentValue5165FD(String value) {
-    return 'Could not forward attachment: $value';
+    return 'بازفرستادن پیوست ممکن نشد: $value';
   }
 
   @override
-  String get uiChatDetails15DAEC => 'Chat details';
+  String get uiChatDetails15DAEC => 'جزئیات گفت‌وگو';
 
   @override
-  String get uiConnectionDetailsAB30A5 => 'Connection details';
+  String get uiConnectionDetailsAB30A5 => 'جزئیات اتصال';
 
   @override
   String uiValueValue270519(String value, String value2) {
@@ -2820,32 +2867,32 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String uiVoiceMessageValue2F0300(String value) {
-    return 'Voice message · $value';
+    return 'پیام صوتی · $value';
   }
 
   @override
   String uiPlaybackFailedValue1C0E1A(String value) {
-    return 'Playback failed: $value';
+    return 'پخش ناموفق بود: $value';
   }
 
   @override
-  String get uiPreparingMicrophone0BBF4A => 'Preparing microphone…';
+  String get uiPreparingMicrophone0BBF4A => 'آماده‌سازی میکروفن…';
 
   @override
-  String get uiPreparingPreview312E7B => 'Preparing preview…';
+  String get uiPreparingPreview312E7B => 'آماده‌سازی پیش‌نمایش…';
 
   @override
   String uiVoiceMessagePreviewValue8235CB(String value) {
-    return 'Voice message preview · $value';
+    return 'پیش‌نمایش پیام صوتی · $value';
   }
 
   @override
   String uiRecordingValueValue111FF1(String value, String value2) {
-    return 'Recording$value · $value2';
+    return 'در حال ضبط$value · $value2';
   }
 
   @override
-  String get uiSendingCF7655 => 'Sending…';
+  String get uiSendingCF7655 => 'در حال ارسال…';
 
   @override
   String uiValue72F816(String value) {
@@ -2853,23 +2900,29 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiSingleChoice68E3E0 => 'Single choice';
+  String get uiSingleChoice68E3E0 => 'تک‌گزینه‌ای';
 
   @override
-  String get uiMultipleChoiceB88936 => 'Multiple choice';
+  String get uiMultipleChoiceB88936 => 'چندگزینه‌ای';
 
   @override
   String uiThisRemovesTheMessageFor2247A2(String value) {
-    return 'This removes the message for group members when they synchronize.$value';
+    return 'این پیام برای اعضای گروه هنگام همگام‌سازی حذف می‌شود.$value';
   }
 
   @override
   String get uiCouldNotLocateThisMessage220E83 =>
-      'Could not locate this message in the current chat';
+      'این پیام در گفت‌وگوی فعلی پیدا نشد';
 
   @override
-  String uiDeleteValueMessageValueForABA7AC(String value, String value2) {
-    return 'Delete $value message$value2 for the group?';
+  String uiDeleteValueMessageValueForABA7AC(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value پیام برای گروه حذف شود؟',
+      one: '$value پیام برای گروه حذف شود؟',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -2878,114 +2931,120 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiNewC2A6B0 => 'new';
+  String get uiNewC2A6B0 => 'جدید';
 
   @override
-  String get uiEditedA22FCA => 'edited';
+  String get uiEditedA22FCA => 'ویرایش‌شده';
 
   @override
-  String get uiCopyCachePathC23134 => 'Copy cache path';
+  String get uiCopyCachePathC23134 => 'کپی مسیر حافظهٔ نهان';
 
   @override
-  String get uiStopKeepingOfflineAABFC7 => 'Stop keeping offline';
+  String get uiStopKeepingOfflineAABFC7 => 'توقف نگهداری آفلاین';
 
   @override
-  String get uiKeepOffline123286 => 'Keep offline';
+  String get uiKeepOffline123286 => 'نگهداری آفلاین';
 
   @override
-  String get uiForwardFileC4B5CB => 'Forward file';
+  String get uiForwardFileC4B5CB => 'بازفرست فایل';
 
   @override
-  String get uiLoadingHistory02CB12 => 'Loading history…';
+  String get uiLoadingHistory02CB12 => 'بارگذاری تاریخچه…';
 
   @override
-  String get uiLoadOlderMessages07471F => 'Load older messages';
+  String get uiLoadOlderMessages07471F => 'بارگذاری پیام‌های قدیمی‌تر';
 
   @override
-  String get uiShareFileNow96E2A2 => 'Share file now';
+  String get uiShareFileNow96E2A2 => 'اشتراک فایل اکنون';
 
   @override
-  String get uiScheduleFile690A92 => 'Schedule file';
+  String get uiScheduleFile690A92 => 'زمان‌بندی فایل';
 
   @override
   String get uiDropToShareThisFile0B73E8 =>
-      'Drop to share this file with the group';
+      'برای اشتراک این فایل با گروه رها کنید';
 
   @override
-  String get uiClosed88D86B => 'Closed';
+  String get uiClosed88D86B => 'بسته';
 
   @override
-  String get uiVisibleVotes460E7A => 'Visible votes';
+  String get uiVisibleVotes460E7A => 'رأی‌های آشکار';
 
   @override
-  String uiValueVoteSWereNot02CC9A(String value) {
-    return '$value vote(s) were not in the creator’s close checkpoint.';
+  String uiValueVoteSWereNot02CC9A(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value رأی در ثبت نهایی سازنده نبود.',
+      one: '$value رأی در ثبت نهایی سازنده نبود.',
+    );
+    return '$_temp0';
   }
 
   @override
   String get uiVotingIsUnavailableWithThis9B92E7 =>
-      'Voting is unavailable with this Conest version.';
+      'رأی دادن در این نسخهٔ Conest ممکن نیست.';
 
   @override
   String get uiThisRemovesTheMessageHere61D27C =>
-      'This removes the message here and asks the contact to remove their copy if reachable.';
+      'این پیام اینجا حذف می‌شود و اگر مخاطب در دسترس باشد درخواست حذف نسخهٔ او فرستاده می‌شود.';
 
   @override
   String get uiThisRemovesTheMessageFrom6A47E2 =>
-      'This removes the message from this device.';
+      'این پیام از این دستگاه حذف می‌شود.';
 
   @override
-  String get uiSendViaMatrix3868FE => 'Send via Matrix…';
+  String get uiSendViaMatrix3868FE => 'ارسال از Matrix…';
 
   @override
   String get uiNotesFilesAndForwardsOnlyB0145F =>
-      'Notes, files and forwards, only on this device';
+      'یادداشت، فایل و بازفرست‌ها، فقط در این دستگاه';
 
   @override
   String uiValueSafetyValue82C755(String value, String value2) {
-    return '$value • safety $value2';
+    return '$value • ایمنی $value2';
   }
 
   @override
   String uiDropFilesToSendMax106011(String value) {
-    return 'Drop files to send (max $value)';
+    return 'فایل‌ها را برای ارسال رها کنید (حداکثر $value)';
   }
 
   @override
   String get uiFreeForAllLocalChatBC90D2 =>
-      'Free-for-all local chat. Messages are session-signed but people here are not trusted contacts.';
+      'گفت‌وگوی محلی آزاد. پیام‌ها با نشست امضا می‌شوند، اما افراد اینجا مخاطبان مورد اعتماد نیستند.';
 
   @override
   String get uiNoLANLobbyMessagesYetBCDC4B =>
-      'No LAN lobby messages yet. Nearby Conest peers will receive messages while they are on this LAN.';
+      'هنوز پیامی در لابی شبکهٔ محلی نیست. همتایان نزدیک Conest تا وقتی در این شبکهٔ محلی باشند پیام را می‌گیرند.';
 
   @override
   String uiValueUntrusted519A32(String value) {
-    return '$value • untrusted';
+    return '$value • نامطمئن';
   }
 
   @override
   String uiRemoveValueF4FE4B(String value) {
-    return 'Remove $value?';
+    return '$value حذف شود؟';
   }
 
   @override
-  String get uiAvailablePaths6EE503 => 'Available paths';
+  String get uiAvailablePaths6EE503 => 'مسیرهای موجود';
 
   @override
   String get uiRunACheckToMeasure5D76A5 =>
-      'Run a check to measure latency, availability, and reachability freshness. Paths are sorted by best direct/LAN route first, then relay fallback.';
+      'برای سنجش تأخیر، دسترسی و تازگی وضعیت دسترسی بررسی اجرا کنید. مسیرها ابتدا بر اساس بهترین مسیر مستقیم یا محلی و سپس رلهٔ جایگزین مرتب می‌شوند.';
 
   @override
   String get uiNoRouteHintsAreAdvertisedB25540 =>
-      'No route hints are advertised for this contact.';
+      'هیچ مسیر پیشنهادی برای این مخاطب اعلام نشده است.';
 
   @override
   String get uiEitherInputIsEnoughOn020B90 =>
-      'Either input is enough on its own. Scan or paste a QR invite to trust it directly, or enter only the current codephrase to discover the sender over nearby LAN routes or the configured relay. If automatic exchange fails, the app will suggest asking the other side to add you back or aborting.';
+      'هر ورودی به‌تنهایی کافی است. دعوت QR را اسکن یا بچسبانید تا مستقیم اعتماد کنید، یا فقط عبارت اتصال فعلی را وارد کنید تا فرستنده از شبکهٔ محلی یا رلهٔ تنظیم‌شده پیدا شود. اگر تبادل خودکار ناموفق باشد، برنامه پیشنهاد می‌کند از طرف مقابل بخواهید شما را اضافه کند یا لغو کنید.';
 
   @override
-  String get uiInvitePreview6433A0 => 'Invite preview';
+  String get uiInvitePreview6433A0 => 'پیش‌نمایش دعوت';
 
   @override
   String uiValueValueValue98AECE(String value, String value2, String value3) {
@@ -2993,80 +3052,92 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiShareInviteDBCC1E => 'Share invite';
+  String get uiShareInviteDBCC1E => 'اشتراک دعوت';
 
   @override
   String get uiThisInviteWorksOnlyOnB106B0 =>
-      'This invite works only on the same network: no internet route is on. Turn on Iroh relays, a Conest relay or a carrier (Nostr, email) in Settings → Connectivity so contacts can add you from anywhere.';
+      'این دعوت فقط در شبکهٔ مشترک کار می‌کند: مسیر اینترنت روشن نیست. در تنظیمات ← اتصال، رلهٔ Iroh، رلهٔ Conest یا حامل (Nostr، ایمیل) را روشن کنید تا مخاطبان از هر جا اضافه‌تان کنند.';
 
   @override
   String get uiThisInviteAlsoListsYourEF3A4F =>
-      'This invite also lists your routes for blocked networks, which makes it too large for one QR code. Show it as Beam, an animated QR the other camera reads in a few seconds.';
+      'این دعوت مسیرهای شبکه‌های مسدود را هم دارد و برای یک کد QR بزرگ است. آن را با Beam نشان دهید؛ QR متحرکی که دوربین دیگر در چند ثانیه می‌خواند.';
 
   @override
   String get uiQRRenderingIsDeferredOn8A6997 =>
-      'QR rendering is deferred on Windows.';
+      'نمایش QR در Windows به تعویق می‌افتد.';
 
   @override
   String get uiUseTheCodephraseBelowOrB6A588 =>
-      'Use the codephrase below, or render the QR after this page is open.';
+      'از عبارت اتصال زیر استفاده کنید یا پس از باز شدن صفحه QR را نمایش دهید.';
 
   @override
   String get uiScanningTheCompactQRIs9459D9 =>
-      'Scanning the compact QR is enough on its own. If the camera still struggles, open it full screen or use only the current codephrase.';
+      'اسکن QR فشرده به‌تنهایی کافی است. اگر دوربین هنوز مشکل دارد، آن را تمام‌صفحه کنید یا فقط از عبارت اتصال فعلی استفاده کنید.';
 
   @override
-  String uiQRPayloadValueCharactersBABEDF(String value) {
-    return 'QR payload: $value characters';
+  String uiQRPayloadValueCharactersBABEDF(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'محتوای QR: ‏$value نویسه',
+      one: 'محتوای QR: ‏$value نویسه',
+    );
+    return '$_temp0';
   }
 
   @override
   String uiAlsoListsYourAddressesOnC5D815(String value) {
-    return 'Also lists your addresses on: $value.';
+    return 'نشانی‌های شما در این شبکه‌ها را هم دارد: $value.';
   }
 
   @override
   String uiPinnedValue834309(String value) {
-    return 'Pinned · $value';
+    return 'سنجاق‌شده · $value';
   }
 
   @override
   String get uiNoVerifiedCiContactsAre3FD190 =>
-      'No verified ci6 contacts are available yet.';
+      'هنوز مخاطب ci6 تأییدشده‌ای نیست.';
 
   @override
-  String get uiCloseUpTransferE6BA46 => 'Close-up transfer';
+  String get uiCloseUpTransferE6BA46 => 'انتقال نزدیک';
 
   @override
   String get uiALoopingLTFountainStream840218 =>
-      'A looping LT fountain stream survives missed, duplicate, and out-of-order QR frames. The final file is hash-checked before you can accept it.';
+      'جریان چرخشی کد فواره‌ای LT از فریم‌های QR گم‌شده، تکراری و نامرتب عبور می‌کند. پیش از پذیرش فایل نهایی، هش آن بررسی می‌شود.';
 
   @override
   String get uiPUBLICVisibleToAnyoneNearbyA775C2 =>
-      'PUBLIC · visible to anyone nearby';
+      'عمومی · قابل‌دیدن برای همهٔ اطرافیان';
 
   @override
-  String get uiCONTACTENCRYPTED879896 => 'CONTACT ENCRYPTED';
+  String get uiCONTACTENCRYPTED879896 => 'رمزگذاری برای مخاطب';
 
   @override
-  String get uiSIGNEDCONTACTINVITE752317 => 'SIGNED CONTACT INVITE';
+  String get uiSIGNEDCONTACTINVITE752317 => 'دعوت مخاطب امضاشده';
 
   @override
   String uiFrameValueValueSourceBlocks9C37CB(
     String value,
-    String value2,
+    int value2,
     String value3,
   ) {
-    return 'Frame $value · $value2 source blocks · $value3';
+    String _temp0 = intl.Intl.pluralLogic(
+      value2,
+      locale: localeName,
+      other: 'فریم $value · $value2 بلوک منبع · $value3',
+      one: 'فریم $value · $value2 بلوک منبع · $value3',
+    );
+    return '$_temp0';
   }
 
   @override
   String get uiPointThisCameraAtThe2EA3F7 =>
-      'Point this camera at the animated Beam QR. Only decoded cb1 frames leave the native scanner.';
+      'این دوربین را به QR متحرک Beam بگیرید. فقط فریم‌های cb1 رمزگشایی‌شده از اسکنر بومی خارج می‌شوند.';
 
   @override
   String get uiNativeDesktopCameraCaptureIs4619C8 =>
-      'Native desktop camera capture is unavailable. Paste cb1 frames below; the protocol decoder and verification path are identical.';
+      'تصویربرداری بومی دوربین رایانه در دسترس نیست. فریم‌های cb1 را پایین بچسبانید؛ رمزگشایی پروتکل و مسیر تأیید یکسان‌اند.';
 
   @override
   String uiValueValueBlocksValueFrames66F819(
@@ -3075,123 +3146,134 @@ class AppLocalizationsFa extends AppLocalizations {
     String value3,
     String value4,
   ) {
-    return '$value/$value2 blocks · $value3 frames · $value4 invalid';
+    return '$value/$value2 بلوک · $value3 فریم · $value4 نامعتبر';
   }
 
   @override
-  String get uiSignedContactInviteA7CC8B => 'Signed contact invite';
+  String get uiSignedContactInviteA7CC8B => 'دعوت مخاطب امضاشده';
 
   @override
   String get uiPUBLICUNTRUSTEDTheSignatureProves96FA7F =>
-      'PUBLIC / UNTRUSTED. The signature proves that all frames came from one key; it does not prove who owns that key.';
+      'عمومی / نامطمئن. امضا ثابت می‌کند همهٔ فریم‌ها از یک کلید آمده‌اند؛ نه اینکه مالک کلید کیست.';
 
   @override
   String get uiEncryptedAndAuthenticatedAsA68B7E4 =>
-      'Encrypted and authenticated as a pinned Conest contact.';
+      'رمزگذاری و احراز هویت به‌عنوان مخاطب سنجاق‌شدهٔ Conest.';
 
   @override
   String get uiSignatureValidCompareTheFingerprintA8A1FE =>
-      'Signature valid. Compare the fingerprint in person.';
+      'امضا معتبر است. اثر انگشت را حضوری مقایسه کنید.';
 
   @override
-  String get uiAcceptAndSavePublicFile852517 => 'Accept and save public file';
+  String get uiAcceptAndSavePublicFile852517 => 'پذیرش و ذخیرهٔ فایل عمومی';
 
   @override
-  String get uiSaveFileBEDC84 => 'Save file';
+  String get uiSaveFileBEDC84 => 'ذخیرهٔ فایل';
 
   @override
-  String get uiFullscreenCompactInviteQRCF6B8B =>
-      'Fullscreen compact invite QR';
+  String get uiFullscreenCompactInviteQRCF6B8B => 'QR دعوت فشردهٔ تمام‌صفحه';
 
   @override
-  String uiValueCharactersIncreaseScreenBrightnessA5AF7D(String value) {
-    return '$value characters. Increase screen brightness if scanning is unreliable.';
+  String uiValueCharactersIncreaseScreenBrightnessA5AF7D(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value نویسه. اگر اسکن مشکل دارد روشنایی نمایشگر را بالا ببرید.',
+      one: '$value نویسه. اگر اسکن مشکل دارد روشنایی نمایشگر را بالا ببرید.',
+    );
+    return '$_temp0';
   }
 
   @override
-  String get uiPersonalPreferencesBD0D61 => 'Personal / Preferences';
+  String get uiPersonalPreferencesBD0D61 => 'شخصی / ترجیحات';
 
   @override
-  String get uiNetworkRelay4F9A27 => 'Network / Relay';
+  String get uiNetworkRelay4F9A27 => 'شبکه / رله';
 
   @override
-  String get uiDanger58D175 => 'Danger';
+  String get uiDanger58D175 => 'خطر';
 
   @override
   String get uiAllowsOneToOneIroh45EEF1 =>
-      'Allows one-to-one Iroh voice calls on this device. Turn off to stop placing and receiving calls.';
+      'تماس دونفرهٔ Iroh را در این دستگاه فعال می‌کند. برای توقف برقراری و دریافت تماس خاموش کنید.';
 
   @override
-  String get uiPrivacyOfFilesYouSend4E4A5B => 'Privacy of files you send';
+  String get uiPrivacyOfFilesYouSend4E4A5B => 'حریم خصوصی فایل‌های ارسالی';
 
   @override
-  String get uiLowA12494 => 'Low';
+  String get uiLowA12494 => 'کم';
 
   @override
-  String get uiMediumD40496 => 'Medium';
+  String get uiMediumD40496 => 'متوسط';
 
   @override
-  String get uiHighB1A595 => 'High';
+  String get uiHighB1A595 => 'زیاد';
 
   @override
-  String get uiTransportPolicy088D79 => 'Transport policy';
+  String get uiTransportPolicy088D79 => 'سیاست انتقال';
 
   @override
   String get uiPerContactRoutingIsIntersected88E292 =>
-      'Per-contact routing is intersected with these flags. Turning off either restricts traffic; turning off both makes the app idle.';
+      'مسیریابی هر مخاطب با این گزینه‌ها محدود می‌شود. خاموش کردن هرکدام ترافیک را محدود و خاموش کردن هر دو برنامه را بی‌فعالیت می‌کند.';
 
   @override
   String get uiConnectivityIsFullyOffTheB12483 =>
-      'Connectivity is fully off — the app will not send or receive.';
+      'اتصال کاملاً خاموش است؛ برنامه ارسال یا دریافت نمی‌کند.';
 
   @override
-  String uiValueCandidateRouteSAre175673(String value) {
-    return '$value candidate route(s) are available right now.';
+  String uiValueCandidateRouteSAre175673(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'اکنون $value مسیر پیشنهادی موجود است.',
+      one: 'اکنون $value مسیر پیشنهادی موجود است.',
+    );
+    return '$_temp0';
   }
 
   @override
-  String get uiConfiguredRelays3CA0DE => 'Configured relays';
+  String get uiConfiguredRelays3CA0DE => 'رله‌های تنظیم‌شده';
 
   @override
-  String get uiNoRelaysAddedYetF791E7 => 'No relays added yet.';
+  String get uiNoRelaysAddedYetF791E7 => 'هنوز رله‌ای اضافه نشده.';
 
   @override
   String uiCurrentBuildValueValue9A675D(String value, String value2) {
-    return 'Current build: $value • $value2';
+    return 'نسخهٔ فعلی: $value • $value2';
   }
 
   @override
   String uiCommitValue2E080C(String value) {
-    return 'commit $value';
+    return 'کامیت $value';
   }
 
   @override
   String uiAvailableValue4B15F7(String value) {
-    return 'Available: $value';
+    return 'موجود: $value';
   }
 
   @override
-  String get uiChecking494D0F => 'Checking...';
+  String get uiChecking494D0F => 'در حال بررسی…';
 
   @override
-  String get uiCheckForUpdates8604FF => 'Check for Updates';
+  String get uiCheckForUpdates8604FF => 'بررسی به‌روزرسانی';
 
   @override
   String uiTrustNewIdentityForValue8B0612(String value) {
-    return 'Trust new identity for $value?';
+    return 'به هویت تازهٔ $value اعتماد می‌کنید؟';
   }
 
   @override
   String uiTheRelayIsNowSigningFF71FD(String value) {
-    return 'The relay is now signing with a different Ed25519 public key ($value). Only continue if the operator has confirmed they rotated the key — otherwise this could be a man-in-the-middle.';
+    return 'رله اکنون با کلید عمومی Ed25519 دیگری امضا می‌کند ($value). فقط اگر گرداننده تغییر کلید را تأیید کرده ادامه دهید؛ وگرنه ممکن است حملهٔ واسطه باشد.';
   }
 
   @override
-  String get uiRelayIdentityChanged097638 => 'Relay identity changed';
+  String get uiRelayIdentityChanged097638 => 'هویت رله تغییر کرد';
 
   @override
   String get uiAConfiguredRelayIsSigning60EED0 =>
-      'A configured relay is signing with a new key. Verify with the operator before trusting it.';
+      'رلهٔ تنظیم‌شده با کلید تازه امضا می‌کند. پیش از اعتماد از گرداننده تأیید بگیرید.';
 
   @override
   String uiValueValue66746D(String value, String value2) {
@@ -3199,112 +3281,125 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiNoPendingContactRequests697615 => 'No pending contact requests';
+  String get uiNoPendingContactRequests697615 =>
+      'درخواست ارتباط در انتظاری نیست';
 
   @override
   String uiCouldNotReviewRequestValue82B3D5(String value) {
-    return 'Could not review request: $value';
+    return 'بررسی درخواست ممکن نشد: $value';
   }
 
   @override
   String uiAddValueF034EE(String value) {
-    return 'Add $value?';
+    return '$value اضافه شود؟';
   }
 
   @override
   String uiCouldNotAddContactValue7F6C38(String value) {
-    return 'Could not add contact: $value';
+    return 'افزودن مخاطب ممکن نشد: $value';
   }
 
   @override
   String uiCouldNotRejectRequestValue2EFD58(String value) {
-    return 'Could not reject request: $value';
+    return 'رد درخواست ممکن نشد: $value';
   }
 
   @override
-  String get uiContactRequestRejected447EE8 => 'Contact request rejected.';
+  String get uiContactRequestRejected447EE8 => 'درخواست ارتباط رد شد.';
 
   @override
   String uiContactRequestFromValue50B6AC(String value) {
-    return 'Contact request from $value';
+    return 'درخواست ارتباط از $value';
   }
 
   @override
   String uiUnverifiedValueC1937C(String value) {
-    return 'Unverified · $value';
+    return 'تأییدنشده · $value';
   }
 
   @override
   String uiContactRequestFailedValue28DD81(String value) {
-    return 'Contact request failed: $value';
+    return 'درخواست ارتباط ناموفق بود: $value';
   }
 
   @override
-  String get uiRequestAgain7B0434 => 'Request again';
+  String get uiRequestAgain7B0434 => 'درخواست دوباره';
 
   @override
   String uiTrustValueAsAFresh7BF87F(String value, String value2) {
-    return 'Trust $value as a fresh contact? Verify the safety number out of band first — accepting now archives any previous \"$value2\" entries as read-only.';
+    return 'به $value به‌عنوان مخاطب تازه اعتماد می‌کنید؟ ابتدا شمارهٔ ایمنی را از راه دیگری بررسی کنید؛ پذیرش، مدخل‌های قبلی «$value2» را فقط‌خواندنی بایگانی می‌کند.';
   }
 
   @override
   String uiTrustThisAsAReinstallCBA4CC(String value) {
-    return 'Trust this as a reinstall of \"$value\"? The previous contact will be archived (history kept read-only); the new contact takes over. This cannot be undone.';
+    return 'این هویت را نصب دوبارهٔ «$value» می‌دانید؟ مخاطب قبلی با تاریخچهٔ فقط‌خواندنی بایگانی و مخاطب تازه جایگزین می‌شود. برگشت‌پذیر نیست.';
   }
 
   @override
   String uiConfirmFailedValueBDE200(String value) {
-    return 'Confirm failed: $value';
+    return 'تأیید ناموفق بود: $value';
   }
 
   @override
   String uiRejectFailedValue5F5917(String value) {
-    return 'Reject failed: $value';
+    return 'رد کردن ناموفق بود: $value';
   }
 
   @override
   String uiThisContactMayBeAD1405D(String value) {
-    return 'This contact may be a reset of \"$value\". Verify their safety number out of band before exchanging messages.';
+    return 'ممکن است این مخاطب بازنشانی «$value» باشد. پیش از تبادل پیام، شمارهٔ ایمنی را از راه دیگری تأیید کنید.';
   }
 
   @override
   String uiImportedRelaysFromValue37C175(String value) {
-    return 'Imported relays from $value.';
+    return 'رله‌ها از $value وارد شدند.';
   }
 
   @override
   String uiImportFailedValueBAFB4A(String value) {
-    return 'Import failed: $value';
+    return 'وارد کردن ناموفق بود: $value';
   }
 
   @override
-  String uiThisWillRemoveValueRelay330EEB(String value, String value2) {
-    return 'This will remove $value relay route(s) imported from $value2.';
+  String uiThisWillRemoveValueRelay330EEB(int value, String value2) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'این کار $value مسیر رلهٔ واردشده از $value2 را حذف می‌کند.',
+      one: 'این کار $value مسیر رلهٔ واردشده از $value2 را حذف می‌کند.',
+    );
+    return '$_temp0';
   }
 
   @override
   String uiRemoveFailedValue58F348(String value) {
-    return 'Remove failed: $value';
+    return 'حذف ناموفق بود: $value';
   }
 
   @override
-  String get uiImportedRelayListsB0BD8B => 'Imported relay lists';
+  String get uiImportedRelayListsB0BD8B => 'فهرست‌های واردشدهٔ رله';
 
   @override
-  String get uiNoImportedLists6CBC34 => 'No imported lists.';
+  String get uiNoImportedLists6CBC34 => 'فهرست واردشده‌ای نیست.';
 
   @override
   String uiValueValueValueRouteS40FB98(
     String value,
     String value2,
-    String value3,
+    int value3,
   ) {
-    return '$value · $value2 · $value3 route(s)';
+    String _temp0 = intl.Intl.pluralLogic(
+      value3,
+      locale: localeName,
+      other: '$value · $value2 · $value3 مسیر',
+      one: '$value · $value2 · $value3 مسیر',
+    );
+    return '$_temp0';
   }
 
   @override
   String get uiLeaveBlankToImportUnsigned0D354E =>
-      'Leave blank to import unsigned (untrusted; pre-flight probes still gate use). Provide the operator\'s key for cryptographically trusted imports — the signature is fetched from <URL>.ed25519.sig.';
+      'برای وارد کردن بی‌امضا خالی بگذارید (نامطمئن؛ بررسی پیش از استفاده همچنان لازم است). برای اعتماد رمزنگاری‌شده کلید گرداننده را بدهید؛ امضا از <URL>.ed25519.sig دریافت می‌شود.';
 
   @override
   String uiValueF7CD86(String value) {
@@ -3312,28 +3407,28 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiThemeA797E3 => 'Theme';
+  String get uiThemeA797E3 => 'پوسته';
 
   @override
   String get uiAdaptiveIsUsingSystemDynamicBAA149 =>
-      'Adaptive is using system dynamic colors.';
+      'پوستهٔ تطبیقی از رنگ‌های پویای سیستم استفاده می‌کند.';
 
   @override
   String get uiMintAndPinkRemainTheC846F3 =>
-      'Mint and pink remain the Conest fallback accents.';
+      'نعنایی و صورتی رنگ‌های جایگزین Conest می‌مانند.';
 
   @override
-  String get uiDecoration2DB87A => 'Decoration';
+  String get uiDecoration2DB87A => 'تزئینات';
 
   @override
   String get uiAmbientGridScanlinesCornerReticles45D5C5 =>
-      'Ambient grid, scanlines, corner reticles and the status readout. Clean ↔ full atmosphere.';
+      'شبکهٔ پس‌زمینه، خطوط اسکن، نشانه‌های گوشه و نمایش وضعیت. از ساده تا فضای کامل.';
 
   @override
-  String get uiShellBDC1FD => 'Shell';
+  String get uiShellBDC1FD => 'چارچوب';
 
   @override
-  String get uiHomeLayoutE19685 => 'Home layout';
+  String get uiHomeLayoutE19685 => 'چیدمان خانه';
 
   @override
   String uiCONESTCiValue7964DC(String value) {
@@ -3341,136 +3436,150 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiQRUnavailable12869A => 'QR unavailable';
+  String get uiQRUnavailable12869A => 'QR در دسترس نیست';
 
   @override
   String get uiUseTheCodephraseOrPayload187111 =>
-      'Use the codephrase or payload below.';
+      'از عبارت اتصال یا محتوای دعوت زیر استفاده کنید.';
 
   @override
   String uiTwoWayConfirmedValueE5A1A1(String value) {
-    return 'two-way confirmed$value';
+    return 'دوسویه تأیید شد$value';
   }
 
   @override
   String uiPathAcceptsSendWaitingFor10B4B0(String value) {
-    return 'path accepts send; waiting for peer reply$value';
+    return 'مسیر ارسال را می‌پذیرد؛ در انتظار پاسخ همتا$value';
   }
 
   @override
-  String get uiUnavailable1D5EE3 => 'unavailable';
+  String get uiUnavailable1D5EE3 => 'در دسترس نیست';
 
   @override
-  String get uiUsable829A7C => 'usable';
+  String get uiUsable829A7C => 'قابل استفاده';
 
   @override
-  String get uiOneWay5EF4D0 => 'one-way';
+  String get uiOneWay5EF4D0 => 'یک‌طرفه';
 
   @override
-  String get uiSkipC7E168 => 'skip';
+  String get uiSkipC7E168 => 'رد شدن';
 
   @override
   String get uiShareYourInviteThenEither5FEF78 =>
-      'Share your invite, then either scan the QR code or enter only the current codephrase on the other device to add the contact.';
+      'دعوت خود را به اشتراک بگذارید، سپس در دستگاه دیگر QR را اسکن یا فقط عبارت اتصال فعلی را وارد کنید تا مخاطب اضافه شود.';
 
   @override
   String get uiStartWithOneTrustedContact650B80 =>
-      'Start with one trusted contact';
+      'با یک مخاطب مورد اعتماد شروع کنید';
 
   @override
   String get uiThisReleasePairsThroughA883AA2 =>
-      'This release pairs through a QR invite alone or through a codephrase alone, prefers nearby LAN routes, and falls back to internet relay routes after that.';
+      'این نسخه با دعوت QR تنها یا عبارت اتصال تنها جفت می‌شود، مسیر شبکهٔ محلی نزدیک را ترجیح می‌دهد و سپس از رلهٔ اینترنت استفاده می‌کند.';
 
   @override
   String get uiConnectivityIsOffEnableLAN39990E =>
-      'Connectivity is off. Enable LAN or Online in Settings.';
+      'اتصال خاموش است. شبکهٔ محلی یا آنلاین را در تنظیمات روشن کنید.';
 
   @override
-  String get uiAutomaticAC9041 => 'Automatic';
+  String get uiAutomaticAC9041 => 'خودکار';
 
   @override
-  String get uiPreferred0A3E0D => 'Preferred';
+  String get uiPreferred0A3E0D => 'ترجیحی';
 
   @override
-  String get uiDisabledF4F447 => 'Disabled';
+  String get uiDisabledF4F447 => 'غیرفعال';
 
   @override
-  String get uiAskFirst1AEB84 => 'Ask first';
+  String get uiAskFirst1AEB84 => 'اول پرسیده شود';
 
   @override
-  String get uiRetryFailed7B6CA4 => 'Retry failed';
+  String get uiRetryFailed7B6CA4 => 'تلاش دوبارهٔ ناموفق‌ها';
 
   @override
-  String get uiCancelAlbumDB0A07 => 'Cancel album';
+  String get uiCancelAlbumDB0A07 => 'لغو آلبوم';
 
   @override
-  String get uiDeleteAlbum52E30F => 'Delete album';
+  String get uiDeleteAlbum52E30F => 'حذف آلبوم';
 
   @override
-  String uiValueSelectedB1DFAF(String value) {
-    return '$value selected';
+  String uiValueSelectedB1DFAF(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value انتخاب‌شده',
+      one: '$value انتخاب‌شده',
+    );
+    return '$_temp0';
   }
 
   @override
-  String uiThisWillCancelValueActiveB3425E(String value, String value2) {
-    return 'This will cancel $value active transfer$value2 and clear the transfer list. Chat messages and completed downloaded files will stay.';
+  String uiThisWillCancelValueActiveB3425E(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other:
+          'این کار $value انتقال فعال را لغو و فهرست انتقال را پاک می‌کند. پیام‌های گفت‌وگو و فایل‌های کامل‌شده می‌مانند.',
+      one:
+          'این کار $value انتقال فعال را لغو و فهرست انتقال را پاک می‌کند. پیام‌های گفت‌وگو و فایل‌های کامل‌شده می‌مانند.',
+    );
+    return '$_temp0';
   }
 
   @override
-  String get uiNoTransfersYetB8E5C1 => 'No transfers yet.';
+  String get uiNoTransfersYetB8E5C1 => 'هنوز انتقالی نیست.';
 
   @override
   String get uiAttachmentMetadataUnavailableE2C31D =>
-      'Attachment metadata unavailable';
+      'فرادادهٔ پیوست در دسترس نیست';
 
   @override
   String uiValueMBPreparingDownload799D4A(String value) {
-    return '$value MB · preparing download…';
+    return '$value MB · آماده‌سازی بارگیری…';
   }
 
   @override
   String uiValueMBDirectRouteRequired6379F0(String value) {
-    return '$value MB · direct route required';
+    return '$value MB · مسیر مستقیم لازم است';
   }
 
   @override
   String uiValueMBTapToDownload432280(String value) {
-    return '$value MB · tap to download';
+    return '$value MB · برای بارگیری بزنید';
   }
 
   @override
-  String get uiPreparingDownload8CB769 => 'Preparing download…';
+  String get uiPreparingDownload8CB769 => 'آماده‌سازی بارگیری…';
 
   @override
   String uiTransferringValueValue10EEBE(String value, String value2) {
-    return 'Transferring · $value% · $value2';
+    return 'در حال انتقال · $value٪ · $value2';
   }
 
   @override
   String uiTransferringValue9D7F13(String value) {
-    return 'Transferring · $value';
+    return 'در حال انتقال · $value';
   }
 
   @override
-  String get uiVoiceMessage999DEB => 'Voice message';
+  String get uiVoiceMessage999DEB => 'پیام صوتی';
 
   @override
-  String get uiSendAsMedia061D87 => 'Send as media';
+  String get uiSendAsMedia061D87 => 'ارسال به‌صورت رسانه';
 
   @override
-  String get uiSendAsFileB50EAF => 'Send as file';
+  String get uiSendAsFileB50EAF => 'ارسال به‌صورت فایل';
 
   @override
-  String get uiMEDIAB85FA2 => 'MEDIA';
+  String get uiMEDIAB85FA2 => 'رسانه';
 
   @override
-  String get uiFILEB4915D => 'FILE';
+  String get uiFILEB4915D => 'فایل';
 
   @override
-  String get uiPausedByPeer63BD05 => 'Paused by peer';
+  String get uiPausedByPeer63BD05 => 'همتا مکث کرده است';
 
   @override
-  String get uiCouldNotDecodeThisImage3EAA16 => 'Could not decode this image.';
+  String get uiCouldNotDecodeThisImage3EAA16 => 'رمزگشایی این تصویر ممکن نشد.';
 
   @override
   String uiValueValueValueDAEE95(String value, String value2, String value3) {
@@ -3479,7 +3588,7 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String uiValueCannotBeReachedOver14E8C2(String value, String value2) {
-    return '$value cannot be reached over Conest right now. Send this message to $value2 as an ordinary Matrix message instead?\n\nIt goes to your Matrix direct chat with them, not through Conest encryption: the homeserver can read it unless that chat is encrypted. Conest stops trying to deliver it.';
+    return 'اکنون از Conest به $value دسترسی نیست. این پیام را به‌جای آن به $value2 به‌صورت پیام معمولی Matrix بفرستیم؟\n\nپیام به گفت‌وگوی مستقیم Matrix شما می‌رود، بدون رمزگذاری Conest: اگر آن گفت‌وگو رمزگذاری نشده باشد سرور خانگی می‌تواند آن را بخواند. Conest تلاش برای تحویل را متوقف می‌کند.';
   }
 
   @override
@@ -3489,22 +3598,22 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String uiCouldNotPlayThisVideoF7D318(String value) {
-    return 'Could not play this video: $value';
+    return 'پخش این ویدیو ممکن نشد: $value';
   }
 
   @override
-  String get uiYouLeft9F2CDB => 'You left';
+  String get uiYouLeft9F2CDB => 'شما خارج شدید';
 
   @override
   String uiReplyingToValue645786(String value) {
-    return 'Replying to $value';
+    return 'پاسخ به $value';
   }
 
   @override
-  String get uiNoScheduledMessages1DDB60 => 'No scheduled messages';
+  String get uiNoScheduledMessages1DDB60 => 'پیام زمان‌بندی‌شده‌ای نیست';
 
   @override
-  String get uiScheduledAttachment08DB0E => 'Scheduled attachment';
+  String get uiScheduledAttachment08DB0E => 'پیوست زمان‌بندی‌شده';
 
   @override
   String uiValueValueValue209DD2(String value, String value2, String value3) {
@@ -3512,58 +3621,64 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiSendNowDAE330 => 'Send now';
+  String get uiSendNowDAE330 => 'ارسال اکنون';
 
   @override
-  String get uiReschedule34B2DC => 'Reschedule';
+  String get uiReschedule34B2DC => 'زمان‌بندی دوباره';
 
   @override
-  String get uiShareTextTo7B5086 => 'Share text to…';
+  String get uiShareTextTo7B5086 => 'اشتراک متن با…';
 
   @override
   String uiShareValueTo6E3BDD(String value) {
-    return 'Share $value to…';
+    return 'اشتراک $value با…';
   }
 
   @override
-  String uiShareValueFilesToA46E17(String value) {
-    return 'Share $value files to…';
+  String uiShareValueFilesToA46E17(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'اشتراک $value فایل با…',
+      one: 'اشتراک $value فایل با…',
+    );
+    return '$_temp0';
   }
 
   @override
   String get uiIfMessagesAndFilesFrom3DED27 =>
-      'If messages and files from a phone on the same network never arrive (but yours reach it), Windows Firewall is blocking them. This lets other devices on any network reach Conest on this PC; Windows asks to confirm.';
+      'اگر پیام و فایل گوشی در همین شبکه نمی‌رسد ولی پیام شما به آن می‌رسد، دیوار آتش Windows آن‌ها را مسدود می‌کند. این گزینه به دستگاه‌های دیگر در هر شبکه اجازهٔ دسترسی به Conest این رایانه می‌دهد؛ Windows تأیید می‌خواهد.';
 
   @override
-  String get uiServerRefusedSignOut66337B => 'Server refused sign-out';
+  String get uiServerRefusedSignOut66337B => 'سرور خروج را نپذیرفت';
 
   @override
-  String get uiServerNotReached62FED2 => 'Server not reached';
+  String get uiServerNotReached62FED2 => 'سرور در دسترس نبود';
 
   @override
   String uiThisServerDoesNotLet9EEC1F(String value) {
-    return 'This server does not let Conest end its session ($value). It may manage sessions on its own account page.\n\nSign out on this device anyway? Then remove the Conest session from your account page or another Matrix app.';
+    return 'این سرور اجازهٔ پایان نشست Conest را نمی‌دهد ($value). شاید نشست‌ها در صفحهٔ حساب سرور مدیریت شوند.\n\nبا این حال از این دستگاه خارج شوید؟ سپس نشست Conest را از صفحهٔ حساب یا برنامهٔ دیگر Matrix حذف کنید.';
   }
 
   @override
   String uiConestCouldNotSignThis3C1074(String value) {
-    return 'Conest could not sign this device out on the server ($value).\n\nSign out on this device anyway? The session stays valid on the server until you remove it from another Matrix app.';
+    return 'Conest نتوانست این دستگاه را از سرور خارج کند ($value).\n\nبا این حال از این دستگاه خارج شوید؟ نشست تا زمانی که از برنامهٔ دیگر Matrix حذفش کنید در سرور معتبر می‌ماند.';
   }
 
   @override
-  String get uiEnabledDF174A => 'Enabled';
+  String get uiEnabledDF174A => 'فعال';
 
   @override
   String get uiYourEncryptedMatrixHistoryIsC16CD2 =>
-      'Your encrypted Matrix history is already backed up. Use \"Enter recovery key\" on a new device.';
+      'از تاریخچهٔ رمزگذاری‌شدهٔ Matrix پشتیبان تهیه شده است. در دستگاه تازه از «وارد کردن کلید بازیابی» استفاده کنید.';
 
   @override
   String get uiThisAccountAlreadyHasA0CF3D8 =>
-      'This account already has a recovery key. Use \"Enter recovery key\" or \"Verify with another session\" to unlock your encrypted history on this device.';
+      'این حساب کلید بازیابی دارد. برای باز کردن تاریخچهٔ رمزگذاری‌شده در این دستگاه از «وارد کردن کلید بازیابی» یا «تأیید با نشست دیگر» استفاده کنید.';
 
   @override
   String uiMatrixValueED6C29(String value) {
-    return 'Matrix: $value';
+    return 'Matrix: ‏$value';
   }
 
   @override
@@ -3572,227 +3687,245 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiMatrixFallbackAA082C => 'Matrix fallback';
+  String get uiMatrixFallbackAA082C => 'مسیر جایگزین Matrix';
 
   @override
-  String get uiMatrixAccountD69140 => 'Matrix account';
+  String get uiMatrixAccountD69140 => 'حساب Matrix';
 
   @override
   String get uiAccountsThatSignInThrough64868A =>
-      'Accounts that sign in through Google, GitHub or another provider, or through matrix.org, use the browser.';
+      'حساب‌هایی که با Google، GitHub، ارائه‌دهندهٔ دیگر یا matrix.org وارد می‌شوند از مرورگر استفاده می‌کنند.';
 
   @override
-  String uiThisAccountIsOnValueB78C80(String value) {
-    return 'This account is on $value devices.';
+  String uiThisAccountIsOnValueB78C80(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'این حساب در $value دستگاه است.',
+      one: 'این حساب در $value دستگاه است.',
+    );
+    return '$_temp0';
   }
 
   @override
   String get uiUseConestOnMoreThanD2AA6A =>
-      'Use Conest on more than one device: link a phone, tablet or computer to this account. Your contacts see one person.';
+      'از Conest در چند دستگاه استفاده کنید: گوشی، تبلت یا رایانه را به این حساب پیوند دهید. مخاطبان یک نفر می‌بینند.';
 
   @override
   String get uiThisDeviceWasLinkedLess2E5122 =>
-      'This device was linked less than a day ago, so it cannot add or remove devices yet.';
+      'این دستگاه کمتر از یک روز پیش پیوند شده و هنوز نمی‌تواند دستگاه اضافه یا حذف کند.';
 
   @override
   String get uiPauseSyncingWithADevice89642E =>
-      'Pause syncing with a device out of touch for';
+      'توقف همگام‌سازی با دستگاه بی‌خبر پس از';
 
   @override
-  String uiValueDaysEE919A(String value) {
-    return '$value days';
+  String uiValueDaysEE919A(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value روز',
+      one: '$value روز',
+    );
+    return '$_temp0';
   }
 
   @override
-  String get uiChatsFromOtherNetworks13CDCD => 'Chats from other networks';
+  String get uiChatsFromOtherNetworks13CDCD => 'گفت‌وگوهای شبکه‌های دیگر';
 
   @override
   String uiShowValueChatsInTheBC0E41(String value) {
-    return 'Show $value chats in the chat list';
+    return 'نمایش گفت‌وگوهای $value در فهرست';
   }
 
   @override
   String get uiChatWithDeltaChatUsers3B8607 =>
-      'Chat with Delta Chat users through your email account. Set up Email above first.';
+      'با کاربران Delta Chat از حساب ایمیل خود گفت‌وگو کنید. ابتدا ایمیل را در بالا تنظیم کنید.';
 
   @override
   String uiChatWithDeltaChatUsersABD3F5(String value) {
-    return 'Chat with Delta Chat users as $value, one to one and in groups. End-to-end encrypted (OpenPGP, without forward secrecy); the mail servers see who writes to whom and when.';
+    return 'با کاربران Delta Chat با نام $value، دونفره و گروهی گفت‌وگو کنید. رمزگذاری سرتاسری (OpenPGP، بدون محرمانگی پیشرو)؛ سرور ایمیل می‌بیند چه کسی چه وقت به چه کسی می‌نویسد.';
   }
 
   @override
   String get uiNoDeltaChatChatsYetF4C538 =>
-      'No Delta Chat chats yet. Share your invite, or join with someone\'s.';
+      'هنوز گفت‌وگوی Delta Chat ندارید. دعوت خود را به اشتراک بگذارید یا با دعوت دیگری بپیوندید.';
 
   @override
   String uiRequestValueE6C033(String value) {
-    return 'Request: $value';
+    return 'درخواست: $value';
   }
 
   @override
   String get uiNobodyToAddYetStart0983BB =>
-      'Nobody to add yet: start a chat first. You can share the group\'s invite once it exists.';
+      'هنوز کسی برای افزودن نیست: ابتدا گفت‌وگو را شروع کنید. پس از ساخت گروه می‌توانید دعوتش را به اشتراک بگذارید.';
 
   @override
-  String get uiVerifiedEC734B => 'verified';
+  String get uiVerifiedEC734B => 'تأییدشده';
 
   @override
   String uiAddValueF546E5(String value) {
-    return 'Add $value';
+    return 'افزودن $value';
   }
 
   @override
-  String get uiChatDeleted73DC61 => 'Chat deleted';
+  String get uiChatDeleted73DC61 => 'گفت‌وگو حذف شد';
 
   @override
-  String get uiLeaveGroup925789 => 'Leave group';
+  String get uiLeaveGroup925789 => 'خروج از گروه';
 
   @override
   String get uiWaitingForTheInviteTo1C712D =>
-      'Waiting for the invite to be answered; this can take a minute.';
+      'منتظر پاسخ دعوت هستیم؛ ممکن است یک دقیقه طول بکشد.';
 
   @override
   String get uiEncryptedWithOpenPGPDeltaChat9C6326 =>
-      'Encrypted with OpenPGP (Delta Chat), without forward secrecy. The mail servers see who writes to whom and when.';
+      'رمزگذاری با OpenPGP ‏(Delta Chat)، بدون محرمانگی پیشرو. سرور ایمیل می‌بیند چه کسی چه وقت به چه کسی می‌نویسد.';
 
   @override
   String get uiARequestFromSomeoneYouAE0967 =>
-      'A request from someone you have not chatted with. Replying accepts it.';
+      'درخواست کسی که با او گفت‌وگو نکرده‌اید. پاسخ دادن آن را می‌پذیرد.';
 
   @override
-  String get uiReadA7AFDD => 'read';
+  String get uiReadA7AFDD => 'خوانده شد';
 
   @override
-  String get uiNotSentBE2B9D => 'not sent';
+  String get uiNotSentBE2B9D => 'ارسال نشد';
 
   @override
   String get uiCouldNotJoinTheCall252D45 =>
-      'Could not join the call. Check your route or leave the current call.';
+      'پیوستن به تماس ممکن نشد. مسیر را بررسی کنید یا از تماس فعلی خارج شوید.';
 
   @override
   String uiCallInValue16F998(String value) {
-    return 'Call in $value';
+    return 'تماس در $value';
   }
 
   @override
   String uiValueStartedACallIn278E96(String value, String value2) {
-    return '$value started a call in $value2';
+    return '$value در $value2 تماس شروع کرد';
   }
 
   @override
-  String get uiReturn24F096 => 'Return';
+  String get uiReturn24F096 => 'بازگشت';
 
   @override
-  String get uiCouldNotUpdateTheCall33517D => 'Could not update the call.';
+  String get uiCouldNotUpdateTheCall33517D => 'به‌روزرسانی تماس ممکن نشد.';
 
   @override
-  String get uiVoiceCallB8499D => 'Voice call';
+  String get uiVoiceCallB8499D => 'تماس صوتی';
 
   @override
   String uiCallViaValue0A68E8(String value) {
-    return 'Call via $value';
+    return 'تماس از $value';
   }
 
   @override
   String uiValueYouEFED9A(String value) {
-    return '$value (you)';
+    return '$value (شما)';
   }
 
   @override
-  String get uiTalkingC34D84 => 'Talking…';
+  String get uiTalkingC34D84 => 'در حال صحبت…';
 
   @override
-  String get uiHoldToTalkSpace869505 => 'Hold to talk · Space';
+  String get uiHoldToTalkSpace869505 => 'برای صحبت نگه دارید · Space';
 
   @override
   String uiVoiceCallValueBD3141(String value) {
-    return 'Voice call · $value';
+    return 'تماس صوتی · $value';
   }
 
   @override
-  String uiStartedByValueValueParticipants99F03D(String value, String value2) {
-    return 'Started by $value · $value2 participants';
+  String uiStartedByValueValueParticipants99F03D(String value, int value2) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value2,
+      locale: localeName,
+      other: 'آغازگر $value · $value2 شرکت‌کننده',
+      one: 'آغازگر $value · $value2 شرکت‌کننده',
+    );
+    return '$_temp0';
   }
 
   @override
-  String get uiNodeRnsd0D8EEC => 'Node (rnsd)';
+  String get uiNodeRnsd0D8EEC => 'گره (rnsd)';
 
   @override
-  String get uiRNodeOnUSBF00220 => 'RNode on USB';
+  String get uiRNodeOnUSBF00220 => 'RNode با USB';
 
   @override
-  String get uiRNodeOnBluetooth13657D => 'RNode on Bluetooth';
+  String get uiRNodeOnBluetooth13657D => 'RNode با Bluetooth';
 
   @override
-  String get uiRNodeOnWiFiC18593 => 'RNode on Wi-Fi';
+  String get uiRNodeOnWiFiC18593 => 'RNode با Wi-Fi';
 
   @override
-  String get uiScanForRadios2B185E => 'Scan for radios';
+  String get uiScanForRadios2B185E => 'جست‌وجوی رادیوها';
 
   @override
   String get uiUseTheSameFrequencyBandwidthFC1A9F =>
-      'Use the same frequency, bandwidth and spreading factor as the Reticulum network the radio joins.';
+      'از همان فرکانس، پهنای باند و ضریب گسترش شبکهٔ Reticulum که رادیو به آن می‌پیوندد استفاده کنید.';
 
   @override
-  String get uiAppMode2965FD => 'App mode';
+  String get uiAppMode2965FD => 'حالت برنامه';
 
   @override
-  String get uiBoth1F4698 => 'Both';
+  String get uiBoth1F4698 => 'هر دو';
 
   @override
   String uiCouldNotStartTheChatAE2F54(String value) {
-    return 'Could not start the chat: $value';
+    return 'شروع گفت‌وگو ممکن نشد: $value';
   }
 
   @override
   String uiMessagesAreEndToEndE786B5(String value) {
-    return 'Messages are end-to-end encrypted, but your homeserver and theirs see who talks to whom and when. Verify $value to be sure it is them.';
+    return 'پیام‌ها سرتاسر رمزگذاری شده‌اند، اما سرور شما و طرف مقابل می‌بینند چه کسی چه وقت با چه کسی صحبت می‌کند. برای اطمینان، $value را تأیید کنید.';
   }
 
   @override
   String get uiThisChatIsNotEncrypted799D99 =>
-      'This chat is not encrypted: your homeserver and theirs can read it.';
+      'این گفت‌وگو رمزگذاری نشده است: سرور شما و طرف مقابل می‌توانند آن را بخوانند.';
 
   @override
-  String get uiLoading33CE41 => 'Loading…';
+  String get uiLoading33CE41 => 'در حال بارگذاری…';
 
   @override
-  String get uiLoadEarlierMessages4AC08D => 'Load earlier messages';
+  String get uiLoadEarlierMessages4AC08D => 'بارگذاری پیام‌های پیشین';
 
   @override
-  String get uiEditing3B9BA1 => 'Editing';
+  String get uiEditing3B9BA1 => 'در حال ویرایش';
 
   @override
   String uiReplyToValueValue666B4E(String value, String value2) {
-    return 'Reply to $value: $value2';
+    return 'پاسخ به $value: ‏$value2';
   }
 
   @override
   String get uiYouWereInvitedToThisE30D1E =>
-      'You were invited to this Matrix chat.';
+      'به این گفت‌وگوی Matrix دعوت شده‌اید.';
 
   @override
-  String get uiEdited0E3C32 => 'edited · ';
+  String get uiEdited0E3C32 => 'ویرایش‌شده · ';
 
   @override
   String get uiUnableToDecryptThisMessage8A31CC =>
-      'Unable to decrypt this message yet';
+      'هنوز رمزگشایی این پیام ممکن نیست';
 
   @override
-  String get uiUnsupportedMessage9E48EB => 'Unsupported message';
+  String get uiUnsupportedMessage9E48EB => 'پیام پشتیبانی‌نشده';
 
   @override
   String uiImageUnavailableValueB024FC(String value) {
-    return 'Image unavailable: $value';
+    return 'تصویر در دسترس نیست: $value';
   }
 
   @override
   String uiDownloadFailedValueB18BB6(String value) {
-    return 'Download failed: $value';
+    return 'بارگیری ناموفق بود: $value';
   }
 
   @override
-  String get uiFile2C3CAF => 'File';
+  String get uiFile2C3CAF => 'فایل';
 
   @override
   String uiValueKiBEC48AF(String value) {
@@ -3800,22 +3933,28 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiCODEPHRASEE2C724 => 'CODEPHRASE';
+  String get uiCODEPHRASEE2C724 => 'عبارت اتصال';
 
   @override
   String uiROTATESINValueS5745B8(String value) {
-    return 'ROTATES IN ${value}s';
+    return 'تغییر تا $value ثانیه';
   }
 
   @override
-  String get uiROUTEINSPECTOR321AA4 => 'ROUTE INSPECTOR';
+  String get uiROUTEINSPECTOR321AA4 => 'بازرس مسیر';
 
   @override
-  String get uiLIVE67B40B => '● LIVE';
+  String get uiLIVE67B40B => '● زنده';
 
   @override
-  String uiValueChatsAD9A3B(String value) {
-    return '$value chats';
+  String uiValueChatsAD9A3B(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value گفت‌وگو',
+      one: '$value گفت‌وگو',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -3825,43 +3964,43 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get uiNotDeliveredTheirRadioCould75D581 =>
-      'not delivered (their radio could not read it)';
+      'تحویل نشد (رادیوی او نتوانست بخواند)';
 
   @override
-  String get uiSenderNotVerified2BB0FA => 'sender not verified';
+  String get uiSenderNotVerified2BB0FA => 'فرستنده تأیید نشده';
 
   @override
-  String get uiYouAreHidden56DCC1 => 'You are hidden';
+  String get uiYouAreHidden56DCC1 => 'شما پنهان هستید';
 
   @override
   String get uiYouReadTheMeshChatAEACC5 =>
-      'You read the mesh chat, but bitchat users cannot see you or write to you. Turn on \"Reachable by bitchat users\" in Settings → Connectivity to write.';
+      'گفت‌وگوی مش را می‌خوانید، اما کاربران bitchat شما را نمی‌بینند و نمی‌توانند بنویسند. برای نوشتن، «دسترسی کاربران bitchat به شما» را در تنظیمات ← اتصال روشن کنید.';
 
   @override
-  String get uiEveryoneNearbyOverBluetooth7B8D63 =>
-      'Everyone nearby, over Bluetooth';
+  String get uiEveryoneNearbyOverBluetooth7B8D63 => 'همهٔ نزدیکان از Bluetooth';
 
   @override
-  String get uiNoBitchatUsersNearbyYetD30471 => 'No bitchat users nearby yet';
+  String get uiNoBitchatUsersNearbyYetD30471 =>
+      'هنوز کاربر bitchat نزدیکی نیست';
 
   @override
   String get uiPhonesInBluetoothRangeThatDCCC0D =>
-      'Phones in Bluetooth range that announce themselves show up here.';
+      'دستگاه‌هایی که در برد Bluetooth اعلام حضور کنند اینجا دیده می‌شوند.';
 
   @override
-  String get uiNearbyF1536C => 'Nearby';
+  String get uiNearbyF1536C => 'نزدیک';
 
   @override
   String get uiEveryoneInBluetoothRangeReadsA7628A =>
-      'Everyone in Bluetooth range reads this chat, and anyone can relay it. Messages are signed, not encrypted.';
+      'همهٔ افراد در برد Bluetooth این گفت‌وگو را می‌خوانند و هر کس می‌تواند منتقلش کند. پیام‌ها امضا شده‌اند، نه رمزگذاری.';
 
   @override
   String get uiEncryptedBetweenTheTwoPhones3871C4 =>
-      'Encrypted between the two phones (bitchat\'s Noise), with forward secrecy only while you are both nearby.';
+      'بین دو دستگاه رمزگذاری می‌شود (Noise در bitchat)، با محرمانگی پیشرو فقط تا وقتی هر دو نزدیک هستید.';
 
   @override
   String get uiThisChatWasWithAn0507F9 =>
-      'This chat was with an earlier bitchat identity of yours. Writing now tells them your new one is the same person.';
+      'این گفت‌وگو با هویت قبلی bitchat شما بود. نوشتن اکنون به آن‌ها نشان می‌دهد هویت تازه متعلق به همان شخص است.';
 
   @override
   String uiValueValue64C067(String value, String value2) {
@@ -3869,92 +4008,98 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiVerifyThisSessionB5065C => 'Verify this session';
+  String get uiVerifyThisSessionB5065C => 'تأیید این نشست';
 
   @override
-  String get uiBluetoothMeshOn5A96FE => 'Bluetooth mesh on';
+  String get uiBluetoothMeshOn5A96FE => 'شبکهٔ مش Bluetooth روشن است';
 
   @override
-  String get uiStartingBluetoothE6928A => 'Starting Bluetooth';
+  String get uiStartingBluetoothE6928A => 'در حال راه‌اندازی Bluetooth';
 
   @override
-  String get uiBluetoothUnavailableF4B751 => 'Bluetooth unavailable';
+  String get uiBluetoothUnavailableF4B751 => 'Bluetooth در دسترس نیست';
 
   @override
   String uiBitchatUsersNearbySeeYou1B54FC(String value) {
-    return 'bitchat users nearby see you as \"$value\" while you are in range, and can write to you. The identity they see is new every week and has nothing to do with your Conest identity.';
+    return 'کاربران نزدیک bitchat تا وقتی در محدوده هستید شما را با نام «$value» می‌بینند و می‌توانند پیام بدهند. هویتی که می‌بینند هر هفته تازه می‌شود و هیچ ارتباطی با هویت Conest شما ندارد.';
   }
 
   @override
   String get uiOffBitchatUsersDoNot054F9A =>
-      'Off: bitchat users do not see this phone. You can still read the mesh chat.';
+      'خاموش: کاربران bitchat این دستگاه را نمی‌بینند. همچنان می‌توانید گفت‌وگوی مش را بخوانید.';
 
   @override
   String uiPhonesNearbyWithoutInternetCan27CC7F(String value) {
-    return 'Phones nearby without internet can use bitchat\'s location channels through this phone. Only those public, signed messages pass. This phone connects to the relays of the areas they use$value: those relays see your internet address and the area, so they can tell roughly where you are.';
+    return 'گوشی‌های نزدیکِ بدون اینترنت می‌توانند از کانال‌های مکانی bitchat از طریق این دستگاه استفاده کنند. فقط همان پیام‌های عمومی و امضاشده عبور می‌کنند. این دستگاه به رله‌های مناطق مورد استفادهٔ آن‌ها وصل می‌شود$value: این رله‌ها نشانی اینترنت و منطقهٔ شما را می‌بینند و می‌توانند موقعیت تقریبی شما را بفهمند.';
   }
 
   @override
   String get uiOffBitchatUsersNearbyWithout030CFB =>
-      'Off: bitchat users nearby without internet cannot reach location channels through you.';
+      'خاموش: کاربران نزدیک bitchat که اینترنت ندارند نمی‌توانند از طریق شما به کانال‌های مکانی دسترسی پیدا کنند.';
 
   @override
-  String uiValueNearbyTheMeshChat31C0CA(String value) {
-    return '$value nearby · the mesh chat and private chats';
+  String uiValueNearbyTheMeshChat31C0CA(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value نفر نزدیک · گفت‌وگوی مش و خصوصی',
+      one: '$value نفر نزدیک · گفت‌وگوی مش و خصوصی',
+    );
+    return '$_temp0';
   }
 
   @override
-  String get uiSignInToYourMatrix8D0037 => 'Sign in to your Matrix account';
+  String get uiSignInToYourMatrix8D0037 => 'ورود به حساب Matrix شما';
 
   @override
-  String get uiNoRoomsFoundAD2C3E => 'No rooms found';
+  String get uiNoRoomsFoundAD2C3E => 'اتاقی پیدا نشد';
 
   @override
-  String get uiMatrixInvitation525106 => 'Matrix invitation';
+  String get uiMatrixInvitation525106 => 'دعوت Matrix';
 
   @override
-  String get uiEncryptedChat0D7563 => 'Encrypted chat';
+  String get uiEncryptedChat0D7563 => 'گفت‌وگوی رمزگذاری‌شده';
 
   @override
-  String get uiChat2CED57 => 'Chat';
+  String get uiChat2CED57 => 'گفت‌وگو';
 
   @override
-  String get uiNoNostrChatsYet0A95D0 => 'No Nostr chats yet';
+  String get uiNoNostrChatsYet0A95D0 => 'هنوز گفت‌وگوی Nostr نیست';
 
   @override
   String get uiEncryptedOnNostrNIPRelaysA51F70 =>
-      'Encrypted on Nostr (NIP-17); relays see neither who wrote nor when. No forward secrecy.';
+      'رمزگذاری در Nostr ‏(NIP-17)؛ رله‌ها نه نویسنده را می‌بینند نه زمان نوشتن را. بدون محرمانگی پیشرو.';
 
   @override
-  String get uiTestingRoutes19C586 => 'Testing routes…';
+  String get uiTestingRoutes19C586 => 'در حال آزمون مسیرها…';
 
   @override
-  String get uiTestRoutes52770A => 'Test Routes';
+  String get uiTestRoutes52770A => 'آزمون مسیرها';
 
   @override
   String get uiCheckingWhetherTheirAppCan51E401 =>
-      'Checking whether their app can take route tests…';
+      'بررسی پشتیبانی برنامهٔ او از آزمون مسیر…';
 
   @override
   String get uiTheirAppDidNotSay758036 =>
-      'Their app did not say it can take route tests. If they run this version too, they may not be reachable right now.';
+      'برنامهٔ او پشتیبانی آزمون مسیر را اعلام نکرد. اگر همین نسخه را دارد، شاید اکنون در دسترس نیست.';
 
   @override
-  String get uiNoRouteTookTheTestF2F6CB => 'No route took the test.';
+  String get uiNoRouteTookTheTestF2F6CB => 'هیچ مسیری آزمون را نپذیرفت.';
 
   @override
   String uiTestedValueRoutesThatAnswer70B842(String value) {
-    return 'Tested $value. Routes that answer go first for messages.';
+    return '$value آزموده شد. مسیرهای پاسخ‌گو برای پیام اولویت دارند.';
   }
 
   @override
   String get uiUSB09716C => 'USB';
 
   @override
-  String get uiCopiedTheErrorHistoryCE02E2 => 'Copied the error history.';
+  String get uiCopiedTheErrorHistoryCE02E2 => 'تاریخچهٔ خطا کپی شد.';
 
   @override
-  String get uiNothingRecordedA27006 => 'Nothing recorded.';
+  String get uiNothingRecordedA27006 => 'چیزی ثبت نشده.';
 
   @override
   String uiValueValue1C180E(String value, String value2) {
@@ -3973,7 +4118,7 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String uiRouteValue9D8426(String value) {
-    return 'Route: $value';
+    return 'مسیر: $value';
   }
 
   @override
@@ -3982,52 +4127,1033 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get uiNetwork53EBC5 => 'Network';
+  String get uiNetwork53EBC5 => 'شبکه';
 
   @override
   String uiImageIsLargerThanTheEE56C5(String value) {
-    return 'Image is larger than the $value MB cap.';
+    return 'تصویر از سقف $value MB بزرگ‌تر است.';
   }
 
   @override
   String uiFileIsLargerThanTheAF488F(String value) {
-    return 'File is larger than the $value MB cap.';
+    return 'فایل از سقف $value MB بزرگ‌تر است.';
   }
 
   @override
   String uiSendValueBF4C3C(String value) {
-    return 'Send $value';
+    return 'ارسال $value';
   }
 
   @override
-  String get uiRecent76EEC7 => 'Recent';
+  String get uiRecent76EEC7 => 'اخیر';
 
   @override
   String get uiConestSeesOnlyThePhotosEE1926 =>
-      'Conest sees only the photos you picked.';
+      'Conest فقط عکس‌های انتخابی شما را می‌بیند.';
 
   @override
   String get uiPhotosPermissionDeniedUseBrowseD672EE =>
-      'Photos permission denied. Use \"Browse files…\" to send any file, or grant access in system settings.';
+      'مجوز عکس رد شد. برای ارسال هر فایل از «مرور فایل‌ها…» استفاده کنید یا در تنظیمات سیستم دسترسی بدهید.';
 
   @override
-  String get uiNoPhotosOrVideosHereC729D1 => 'No photos or videos here.';
+  String get uiNoPhotosOrVideosHereC729D1 => 'اینجا عکس یا ویدیویی نیست.';
 
   @override
   String get uiCouldNotDecodeTheImage69AC9D =>
-      'Could not decode the image to rotate it.';
+      'رمزگشایی تصویر برای چرخش ممکن نشد.';
 
   @override
   String uiRotationFailedValue176CC6(String value) {
-    return 'Rotation failed: $value';
+    return 'چرخش ناموفق بود: $value';
   }
 
   @override
   String uiValueOfValueVerified63B11D(String value, String value2) {
-    return '$value of $value2 verified';
+    return '$value از $value2 تأیید شد';
   }
 
   @override
-  String get uiPointTheCameraAtA9BAFAF =>
-      'Point the camera at a Conest invite QR code.';
+  String get uiPointTheCameraAtA9BAFAF => 'دوربین را به QR دعوت Conest بگیرید.';
+
+  @override
+  String get statusMatrixRoomsShowJoinsAndE8AC9E =>
+      'ورود و خروج در اتاق‌های Matrix نمایش داده می‌شود.';
+
+  @override
+  String get statusMatrixRoomsHideJoinsAndE00610 =>
+      'ورود و خروج در اتاق‌های Matrix پنهان می‌شود.';
+
+  @override
+  String statusAppMode95B48F(String value) {
+    return 'حالت برنامه: $value.';
+  }
+
+  @override
+  String statusCalling7A8C67(String value) {
+    return 'در حال تماس با $value…';
+  }
+
+  @override
+  String get statusUpdatedHistoryVisibilityForFutureDA1A23 =>
+      'نمایانی تاریخچه برای اعضای آیندهٔ گروه به‌روز شد.';
+
+  @override
+  String statusVaultUnlockFailedAE7813(String value) {
+    return 'بازگشایی گاوصندوق ناموفق بود: $value';
+  }
+
+  @override
+  String get statusDirectOnlineTransportIsUnavailableB1EFAE =>
+      'انتقال مستقیم آنلاین در دسترس نیست؛ مسیر جایگزین رله فعال است.';
+
+  @override
+  String get statusNostrCarrierSetUpE82998 => 'حامل Nostr تنظیم شد.';
+
+  @override
+  String get statusNostrCarrierRemovedCB968A => 'حامل Nostr حذف شد.';
+
+  @override
+  String get statusNostrRelaysUpdatedARelay03F8F3 =>
+      'رله‌های Nostr به‌روز شدند: یک رله بسته شد.';
+
+  @override
+  String get statusTorCarrierSetUp3D2304 => 'حامل Tor تنظیم شد.';
+
+  @override
+  String get statusTorCarrierRemovedAAC23E => 'حامل Tor حذف شد.';
+
+  @override
+  String get statusBluetoothMeshOn11FD21 => 'شبکهٔ مش Bluetooth روشن شد.';
+
+  @override
+  String get statusBluetoothMeshOff2CE954 => 'شبکهٔ مش Bluetooth خاموش شد.';
+
+  @override
+  String get statusNostrMessagesOn35ABF5 => 'پیام‌های Nostr روشن شد.';
+
+  @override
+  String get statusNostrMessagesOff16BCA7 => 'پیام‌های Nostr خاموش شد.';
+
+  @override
+  String get statusDeltaChatOn1F38AA => 'Delta Chat روشن شد.';
+
+  @override
+  String get statusDeltaChatOff8BDBD4 => 'Delta Chat خاموش شد.';
+
+  @override
+  String statusBitchatUsersNearbyCanNow5536CD(String value) {
+    return 'کاربران نزدیک bitchat اکنون شما را با نام $value می‌بینند.';
+  }
+
+  @override
+  String get statusBitchatUsersNoLongerSee68B46D =>
+      'کاربران bitchat دیگر شما را نمی‌بینند.';
+
+  @override
+  String statusMeshcoreCarrierSetUpThroughE51369(String value) {
+    return 'حامل MeshCore از $value تنظیم شد.';
+  }
+
+  @override
+  String get statusMeshcoreCarrierRemoved38FC35 => 'حامل MeshCore حذف شد.';
+
+  @override
+  String statusMeshtasticCarrierSetUpThroughAFA24A(String value) {
+    return 'حامل Meshtastic از $value تنظیم شد.';
+  }
+
+  @override
+  String get statusMeshtasticCarrierRemoved66387E => 'حامل Meshtastic حذف شد.';
+
+  @override
+  String get statusMeshtasticAppMessagesOn2C1888 =>
+      'پیام‌های برنامهٔ Meshtastic روشن شد.';
+
+  @override
+  String get statusMeshtasticAppMessagesOffAFB9E8 =>
+      'پیام‌های برنامهٔ Meshtastic خاموش شد.';
+
+  @override
+  String get statusMeshcoreAppMessagesOn2BF1E3 =>
+      'پیام‌های برنامهٔ MeshCore روشن شد.';
+
+  @override
+  String get statusMeshcoreAppMessagesOffE59C90 =>
+      'پیام‌های برنامهٔ MeshCore خاموش شد.';
+
+  @override
+  String statusReticulumCarrierSetUpThrough7EB41E(String value) {
+    return 'حامل Reticulum از $value تنظیم شد.';
+  }
+
+  @override
+  String get statusReticulumCarrierRemoved301C05 => 'حامل Reticulum حذف شد.';
+
+  @override
+  String statusEmailCarrierSetUpAs8427FD(String value) {
+    return 'حامل ایمیل با نشانی $value تنظیم شد.';
+  }
+
+  @override
+  String get statusEmailCarrierRemoved036E51 => 'حامل ایمیل حذف شد.';
+
+  @override
+  String statusImportedRelaySFromB1DB2D(int value, String value2) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value رله از $value2 وارد شد.',
+      one: '$value رله از $value2 وارد شد.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String statusRemovedImportedRelaySource3F4540(String value) {
+    return 'منبع واردشدهٔ رلهٔ $value حذف شد.';
+  }
+
+  @override
+  String get statusPairingCodeRotatedAndAdvertised722FB9 =>
+      'کد جفت‌سازی تغییر و اعلام شد.';
+
+  @override
+  String statusCheckedRouteSAvailableE9B9D6(
+    int value,
+    int value2,
+    String value3,
+  ) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value مسیر بررسی شد؛ $value2 موجود است. $value3',
+      one: '$value مسیر بررسی شد؛ $value2 موجود است. $value3',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String statusCheckedIrohPathSFor038B43(
+    String value,
+    String value2,
+    String value3,
+  ) {
+    return 'مسیرهای Iroh برای $value بررسی شد؛ وضعیت دسترسی $value2 است. $value3';
+  }
+
+  @override
+  String statusNoPathsAreAdvertisedForA37EA3(String value) {
+    return 'هیچ مسیری برای $value اعلام نشده.';
+  }
+
+  @override
+  String statusCheckedPathSForAvailable0970F6(
+    int value,
+    String value2,
+    int value3,
+    String value4,
+    String value5,
+    String value6,
+  ) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other:
+          '$value مسیر برای $value2 بررسی شد؛ $value3 موجود است$value4. وضعیت دسترسی $value5 است. $value6',
+      one:
+          '$value مسیر برای $value2 بررسی شد؛ $value3 موجود است$value4. وضعیت دسترسی $value5 است. $value6',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get statusDisplayNameUpdated3BD31A => 'نام نمایشی به‌روز شد.';
+
+  @override
+  String get statusBioCleared543896 => 'دربارهٔ من پاک شد.';
+
+  @override
+  String get statusBioUpdated440110 => 'دربارهٔ من به‌روز شد.';
+
+  @override
+  String get statusContactProfileUpdated47ECF6 => 'نمایهٔ مخاطب به‌روز شد.';
+
+  @override
+  String get statusRelayModeEnabledB9ACB8 => 'حالت رله روشن شد.';
+
+  @override
+  String get statusRelayModeDisabled723F4D => 'حالت رله خاموش شد.';
+
+  @override
+  String get statusContactsCanNowContributeRelay147ECE =>
+      'مخاطبان اکنون می‌توانند مسیر رله را خودکار ارائه کنند.';
+
+  @override
+  String get statusAutomaticContactRelayUsageDisabledE762A7 =>
+      'استفادهٔ خودکار از رلهٔ مخاطبان خاموش شد.';
+
+  @override
+  String get statusNotificationsEnabledF70668 => 'اعلان‌ها روشن شد.';
+
+  @override
+  String get statusNotificationsDisabledForThisDeviceE10A46 =>
+      'اعلان‌ها در این دستگاه خاموش شد.';
+
+  @override
+  String get statusExperimentalVoiceCallsEnabledOn4081DE =>
+      'تماس صوتی آزمایشی در این دستگاه روشن شد.';
+
+  @override
+  String get statusExperimentalVoiceCallsDisabledOn19A5AE =>
+      'تماس صوتی آزمایشی در این دستگاه خاموش شد.';
+
+  @override
+  String get statusAndroidBackgroundRuntimeEnabledIfAA5168 =>
+      'اجرای پس‌زمینهٔ Android روشن شد. اگر سیستم دسترسی باتری یا پس‌زمینه را مسدود کند، اعلان‌ها ممکن است دیر برسند یا نرسند.';
+
+  @override
+  String get statusAndroidBackgroundRuntimeDisabled5FC9A0 =>
+      'اجرای پس‌زمینهٔ Android خاموش شد.';
+
+  @override
+  String get statusBackgroundVoiceCallAvailabilityEnabledA87223 =>
+      'دسترسی تماس صوتی پس‌زمینه روشن شد. تماس فقط وقتی می‌رسد که سرویس Conest اجازهٔ اجرا داشته باشد.';
+
+  @override
+  String get statusBackgroundVoiceCallAvailabilityDisabledA71AD1 =>
+      'دسترسی تماس صوتی پس‌زمینه خاموش شد.';
+
+  @override
+  String get statusFreeSpaceReserveEnabledD7CE0E =>
+      'نگهداری ۱۰٪ فضای خالی روشن شد.';
+
+  @override
+  String get statusFreeSpaceReserveDisabledD3E635 =>
+      'نگهداری ۱۰٪ فضای خالی خاموش شد.';
+
+  @override
+  String statusRoutingPreferencesUpdatedFor05867B(String value) {
+    return 'ترجیحات مسیریابی $value به‌روز شد.';
+  }
+
+  @override
+  String statusLocalRelayPortUpdatedTo7F815D(String value) {
+    return 'درگاه رلهٔ محلی به $value تغییر کرد.';
+  }
+
+  @override
+  String statusRelayAdded800692(String value) {
+    return 'رلهٔ $value افزوده شد.';
+  }
+
+  @override
+  String statusRelayAddedFor087398(String value, String value2, String value3) {
+    return 'رلهٔ $value:$value2 برای $value3 افزوده شد.';
+  }
+
+  @override
+  String statusRelayRemoved546A15(String value) {
+    return 'رلهٔ $value حذف شد.';
+  }
+
+  @override
+  String statusTrustedNewIdentityForRelay4CDBFE(String value) {
+    return 'به هویت تازهٔ رلهٔ $value اعتماد شد.';
+  }
+
+  @override
+  String get statusContactRemovedE31CE0 => 'مخاطب حذف شد.';
+
+  @override
+  String get statusContactRemovedLocallySendingA40D607 =>
+      'مخاطب محلی حذف شد. اعلان حذف در پس‌زمینه فرستاده می‌شود.';
+
+  @override
+  String get statusDeviceCreatedShareAQr06E7B6 =>
+      'دستگاه ساخته شد. برای افزودن مخاطب، دعوت QR یا عبارت اتصال فعلی را به اشتراک بگذارید.';
+
+  @override
+  String statusContactAcceptedSendingApprovalOverDAD10C(String value) {
+    return 'مخاطب $value پذیرفته شد. تأیید از مسیرهای موجود ارسال می‌شود.';
+  }
+
+  @override
+  String statusContactSavedWaitingForThe41F77D(String value) {
+    return 'مخاطب $value ذخیره شد. در انتظار تأیید درخواست از طرف مقابل.';
+  }
+
+  @override
+  String statusReconnectedWithBC62EC(String value) {
+    return 'با $value دوباره متصل شدیم.';
+  }
+
+  @override
+  String statusAskingToReconnectE93389(String value) {
+    return 'از $value درخواست اتصال دوباره می‌شود.';
+  }
+
+  @override
+  String statusConfirmedIdentityReplacementForC93359(String value) {
+    return 'جایگزینی هویت $value تأیید شد.';
+  }
+
+  @override
+  String statusRejectedIdentityReplacementForDEC894(String value) {
+    return 'جایگزینی هویت $value رد شد.';
+  }
+
+  @override
+  String get statusContactRequestCancelledQueuedItemsEC2567 =>
+      'درخواست ارتباط لغو شد. موارد در صف مسدود می‌مانند.';
+
+  @override
+  String get statusSaved9D4AF6 => 'ذخیره شد.';
+
+  @override
+  String statusMessageSavedLocallyItWill0DBD03(String value) {
+    return 'پیام محلی ذخیره شد. پس از پذیرش درخواست توسط $value ارسال می‌شود.';
+  }
+
+  @override
+  String statusTryingLanFirstThenRelay1F5BEC(String value) {
+    return 'نخست شبکهٔ محلی و سپس رله برای $value امتحان می‌شود.';
+  }
+
+  @override
+  String get statusMessageQueuedTheAppWillA89BCC =>
+      'پیام در صف است. برنامه هنگام بررسی، مسیرهای مستقیم و رله را دوباره امتحان می‌کند.';
+
+  @override
+  String statusAttachmentIsWaitingForA3F032B(String value) {
+    return 'پیوست منتظر مسیر است: $value';
+  }
+
+  @override
+  String statusCouldNotPrepareForDownloadE8FB18(String value) {
+    return 'آماده‌سازی $value برای بارگیری ممکن نشد.';
+  }
+
+  @override
+  String statusCreatedGroupF5D335(String value) {
+    return 'گروه $value ساخته شد.';
+  }
+
+  @override
+  String statusUpdatedGroup2140B7(String value) {
+    return 'گروه $value به‌روز شد.';
+  }
+
+  @override
+  String statusRemovedAMemberFrom68CF04(String value) {
+    return 'عضوی از $value حذف شد.';
+  }
+
+  @override
+  String statusLeftGroup9E3412(String value) {
+    return 'از گروه $value خارج شدید.';
+  }
+
+  @override
+  String statusRemovedGroupFromYourList047F4B(String value) {
+    return 'گروه $value از فهرست شما حذف شد.';
+  }
+
+  @override
+  String statusTransferredOwnershipOfToA126A1(String value, String value2) {
+    return 'مالکیت $value به $value2 منتقل شد.';
+  }
+
+  @override
+  String statusDeletedGroupForEveryoneDB26F8(String value) {
+    return 'گروه $value برای همه حذف شد.';
+  }
+
+  @override
+  String statusUpdatedIn642C0A(String value, String value2) {
+    return '$value در $value2 به‌روز شد.';
+  }
+
+  @override
+  String statusSendingGroupMessageToD77236(String value) {
+    return 'در حال ارسال پیام گروه به $value.';
+  }
+
+  @override
+  String statusSentToAsAPlainAF2DE6(String value) {
+    return 'به $value به‌صورت پیام عادی Matrix ارسال شد.';
+  }
+
+  @override
+  String statusCanceledAndDeletedPendingMessageCDCA88(String value) {
+    return 'پیام منتظر به $value لغو و حذف شد.';
+  }
+
+  @override
+  String get statusMessageDeletedLocallyCE90EE => 'پیام محلی حذف شد.';
+
+  @override
+  String statusMessageDeletedHereAndDeletion7C4E80(String value) {
+    return 'پیام اینجا حذف شد و درخواست حذف به $value رفت.';
+  }
+
+  @override
+  String get statusMessageDeletedHereRemoteDeletionB6AE62 =>
+      'پیام اینجا حذف شد. درخواست حذف از راه دور هنوز ارسال نشده.';
+
+  @override
+  String get statusMessageEditedLocally187334 => 'پیام محلی ویرایش شد.';
+
+  @override
+  String statusMessageEditQueuedTo695B15(String value) {
+    return 'ویرایش پیام برای $value در صف است.';
+  }
+
+  @override
+  String get statusReactionUpdatedLocally97D795 => 'واکنش محلی به‌روز شد.';
+
+  @override
+  String statusReactionQueuedToD43BED(String value) {
+    return 'واکنش برای $value در صف است.';
+  }
+
+  @override
+  String get statusLanLobbyMessageSavedLocallyFDE86E =>
+      'پیام لابی محلی ذخیره شد؛ هیچ شرکت‌کنندهٔ محلی نزدیک در دسترس نبود.';
+
+  @override
+  String statusLanLobbyMessageSentTo82F0B0(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'پیام لابی محلی از $value مسیر نزدیک ارسال شد.',
+      one: 'پیام لابی محلی از $value مسیر نزدیک ارسال شد.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String statusGroupMembershipAckFrom43FCF1(String value, String value2) {
+    return 'تأیید عضویت گروه $value از $value2.';
+  }
+
+  @override
+  String statusReceivedItemSVia58B082(int value, String value2) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value مورد از $value2 دریافت شد.',
+      one: '$value مورد از $value2 دریافت شد.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String statusRoutePollFailedA1FD0C(String value) {
+    return 'بررسی مسیرها ناموفق بود: $value';
+  }
+
+  @override
+  String statusLanReceivingIsOffPort5F04CB(String value) {
+    return 'دریافت محلی خاموش است: درگاه $value اشغال است. در تنظیمات درگاه رلهٔ محلی دیگری انتخاب کنید.';
+  }
+
+  @override
+  String statusRediscoveredLanRouteFor587829(String value, String value2) {
+    return 'مسیر محلی $value برای $value2 دوباره پیدا شد.';
+  }
+
+  @override
+  String statusLanDiscoveryUnavailable0E99AE(String value) {
+    return 'کشف شبکهٔ محلی در دسترس نیست: $value';
+  }
+
+  @override
+  String get statusUpdatedNearbyLanRoutesF8CAFC =>
+      'مسیرهای محلی نزدیک به‌روز شدند.';
+
+  @override
+  String statusRejectedMalformedAttachmentOfferFrom9FC96A(String value) {
+    return 'پیشنهاد پیوست نادرست از $value رد شد.';
+  }
+
+  @override
+  String get statusRejectedInvalidAttachmentMetadata849465 =>
+      'فرادادهٔ نامعتبر پیوست رد شد.';
+
+  @override
+  String statusDeclinedTheRequestQueuedMessagesABFFCB(String value) {
+    return '$value درخواست را رد کرد. پیام و فایل‌های در صف مسدود می‌مانند.';
+  }
+
+  @override
+  String statusNewContactRequestFromCF70B9(String value) {
+    return 'درخواست ارتباط تازه از $value.';
+  }
+
+  @override
+  String statusLeftF4FE32(String value, String value2) {
+    return '$value از $value2 خارج شد.';
+  }
+
+  @override
+  String statusRemovedYouTheConversationRemains3BB516(String value) {
+    return '$value شما را حذف کرد. گفت‌وگو محلی بایگانی می‌ماند.';
+  }
+
+  @override
+  String statusUpdatedEditedMessageFrom1AB90D(String value) {
+    return 'پیام ویرایش‌شدهٔ $value به‌روز شد.';
+  }
+
+  @override
+  String statusDeletedMessageRemovedBy5A9E79(String value) {
+    return 'پیامی که $value حذف کرد برداشته شد.';
+  }
+
+  @override
+  String statusAppliedAReactionFrom41011B(String value) {
+    return 'واکنش $value اعمال شد.';
+  }
+
+  @override
+  String get statusAppliedDeferredDirectReactions1414C8 =>
+      'واکنش‌های مستقیم معوق اعمال شد.';
+
+  @override
+  String statusEncryptedMessageStoredForVia029324(String value, String value2) {
+    return 'پیام رمزگذاری‌شده برای $value از $value2 ذخیره شد.';
+  }
+
+  @override
+  String statusSentToViaWaitingForEA766D(String value, String value2) {
+    return 'به $value از $value2 ارسال شد؛ در انتظار تأیید تحویل.';
+  }
+
+  @override
+  String statusDeliveryRetryPending93EAA3(String value) {
+    return 'تلاش دوبارهٔ تحویل در انتظار است: $value';
+  }
+
+  @override
+  String statusGroupDeliveryRetryPending691CA4(String value) {
+    return 'تلاش دوبارهٔ تحویل گروه در انتظار است: $value';
+  }
+
+  @override
+  String statusRelayIdentityChangedVerifyWith6F3689(String value) {
+    return 'هویت رلهٔ $value تغییر کرد؛ از گرداننده تأیید بگیرید.';
+  }
+
+  @override
+  String statusRelayIdentityMismatchVerifyWith2D3B10(
+    String value,
+    String value2,
+  ) {
+    return 'هویت رلهٔ $value:$value2 مطابقت ندارد؛ از گرداننده تأیید بگیرید.';
+  }
+
+  @override
+  String get statusTheMatrixSignInExpired76ABA4 =>
+      'ورود Matrix منقضی شد. برای استفاده دوباره وارد شوید.';
+
+  @override
+  String statusSignedInToMatrixAs5103D2(String value) {
+    return 'با نام $value به Matrix وارد شدید.';
+  }
+
+  @override
+  String get statusSignedOutOfMatrix1D1860 => 'از Matrix خارج شدید.';
+
+  @override
+  String statusSOtherDevicesHaveNot07F30F(String value, String value2) {
+    return 'دستگاه‌های دیگر $value مدتی است از $value2 بی‌خبرند: ممکن است پیام‌های آن از صاحب حساب نباشد.';
+  }
+
+  @override
+  String statusReceivedItemSInstantlyViaA7773B(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value مورد فوری از رلهٔ محلی دریافت شد.',
+      one: '$value مورد فوری از رلهٔ محلی دریافت شد.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String statusReceivedItemSViaLocal71A104(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value مورد از صندوق محلی دریافت شد.',
+      one: '$value مورد از صندوق محلی دریافت شد.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get statusNoNewProtocols => 'پروتکل رلهٔ تازه‌ای پیدا نشد.';
+
+  @override
+  String get statusRouteExchangeRequested => 'تبادل اطلاعات مسیر درخواست شد.';
+
+  @override
+  String get statusRouteExchangePending =>
+      'درخواست تبادل مسیر هنوز ارسال نشده.';
+
+  @override
+  String get statusKnownRoutes => 'مسیرهای شناخته‌شده';
+
+  @override
+  String get statusReachable => 'در دسترس';
+
+  @override
+  String get statusUnreachable => 'دور از دسترس';
+
+  @override
+  String get statusUnknown => 'نامشخص';
+
+  @override
+  String get statusExpired => 'قدیمی';
+
+  @override
+  String get connectionsTitle => 'اتصال‌ها';
+
+  @override
+  String get connectionsDescription =>
+      'کدام دستگاه به کدام می‌رسد، دوطرفه یا یک‌طرفه.';
+
+  @override
+  String get relayUdpHint => 'udp://host:port استفاده از UDP را اجباری می‌کند';
+
+  @override
+  String get deltaFileActions => 'عملیات فایل';
+
+  @override
+  String get deltaForward => 'بازفرست';
+
+  @override
+  String get deltaAttach => 'پیوست';
+
+  @override
+  String get deltaSendVoice => 'ارسال پیام صوتی';
+
+  @override
+  String get deltaDiscardVoice => 'دور انداختن پیام صوتی';
+
+  @override
+  String get deltaRecordVoice => 'ضبط پیام صوتی';
+
+  @override
+  String get deltaReact => 'واکنش';
+
+  @override
+  String get savedMessagesPreview => 'یادداشت، فایل و بازفرست برای خودتان';
+
+  @override
+  String networkChatsTitle(String network) {
+    return 'گفت‌وگوهای $network';
+  }
+
+  @override
+  String get networkEncryptedMatrixChat => 'گفت‌وگوی رمزگذاری‌شدهٔ Matrix';
+
+  @override
+  String get networkMatrixChat => 'گفت‌وگوی Matrix';
+
+  @override
+  String get networkEveryoneBluetooth => 'همهٔ افراد در برد Bluetooth';
+
+  @override
+  String get inviteNoRoutes => 'مسیری اعلام نشده';
+
+  @override
+  String get deliveryPending => 'در انتظار مسیر در دسترس';
+
+  @override
+  String get deliveryLocal => 'از شبکهٔ محلی ارسال شد؛ در انتظار تأیید تحویل';
+
+  @override
+  String get deliveryRelayed => 'در صف رله؛ در انتظار تأیید تحویل';
+
+  @override
+  String get deliveryDelivered => 'تحویل شد';
+
+  @override
+  String get deliveryRead => 'خوانده شد';
+
+  @override
+  String get reachabilityOnline => 'آنلاین';
+
+  @override
+  String get reachabilityRecent => 'به‌تازگی دیده شده';
+
+  @override
+  String get reachabilityKnown => 'شناخته‌شده';
+
+  @override
+  String get transferApproval => 'در انتظار تأیید';
+
+  @override
+  String get transferPeer => 'در انتظار همتا';
+
+  @override
+  String get routeLanDirect => 'مستقیم شبکهٔ محلی';
+
+  @override
+  String get routeInternetDirect => 'مستقیم اینترنت';
+
+  @override
+  String get routeIrohDirect => 'Iroh مستقیم';
+
+  @override
+  String get routeConestRelay => 'رلهٔ Conest';
+
+  @override
+  String get routeOptical => 'نوری';
+
+  @override
+  String get routeViaContact => 'از طریق مخاطب';
+
+  @override
+  String get themeSystem => 'سیستم';
+
+  @override
+  String get themeLight => 'Signature · روشن';
+
+  @override
+  String get themeDark => 'Signature · تیره';
+
+  @override
+  String get themeBlack => 'Signature · سیاه (OLED)';
+
+  @override
+  String get themeAdaptive => 'تطبیقی (پس‌زمینه)';
+
+  @override
+  String get layoutSignalCards => 'کارت‌های سیگنال';
+
+  @override
+  String get layoutStationFeed => 'خوراک ایستگاه';
+
+  @override
+  String get layoutClassic => 'ردیف‌های کلاسیک';
+
+  @override
+  String get layoutSignalDescription =>
+      'همتایان به‌صورت کارت اتصال در داشبورد.';
+
+  @override
+  String get layoutFeedDescription => 'گزارش زمانی بسته‌ها و فعالیت.';
+
+  @override
+  String get layoutClassicDescription => 'فهرست فشردهٔ تک‌خطی.';
+
+  @override
+  String get shellSignatureDescription => 'نوار کناری داشبورد اصلی Conest.';
+
+  @override
+  String get shellGarrisonDescription =>
+      'مانند Discord: نوار خانه‌ها و گفت‌وگوها.';
+
+  @override
+  String get shellCourierDescription =>
+      'مانند Telegram: یک فهرست سادهٔ گفت‌وگو.';
+
+  @override
+  String get connectionsBothWays => 'دوطرفه';
+
+  @override
+  String get connectionsInbound => 'فقط از آن‌ها';
+
+  @override
+  String get connectionsFailing => 'ناموفق';
+
+  @override
+  String get connectionsUnknown => 'خبر تازه‌ای نیست';
+
+  @override
+  String voiceConnected(String time) {
+    return 'متصل · $time';
+  }
+
+  @override
+  String messageClockAhead(String amount) {
+    return 'ساعت او حدود $amount جلو است؛ زمان‌های اینجا بر اساس این دستگاه‌اند.';
+  }
+
+  @override
+  String messageClockBehind(String amount) {
+    return 'ساعت او حدود $amount عقب است؛ زمان‌های اینجا بر اساس این دستگاه‌اند.';
+  }
+
+  @override
+  String messageNotRecentlyConfirmed(String date) {
+    return 'به‌تازگی تأیید نشده: دیگر دستگاه‌های او آخرین بار در $date این دستگاه را متعلق به او دانستند.';
+  }
+
+  @override
+  String get routeLanDirectDescription =>
+      'مستقیم به دستگاه دیگر در شبکهٔ محلی شما.';
+
+  @override
+  String get routeLanRelayDescription =>
+      'از طریق گره رلهٔ دستگاهی دیگر در شبکهٔ محلی شما.';
+
+  @override
+  String get routeLanLobbyDescription =>
+      'صندوق پیام مشترک لابی شبکهٔ محلی؛ هر کسی در شبکه می‌تواند آن را بخواند.';
+
+  @override
+  String get routeInternetDirectDescription =>
+      'مستقیم به گره رلهٔ دستگاه دیگر از طریق اینترنت.';
+
+  @override
+  String get routeIrohDirectDescription =>
+      'همتا‌به‌همتا از طریق Iroh، با رمزگذاری سرتاسری.';
+
+  @override
+  String get routeIrohRelayDescription =>
+      'از طریق سرور رلهٔ Iroh که فقط ترافیک رمزگذاری‌شده را می‌بیند.';
+
+  @override
+  String get routeConestRelayDescription =>
+      'سرور رلهٔ Conest آن را ذخیره و ارسال می‌کند و فقط پاکت‌های رمزگذاری‌شده را می‌بیند.';
+
+  @override
+  String get routeMatrixDescription =>
+      'از طریق Matrix منتقل می‌شود و همچنان با Conest رمزگذاری سرتاسری دارد؛ سرور خانگی طرف‌های ارتباط و زمان آن را می‌بیند.';
+
+  @override
+  String get routePlainMatrixDescription =>
+      'به‌صورت پیام عادی Matrix ارسال می‌شود؛ اگر اتاق رمزگذاری نشده باشد سرور خانگی می‌تواند آن را بخواند.';
+
+  @override
+  String get routeNostrDescription =>
+      'از طریق رله‌های Nostr منتقل می‌شود و همچنان با Conest رمزگذاری سرتاسری دارد؛ رله‌ها گیرنده و زمان را می‌بینند، نه فرستنده را.';
+
+  @override
+  String get routeEmailDescription =>
+      'از طریق ایمیل منتقل می‌شود و همچنان با Conest رمزگذاری سرتاسری دارد؛ سرورهای ایمیل هر دو نشانی و زمان را می‌بینند.';
+
+  @override
+  String get routeReticulumDescription =>
+      'از طریق Reticulum، با رادیو یا شبکهٔ Reticulum، با رمزگذاری سرتاسری.';
+
+  @override
+  String get routeMeshtasticDescription =>
+      'از طریق مش رادیویی Meshtastic، با رمزگذاری سرتاسری.';
+
+  @override
+  String get routeMeshCoreDescription =>
+      'از طریق مش رادیویی MeshCore، با رمزگذاری سرتاسری.';
+
+  @override
+  String get routeBluetoothDescription =>
+      'از طریق مش Bluetooth و دستگاه‌های نزدیک، با رمزگذاری سرتاسری.';
+
+  @override
+  String get routeTorDescription =>
+      'میان سرویس‌های onion از طریق Tor؛ هیچ واسطه‌ای طرف‌های ارتباط را نمی‌بیند.';
+
+  @override
+  String get routeContactDescription =>
+      'مخاطبی که به دستگاه دیگر دسترسی دارد آن را منتقل می‌کند؛ همچنان رمزگذاری سرتاسری دارد و مخاطب فقط گیرنده و زمان را می‌بیند.';
+
+  @override
+  String routeTestRoundTrip(String route, String ms) {
+    return '$route: رفت‌وبرگشت $ms میلی‌ثانیه';
+  }
+
+  @override
+  String routeTestStored(String route) {
+    return '$route: در رله مانده (پس از دریافت پاسخ می‌دهد)';
+  }
+
+  @override
+  String routeTestNoAnswer(String route) {
+    return '$route: پاسخی نیست';
+  }
+
+  @override
+  String transferTimeLeft(String time) {
+    return '$time باقی مانده';
+  }
+
+  @override
+  String transferQueuePosition(String position) {
+    return 'صف #$position';
+  }
+
+  @override
+  String get transferTapRetry => 'برای تلاش دوباره بزنید';
+
+  @override
+  String get transferRerouting => 'تغییر مسیر';
+
+  @override
+  String get routeShortLobby => 'لابی';
+
+  @override
+  String get routeShortDirect => 'مستقیم';
+
+  @override
+  String get routeShortRelay => 'رله';
+
+  @override
+  String get routeShortContact => 'از طریق مخاطب';
+
+  @override
+  String chatDraftPreview(String text) {
+    return 'پیش‌نویس: $text';
+  }
+
+  @override
+  String get routeAutomaticFallback => 'جایگزینی خودکار ✓';
+
+  @override
+  String get releaseNightly => 'شبانه';
+
+  @override
+  String get releaseStable => 'پایدار';
+
+  @override
+  String get callActive => 'تماس فعال';
+
+  @override
+  String get callGeneric => 'تماس';
+
+  @override
+  String get contactNotPinned => 'پین نشده';
+
+  @override
+  String get groupUnknownMember => 'یک عضو';
+
+  @override
+  String get relaySourceSigned => 'امضاشده';
+
+  @override
+  String get relaySourceUnsigned => 'بدون امضا';
+
+  @override
+  String get beamFingerprintUnavailable => 'اثر انگشت در دسترس نیست';
+
+  @override
+  String get fileOriginalMetadataWarning =>
+      'جزئیات مکان، دوربین، نویسنده و تاریخ همراه آن ارسال می‌شود.';
+
+  @override
+  String get routeMarkSent => 'ارسال شد';
+
+  @override
+  String get routeMarkStored => 'در انتظار رله';
+
+  @override
+  String get routeMarkReached => 'به دستگاه او رسید';
+
+  @override
+  String get routeMarkDelivered => 'تحویل شد';
+
+  @override
+  String get routeMarkReceived => 'دریافت شد';
 }

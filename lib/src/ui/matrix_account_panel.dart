@@ -1,4 +1,4 @@
-import 'localized_ui_text.dart';
+import '../app_locales.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -83,20 +83,26 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
     final force = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(refused ? localizedUiText(context, 'Server refused sign-out') : localizedUiText(context, 'Server not reached')),
+        title: Text(
+          refused
+              ? l10nOf(context).uiServerRefusedSignOut66337B
+              : l10nOf(context).uiServerNotReached62FED2,
+        ),
         content: Text(
           refused
-              ? localizedUiText(context, 'This server does not let Conest end its session ($text). ' 'It may manage sessions on its own account page.\n\n' 'Sign out on this device anyway? Then remove the Conest ' 'session from your account page or another Matrix app.')
-              : localizedUiText(context, 'Conest could not sign this device out on the server ' '($text).\n\nSign out on this device anyway? The session ' 'stays valid on the server until you remove it from ' 'another Matrix app.'),
+              ? l10nOf(context).uiThisServerDoesNotLet9EEC1F((text).toString())
+              : l10nOf(
+                  context,
+                ).uiConestCouldNotSignThis3C1074((text).toString()),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child:  Text(localizedUiText(context, 'Keep signed in')),
+            child: Text(l10nOf(context).uiKeepSignedIn611A13),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child:  Text(localizedUiText(context, 'Sign out here')),
+            child: Text(l10nOf(context).uiSignOutHereA6F129),
           ),
         ],
       ),
@@ -111,25 +117,25 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
     final password = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title:  Text(localizedUiText(context, 'Matrix password')),
+        title: Text(l10nOf(context).uiMatrixPassword34E218),
         content: TextField(
           controller: input,
           autofocus: true,
           obscureText: true,
-          decoration:  InputDecoration(
-            labelText: localizedUiText(context, 'Password'),
-            helperText: localizedUiText(context, 'Your server asks for it to create signing keys.'),
+          decoration: InputDecoration(
+            labelText: l10nOf(context).uiPassword8BE3C9,
+            helperText: l10nOf(context).uiYourServerAsksForIt1594FA,
           ),
           onSubmitted: (value) => Navigator.pop(context, value),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, input.text),
-            child:  Text(localizedUiText(context, 'Continue')),
+            child: Text(l10nOf(context).actionContinue),
           ),
         ],
       ),
@@ -150,16 +156,16 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
       await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
-          title:  Text(localizedUiText(context, 'Recovery is already set up')),
+          title: Text(l10nOf(context).uiRecoveryIsAlreadySetUp371F7F),
           content: Text(
-            state.recovery == localizedUiText(context, 'Enabled')
-                ? localizedUiText(context, 'Your encrypted Matrix history is already backed up. Use ' '"Enter recovery key" on a new device.')
-                : localizedUiText(context, 'This account already has a recovery key. Use "Enter ' 'recovery key" or "Verify with another session" to ' 'unlock your encrypted history on this device.'),
+            state.recovery == l10nOf(context).uiEnabledDF174A
+                ? l10nOf(context).uiYourEncryptedMatrixHistoryIsC16CD2
+                : l10nOf(context).uiThisAccountAlreadyHasA0CF3D8,
           ),
           actions: [
             FilledButton(
               onPressed: () => Navigator.pop(context),
-              child:  Text(localizedUiText(context, 'OK')),
+              child: Text(l10nOf(context).uiOK9CE3BD),
             ),
           ],
         ),
@@ -182,14 +188,12 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
-        title:  Text(localizedUiText(context, 'Save your recovery key')),
+        title: Text(l10nOf(context).uiSaveYourRecoveryKey7851B3),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-             Text(
-              localizedUiText(context, 'Keep this key somewhere safe. You need it to read encrypted ' 'Matrix history on a new device. It is shown only once.'),
-            ),
+            Text(l10nOf(context).uiKeepThisKeySomewhereSafe0C0DFE),
             const SizedBox(height: 12),
             SelectableText(
               recoveryKey,
@@ -201,11 +205,11 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
           TextButton(
             onPressed: () =>
                 Clipboard.setData(ClipboardData(text: recoveryKey)),
-            child:  Text(localizedUiText(context, 'Copy')),
+            child: Text(l10nOf(context).uiCopyAF74F7),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context),
-            child:  Text(localizedUiText(context, 'I saved it')),
+            child: Text(l10nOf(context).uiISavedIt3E2255),
           ),
         ],
       ),
@@ -235,24 +239,24 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
     final key = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title:  Text(localizedUiText(context, 'Enter recovery key')),
+        title: Text(l10nOf(context).uiEnterRecoveryKey4521B6),
         content: TextField(
           controller: input,
           autofocus: true,
           minLines: 1,
           maxLines: 3,
-          decoration:  InputDecoration(
-            hintText: localizedUiText(context, 'EsT… (from another Matrix app or this one)'),
+          decoration: InputDecoration(
+            hintText: l10nOf(context).uiEsTFromAnotherMatrixAppFCA0C9,
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, input.text),
-            child:  Text(localizedUiText(context, 'Unlock')),
+            child: Text(l10nOf(context).uiUnlock1526A1),
           ),
         ],
       ),
@@ -301,13 +305,15 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
         children: [
           ListTile(
             contentPadding: EdgeInsets.zero,
-            title: Text(localizedUiText(context, 'Matrix: $userId')),
+            title: Text(
+              l10nOf(context).uiMatrixValueED6C29((userId).toString()),
+            ),
             subtitle: Text(
-              localizedUiText(context, '${client == null || !carrier ? privacy : 'Your Matrix chats appear in the chat list. $privacy'}' '${error == null ? '' : '\nLast error: $error'}'),
+              "${(client == null || !carrier ? privacy : 'Your Matrix chats appear in the chat list. $privacy')}${(error == null ? '' : '\nLast error: $error')}",
             ),
             trailing: TextButton(
               onPressed: _busy ? null : _signOutOfMatrix,
-              child:  Text(localizedUiText(context, 'Sign out')),
+              child: Text(l10nOf(context).uiSignOutDC1649),
             ),
           ),
           if (client != null && client.signedIn)
@@ -318,27 +324,29 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
                 OutlinedButton.icon(
                   onPressed: _busy ? null : () => _setUpMatrixRecovery(client),
                   icon: const Icon(Icons.key_outlined),
-                  label:  Text(localizedUiText(context, 'Set up recovery')),
+                  label: Text(l10nOf(context).uiSetUpRecoveryFD3804),
                 ),
                 OutlinedButton.icon(
                   onPressed: _busy
                       ? null
                       : () => _enterMatrixRecoveryKey(client),
                   icon: const Icon(Icons.lock_open_outlined),
-                  label:  Text(localizedUiText(context, 'Enter recovery key')),
+                  label: Text(l10nOf(context).uiEnterRecoveryKey4521B6),
                 ),
                 OutlinedButton.icon(
                   onPressed: _busy ? null : () => _verifyMatrixSession(client),
                   icon: const Icon(Icons.verified_user_outlined),
-                  label:  Text(localizedUiText(context, 'Verify with another session')),
+                  label: Text(l10nOf(context).uiVerifyWithAnotherSession9ED031),
                 ),
               ],
             ),
           if (client != null && client.signedIn)
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title:  Text(localizedUiText(context, 'Show joins, leaves and profile changes')),
-              subtitle:  Text(localizedUiText(context, 'In Matrix rooms, collapsed into one line')),
+              title: Text(l10nOf(context).uiShowJoinsLeavesAndProfile9FA764),
+              subtitle: Text(
+                l10nOf(context).uiInMatrixRoomsCollapsedIntoD20CAB,
+              ),
               value: widget.controller.matrixShowMembership,
               onChanged: (value) =>
                   _run(() => widget.controller.setMatrixShowMembership(value)),
@@ -352,7 +360,9 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            carrier ? localizedUiText(context, 'Matrix fallback') : localizedUiText(context, 'Matrix account'),
+            carrier
+                ? l10nOf(context).uiMatrixFallbackAA082C
+                : l10nOf(context).uiMatrixAccountD69140,
             style: Theme.of(
               context,
             ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
@@ -370,9 +380,9 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
                   controller: _matrixUserController,
                   enabled: !_busy,
                   autocorrect: false,
-                  decoration:  InputDecoration(
-                    labelText: localizedUiText(context, 'Matrix user'),
-                    helperText: localizedUiText(context, 'For example @name:matrix.org'),
+                  decoration: InputDecoration(
+                    labelText: l10nOf(context).uiMatrixUser70A560,
+                    helperText: l10nOf(context).uiForExampleNameMatrixOrg63C60A,
                   ),
                 ),
               ),
@@ -382,7 +392,9 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
                   controller: _matrixPasswordController,
                   enabled: !_busy,
                   obscureText: true,
-                  decoration:  InputDecoration(labelText: localizedUiText(context, 'Password')),
+                  decoration: InputDecoration(
+                    labelText: l10nOf(context).uiPassword8BE3C9,
+                  ),
                 ),
               ),
               SizedBox(
@@ -391,9 +403,9 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
                   controller: _matrixHomeserverController,
                   enabled: !_busy,
                   autocorrect: false,
-                  decoration:  InputDecoration(
-                    labelText: localizedUiText(context, 'Homeserver (optional)'),
-                    helperText: localizedUiText(context, 'Found from the user id when blank'),
+                  decoration: InputDecoration(
+                    labelText: l10nOf(context).uiHomeserverOptional70DF85,
+                    helperText: l10nOf(context).uiFoundFromTheUserId69A3AB,
                   ),
                 ),
               ),
@@ -411,20 +423,20 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
                           _matrixPasswordController.clear();
                         }
                       }),
-                child:  Text(localizedUiText(context, 'Sign in to Matrix')),
+                child: Text(l10nOf(context).uiSignInToMatrix652C8F),
               ),
               if (widget.controller.matrixClient != null)
                 OutlinedButton.icon(
                   onPressed: _busy ? null : _signInToMatrixWithBrowser,
                   icon: const Icon(Icons.open_in_browser),
-                  label:  Text(localizedUiText(context, 'Sign in with browser')),
+                  label: Text(l10nOf(context).uiSignInWithBrowserC995DF),
                 ),
             ],
           ),
           const SizedBox(height: 4),
           if (widget.controller.matrixClient != null)
             Text(
-              localizedUiText(context, 'Accounts that sign in through Google, GitHub or another ' 'provider, or through matrix.org, use the browser.'),
+              l10nOf(context).uiAccountsThatSignInThrough64868A,
               style: Theme.of(context).textTheme.bodySmall,
             ),
           if (_matrixBrowserUrl case final url?)
@@ -434,15 +446,15 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
                 spacing: 8,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                   Text(localizedUiText(context, 'Finish signing in in your browser.')),
+                  Text(l10nOf(context).uiFinishSigningInInYour9F41A4),
                   TextButton(
                     onPressed: () =>
                         Clipboard.setData(ClipboardData(text: url.toString())),
-                    child:  Text(localizedUiText(context, 'Copy link')),
+                    child: Text(l10nOf(context).uiCopyLink2F84EE),
                   ),
                   TextButton(
                     onPressed: widget.controller.cancelMatrixBrowserSignIn,
-                    child:  Text(localizedUiText(context, 'Cancel')),
+                    child: Text(l10nOf(context).actionCancel),
                   ),
                 ],
               ),

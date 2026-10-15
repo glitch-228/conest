@@ -1,4 +1,4 @@
-import 'localized_ui_text.dart';
+import '../app_locales.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -50,10 +50,8 @@ class _NostrDirectPanelState extends State<NostrDirectPanel> {
             SwitchListTile.adaptive(
               key: const ValueKey('nostr-direct-switch'),
               contentPadding: EdgeInsets.zero,
-              title:  Text(localizedUiText(context, 'Nostr private messages')),
-              subtitle:  Text(
-                localizedUiText(context, 'Chat with anyone on Nostr (0xchat, Amethyst, Damus and other ' 'apps that use NIP-17), one to one or in small groups. A ' 'Nostr account of its own, never linked to your Conest ' 'contacts. End-to-end encrypted, but without forward ' 'secrecy.'),
-              ),
+              title: Text(l10nOf(context).uiNostrPrivateMessagesDF74A3),
+              subtitle: Text(l10nOf(context).uiChatWithAnyoneOnNostrA867BC),
               value: on,
               onChanged: _busy
                   ? null
@@ -66,10 +64,10 @@ class _NostrDirectPanelState extends State<NostrDirectPanel> {
             if (on && npub != null) ...[
               ListTile(
                 contentPadding: EdgeInsets.zero,
-                title:  Text(localizedUiText(context, 'Your Nostr address')),
+                title: Text(l10nOf(context).uiYourNostrAddress5CF7C6),
                 subtitle: SelectableText(npub, maxLines: 2),
                 trailing: IconButton(
-                  tooltip: localizedUiText(context, 'Copy (with your relays)'),
+                  tooltip: l10nOf(context).uiCopyWithYourRelaysD49669,
                   icon: const Icon(Icons.copy),
                   onPressed: () => Clipboard.setData(
                     ClipboardData(text: controller.nostrProfile ?? npub),
@@ -80,11 +78,11 @@ class _NostrDirectPanelState extends State<NostrDirectPanel> {
                 key: const ValueKey('nostr-chats'),
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.forum_outlined),
-                title:  Text(localizedUiText(context, 'Nostr chats')),
+                title: Text(l10nOf(context).uiNostrChats3D786C),
                 trailing: controller.nostrChats.totalUnread == 0
                     ? const Icon(Icons.chevron_right)
                     : Badge(
-                        label: Text(localizedUiText(context, '${controller.nostrChats.totalUnread}')),
+                        label: Text("${(controller.nostrChats.totalUnread)}"),
                       ),
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute<void>(
@@ -116,25 +114,25 @@ class NostrChatsScreen extends StatelessWidget {
     final profiles = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title:  Text(localizedUiText(context, 'New Nostr chat')),
+        title: Text(l10nOf(context).uiNewNostrChat68199C),
         content: TextField(
           key: const ValueKey('nostr-new-chat-field'),
           controller: field,
           autofocus: true,
           minLines: 1,
           maxLines: 4,
-          decoration:  InputDecoration(
-            hintText: localizedUiText(context, 'npub1… (several for a group)'),
+          decoration: InputDecoration(
+            hintText: l10nOf(context).uiNpubSeveralForAGroupE6ED77,
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(field.text),
-            child:  Text(localizedUiText(context, 'Start')),
+            child: Text(l10nOf(context).actionStart),
           ),
         ],
       ),
@@ -148,7 +146,7 @@ class NostrChatsScreen extends StatelessWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(localizedUiText(context, '$error'))));
+        ).showSnackBar(SnackBar(content: Text("${(error)}")));
       }
     }
   }
@@ -165,14 +163,14 @@ class NostrChatsScreen extends StatelessWidget {
             ),
           );
         return Scaffold(
-          appBar: AppBar(title:  Text(localizedUiText(context, 'Nostr chats'))),
+          appBar: AppBar(title: Text(l10nOf(context).uiNostrChats3D786C)),
           floatingActionButton: FloatingActionButton(
-            tooltip: localizedUiText(context, 'New chat'),
+            tooltip: l10nOf(context).uiNewChat009BF6,
             onPressed: () => _newChat(context),
             child: const Icon(Icons.edit_outlined),
           ),
           body: chats.isEmpty
-              ?  Center(child: Text(localizedUiText(context, 'No Nostr chats yet')))
+              ? Center(child: Text(l10nOf(context).uiNoNostrChatsYet0A95D0))
               : ListView(
                   children: [
                     for (final chat in chats)
@@ -188,7 +186,7 @@ class NostrChatsScreen extends StatelessWidget {
                         ),
                         trailing: chat.unread == 0
                             ? null
-                            : Badge(label: Text(localizedUiText(context, '${chat.unread}'))),
+                            : Badge(label: Text("${(chat.unread)}")),
                         onTap: () =>
                             openNostrChat(context, controller, chat.key),
                       ),
@@ -279,14 +277,16 @@ class _NostrChatScreenState extends State<_NostrChatScreen> {
         final controller = widget.controller;
         final chat = controller.nostrChats.chats[widget.chatKey];
         if (chat == null) {
-          return  Scaffold(body: Center(child: Text(localizedUiText(context, 'Chat deleted'))));
+          return Scaffold(
+            body: Center(child: Text(l10nOf(context).uiChatDeleted73DC61)),
+          );
         }
         return Scaffold(
           appBar: AppBar(
             title: Text(nostrChatTitle(controller, chat)),
             actions: [
               IconButton(
-                tooltip: localizedUiText(context, 'Delete chat'),
+                tooltip: l10nOf(context).uiDeleteChatDB9121,
                 icon: const Icon(Icons.delete_outline),
                 onPressed: () async {
                   await controller.deleteNostrChat(widget.chatKey);
@@ -297,11 +297,9 @@ class _NostrChatScreenState extends State<_NostrChatScreen> {
           ),
           body: Column(
             children: [
-               Padding(
+              Padding(
                 padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
-                child: Text(
-                  localizedUiText(context, 'Encrypted on Nostr (NIP-17); relays see neither who wrote ' 'nor when. No forward secrecy.'),
-                ),
+                child: Text(l10nOf(context).uiEncryptedOnNostrNIPRelaysA51F70),
               ),
               Expanded(
                 child: ListView.builder(
@@ -364,14 +362,14 @@ class _NostrChatScreenState extends State<_NostrChatScreen> {
                           controller: _composer,
                           minLines: 1,
                           maxLines: 4,
-                          decoration:  InputDecoration(
-                            hintText: localizedUiText(context, 'Message'),
+                          decoration: InputDecoration(
+                            hintText: l10nOf(context).uiMessage68F414,
                           ),
                           onSubmitted: (_) => _send(),
                         ),
                       ),
                       IconButton(
-                        tooltip: localizedUiText(context, 'Send'),
+                        tooltip: l10nOf(context).composerSend,
                         icon: const Icon(Icons.send),
                         onPressed: _sending ? null : _send,
                       ),

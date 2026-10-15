@@ -1,0 +1,13 @@
+Conest adalah aplikasi pesan untuk Android, Linux, dan Windows. Terhubung langsung lewat jaringan lokal atau internet, dengan enkripsi ujung ke ujung pada rute Conest.
+
+Mengobrol berdua atau dalam grup khusus undangan. Kirim berkas, pesan suara, balasan, dan reaksi. Simpan catatan dalam Pesan tersimpan atau coba panggilan suara eksperimental.
+
+Saat koneksi biasa gagal, pilih rute opsional di Pengaturan: relai, Matrix, Nostr, email terenkripsi, Tor, mesh Bluetooth, atau radio LoRa. Rute ini mungkin memerlukan akun atau perangkat keras yang sesuai. Bagikan berkas dan undangan antar layar dengan Conest Beam, bahkan tanpa jaringan.
+
+Conest juga dapat menjadi klien Matrix. Obrolan dengan jaringan lain menggunakan perlindungan jaringan tersebut. Kanal mesh dan radio publik bukan obrolan Conest pribadi.
+
+Brankas lokal Anda terenkripsi. Pilih frasa sandi, buka kunci perangkat, atau penyimpanan portabel. Hapus metadata berkas yang didukung sebelum mengirim.
+
+Sebagian rute dan panggilan masih eksperimental. Lihat dokumentasi proyek untuk penyiapan dan kebutuhan perangkat.
+
+Terjemahan ini dibuat dengan AI dan mungkin mengandung kesalahan.

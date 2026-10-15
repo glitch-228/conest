@@ -1,4 +1,4 @@
-import 'localized_ui_text.dart';
+import '../app_locales.dart';
 import 'package:flutter/material.dart';
 
 import '../messenger_controller.dart';
@@ -31,17 +31,26 @@ class AppModeSelector extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          localizedUiText(context, 'App mode'),
+          l10nOf(context).uiAppMode2965FD,
           style: Theme.of(
             context,
           ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 8),
         SegmentedButton<AppMode>(
-          segments:  [
-            ButtonSegment(value: AppMode.conest, label: Text(localizedUiText(context, 'Conest'))),
-            ButtonSegment(value: AppMode.both, label: Text(localizedUiText(context, 'Both'))),
-            ButtonSegment(value: AppMode.matrixOnly, label: Text(localizedUiText(context, 'Matrix'))),
+          segments: [
+            ButtonSegment(
+              value: AppMode.conest,
+              label: Text(l10nOf(context).uiConest26885B),
+            ),
+            ButtonSegment(
+              value: AppMode.both,
+              label: Text(l10nOf(context).uiBoth1F4698),
+            ),
+            ButtonSegment(
+              value: AppMode.matrixOnly,
+              label: Text(l10nOf(context).uiMatrix58947E),
+            ),
           ],
           selected: {mode},
           onSelectionChanged: (selection) =>
@@ -64,18 +73,16 @@ class AppModeSelector extends StatelessWidget {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title:  Text(localizedUiText(context, 'Use Conest as a Matrix client only?')),
-          content:  Text(
-            localizedUiText(context, 'Your Conest chats are hidden and Conest stops connecting on this ' 'device until you switch back. Nothing is deleted. Contacts ' "cannot reach you over Conest meanwhile; their apps keep " 'retrying and deliver when you switch back.'),
-          ),
+          title: Text(l10nOf(context).uiUseConestAsAMatrix6A44C5),
+          content: Text(l10nOf(context).uiYourConestChatsAreHiddenCFD853),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child:  Text(localizedUiText(context, 'Cancel')),
+              child: Text(l10nOf(context).actionCancel),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child:  Text(localizedUiText(context, 'Switch')),
+              child: Text(l10nOf(context).uiSwitch3E44C9),
             ),
           ],
         ),
@@ -88,7 +95,7 @@ class AppModeSelector extends StatelessWidget {
       if (context.mounted) {
         ScaffoldMessenger.maybeOf(
           context,
-        )?.showSnackBar(SnackBar(content: Text(localizedUiText(context, '$error'))));
+        )?.showSnackBar(SnackBar(content: Text("${(error)}")));
       }
     }
   }

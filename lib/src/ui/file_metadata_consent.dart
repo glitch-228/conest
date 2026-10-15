@@ -1,4 +1,4 @@
-import 'localized_ui_text.dart';
+import '../app_locales.dart';
 import 'package:flutter/material.dart';
 
 import '../file_metadata_consent.dart';
@@ -11,16 +11,16 @@ Future<bool> showFileMetadataConsent(
     await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title:  Text(localizedUiText(context, 'Send with its details?')),
+        title: Text(l10nOf(context).uiSendWithItsDetailsF287FB),
         content: Text(fileMetadataConsentText(fileName, partial: partial)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child:  Text(localizedUiText(context, 'Send anyway')),
+            child: Text(l10nOf(context).uiSendAnyway911263),
           ),
         ],
       ),

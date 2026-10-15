@@ -1,4 +1,4 @@
-import 'localized_ui_text.dart';
+import '../app_locales.dart';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
@@ -42,18 +42,16 @@ class DevicesPanel extends StatelessWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(localizedUiText(context, 'Remove $name?')),
-        content:  Text(
-          localizedUiText(context, 'Your contacts will stop accepting anything from that device. ' 'It cannot be added back; link it again as a new device instead.'),
-        ),
+        title: Text(l10nOf(context).uiRemoveValueF4FE4B((name).toString())),
+        content: Text(l10nOf(context).uiYourContactsWillStopAccepting5B0F03),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child:  Text(localizedUiText(context, 'Remove')),
+            child: Text(l10nOf(context).uiRemoveE96390),
           ),
         ],
       ),
@@ -84,8 +82,8 @@ class DevicesPanel extends StatelessWidget {
       children: [
         Text(
           devices.length > 1
-              ? localizedUiText(context, 'This account is on ${devices.length} devices.')
-              : localizedUiText(context, 'Use Conest on more than one device: link a phone, tablet or ' 'computer to this account. Your contacts see one person.'),
+              ? l10nOf(context).uiThisAccountIsOnValueB78C80((devices.length))
+              : l10nOf(context).uiUseConestOnMoreThanD2AA6A,
           style: muted,
         ),
         for (final device in devices)
@@ -116,10 +114,10 @@ class DevicesPanel extends StatelessWidget {
                         key: ValueKey('confirm-device-${device.deviceId}'),
                         onPressed: () =>
                             controller.confirmOwnDevice(device.deviceId),
-                        child:  Text(localizedUiText(context, 'Still mine')),
+                        child: Text(l10nOf(context).uiStillMine38C8AE),
                       ),
                       IconButton(
-                        tooltip: localizedUiText(context, 'Remove device'),
+                        tooltip: l10nOf(context).uiRemoveDeviceA9C39D,
                         icon: const Icon(Icons.link_off),
                         onPressed: controller.mayManageAccountDevices
                             ? () =>
@@ -129,7 +127,7 @@ class DevicesPanel extends StatelessWidget {
                     ],
                   )
                 : IconButton(
-                    tooltip: localizedUiText(context, 'Remove device'),
+                    tooltip: l10nOf(context).uiRemoveDeviceA9C39D,
                     icon: const Icon(Icons.link_off),
                     onPressed: controller.mayManageAccountDevices
                         ? () => _revoke(context, device.deviceId, device.name)
@@ -137,16 +135,13 @@ class DevicesPanel extends StatelessWidget {
                   ),
           ),
         if (devices.length > 1 && !controller.mayManageAccountDevices)
-          Text(
-            localizedUiText(context, 'This device was linked less than a day ago, so it cannot add or ' 'remove devices yet.'),
-            style: muted,
-          ),
+          Text(l10nOf(context).uiThisDeviceWasLinkedLess2E5122, style: muted),
         if (devices.length > 1)
           Row(
             children: [
               Expanded(
                 child: Text(
-                  localizedUiText(context, 'Pause syncing with a device out of touch for'),
+                  l10nOf(context).uiPauseSyncingWithADevice89642E,
                   style: muted,
                 ),
               ),
@@ -161,7 +156,10 @@ class DevicesPanel extends StatelessWidget {
                     30,
                     me?.ownDeviceTouchDays ?? 7,
                   })
-                    DropdownMenuItem(value: days, child: Text(localizedUiText(context, '$days days'))),
+                    DropdownMenuItem(
+                      value: days,
+                      child: Text(l10nOf(context).uiValueDaysEE919A((days))),
+                    ),
                 ],
                 onChanged: (days) {
                   if (days != null) controller.setOwnDeviceTouchDays(days);
@@ -182,7 +180,7 @@ class DevicesPanel extends StatelessWidget {
                     LinkExistingDialog(controller: controller, onScan: onScan),
               ),
               icon: const Icon(Icons.add_link),
-              label:  Text(localizedUiText(context, 'Link a device')),
+              label: Text(l10nOf(context).uiLinkADeviceE71635),
             ),
             if (devices.length <= 1)
               TextButton.icon(
@@ -192,7 +190,7 @@ class DevicesPanel extends StatelessWidget {
                   builder: (_) => LinkNewDeviceDialog(controller: controller),
                 ),
                 icon: const Icon(Icons.qr_code),
-                label:  Text(localizedUiText(context, 'Link this device to my account')),
+                label: Text(l10nOf(context).uiLinkThisDeviceToMy888A1A),
               ),
           ],
         ),
@@ -214,7 +212,7 @@ class _CompareCode extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-         Text(localizedUiText(context, 'Check that both devices show this code:')),
+        Text(l10nOf(context).uiCheckThatBothDevicesShow031E51),
         const SizedBox(height: 12),
         Text(
           grouped,
@@ -225,7 +223,7 @@ class _CompareCode extends StatelessWidget {
         FilledButton(
           key: const ValueKey('link-codes-match'),
           onPressed: onConfirm,
-          child:  Text(localizedUiText(context, 'The codes match')),
+          child: Text(l10nOf(context).uiTheCodesMatch32C407),
         ),
       ],
     );
@@ -276,17 +274,17 @@ class _LinkExistingDialogState extends State<LinkExistingDialog> {
         final state = widget.controller.linkState;
         final code = widget.controller.linkCode;
         return AlertDialog(
-          title:  Text(localizedUiText(context, 'Link a device')),
+          title: Text(l10nOf(context).uiLinkADeviceE71635),
           content: SingleChildScrollView(
             child: switch (state) {
-              LinkState.linked =>  Text(
-                localizedUiText(context, 'Linked. The new device now has your account and contacts; ' 'your contacts will see it as you.'),
+              LinkState.linked => Text(
+                l10nOf(context).uiLinkedTheNewDeviceNow9900E5,
               ),
-              LinkState.waitingForOtherDevice =>  Text(
-                localizedUiText(context, 'Confirm the code on the new device too.'),
+              LinkState.waitingForOtherDevice => Text(
+                l10nOf(context).uiConfirmTheCodeOnThe17BB1F,
               ),
-              LinkState.connecting =>  Text(
-                localizedUiText(context, 'Waiting for the new device to answer. If no code appears, ' 'make sure the new device still shows its code, and that ' 'both are on the same network or online.'),
+              LinkState.connecting => Text(
+                l10nOf(context).uiWaitingForTheNewDevice75283F,
               ),
               LinkState.compareCode when code != null => _CompareCode(
                 code: code,
@@ -296,9 +294,7 @@ class _LinkExistingDialogState extends State<LinkExistingDialog> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                   Text(
-                    localizedUiText(context, 'On the new device, open Settings → Devices → Link this ' 'device to my account, then scan the code it shows.'),
-                  ),
+                  Text(l10nOf(context).uiOnTheNewDeviceOpen29AF5E),
                   const SizedBox(height: 12),
                   if (widget.onScan != null)
                     FilledButton.icon(
@@ -309,13 +305,13 @@ class _LinkExistingDialogState extends State<LinkExistingDialog> {
                               if (text != null) await _start(text);
                             },
                       icon: const Icon(Icons.qr_code_scanner),
-                      label:  Text(localizedUiText(context, 'Scan code')),
+                      label: Text(l10nOf(context).uiScanCode4596C2),
                     ),
                   TextField(
                     key: const ValueKey('link-code-input'),
                     controller: _code,
-                    decoration:  InputDecoration(
-                      labelText: localizedUiText(context, 'Or paste the code'),
+                    decoration: InputDecoration(
+                      labelText: l10nOf(context).uiOrPasteTheCodeE72792,
                     ),
                     onSubmitted: _start,
                   ),
@@ -337,14 +333,18 @@ class _LinkExistingDialogState extends State<LinkExistingDialog> {
             if (state == LinkState.none)
               TextButton(
                 onPressed: _busy ? null : () => _start(_code.text),
-                child:  Text(localizedUiText(context, 'Continue')),
+                child: Text(l10nOf(context).actionContinue),
               ),
             TextButton(
               onPressed: () {
                 if (state != LinkState.linked) widget.controller.cancelLink();
                 Navigator.pop(context);
               },
-              child: Text(state == LinkState.linked ? localizedUiText(context, 'Done') : localizedUiText(context, 'Cancel')),
+              child: Text(
+                state == LinkState.linked
+                    ? l10nOf(context).uiDoneE9B450
+                    : l10nOf(context).actionCancel,
+              ),
             ),
           ],
         );
@@ -388,14 +388,14 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
         final code = widget.controller.linkCode;
         final qr = _qr;
         return AlertDialog(
-          title:  Text(localizedUiText(context, 'Link this device')),
+          title: Text(l10nOf(context).uiLinkThisDeviceBF5E5C),
           content: SingleChildScrollView(
             child: switch (state) {
-              LinkState.linked =>  Text(
-                localizedUiText(context, 'This device is now linked to your account.'),
+              LinkState.linked => Text(
+                l10nOf(context).uiThisDeviceIsNowLinked7EA826,
               ),
-              LinkState.waitingForOtherDevice =>  Text(
-                localizedUiText(context, 'Waiting for the other device…'),
+              LinkState.waitingForOtherDevice => Text(
+                l10nOf(context).uiWaitingForTheOtherDeviceB39C3F,
               ),
               LinkState.compareCode when code != null => _CompareCode(
                 code: code,
@@ -404,9 +404,7 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
               _ => Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                   Text(
-                    localizedUiText(context, 'On the device you already use, open Settings → Devices → ' 'Link a device and scan this code. Both devices should be ' 'on the same network or online.'),
-                  ),
+                  Text(l10nOf(context).uiOnTheDeviceYouAlready92C421),
                   const SizedBox(height: 12),
                   if (qr == null)
                     const CircularProgressIndicator()
@@ -435,7 +433,11 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
                 if (state != LinkState.linked) widget.controller.cancelLink();
                 Navigator.pop(context);
               },
-              child: Text(state == LinkState.linked ? localizedUiText(context, 'Done') : localizedUiText(context, 'Cancel')),
+              child: Text(
+                state == LinkState.linked
+                    ? l10nOf(context).uiDoneE9B450
+                    : l10nOf(context).actionCancel,
+              ),
             ),
           ],
         );

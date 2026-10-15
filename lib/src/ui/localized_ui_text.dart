@@ -3,13 +3,17 @@ import 'package:flutter/widgets.dart';
 import '../../l10n/app_localizations.dart';
 import '../app_locales.dart';
 
-/// Localize only app-owned labels/statuses; keep unknown diagnostics intact.
+/// Translate app-owned controller notices only; never pass peer content here.
 String localizedUiText(BuildContext? context, String text) {
   if (text.length > 16384) return text;
   final strings = l10nOf(context);
   final direct = _lookup(strings, text);
   if (direct != null) return direct;
-  for (final prefix in const ['Bad state: ', 'Exception: ', 'FormatException: ']) {
+  for (final prefix in const [
+    'Bad state: ',
+    'Exception: ',
+    'FormatException: ',
+  ]) {
     if (text.startsWith(prefix)) {
       return _lookup(strings, text.substring(prefix.length)) ?? text;
     }
@@ -19,1139 +23,504 @@ String localizedUiText(BuildContext? context, String text) {
 
 String? _lookup(AppLocalizations s, String text) {
   switch (text) {
-    case "(none)": return s.uiNone3C6B18;
-    case "// GROUP TRUST FANOUT · mint = paired": return s.uiGROUPTRUSTFANOUTMintPaired5DDF6E;
-    case "192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413": return s.uiEEFEBFE80B7A;
-    case "@name:matrix.org": return s.uiNameMatrixOrgD0BB06;
-    case "A configured relay is signing with a new key. Verify with the operator before trusting it.": return s.uiAConfiguredRelayIsSigning60EED0;
-    case "A looping LT fountain stream survives missed, duplicate, and out-of-order QR frames. The final file is hash-checked before you can accept it.": return s.uiALoopingLTFountainStream840218;
-    case "A name you choose stays when your identity changes, so people nearby can tell it is still you. Leave it empty for a new \"anon\" name with each identity.": return s.uiANameYouChooseStays17E677;
-    case "A request from someone you have not chatted with. Replying accepts it.": return s.uiARequestFromSomeoneYouAE0967;
-    case "AVG RTT": return s.uiAVGRTTE96B26;
-    case "Abort": return s.actionAbort;
-    case "Accept": return s.uiAcceptBB54DB;
-    case "Accept and save public file": return s.uiAcceptAndSavePublicFile852517;
-    case "Account": return s.settingsAccount;
-    case "Accounts that sign in through Google, GitHub or another provider, or through matrix.org, use the browser.": return s.uiAccountsThatSignInThrough64868A;
-    case "Adaptive is using system dynamic colors.": return s.uiAdaptiveIsUsingSystemDynamicBAA149;
-    case "Add": return s.uiAdd61CC55;
-    case "Add a contact to start a conversation": return s.uiAddAContactToStart165431;
-    case "Add contact": return s.contactAdd;
-    case "Add frame": return s.uiAddFrame2BBA30;
-    case "Add member": return s.uiAddMember170AD0;
-    case "Add to folder": return s.uiAddToFolderBFAD96;
-    case "Add trusted contact": return s.uiAddTrustedContact126717;
-    case "Add trusted contacts before creating a group.": return s.uiAddTrustedContactsBeforeCreating1084CC;
-    case "Add with Conest Beam": return s.uiAddWithConestBeam19D1E2;
-    case "Admin": return s.roleAdmin;
-    case "Advanced": return s.modeAdvanced;
-    case "Album actions": return s.uiAlbumActions7B6D70;
-    case "Alias": return s.contactAlias;
-    case "All chats": return s.uiAllChats398E5B;
-    case "Allow": return s.uiAllow3AD0E3;
-    case "Allow Iroh relay fallback": return s.uiAllowIrohRelayFallback35227B;
-    case "Allow all": return s.uiAllowAllA16326;
-    case "Allow trusted contacts to use this device as a relay.": return s.uiAllowTrustedContactsToUse001771;
-    case "Allow voice calls in background": return s.uiAllowVoiceCallsInBackground73C5C5;
-    case "Allows one-to-one Iroh voice calls on this device. Turn off to stop placing and receiving calls.": return s.uiAllowsOneToOneIroh45EEF1;
-    case "Also a Matrix client": return s.onbFeatureMatrix;
-    case "Also offer nightly builds: newer features, less tested. A newer stable release is always offered.": return s.uiAlsoOfferNightlyBuildsNewerA7FAB0;
-    case "Ambient grid, scanlines, corner reticles and the status readout. Clean ↔ full atmosphere.": return s.uiAmbientGridScanlinesCornerReticles45D5C5;
-    case "Android starts with relay mode off. Enable it in Settings only when you want this device to relay.": return s.onbRelayAndroid;
-    case "Anyone who can see the display may reconstruct this file. It is signed for integrity but it is not confidential.": return s.uiAnyoneWhoCanSeeTheFAB2D0;
-    case "App mode": return s.uiAppMode2965FD;
-    case "Applies to direct online and Iroh relay transfers. Disable for larger files; they may take a long time. LAN transfers keep their larger limit.": return s.uiAppliesToDirectOnlineAnd28F6F1;
-    case "Applies to future admissions. History already received cannot be withdrawn.": return s.uiAppliesToFutureAdmissionsHistory78E3A0;
-    case "Apply crop": return s.uiApplyCropA43CCF;
-    case "Archived chats": return s.archivedChats;
-    case "Arrived by": return s.messageArrivedBy;
-    case "Ask first": return s.uiAskFirst1AEB84;
-    case "Ask for a passphrase on each launch. Forgotten passphrases cannot be recovered.": return s.uiAskForAPassphraseOn4BA25C;
-    case "Attach a file": return s.uiAttachAFileAE85E4;
-    case "Attach a file or image": return s.composerAttach;
-    case "Attachment metadata unavailable": return s.uiAttachmentMetadataUnavailableE2C31D;
-    case "Audio output": return s.uiAudioOutput2B89CC;
-    case "Auto-unlock with this device": return s.uiAutoUnlockWithThisDeviceE7F781;
-    case "Auto-use contacts as relays": return s.uiAutoUseContactsAsRelaysC62C06;
-    case "Automatic": return s.uiAutomaticAC9041;
-    case "Automatic downloads": return s.uiAutomaticDownloads5E777B;
-    case "Automatic exchange failed": return s.contactExchangeFailed;
-    case "Available paths": return s.uiAvailablePaths6EE503;
-    case "Back": return s.actionBack;
-    case "Back to chats": return s.uiBackToChats8DE6F6;
-    case "Beam contact invite": return s.uiBeamContactInvite2BAB4C;
-    case "Before sending, removes location, camera, author and date details from photos, videos, PDFs and office documents. Pictures are not re-compressed. Other files are sent as they are.": return s.uiBeforeSendingRemovesLocationCamera4E390D;
-    case "Blockie (pixel hash)": return s.uiBlockiePixelHashA265BA;
-    case "Bluetooth": return s.uiBluetoothC3B414;
-    case "Bluetooth address": return s.uiBluetoothAddress0E2BED;
-    case "Bluetooth mesh": return s.uiBluetoothMeshC8B7F1;
-    case "Bluetooth mesh on": return s.uiBluetoothMeshOn5A96FE;
-    case "Bluetooth unavailable": return s.uiBluetoothUnavailableF4B751;
-    case "Both": return s.uiBoth1F4698;
-    case "Bridges (optional, one per line)": return s.uiBridgesOptionalOnePerLine110291;
-    case "Broadcast": return s.uiBroadcast77CA3F;
-    case "Browse files…": return s.uiBrowseFilesAF7C13;
-    case "CLEAN": return s.uiCLEAN2F3D27;
-    case "CODEPHRASE": return s.uiCODEPHRASEE2C724;
-    case "CONTACT ENCRYPTED": return s.uiCONTACTENCRYPTED879896;
-    case "Cache path is not ready yet — still transferring.": return s.uiCachePathIsNotReady0404B5;
-    case "Call audio output": return s.uiCallAudioOutput0C276F;
-    case "Call ended": return s.uiCallEnded9933A4;
-    case "Calling…": return s.uiCallingACD4A6;
-    case "Calls": return s.tabCalls;
-    case "Cancel": return s.actionCancel;
-    case "Cancel album": return s.uiCancelAlbumDB0A07;
-    case "Cancel and clear": return s.uiCancelAndClearCCF59C;
-    case "Cancel and clear all transfers": return s.uiCancelAndClearAllTransfersACEBB3;
-    case "Cancel and clear all transfers?": return s.uiCancelAndClearAllTransfers01B81D;
-    case "Cancel call": return s.uiCancelCallCE6C16;
-    case "Cancel microphone startup": return s.uiCancelMicrophoneStartup9E9F8A;
-    case "Cancel reply": return s.uiCancelReplyBD62D2;
-    case "Cancel selection": return s.uiCancelSelectionF7F56C;
-    case "Cancel sending": return s.menuCancelSending;
-    case "Cancel transfer": return s.menuCancelTransfer;
-    case "Canceled": return s.uiCanceledF840AC;
-    case "Cancelled": return s.callCancelled;
-    case "Caption": return s.uiCaption3428D9;
-    case "Caption…": return s.uiCaptionDA5C59;
-    case "Carry messages as encrypted email when other routes fail, like Delta Chat. The mail servers see both addresses and when, not what. Your contacts learn the address automatically.": return s.uiCarryMessagesAsEncryptedEmail0D19EA;
-    case "Carry messages over a Reticulum network, for example LoRa radios (RNode) without the internet, through a node running rnsd with a TCP server interface. Conest keeps a Reticulum identity of its own; your contacts learn it automatically.": return s.uiCarryMessagesOverAReticulum1CE915;
-    case "Carry messages through public Nostr relays when other routes fail. Relays see that someone writes to you and when, not who or what. Uses a separate key; your contacts learn it automatically.": return s.uiCarryMessagesThroughPublicNostr729B94;
-    case "Carry short messages over a MeshCore LoRa mesh through your companion radio, without the internet. Conest adds your contacts to the radio so it accepts their messages.": return s.uiCarryShortMessagesOverAFA94B6;
-    case "Carry short messages over a Meshtastic LoRa mesh, without the internet, through your Meshtastic radio. Contacts need Conest with a radio in the same mesh.": return s.uiCarryShortMessagesOverADD8570;
-    case "Carry their messages": return s.uiCarryTheirMessages22FD33;
-    case "Change name": return s.uiChangeNameE46692;
-    case "Change role": return s.uiChangeRole2B9BFD;
-    case "Chat": return s.uiChat2CED57;
-    case "Chat deleted": return s.uiChatDeleted73DC61;
-    case "Chat details": return s.uiChatDetails15DAEC;
-    case "Chat options": return s.uiChatOptionsA40D0F;
-    case "Chat with Delta Chat users through your email account. Set up Email above first.": return s.uiChatWithDeltaChatUsers3B8607;
-    case "Chat with anyone on Nostr (0xchat, Amethyst, Damus and other apps that use NIP-17), one to one or in small groups. A Nostr account of its own, never linked to your Conest contacts. End-to-end encrypted, but without forward secrecy.": return s.uiChatWithAnyoneOnNostrA867BC;
-    case "Chats": return s.tabChats;
-    case "Chats from other networks": return s.uiChatsFromOtherNetworks13CDCD;
-    case "Check Availability": return s.uiCheckAvailabilityFCC1A6;
-    case "Check Paths": return s.uiCheckPaths917FF3;
-    case "Check for Updates": return s.uiCheckForUpdates8604FF;
-    case "Check that both devices show this code:": return s.uiCheckThatBothDevicesShow031E51;
-    case "Checking whether their app can take route tests…": return s.uiCheckingWhetherTheirAppCan51E401;
-    case "Checking...": return s.uiChecking494D0F;
-    case "Choose how to wind down this group. Transferring ownership keeps the group alive under a new owner and demotes you to admin. Deleting for everyone removes the group from every member's list and cannot be undone.": return s.uiChooseHowToWindDownF7399D;
-    case "Choose options": return s.uiChooseOptionsEA120E;
-    case "Choose public file": return s.uiChoosePublicFile6E2739;
-    case "Choose what future members can catch up on": return s.uiChooseWhatFutureMembersCanC38992;
-    case "Choose where Conest stores data": return s.uiChooseWhereConestStoresData0CF613;
-    case "Clear": return s.uiClear719EA3;
-    case "Clear completed": return s.uiClearCompletedE63FC1;
-    case "Clear search": return s.uiClearSearch67300D;
-    case "Clear selection": return s.uiClearSelection247FD6;
-    case "Close": return s.actionClose;
-    case "Close details": return s.uiCloseDetails433DA6;
-    case "Close poll": return s.uiClosePollA6A189;
-    case "Close the existing Conest window first. A second instance would race the local relay port and encrypted vault.": return s.uiCloseTheExistingConestWindow83B30B;
-    case "Close-up transfer": return s.uiCloseUpTransferE6BA46;
-    case "Closed": return s.uiClosed88D86B;
-    case "Codephrase only": return s.contactCodephrase;
-    case "Complete": return s.uiComplete1F5A1A;
-    case "Conest": return s.uiConest26885B;
-    case "Conest Beam": return s.uiConestBeamE98B77;
-    case "Conest is already running": return s.uiConestIsAlreadyRunningEE8037;
-    case "Conest sees only the photos you picked.": return s.uiConestSeesOnlyThePhotosEE1926;
-    case "Conest sends messages straight to your contacts over your network and the internet, with no server in between. That is on now.": return s.routesDirect;
-    case "Conest transfer": return s.uiConestTransfer406028;
-    case "Configured relays": return s.uiConfiguredRelays3CA0DE;
-    case "Confirm identity replacement?": return s.uiConfirmIdentityReplacement0219C5;
-    case "Confirm passphrase": return s.uiConfirmPassphraseEBAAC0;
-    case "Confirm the code on the new device too.": return s.uiConfirmTheCodeOnThe17BB1F;
-    case "Connecting…": return s.uiConnectingFD3E79;
-    case "Connection details": return s.uiConnectionDetailsAB30A5;
-    case "Connectivity": return s.settingsConnectivity;
-    case "Connectivity is fully off — the app will not send or receive.": return s.uiConnectivityIsFullyOffTheB12483;
-    case "Connectivity is off. Enable LAN or Online in Settings.": return s.uiConnectivityIsOffEnableLAN39990E;
-    case "Connectivity is off. Turn on LAN or Online before sharing this invite.": return s.uiConnectivityIsOffTurnOnFA573F;
-    case "Connectivity is off. Turn on LAN or Online to exchange this invite.": return s.uiConnectivityIsOffTurnOnE42D4A;
-    case "Contact alias": return s.uiContactAliasE07C25;
-    case "Contact details": return s.uiContactDetailsD4EC65;
-    case "Contact profile": return s.uiContactProfile1B3A0E;
-    case "Contact request rejected.": return s.uiContactRequestRejected447EE8;
-    case "Contact requests": return s.uiContactRequests082691;
-    case "Contacts": return s.uiContactsB0DD61;
-    case "Continue": return s.actionContinue;
-    case "Continue over Iroh relay": return s.uiContinueOverIrohRelay949702;
-    case "Conversation": return s.uiConversation2A20C7;
-    case "Copied message text.": return s.uiCopiedMessageText9DC18F;
-    case "Copied the error history.": return s.uiCopiedTheErrorHistoryCE02E2;
-    case "Copy": return s.uiCopyAF74F7;
-    case "Copy (with your relays)": return s.uiCopyWithYourRelaysD49669;
-    case "Copy State": return s.uiCopyState9BFD16;
-    case "Copy cache path": return s.uiCopyCachePathC23134;
-    case "Copy image": return s.menuCopyImage;
-    case "Copy link": return s.uiCopyLink2F84EE;
-    case "Copy message": return s.menuCopyMessage;
-    case "Copy text": return s.uiCopyText06A76C;
-    case "Could not decode the image to rotate it.": return s.uiCouldNotDecodeTheImage69AC9D;
-    case "Could not decode this image.": return s.uiCouldNotDecodeThisImage3EAA16;
-    case "Could not join the call. Check your route or leave the current call.": return s.uiCouldNotJoinTheCall252D45;
-    case "Could not locate this message in the current chat": return s.uiCouldNotLocateThisMessage220E83;
-    case "Could not update the call.": return s.uiCouldNotUpdateTheCall33517D;
-    case "Create": return s.actionCreate;
-    case "Create encrypted device": return s.onbCreateButton;
-    case "Create group": return s.groupCreate;
-    case "Create poll": return s.uiCreatePoll8F5663;
-    case "Create your first device": return s.onbCreateTitle;
-    case "Creating": return s.actionCreating;
-    case "Crop": return s.uiCropC5DB3D;
-    case "Custom Iroh relay URLs": return s.uiCustomIrohRelayURLsDBF979;
-    case "DEFAULT": return s.uiDEFAULTC18920;
-    case "DOWN": return s.uiDOWN30E504;
-    case "Danger": return s.uiDanger58D175;
-    case "Debug": return s.uiDebugBD604D;
-    case "Debug-only. Delivery acknowledgements still send; incoming read confirmations are still processed.": return s.uiDebugOnlyDeliveryAcknowledgementsStill7D6A9C;
-    case "Decline": return s.uiDeclineB59CF9;
-    case "Declined": return s.callDeclined;
-    case "Decoration": return s.uiDecoration2DB87A;
-    case "Default on this device": return s.uiDefaultOnThisDevice10343F;
-    case "Default relays": return s.uiDefaultRelays5C909F;
-    case "Delete": return s.menuDelete;
-    case "Delete album": return s.uiDeleteAlbum52E30F;
-    case "Delete chat": return s.uiDeleteChatDB9121;
-    case "Delete for everyone": return s.uiDeleteForEveryoneE055A8;
-    case "Delete group…": return s.uiDeleteGroup043336;
-    case "Delete message": return s.menuDeleteMessage;
-    case "Delete message?": return s.uiDeleteMessageD536CF;
-    case "Delete recording": return s.uiDeleteRecording8B58CE;
-    case "Delete selected messages?": return s.uiDeleteSelectedMessages190A5F;
-    case "Delta Chat": return s.uiDeltaChat8BDA67;
-    case "Delta Chat chats": return s.uiDeltaChatChats8EBCBC;
-    case "Description / bio": return s.uiDescriptionBio505243;
-    case "Desktop camera active": return s.uiDesktopCameraActiveDA0F15;
-    case "Desktop nodes relay by default and advertise nearby LAN routes automatically.": return s.onbRelayDesktop;
-    case "Detect & Add Relay": return s.uiDetectAddRelayE825AD;
-    case "Device": return s.uiDeviceA5A74A;
-    case "Devices": return s.uiDevicesDF485C;
-    case "Direct": return s.uiDirectBC8152;
-    case "Direct messages": return s.uiDirectMessagesE7596A;
-    case "Direct over LAN and internet": return s.onbFeatureDirect;
-    case "Disabled": return s.uiDisabledF4F447;
-    case "Disabled by global setting": return s.uiDisabledByGlobalSetting2CB06C;
-    case "Disabled in release builds: the foreground service does not yet host a headless Flutter receiver.": return s.uiDisabledInReleaseBuildsThe45B7DF;
-    case "Discard": return s.uiDiscard36FFF6;
-    case "Discard changes?": return s.uiDiscardChangesD3F0B4;
-    case "Discard chat": return s.uiDiscardChat319267;
-    case "Display name": return s.onbDisplayName;
-    case "Don't send read confirmations": return s.uiDonTSendReadConfirmations230076;
-    case "Done": return s.uiDoneE9B450;
-    case "Download": return s.uiDownloadA479C9;
-    case "Download anyway": return s.uiDownloadAnyway42859F;
-    case "Download attachment": return s.menuDownloadAttachment;
-    case "Download this file before forwarding it.": return s.uiDownloadThisFileBeforeForwarding60D7B5;
-    case "Drop to share this file with the group": return s.uiDropToShareThisFile0B73E8;
-    case "EU 869.525": return s.uiEU233558;
-    case "Edit": return s.menuEdit;
-    case "Edit message": return s.menuEditMessage;
-    case "Edit scheduled message": return s.uiEditScheduledMessage62AF88;
-    case "Editing": return s.uiEditing3B9BA1;
-    case "Either input is enough on its own. Scan or paste a QR invite to trust it directly, or enter only the current codephrase to discover the sender over nearby LAN routes or the configured relay. If automatic exchange fails, the app will suggest asking the other side to add you back or aborting.": return s.uiEitherInputIsEnoughOn020B90;
-    case "Email": return s.uiEmail84ADD5;
-    case "Enabled": return s.uiEnabledDF174A;
-    case "Encrypt for contact": return s.uiEncryptForContactE07450;
-    case "Encrypted and authenticated as a pinned Conest contact.": return s.uiEncryptedAndAuthenticatedAsA68B7E4;
-    case "Encrypted between the two phones (bitchat's Noise), with forward secrecy only while you are both nearby.": return s.uiEncryptedBetweenTheTwoPhones3871C4;
-    case "Encrypted chat": return s.uiEncryptedChat0D7563;
-    case "Encrypted on Nostr (NIP-17); relays see neither who wrote nor when. No forward secrecy.": return s.uiEncryptedOnNostrNIPRelaysA51F70;
-    case "Encrypted with OpenPGP (Delta Chat), without forward secrecy. The mail servers see who writes to whom and when.": return s.uiEncryptedWithOpenPGPDeltaChat9C6326;
-    case "End-to-end encrypted (Matrix)": return s.uiEndToEndEncryptedMatrix9E4418;
-    case "Enter a display name and a valid local relay port.": return s.onbNameRequired;
-    case "Enter recovery key": return s.uiEnterRecoveryKey4521B6;
-    case "Enter the passphrase for this vault.": return s.uiEnterThePassphraseForThis891200;
-    case "Error history": return s.uiErrorHistory25AFF8;
-    case "Errors only (hide the debug log)": return s.uiErrorsOnlyHideTheDebugECA1DD;
-    case "EsT… (from another Matrix app or this one)": return s.uiEsTFromAnotherMatrixAppFCA0C9;
-    case "Every member will be removed from the group and the group will be marked left in each member's list. Local message history is not deleted automatically — each member can clear it via Remove from list. This cannot be undone.": return s.uiEveryMemberWillBeRemoved75A3FC;
-    case "Everyone in Bluetooth range reads this chat, and anyone can relay it. Messages are signed, not encrypted.": return s.uiEveryoneInBluetoothRangeReadsA7628A;
-    case "Everyone nearby, over Bluetooth": return s.uiEveryoneNearbyOverBluetooth7B8D63;
-    case "Everything, including the routes each message took, every transport and diagnostics.": return s.modeAdvancedDescription;
-    case "Experimental Android background receive": return s.uiExperimentalAndroidBackgroundReceive60828A;
-    case "Experimental voice calls": return s.uiExperimentalVoiceCalls51098B;
-    case "FILE": return s.uiFILEB4915D;
-    case "FULL": return s.uiFULLCC0A74;
-    case "Failed": return s.callFailed;
-    case "File": return s.uiFile2C3CAF;
-    case "Filter": return s.uiFilterD7DECF;
-    case "Find by codephrase": return s.contactFindCodephrase;
-    case "Find devices": return s.uiFindDevices98771A;
-    case "Finish signing in in your browser.": return s.uiFinishSigningInInYour9F41A4;
-    case "Finish the voice preview in its original chat": return s.uiFinishTheVoicePreviewIn142571;
-    case "Folder name": return s.uiFolderNameB2CE02;
-    case "For contacts on Conest 0.3.11 or older. It leaves out your routes for blocked networks; they arrive once you are connected.": return s.uiForContactsOnConestOr486754;
-    case "For example @name:matrix.org": return s.uiForExampleNameMatrixOrg63C60A;
-    case "Forward": return s.menuForward;
-    case "Forward attachment": return s.menuForwardAttachment;
-    case "Forward file": return s.uiForwardFileC4B5CB;
-    case "Forward message": return s.uiForwardMessage482959;
-    case "Forward-secret chats": return s.onbFeatureForwardSecret;
-    case "Forwarded attachment queued": return s.uiForwardedAttachmentQueued57C88B;
-    case "Forwarded message queued": return s.uiForwardedMessageQueuedC82DA4;
-    case "Found from the user id when blank": return s.uiFoundFromTheUserId69A3AB;
-    case "Free up local space": return s.menuFreeUpSpace;
-    case "Free-for-all local chat • untrusted": return s.uiFreeForAllLocalChat5485CC;
-    case "Free-for-all local chat. Messages are session-signed but people here are not trusted contacts.": return s.uiFreeForAllLocalChatBC90D2;
-    case "Fullscreen compact invite QR": return s.uiFullscreenCompactInviteQRCF6B8B;
-    case "Ghost mode is best-effort privacy: OS launch history, crash logs, network metadata, shell history, recent files, and platform caches are outside app control.": return s.uiGhostModeIsBestEffort694912;
-    case "Ghost/portable beside the app": return s.uiGhostPortableBesideTheApp31A40D;
-    case "Global connectivity is off — adjust Settings to send.": return s.uiGlobalConnectivityIsOffAdjustA7C644;
-    case "Group": return s.uiGroup171A06;
-    case "Group details": return s.uiGroupDetailsDF844A;
-    case "Group file scheduled.": return s.uiGroupFileScheduledB1DC66;
-    case "Group invite": return s.uiGroupInviteD64669;
-    case "Group name": return s.uiGroupNameEBB7E1;
-    case "Group title": return s.groupTitle;
-    case "Groups": return s.uiGroupsAE9629;
-    case "Hang up": return s.uiHangUp66BE99;
-    case "Hidden: turn on \"Reachable by bitchat users\"": return s.uiHiddenTurnOnReachableBy0103C9;
-    case "High": return s.uiHighB1A595;
-    case "History for new members": return s.uiHistoryForNewMembersF419F2;
-    case "Hold to record a group voice message": return s.uiHoldToRecordAGroupC11B32;
-    case "Hold to record a voice message": return s.uiHoldToRecordAVoice06B1B5;
-    case "Hold to talk · Space": return s.uiHoldToTalkSpace869505;
-    case "Hold to talk, or hold Space": return s.uiHoldToTalkOrHold74FC22;
-    case "Home layout": return s.uiHomeLayoutE19685;
-    case "Homeserver (optional)": return s.uiHomeserverOptional70DF85;
-    case "How Conest reaches people": return s.routesTitle;
-    case "How should Conest look?": return s.modeChooseTitle;
-    case "I saved it": return s.uiISavedIt3E2255;
-    case "If messages and files from a phone on the same network never arrive (but yours reach it), Windows Firewall is blocking them. This lets other devices on any network reach Conest on this PC; Windows asks to confirm.": return s.uiIfMessagesAndFilesFrom3DED27;
-    case "If you set an internet relay host, the relay port must be valid too.": return s.onbRelayPortInvalid;
-    case "Ignore": return s.uiIgnore98F55D;
-    case "Image is not available locally.": return s.uiImageIsNotAvailableLocally12017F;
-    case "Import": return s.uiImportD6FBC9;
-    case "Import from URL…": return s.uiImportFromURL3F7B77;
-    case "Import relay list from URL": return s.uiImportRelayListFromURL86E363;
-    case "Imported relay lists": return s.uiImportedRelayListsB0BD8B;
-    case "In Matrix rooms, collapsed into one line": return s.uiInMatrixRoomsCollapsedIntoD20CAB;
-    case "In advanced mode each message shows the routes it took, and a contact's profile can test every route.": return s.routesAdvanced;
-    case "Incoming": return s.callIncoming;
-    case "Incoming voice call": return s.uiIncomingVoiceCallF68FD3;
-    case "Internet relay host / URL (optional)": return s.onbRelayHost;
-    case "Internet relay port": return s.onbRelayPort;
-    case "Invite payload or scanned QR": return s.contactInvitePayload;
-    case "Invite preview": return s.uiInvitePreview6433A0;
-    case "Iroh": return s.uiIroh84642D;
-    case "Iroh endpoint": return s.uiIrohEndpoint72F674;
-    case "Iroh messaging and file transfers over the internet. Custom Conest relays are optional.": return s.uiIrohMessagingAndFileTransfersC4D635;
-    case "Iroh relay": return s.uiIrohRelayB128EA;
-    case "Iroh relay fallback": return s.uiIrohRelayFallbackE954F7;
-    case "It's them": return s.uiItSThem394960;
-    case "JSON URL": return s.uiJSONURL6918BA;
-    case "Join": return s.uiJoinE0D731;
-    case "Join group call": return s.uiJoinGroupCallC9ECF8;
-    case "Join with an invite": return s.uiJoinWithAnInviteC76024;
-    case "Keep 10% of storage free": return s.uiKeepOfStorageFreeF00434;
-    case "Keep Contact": return s.contactKeep;
-    case "Keep editing": return s.uiKeepEditingD4D9E3;
-    case "Keep offline": return s.uiKeepOffline123286;
-    case "Keep signed in": return s.uiKeepSignedIn611A13;
-    case "Keep this key somewhere safe. You need it to read encrypted Matrix history on a new device. It is shown only once.": return s.uiKeepThisKeySomewhereSafe0C0DFE;
-    case "Keep this screen visible until the receiver reports 100%.": return s.uiKeepThisScreenVisibleUntil2261B8;
-    case "Keep transfers": return s.uiKeepTransfersDB8CC7;
-    case "Keep waiting": return s.uiKeepWaiting9BE1AB;
-    case "Keeps call signaling active and shows an ongoing call notification while the Conest service runs. Requires Experimental voice calls; Android battery policy or force-stop can still end availability.": return s.uiKeepsCallSignalingActiveAndC0A342;
-    case "Keeps the key beside the vault. Anyone with the folder can open it.": return s.uiKeepsTheKeyBesideTheB045D9;
-    case "Key file auto-unlock": return s.uiKeyFileAutoUnlock66AC4A;
-    case "LAN": return s.uiLAN2ECD17;
-    case "LAN first": return s.uiLANFirstB360D1;
-    case "LAN lobby": return s.uiLANLobbyC16DC8;
-    case "LAN node unavailable": return s.uiLANNodeUnavailable9CFA32;
-    case "LAN only": return s.uiLANOnly94945D;
-    case "LAN relay": return s.uiLANRelayA05D48;
-    case "Language": return s.settingsLanguage;
-    case "Later": return s.uiLater56E2F5;
-    case "Leave": return s.uiLeave7E3520;
-    case "Leave blank to import unsigned (untrusted; pre-flight probes still gate use). Provide the operator's key for cryptographically trusted imports — the signature is fetched from <URL>.ed25519.sig.": return s.uiLeaveBlankToImportUnsigned0D354E;
-    case "Leave group": return s.uiLeaveGroup925789;
-    case "Legacy invite": return s.uiLegacyInviteC61C5D;
-    case "Let devices on this network reach this PC": return s.uiLetDevicesOnThisNetwork42E2F0;
-    case "Lets members of your groups who are not your contacts reach you by email or Matrix. Off: they only learn your Nostr, Tor and radio addresses, which do not name you. Turning it off stops sharing from now on; members who already saw an address may keep it.": return s.uiLetsMembersOfYourGroups9912A5;
-    case "Like the messengers you know: chats, groups, calls and files, with delivered and read ticks.": return s.modeStandardDescription;
-    case "Limit Iroh files to 100 MiB (recommended)": return s.uiLimitIrohFilesToMiBB58353;
-    case "Lines from bridges.torproject.org, starting with the type: obfs4, webtunnel, snowflake or meek_lite (or plain bridges: address and fingerprint).": return s.uiLinesFromBridgesTorprojectOrgF08389;
-    case "Link a device": return s.uiLinkADeviceE71635;
-    case "Link this device": return s.uiLinkThisDeviceBF5E5C;
-    case "Link this device to my account": return s.uiLinkThisDeviceToMy888A1A;
-    case "Linked. The new device now has your account and contacts; your contacts will see it as you.": return s.uiLinkedTheNewDeviceNow9900E5;
-    case "Load earlier messages": return s.uiLoadEarlierMessages4AC08D;
-    case "Load older messages": return s.uiLoadOlderMessages07471F;
-    case "Loading history…": return s.uiLoadingHistory02CB12;
-    case "Loading…": return s.uiLoading33CE41;
-    case "Lobby": return s.uiLobbyFDB6D9;
-    case "Local relay / LAN port": return s.onbLocalPort;
-    case "Local relay port": return s.uiLocalRelayPort28A73C;
-    case "Low": return s.uiLowA12494;
-    case "MEDIA": return s.uiMEDIAB85FA2;
-    case "Matrix": return s.uiMatrix58947E;
-    case "Matrix account": return s.uiMatrixAccountD69140;
-    case "Matrix chats only, with no Conest identity. You can switch to Both (Conest and Matrix side by side) later under Settings → Connectivity → App mode.": return s.onbMatrixHelp;
-    case "Matrix fallback": return s.uiMatrixFallbackAA082C;
-    case "Matrix invitation": return s.uiMatrixInvitation525106;
-    case "Matrix password": return s.uiMatrixPassword34E218;
-    case "Matrix user": return s.uiMatrixUser70A560;
-    case "Medium": return s.uiMediumD40496;
-    case "Member": return s.roleMember;
-    case "Members": return s.uiMembers1CB449;
-    case "Mesh chat": return s.uiMeshChat7BF668;
-    case "Mesh chat (nearby)": return s.uiMeshChatNearbyA35A63;
-    case "MeshCore": return s.uiMeshCoreBA58A2;
-    case "MeshCore chats": return s.uiMeshCoreChats82C29C;
-    case "Meshtastic": return s.uiMeshtastic29C887;
-    case "Meshtastic chats": return s.uiMeshtasticChats46BEF8;
-    case "Message": return s.uiMessage68F414;
-    case "Message actions": return s.uiMessageActions949184;
-    case "Message deleted": return s.uiMessageDeleted3271A7;
-    case "Message details": return s.messageDetails;
-    case "Message notifications": return s.uiMessageNotifications595635;
-    case "Message routes": return s.uiMessageRoutesFBF32C;
-    case "Message saved here until the contact accepts.": return s.uiMessageSavedHereUntilTheA49A2C;
-    case "Messages with MeshCore app users": return s.uiMessagesWithMeshCoreAppUsersDE77BA;
-    case "Messages with Meshtastic app users": return s.uiMessagesWithMeshtasticAppUsers812B3A;
-    case "Minimize call": return s.uiMinimizeCall6CB0F0;
-    case "Mint and pink remain the Conest fallback accents.": return s.uiMintAndPinkRemainTheC846F3;
-    case "Missed": return s.callMissed;
-    case "Moderator": return s.roleModerator;
-    case "Monogram (initials)": return s.uiMonogramInitials8C6019;
-    case "Move earlier": return s.uiMoveEarlier07DD6F;
-    case "Move later": return s.uiMoveLaterBB4C84;
-    case "Move to top": return s.uiMoveToTop44AFA6;
-    case "Multiple choice": return s.uiMultipleChoiceB88936;
-    case "Mute": return s.uiMute0F0973;
-    case "Mute preview": return s.uiMutePreviewCE44BD;
-    case "My invite": return s.uiMyInviteF80A7A;
-    case "Name bitchat users see": return s.uiNameBitchatUsersSee1CE7E3;
-    case "Native desktop camera capture is unavailable. Paste cb1 frames below; the protocol decoder and verification path are identical.": return s.uiNativeDesktopCameraCaptureIs4619C8;
-    case "Navigation menu": return s.uiNavigationMenu6609F1;
-    case "Nearby": return s.uiNearbyF1536C;
-    case "Network": return s.uiNetwork53EBC5;
-    case "Network / Relay": return s.uiNetworkRelay4F9A27;
-    case "New Delta Chat group": return s.uiNewDeltaChatGroup7D5142;
-    case "New Matrix chat": return s.uiNewMatrixChatC065C8;
-    case "New Nostr chat": return s.uiNewNostrChat68199C;
-    case "New chat": return s.uiNewChat009BF6;
-    case "New folder": return s.uiNewFolderA71199;
-    case "New group": return s.uiNewGroupF9850C;
-    case "New identity": return s.uiNewIdentityA119CF;
-    case "New message": return s.uiNewMessage1ED2E7;
-    case "New poll": return s.uiNewPoll6D62BD;
-    case "No Delta Chat chats yet. Share your invite, or join with someone's.": return s.uiNoDeltaChatChatsYetF4C538;
-    case "No LAN lobby messages yet. Nearby Conest peers will receive messages while they are on this LAN.": return s.uiNoLANLobbyMessagesYetBCDC4B;
-    case "No Matrix chats yet": return s.uiNoMatrixChatsYet23B023;
-    case "No Nostr chats yet": return s.uiNoNostrChatsYet0A95D0;
-    case "No activity yet — pair a contact to start the log.": return s.uiNoActivityYetPairA7F5366;
-    case "No archived chats": return s.uiNoArchivedChatsEAE7F0;
-    case "No audio output devices were found.": return s.uiNoAudioOutputDevicesWere17E473;
-    case "No available chats": return s.uiNoAvailableChats1FAA40;
-    case "No bitchat users nearby yet": return s.uiNoBitchatUsersNearbyYetD30471;
-    case "No bundled Conest relays. Online connections use Iroh; you can also configure your own relay.": return s.uiNoBundledConestRelaysOnline46529B;
-    case "No calls yet. Open a chat and tap the call button.": return s.callsEmpty;
-    case "No chats found": return s.uiNoChatsFoundC6BD82;
-    case "No chats to share into yet.": return s.uiNoChatsToShareIntoB50F2F;
-    case "No contacts found": return s.uiNoContactsFound816015;
-    case "No groups yet.": return s.uiNoGroupsYet5009C6;
-    case "No identity is active.": return s.uiNoIdentityIsActive6B2EE3;
-    case "No imported lists.": return s.uiNoImportedLists6CBC34;
-    case "No messages yet": return s.uiNoMessagesYetC04921;
-    case "No other active members to transfer ownership to.": return s.uiNoOtherActiveMembersToF9DE12;
-    case "No pending contact requests": return s.uiNoPendingContactRequests697615;
-    case "No photos or videos here.": return s.uiNoPhotosOrVideosHereC729D1;
-    case "No relays added yet.": return s.uiNoRelaysAddedYetF791E7;
-    case "No rooms found": return s.uiNoRoomsFoundAD2C3E;
-    case "No route hints are advertised for this contact.": return s.uiNoRouteHintsAreAdvertisedB25540;
-    case "No route took the test.": return s.uiNoRouteTookTheTestF2F6CB;
-    case "No scheduled messages": return s.uiNoScheduledMessages1DDB60;
-    case "No selected attachment is ready yet — still transferring.": return s.uiNoSelectedAttachmentIsReady536B54;
-    case "No transfers yet.": return s.uiNoTransfersYetB8E5C1;
-    case "No transport selected — this contact is unreachable.": return s.uiNoTransportSelectedThisContact7969EB;
-    case "No update is available right now.": return s.uiNoUpdateIsAvailableRightA5EB48;
-    case "No verified ci6 contacts are available yet.": return s.uiNoVerifiedCiContactsAre3FD190;
-    case "Nobody to add yet: start a chat first. You can share the group's invite once it exists.": return s.uiNobodyToAddYetStart0983BB;
-    case "Node (rnsd)": return s.uiNodeRnsd0D8EEC;
-    case "Node address": return s.uiNodeAddress896F20;
-    case "Node address (rnsd)": return s.uiNodeAddressRnsdCD61E2;
-    case "Node · online": return s.uiNodeOnlineFAC64A;
-    case "Noise suppression": return s.uiNoiseSuppression71DE3C;
-    case "Nostr": return s.uiNostr4D3AD8;
-    case "Nostr chats": return s.uiNostrChats3D786C;
-    case "Nostr private messages": return s.uiNostrPrivateMessagesDF74A3;
-    case "Nostr relays": return s.uiNostrRelaysBD8BAD;
-    case "Not delivered yet. Send via Matrix…": return s.uiNotDeliveredYetSendViaF056E1;
-    case "Not them": return s.uiNotThem685593;
-    case "Notes, files and forwards, only on this device": return s.uiNotesFilesAndForwardsOnlyB0145F;
-    case "Nothing recorded.": return s.uiNothingRecordedA27006;
-    case "Nothing to copy from the selected messages.": return s.uiNothingToCopyFromTheEC27E3;
-    case "OK": return s.uiOK9CE3BD;
-    case "Off: bitchat users do not see this phone. You can still read the mesh chat.": return s.uiOffBitchatUsersDoNot054F9A;
-    case "Off: bitchat users nearby without internet cannot reach location channels through you.": return s.uiOffBitchatUsersNearbyWithout030CFB;
-    case "Offline": return s.uiOfflineE01FA7;
-    case "On the device you already use, open Settings → Devices → Link a device and scan this code. Both devices should be on the same network or online.": return s.uiOnTheDeviceYouAlready92C421;
-    case "On the new device, open Settings → Devices → Link this device to my account, then scan the code it shows.": return s.uiOnTheNewDeviceOpen29AF5E;
-    case "One HTTPS URL per line; blank uses the standard N0 relay set.": return s.uiOneHTTPSURLPerLineDA8E70;
-    case "One list of chats, large text and only the settings you need. Messages show sent, delivered and read.": return s.modeSimpleDescription;
-    case "Online": return s.uiOnlineC3E839;
-    case "Online first": return s.uiOnlineFirst346B6D;
-    case "Online only": return s.uiOnlineOnlyF79CB9;
-    case "Only a display name is needed. The local port is for nearby (LAN) delivery and codephrase pairing. An internet relay is optional: contacts are reached over the internet without one. Turn on more routes later under Settings → Connectivity.": return s.onbCreateHelp;
-    case "Only on this device": return s.uiOnlyOnThisDevice7D64C4;
-    case "Open": return s.uiOpenCF9B77;
-    case "Open Fullscreen QR": return s.uiOpenFullscreenQRC5418D;
-    case "Open full profile": return s.uiOpenFullProfile35063C;
-    case "Open group settings": return s.uiOpenGroupSettings0B568E;
-    case "Open in default player": return s.uiOpenInDefaultPlayerE64C20;
-    case "Open settings": return s.uiOpenSettingsFD7108;
-    case "Opening files is unavailable on this platform.": return s.uiOpeningFilesIsUnavailableOnC6ADA2;
-    case "Operator's public key (optional, base64)": return s.uiOperatorSPublicKeyOptionalA80E7A;
-    case "Options (one per line)": return s.uiOptionsOnePerLine62FF3D;
-    case "Or paste the code": return s.uiOrPasteTheCodeE72792;
-    case "Outgoing": return s.callOutgoing;
-    case "Owner": return s.uiOwner89FF31;
-    case "PUBLIC / UNTRUSTED. The signature proves that all frames came from one key; it does not prove who owns that key.": return s.uiPUBLICUNTRUSTEDTheSignatureProves96FA7F;
-    case "PUBLIC · visible to anyone nearby": return s.uiPUBLICVisibleToAnyoneNearbyA775C2;
-    case "Passphrase": return s.uiPassphrase89950C;
-    case "Passphrase unlock": return s.uiPassphraseUnlock13B14C;
-    case "Password": return s.uiPassword8BE3C9;
-    case "Paste media": return s.uiPasteMedia4831DE;
-    case "Paste one cb1 frame": return s.uiPasteOneCbFrame66EA2B;
-    case "Pause": return s.uiPause781961;
-    case "Pause all": return s.uiPauseAll6F6099;
-    case "Pause preview": return s.uiPausePreview805180;
-    case "Pause syncing with a device out of touch for": return s.uiPauseSyncingWithADevice89642E;
-    case "Pause voice message": return s.uiPauseVoiceMessageECD12D;
-    case "Paused": return s.uiPausedC7DFB6;
-    case "Paused by peer": return s.uiPausedByPeer63BD05;
-    case "Per-contact routing is intersected with these flags. Turning off either restricts traffic; turning off both makes the app idle.": return s.uiPerContactRoutingIsIntersected88E292;
-    case "Personal": return s.settingsPersonal;
-    case "Personal / Preferences": return s.uiPersonalPreferencesBD0D61;
-    case "Phones in Bluetooth range that announce themselves show up here.": return s.uiPhonesInBluetoothRangeThatDCCC0D;
-    case "Photos permission denied. Use \"Browse files…\" to send any file, or grant access in system settings.": return s.uiPhotosPermissionDeniedUseBrowseD672EE;
-    case "Plain Matrix": return s.uiPlainMatrixBA9DE1;
-    case "Plain bridges only (address and fingerprint) in this build.": return s.uiPlainBridgesOnlyAddressAnd7F0B60;
-    case "Play preview": return s.uiPlayPreview47BB44;
-    case "Play voice message": return s.uiPlayVoiceMessageB16684;
-    case "Playback speed": return s.uiPlaybackSpeed6FF42B;
-    case "Point the camera at a Conest invite QR code.": return s.uiPointTheCameraAtA9BAFAF;
-    case "Point this camera at the animated Beam QR. Only decoded cb1 frames leave the native scanner.": return s.uiPointThisCameraAtThe2EA3F7;
-    case "Poll routes now": return s.uiPollRoutesNow22318F;
-    case "Prefer": return s.uiPrefer13F662;
-    case "Preferred": return s.uiPreferred0A3E0D;
-    case "Preparing": return s.uiPreparing96A9B7;
-    case "Preparing call…": return s.uiPreparingCallE86D6C;
-    case "Preparing download": return s.uiPreparingDownloadF9B13B;
-    case "Preparing download…": return s.uiPreparingDownload8CB769;
-    case "Preparing microphone…": return s.uiPreparingMicrophone0BBF4A;
-    case "Preparing preview…": return s.uiPreparingPreview312E7B;
-    case "Primary channel": return s.uiPrimaryChannel53B8E1;
-    case "Privacy of files you send": return s.uiPrivacyOfFilesYouSend4E4A5B;
-    case "Public channel": return s.uiPublicChannelA9795B;
-    case "Public optical transfer": return s.uiPublicOpticalTransfer58E3F4;
-    case "Push-to-talk": return s.uiPushToTalk032E78;
-    case "QR rendering is deferred on Windows.": return s.uiQRRenderingIsDeferredOn8A6997;
-    case "QR unavailable": return s.uiQRUnavailable12869A;
-    case "Question": return s.uiQuestion002FF5;
-    case "Queued": return s.uiQueued6A5998;
-    case "RECV": return s.uiRECVBFC296;
-    case "RELAY": return s.uiRELAYA1C0CF;
-    case "RNode address": return s.uiRNodeAddress691283;
-    case "RNode on Bluetooth": return s.uiRNodeOnBluetooth13657D;
-    case "RNode on USB": return s.uiRNodeOnUSBF00220;
-    case "RNode on Wi-Fi": return s.uiRNodeOnWiFiC18593;
-    case "ROUTE INSPECTOR": return s.uiROUTEINSPECTOR321AA4;
-    case "Radio address": return s.uiRadioAddressD288E6;
-    case "Reach contacts directly over your network or the internet, end-to-end encrypted with forward secrecy. When the usual routes are blocked, Conest falls back to relays, Matrix, Nostr, email, Tor, LoRa radios or a Bluetooth mesh of nearby phones.": return s.onbTagline;
-    case "Reach contacts nearby without any network: messages hop from phone to phone over Bluetooth, through Conest and bitchat users alike, and this phone relays for others. This phone does not show up in bitchat, and what it sends looks like any bitchat private message, with ids that change every hour.": return s.uiReachContactsNearbyWithoutAny9E9649;
-    case "Reach contacts through Tor onion services: neither side nor the network learns where the other is. Slower than other routes; add bridges where Tor is blocked.": return s.uiReachContactsThroughTorOnion8B8A98;
-    case "Reachable by bitchat users": return s.uiReachableByBitchatUsers568021;
-    case "React 👍": return s.menuReact;
-    case "Read and write the MeshCore apps' own messages through this radio: with its contacts, and on its channels as group chats. They are protected only as MeshCore protects them.": return s.uiReadAndWriteTheMeshCore98E60E;
-    case "Read and write the Meshtastic apps' own messages through this radio: direct ones, and its channels as group chats. They are protected only as Meshtastic protects them.": return s.uiReadAndWriteTheMeshtastic995E5D;
-    case "Receive Beam": return s.uiReceiveBeam2CB58B;
-    case "Receive Conest Beam": return s.uiReceiveConestBeamB05BCB;
-    case "Receive unstable updates": return s.uiReceiveUnstableUpdatesBF7122;
-    case "Recent": return s.uiRecent76EEC7;
-    case "Reconnecting": return s.uiReconnecting9D80F9;
-    case "Reconnecting…": return s.uiReconnecting8A8B95;
-    case "Recording belongs to another conversation": return s.uiRecordingBelongsToAnotherConversation87E802;
-    case "Recording locked · tap to finish": return s.uiRecordingLockedTapToFinish40CD88;
-    case "Recovery is already set up": return s.uiRecoveryIsAlreadySetUp371F7F;
-    case "Reject": return s.uiReject2B03B5;
-    case "Reject this identity?": return s.uiRejectThisIdentityCB604F;
-    case "Relay": return s.uiRelay9F537F;
-    case "Relay / internet delivery": return s.uiRelayInternetDeliveryD64AB6;
-    case "Relay host / URL": return s.uiRelayHostURLF11441;
-    case "Relay identity changed": return s.uiRelayIdentityChanged097638;
-    case "Relay mode can be enabled in Settings when this device should help carry traffic.": return s.onbRelayOther;
-    case "Relay port": return s.uiRelayPortEA05DA;
-    case "Relays": return s.settingsRelays;
-    case "Relays you read from (one per line, up to 4)": return s.uiRelaysYouReadFromOne020C0A;
-    case "Release to discard recording": return s.uiReleaseToDiscardRecording4C5C71;
-    case "Release to stop · slide left to cancel · slide up to lock": return s.uiReleaseToStopSlideLeft4686F1;
-    case "Remove": return s.uiRemoveE96390;
-    case "Remove Contact": return s.uiRemoveContact7F9A8A;
-    case "Remove device": return s.uiRemoveDeviceA9C39D;
-    case "Remove from list": return s.uiRemoveFromList23A976;
-    case "Remove imported list?": return s.uiRemoveImportedList36FC81;
-    case "Remove local copy": return s.uiRemoveLocalCopy80FA01;
-    case "Remove member": return s.uiRemoveMember1C31D1;
-    case "Remove metadata from files": return s.uiRemoveMetadataFromFilesA4860E;
-    case "Remove this group from your list? This deletes the local message history. Other members will not be notified — they already see you as having left.": return s.uiRemoveThisGroupFromYourDA7898;
-    case "Remove this group?": return s.uiRemoveThisGroup38C4E8;
-    case "Replaces file names with random letters (the type, such as .jpg, stays), for you and the recipient.": return s.uiReplacesFileNamesWithRandom16F099;
-    case "Reply": return s.menuReply;
-    case "Request again": return s.uiRequestAgain7B0434;
-    case "Reschedule": return s.uiReschedule34B2DC;
-    case "Reserve free space for other apps. When off, transfers can use this space but must still fit on disk.": return s.uiReserveFreeSpaceForOther1AC9CF;
-    case "Reset": return s.uiReset44C57A;
-    case "Reset App Identity": return s.uiResetAppIdentity2E0F86;
-    case "Reset identity": return s.uiResetIdentity8B0224;
-    case "Resume": return s.uiResumeB3BD0B;
-    case "Resume all": return s.uiResumeAll039916;
-    case "Reticulum": return s.uiReticulumC27E52;
-    case "Retract vote": return s.uiRetractVoteA5DA11;
-    case "Retry": return s.uiRetry9F5CD8;
-    case "Retry failed": return s.uiRetryFailed7B6CA4;
-    case "Retry transfer": return s.menuRetryTransfer;
-    case "Return": return s.uiReturn24F096;
-    case "Review": return s.uiReviewE29A79;
-    case "Review people who want to connect": return s.uiReviewPeopleWhoWantTo24A8CB;
-    case "Review unsent voice message": return s.uiReviewUnsentVoiceMessage24931C;
-    case "Rotate Codephrase Now": return s.uiRotateCodephraseNow89B2D5;
-    case "Rotate left": return s.uiRotateLeft6F72F3;
-    case "Rotate right": return s.uiRotateRightB75F23;
-    case "Route": return s.uiRoute499952;
-    case "Route inspector": return s.uiRouteInspector0E65DE;
-    case "Routes": return s.messageRoutes;
-    case "Run a check to measure latency, availability, and reachability freshness. Paths are sorted by best direct/LAN route first, then relay fallback.": return s.uiRunACheckToMeasure5D76A5;
-    case "Run this device as a relay": return s.uiRunThisDeviceAsA9DEA14;
-    case "SENT": return s.uiSENT5AD0CD;
-    case "SIGNED CONTACT INVITE": return s.uiSIGNEDCONTACTINVITE752317;
-    case "SUBTLE": return s.uiSUBTLEBB048B;
-    case "Safety number": return s.uiSafetyNumber5ED2D3;
-    case "Same as the device": return s.settingsLanguageSystem;
-    case "Same-network delivery": return s.uiSameNetworkDelivery94E793;
-    case "Same-network listener, pairing beacons, LAN delivery.": return s.uiSameNetworkListenerPairingBeacons5CF0A2;
-    case "Save": return s.uiSaveEFC007;
-    case "Save Bio": return s.uiSaveBioBE2711;
-    case "Save Iroh relays": return s.uiSaveIrohRelaysC144AD;
-    case "Save Name": return s.uiSaveNameE73831;
-    case "Save Port": return s.uiSavePort1876F6;
-    case "Save Profile": return s.uiSaveProfile909BF3;
-    case "Save attachment": return s.menuSaveAttachment;
-    case "Save attachments": return s.uiSaveAttachments5A74EA;
-    case "Save canceled.": return s.uiSaveCanceled1939D0;
-    case "Save file": return s.uiSaveFileBEDC84;
-    case "Save relays": return s.uiSaveRelays91CBA8;
-    case "Save the error history": return s.uiSaveTheErrorHistory0B3413;
-    case "Save to a file": return s.uiSaveToAFile5BB648;
-    case "Save your recovery key": return s.uiSaveYourRecoveryKey7851B3;
-    case "Saved in private Conest storage:": return s.uiSavedInPrivateConestStorage4C1334;
-    case "Saved messages": return s.uiSavedMessagesC0FA7E;
-    case "Scan Invite": return s.uiScanInviteEFC78A;
-    case "Scan QR": return s.contactScanQr;
-    case "Scan code": return s.uiScanCode4596C2;
-    case "Scan for radios": return s.uiScanForRadios2B185E;
-    case "Scanning the compact QR is enough on its own. If the camera still struggles, open it full screen or use only the current codephrase.": return s.uiScanningTheCompactQRIs9459D9;
-    case "Schedule file": return s.uiScheduleFile690A92;
-    case "Schedule message": return s.composerSchedule;
-    case "Schedule one attachment at a time.": return s.uiScheduleOneAttachmentAtAC580C3;
-    case "Scheduled attachment": return s.uiScheduledAttachment08DB0E;
-    case "Scheduled messages": return s.uiScheduledMessages98CEF4;
-    case "Seal (animated rings)": return s.uiSealAnimatedRings29BE2D;
-    case "Search": return s.actionSearch;
-    case "Search all chats": return s.uiSearchAllChatsC825C8;
-    case "Search chats": return s.searchChats;
-    case "Search chats and messages": return s.searchChatsAndMessages;
-    case "Search contacts": return s.searchContacts;
-    case "Search messages": return s.uiSearchMessagesABEA65;
-    case "Search rooms": return s.uiSearchRoomsCCE4F9;
-    case "Select a group before dropping files.": return s.uiSelectAGroupBeforeDropping9DAB4C;
-    case "Select more": return s.uiSelectMoreE38EF3;
-    case "Send": return s.composerSend;
-    case "Send anyway": return s.uiSendAnyway911263;
-    case "Send as file": return s.uiSendAsFileB50EAF;
-    case "Send as media": return s.uiSendAsMedia061D87;
-    case "Send encrypted file": return s.uiSendEncryptedFile99D424;
-    case "Send files under random names": return s.uiSendFilesUnderRandomNames5F79D4;
-    case "Send from original": return s.uiSendFromOriginalFFF29A;
-    case "Send mode": return s.uiSendMode265A2D;
-    case "Send now": return s.uiSendNowDAE330;
-    case "Send public file": return s.uiSendPublicFileF81389;
-    case "Send via Matrix": return s.uiSendViaMatrix638038;
-    case "Send via Matrix?": return s.uiSendViaMatrix062A08;
-    case "Send via Matrix…": return s.uiSendViaMatrix3868FE;
-    case "Send with its details?": return s.uiSendWithItsDetailsF287FB;
-    case "Send without resumable copy?": return s.uiSendWithoutResumableCopy0475F4;
-    case "Sending…": return s.uiSendingCF7655;
-    case "Sent as a plain Matrix message": return s.uiSentAsAPlainMatrixAAE694;
-    case "Server not reached": return s.uiServerNotReached62FED2;
-    case "Server refused sign-out": return s.uiServerRefusedSignOut66337B;
-    case "Set up recovery": return s.uiSetUpRecoveryFD3804;
-    case "Settings": return s.tabSettings;
-    case "Share email and Matrix addresses with group members": return s.uiShareEmailAndMatrixAddressesD762EE;
-    case "Share file now": return s.uiShareFileNow96E2A2;
-    case "Share internet with bitchat users": return s.uiShareInternetWithBitchatUsers572F90;
-    case "Share invite": return s.uiShareInviteDBCC1E;
-    case "Share or schedule a group file": return s.uiShareOrScheduleAGroup2989F0;
-    case "Share text to…": return s.uiShareTextTo7B5086;
-    case "Share your invite, then either scan the QR code or enter only the current codephrase on the other device to add the contact.": return s.uiShareYourInviteThenEither5FEF78;
-    case "Sharing with group": return s.uiSharingWithGroup2AED71;
-    case "Shell": return s.uiShellBDC1FD;
-    case "Show QR": return s.uiShowQRCFBAC6;
-    case "Show QR code": return s.uiShowQRCode2DF2DD;
-    case "Show a system notification when a direct message arrives.": return s.uiShowASystemNotificationWhen90113B;
-    case "Show all settings": return s.settingsShowAll;
-    case "Show as Beam": return s.uiShowAsBeam74375F;
-    case "Show joins, leaves and profile changes": return s.uiShowJoinsLeavesAndProfile9FA764;
-    case "Show the QR anyway": return s.uiShowTheQRAnyway0B0CDF;
-    case "Show the QR code to a Delta Chat user, or send the link. Whoever has it can start a verified chat with you.": return s.uiShowTheQRCodeTo0769AD;
-    case "Sigil (rune)": return s.uiSigilRuneA0B8A7;
-    case "Sign in to Matrix": return s.uiSignInToMatrix652C8F;
-    case "Sign in to your Matrix account": return s.uiSignInToYourMatrix8D0037;
-    case "Sign in with browser": return s.uiSignInWithBrowserC995DF;
-    case "Sign out": return s.uiSignOutDC1649;
-    case "Sign out here": return s.uiSignOutHereA6F129;
-    case "Signature valid. Compare the fingerprint in person.": return s.uiSignatureValidCompareTheFingerprintA8A1FE;
-    case "Signed contact invite": return s.uiSignedContactInviteA7CC8B;
-    case "Simple": return s.modeSimple;
-    case "Single choice": return s.uiSingleChoice68E3E0;
-    case "Speaker off": return s.uiSpeakerOff97823A;
-    case "Speaker on": return s.uiSpeakerOn93982E;
-    case "Standard": return s.modeStandard;
-    case "Start": return s.actionStart;
-    case "Start chat": return s.uiStartChat18BB58;
-    case "Start group call": return s.uiStartGroupCallC2A083;
-    case "Start voice call (experimental)": return s.uiStartVoiceCallExperimental6DE320;
-    case "Start with one trusted contact": return s.uiStartWithOneTrustedContact650B80;
-    case "Starting Bluetooth": return s.uiStartingBluetoothE6928A;
-    case "Still mine": return s.uiStillMine38C8AE;
-    case "Stop keeping offline": return s.uiStopKeepingOfflineAABFC7;
-    case "Stop recording": return s.uiStopRecordingEE0D9D;
-    case "Stop sharing": return s.uiStopSharing0E45AE;
-    case "Storage": return s.settingsStorage;
-    case "Store Conest-controlled files in a conest_data folder next to the app.": return s.uiStoreConestControlledFilesIn7DA307;
-    case "Stores the vault key in the platform secure store.": return s.uiStoresTheVaultKeyInC7B1CD;
-    case "Switch": return s.uiSwitch3E44C9;
-    case "TCP port": return s.uiTCPPortDE05BE;
-    case "Talking…": return s.uiTalkingC34D84;
-    case "Test Routes": return s.uiTestRoutes52770A;
-    case "Testing routes…": return s.uiTestingRoutes19C586;
-    case "The Android file saver is unavailable.": return s.uiTheAndroidFileSaverIsDF910B;
-    case "The Matrix client is not available on this device, so Conest cannot run in Matrix-only mode here.": return s.uiTheMatrixClientIsNot01A5B4;
-    case "The attachment file is not available locally.": return s.uiTheAttachmentFileIsNotA67009;
-    case "The attachment is still downloading.": return s.uiTheAttachmentIsStillDownloadingF77317;
-    case "The codes match": return s.uiTheCodesMatch32C407;
-    case "The group file is not available locally.": return s.uiTheGroupFileIsNotF8A236;
-    case "Their app did not say it can take route tests. If they run this version too, they may not be reachable right now.": return s.uiTheirAppDidNotSay758036;
-    case "Theme": return s.uiThemeA797E3;
-    case "They don't match": return s.uiTheyDonTMatch27EF0C;
-    case "They match": return s.uiTheyMatch6FB8EB;
-    case "This account already has a recovery key. Use \"Enter recovery key\" or \"Verify with another session\" to unlock your encrypted history on this device.": return s.uiThisAccountAlreadyHasA0CF3D8;
-    case "This attachment is not available locally yet.": return s.uiThisAttachmentIsNotAvailableFE641A;
-    case "This chat is not encrypted: your homeserver and theirs can read it.": return s.uiThisChatIsNotEncrypted799D99;
-    case "This chat was with an earlier bitchat identity of yours. Writing now tells them your new one is the same person.": return s.uiThisChatWasWithAn0507F9;
-    case "This clears the encrypted vault, removes contacts and messages, and returns the app to the first-launch state.": return s.uiThisClearsTheEncryptedVault864B3D;
-    case "This contact request is blocked.": return s.uiThisContactRequestIsBlocked944F7D;
-    case "This deletes the new contact and any held inbound messages. Use this if you believe this is impersonation.": return s.uiThisDeletesTheNewContactBB4444;
-    case "This device": return s.uiThisDeviceFA5A6D;
-    case "This device is now linked to your account.": return s.uiThisDeviceIsNowLinked7EA826;
-    case "This device was linked less than a day ago, so it cannot add or remove devices yet.": return s.uiThisDeviceWasLinkedLess2E5122;
-    case "This invite also lists your routes for blocked networks, which makes it too large for one QR code. Show it as Beam, an animated QR the other camera reads in a few seconds.": return s.uiThisInviteAlsoListsYourEF3A4F;
-    case "This invite works only on the same network: no internet route is on. Turn on Iroh relays, a Conest relay or a carrier (Nostr, email) in Settings → Connectivity so contacts can add you from anywhere.": return s.uiThisInviteWorksOnlyOnB106B0;
-    case "This release pairs through a QR invite alone or through a codephrase alone, prefers nearby LAN routes, and falls back to internet relay routes after that.": return s.uiThisReleasePairsThroughA883AA2;
-    case "This removes the local contact and message history. The app will also try to send a removal notice so this contact disappears on the other side.": return s.uiThisRemovesTheLocalContact0D6D1E;
-    case "This removes the message from this device.": return s.uiThisRemovesTheMessageFrom6A47E2;
-    case "This removes the message here and asks the contact to remove their copy if reachable.": return s.uiThisRemovesTheMessageHere61D27C;
-    case "This translation was made with AI and may contain mistakes. You can help improve it on Weblate.": return s.settingsAiTranslated;
-    case "Tor": return s.uiTorED7088;
-    case "Tor, mesh and radio fallbacks": return s.onbFeatureFallbacks;
-    case "Transfer": return s.uiTransferCBB4CC;
-    case "Transfer ownership": return s.uiTransferOwnershipA6819E;
-    case "Transfer ownership…": return s.uiTransferOwnershipA563C9;
-    case "Transferring": return s.uiTransferring73F753;
-    case "Transfers": return s.uiTransfers812412;
-    case "Transport policy": return s.uiTransportPolicy088D79;
-    case "Trust QR / payload": return s.contactTrustPayload;
-    case "Trust and add contact": return s.uiTrustAndAddContact0962A2;
-    case "Trust new key": return s.uiTrustNewKeyA181BE;
-    case "Turn on app messages to write": return s.uiTurnOnAppMessagesTo7DCA13;
-    case "US 914.875": return s.uiUS5ED166;
-    case "USB": return s.uiUSB09716C;
-    case "USB device": return s.uiUSBDeviceB47FF0;
-    case "Unable to decrypt": return s.uiUnableToDecryptFDF88B;
-    case "Unable to decrypt this message yet": return s.uiUnableToDecryptThisMessage8A31CC;
-    case "Unavailable": return s.uiUnavailable2C9C1F;
-    case "Unknown contact": return s.unknownContact;
-    case "Unlock": return s.uiUnlock1526A1;
-    case "Unlock Conest": return s.uiUnlockConest033EB6;
-    case "Unmute": return s.uiUnmute7044C3;
-    case "Unmute preview": return s.uiUnmutePreview12A31A;
-    case "Unsupported message": return s.uiUnsupportedMessage9E48EB;
-    case "Update Available": return s.uiUpdateAvailable67FD3A;
-    case "Updates": return s.settingsUpdates;
-    case "Use Conest": return s.uiUseConest12EEF3;
-    case "Use Conest as a Matrix client only?": return s.uiUseConestAsAMatrix6A44C5;
-    case "Use Conest on more than one device: link a phone, tablet or computer to this account. Your contacts see one person.": return s.uiUseConestOnMoreThanD2AA6A;
-    case "Use Iroh’s built-in relays for messages and files when direct connections cannot get through. Both peers must be online.": return s.uiUseIrohSBuiltIn631E03;
-    case "Use as a Matrix client instead": return s.onbMatrixInstead;
-    case "Use my own email account instead": return s.uiUseMyOwnEmailAccountE78C1D;
-    case "Use the codephrase below, or render the QR after this page is open.": return s.uiUseTheCodephraseBelowOrB6A588;
-    case "Use the codephrase or payload below.": return s.uiUseTheCodephraseOrPayload187111;
-    case "Use the normal app data folder and this device keychain when auto-unlock is selected.": return s.uiUseTheNormalAppDataF44F79;
-    case "Use the same frequency, bandwidth and spreading factor as the Reticulum network the radio joins.": return s.uiUseTheSameFrequencyBandwidthFC1A9F;
-    case "Use these bridges": return s.uiUseTheseBridgesC1FA11;
-    case "Uses LAN only. No relay traffic for this contact.": return s.uiUsesLANOnlyNoRelay589D55;
-    case "Uses LAN when available, falls back to Online.": return s.uiUsesLANWhenAvailableFallsA810EF;
-    case "Uses Online only. No LAN traffic for this contact.": return s.uiUsesOnlineOnlyNoLAN193810;
-    case "Uses Online when available, falls back to LAN.": return s.uiUsesOnlineWhenAvailableFallsCE2CAF;
-    case "Vault unlock": return s.uiVaultUnlock602BF6;
-    case "Verification request": return s.uiVerificationRequestDA06F9;
-    case "Verified": return s.uiVerifiedAED3B8;
-    case "Verified contacts only. Limits adapt to Wi-Fi/Ethernet, cellular, and roaming.": return s.uiVerifiedContactsOnlyLimitsAdapt8A1876;
-    case "Verified download progress": return s.uiVerifiedDownloadProgressBED7C2;
-    case "Verified with an invite": return s.uiVerifiedWithAnInviteBD826F;
-    case "Verify": return s.uiVerifyDDA6AC;
-    case "Verify the person and compare this safety number through another channel before accepting.": return s.uiVerifyThePersonAndCompare738F28;
-    case "Verify this session": return s.uiVerifyThisSessionB5065C;
-    case "Verify with another session": return s.uiVerifyWithAnotherSession9ED031;
-    case "Verifying": return s.uiVerifying536244;
-    case "Via contact": return s.uiViaContactCF1F8E;
-    case "Video isn't cached locally yet — wait for the transfer to finish.": return s.uiVideoIsnTCachedLocally8920DD;
-    case "Visible and online-only; direct Iroh is preferred.": return s.uiVisibleAndOnlineOnlyDirectEA8902;
-    case "Visible votes": return s.uiVisibleVotes460E7A;
-    case "Voice call": return s.uiVoiceCallB8499D;
-    case "Voice calls are turned off. Enable them in Settings to call.": return s.uiVoiceCallsAreTurnedOff692843;
-    case "Voice message": return s.uiVoiceMessage999DEB;
-    case "Voice message bytes are not ready.": return s.uiVoiceMessageBytesAreNotF8339B;
-    case "Voice-call audio is unavailable in this build.": return s.uiVoiceCallAudioIsUnavailable0B6C43;
-    case "Vote": return s.uiVote64F872;
-    case "Voting is unavailable with this Conest version.": return s.uiVotingIsUnavailableWithThis9B92E7;
-    case "WARN": return s.uiWARNC2FD77;
-    case "Waiting": return s.uiWaiting33D306;
-    case "Waiting for the invite to be answered; this can take a minute.": return s.uiWaitingForTheInviteTo1C712D;
-    case "Waiting for the new device to answer. If no code appears, make sure the new device still shows its code, and that both are on the same network or online.": return s.uiWaitingForTheNewDevice75283F;
-    case "Waiting for the other device…": return s.uiWaitingForTheOtherDeviceB39C3F;
-    case "We compared this fingerprint in person": return s.uiWeComparedThisFingerprintIn952BEB;
-    case "What the coloured marks on messages mean": return s.uiWhatTheColouredMarksOnA10C8E;
-    case "What went wrong, kept across restarts on this build, to copy for a bug report.": return s.uiWhatWentWrongKeptAcross27FC1F;
-    case "What's new": return s.uiWhatSNew4D8DC5;
-    case "When this contact cannot reach someone but this device can, pass their messages on. You see only who they are for and when; the content stays encrypted.": return s.uiWhenThisContactCannotReach5C3FF8;
-    case "When those are blocked or missing, Conest can also use relays, Tor, Nostr, email, Matrix, a Bluetooth mesh of nearby phones or LoRa radios. Each is off until you turn it on in Settings → Connectivity.": return s.routesOthers;
-    case "With a filter of their own. Off: open them from the network's settings only.": return s.uiWithAFilterOfTheir4FD18E;
-    case "Write a reply": return s.uiWriteAReply0A58E1;
-    case "Write a reply or add a caption": return s.uiWriteAReplyOrAddFC0A42;
-    case "Write an encrypted message": return s.uiWriteAnEncryptedMessage9F7705;
-    case "Write to group": return s.uiWriteToGroup5878DB;
-    case "Write to nearby LAN users": return s.uiWriteToNearbyLANUsers291142;
-    case "You": return s.uiYou905CB3;
-    case "You are hidden": return s.uiYouAreHidden56DCC1;
-    case "You are no longer in this group": return s.uiYouAreNoLongerIn571DA7;
-    case "You are not in this group": return s.uiYouAreNotInThisCF5BD5;
-    case "You can change this any time in Settings.": return s.modeChangeLater;
-    case "You left": return s.uiYouLeft9F2CDB;
-    case "You read the mesh chat, but bitchat users cannot see you or write to you. Turn on \"Reachable by bitchat users\" in Settings → Connectivity to write.": return s.uiYouReadTheMeshChatAEACC5;
-    case "You were invited to this Matrix chat.": return s.uiYouWereInvitedToThisE30D1E;
-    case "Your Conest chats are hidden and Conest stops connecting on this device until you switch back. Nothing is deleted. Contacts cannot reach you over Conest meanwhile; their apps keep retrying and deliver when you switch back.": return s.uiYourConestChatsAreHiddenCFD853;
-    case "Your Delta Chat invite": return s.uiYourDeltaChatInviteEE073F;
-    case "Your Nostr address": return s.uiYourNostrAddress5CF7C6;
-    case "Your contacts will stop accepting anything from that device. It cannot be added back; link it again as a new device instead.": return s.uiYourContactsWillStopAccepting5B0F03;
-    case "Your edits will be lost. The original image stays in your gallery.": return s.uiYourEditsWillBeLostB34663;
-    case "Your encrypted Matrix history is already backed up. Use \"Enter recovery key\" on a new device.": return s.uiYourEncryptedMatrixHistoryIsC16CD2;
-    case "Your server asks for it to create signing keys.": return s.uiYourServerAsksForIt1594FA;
-    case "back through the contact who passed their message on": return s.uiBackThroughTheContactWhoD09BD0;
-    case "bitchat": return s.uiBitchatA99B50;
-    case "bitchat chats": return s.uiBitchatChatsC74EC3;
-    case "bitchat nearby": return s.uiBitchatNearbyD0C416;
-    case "delivered": return s.uiDeliveredF81891;
-    case "description": return s.uiDescriptionCB3291;
-    case "direct": return s.uiDirect24A173;
-    case "edited": return s.uiEditedA22FCA;
-    case "edited · ": return s.uiEdited0E3C32;
-    case "host auto-detects TCP/UDP; udp://host:port forces UDP": return s.uiHostAutoDetectsTCPUDP663D30;
-    case "new": return s.uiNewC2A6B0;
-    case "no internet relay": return s.uiNoInternetRelay55D2CE;
-    case "not delivered (their radio could not read it)": return s.uiNotDeliveredTheirRadioCould75D581;
-    case "not sent": return s.uiNotSentBE2B9D;
-    case "npub1… (several for a group)": return s.uiNpubSeveralForAGroupE6ED77;
-    case "obfs4 192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413 cert=… iat-mode=0": return s.uiObfsEEFEAD0EDF;
-    case "one-way": return s.uiOneWay5EF4D0;
-    case "pairwise": return s.uiPairwise64A0EF;
-    case "reached their device": return s.uiReachedTheirDevice0FE289;
-    case "read": return s.uiReadA7AFDD;
-    case "received": return s.uiReceived38428A;
-    case "relay": return s.uiRelayBD28B2;
-    case "routing": return s.uiRoutingECF60A;
-    case "sender not verified": return s.uiSenderNotVerified2BB0FA;
-    case "sent": return s.uiSent27E770;
-    case "skip": return s.uiSkipC7E168;
-    case "unavailable": return s.uiUnavailable1D5EE3;
-    case "usable": return s.uiUsable829A7C;
-    case "verified": return s.uiVerifiedEC734B;
-    case "waiting on the relay": return s.uiWaitingOnTheRelayED66FF;
-    case "● LIVE": return s.uiLIVE67B40B;
-    case "◢ SERVERLESS SECURE MESSENGER": return s.uiSERVERLESSSECUREMESSENGER1E1891;
+    case "10% free-space reserve disabled.":
+      return s.statusFreeSpaceReserveDisabledD3E635;
+    case "10% free-space reserve enabled.":
+      return s.statusFreeSpaceReserveEnabledD7CE0E;
+    case "Android background runtime disabled.":
+      return s.statusAndroidBackgroundRuntimeDisabled5FC9A0;
+    case "Android background runtime enabled. If system battery/background access is blocked, notifications can still be late or never arrive.":
+      return s.statusAndroidBackgroundRuntimeEnabledIfAA5168;
+    case "Applied deferred direct reactions.":
+      return s.statusAppliedDeferredDirectReactions1414C8;
+    case "Automatic contact relay usage disabled.":
+      return s.statusAutomaticContactRelayUsageDisabledE762A7;
+    case "Background voice-call availability disabled.":
+      return s.statusBackgroundVoiceCallAvailabilityDisabledA71AD1;
+    case "Background voice-call availability enabled for this device. Calls can arrive only while the Conest service is allowed to run.":
+      return s.statusBackgroundVoiceCallAvailabilityEnabledA87223;
+    case "Bio cleared.":
+      return s.statusBioCleared543896;
+    case "Bio updated.":
+      return s.statusBioUpdated440110;
+    case "Bluetooth mesh off.":
+      return s.statusBluetoothMeshOff2CE954;
+    case "Bluetooth mesh on.":
+      return s.statusBluetoothMeshOn11FD21;
+    case "Cache path is not ready yet — still transferring.":
+      return s.uiCachePathIsNotReady0404B5;
+    case "Contact profile updated.":
+      return s.statusContactProfileUpdated47ECF6;
+    case "Contact removed locally. Sending a removal notice in the background.":
+      return s.statusContactRemovedLocallySendingA40D607;
+    case "Contact removed.":
+      return s.statusContactRemovedE31CE0;
+    case "Contact request cancelled. Queued items remain blocked.":
+      return s.statusContactRequestCancelledQueuedItemsEC2567;
+    case "Contact request rejected.":
+      return s.uiContactRequestRejected447EE8;
+    case "Contacts can now contribute relay routes automatically.":
+      return s.statusContactsCanNowContributeRelay147ECE;
+    case "Copied message text.":
+      return s.uiCopiedMessageText9DC18F;
+    case "Delta Chat off.":
+      return s.statusDeltaChatOff8BDBD4;
+    case "Delta Chat on.":
+      return s.statusDeltaChatOn1F38AA;
+    case "Device created. Share a QR invite or the current codephrase to add this contact.":
+      return s.statusDeviceCreatedShareAQr06E7B6;
+    case "Direct online transport is unavailable; relay fallback remains active.":
+      return s.statusDirectOnlineTransportIsUnavailableB1EFAE;
+    case "Display name updated.":
+      return s.statusDisplayNameUpdated3BD31A;
+    case "Download this file before forwarding it.":
+      return s.uiDownloadThisFileBeforeForwarding60D7B5;
+    case "Email carrier removed.":
+      return s.statusEmailCarrierRemoved036E51;
+    case "Experimental voice calls disabled on this device.":
+      return s.statusExperimentalVoiceCallsDisabledOn19A5AE;
+    case "Experimental voice calls enabled on this device.":
+      return s.statusExperimentalVoiceCallsEnabledOn4081DE;
+    case "Group file scheduled.":
+      return s.uiGroupFileScheduledB1DC66;
+    case "Image is not available locally.":
+      return s.uiImageIsNotAvailableLocally12017F;
+    case "Incoming voice call":
+      return s.uiIncomingVoiceCallF68FD3;
+    case "LAN lobby message saved locally; no nearby LAN participants were reachable.":
+      return s.statusLanLobbyMessageSavedLocallyFDE86E;
+    case "Matrix rooms hide joins and leaves.":
+      return s.statusMatrixRoomsHideJoinsAndE00610;
+    case "Matrix rooms show joins and leaves.":
+      return s.statusMatrixRoomsShowJoinsAndE8AC9E;
+    case "MeshCore app messages off.":
+      return s.statusMeshcoreAppMessagesOffE59C90;
+    case "MeshCore app messages on.":
+      return s.statusMeshcoreAppMessagesOn2BF1E3;
+    case "MeshCore carrier removed.":
+      return s.statusMeshcoreCarrierRemoved38FC35;
+    case "Meshtastic app messages off.":
+      return s.statusMeshtasticAppMessagesOffAFB9E8;
+    case "Meshtastic app messages on.":
+      return s.statusMeshtasticAppMessagesOn2C1888;
+    case "Meshtastic carrier removed.":
+      return s.statusMeshtasticCarrierRemoved66387E;
+    case "Message deleted here. Remote deletion could not be sent yet.":
+      return s.statusMessageDeletedHereRemoteDeletionB6AE62;
+    case "Message deleted locally.":
+      return s.statusMessageDeletedLocallyCE90EE;
+    case "Message edited locally.":
+      return s.statusMessageEditedLocally187334;
+    case "Message queued. The app will retry direct routes and relays while polling.":
+      return s.statusMessageQueuedTheAppWillA89BCC;
+    case "No audio output devices were found.":
+      return s.uiNoAudioOutputDevicesWere17E473;
+    case "No new relay protocols detected.":
+      return s.statusNoNewProtocols;
+    case "No other active members to transfer ownership to.":
+      return s.uiNoOtherActiveMembersToF9DE12;
+    case "No selected attachment is ready yet — still transferring.":
+      return s.uiNoSelectedAttachmentIsReady536B54;
+    case "Nostr carrier removed.":
+      return s.statusNostrCarrierRemovedCB968A;
+    case "Nostr carrier set up.":
+      return s.statusNostrCarrierSetUpE82998;
+    case "Nostr messages off.":
+      return s.statusNostrMessagesOff16BCA7;
+    case "Nostr messages on.":
+      return s.statusNostrMessagesOn35ABF5;
+    case "Nostr relays updated: a relay shut down.":
+      return s.statusNostrRelaysUpdatedARelay03F8F3;
+    case "Nothing to copy from the selected messages.":
+      return s.uiNothingToCopyFromTheEC27E3;
+    case "Notifications disabled for this device.":
+      return s.statusNotificationsDisabledForThisDeviceE10A46;
+    case "Notifications enabled.":
+      return s.statusNotificationsEnabledF70668;
+    case "Opening files is unavailable on this platform.":
+      return s.uiOpeningFilesIsUnavailableOnC6ADA2;
+    case "Pairing code rotated and advertised.":
+      return s.statusPairingCodeRotatedAndAdvertised722FB9;
+    case "Reaction updated locally.":
+      return s.statusReactionUpdatedLocally97D795;
+    case "Rejected invalid attachment metadata.":
+      return s.statusRejectedInvalidAttachmentMetadata849465;
+    case "Relay mode disabled.":
+      return s.statusRelayModeDisabled723F4D;
+    case "Relay mode enabled.":
+      return s.statusRelayModeEnabledB9ACB8;
+    case "Reticulum carrier removed.":
+      return s.statusReticulumCarrierRemoved301C05;
+    case "Route info exchange could not be sent yet.":
+      return s.statusRouteExchangePending;
+    case "Route info exchange requested.":
+      return s.statusRouteExchangeRequested;
+    case "Save canceled.":
+      return s.uiSaveCanceled1939D0;
+    case "Saved.":
+      return s.statusSaved9D4AF6;
+    case "Schedule one attachment at a time.":
+      return s.uiScheduleOneAttachmentAtAC580C3;
+    case "Select a group before dropping files.":
+      return s.uiSelectAGroupBeforeDropping9DAB4C;
+    case "Signed out of Matrix.":
+      return s.statusSignedOutOfMatrix1D1860;
+    case "The Android file saver is unavailable.":
+      return s.uiTheAndroidFileSaverIsDF910B;
+    case "The Matrix sign-in expired. Sign in again to use Matrix.":
+      return s.statusTheMatrixSignInExpired76ABA4;
+    case "The attachment file is not available locally.":
+      return s.uiTheAttachmentFileIsNotA67009;
+    case "The attachment is still downloading.":
+      return s.uiTheAttachmentIsStillDownloadingF77317;
+    case "The group file is not available locally.":
+      return s.uiTheGroupFileIsNotF8A236;
+    case "This attachment is not available locally yet.":
+      return s.uiThisAttachmentIsNotAvailableFE641A;
+    case "This device is now linked to your account.":
+      return s.uiThisDeviceIsNowLinked7EA826;
+    case "Tor carrier removed.":
+      return s.statusTorCarrierRemovedAAC23E;
+    case "Tor carrier set up.":
+      return s.statusTorCarrierSetUp3D2304;
+    case "Updated history visibility for future group members.":
+      return s.statusUpdatedHistoryVisibilityForFutureDA1A23;
+    case "Updated nearby LAN routes.":
+      return s.statusUpdatedNearbyLanRoutesF8CAFC;
+    case "Video isn't cached locally yet — wait for the transfer to finish.":
+      return s.uiVideoIsnTCachedLocally8920DD;
+    case "Voice calls are turned off. Enable them in Settings to call.":
+      return s.uiVoiceCallsAreTurnedOff692843;
+    case "Voice message bytes are not ready.":
+      return s.uiVoiceMessageBytesAreNotF8339B;
+    case "Voice-call audio is unavailable in this build.":
+      return s.uiVoiceCallAudioIsUnavailable0B6C43;
+    case "bitchat users no longer see you.":
+      return s.statusBitchatUsersNoLongerSee68B46D;
+    case "known routes":
+      return s.statusKnownRoutes;
+    case "reachable":
+      return s.statusReachable;
+    case "stale":
+      return s.statusExpired;
+    case "unknown":
+      return s.statusUnknown;
+    case "unreachable":
+      return s.statusUnreachable;
   }
   {
-    final values = _match(text, ["Phones nearby without internet can use bitchat's location channels through this phone. Only those public, signed messages pass. This phone connects to the relays of the areas they use", ": those relays see your internet address and the area, so they can tell roughly where you are."]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiPhonesNearbyWithoutInternetCan27CC7F(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " cannot be reached over Conest right now. Send this message to ", " as an ordinary Matrix message instead?\n\nIt goes to your Matrix direct chat with them, not through Conest encryption: the homeserver can read it unless that chat is encrypted. Conest stops trying to deliver it."]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueCannotBeReachedOver14E8C2(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["This server does not let Conest end its session (", "). It may manage sessions on its own account page.\n\nSign out on this device anyway? Then remove the Conest session from your account page or another Matrix app."]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiThisServerDoesNotLet9EEC1F(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " wants to verify you, comparing emojis. Check the whole address: look-alike ones exist. Accept only if you can compare with them in person or on a call; verifying marks their keys as trusted."]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueWantsToVerifyYou61FD9D(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " could not be copied into private transfer storage.\n\n", "\n\nThe app can read the original file directly, but the transfer cannot resume after restart if that file moves or its permission expires.", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueCouldNotBeCopied06F61A(values[0], values[1], values[2]);
-    }
-  }
-  {
-    final values = _match(text, ["You added ", ", but your invite could not be sent back automatically. Ask the other user to scan or enter your invite from their side, or abort and remove this one-sided contact now."]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.contactExchangeFailedBody(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["The relay is now signing with a different Ed25519 public key (", "). Only continue if the operator has confirmed they rotated the key — otherwise this could be a man-in-the-middle."]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiTheRelayIsNowSigningFF71FD(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Conest could not sign this device out on the server (", ").\n\nSign out on this device anyway? The session stays valid on the server until you remove it from another Matrix app."]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiConestCouldNotSignThis3C1074(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["bitchat users nearby see you as \"", "\" while you are in range, and can write to you. The identity they see is new every week and has nothing to do with your Conest identity."]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiBitchatUsersNearbySeeYou1B54FC(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Chat with Delta Chat users as ", ", one to one and in groups. End-to-end encrypted (OpenPGP, without forward secrecy); the mail servers see who writes to whom and when."]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiChatWithDeltaChatUsersABD3F5(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Trust this as a reinstall of \"", "\"? The previous contact will be archived (history kept read-only); the new contact takes over. This cannot be undone."]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiTrustThisAsAReinstallCBA4CC(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Your devices disagree on which devices are in the account, and together there would be more than ", ". Remove one in Settings → Devices."]);
+    final values = _match(text, [
+      "Your devices disagree on which devices are in the account, and together there would be more than ",
+      ". Remove one in Settings → Devices.",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
       return s.uiYourDevicesDisagreeOnWhich2E7001(values[0]);
     }
   }
   {
-    final values = _match(text, ["Trust ", " as a fresh contact? Verify the safety number out of band first — accepting now archives any previous \"", "\" entries as read-only."]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiTrustValueAsAFresh7BF87F(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["Messages are end-to-end encrypted, but your homeserver and theirs see who talks to whom and when. Verify ", " to be sure it is them."]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiMessagesAreEndToEndE786B5(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["This will cancel ", " active transfer", " and clear the transfer list. Chat messages and completed downloaded files will stay."]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiThisWillCancelValueActiveB3425E(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["", " has been out of touch for a while: nothing syncs with it until you confirm it in Settings → Devices."]);
+    final values = _match(text, [
+      "",
+      " has been out of touch for a while: nothing syncs with it until you confirm it in Settings → Devices.",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
       return s.uiValueHasBeenOutOf039D48(values[0]);
     }
   }
   {
-    final values = _match(text, ["This contact may be a reset of \"", "\". Verify their safety number out of band before exchanging messages."]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiThisContactMayBeAD1405D(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Shared ", " with the group as a regular attachment; some members need an update for voice playback."]);
+    final values = _match(text, [
+      "Shared ",
+      " with the group as a regular attachment; some members need an update for voice playback.",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
       return s.uiSharedValueWithTheGroup163418(values[0]);
     }
   }
   {
-    final values = _match(text, ["Out of touch since ", ": nothing syncs with it until you confirm it is still yours."]);
+    final values = _match(text, [
+      "",
+      "'s other devices have not heard from ",
+      " for a while: messages from it may not be theirs.",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiOutOfTouchSinceValueA037FD(values[0]);
+      return s.statusSOtherDevicesHaveNot07F30F(values[0], values[1]);
     }
   }
   {
-    final values = _match(text, ["Your Matrix session ", " wants to verify this one. Accept only if you started it."]);
+    final values = _match(text, [
+      "LAN receiving is off: port ",
+      " is in use. Pick another local relay port in Settings.",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiYourMatrixSessionValueWants580E45(values[0]);
+      return s.statusLanReceivingIsOffPort5F04CB(values[0]);
     }
   }
   {
-    final values = _match(text, ["Could not stage ", ": pathless drops are limited to 8 MB to protect memory."]);
+    final values = _match(text, [
+      "Could not stage ",
+      ": pathless drops are limited to 8 MB to protect memory.",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
       return s.uiCouldNotStageValuePathless514094(values[0]);
     }
   }
   {
-    final values = _match(text, ["Copied \"", "\" (text only — system clipboard binary surface unavailable)."]);
+    final values = _match(text, [
+      "Message saved locally. It will send after ",
+      " accepts the contact request.",
+    ]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusMessageSavedLocallyItWill0DBD03(values[0]);
+    }
+  }
+  {
+    final values = _match(text, [
+      "Copied \"",
+      "\" (text only — system clipboard binary surface unavailable).",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
       return s.uiCopiedValueTextOnlySystemB51B8D(values[0]);
     }
   }
   {
-    final values = _match(text, ["", " is one of your own devices now; its old chat is no longer listed."]);
+    final values = _match(text, [
+      "Contact ",
+      " saved. Waiting for the other person to approve the request.",
+    ]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusContactSavedWaitingForThe41F77D(values[0]);
+    }
+  }
+  {
+    final values = _match(text, [
+      "",
+      " is one of your own devices now; its old chat is no longer listed.",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
       return s.uiValueIsOneOfYourE4FD9C(values[0]);
     }
   }
   {
-    final values = _match(text, ["", " characters. Increase screen brightness if scanning is unreliable."]);
+    final values = _match(text, [
+      "",
+      " declined the request. Queued messages and files remain blocked.",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiValueCharactersIncreaseScreenBrightnessA5AF7D(values[0]);
+      return s.statusDeclinedTheRequestQueuedMessagesABFFCB(values[0]);
     }
   }
   {
-    final values = _match(text, ["This removes the message for group members when they synchronize.", ""]);
+    final values = _match(text, [
+      "Contact ",
+      " accepted. Sending approval over available routes.",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiThisRemovesTheMessageFor2247A2(values[0]);
+      return s.statusContactAcceptedSendingApprovalOverDAD10C(values[0]);
     }
   }
   {
-    final values = _match(text, ["samples=", " slowOver100ms=", " maxTotalMs=", " maxBuildMs=", " maxRasterMs=", ""]);
+    final values = _match(text, [
+      "",
+      " removed you. The conversation remains archived locally.",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiSamplesValueSlowOverMsValue45CEDE(values[0], values[1], values[2], values[3], values[4]);
+      return s.statusRemovedYouTheConversationRemains3BB516(values[0]);
     }
   }
   {
-    final values = _match(text, ["Their clock is about ", " ", "; times here are by this device."]);
+    final values = _match(text, [
+      "Checked ",
+      " path(s) for ",
+      "; ",
+      " available",
+      ". Reachability is ",
+      ". ",
+      "",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiTheirClockIsAboutValue7DB956(values[0], values[1]);
+      final p0 = int.tryParse(values[0]);
+      final p2 = int.tryParse(values[2]);
+      if (p0 != null && p2 != null) {
+        return s.statusCheckedPathSForAvailable0970F6(
+          p0,
+          values[1],
+          p2,
+          values[3],
+          _atom(s, values[4]),
+          _atom(s, values[5]),
+        );
+      }
     }
   }
   {
-    final values = _match(text, ["Gallery save failed (", "); falling back to file dialog."]);
+    final values = _match(text, [
+      "Relay ",
+      ":",
+      " identity mismatch — verify with the operator.",
+    ]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusRelayIdentityMismatchVerifyWith2D3B10(
+        values[0],
+        values[1],
+      );
+    }
+  }
+  {
+    final values = _match(text, [
+      "Gallery save failed (",
+      "); falling back to file dialog.",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
       return s.uiGallerySaveFailedValueFalling0B82BB(values[0]);
     }
   }
   {
-    final values = _match(text, ["", " vote(s) were not in the creator’s close checkpoint."]);
+    final values = _match(text, [
+      "Relay ",
+      " identity changed — verify with the operator.",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiValueVoteSWereNot02CC9A(values[0]);
+      return s.statusRelayIdentityChangedVerifyWith6F3689(values[0]);
     }
   }
   {
-    final values = _match(text, ["Tested ", ". Routes that answer go first for messages."]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiTestedValueRoutesThatAnswer70B842(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Copy failed: ", ". Filename copied as text fallback."]);
+    final values = _match(text, [
+      "Copy failed: ",
+      ". Filename copied as text fallback.",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
       return s.uiCopyFailedValueFilenameCopiedF71C87(values[0]);
     }
   }
   {
-    final values = _match(text, ["This will remove ", " relay route(s) imported from ", "."]);
+    final values = _match(text, [
+      "Message deleted here and deletion was sent to ",
+      ".",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiThisWillRemoveValueRelay330EEB(values[0], values[1]);
+      return s.statusMessageDeletedHereAndDeletion7C4E80(values[0]);
     }
   }
   {
-    final values = _match(text, ["Only the first ", " files will be staged (got ", ")."]);
+    final values = _match(text, [
+      "Sent to ",
+      " via ",
+      "; waiting for a delivery receipt.",
+    ]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusSentToViaWaitingForEA766D(values[0], values[1]);
+    }
+  }
+  {
+    final values = _match(text, [
+      "Checked Iroh path(s) for ",
+      "; reachability is ",
+      ". ",
+      "",
+    ]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusCheckedIrohPathSFor038B43(
+        values[0],
+        _atom(s, values[1]),
+        _atom(s, values[2]),
+      );
+    }
+  }
+  {
+    final values = _match(text, [
+      "Only the first ",
+      " files will be staged (got ",
+      ").",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
       return s.uiOnlyTheFirstValueFiles45FC47(values[0], values[1]);
     }
   }
   {
-    final values = _match(text, ["", " candidate route(s) are available right now."]);
+    final values = _match(text, [
+      "Received ",
+      " item(s) instantly via local relay.",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiValueCandidateRouteSAre175673(values[0]);
+      final p0 = int.tryParse(values[0]);
+      if (p0 != null) {
+        return s.statusReceivedItemSInstantlyViaA7773B(p0);
+      }
     }
   }
   {
-    final values = _match(text, ["Could not open video in the system player: ", ""]);
+    final values = _match(text, [
+      "Could not open video in the system player: ",
+      "",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
       return s.uiCouldNotOpenVideoIn054087(values[0]);
     }
   }
   {
-    final values = _match(text, ["path accepts send; waiting for peer reply", ""]);
+    final values = _match(text, [
+      "LAN lobby message sent to ",
+      " nearby route(s).",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiPathAcceptsSendWaitingFor10B4B0(values[0]);
+      final p0 = int.tryParse(values[0]);
+      if (p0 != null) {
+        return s.statusLanLobbyMessageSentTo82F0B0(p0);
+      }
     }
   }
   {
-    final values = _match(text, ["", " nearby · the mesh chat and private chats"]);
+    final values = _match(text, [
+      "Rejected malformed attachment offer from ",
+      ".",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiValueNearbyTheMeshChat31C0CA(values[0]);
+      return s.statusRejectedMalformedAttachmentOfferFrom9FC96A(values[0]);
+    }
+  }
+  {
+    final values = _match(text, [
+      "bitchat users nearby can now see you as ",
+      ".",
+    ]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusBitchatUsersNearbyCanNow5536CD(values[0]);
+    }
+  }
+  {
+    final values = _match(text, [
+      "Canceled and deleted pending message to ",
+      ".",
+    ]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusCanceledAndDeletedPendingMessageCDCA88(values[0]);
     }
   }
   {
@@ -1169,6 +538,52 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
+    final values = _match(text, ["Confirmed identity replacement for ", "."]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusConfirmedIdentityReplacementForC93359(values[0]);
+    }
+  }
+  {
+    final values = _match(text, ["Meshtastic carrier set up through ", "."]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusMeshtasticCarrierSetUpThroughAFA24A(values[0]);
+    }
+  }
+  {
+    final values = _match(text, ["Rejected identity replacement for ", "."]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusRejectedIdentityReplacementForDEC894(values[0]);
+    }
+  }
+  {
+    final values = _match(text, ["Attachment is waiting for a route: ", ""]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusAttachmentIsWaitingForA3F032B(values[0]);
+    }
+  }
+  {
+    final values = _match(text, ["Sent to ", " as a plain Matrix message."]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusSentToAsAPlainAF2DE6(values[0]);
+    }
+  }
+  {
+    final values = _match(text, [
+      "Encrypted message stored for ",
+      " via ",
+      ".",
+    ]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusEncryptedMessageStoredForVia029324(values[0], values[1]);
+    }
+  }
+  {
     final values = _match(text, ["Could not send LAN lobby message: ", ""]);
     if (values != null) {
       if (values.isEmpty) return null;
@@ -1176,10 +591,43 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["", " skipped: ", " MB exceeds the ", " MB cap."]);
+    final values = _match(text, [
+      "",
+      " skipped: ",
+      " MB exceeds the ",
+      " MB cap.",
+    ]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiValueSkippedValueMBExceedsD0800C(values[0], values[1], values[2]);
+      return s.uiValueSkippedValueMBExceedsD0800C(
+        values[0],
+        values[1],
+        values[2],
+      );
+    }
+  }
+  {
+    final values = _match(text, ["Reticulum carrier set up through ", "."]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusReticulumCarrierSetUpThrough7EB41E(values[0]);
+    }
+  }
+  {
+    final values = _match(text, ["Trying LAN first, then relay for ", "."]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusTryingLanFirstThenRelay1F5BEC(values[0]);
+    }
+  }
+  {
+    final values = _match(text, ["Received ", " item(s) via local inbox."]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      final p0 = int.tryParse(values[0]);
+      if (p0 != null) {
+        return s.statusReceivedItemSViaLocal71A104(p0);
+      }
     }
   }
   {
@@ -1190,17 +638,31 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["Image is larger than the ", " MB cap."]);
+    final values = _match(text, ["MeshCore carrier set up through ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiImageIsLargerThanTheEE56C5(values[0]);
+      return s.statusMeshcoreCarrierSetUpThroughE51369(values[0]);
     }
   }
   {
-    final values = _match(text, ["File is larger than the ", " MB cap."]);
+    final values = _match(text, ["Routing preferences updated for ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiFileIsLargerThanTheAF488F(values[0]);
+      return s.statusRoutingPreferencesUpdatedFor05867B(values[0]);
+    }
+  }
+  {
+    final values = _match(text, ["Trusted new identity for relay ", "."]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusTrustedNewIdentityForRelay4CDBFE(values[0]);
+    }
+  }
+  {
+    final values = _match(text, ["Could not prepare ", " for download."]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusCouldNotPrepareForDownloadE8FB18(values[0]);
     }
   }
   {
@@ -1211,10 +673,30 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["Also lists your addresses on: ", "."]);
+    final values = _match(text, ["Removed imported relay source ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiAlsoListsYourAddressesOnC5D815(values[0]);
+      return s.statusRemovedImportedRelaySource3F4540(values[0]);
+    }
+  }
+  {
+    final values = _match(text, [
+      "Checked ",
+      " route(s); ",
+      " available. ",
+      "",
+    ]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      final p0 = int.tryParse(values[0]);
+      final p1 = int.tryParse(values[1]);
+      if (p0 != null && p1 != null) {
+        return s.statusCheckedRouteSAvailableE9B9D6(
+          p0,
+          p1,
+          _atom(s, values[2]),
+        );
+      }
     }
   }
   {
@@ -1239,31 +721,24 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["", " is available on the ", " channel."]);
+    final values = _match(text, ["Removed group ", " from your list."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiValueIsAvailableOnTheD338C4(values[0], values[1]);
+      return s.statusRemovedGroupFromYourList047F4B(values[0]);
     }
   }
   {
-    final values = _match(text, ["Could not save chat settings: ", ""]);
+    final values = _match(text, ["Transferred ownership of ", " to ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiCouldNotSaveChatSettings2372B2(values[0]);
+      return s.statusTransferredOwnershipOfToA126A1(values[0], values[1]);
     }
   }
   {
-    final values = _match(text, ["Could not forward attachment: ", ""]);
+    final values = _match(text, ["Group delivery retry pending: ", ""]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiCouldNotForwardAttachmentValue5165FD(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Delete ", " message", " for the group?"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiDeleteValueMessageValueForABA7AC(values[0], values[1]);
+      return s.statusGroupDeliveryRetryPending691CA4(values[0]);
     }
   }
   {
@@ -1274,10 +749,31 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["", "/", " blocks · ", " frames · ", " invalid"]);
+    final values = _match(text, ["No paths are advertised for ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiValueValueBlocksValueFrames66F819(values[0], values[1], values[2], values[3]);
+      return s.statusNoPathsAreAdvertisedForA37EA3(values[0]);
+    }
+  }
+  {
+    final values = _match(text, ["Local relay port updated to ", "."]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusLocalRelayPortUpdatedTo7F815D(values[0]);
+    }
+  }
+  {
+    final values = _match(text, ["Rediscovered LAN route ", " for ", "."]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusRediscoveredLanRouteFor587829(values[0], values[1]);
+    }
+  }
+  {
+    final values = _match(text, ["Updated edited message from ", "."]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusUpdatedEditedMessageFrom1AB90D(values[0]);
     }
   }
   {
@@ -1295,17 +791,24 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["This account is on ", " devices."]);
+    final values = _match(text, ["Deleted group ", " for everyone."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiThisAccountIsOnValueB78C80(values[0]);
+      return s.statusDeletedGroupForEveryoneDB26F8(values[0]);
     }
   }
   {
-    final values = _match(text, ["Show ", " chats in the chat list"]);
+    final values = _match(text, ["Group ", " membership ack from ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiShowValueChatsInTheBC0E41(values[0]);
+      return s.statusGroupMembershipAckFrom43FCF1(values[0], values[1]);
+    }
+  }
+  {
+    final values = _match(text, ["Deleted message removed by ", "."]);
+    if (values != null) {
+      if (values.isEmpty) return null;
+      return s.statusDeletedMessageRemovedBy5A9E79(values[0]);
     }
   }
   {
@@ -1316,24 +819,10 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["", " MB · direct route required"]);
+    final values = _match(text, ["LAN discovery unavailable: ", ""]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiValueMBDirectRouteRequired6379F0(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Could not play this video: ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiCouldNotPlayThisVideoF7D318(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Started by ", " · ", " participants"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiStartedByValueValueParticipants99F03D(values[0], values[1]);
+      return s.statusLanDiscoveryUnavailable0E99AE(values[0]);
     }
   }
   {
@@ -1351,45 +840,41 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["Frame ", " · ", " source blocks · ", ""]);
+    final values = _match(text, ["Sending group message to ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiFrameValueValueSourceBlocks9C37CB(values[0], values[1], values[2]);
+      return s.statusSendingGroupMessageToD77236(values[0]);
     }
   }
   {
-    final values = _match(text, ["Could not review request: ", ""]);
+    final values = _match(text, ["New contact request from ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiCouldNotReviewRequestValue82B3D5(values[0]);
+      return s.statusNewContactRequestFromCF70B9(values[0]);
     }
   }
   {
-    final values = _match(text, ["Could not reject request: ", ""]);
+    final values = _match(text, ["Email carrier set up as ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiCouldNotRejectRequestValue2EFD58(values[0]);
+      return s.statusEmailCarrierSetUpAs8427FD(values[0]);
     }
   }
   {
-    final values = _match(text, ["Could not start the chat: ", ""]);
+    final values = _match(text, ["Imported ", " relay(s) from ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiCouldNotStartTheChatAE2F54(values[0]);
+      final p0 = int.tryParse(values[0]);
+      if (p0 != null) {
+        return s.statusImportedRelaySFromB1DB2D(p0, values[1]);
+      }
     }
   }
   {
-    final values = _match(text, ["Drop files to send (max ", ")"]);
+    final values = _match(text, ["Applied a reaction from ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiDropFilesToSendMax106011(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " MB · preparing download…"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueMBPreparingDownload799D4A(values[0]);
+      return s.statusAppliedAReactionFrom41011B(values[0]);
     }
   }
   {
@@ -1400,24 +885,24 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["Voice message preview · ", ""]);
+    final values = _match(text, ["Message edit queued to ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiVoiceMessagePreviewValue8235CB(values[0]);
+      return s.statusMessageEditQueuedTo695B15(values[0]);
     }
   }
   {
-    final values = _match(text, ["Trust new identity for ", "?"]);
+    final values = _match(text, ["Delivery retry pending: ", ""]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiTrustNewIdentityForValue8B0612(values[0]);
+      return s.statusDeliveryRetryPending93EAA3(values[0]);
     }
   }
   {
-    final values = _match(text, ["Contact request failed: ", ""]);
+    final values = _match(text, ["Signed in to Matrix as ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiContactRequestFailedValue28DD81(values[0]);
+      return s.statusSignedInToMatrixAs5103D2(values[0]);
     }
   }
   {
@@ -1442,24 +927,20 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["Delete \"", "\" for everyone?"]);
+    final values = _match(text, ["Removed a member from ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiDeleteValueForEveryone12E724(values[0]);
+      return s.statusRemovedAMemberFrom68CF04(values[0]);
     }
   }
   {
-    final values = _match(text, ["QR payload: ", " characters"]);
+    final values = _match(text, ["Received ", " item(s) via ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiQRPayloadValueCharactersBABEDF(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Could not add contact: ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiCouldNotAddContactValue7F6C38(values[0]);
+      final p0 = int.tryParse(values[0]);
+      if (p0 != null) {
+        return s.statusReceivedItemSVia58B082(p0, _atom(s, values[1]));
+      }
     }
   }
   {
@@ -1467,20 +948,6 @@ String? _lookup(AppLocalizations s, String text) {
     if (values != null) {
       if (values.isEmpty) return null;
       return s.uiCallAudioRoutedToValueFFFBE8(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Waiting for ", " member(s)"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiWaitingForValueMemberS5A8BA6(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Imported relays from ", "."]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiImportedRelaysFromValue37C175(values[0]);
     }
   }
   {
@@ -1505,31 +972,34 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["Contact request from ", ""]);
+    final values = _match(text, ["Vault unlock failed: ", ""]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiContactRequestFromValue50B6AC(values[0]);
+      return s.statusVaultUnlockFailedAE7813(values[0]);
     }
   }
   {
-    final values = _match(text, ["", " MB · tap to download"]);
+    final values = _match(text, ["Asking ", " to reconnect."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiValueMBTapToDownload432280(values[0]);
+      return s.statusAskingToReconnectE93389(values[0]);
     }
   }
   {
-    final values = _match(text, ["", "All retained history"]);
+    final values = _match(text, ["Reaction queued to ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiValueAllRetainedHistory5E25F4(values[0]);
+      return s.statusReactionQueuedToD43BED(values[0]);
     }
   }
   {
     final values = _match(text, ["Copied ", " message(s)."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiCopiedValueMessageSC97E6E(values[0]);
+      final p0 = int.tryParse(values[0]);
+      if (p0 != null) {
+        return s.uiCopiedValueMessageSC97E6E(p0);
+      }
     }
   }
   {
@@ -1540,38 +1010,17 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["", " member(s) • owner ", ""]);
+    final values = _match(text, ["Relay ", ":", " added for ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiValueMemberSOwnerValueE42E13(values[0], values[1]);
+      return s.statusRelayAddedFor087398(values[0], values[1], values[2]);
     }
   }
   {
-    final values = _match(text, ["Could not forward: ", ""]);
+    final values = _match(text, ["Route poll failed: ", ""]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiCouldNotForwardValue80193D(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Transferring · ", "% · ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiTransferringValueValue10EEBE(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["", " started a call in ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueStartedACallIn278E96(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["Image unavailable: ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiImageUnavailableValueB024FC(values[0]);
+      return s.statusRoutePollFailedA1FD0C(values[0]);
     }
   }
   {
@@ -1582,13 +1031,6 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["", " backoff ", "s streak ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueBackoffValueSStreak25FF09(values[0], values[1], values[2]);
-    }
-  }
-  {
     final values = _match(text, ["", " added a device: ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
@@ -1596,17 +1038,10 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["Could not verify: ", ""]);
+    final values = _match(text, ["Reconnected with ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiCouldNotVerifyValue3AE1C4(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Current build: ", " • ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiCurrentBuildValueValue9A675D(values[0], values[1]);
+      return s.statusReconnectedWithBC62EC(values[0]);
     }
   }
   {
@@ -1638,150 +1073,24 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["Save ", " file(s) to…"]);
+    final values = _match(text, ["Relay ", " removed."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiSaveValueFileSToB46C57(values[0]);
+      return s.statusRelayRemoved546A15(values[0]);
     }
   }
   {
-    final values = _match(text, ["Delivered to all ", ""]);
+    final values = _match(text, ["Created group ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiDeliveredToAllValue71E077(values[0]);
+      return s.statusCreatedGroupF5D335(values[0]);
     }
   }
   {
-    final values = _match(text, ["", " Conest transfers"]);
+    final values = _match(text, ["Updated group ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiValueConestTransfersF846F8(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Playback failed: ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiPlaybackFailedValue1C0E1A(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["two-way confirmed", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiTwoWayConfirmedValueE5A1A1(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Download failed: ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiDownloadFailedValueB18BB6(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Rotation failed: ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiRotationFailedValue176CC6(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Accepted by ", " of ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiAcceptedByValueOfValue826A0E(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["Voice message · ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiVoiceMessageValue2F0300(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Confirm failed: ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiConfirmFailedValueBDE200(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Share ", " files to…"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiShareValueFilesToA46E17(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Current build: ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiCurrentBuildValue2FD415(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", "Since admission"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueSinceAdmissionB2617B(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Reject failed: ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiRejectFailedValue5F5917(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Import failed: ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiImportFailedValueBAFB4A(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Remove failed: ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiRemoveFailedValue58F348(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " · ", " · ", " route(s)"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueValueValueRouteS40FB98(values[0], values[1], values[2]);
-    }
-  }
-  {
-    final values = _match(text, ["CONEST · ci5 · ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiCONESTCiValue7964DC(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Transferring · ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiTransferringValue9D7F13(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["default relay ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiDefaultRelayValueBD3FD1(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " active member", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueActiveMemberValue6700F2(values[0], values[1]);
+      return s.statusUpdatedGroup2140B7(values[0]);
     }
   }
   {
@@ -1792,38 +1101,17 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["LAN node :", " on"]);
+    final values = _match(text, ["Relay ", " added."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiLANNodeValueOn5D539E(values[0]);
+      return s.statusRelayAdded800692(values[0]);
     }
   }
   {
-    final values = _match(text, ["Conest relay ", ""]);
+    final values = _match(text, ["Updated ", " in ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiConestRelayValue4FB2DB(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Unverified · ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiUnverifiedValueC1937C(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Voice call · ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiVoiceCallValueBD3141(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " of ", " verified"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueOfValueVerified63B11D(values[0], values[1]);
+      return s.statusUpdatedIn642C0A(values[0], values[1]);
     }
   }
   {
@@ -1834,45 +1122,10 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["Read by all ", ""]);
+    final values = _match(text, ["Left group ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiReadByAllValue43BA5A(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Invitation: ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiInvitationValue6F0633(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Recording", " · ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiRecordingValueValue111FF1(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["", " • untrusted"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueUntrusted519A32(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Replying to ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiReplyingToValue645786(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["ROTATES IN ", "s"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiROTATESINValueS5745B8(values[0]);
+      return s.statusLeftGroup9E3412(values[0]);
     }
   }
   {
@@ -1883,164 +1136,17 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["relay ", " down"]);
+    final values = _match(text, ["App mode: ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiRelayValueDownD6B267(values[0]);
+      return s.statusAppMode95B48F(values[0]);
     }
   }
   {
-    final values = _match(text, ["Available: ", ""]);
+    final values = _match(text, ["Calling ", "…"]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiAvailableValue4B15F7(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Reply to ", ": ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiReplyToValueValue666B4E(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["Delivered ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.messageDeliveredAt(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["delivered ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.memberDeliveredAt(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Members · ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiMembersValue541E72(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Routing — ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiRoutingValueFC4557(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " member(s)"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueMemberSE75249(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " • safety ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueSafetyValue82C755(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["Share ", " to…"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiShareValueTo6E3BDD(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Received ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.messageReceivedAt(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Active (", ")"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiActiveValueC78B63(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Recent (", ")"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiRecentValueB82237(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Delete \"", "\""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiDeleteValueF0396B(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Pinned · ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiPinnedValue834309(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " selected"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueSelectedB1DFAF(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Request: ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiRequestValueE6C033(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Call via ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiCallViaValue0A68E8(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " members"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueMembersCEF563(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Channel ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiChannelValue76ED1D(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Remove ", "?"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiRemoveValueF4FE4B(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Matrix: ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiMatrixValueED6C29(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Call in ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiCallInValue16F998(values[0]);
+      return s.statusCalling7A8C67(values[0]);
     }
   }
   {
@@ -2051,346 +1157,10 @@ String? _lookup(AppLocalizations s, String text) {
     }
   }
   {
-    final values = _match(text, ["Linked ", ""]);
+    final values = _match(text, ["", " left ", "."]);
     if (values != null) {
       if (values.isEmpty) return null;
-      return s.uiLinkedValueDCADF7(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Verify ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiVerifyValue1B6B79(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["safety ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiSafetyValueC542B8(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["via ", " (", ")"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiViaValueValue37232D(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["device ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiDeviceValue11AEA9(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["commit ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiCommitValue2E080C(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Route: ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiRouteValue9D8426(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["relay ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiRelayValueA6D70A(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Open #", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiOpenValue8DF02B(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", "  ·  ", "/", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueValueValueDAEE95(values[0], values[1], values[2]);
-    }
-  }
-  {
-    final values = _match(text, ["", " (you)"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueYouEFED9A(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " chats"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueChatsAD9A3B(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Sent ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.messageSentAt(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Read ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.messageReadAt(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["read ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.memberReadAt(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Save ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiSaveValue5769AA(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Edit ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiEditValue75BE00(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["Add ", "?"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiAddValueF034EE(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " days"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueDaysEE919A(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", "  ·  ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueValue1C180E(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["Send ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiSendValueBF4C3C(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " min"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueMin439C52(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["LAN ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiLANValueA8EEF3(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " • ", "\n", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueValueValue209DD2(values[0], values[1], values[2]);
-    }
-  }
-  {
-    final values = _match(text, ["Add ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiAddValueF546E5(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " KiB"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueKiBEC48AF(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " · !", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueValue7B4608(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["", " KB"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueKB554C06(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " MB"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueMBDB5A1C(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " GB"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueGB0A98F3(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " · ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueValue64684F(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["", " / ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueValue270519(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["", " → ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueValue66746D(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["// ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueF7CD86(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " (", ")"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueValue167E51(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["📷 ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueCF9C0A(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["📎 ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValue134796(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", ": ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueValue6EF45D(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["", " h"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueH171B92(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " B"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueB7CFB44(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", ":", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueValue176D15(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["", "=", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueValue42DC94(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["", "%"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValue3072D4(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", "…"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueF36340(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", "×"]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValue72F816(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", " ", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueValue29C8B9(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["+", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueF69855(values[0]);
-    }
-  }
-  {
-    final values = _match(text, ["", "#", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValueValue64C067(values[0], values[1]);
-    }
-  }
-  {
-    final values = _match(text, ["", ""]);
-    if (values != null) {
-      if (values.isEmpty) return null;
-      return s.uiValue75CED7(values[0]);
+      return s.statusLeftF4FE32(values[0], values[1]);
     }
   }
   return null;
@@ -2416,3 +1186,19 @@ List<String>? _match(String text, List<String> parts) {
   values.add(text.substring(offset, end));
   return values;
 }
+
+// Only canonical status fragments, never names, addresses or file content.
+String _atom(AppLocalizations s, String text) => switch (text) {
+  "unavailable" => s.uiUnavailable1D5EE3,
+  "usable" => s.uiUsable829A7C,
+  "one-way" => s.uiOneWay5EF4D0,
+  "No new relay protocols detected." => s.statusNoNewProtocols,
+  "Route info exchange requested." => s.statusRouteExchangeRequested,
+  "Route info exchange could not be sent yet." => s.statusRouteExchangePending,
+  "known routes" => s.statusKnownRoutes,
+  "reachable" => s.statusReachable,
+  "unreachable" => s.statusUnreachable,
+  "unknown" => s.statusUnknown,
+  "stale" => s.statusExpired,
+  _ => text,
+};

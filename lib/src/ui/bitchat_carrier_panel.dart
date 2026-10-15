@@ -1,4 +1,4 @@
-import 'localized_ui_text.dart';
+import '../app_locales.dart';
 import 'package:flutter/material.dart';
 
 import '../bitchat_carrier.dart';
@@ -62,7 +62,7 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
     final nickname = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title:  Text(localizedUiText(context, 'Name bitchat users see')),
+        title: Text(l10nOf(context).uiNameBitchatUsersSee1CE7E3),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -72,19 +72,17 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
               autofocus: true,
               maxLength: BitchatCarrierConfig.maxNicknameLength,
             ),
-             Text(
-              localizedUiText(context, 'A name you choose stays when your identity changes, so ' 'people nearby can tell it is still you. Leave it empty for ' 'a new "anon" name with each identity.'),
-            ),
+            Text(l10nOf(context).uiANameYouChooseStays17E677),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(field.text),
-            child:  Text(localizedUiText(context, 'Save')),
+            child: Text(l10nOf(context).uiSaveEFC007),
           ),
         ],
       ),
@@ -108,10 +106,8 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
         SwitchListTile.adaptive(
           key: const ValueKey('bitchat-carrier-switch'),
           contentPadding: EdgeInsets.zero,
-          title:  Text(localizedUiText(context, 'Bluetooth mesh')),
-          subtitle:  Text(
-            localizedUiText(context, 'Reach contacts nearby without any network: messages hop from ' 'phone to phone over Bluetooth, through Conest and bitchat ' 'users alike, and this phone relays for others. This phone does ' 'not show up in bitchat, and what it sends looks like any ' 'bitchat private message, with ids that change every hour.'),
-          ),
+          title: Text(l10nOf(context).uiBluetoothMeshC8B7F1),
+          subtitle: Text(l10nOf(context).uiReachContactsNearbyWithoutAny9E9649),
           value: config != null,
           onChanged: _busy ? null : _set,
         ),
@@ -131,9 +127,11 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
             ),
             title: Text(switch (channel?.state) {
               BitchatCarrierState.running when channel?.lastError == null =>
-                localizedUiText(context, 'Bluetooth mesh on'),
-              BitchatCarrierState.starting => localizedUiText(context, 'Starting Bluetooth'),
-              _ => localizedUiText(context, 'Bluetooth unavailable'),
+                l10nOf(context).uiBluetoothMeshOn5A96FE,
+              BitchatCarrierState.starting => l10nOf(
+                context,
+              ).uiStartingBluetoothE6928A,
+              _ => l10nOf(context).uiBluetoothUnavailableF4B751,
             }),
             subtitle: channel?.lastError == null
                 ? null
@@ -143,11 +141,13 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
           SwitchListTile.adaptive(
             key: const ValueKey('bitchat-reachable-switch'),
             contentPadding: EdgeInsets.zero,
-            title:  Text(localizedUiText(context, 'Reachable by bitchat users')),
+            title: Text(l10nOf(context).uiReachableByBitchatUsers568021),
             subtitle: Text(
               controller.bitchatReachable
-                  ? localizedUiText(context, 'bitchat users nearby see you as ' '"${controller.bitchatNickname}" while you are in ' 'range, and can write to you. The identity they see ' 'is new every week and has nothing to do with your ' 'Conest identity.')
-                  : localizedUiText(context, 'Off: bitchat users do not see this phone. You can ' 'still read the mesh chat.'),
+                  ? l10nOf(context).uiBitchatUsersNearbySeeYou1B54FC(
+                      (controller.bitchatNickname).toString(),
+                    )
+                  : l10nOf(context).uiOffBitchatUsersDoNot054F9A,
             ),
             value: controller.bitchatReachable,
             onChanged: _busy
@@ -158,11 +158,16 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
           SwitchListTile.adaptive(
             key: const ValueKey('bitchat-gateway-switch'),
             contentPadding: EdgeInsets.zero,
-            title:  Text(localizedUiText(context, 'Share internet with bitchat users')),
+            title: Text(l10nOf(context).uiShareInternetWithBitchatUsers572F90),
             subtitle: Text(
               controller.bitchatGateway
-                  ? localizedUiText(context, 'Phones nearby without internet can use bitchat\'s ' 'location channels through this phone. Only those ' 'public, signed messages pass. This phone connects ' 'to the relays of the areas they use' '${controller.bitchatGatewayCells.isEmpty ? '' : ' (now ${controller.bitchatGatewayCells.length})'}' ': those relays see your internet address and the ' 'area, so they can tell roughly where you are.')
-                  : localizedUiText(context, 'Off: bitchat users nearby without internet cannot ' 'reach location channels through you.'),
+                  ? l10nOf(context).uiPhonesNearbyWithoutInternetCan27CC7F(
+                      (controller.bitchatGatewayCells.isEmpty
+                              ? ''
+                              : ' (now ${controller.bitchatGatewayCells.length})')
+                          .toString(),
+                    )
+                  : l10nOf(context).uiOffBitchatUsersNearbyWithout030CFB,
             ),
             value: controller.bitchatGateway,
             onChanged: _busy
@@ -175,12 +180,12 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
             children: [
               TextButton.icon(
                 icon: const Icon(Icons.edit_outlined),
-                label:  Text(localizedUiText(context, 'Change name')),
+                label: Text(l10nOf(context).uiChangeNameE46692),
                 onPressed: _busy ? null : _editNickname,
               ),
               TextButton.icon(
                 icon: const Icon(Icons.autorenew),
-                label:  Text(localizedUiText(context, 'New identity')),
+                label: Text(l10nOf(context).uiNewIdentityA119CF),
                 onPressed: _busy
                     ? null
                     : () => _run(controller.newBitchatIdentity),
@@ -192,13 +197,17 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
             key: const ValueKey('bitchat-chats'),
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.forum_outlined),
-            title:  Text(localizedUiText(context, 'bitchat chats')),
+            title: Text(l10nOf(context).uiBitchatChatsC74EC3),
             subtitle: Text(
-              localizedUiText(context, '${controller.bitchatNearbyPeers.length} nearby · the mesh ' 'chat and private chats'),
+              l10nOf(context).uiValueNearbyTheMeshChat31C0CA(
+                (controller.bitchatNearbyPeers.length),
+              ),
             ),
             trailing: controller.bitchatChats.totalUnread == 0
                 ? const Icon(Icons.chevron_right)
-                : Badge(label: Text(localizedUiText(context, '${controller.bitchatChats.totalUnread}'))),
+                : Badge(
+                    label: Text("${(controller.bitchatChats.totalUnread)}"),
+                  ),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(
                 builder: (_) => BitchatChatsScreen(controller: controller),

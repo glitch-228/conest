@@ -1,4 +1,4 @@
-import 'localized_ui_text.dart';
+import '../app_locales.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -54,11 +54,13 @@ class _DeltaChatPanelState extends State<DeltaChatPanel> {
             SwitchListTile.adaptive(
               key: const ValueKey('delta-chat-switch'),
               contentPadding: EdgeInsets.zero,
-              title:  Text(localizedUiText(context, 'Delta Chat')),
+              title: Text(l10nOf(context).uiDeltaChat8BDA67),
               subtitle: Text(
                 email == null
-                    ? localizedUiText(context, 'Chat with Delta Chat users through your email account. ' 'Set up Email above first.')
-                    : localizedUiText(context, 'Chat with Delta Chat users as ${email.mail}, one to one ' 'and in groups. End-to-end encrypted (OpenPGP, ' 'without forward secrecy); the mail servers see who ' 'writes to whom and when.'),
+                    ? l10nOf(context).uiChatWithDeltaChatUsers3B8607
+                    : l10nOf(
+                        context,
+                      ).uiChatWithDeltaChatUsersABD3F5((email.mail).toString()),
               ),
               value: on,
               onChanged: _busy || email == null
@@ -72,14 +74,12 @@ class _DeltaChatPanelState extends State<DeltaChatPanel> {
             if (on && link != null) ...[
               ListTile(
                 contentPadding: EdgeInsets.zero,
-                title:  Text(localizedUiText(context, 'Your Delta Chat invite')),
-                subtitle:  Text(
-                  localizedUiText(context, 'Show the QR code to a Delta Chat user, or send the link. ' 'Whoever has it can start a verified chat with you.'),
-                ),
+                title: Text(l10nOf(context).uiYourDeltaChatInviteEE073F),
+                subtitle: Text(l10nOf(context).uiShowTheQRCodeTo0769AD),
                 trailing: Wrap(
                   children: [
                     IconButton(
-                      tooltip: localizedUiText(context, 'Show QR code'),
+                      tooltip: l10nOf(context).uiShowQRCode2DF2DD,
                       icon: const Icon(Icons.qr_code),
                       onPressed: () => showDeltaInviteQr(
                         context,
@@ -88,7 +88,7 @@ class _DeltaChatPanelState extends State<DeltaChatPanel> {
                       ),
                     ),
                     IconButton(
-                      tooltip: localizedUiText(context, 'Copy link'),
+                      tooltip: l10nOf(context).uiCopyLink2F84EE,
                       icon: const Icon(Icons.copy),
                       onPressed: () =>
                           Clipboard.setData(ClipboardData(text: link)),
@@ -100,11 +100,11 @@ class _DeltaChatPanelState extends State<DeltaChatPanel> {
                 key: const ValueKey('delta-chats'),
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.forum_outlined),
-                title:  Text(localizedUiText(context, 'Delta Chat chats')),
+                title: Text(l10nOf(context).uiDeltaChatChats8EBCBC),
                 trailing: controller.deltaChats.totalUnread == 0
                     ? const Icon(Icons.chevron_right)
                     : Badge(
-                        label: Text(localizedUiText(context, '${controller.deltaChats.totalUnread}')),
+                        label: Text("${(controller.deltaChats.totalUnread)}"),
                       ),
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute<void>(
@@ -143,11 +143,11 @@ void showDeltaInviteQr(BuildContext context, String title, String link) {
       actions: [
         TextButton(
           onPressed: () => Clipboard.setData(ClipboardData(text: link)),
-          child:  Text(localizedUiText(context, 'Copy link')),
+          child: Text(l10nOf(context).uiCopyLink2F84EE),
         ),
         FilledButton(
           onPressed: () => Navigator.of(context).pop(),
-          child:  Text(localizedUiText(context, 'Done')),
+          child: Text(l10nOf(context).uiDoneE9B450),
         ),
       ],
     ),
@@ -171,7 +171,7 @@ class DeltaChatsScreen extends StatelessWidget {
     final invite = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title:  Text(localizedUiText(context, 'Join with an invite')),
+        title: Text(l10nOf(context).uiJoinWithAnInviteC76024),
         content: TextField(
           key: const ValueKey('delta-invite-field'),
           controller: field,
@@ -185,11 +185,11 @@ class DeltaChatsScreen extends StatelessWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(field.text),
-            child:  Text(localizedUiText(context, 'Join')),
+            child: Text(l10nOf(context).uiJoinE0D731),
           ),
         ],
       ),
@@ -203,7 +203,7 @@ class DeltaChatsScreen extends StatelessWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(localizedUiText(context, '$error'))));
+        ).showSnackBar(SnackBar(content: Text("${(error)}")));
       }
     }
   }
@@ -225,7 +225,7 @@ class DeltaChatsScreen extends StatelessWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(localizedUiText(context, '$error'))));
+        ).showSnackBar(SnackBar(content: Text("${(error)}")));
       }
     }
   }
@@ -243,26 +243,26 @@ class DeltaChatsScreen extends StatelessWidget {
           );
         return Scaffold(
           appBar: AppBar(
-            title:  Text(localizedUiText(context, 'Delta Chat')),
+            title: Text(l10nOf(context).uiDeltaChat8BDA67),
             actions: [
               IconButton(
-                tooltip: localizedUiText(context, 'New group'),
+                tooltip: l10nOf(context).uiNewGroupF9850C,
                 icon: const Icon(Icons.group_add_outlined),
                 onPressed: () => _newGroup(context),
               ),
             ],
           ),
           floatingActionButton: FloatingActionButton(
-            tooltip: localizedUiText(context, 'Join with an invite'),
+            tooltip: l10nOf(context).uiJoinWithAnInviteC76024,
             onPressed: () => _join(context),
             child: const Icon(Icons.qr_code_scanner),
           ),
           body: chats.isEmpty
-              ?  Center(
+              ? Center(
                   child: Padding(
                     padding: EdgeInsets.all(24),
                     child: Text(
-                      localizedUiText(context, 'No Delta Chat chats yet. Share your invite, or join ' 'with someone\'s.'),
+                      l10nOf(context).uiNoDeltaChatChatsYetF4C538,
                       textAlign: TextAlign.center,
                     ),
                   ),
@@ -285,7 +285,7 @@ class DeltaChatsScreen extends StatelessWidget {
                         ),
                         trailing: chat.unread == 0
                             ? null
-                            : Badge(label: Text(localizedUiText(context, '${chat.unread}'))),
+                            : Badge(label: Text("${(chat.unread)}")),
                         onTap: () =>
                             openDeltaChat(context, controller, chat.key),
                       ),
@@ -319,7 +319,7 @@ class _NewGroupDialogState extends State<_NewGroupDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title:  Text(localizedUiText(context, 'New Delta Chat group')),
+      title: Text(l10nOf(context).uiNewDeltaChatGroup7D5142),
       content: SizedBox(
         width: 360,
         child: ListView(
@@ -327,20 +327,22 @@ class _NewGroupDialogState extends State<_NewGroupDialog> {
           children: [
             TextField(
               controller: _name,
-              decoration:  InputDecoration(labelText: localizedUiText(context, 'Group name')),
+              decoration: InputDecoration(
+                labelText: l10nOf(context).uiGroupNameEBB7E1,
+              ),
             ),
             if (widget.peers.isEmpty)
-               Padding(
+              Padding(
                 padding: EdgeInsets.only(top: 12),
-                child: Text(
-                  localizedUiText(context, 'Nobody to add yet: start a chat first. You can share the ' 'group\'s invite once it exists.'),
-                ),
+                child: Text(l10nOf(context).uiNobodyToAddYetStart0983BB),
               ),
             for (final peer in widget.peers)
               CheckboxListTile(
                 value: _chosen.contains(peer.fingerprint),
                 title: Text(peer.name ?? peer.addr),
-                subtitle: Text(peer.verified ? localizedUiText(context, 'verified') : peer.addr),
+                subtitle: Text(
+                  peer.verified ? l10nOf(context).uiVerifiedEC734B : peer.addr,
+                ),
                 onChanged: (value) => setState(
                   () => value == true
                       ? _chosen.add(peer.fingerprint)
@@ -353,14 +355,14 @@ class _NewGroupDialogState extends State<_NewGroupDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child:  Text(localizedUiText(context, 'Cancel')),
+          child: Text(l10nOf(context).actionCancel),
         ),
         FilledButton(
           onPressed: () => Navigator.of(context).pop((
             _name.text.trim().isEmpty ? 'Group' : _name.text.trim(),
             _chosen.toList(),
           )),
-          child:  Text(localizedUiText(context, 'Create')),
+          child: Text(l10nOf(context).actionCreate),
         ),
       ],
     );
@@ -455,7 +457,7 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(localizedUiText(context, '$error'))));
+        ).showSnackBar(SnackBar(content: Text("${(error)}")));
       }
     }
   }
@@ -475,25 +477,29 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
                 peer,
           ];
           return AlertDialog(
-            title: Text(localizedUiText(context, '${current.members.length + 1} members')),
+            title: Text(
+              l10nOf(
+                context,
+              ).uiValueMembersCEF563((current.members.length + 1)),
+            ),
             content: SizedBox(
               width: 360,
               child: ListView(
                 shrinkWrap: true,
                 children: [
-                   ListTile(title: Text(localizedUiText(context, 'You'))),
+                  ListTile(title: Text(l10nOf(context).uiYou905CB3)),
                   for (final member in current.members)
                     ListTile(
                       title: Text(controller.deltaName(member)),
                       subtitle: Text(
                         controller.deltaChats.peers[member]?.verified ?? false
-                            ? localizedUiText(context, 'verified')
+                            ? l10nOf(context).uiVerifiedEC734B
                             : controller.deltaChats.peers[member]?.addr ?? '',
                       ),
                       trailing: current.left
                           ? null
                           : IconButton(
-                              tooltip: localizedUiText(context, 'Remove'),
+                              tooltip: l10nOf(context).uiRemoveE96390,
                               icon: const Icon(Icons.person_remove_outlined),
                               onPressed: () => _act(
                                 () => controller.removeDeltaGroupMember(
@@ -507,7 +513,11 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
                     for (final peer in others)
                       ListTile(
                         leading: const Icon(Icons.person_add_outlined),
-                        title: Text(localizedUiText(context, 'Add ${peer.name ?? peer.addr}')),
+                        title: Text(
+                          l10nOf(context).uiAddValueF546E5(
+                            (peer.name ?? peer.addr).toString(),
+                          ),
+                        ),
                         onTap: () => _act(
                           () => controller.addDeltaGroupMember(
                             chat.key,
@@ -521,7 +531,7 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
             actions: [
               FilledButton(
                 onPressed: () => Navigator.of(context).pop(),
-                child:  Text(localizedUiText(context, 'Done')),
+                child: Text(l10nOf(context).uiDoneE9B450),
               ),
             ],
           );
@@ -539,7 +549,9 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
         final controller = widget.controller;
         final chat = controller.deltaChats.chats[widget.chatKey];
         if (chat == null) {
-          return  Scaffold(body: Center(child: Text(localizedUiText(context, 'Chat deleted'))));
+          return Scaffold(
+            body: Center(child: Text(l10nOf(context).uiChatDeleted73DC61)),
+          );
         }
         final peer = chat.isGroup
             ? null
@@ -564,10 +576,10 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
                   ),
                 ),
                 if (peer?.verified ?? false)
-                   Padding(
+                  Padding(
                     padding: EdgeInsetsDirectional.only(start: 6),
                     child: Tooltip(
-                      message: localizedUiText(context, 'Verified with an invite'),
+                      message: l10nOf(context).uiVerifiedWithAnInviteBD826F,
                       child: Icon(Icons.verified_user, size: 18),
                     ),
                   ),
@@ -576,12 +588,12 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
             actions: [
               if (chat.isGroup && !chat.left) ...[
                 IconButton(
-                  tooltip: localizedUiText(context, 'Members'),
+                  tooltip: l10nOf(context).uiMembers1CB449,
                   icon: const Icon(Icons.group_outlined),
                   onPressed: () => _members(chat),
                 ),
                 IconButton(
-                  tooltip: localizedUiText(context, 'Group invite'),
+                  tooltip: l10nOf(context).uiGroupInviteD64669,
                   icon: const Icon(Icons.qr_code),
                   onPressed: () => _act(() async {
                     final link = await controller.deltaGroupInviteLink(
@@ -609,13 +621,13 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
                 }),
                 itemBuilder: (context) => [
                   if (chat.isGroup && !chat.left)
-                     PopupMenuItem(
+                    PopupMenuItem(
                       value: 'leave',
-                      child: Text(localizedUiText(context, 'Leave group')),
+                      child: Text(l10nOf(context).uiLeaveGroup925789),
                     ),
-                   PopupMenuItem(
+                  PopupMenuItem(
                     value: 'delete',
-                    child: Text(localizedUiText(context, 'Delete chat')),
+                    child: Text(l10nOf(context).uiDeleteChatDB9121),
                   ),
                 ],
               ),
@@ -627,10 +639,10 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                 child: Text(
                   waiting
-                      ? localizedUiText(context, 'Waiting for the invite to be answered; this can take ' 'a minute.')
+                      ? l10nOf(context).uiWaitingForTheInviteTo1C712D
                       : chat.kept
-                      ? localizedUiText(context, 'Encrypted with OpenPGP (Delta Chat), without forward ' 'secrecy. The mail servers see who writes to whom ' 'and when.')
-                      : localizedUiText(context, 'A request from someone you have not chatted with. ' 'Replying accepts it.'),
+                      ? l10nOf(context).uiEncryptedWithOpenPGPDeltaChat9C6326
+                      : l10nOf(context).uiARequestFromSomeoneYouAE0967,
                 ),
               ),
               Expanded(
@@ -671,7 +683,7 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
                                   style: theme.textTheme.labelMedium,
                                 ),
                               if (message.deleted)
-                                const Text('Message deleted')
+                                Text(l10nOf(context).uiMessageDeleted3271A7)
                               else ...[
                                 if (message.text.isNotEmpty) Text(message.text),
                                 if (message.pending != null)
@@ -719,9 +731,15 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
                                   if (message.editedAt != null) 'edited',
                                   if (message.outgoing)
                                     switch (message.state) {
-                                      DeltaMessageState.read => localizedUiText(context, 'read'),
-                                      DeltaMessageState.failed => localizedUiText(context, 'not sent'),
-                                      DeltaMessageState.sent => localizedUiText(context, 'sent'),
+                                      DeltaMessageState.read => l10nOf(
+                                        context,
+                                      ).uiReadA7AFDD,
+                                      DeltaMessageState.failed => l10nOf(
+                                        context,
+                                      ).uiNotSentBE2B9D,
+                                      DeltaMessageState.sent => l10nOf(
+                                        context,
+                                      ).uiSent27E770,
                                     },
                                 ].join(' · '),
                                 style: theme.textTheme.labelSmall,
@@ -749,7 +767,7 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
                   child: Row(
                     children: [
                       PopupMenuButton<bool>(
-                        tooltip: 'Attach',
+                        tooltip: l10nOf(context).deltaAttach,
                         enabled: !chat.left && !_sending,
                         icon: const Icon(Icons.attach_file),
                         itemBuilder: (_) => [
@@ -786,8 +804,8 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
                           maxLines: 4,
                           decoration: InputDecoration(
                             hintText: chat.left
-                                ? localizedUiText(context, 'You are not in this group')
-                                : localizedUiText(context, 'Message'),
+                                ? l10nOf(context).uiYouAreNotInThisCF5BD5
+                                : l10nOf(context).uiMessage68F414,
                           ),
                           onSubmitted: (_) => _send(),
                         ),
@@ -799,7 +817,7 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
                         act: _act,
                       ),
                       IconButton(
-                        tooltip: localizedUiText(context, 'Send'),
+                        tooltip: l10nOf(context).composerSend,
                         icon: const Icon(Icons.send),
                         onPressed: _sending || chat.left ? null : _send,
                       ),

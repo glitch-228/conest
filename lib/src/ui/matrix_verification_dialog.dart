@@ -1,4 +1,4 @@
-import 'localized_ui_text.dart';
+import '../app_locales.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -85,7 +85,9 @@ class _MatrixVerificationDialogState extends State<MatrixVerificationDialog> {
               if (emoji is Map)
                 (
                   symbol: emoji['symbol'] as String? ?? '?',
-                  description: emoji[localizedUiText(context, 'description')] as String? ?? '',
+                  description:
+                      emoji[l10nOf(context).uiDescriptionCB3291] as String? ??
+                      '',
                 ),
           ];
           _status =
@@ -157,8 +159,10 @@ class _MatrixVerificationDialogState extends State<MatrixVerificationDialog> {
     return AlertDialog(
       title: Text(
         widget.otherName == null
-            ? localizedUiText(context, 'Verify this session')
-            : localizedUiText(context, 'Verify ${widget.otherName}'),
+            ? l10nOf(context).uiVerifyThisSessionB5065C
+            : l10nOf(
+                context,
+              ).uiVerifyValue1B6B79((widget.otherName).toString()),
       ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -201,16 +205,20 @@ class _MatrixVerificationDialogState extends State<MatrixVerificationDialog> {
         if (_emojis.isNotEmpty && !_finished && !_confirmed) ...[
           TextButton(
             onPressed: _busy ? null : () => _answer(match: false),
-            child:  Text(localizedUiText(context, "They don't match")),
+            child: Text(l10nOf(context).uiTheyDonTMatch27EF0C),
           ),
           FilledButton(
             onPressed: _busy ? null : () => _answer(match: true),
-            child:  Text(localizedUiText(context, 'They match')),
+            child: Text(l10nOf(context).uiTheyMatch6FB8EB),
           ),
         ] else
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: Text(_finished ? localizedUiText(context, 'Close') : localizedUiText(context, 'Cancel')),
+            child: Text(
+              _finished
+                  ? l10nOf(context).actionClose
+                  : l10nOf(context).actionCancel,
+            ),
           ),
       ],
     );

@@ -1,4 +1,4 @@
-import 'localized_ui_text.dart';
+import '../app_locales.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -26,7 +26,7 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
   );
   late final _port = TextEditingController(
     text:
-        localizedUiText(context, '${widget.controller.reticulumCarrierConfig?.port ?? defaultReticulumPort}'),
+        "${(widget.controller.reticulumCarrierConfig?.port ?? defaultReticulumPort)}",
   );
   late ReticulumLink _link =
       widget.controller.reticulumCarrierConfig?.link ?? ReticulumLink.rnsd;
@@ -35,16 +35,16 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
     text: _mhz((_radio ?? RnodeConfig.eu869).frequency),
   );
   late final _bandwidth = TextEditingController(
-    text: localizedUiText(context, '${(_radio ?? RnodeConfig.eu869).bandwidth ~/ 1000}'),
+    text: "${((_radio ?? RnodeConfig.eu869).bandwidth ~/ 1000)}",
   );
   late final _spreading = TextEditingController(
-    text: localizedUiText(context, '${(_radio ?? RnodeConfig.eu869).spreadingFactor}'),
+    text: "${((_radio ?? RnodeConfig.eu869).spreadingFactor)}",
   );
   late final _coding = TextEditingController(
-    text: localizedUiText(context, '${(_radio ?? RnodeConfig.eu869).codingRate}'),
+    text: "${((_radio ?? RnodeConfig.eu869).codingRate)}",
   );
   late final _power = TextEditingController(
-    text: localizedUiText(context, '${(_radio ?? RnodeConfig.eu869).txPower}'),
+    text: "${((_radio ?? RnodeConfig.eu869).txPower)}",
   );
   bool _busy = false;
   String? _error;
@@ -190,7 +190,7 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
 
   Widget _number(TextEditingController text, String label) => Expanded(
     child: Padding(
-      padding: const EdgeInsets.only(right: 8),
+      padding: const EdgeInsetsDirectional.only(end: 8),
       child: TextField(
         controller: text,
         enabled: !_busy,
@@ -212,10 +212,8 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
         SwitchListTile.adaptive(
           key: const ValueKey('reticulum-carrier-switch'),
           contentPadding: EdgeInsets.zero,
-          title:  Text(localizedUiText(context, 'Reticulum')),
-          subtitle:  Text(
-            localizedUiText(context, 'Carry messages over a Reticulum network, for example LoRa ' 'radios (RNode) without the internet, through a node running ' 'rnsd with a TCP server interface. Conest keeps a Reticulum ' 'identity of its own; your contacts learn it automatically.'),
-          ),
+          title: Text(l10nOf(context).uiReticulumC27E52),
+          subtitle: Text(l10nOf(context).uiCarryMessagesOverAReticulum1CE915),
           value: config != null,
           onChanged: _busy
               ? null
@@ -241,23 +239,23 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
           ),
         SegmentedButton<ReticulumLink>(
           segments: [
-             ButtonSegment(
+            ButtonSegment(
               value: ReticulumLink.rnsd,
-              label: Text(localizedUiText(context, 'Node (rnsd)')),
+              label: Text(l10nOf(context).uiNodeRnsd0D8EEC),
             ),
             if (_serialAvailable)
-               ButtonSegment(
+              ButtonSegment(
                 value: ReticulumLink.rnodeSerial,
-                label: Text(localizedUiText(context, 'RNode on USB')),
+                label: Text(l10nOf(context).uiRNodeOnUSBF00220),
               ),
             if (Platform.isAndroid)
-               ButtonSegment(
+              ButtonSegment(
                 value: ReticulumLink.rnodeBluetooth,
-                label: Text(localizedUiText(context, 'RNode on Bluetooth')),
+                label: Text(l10nOf(context).uiRNodeOnBluetooth13657D),
               ),
-             ButtonSegment(
+            ButtonSegment(
               value: ReticulumLink.rnodeTcp,
-              label: Text(localizedUiText(context, 'RNode on Wi-Fi')),
+              label: Text(l10nOf(context).uiRNodeOnWiFiC18593),
             ),
           ],
           selected: {_link},
@@ -280,8 +278,8 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
                 icon: const Icon(Icons.search, size: 18),
                 label: Text(
                   _link == ReticulumLink.rnodeBluetooth
-                      ? localizedUiText(context, 'Scan for radios')
-                      : localizedUiText(context, 'Find devices'),
+                      ? l10nOf(context).uiScanForRadios2B185E
+                      : l10nOf(context).uiFindDevices98771A,
                 ),
               ),
               for (final (id, name) in _devices)
@@ -300,10 +298,18 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
                 enabled: !_busy,
                 decoration: InputDecoration(
                   labelText: switch (_link) {
-                    ReticulumLink.rnsd => localizedUiText(context, 'Node address (rnsd)'),
-                    ReticulumLink.rnodeSerial => localizedUiText(context, 'USB device'),
-                    ReticulumLink.rnodeTcp => localizedUiText(context, 'RNode address'),
-                    ReticulumLink.rnodeBluetooth => localizedUiText(context, 'Bluetooth address'),
+                    ReticulumLink.rnsd => l10nOf(
+                      context,
+                    ).uiNodeAddressRnsdCD61E2,
+                    ReticulumLink.rnodeSerial => l10nOf(
+                      context,
+                    ).uiUSBDeviceB47FF0,
+                    ReticulumLink.rnodeTcp => l10nOf(
+                      context,
+                    ).uiRNodeAddress691283,
+                    ReticulumLink.rnodeBluetooth => l10nOf(
+                      context,
+                    ).uiBluetoothAddress0E2BED,
                   },
                   isDense: true,
                 ),
@@ -317,8 +323,8 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
                   controller: _port,
                   enabled: !_busy,
                   keyboardType: TextInputType.number,
-                  decoration:  InputDecoration(
-                    labelText: localizedUiText(context, 'TCP port'),
+                  decoration: InputDecoration(
+                    labelText: l10nOf(context).uiTCPPortDE05BE,
                     isDense: true,
                   ),
                 ),
@@ -342,16 +348,16 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
             children: [
               TextButton(
                 onPressed: _busy ? null : () => _usePreset(RnodeConfig.eu869),
-                child:  Text(localizedUiText(context, 'EU 869.525')),
+                child: Text(l10nOf(context).uiEU233558),
               ),
               TextButton(
                 onPressed: _busy ? null : () => _usePreset(RnodeConfig.us915),
-                child:  Text(localizedUiText(context, 'US 914.875')),
+                child: Text(l10nOf(context).uiUS5ED166),
               ),
             ],
           ),
           Text(
-            localizedUiText(context, 'Use the same frequency, bandwidth and spreading factor as the ' 'Reticulum network the radio joins.'),
+            l10nOf(context).uiUseTheSameFrequencyBandwidthFC1A9F,
             style: theme.textTheme.bodySmall,
           ),
         ],
@@ -360,7 +366,7 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
             padding: const EdgeInsets.only(top: 8),
             child: FilledButton.tonal(
               onPressed: _busy ? null : () => _run(_save),
-              child:  Text(localizedUiText(context, 'Save')),
+              child: Text(l10nOf(context).uiSaveEFC007),
             ),
           ),
         if (_error != null)

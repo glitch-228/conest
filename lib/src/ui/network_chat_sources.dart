@@ -1,4 +1,4 @@
-import 'localized_ui_text.dart';
+import '../app_locales.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -117,7 +117,7 @@ class RadioChatSource extends NetworkChatSource {
           network: id,
           id: key,
           title: access.title(key),
-          preview: messages.lastOrNull?.text ?? localizedUiText(context, 'New chat'),
+          preview: messages.lastOrNull?.text ?? l10nOf(context).uiNewChat009BF6,
           at: messages.lastOrNull?.at.toLocal(),
           unread: chats.unread[key] ?? 0,
           isGroup: RadioChats.isChannel(key),
@@ -152,7 +152,8 @@ class NostrChatSource extends NetworkChatSource {
           network: id,
           id: chat.key,
           title: nostrChatTitle(controller, chat),
-          preview: chat.messages.lastOrNull?.text ?? localizedUiText(context, 'New chat'),
+          preview:
+              chat.messages.lastOrNull?.text ?? l10nOf(context).uiNewChat009BF6,
           at: chat.messages.lastOrNull?.at.toLocal(),
           unread: chat.unread,
           isGroup: chat.isGroup,
@@ -188,7 +189,8 @@ class DeltaChatSource extends NetworkChatSource {
           id: chat.key,
           title: deltaChatTitle(controller, chat),
           preview:
-              chat.messages.lastOrNull?.preview(DateTime.now()) ?? 'New chat',
+              chat.messages.lastOrNull?.preview(DateTime.now()) ??
+              l10nOf(context).uiNewChat009BF6,
           at: chat.messages.lastOrNull?.at.toLocal(),
           unread: chat.unread,
           isGroup: chat.isGroup,
@@ -229,11 +231,17 @@ class MatrixChatSource extends NetworkChatSource {
           return NetworkChat(
             network: id,
             id: room.roomId,
-            title: room.invited ? localizedUiText(context, 'Invitation: ${room.name}') : room.name,
+            title: room.invited
+                ? l10nOf(
+                    context,
+                  ).uiInvitationValue6F0633((room.name).toString())
+                : room.name,
             preview: room.invited
-                ? 'Matrix invitation'
+                ? l10nOf(context).uiMatrixInvitation525106
                 : last == null
-                ? (room.encrypted ? 'Encrypted Matrix chat' : 'Matrix chat')
+                ? (room.encrypted
+                      ? l10nOf(context).networkEncryptedMatrixChat
+                      : l10nOf(context).networkMatrixChat)
                 : matrixPreview(last),
             at: last?.timestamp.toLocal(),
             unread: room.unread,
@@ -290,11 +298,16 @@ class BitchatChatSource extends NetworkChatSource {
       NetworkChat(
         network: id,
         id: BitchatChats.meshKey,
-        title: 'Mesh chat (nearby)',
+        title: l10nOf(context).uiMeshChatNearbyA35A63,
         preview: chats.mesh.isEmpty
-            ? 'Everyone in Bluetooth range'
-            : '${chats.mesh.last.outgoing ? 'You' : chats.mesh.last.nickname}: '
-                  '${chats.mesh.last.text}',
+            ? l10nOf(context).networkEveryoneBluetooth
+            : l10nOf(context).uiValueValue6EF45D(
+                (chats.mesh.last.outgoing
+                        ? l10nOf(context).uiYou905CB3
+                        : chats.mesh.last.nickname)
+                    .toString(),
+                (chats.mesh.last.text).toString(),
+              ),
         at: chats.mesh.lastOrNull?.at.toLocal(),
         unread: chats.unread[BitchatChats.meshKey] ?? 0,
         isGroup: true,
@@ -346,7 +359,7 @@ class NetworkChatsSettings extends StatelessWidget {
       children: [
         const SizedBox(height: 12),
         Text(
-          localizedUiText(context, 'Chats from other networks'),
+          l10nOf(context).uiChatsFromOtherNetworks13CDCD,
           style: Theme.of(
             context,
           ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
@@ -355,10 +368,12 @@ class NetworkChatsSettings extends StatelessWidget {
           SwitchListTile.adaptive(
             key: ValueKey('network-chats-${source.id}'),
             contentPadding: EdgeInsets.zero,
-            title: Text(localizedUiText(context, 'Show ${source.label} chats in the chat list')),
-            subtitle:  Text(
-              localizedUiText(context, 'With a filter of their own. Off: open them from the ' 'network\'s settings only.'),
+            title: Text(
+              l10nOf(
+                context,
+              ).uiShowValueChatsInTheBC0E41((source.label).toString()),
             ),
+            subtitle: Text(l10nOf(context).uiWithAFilterOfTheir4FD18E),
             value: controller.showsChatNetwork(source.id),
             onChanged: (value) =>
                 unawaited(controller.setShowsChatNetwork(source.id, value)),

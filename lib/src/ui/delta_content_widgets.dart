@@ -1,3 +1,4 @@
+import '../app_locales.dart';
 import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
@@ -185,12 +186,12 @@ class DeltaVoiceComposer extends StatelessWidget {
             if (recording) Text('${value.elapsed.inSeconds}s'),
             if (preview) ...[
               IconButton(
-                tooltip: 'Play voice message',
+                tooltip: l10nOf(context).uiPlayVoiceMessageB16684,
                 icon: const Icon(Icons.play_circle_outline),
                 onPressed: () => act(service.playPreview),
               ),
               IconButton(
-                tooltip: 'Send voice message',
+                tooltip: l10nOf(context).deltaSendVoice,
                 icon: const Icon(Icons.send),
                 onPressed: enabled
                     ? () => act(
@@ -201,13 +202,15 @@ class DeltaVoiceComposer extends StatelessWidget {
             ],
             if (recording || preview)
               IconButton(
-                tooltip: 'Discard voice message',
+                tooltip: l10nOf(context).deltaDiscardVoice,
                 icon: const Icon(Icons.close),
                 onPressed: () => act(service.cancel),
               ),
             if (!preview)
               IconButton(
-                tooltip: recording ? 'Stop recording' : 'Record voice message',
+                tooltip: recording
+                    ? l10nOf(context).uiStopRecordingEE0D9D
+                    : l10nOf(context).deltaRecordVoice,
                 icon: Icon(
                   recording ? Icons.stop_circle_outlined : Icons.mic_none,
                 ),
@@ -249,7 +252,7 @@ class DeltaMessageMenu extends StatelessWidget {
     final selected = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('React'),
+        title: Text(l10nOf(context).deltaReact),
         content: Wrap(
           spacing: 8,
           children: [
@@ -260,7 +263,7 @@ class DeltaMessageMenu extends StatelessWidget {
               ),
             TextButton(
               onPressed: () => Navigator.pop(context, ''),
-              child: const Text('Remove'),
+              child: Text(l10nOf(context).uiRemoveE96390),
             ),
           ],
         ),
@@ -276,16 +279,16 @@ class DeltaMessageMenu extends StatelessWidget {
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Edit message'),
+        title: Text(l10nOf(context).menuEditMessage),
         content: TextField(controller: text, minLines: 1, maxLines: 6),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, text.text),
-            child: const Text('Save'),
+            child: Text(l10nOf(context).uiSaveEFC007),
           ),
         ],
       ),
@@ -298,7 +301,7 @@ class DeltaMessageMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => PopupMenuButton<String>(
-    tooltip: 'Message actions',
+    tooltip: l10nOf(context).uiMessageActions949184,
     icon: const Icon(Icons.more_horiz, size: 18),
     onSelected: (action) => unawaited(
       act(() async {

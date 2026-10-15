@@ -1090,7 +1090,7 @@ abstract class AppLocalizations {
   /// **'Move later'**
   String get uiMoveLaterBB4C84;
 
-  /// App-owned interface/status text in lib/main.dart:4186. English: Save
+  /// Button that saves changes, including the name shown to nearby bitchat users.
   ///
   /// In en, this message translates to:
   /// **'Save'**
@@ -1495,8 +1495,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/main.dart:8577. English: Copied {value} message(s).
   ///
   /// In en, this message translates to:
-  /// **'Copied {value} message(s).'**
-  String uiCopiedValueMessageSC97E6E(String value);
+  /// **'{value, plural, one{Copied {value} message.} other{Copied {value} messages.}}'**
+  String uiCopiedValueMessageSC97E6E(int value);
 
   /// App-owned interface/status text in lib/main.dart:8590. English: No selected attachment is ready yet — still transferring.
   ///
@@ -2437,8 +2437,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/main.dart:18137. English: Save {value} file(s) to…
   ///
   /// In en, this message translates to:
-  /// **'Save {value} file(s) to…'**
-  String uiSaveValueFileSToB46C57(String value);
+  /// **'{value, plural, one{Save {value} file to…} other{Save {value} files to…}}'**
+  String uiSaveValueFileSToB46C57(int value);
 
   /// App-owned interface/status text in lib/main.dart:18141. English: Save canceled.
   ///
@@ -3532,55 +3532,55 @@ abstract class AppLocalizations {
   /// **'They match'**
   String get uiTheyMatch6FB8EB;
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:64. English: Name bitchat users see
+  /// Settings → Connectivity, Bluetooth mesh: Name bitchat users see
   ///
   /// In en, this message translates to:
   /// **'Name bitchat users see'**
   String get uiNameBitchatUsersSee1CE7E3;
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:75. English: A name you choose stays when your identity changes, so people nearby can tell it is still you. Leave it empty for a new "anon" name with each identity.
+  /// Settings → Connectivity, Bluetooth mesh: A name you choose stays when your identity changes, so people nearby can tell it is still you. Leave it empty for a new "anon" name with each identity.
   ///
   /// In en, this message translates to:
   /// **'A name you choose stays when your identity changes, so people nearby can tell it is still you. Leave it empty for a new \"anon\" name with each identity.'**
   String get uiANameYouChooseStays17E677;
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:112. English: Bluetooth mesh
+  /// Settings → Connectivity, Bluetooth mesh: Bluetooth mesh
   ///
   /// In en, this message translates to:
   /// **'Bluetooth mesh'**
   String get uiBluetoothMeshC8B7F1;
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:114. English: Reach contacts nearby without any network: messages hop from phone to phone over Bluetooth, through Conest and bitchat users alike, and this phone relays for others. This phone does not show up in bitchat, and what it sends looks like any bitchat private message, with ids that change every hour.
+  /// Settings → Connectivity, Bluetooth mesh: Reach contacts nearby without any network: messages hop from device to device over Bluetooth, through Conest and bitchat users alike, and this device relays for others. This device does not show up in bitchat, and what it sends looks like any bitchat private message, with ids that change every hour.
   ///
   /// In en, this message translates to:
-  /// **'Reach contacts nearby without any network: messages hop from phone to phone over Bluetooth, through Conest and bitchat users alike, and this phone relays for others. This phone does not show up in bitchat, and what it sends looks like any bitchat private message, with ids that change every hour.'**
+  /// **'Reach contacts nearby without any network: messages hop from device to device over Bluetooth, through Conest and bitchat users alike, and this device relays for others. This device does not show up in bitchat, and what it sends looks like any bitchat private message, with ids that change every hour.'**
   String get uiReachContactsNearbyWithoutAny9E9649;
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:151. English: Reachable by bitchat users
+  /// Settings → Connectivity, Bluetooth mesh: Reachable by bitchat users
   ///
   /// In en, this message translates to:
   /// **'Reachable by bitchat users'**
   String get uiReachableByBitchatUsers568021;
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:171. English: Share internet with bitchat users
+  /// Settings → Connectivity, Bluetooth mesh: Share internet with bitchat users
   ///
   /// In en, this message translates to:
   /// **'Share internet with bitchat users'**
   String get uiShareInternetWithBitchatUsers572F90;
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:195. English: Change name
+  /// Settings → Connectivity, Bluetooth mesh: Change name
   ///
   /// In en, this message translates to:
   /// **'Change name'**
   String get uiChangeNameE46692;
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:200. English: New identity
+  /// Settings → Connectivity, Bluetooth mesh: New identity
   ///
   /// In en, this message translates to:
   /// **'New identity'**
   String get uiNewIdentityA119CF;
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:212. English: bitchat chats
+  /// Settings → Connectivity, Bluetooth mesh: bitchat chats
   ///
   /// In en, this message translates to:
   /// **'bitchat chats'**
@@ -4139,8 +4139,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/src/messenger_controller.dart:32231. English: Waiting for {value} member(s)
   ///
   /// In en, this message translates to:
-  /// **'Waiting for {value} member(s)'**
-  String uiWaitingForValueMemberS5A8BA6(String value);
+  /// **'{value, plural, one{Waiting for {value} member} other{Waiting for {value} members}}'**
+  String uiWaitingForValueMemberS5A8BA6(int value);
 
   /// App-owned interface/status text in lib/main.dart:333. English: Conest
   ///
@@ -4221,8 +4221,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/main.dart:9423. English: {value} members
   ///
   /// In en, this message translates to:
-  /// **'{value} members'**
-  String uiValueMembersCEF563(String value);
+  /// **'{value, plural, one{{value} member} other{{value} members}}'**
+  String uiValueMembersCEF563(int value);
 
   /// App-owned interface/status text in lib/main.dart:9466. English: pairwise
   ///
@@ -4449,8 +4449,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/src/messenger_controller.dart:17709. English: {value} Conest transfers
   ///
   /// In en, this message translates to:
-  /// **'{value} Conest transfers'**
-  String uiValueConestTransfersF846F8(String value);
+  /// **'{value, plural, one{{value} Conest transfers} other{{value} Conest transfers}}'**
+  String uiValueConestTransfersF846F8(int value);
 
   /// App-owned interface/status text in lib/src/messenger_controller.dart:25880. English: via {value} ({value2})
   ///
@@ -4685,8 +4685,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/main.dart:3924. English: {value} active member{value2}
   ///
   /// In en, this message translates to:
-  /// **'{value} active member{value2}'**
-  String uiValueActiveMemberValue6700F2(String value, String value2);
+  /// **'{value, plural, one{{value} active member} other{{value} active members}}'**
+  String uiValueActiveMemberValue6700F2(int value);
 
   /// App-owned interface/status text in lib/main.dart:3947. English: Owner
   ///
@@ -4781,8 +4781,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/main.dart:6283. English: {value} member(s)
   ///
   /// In en, this message translates to:
-  /// **'{value} member(s)'**
-  String uiValueMemberSE75249(String value);
+  /// **'{value, plural, one{{value} member} other{{value} members}}'**
+  String uiValueMemberSE75249(int value);
 
   /// App-owned interface/status text in lib/main.dart:6328. English: Contacts
   ///
@@ -4823,8 +4823,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/main.dart:7080. English: {value} member(s) • owner {value2}
   ///
   /// In en, this message translates to:
-  /// **'{value} member(s) • owner {value2}'**
-  String uiValueMemberSOwnerValueE42E13(String value, String value2);
+  /// **'{value, plural, one{{value} member • owner {value2}} other{{value} members • owner {value2}}}'**
+  String uiValueMemberSOwnerValueE42E13(int value, String value2);
 
   /// App-owned interface/status text in lib/main.dart:7125. English: // GROUP TRUST FANOUT · mint = paired
   ///
@@ -4961,8 +4961,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/main.dart:8519. English: Delete {value} message{value2} for the group?
   ///
   /// In en, this message translates to:
-  /// **'Delete {value} message{value2} for the group?'**
-  String uiDeleteValueMessageValueForABA7AC(String value, String value2);
+  /// **'{value, plural, one{Delete {value} message for the group?} other{Delete {value} messages for the group?}}'**
+  String uiDeleteValueMessageValueForABA7AC(int value);
 
   /// App-owned interface/status text in lib/main.dart:9086. English: {value} {value2}
   ///
@@ -5051,8 +5051,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/main.dart:10061. English: {value} vote(s) were not in the creator’s close checkpoint.
   ///
   /// In en, this message translates to:
-  /// **'{value} vote(s) were not in the creator’s close checkpoint.'**
-  String uiValueVoteSWereNot02CC9A(String value);
+  /// **'{value, plural, one{{value} vote were not in the creator’s close checkpoint.} other{{value} votes were not in the creator’s close checkpoint.}}'**
+  String uiValueVoteSWereNot02CC9A(int value);
 
   /// App-owned interface/status text in lib/main.dart:10068. English: Voting is unavailable with this Conest version.
   ///
@@ -5195,8 +5195,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/main.dart:13050. English: QR payload: {value} characters
   ///
   /// In en, this message translates to:
-  /// **'QR payload: {value} characters'**
-  String uiQRPayloadValueCharactersBABEDF(String value);
+  /// **'{value, plural, one{QR payload: {value} character} other{QR payload: {value} characters}}'**
+  String uiQRPayloadValueCharactersBABEDF(int value);
 
   /// App-owned interface/status text in lib/main.dart:13058. English: Also lists your addresses on: {value}.
   ///
@@ -5249,10 +5249,10 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/main.dart:13499. English: Frame {value} · {value2} source blocks · {value3}
   ///
   /// In en, this message translates to:
-  /// **'Frame {value} · {value2} source blocks · {value3}'**
+  /// **'{value2, plural, one{Frame {value} · {value2} source blocks · {value3}} other{Frame {value} · {value2} source blocks · {value3}}}'**
   String uiFrameValueValueSourceBlocks9C37CB(
     String value,
-    String value2,
+    int value2,
     String value3,
   );
 
@@ -5324,8 +5324,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/main.dart:14004. English: {value} characters. Increase screen brightness if scanning is unreliable.
   ///
   /// In en, this message translates to:
-  /// **'{value} characters. Increase screen brightness if scanning is unreliable.'**
-  String uiValueCharactersIncreaseScreenBrightnessA5AF7D(String value);
+  /// **'{value, plural, one{{value} character. Increase screen brightness if scanning is unreliable.} other{{value} characters. Increase screen brightness if scanning is unreliable.}}'**
+  String uiValueCharactersIncreaseScreenBrightnessA5AF7D(int value);
 
   /// App-owned interface/status text in lib/main.dart:14203. English: Personal / Preferences
   ///
@@ -5396,8 +5396,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/main.dart:14884. English: {value} candidate route(s) are available right now.
   ///
   /// In en, this message translates to:
-  /// **'{value} candidate route(s) are available right now.'**
-  String uiValueCandidateRouteSAre175673(String value);
+  /// **'{value, plural, one{{value} candidate route are available right now.} other{{value} candidate routes are available right now.}}'**
+  String uiValueCandidateRouteSAre175673(int value);
 
   /// App-owned interface/status text in lib/main.dart:14937. English: Configured relays
   ///
@@ -5576,8 +5576,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/main.dart:15801. English: This will remove {value} relay route(s) imported from {value2}.
   ///
   /// In en, this message translates to:
-  /// **'This will remove {value} relay route(s) imported from {value2}.'**
-  String uiThisWillRemoveValueRelay330EEB(String value, String value2);
+  /// **'{value, plural, one{This will remove {value} relay route imported from {value2}.} other{This will remove {value} relay routes imported from {value2}.}}'**
+  String uiThisWillRemoveValueRelay330EEB(int value, String value2);
 
   /// App-owned interface/status text in lib/main.dart:15822. English: Remove failed: {value}
   ///
@@ -5600,12 +5600,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/main.dart:15886. English: {value} · {value2} · {value3} route(s)
   ///
   /// In en, this message translates to:
-  /// **'{value} · {value2} · {value3} route(s)'**
-  String uiValueValueValueRouteS40FB98(
-    String value,
-    String value2,
-    String value3,
-  );
+  /// **'{value3, plural, one{{value} · {value2} · {value3} route} other{{value} · {value2} · {value3} routes}}'**
+  String uiValueValueValueRouteS40FB98(String value, String value2, int value3);
 
   /// App-owned interface/status text in lib/main.dart:15958. English: Leave blank to import unsigned (untrusted; pre-flight probes still gate use). Provide the operator's key for cryptographically trusted imports — the signature is fetched from <URL>.ed25519.sig.
   ///
@@ -5784,14 +5780,14 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/main.dart:18413. English: {value} selected
   ///
   /// In en, this message translates to:
-  /// **'{value} selected'**
-  String uiValueSelectedB1DFAF(String value);
+  /// **'{value, plural, one{{value} selected} other{{value} selected}}'**
+  String uiValueSelectedB1DFAF(int value);
 
   /// App-owned interface/status text in lib/main.dart:18491. English: This will cancel {value} active transfer{value2} and clear the transfer list. Chat messages and completed downloaded files will stay.
   ///
   /// In en, this message translates to:
-  /// **'This will cancel {value} active transfer{value2} and clear the transfer list. Chat messages and completed downloaded files will stay.'**
-  String uiThisWillCancelValueActiveB3425E(String value, String value2);
+  /// **'{value, plural, one{This will cancel {value} active transfer and clear the transfer list. Chat messages and completed downloaded files will stay.} other{This will cancel {value} active transfers and clear the transfer list. Chat messages and completed downloaded files will stay.}}'**
+  String uiThisWillCancelValueActiveB3425E(int value);
 
   /// App-owned interface/status text in lib/main.dart:18573. English: No transfers yet.
   ///
@@ -5967,8 +5963,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/main.dart:21594. English: Share {value} files to…
   ///
   /// In en, this message translates to:
-  /// **'Share {value} files to…'**
-  String uiShareValueFilesToA46E17(String value);
+  /// **'{value, plural, one{Share {value} file to…} other{Share {value} files to…}}'**
+  String uiShareValueFilesToA46E17(int value);
 
   /// App-owned interface/status text in lib/main.dart:21729. English: If messages and files from a phone on the same network never arrive (but yours reach it), Windows Firewall is blocking them. This lets other devices on any network reach Conest on this PC; Windows asks to confirm.
   ///
@@ -6055,8 +6051,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/src/ui/devices_panel.dart:87. English: This account is on {value} devices.
   ///
   /// In en, this message translates to:
-  /// **'This account is on {value} devices.'**
-  String uiThisAccountIsOnValueB78C80(String value);
+  /// **'{value, plural, one{This account is on {value} device.} other{This account is on {value} devices.}}'**
+  String uiThisAccountIsOnValueB78C80(int value);
 
   /// App-owned interface/status text in lib/src/ui/devices_panel.dart:88. English: Use Conest on more than one device: link a phone, tablet or computer to this account. Your contacts see one person.
   ///
@@ -6079,8 +6075,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/src/ui/devices_panel.dart:166. English: {value} days
   ///
   /// In en, this message translates to:
-  /// **'{value} days'**
-  String uiValueDaysEE919A(String value);
+  /// **'{value, plural, one{{value} day} other{{value} days}}'**
+  String uiValueDaysEE919A(int value);
 
   /// App-owned interface/status text in lib/src/ui/network_chat_sources.dart:348. English: Chats from other networks
   ///
@@ -6247,8 +6243,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/src/ui/group_call_screen.dart:442. English: Started by {value} · {value2} participants
   ///
   /// In en, this message translates to:
-  /// **'Started by {value} · {value2} participants'**
-  String uiStartedByValueValueParticipants99F03D(String value, String value2);
+  /// **'{value2, plural, one{Started by {value} · {value2} participant} other{Started by {value} · {value2} participants}}'**
+  String uiStartedByValueValueParticipants99F03D(String value, int value2);
 
   /// App-owned interface/status text in lib/src/ui/reticulum_carrier_panel.dart:246. English: Node (rnsd)
   ///
@@ -6415,8 +6411,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/src/ui/radio_chats_screen.dart:182. English: {value} chats
   ///
   /// In en, this message translates to:
-  /// **'{value} chats'**
-  String uiValueChatsAD9A3B(String value);
+  /// **'{value, plural, one{{value} chat} other{{value} chats}}'**
+  String uiValueChatsAD9A3B(int value);
 
   /// App-owned interface/status text in lib/src/ui/radio_chats_screen.dart:350. English: {value} ({value2})
   ///
@@ -6502,43 +6498,43 @@ abstract class AppLocalizations {
   /// **'Verify this session'**
   String get uiVerifyThisSessionB5065C;
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:134. English: Bluetooth mesh on
+  /// Settings → Connectivity, Bluetooth mesh: Bluetooth mesh on
   ///
   /// In en, this message translates to:
   /// **'Bluetooth mesh on'**
   String get uiBluetoothMeshOn5A96FE;
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:135. English: Starting Bluetooth
+  /// Settings → Connectivity, Bluetooth mesh: Starting Bluetooth
   ///
   /// In en, this message translates to:
   /// **'Starting Bluetooth'**
   String get uiStartingBluetoothE6928A;
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:136. English: Bluetooth unavailable
+  /// Settings → Connectivity, Bluetooth mesh: Bluetooth unavailable
   ///
   /// In en, this message translates to:
   /// **'Bluetooth unavailable'**
   String get uiBluetoothUnavailableF4B751;
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:149. English: bitchat users nearby see you as "{value}" while you are in range, and can write to you. The identity they see is new every week and has nothing to do with your Conest identity.
+  /// Explains public bitchat visibility. value is the chosen nickname; preserve it exactly.
   ///
   /// In en, this message translates to:
   /// **'bitchat users nearby see you as \"{value}\" while you are in range, and can write to you. The identity they see is new every week and has nothing to do with your Conest identity.'**
   String uiBitchatUsersNearbySeeYou1B54FC(String value);
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:154. English: Off: bitchat users do not see this phone. You can still read the mesh chat.
+  /// Settings → Connectivity, Bluetooth mesh: Off: bitchat users do not see this device. You can still read the mesh chat.
   ///
   /// In en, this message translates to:
-  /// **'Off: bitchat users do not see this phone. You can still read the mesh chat.'**
+  /// **'Off: bitchat users do not see this device. You can still read the mesh chat.'**
   String get uiOffBitchatUsersDoNot054F9A;
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:169. English: Phones nearby without internet can use bitchat's location channels through this phone. Only those public, signed messages pass. This phone connects to the relays of the areas they use{value}: those relays see your internet address and the area, so they can tell roughly where you are.
+  /// Explains internet sharing and its privacy tradeoff. value is an optional localized area-count suffix, including spacing.
   ///
   /// In en, this message translates to:
-  /// **'Phones nearby without internet can use bitchat\'s location channels through this phone. Only those public, signed messages pass. This phone connects to the relays of the areas they use{value}: those relays see your internet address and the area, so they can tell roughly where you are.'**
+  /// **'Phones nearby without internet can use bitchat\'s location channels through this device. Only those public, signed messages pass. This device connects to the relays of the areas they use{value}: those relays see your internet address and the area, so they can tell roughly where you are.'**
   String uiPhonesNearbyWithoutInternetCan27CC7F(String value);
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:176. English: Off: bitchat users nearby without internet cannot reach location channels through you.
+  /// Settings → Connectivity, Bluetooth mesh: Off: bitchat users nearby without internet cannot reach location channels through you.
   ///
   /// In en, this message translates to:
   /// **'Off: bitchat users nearby without internet cannot reach location channels through you.'**
@@ -6547,8 +6543,8 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:209. English: {value} nearby · the mesh chat and private chats
   ///
   /// In en, this message translates to:
-  /// **'{value} nearby · the mesh chat and private chats'**
-  String uiValueNearbyTheMeshChat31C0CA(String value);
+  /// **'{value, plural, one{{value} nearby · the mesh chat and private chats} other{{value} nearby · the mesh chat and private chats}}'**
+  String uiValueNearbyTheMeshChat31C0CA(int value);
 
   /// App-owned interface/status text in lib/src/ui/matrix_home_screen.dart:114. English: Sign in to your Matrix account
   ///
@@ -6746,6 +6742,1434 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Point the camera at a Conest invite QR code.'**
   String get uiPointTheCameraAtA9BAFAF;
+
+  /// App-owned controller status shown in the status line or an action notice. Matrix rooms show joins and leaves.
+  ///
+  /// In en, this message translates to:
+  /// **'Matrix rooms show joins and leaves.'**
+  String get statusMatrixRoomsShowJoinsAndE8AC9E;
+
+  /// App-owned controller status shown in the status line or an action notice. Matrix rooms hide joins and leaves.
+  ///
+  /// In en, this message translates to:
+  /// **'Matrix rooms hide joins and leaves.'**
+  String get statusMatrixRoomsHideJoinsAndE00610;
+
+  /// App-owned controller status shown in the status line or an action notice. App mode: {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'App mode: {value}.'**
+  String statusAppMode95B48F(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Calling {value}…
+  ///
+  /// In en, this message translates to:
+  /// **'Calling {value}…'**
+  String statusCalling7A8C67(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Updated history visibility for future group members.
+  ///
+  /// In en, this message translates to:
+  /// **'Updated history visibility for future group members.'**
+  String get statusUpdatedHistoryVisibilityForFutureDA1A23;
+
+  /// App-owned controller status shown in the status line or an action notice. Vault unlock failed: {value}
+  ///
+  /// In en, this message translates to:
+  /// **'Vault unlock failed: {value}'**
+  String statusVaultUnlockFailedAE7813(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Direct online transport is unavailable; relay fallback remains active.
+  ///
+  /// In en, this message translates to:
+  /// **'Direct online transport is unavailable; relay fallback remains active.'**
+  String get statusDirectOnlineTransportIsUnavailableB1EFAE;
+
+  /// App-owned controller status shown in the status line or an action notice. Nostr carrier set up.
+  ///
+  /// In en, this message translates to:
+  /// **'Nostr carrier set up.'**
+  String get statusNostrCarrierSetUpE82998;
+
+  /// App-owned controller status shown in the status line or an action notice. Nostr carrier removed.
+  ///
+  /// In en, this message translates to:
+  /// **'Nostr carrier removed.'**
+  String get statusNostrCarrierRemovedCB968A;
+
+  /// App-owned controller status shown in the status line or an action notice. Nostr relays updated: a relay shut down.
+  ///
+  /// In en, this message translates to:
+  /// **'Nostr relays updated: a relay shut down.'**
+  String get statusNostrRelaysUpdatedARelay03F8F3;
+
+  /// App-owned controller status shown in the status line or an action notice. Tor carrier set up.
+  ///
+  /// In en, this message translates to:
+  /// **'Tor carrier set up.'**
+  String get statusTorCarrierSetUp3D2304;
+
+  /// App-owned controller status shown in the status line or an action notice. Tor carrier removed.
+  ///
+  /// In en, this message translates to:
+  /// **'Tor carrier removed.'**
+  String get statusTorCarrierRemovedAAC23E;
+
+  /// App-owned controller status shown in the status line or an action notice. Bluetooth mesh on.
+  ///
+  /// In en, this message translates to:
+  /// **'Bluetooth mesh on.'**
+  String get statusBluetoothMeshOn11FD21;
+
+  /// App-owned controller status shown in the status line or an action notice. Bluetooth mesh off.
+  ///
+  /// In en, this message translates to:
+  /// **'Bluetooth mesh off.'**
+  String get statusBluetoothMeshOff2CE954;
+
+  /// App-owned controller status shown in the status line or an action notice. Nostr messages on.
+  ///
+  /// In en, this message translates to:
+  /// **'Nostr messages on.'**
+  String get statusNostrMessagesOn35ABF5;
+
+  /// App-owned controller status shown in the status line or an action notice. Nostr messages off.
+  ///
+  /// In en, this message translates to:
+  /// **'Nostr messages off.'**
+  String get statusNostrMessagesOff16BCA7;
+
+  /// App-owned controller status shown in the status line or an action notice. Delta Chat on.
+  ///
+  /// In en, this message translates to:
+  /// **'Delta Chat on.'**
+  String get statusDeltaChatOn1F38AA;
+
+  /// App-owned controller status shown in the status line or an action notice. Delta Chat off.
+  ///
+  /// In en, this message translates to:
+  /// **'Delta Chat off.'**
+  String get statusDeltaChatOff8BDBD4;
+
+  /// App-owned controller status shown in the status line or an action notice. bitchat users nearby can now see you as {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'bitchat users nearby can now see you as {value}.'**
+  String statusBitchatUsersNearbyCanNow5536CD(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. bitchat users no longer see you.
+  ///
+  /// In en, this message translates to:
+  /// **'bitchat users no longer see you.'**
+  String get statusBitchatUsersNoLongerSee68B46D;
+
+  /// App-owned controller status shown in the status line or an action notice. MeshCore carrier set up through {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'MeshCore carrier set up through {value}.'**
+  String statusMeshcoreCarrierSetUpThroughE51369(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. MeshCore carrier removed.
+  ///
+  /// In en, this message translates to:
+  /// **'MeshCore carrier removed.'**
+  String get statusMeshcoreCarrierRemoved38FC35;
+
+  /// App-owned controller status shown in the status line or an action notice. Meshtastic carrier set up through {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Meshtastic carrier set up through {value}.'**
+  String statusMeshtasticCarrierSetUpThroughAFA24A(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Meshtastic carrier removed.
+  ///
+  /// In en, this message translates to:
+  /// **'Meshtastic carrier removed.'**
+  String get statusMeshtasticCarrierRemoved66387E;
+
+  /// App-owned controller status shown in the status line or an action notice. Meshtastic app messages on.
+  ///
+  /// In en, this message translates to:
+  /// **'Meshtastic app messages on.'**
+  String get statusMeshtasticAppMessagesOn2C1888;
+
+  /// App-owned controller status shown in the status line or an action notice. Meshtastic app messages off.
+  ///
+  /// In en, this message translates to:
+  /// **'Meshtastic app messages off.'**
+  String get statusMeshtasticAppMessagesOffAFB9E8;
+
+  /// App-owned controller status shown in the status line or an action notice. MeshCore app messages on.
+  ///
+  /// In en, this message translates to:
+  /// **'MeshCore app messages on.'**
+  String get statusMeshcoreAppMessagesOn2BF1E3;
+
+  /// App-owned controller status shown in the status line or an action notice. MeshCore app messages off.
+  ///
+  /// In en, this message translates to:
+  /// **'MeshCore app messages off.'**
+  String get statusMeshcoreAppMessagesOffE59C90;
+
+  /// App-owned controller status shown in the status line or an action notice. Reticulum carrier set up through {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Reticulum carrier set up through {value}.'**
+  String statusReticulumCarrierSetUpThrough7EB41E(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Reticulum carrier removed.
+  ///
+  /// In en, this message translates to:
+  /// **'Reticulum carrier removed.'**
+  String get statusReticulumCarrierRemoved301C05;
+
+  /// App-owned controller status shown in the status line or an action notice. Email carrier set up as {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Email carrier set up as {value}.'**
+  String statusEmailCarrierSetUpAs8427FD(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Email carrier removed.
+  ///
+  /// In en, this message translates to:
+  /// **'Email carrier removed.'**
+  String get statusEmailCarrierRemoved036E51;
+
+  /// App-owned controller status shown in the status line or an action notice. Imported {value} relay(s) from {value2}.
+  ///
+  /// In en, this message translates to:
+  /// **'{value, plural, one{Imported {value} relay from {value2}.} other{Imported {value} relays from {value2}.}}'**
+  String statusImportedRelaySFromB1DB2D(int value, String value2);
+
+  /// App-owned controller status shown in the status line or an action notice. Removed imported relay source {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Removed imported relay source {value}.'**
+  String statusRemovedImportedRelaySource3F4540(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Pairing code rotated and advertised.
+  ///
+  /// In en, this message translates to:
+  /// **'Pairing code rotated and advertised.'**
+  String get statusPairingCodeRotatedAndAdvertised722FB9;
+
+  /// App-owned controller status shown in the status line or an action notice. Checked {value} route(s); {value2} available. {value3}
+  ///
+  /// In en, this message translates to:
+  /// **'{value, plural, one{Checked {value} route; {value2} available. {value3}} other{Checked {value} routes; {value2} available. {value3}}}'**
+  String statusCheckedRouteSAvailableE9B9D6(
+    int value,
+    int value2,
+    String value3,
+  );
+
+  /// App-owned controller status shown in the status line or an action notice. Checked Iroh path(s) for {value}; reachability is {value2}. {value3}
+  ///
+  /// In en, this message translates to:
+  /// **'Checked Iroh path(s) for {value}; reachability is {value2}. {value3}'**
+  String statusCheckedIrohPathSFor038B43(
+    String value,
+    String value2,
+    String value3,
+  );
+
+  /// App-owned controller status shown in the status line or an action notice. No paths are advertised for {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'No paths are advertised for {value}.'**
+  String statusNoPathsAreAdvertisedForA37EA3(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Checked {value} path(s) for {value2}; {value3} available{value4}. Reachability is {value5}. {value6}
+  ///
+  /// In en, this message translates to:
+  /// **'{value, plural, one{Checked {value} path for {value2}; {value3} available{value4}. Reachability is {value5}. {value6}} other{Checked {value} paths for {value2}; {value3} available{value4}. Reachability is {value5}. {value6}}}'**
+  String statusCheckedPathSForAvailable0970F6(
+    int value,
+    String value2,
+    int value3,
+    String value4,
+    String value5,
+    String value6,
+  );
+
+  /// App-owned controller status shown in the status line or an action notice. Display name updated.
+  ///
+  /// In en, this message translates to:
+  /// **'Display name updated.'**
+  String get statusDisplayNameUpdated3BD31A;
+
+  /// App-owned controller status shown in the status line or an action notice. Bio cleared.
+  ///
+  /// In en, this message translates to:
+  /// **'Bio cleared.'**
+  String get statusBioCleared543896;
+
+  /// App-owned controller status shown in the status line or an action notice. Bio updated.
+  ///
+  /// In en, this message translates to:
+  /// **'Bio updated.'**
+  String get statusBioUpdated440110;
+
+  /// App-owned controller status shown in the status line or an action notice. Contact profile updated.
+  ///
+  /// In en, this message translates to:
+  /// **'Contact profile updated.'**
+  String get statusContactProfileUpdated47ECF6;
+
+  /// App-owned controller status shown in the status line or an action notice. Relay mode enabled.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay mode enabled.'**
+  String get statusRelayModeEnabledB9ACB8;
+
+  /// App-owned controller status shown in the status line or an action notice. Relay mode disabled.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay mode disabled.'**
+  String get statusRelayModeDisabled723F4D;
+
+  /// App-owned controller status shown in the status line or an action notice. Contacts can now contribute relay routes automatically.
+  ///
+  /// In en, this message translates to:
+  /// **'Contacts can now contribute relay routes automatically.'**
+  String get statusContactsCanNowContributeRelay147ECE;
+
+  /// App-owned controller status shown in the status line or an action notice. Automatic contact relay usage disabled.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic contact relay usage disabled.'**
+  String get statusAutomaticContactRelayUsageDisabledE762A7;
+
+  /// App-owned controller status shown in the status line or an action notice. Notifications enabled.
+  ///
+  /// In en, this message translates to:
+  /// **'Notifications enabled.'**
+  String get statusNotificationsEnabledF70668;
+
+  /// App-owned controller status shown in the status line or an action notice. Notifications disabled for this device.
+  ///
+  /// In en, this message translates to:
+  /// **'Notifications disabled for this device.'**
+  String get statusNotificationsDisabledForThisDeviceE10A46;
+
+  /// App-owned controller status shown in the status line or an action notice. Experimental voice calls enabled on this device.
+  ///
+  /// In en, this message translates to:
+  /// **'Experimental voice calls enabled on this device.'**
+  String get statusExperimentalVoiceCallsEnabledOn4081DE;
+
+  /// App-owned controller status shown in the status line or an action notice. Experimental voice calls disabled on this device.
+  ///
+  /// In en, this message translates to:
+  /// **'Experimental voice calls disabled on this device.'**
+  String get statusExperimentalVoiceCallsDisabledOn19A5AE;
+
+  /// App-owned controller status shown in the status line or an action notice. Android background runtime enabled. If system battery/background access is blocked, notifications can still be late or never arrive.
+  ///
+  /// In en, this message translates to:
+  /// **'Android background runtime enabled. If system battery/background access is blocked, notifications can still be late or never arrive.'**
+  String get statusAndroidBackgroundRuntimeEnabledIfAA5168;
+
+  /// App-owned controller status shown in the status line or an action notice. Android background runtime disabled.
+  ///
+  /// In en, this message translates to:
+  /// **'Android background runtime disabled.'**
+  String get statusAndroidBackgroundRuntimeDisabled5FC9A0;
+
+  /// App-owned controller status shown in the status line or an action notice. Background voice-call availability enabled for this device. Calls can arrive only while the Conest service is allowed to run.
+  ///
+  /// In en, this message translates to:
+  /// **'Background voice-call availability enabled for this device. Calls can arrive only while the Conest service is allowed to run.'**
+  String get statusBackgroundVoiceCallAvailabilityEnabledA87223;
+
+  /// App-owned controller status shown in the status line or an action notice. Background voice-call availability disabled.
+  ///
+  /// In en, this message translates to:
+  /// **'Background voice-call availability disabled.'**
+  String get statusBackgroundVoiceCallAvailabilityDisabledA71AD1;
+
+  /// App-owned controller status shown in the status line or an action notice. 10% free-space reserve enabled.
+  ///
+  /// In en, this message translates to:
+  /// **'10% free-space reserve enabled.'**
+  String get statusFreeSpaceReserveEnabledD7CE0E;
+
+  /// App-owned controller status shown in the status line or an action notice. 10% free-space reserve disabled.
+  ///
+  /// In en, this message translates to:
+  /// **'10% free-space reserve disabled.'**
+  String get statusFreeSpaceReserveDisabledD3E635;
+
+  /// App-owned controller status shown in the status line or an action notice. Routing preferences updated for {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Routing preferences updated for {value}.'**
+  String statusRoutingPreferencesUpdatedFor05867B(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Local relay port updated to {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Local relay port updated to {value}.'**
+  String statusLocalRelayPortUpdatedTo7F815D(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Relay {value} added.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay {value} added.'**
+  String statusRelayAdded800692(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Relay {value}:{value2} added for {value3}.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay {value}:{value2} added for {value3}.'**
+  String statusRelayAddedFor087398(String value, String value2, String value3);
+
+  /// App-owned controller status shown in the status line or an action notice. Relay {value} removed.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay {value} removed.'**
+  String statusRelayRemoved546A15(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Trusted new identity for relay {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Trusted new identity for relay {value}.'**
+  String statusTrustedNewIdentityForRelay4CDBFE(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Contact removed.
+  ///
+  /// In en, this message translates to:
+  /// **'Contact removed.'**
+  String get statusContactRemovedE31CE0;
+
+  /// App-owned controller status shown in the status line or an action notice. Contact removed locally. Sending a removal notice in the background.
+  ///
+  /// In en, this message translates to:
+  /// **'Contact removed locally. Sending a removal notice in the background.'**
+  String get statusContactRemovedLocallySendingA40D607;
+
+  /// App-owned controller status shown in the status line or an action notice. Device created. Share a QR invite or the current codephrase to add this contact.
+  ///
+  /// In en, this message translates to:
+  /// **'Device created. Share a QR invite or the current codephrase to add this contact.'**
+  String get statusDeviceCreatedShareAQr06E7B6;
+
+  /// App-owned controller status shown in the status line or an action notice. Contact {value} accepted. Sending approval over available routes.
+  ///
+  /// In en, this message translates to:
+  /// **'Contact {value} accepted. Sending approval over available routes.'**
+  String statusContactAcceptedSendingApprovalOverDAD10C(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Contact {value} saved. Waiting for the other person to approve the request.
+  ///
+  /// In en, this message translates to:
+  /// **'Contact {value} saved. Waiting for the other person to approve the request.'**
+  String statusContactSavedWaitingForThe41F77D(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Reconnected with {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Reconnected with {value}.'**
+  String statusReconnectedWithBC62EC(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Asking {value} to reconnect.
+  ///
+  /// In en, this message translates to:
+  /// **'Asking {value} to reconnect.'**
+  String statusAskingToReconnectE93389(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Confirmed identity replacement for {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Confirmed identity replacement for {value}.'**
+  String statusConfirmedIdentityReplacementForC93359(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Rejected identity replacement for {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Rejected identity replacement for {value}.'**
+  String statusRejectedIdentityReplacementForDEC894(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Contact request cancelled. Queued items remain blocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Contact request cancelled. Queued items remain blocked.'**
+  String get statusContactRequestCancelledQueuedItemsEC2567;
+
+  /// App-owned controller status shown in the status line or an action notice. Saved.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved.'**
+  String get statusSaved9D4AF6;
+
+  /// App-owned controller status shown in the status line or an action notice. Message saved locally. It will send after {value} accepts the contact request.
+  ///
+  /// In en, this message translates to:
+  /// **'Message saved locally. It will send after {value} accepts the contact request.'**
+  String statusMessageSavedLocallyItWill0DBD03(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Trying LAN first, then relay for {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Trying LAN first, then relay for {value}.'**
+  String statusTryingLanFirstThenRelay1F5BEC(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Message queued. The app will retry direct routes and relays while polling.
+  ///
+  /// In en, this message translates to:
+  /// **'Message queued. The app will retry direct routes and relays while polling.'**
+  String get statusMessageQueuedTheAppWillA89BCC;
+
+  /// App-owned controller status shown in the status line or an action notice. Attachment is waiting for a route: {value}
+  ///
+  /// In en, this message translates to:
+  /// **'Attachment is waiting for a route: {value}'**
+  String statusAttachmentIsWaitingForA3F032B(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Could not prepare {value} for download.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not prepare {value} for download.'**
+  String statusCouldNotPrepareForDownloadE8FB18(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Created group {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Created group {value}.'**
+  String statusCreatedGroupF5D335(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Updated group {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Updated group {value}.'**
+  String statusUpdatedGroup2140B7(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Removed a member from {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Removed a member from {value}.'**
+  String statusRemovedAMemberFrom68CF04(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Left group {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Left group {value}.'**
+  String statusLeftGroup9E3412(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Removed group {value} from your list.
+  ///
+  /// In en, this message translates to:
+  /// **'Removed group {value} from your list.'**
+  String statusRemovedGroupFromYourList047F4B(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Transferred ownership of {value} to {value2}.
+  ///
+  /// In en, this message translates to:
+  /// **'Transferred ownership of {value} to {value2}.'**
+  String statusTransferredOwnershipOfToA126A1(String value, String value2);
+
+  /// App-owned controller status shown in the status line or an action notice. Deleted group {value} for everyone.
+  ///
+  /// In en, this message translates to:
+  /// **'Deleted group {value} for everyone.'**
+  String statusDeletedGroupForEveryoneDB26F8(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Updated {value} in {value2}.
+  ///
+  /// In en, this message translates to:
+  /// **'Updated {value} in {value2}.'**
+  String statusUpdatedIn642C0A(String value, String value2);
+
+  /// App-owned controller status shown in the status line or an action notice. Sending group message to {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Sending group message to {value}.'**
+  String statusSendingGroupMessageToD77236(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Sent to {value} as a plain Matrix message.
+  ///
+  /// In en, this message translates to:
+  /// **'Sent to {value} as a plain Matrix message.'**
+  String statusSentToAsAPlainAF2DE6(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Canceled and deleted pending message to {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Canceled and deleted pending message to {value}.'**
+  String statusCanceledAndDeletedPendingMessageCDCA88(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Message deleted locally.
+  ///
+  /// In en, this message translates to:
+  /// **'Message deleted locally.'**
+  String get statusMessageDeletedLocallyCE90EE;
+
+  /// App-owned controller status shown in the status line or an action notice. Message deleted here and deletion was sent to {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Message deleted here and deletion was sent to {value}.'**
+  String statusMessageDeletedHereAndDeletion7C4E80(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Message deleted here. Remote deletion could not be sent yet.
+  ///
+  /// In en, this message translates to:
+  /// **'Message deleted here. Remote deletion could not be sent yet.'**
+  String get statusMessageDeletedHereRemoteDeletionB6AE62;
+
+  /// App-owned controller status shown in the status line or an action notice. Message edited locally.
+  ///
+  /// In en, this message translates to:
+  /// **'Message edited locally.'**
+  String get statusMessageEditedLocally187334;
+
+  /// App-owned controller status shown in the status line or an action notice. Message edit queued to {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Message edit queued to {value}.'**
+  String statusMessageEditQueuedTo695B15(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Reaction updated locally.
+  ///
+  /// In en, this message translates to:
+  /// **'Reaction updated locally.'**
+  String get statusReactionUpdatedLocally97D795;
+
+  /// App-owned controller status shown in the status line or an action notice. Reaction queued to {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Reaction queued to {value}.'**
+  String statusReactionQueuedToD43BED(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. LAN lobby message saved locally; no nearby LAN participants were reachable.
+  ///
+  /// In en, this message translates to:
+  /// **'LAN lobby message saved locally; no nearby LAN participants were reachable.'**
+  String get statusLanLobbyMessageSavedLocallyFDE86E;
+
+  /// App-owned controller status shown in the status line or an action notice. LAN lobby message sent to {value} nearby route(s).
+  ///
+  /// In en, this message translates to:
+  /// **'{value, plural, one{LAN lobby message sent to {value} nearby route.} other{LAN lobby message sent to {value} nearby routes.}}'**
+  String statusLanLobbyMessageSentTo82F0B0(int value);
+
+  /// App-owned controller status shown in the status line or an action notice. Group {value} membership ack from {value2}.
+  ///
+  /// In en, this message translates to:
+  /// **'Group {value} membership ack from {value2}.'**
+  String statusGroupMembershipAckFrom43FCF1(String value, String value2);
+
+  /// App-owned controller status shown in the status line or an action notice. Received {value} item(s) via {value2}.
+  ///
+  /// In en, this message translates to:
+  /// **'{value, plural, one{Received {value} item via {value2}.} other{Received {value} items via {value2}.}}'**
+  String statusReceivedItemSVia58B082(int value, String value2);
+
+  /// App-owned controller status shown in the status line or an action notice. Route poll failed: {value}
+  ///
+  /// In en, this message translates to:
+  /// **'Route poll failed: {value}'**
+  String statusRoutePollFailedA1FD0C(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. LAN receiving is off: port {value} is in use. Pick another local relay port in Settings.
+  ///
+  /// In en, this message translates to:
+  /// **'LAN receiving is off: port {value} is in use. Pick another local relay port in Settings.'**
+  String statusLanReceivingIsOffPort5F04CB(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Rediscovered LAN route {value} for {value2}.
+  ///
+  /// In en, this message translates to:
+  /// **'Rediscovered LAN route {value} for {value2}.'**
+  String statusRediscoveredLanRouteFor587829(String value, String value2);
+
+  /// App-owned controller status shown in the status line or an action notice. LAN discovery unavailable: {value}
+  ///
+  /// In en, this message translates to:
+  /// **'LAN discovery unavailable: {value}'**
+  String statusLanDiscoveryUnavailable0E99AE(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Updated nearby LAN routes.
+  ///
+  /// In en, this message translates to:
+  /// **'Updated nearby LAN routes.'**
+  String get statusUpdatedNearbyLanRoutesF8CAFC;
+
+  /// App-owned controller status shown in the status line or an action notice. Rejected malformed attachment offer from {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Rejected malformed attachment offer from {value}.'**
+  String statusRejectedMalformedAttachmentOfferFrom9FC96A(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Rejected invalid attachment metadata.
+  ///
+  /// In en, this message translates to:
+  /// **'Rejected invalid attachment metadata.'**
+  String get statusRejectedInvalidAttachmentMetadata849465;
+
+  /// App-owned controller status shown in the status line or an action notice. {value} declined the request. Queued messages and files remain blocked.
+  ///
+  /// In en, this message translates to:
+  /// **'{value} declined the request. Queued messages and files remain blocked.'**
+  String statusDeclinedTheRequestQueuedMessagesABFFCB(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. New contact request from {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'New contact request from {value}.'**
+  String statusNewContactRequestFromCF70B9(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. {value} left {value2}.
+  ///
+  /// In en, this message translates to:
+  /// **'{value} left {value2}.'**
+  String statusLeftF4FE32(String value, String value2);
+
+  /// App-owned controller status shown in the status line or an action notice. {value} removed you. The conversation remains archived locally.
+  ///
+  /// In en, this message translates to:
+  /// **'{value} removed you. The conversation remains archived locally.'**
+  String statusRemovedYouTheConversationRemains3BB516(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Updated edited message from {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Updated edited message from {value}.'**
+  String statusUpdatedEditedMessageFrom1AB90D(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Deleted message removed by {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Deleted message removed by {value}.'**
+  String statusDeletedMessageRemovedBy5A9E79(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Applied a reaction from {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Applied a reaction from {value}.'**
+  String statusAppliedAReactionFrom41011B(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Applied deferred direct reactions.
+  ///
+  /// In en, this message translates to:
+  /// **'Applied deferred direct reactions.'**
+  String get statusAppliedDeferredDirectReactions1414C8;
+
+  /// App-owned controller status shown in the status line or an action notice. Encrypted message stored for {value} via {value2}.
+  ///
+  /// In en, this message translates to:
+  /// **'Encrypted message stored for {value} via {value2}.'**
+  String statusEncryptedMessageStoredForVia029324(String value, String value2);
+
+  /// App-owned controller status shown in the status line or an action notice. Sent to {value} via {value2}; waiting for a delivery receipt.
+  ///
+  /// In en, this message translates to:
+  /// **'Sent to {value} via {value2}; waiting for a delivery receipt.'**
+  String statusSentToViaWaitingForEA766D(String value, String value2);
+
+  /// App-owned controller status shown in the status line or an action notice. Delivery retry pending: {value}
+  ///
+  /// In en, this message translates to:
+  /// **'Delivery retry pending: {value}'**
+  String statusDeliveryRetryPending93EAA3(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Group delivery retry pending: {value}
+  ///
+  /// In en, this message translates to:
+  /// **'Group delivery retry pending: {value}'**
+  String statusGroupDeliveryRetryPending691CA4(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Relay {value} identity changed — verify with the operator.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay {value} identity changed — verify with the operator.'**
+  String statusRelayIdentityChangedVerifyWith6F3689(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Relay {value}:{value2} identity mismatch — verify with the operator.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay {value}:{value2} identity mismatch — verify with the operator.'**
+  String statusRelayIdentityMismatchVerifyWith2D3B10(
+    String value,
+    String value2,
+  );
+
+  /// App-owned controller status shown in the status line or an action notice. The Matrix sign-in expired. Sign in again to use Matrix.
+  ///
+  /// In en, this message translates to:
+  /// **'The Matrix sign-in expired. Sign in again to use Matrix.'**
+  String get statusTheMatrixSignInExpired76ABA4;
+
+  /// App-owned controller status shown in the status line or an action notice. Signed in to Matrix as {value}.
+  ///
+  /// In en, this message translates to:
+  /// **'Signed in to Matrix as {value}.'**
+  String statusSignedInToMatrixAs5103D2(String value);
+
+  /// App-owned controller status shown in the status line or an action notice. Signed out of Matrix.
+  ///
+  /// In en, this message translates to:
+  /// **'Signed out of Matrix.'**
+  String get statusSignedOutOfMatrix1D1860;
+
+  /// App-owned controller status shown in the status line or an action notice. {value}'s other devices have not heard from {value2} for a while: messages from it may not be theirs.
+  ///
+  /// In en, this message translates to:
+  /// **'{value}\'s other devices have not heard from {value2} for a while: messages from it may not be theirs.'**
+  String statusSOtherDevicesHaveNot07F30F(String value, String value2);
+
+  /// App-owned controller status shown in the status line or an action notice. Received {value} item(s) instantly via local relay.
+  ///
+  /// In en, this message translates to:
+  /// **'{value, plural, one{Received {value} item instantly via local relay.} other{Received {value} items instantly via local relay.}}'**
+  String statusReceivedItemSInstantlyViaA7773B(int value);
+
+  /// App-owned controller status shown in the status line or an action notice. Received {value} item(s) via local inbox.
+  ///
+  /// In en, this message translates to:
+  /// **'{value, plural, one{Received {value} item via local inbox.} other{Received {value} items via local inbox.}}'**
+  String statusReceivedItemSViaLocal71A104(int value);
+
+  /// UI label or app-owned status atom: No new relay protocols detected.
+  ///
+  /// In en, this message translates to:
+  /// **'No new relay protocols detected.'**
+  String get statusNoNewProtocols;
+
+  /// UI label or app-owned status atom: Route info exchange requested.
+  ///
+  /// In en, this message translates to:
+  /// **'Route info exchange requested.'**
+  String get statusRouteExchangeRequested;
+
+  /// UI label or app-owned status atom: Route info exchange could not be sent yet.
+  ///
+  /// In en, this message translates to:
+  /// **'Route info exchange could not be sent yet.'**
+  String get statusRouteExchangePending;
+
+  /// UI label or app-owned status atom: known routes
+  ///
+  /// In en, this message translates to:
+  /// **'known routes'**
+  String get statusKnownRoutes;
+
+  /// UI label or app-owned status atom: reachable
+  ///
+  /// In en, this message translates to:
+  /// **'reachable'**
+  String get statusReachable;
+
+  /// UI label or app-owned status atom: unreachable
+  ///
+  /// In en, this message translates to:
+  /// **'unreachable'**
+  String get statusUnreachable;
+
+  /// UI label or app-owned status atom: unknown
+  ///
+  /// In en, this message translates to:
+  /// **'unknown'**
+  String get statusUnknown;
+
+  /// UI label or app-owned status atom: stale
+  ///
+  /// In en, this message translates to:
+  /// **'stale'**
+  String get statusExpired;
+
+  /// UI label or app-owned status atom: Connections
+  ///
+  /// In en, this message translates to:
+  /// **'Connections'**
+  String get connectionsTitle;
+
+  /// UI label or app-owned status atom: Which devices reach which, both ways or one way.
+  ///
+  /// In en, this message translates to:
+  /// **'Which devices reach which, both ways or one way.'**
+  String get connectionsDescription;
+
+  /// UI label or app-owned status atom: udp://host:port forces UDP
+  ///
+  /// In en, this message translates to:
+  /// **'udp://host:port forces UDP'**
+  String get relayUdpHint;
+
+  /// UI label or app-owned status atom: File actions
+  ///
+  /// In en, this message translates to:
+  /// **'File actions'**
+  String get deltaFileActions;
+
+  /// UI label or app-owned status atom: Forward
+  ///
+  /// In en, this message translates to:
+  /// **'Forward'**
+  String get deltaForward;
+
+  /// UI label or app-owned status atom: Attach
+  ///
+  /// In en, this message translates to:
+  /// **'Attach'**
+  String get deltaAttach;
+
+  /// UI label or app-owned status atom: Send voice message
+  ///
+  /// In en, this message translates to:
+  /// **'Send voice message'**
+  String get deltaSendVoice;
+
+  /// UI label or app-owned status atom: Discard voice message
+  ///
+  /// In en, this message translates to:
+  /// **'Discard voice message'**
+  String get deltaDiscardVoice;
+
+  /// UI label or app-owned status atom: Record voice message
+  ///
+  /// In en, this message translates to:
+  /// **'Record voice message'**
+  String get deltaRecordVoice;
+
+  /// UI label or app-owned status atom: React
+  ///
+  /// In en, this message translates to:
+  /// **'React'**
+  String get deltaReact;
+
+  /// UI label or app-owned status atom: Notes, files and forwards for yourself
+  ///
+  /// In en, this message translates to:
+  /// **'Notes, files and forwards for yourself'**
+  String get savedMessagesPreview;
+
+  /// User-facing network chat label: {network} chats
+  ///
+  /// In en, this message translates to:
+  /// **'{network} chats'**
+  String networkChatsTitle(String network);
+
+  /// User-facing network chat label: Encrypted Matrix chat
+  ///
+  /// In en, this message translates to:
+  /// **'Encrypted Matrix chat'**
+  String get networkEncryptedMatrixChat;
+
+  /// User-facing network chat label: Matrix chat
+  ///
+  /// In en, this message translates to:
+  /// **'Matrix chat'**
+  String get networkMatrixChat;
+
+  /// User-facing network chat label: Everyone in Bluetooth range
+  ///
+  /// In en, this message translates to:
+  /// **'Everyone in Bluetooth range'**
+  String get networkEveryoneBluetooth;
+
+  /// User-facing network chat label: no routes advertised
+  ///
+  /// In en, this message translates to:
+  /// **'no routes advertised'**
+  String get inviteNoRoutes;
+
+  /// Label for an app-owned state or display option: Waiting for a reachable path
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting for a reachable path'**
+  String get deliveryPending;
+
+  /// Label for an app-owned state or display option: Sent over LAN; waiting for delivery receipt
+  ///
+  /// In en, this message translates to:
+  /// **'Sent over LAN; waiting for delivery receipt'**
+  String get deliveryLocal;
+
+  /// Label for an app-owned state or display option: Queued on a relay; waiting for delivery receipt
+  ///
+  /// In en, this message translates to:
+  /// **'Queued on a relay; waiting for delivery receipt'**
+  String get deliveryRelayed;
+
+  /// Label for an app-owned state or display option: Delivered
+  ///
+  /// In en, this message translates to:
+  /// **'Delivered'**
+  String get deliveryDelivered;
+
+  /// Label for an app-owned state or display option: Read
+  ///
+  /// In en, this message translates to:
+  /// **'Read'**
+  String get deliveryRead;
+
+  /// Label for an app-owned state or display option: online
+  ///
+  /// In en, this message translates to:
+  /// **'online'**
+  String get reachabilityOnline;
+
+  /// Label for an app-owned state or display option: seen recently
+  ///
+  /// In en, this message translates to:
+  /// **'seen recently'**
+  String get reachabilityRecent;
+
+  /// Label for an app-owned state or display option: known
+  ///
+  /// In en, this message translates to:
+  /// **'known'**
+  String get reachabilityKnown;
+
+  /// Label for an app-owned state or display option: Waiting for approval
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting for approval'**
+  String get transferApproval;
+
+  /// Label for an app-owned state or display option: Waiting for peer
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting for peer'**
+  String get transferPeer;
+
+  /// Label for an app-owned state or display option: LAN direct
+  ///
+  /// In en, this message translates to:
+  /// **'LAN direct'**
+  String get routeLanDirect;
+
+  /// Label for an app-owned state or display option: Internet direct
+  ///
+  /// In en, this message translates to:
+  /// **'Internet direct'**
+  String get routeInternetDirect;
+
+  /// Label for an app-owned state or display option: Iroh direct
+  ///
+  /// In en, this message translates to:
+  /// **'Iroh direct'**
+  String get routeIrohDirect;
+
+  /// Label for an app-owned state or display option: Conest relay
+  ///
+  /// In en, this message translates to:
+  /// **'Conest relay'**
+  String get routeConestRelay;
+
+  /// Label for an app-owned state or display option: Optical
+  ///
+  /// In en, this message translates to:
+  /// **'Optical'**
+  String get routeOptical;
+
+  /// Label for an app-owned state or display option: Via a contact
+  ///
+  /// In en, this message translates to:
+  /// **'Via a contact'**
+  String get routeViaContact;
+
+  /// Label for an app-owned state or display option: System
+  ///
+  /// In en, this message translates to:
+  /// **'System'**
+  String get themeSystem;
+
+  /// Label for an app-owned state or display option: Signature · Light
+  ///
+  /// In en, this message translates to:
+  /// **'Signature · Light'**
+  String get themeLight;
+
+  /// Label for an app-owned state or display option: Signature · Dark
+  ///
+  /// In en, this message translates to:
+  /// **'Signature · Dark'**
+  String get themeDark;
+
+  /// Label for an app-owned state or display option: Signature · Black (OLED)
+  ///
+  /// In en, this message translates to:
+  /// **'Signature · Black (OLED)'**
+  String get themeBlack;
+
+  /// Label for an app-owned state or display option: Adaptive (wallpaper)
+  ///
+  /// In en, this message translates to:
+  /// **'Adaptive (wallpaper)'**
+  String get themeAdaptive;
+
+  /// Label for an app-owned state or display option: Signal Cards
+  ///
+  /// In en, this message translates to:
+  /// **'Signal Cards'**
+  String get layoutSignalCards;
+
+  /// Label for an app-owned state or display option: Station Feed
+  ///
+  /// In en, this message translates to:
+  /// **'Station Feed'**
+  String get layoutStationFeed;
+
+  /// Label for an app-owned state or display option: Classic rows
+  ///
+  /// In en, this message translates to:
+  /// **'Classic rows'**
+  String get layoutClassic;
+
+  /// Label for an app-owned state or display option: Peers as dashboard link tiles.
+  ///
+  /// In en, this message translates to:
+  /// **'Peers as dashboard link tiles.'**
+  String get layoutSignalDescription;
+
+  /// Label for an app-owned state or display option: A chronological packet/activity log.
+  ///
+  /// In en, this message translates to:
+  /// **'A chronological packet/activity log.'**
+  String get layoutFeedDescription;
+
+  /// Label for an app-owned state or display option: A compact one-line list.
+  ///
+  /// In en, this message translates to:
+  /// **'A compact one-line list.'**
+  String get layoutClassicDescription;
+
+  /// Label for an app-owned state or display option: Conest's native dashboard sidebar.
+  ///
+  /// In en, this message translates to:
+  /// **'Conest\'s native dashboard sidebar.'**
+  String get shellSignatureDescription;
+
+  /// Label for an app-owned state or display option: Discord-shaped: a rail of cells + conversations.
+  ///
+  /// In en, this message translates to:
+  /// **'Discord-shaped: a rail of cells + conversations.'**
+  String get shellGarrisonDescription;
+
+  /// Label for an app-owned state or display option: Telegram-shaped: one clean conversation list.
+  ///
+  /// In en, this message translates to:
+  /// **'Telegram-shaped: one clean conversation list.'**
+  String get shellCourierDescription;
+
+  /// Label for an app-owned state or display option: both ways
+  ///
+  /// In en, this message translates to:
+  /// **'both ways'**
+  String get connectionsBothWays;
+
+  /// Label for an app-owned state or display option: only from them
+  ///
+  /// In en, this message translates to:
+  /// **'only from them'**
+  String get connectionsInbound;
+
+  /// Label for an app-owned state or display option: failing
+  ///
+  /// In en, this message translates to:
+  /// **'failing'**
+  String get connectionsFailing;
+
+  /// Label for an app-owned state or display option: no recent word
+  ///
+  /// In en, this message translates to:
+  /// **'no recent word'**
+  String get connectionsUnknown;
+
+  /// Label for an app-owned state or display option: Connected · {time}
+  ///
+  /// In en, this message translates to:
+  /// **'Connected · {time}'**
+  String voiceConnected(String time);
+
+  /// Label for an app-owned state or display option: Their clock is about {amount} ahead; times here are by this device.
+  ///
+  /// In en, this message translates to:
+  /// **'Their clock is about {amount} ahead; times here are by this device.'**
+  String messageClockAhead(String amount);
+
+  /// Label for an app-owned state or display option: Their clock is about {amount} behind; times here are by this device.
+  ///
+  /// In en, this message translates to:
+  /// **'Their clock is about {amount} behind; times here are by this device.'**
+  String messageClockBehind(String amount);
+
+  /// Label for an app-owned state or display option: Not recently confirmed: their other devices last counted this one as theirs on {date}.
+  ///
+  /// In en, this message translates to:
+  /// **'Not recently confirmed: their other devices last counted this one as theirs on {date}.'**
+  String messageNotRecentlyConfirmed(String date);
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Straight to the other device on your local network.'**
+  String get routeLanDirectDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Through another device\'s relay node on your local network.'**
+  String get routeLanRelayDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'The LAN lobby\'s shared mailbox; anyone on the network can read it.'**
+  String get routeLanLobbyDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Straight to the other device\'s relay node over the internet.'**
+  String get routeInternetDirectDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Peer to peer over Iroh, end-to-end encrypted.'**
+  String get routeIrohDirectDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Through an Iroh relay server, which sees only encrypted traffic.'**
+  String get routeIrohRelayDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Stored and forwarded by a Conest relay server, which sees only encrypted envelopes.'**
+  String get routeConestRelayDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Carried by Matrix, still end-to-end encrypted by Conest; the homeserver sees who talks and when.'**
+  String get routeMatrixDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Sent as an ordinary Matrix message; the homeserver can read it unless the room is encrypted.'**
+  String get routePlainMatrixDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Carried by Nostr relays, still end-to-end encrypted by Conest; relays see the recipient and when, not the sender.'**
+  String get routeNostrDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Carried by email, still end-to-end encrypted by Conest; the mail servers see both addresses and when.'**
+  String get routeEmailDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Over Reticulum, by radio or a Reticulum network, end-to-end encrypted.'**
+  String get routeReticulumDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Over a Meshtastic radio mesh, end-to-end encrypted.'**
+  String get routeMeshtasticDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Over a MeshCore radio mesh, end-to-end encrypted.'**
+  String get routeMeshCoreDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Over the Bluetooth mesh through nearby devices, end-to-end encrypted.'**
+  String get routeBluetoothDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Between onion services over Tor; no one on the way sees who talks to whom.'**
+  String get routeTorDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Passed on by a contact who could reach the other device; still end-to-end encrypted, the contact saw only who it was for and when.'**
+  String get routeContactDescription;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'{route}: {ms} ms there and back'**
+  String routeTestRoundTrip(String route, String ms);
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'{route}: left on the relay (answers once they fetch it)'**
+  String routeTestStored(String route);
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'{route}: no answer'**
+  String routeTestNoAnswer(String route);
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'{time} left'**
+  String transferTimeLeft(String time);
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'queue #{position}'**
+  String transferQueuePosition(String position);
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'tap to retry'**
+  String get transferTapRetry;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Rerouting'**
+  String get transferRerouting;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Lobby'**
+  String get routeShortLobby;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Direct'**
+  String get routeShortDirect;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay'**
+  String get routeShortRelay;
+
+  /// Presentation text for message route information or attachment transfer progress.
+  ///
+  /// In en, this message translates to:
+  /// **'Via contact'**
+  String get routeShortContact;
+
+  /// Chat list preview for a locally saved unsent draft.
+  ///
+  /// In en, this message translates to:
+  /// **'Draft: {text}'**
+  String chatDraftPreview(String text);
+
+  /// Route inspector note: automatic fallback is enabled.
+  ///
+  /// In en, this message translates to:
+  /// **'automatic fallback ✓'**
+  String get routeAutomaticFallback;
+
+  /// App-owned fallback or state label within a release, call, contact, relay or file sharing screen.
+  ///
+  /// In en, this message translates to:
+  /// **'nightly'**
+  String get releaseNightly;
+
+  /// App-owned fallback or state label within a release, call, contact, relay or file sharing screen.
+  ///
+  /// In en, this message translates to:
+  /// **'stable'**
+  String get releaseStable;
+
+  /// App-owned fallback or state label within a release, call, contact, relay or file sharing screen.
+  ///
+  /// In en, this message translates to:
+  /// **'Call active'**
+  String get callActive;
+
+  /// App-owned fallback or state label within a release, call, contact, relay or file sharing screen.
+  ///
+  /// In en, this message translates to:
+  /// **'Call'**
+  String get callGeneric;
+
+  /// App-owned fallback or state label within a release, call, contact, relay or file sharing screen.
+  ///
+  /// In en, this message translates to:
+  /// **'Not pinned'**
+  String get contactNotPinned;
+
+  /// App-owned fallback or state label within a release, call, contact, relay or file sharing screen.
+  ///
+  /// In en, this message translates to:
+  /// **'A member'**
+  String get groupUnknownMember;
+
+  /// App-owned fallback or state label within a release, call, contact, relay or file sharing screen.
+  ///
+  /// In en, this message translates to:
+  /// **'signed'**
+  String get relaySourceSigned;
+
+  /// App-owned fallback or state label within a release, call, contact, relay or file sharing screen.
+  ///
+  /// In en, this message translates to:
+  /// **'unsigned'**
+  String get relaySourceUnsigned;
+
+  /// App-owned fallback or state label within a release, call, contact, relay or file sharing screen.
+  ///
+  /// In en, this message translates to:
+  /// **'fingerprint unavailable'**
+  String get beamFingerprintUnavailable;
+
+  /// App-owned fallback or state label within a release, call, contact, relay or file sharing screen.
+  ///
+  /// In en, this message translates to:
+  /// **'Its location, camera, author and date details will be sent with it.'**
+  String get fileOriginalMetadataWarning;
+
+  /// Delivery progress after a route name in message details; lowercase in English.
+  ///
+  /// In en, this message translates to:
+  /// **'sent'**
+  String get routeMarkSent;
+
+  /// Delivery progress after a route name in message details; lowercase in English.
+  ///
+  /// In en, this message translates to:
+  /// **'waiting on the relay'**
+  String get routeMarkStored;
+
+  /// Delivery progress after a route name in message details; lowercase in English.
+  ///
+  /// In en, this message translates to:
+  /// **'reached their device'**
+  String get routeMarkReached;
+
+  /// Delivery progress after a route name in message details; lowercase in English.
+  ///
+  /// In en, this message translates to:
+  /// **'delivered'**
+  String get routeMarkDelivered;
+
+  /// Delivery progress after a route name in message details; lowercase in English.
+  ///
+  /// In en, this message translates to:
+  /// **'received'**
+  String get routeMarkReceived;
 }
 
 class _AppLocalizationsDelegate

@@ -1,4 +1,4 @@
-import 'localized_ui_text.dart';
+import '../app_locales.dart';
 import 'package:flutter/material.dart';
 
 import '../messenger_controller.dart';
@@ -75,9 +75,9 @@ class _NostrCarrierPanelState extends State<NostrCarrierPanel> {
         SwitchListTile.adaptive(
           key: const ValueKey('nostr-carrier-switch'),
           contentPadding: EdgeInsets.zero,
-          title:  Text(localizedUiText(context, 'Nostr relays')),
-          subtitle:  Text(
-            localizedUiText(context, 'Carry messages through public Nostr relays when other routes ' 'fail. Relays see that someone writes to you and when, not who ' 'or what. Uses a separate key; your contacts learn it ' 'automatically.'),
+          title: Text(l10nOf(context).uiNostrRelaysBD8BAD),
+          subtitle: Text(
+            l10nOf(context).uiCarryMessagesThroughPublicNostr729B94,
           ),
           value: config != null,
           onChanged: _busy
@@ -116,8 +116,8 @@ class _NostrCarrierPanelState extends State<NostrCarrierPanel> {
           enabled: !_busy,
           minLines: 2,
           maxLines: maxNostrAddressRelays,
-          decoration:  InputDecoration(
-            labelText: localizedUiText(context, 'Relays you read from (one per line, up to 4)'),
+          decoration: InputDecoration(
+            labelText: l10nOf(context).uiRelaysYouReadFromOne020C0A,
             isDense: true,
           ),
         ),
@@ -133,7 +133,7 @@ class _NostrCarrierPanelState extends State<NostrCarrierPanel> {
                         () =>
                             controller.enableNostrCarrier(relays: _relayLines),
                       ),
-                child:  Text(localizedUiText(context, 'Save relays')),
+                child: Text(l10nOf(context).uiSaveRelays91CBA8),
               ),
             TextButton(
               onPressed: _busy
@@ -141,7 +141,7 @@ class _NostrCarrierPanelState extends State<NostrCarrierPanel> {
                   : () => setState(
                       () => _relays.text = defaultNostrRelays.join('\n'),
                     ),
-              child:  Text(localizedUiText(context, 'Default relays')),
+              child: Text(l10nOf(context).uiDefaultRelays5C909F),
             ),
           ],
         ),

@@ -1,4 +1,4 @@
-import 'localized_ui_text.dart';
+import '../app_locales.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../messenger_controller.dart';
 import '../models.dart';
 import '../route_test.dart';
+import 'localized_labels.dart';
 
 /// "Test Routes" in a contact's profile: times a probe out and back on each
 /// route, and lists the answers.
@@ -72,15 +73,22 @@ class _RouteTestPanelState extends State<RouteTestPanel> {
     }
   }
 
-  static String describe(RouteTestResult result) {
+  static String describe(RouteTestResult result, {BuildContext? context}) {
+    final strings = l10nOf(context);
+    final label = result.route == null
+        ? result.label
+        : messageRouteLabel(context, result.route!);
     final roundTrip = result.roundTrip;
     if (roundTrip != null) {
-      return '${result.label}: ${roundTrip.inMilliseconds} ms there and back';
+      return strings.routeTestRoundTrip(
+        label,
+        roundTrip.inMilliseconds.toString(),
+      );
     }
     if (result.stored) {
-      return '${result.label}: left on the relay (answers once they fetch it)';
+      return strings.routeTestStored(label);
     }
-    return '${result.label}: no answer';
+    return strings.routeTestNoAnswer(label);
   }
 
   @override
@@ -107,7 +115,11 @@ class _RouteTestPanelState extends State<RouteTestPanel> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.speed),
-            label: Text(_running ? localizedUiText(context, 'Testing routes…') : localizedUiText(context, 'Test Routes')),
+            label: Text(
+              _running
+                  ? l10nOf(context).uiTestingRoutes19C586
+                  : l10nOf(context).uiTestRoutes52770A,
+            ),
           ),
         ),
         if (!supported)
@@ -115,8 +127,8 @@ class _RouteTestPanelState extends State<RouteTestPanel> {
             padding: const EdgeInsets.only(top: 6),
             child: Text(
               _asking
-                  ? localizedUiText(context, 'Checking whether their app can take route tests…')
-                  : localizedUiText(context, 'Their app did not say it can take route tests. If ' 'they run this version too, they may not be ' 'reachable right now.'),
+                  ? l10nOf(context).uiCheckingWhetherTheirAppCan51E401
+                  : l10nOf(context).uiTheirAppDidNotSay758036,
               style: muted,
             ),
           ),
@@ -133,7 +145,7 @@ class _RouteTestPanelState extends State<RouteTestPanel> {
         if (report != null) ...[
           const SizedBox(height: 8),
           if (report.results.isEmpty)
-            Text(localizedUiText(context, 'No route took the test.'), style: muted)
+            Text(l10nOf(context).uiNoRouteTookTheTestF2F6CB, style: muted)
           else
             for (final result in report.results)
               Padding(
@@ -154,13 +166,17 @@ class _RouteTestPanelState extends State<RouteTestPanel> {
                           : theme.colorScheme.error,
                     ),
                     const SizedBox(width: 6),
-                    Expanded(child: Text(describe(result))),
+                    Expanded(child: Text(describe(result, context: context))),
                   ],
                 ),
               ),
           const SizedBox(height: 4),
           Text(
-            localizedUiText(context, 'Tested ${TimeOfDay.fromDateTime(report.measuredAt.toLocal()).format(context)}. ' 'Routes that answer go first for messages.'),
+            l10nOf(context).uiTestedValueRoutesThatAnswer70B842(
+              (TimeOfDay.fromDateTime(
+                report.measuredAt.toLocal(),
+              ).format(context)).toString(),
+            ),
             style: muted,
           ),
         ],

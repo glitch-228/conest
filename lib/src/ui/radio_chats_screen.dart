@@ -1,4 +1,4 @@
-import 'localized_ui_text.dart';
+import '../app_locales.dart';
 import 'dart:async';
 import 'dart:math';
 
@@ -120,7 +120,7 @@ class RadioChatsScreen extends StatelessWidget {
       builder: (context) {
         final field = TextEditingController();
         return AlertDialog(
-          title:  Text(localizedUiText(context, 'New chat')),
+          title: Text(l10nOf(context).uiNewChat009BF6),
           content: SizedBox(
             width: 360,
             child: ListView(
@@ -128,7 +128,9 @@ class RadioChatsScreen extends StatelessWidget {
               children: [
                 TextField(
                   controller: field,
-                  decoration:  InputDecoration(hintText: localizedUiText(context, 'Node address')),
+                  decoration: InputDecoration(
+                    hintText: l10nOf(context).uiNodeAddress896F20,
+                  ),
                   onSubmitted: (value) => Navigator.of(context).pop(value),
                 ),
                 for (final MapEntry(key: node, value: name) in nodes.entries)
@@ -143,11 +145,11 @@ class RadioChatsScreen extends StatelessWidget {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child:  Text(localizedUiText(context, 'Cancel')),
+              child: Text(l10nOf(context).actionCancel),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(field.text),
-              child:  Text(localizedUiText(context, 'Start')),
+              child: Text(l10nOf(context).actionStart),
             ),
           ],
         );
@@ -161,7 +163,7 @@ class RadioChatsScreen extends StatelessWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(localizedUiText(context, '$error'))));
+        ).showSnackBar(SnackBar(content: Text("${(error)}")));
       }
     }
   }
@@ -179,10 +181,12 @@ class RadioChatsScreen extends StatelessWidget {
             return last(b).compareTo(last(a));
           });
         return Scaffold(
-          appBar: AppBar(title: Text(localizedUiText(context, '${access.network} chats'))),
+          appBar: AppBar(
+            title: Text(l10nOf(context).networkChatsTitle(access.network)),
+          ),
           floatingActionButton: access.canWrite()
               ? FloatingActionButton(
-                  tooltip: localizedUiText(context, 'New chat'),
+                  tooltip: l10nOf(context).uiNewChat009BF6,
                   onPressed: () => _newChat(context),
                   child: const Icon(Icons.edit_outlined),
                 )
@@ -202,7 +206,7 @@ class RadioChatsScreen extends StatelessWidget {
                   ),
                   trailing: (chats.unread[key] ?? 0) == 0
                       ? null
-                      : Badge(label: Text(localizedUiText(context, '${chats.unread[key]}'))),
+                      : Badge(label: Text("${(chats.unread[key])}")),
                   onTap: () => openRadioChat(context, controller, access, key),
                 ),
             ],
@@ -302,7 +306,7 @@ class _RadioChatScreenState extends State<_RadioChatScreen> {
             title: Text(widget.access.title(widget.chatKey)),
             actions: [
               IconButton(
-                tooltip: localizedUiText(context, 'Delete chat'),
+                tooltip: l10nOf(context).uiDeleteChatDB9121,
                 icon: const Icon(Icons.delete_outline),
                 onPressed: () async {
                   await widget.access.delete(widget.chatKey);
@@ -347,7 +351,7 @@ class _RadioChatScreenState extends State<_RadioChatScreen> {
                                   // are alike (names are self-chosen).
                                   message.from.isEmpty
                                       ? message.name
-                                      : localizedUiText(context, '${message.name} ' '(${message.from.substring(0, min(6, message.from.length))})'),
+                                      : "${(message.name)} (${(message.from.substring(0, min(6, message.from.length)))})",
                                   style: theme.textTheme.labelMedium,
                                 ),
                               Text(message.text),
@@ -358,16 +362,20 @@ class _RadioChatScreenState extends State<_RadioChatScreen> {
                                   ).format(context),
                                   if (message.outgoing && !channel)
                                     switch (message.state) {
-                                      RadioMessageState.delivered =>
-                                        localizedUiText(context, 'delivered'),
-                                      RadioMessageState.failed =>
-                                        localizedUiText(context, 'not delivered (their radio could ' 'not read it)'),
-                                      RadioMessageState.sent => localizedUiText(context, 'sent'),
+                                      RadioMessageState.delivered => l10nOf(
+                                        context,
+                                      ).uiDeliveredF81891,
+                                      RadioMessageState.failed => l10nOf(
+                                        context,
+                                      ).uiNotDeliveredTheirRadioCould75D581,
+                                      RadioMessageState.sent => l10nOf(
+                                        context,
+                                      ).uiSent27E770,
                                     },
                                   if (!message.outgoing &&
                                       !channel &&
                                       !message.authentic)
-                                    localizedUiText(context, 'sender not verified'),
+                                    l10nOf(context).uiSenderNotVerified2BB0FA,
                                 ].join(' · '),
                                 style: theme.textTheme.labelSmall,
                               ),
@@ -400,14 +408,14 @@ class _RadioChatScreenState extends State<_RadioChatScreen> {
                           enabled: canWrite,
                           decoration: InputDecoration(
                             hintText: canWrite
-                                ? localizedUiText(context, 'Message')
-                                : localizedUiText(context, 'Turn on app messages to write'),
+                                ? l10nOf(context).uiMessage68F414
+                                : l10nOf(context).uiTurnOnAppMessagesTo7DCA13,
                           ),
                           onSubmitted: (_) => _send(),
                         ),
                       ),
                       IconButton(
-                        tooltip: localizedUiText(context, 'Send'),
+                        tooltip: l10nOf(context).composerSend,
                         icon: const Icon(Icons.send),
                         onPressed: canWrite && !_sending ? _send : null,
                       ),

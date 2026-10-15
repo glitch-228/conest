@@ -1,4 +1,4 @@
-import 'ui/localized_ui_text.dart';
+import 'app_locales.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
@@ -37,7 +37,7 @@ class _QrScanScreenState extends State<QrScanScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title:  Text(localizedUiText(context, 'Scan Invite'))),
+      appBar: AppBar(title: Text(l10nOf(context).uiScanInviteEFC78A)),
       body: Stack(
         fit: StackFit.expand,
         children: [
@@ -54,12 +54,12 @@ class _QrScanScreenState extends State<QrScanScreen> {
               ),
             ),
           ),
-           Positioned(
+          Positioned(
             left: 24,
             right: 24,
             bottom: 36,
             child: Text(
-              localizedUiText(context, 'Point the camera at a Conest invite QR code.'),
+              l10nOf(context).uiPointTheCameraAtA9BAFAF,
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Colors.white,

@@ -1,4 +1,3 @@
-import 'localized_ui_text.dart';
 import 'package:flutter/material.dart';
 
 import '../../l10n/app_localizations.dart';
@@ -73,7 +72,7 @@ class CallsList extends StatelessWidget {
             color: missed ? theme.colorScheme.error : null,
           ),
           title: Text(contact?.alias ?? l10n.unknownContact),
-          subtitle: Text(localizedUiText(context, '${_outcome(l10n, call)}${_duration(l10n, call)}')),
+          subtitle: Text("${(_outcome(l10n, call))}${(_duration(l10n, call))}"),
           trailing: Text(_when(call.startedAt)),
           onTap: contact == null ? null : () => onOpenContact(contact),
         );

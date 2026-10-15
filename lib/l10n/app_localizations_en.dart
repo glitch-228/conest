@@ -800,8 +800,14 @@ class AppLocalizationsEn extends AppLocalizations {
       'Nothing to copy from the selected messages.';
 
   @override
-  String uiCopiedValueMessageSC97E6E(String value) {
-    return 'Copied $value message(s).';
+  String uiCopiedValueMessageSC97E6E(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'Copied $value messages.',
+      one: 'Copied $value message.',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -1339,8 +1345,14 @@ class AppLocalizationsEn extends AppLocalizations {
       'When this contact cannot reach someone but this device can, pass their messages on. You see only who they are for and when; the content stays encrypted.';
 
   @override
-  String uiSaveValueFileSToB46C57(String value) {
-    return 'Save $value file(s) to…';
+  String uiSaveValueFileSToB46C57(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'Save $value files to…',
+      one: 'Save $value file to…',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -1968,7 +1980,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get uiReachContactsNearbyWithoutAny9E9649 =>
-      'Reach contacts nearby without any network: messages hop from phone to phone over Bluetooth, through Conest and bitchat users alike, and this phone relays for others. This phone does not show up in bitchat, and what it sends looks like any bitchat private message, with ids that change every hour.';
+      'Reach contacts nearby without any network: messages hop from device to device over Bluetooth, through Conest and bitchat users alike, and this device relays for others. This device does not show up in bitchat, and what it sends looks like any bitchat private message, with ids that change every hour.';
 
   @override
   String get uiReachableByBitchatUsers568021 => 'Reachable by bitchat users';
@@ -2336,8 +2348,14 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String uiWaitingForValueMemberS5A8BA6(String value) {
-    return 'Waiting for $value member(s)';
+  String uiWaitingForValueMemberS5A8BA6(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'Waiting for $value members',
+      one: 'Waiting for $value member',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -2391,8 +2409,14 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String uiValueMembersCEF563(String value) {
-    return '$value members';
+  String uiValueMembersCEF563(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value members',
+      one: '$value member',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -2530,8 +2554,14 @@ class AppLocalizationsEn extends AppLocalizations {
   String get uiConestTransfer406028 => 'Conest transfer';
 
   @override
-  String uiValueConestTransfersF846F8(String value) {
-    return '$value Conest transfers';
+  String uiValueConestTransfersF846F8(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value Conest transfers',
+      one: '$value Conest transfers',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -2681,8 +2711,14 @@ class AppLocalizationsEn extends AppLocalizations {
   String get uiContactDetailsD4EC65 => 'Contact details';
 
   @override
-  String uiValueActiveMemberValue6700F2(String value, String value2) {
-    return '$value active member$value2';
+  String uiValueActiveMemberValue6700F2(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value active members',
+      one: '$value active member',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -2743,8 +2779,14 @@ class AppLocalizationsEn extends AppLocalizations {
   String get uiNoGroupsYet5009C6 => 'No groups yet.';
 
   @override
-  String uiValueMemberSE75249(String value) {
-    return '$value member(s)';
+  String uiValueMemberSE75249(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value members',
+      one: '$value member',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -2775,8 +2817,14 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String uiValueMemberSOwnerValueE42E13(String value, String value2) {
-    return '$value member(s) • owner $value2';
+  String uiValueMemberSOwnerValueE42E13(int value, String value2) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value members • owner $value2',
+      one: '$value member • owner $value2',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -2866,8 +2914,14 @@ class AppLocalizationsEn extends AppLocalizations {
       'Could not locate this message in the current chat';
 
   @override
-  String uiDeleteValueMessageValueForABA7AC(String value, String value2) {
-    return 'Delete $value message$value2 for the group?';
+  String uiDeleteValueMessageValueForABA7AC(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'Delete $value messages for the group?',
+      one: 'Delete $value message for the group?',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -2916,8 +2970,14 @@ class AppLocalizationsEn extends AppLocalizations {
   String get uiVisibleVotes460E7A => 'Visible votes';
 
   @override
-  String uiValueVoteSWereNot02CC9A(String value) {
-    return '$value vote(s) were not in the creator’s close checkpoint.';
+  String uiValueVoteSWereNot02CC9A(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value votes were not in the creator’s close checkpoint.',
+      one: '$value vote were not in the creator’s close checkpoint.',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -3014,8 +3074,14 @@ class AppLocalizationsEn extends AppLocalizations {
       'Scanning the compact QR is enough on its own. If the camera still struggles, open it full screen or use only the current codephrase.';
 
   @override
-  String uiQRPayloadValueCharactersBABEDF(String value) {
-    return 'QR payload: $value characters';
+  String uiQRPayloadValueCharactersBABEDF(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'QR payload: $value characters',
+      one: 'QR payload: $value character',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -3052,10 +3118,16 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String uiFrameValueValueSourceBlocks9C37CB(
     String value,
-    String value2,
+    int value2,
     String value3,
   ) {
-    return 'Frame $value · $value2 source blocks · $value3';
+    String _temp0 = intl.Intl.pluralLogic(
+      value2,
+      locale: localeName,
+      other: 'Frame $value · $value2 source blocks · $value3',
+      one: 'Frame $value · $value2 source blocks · $value3',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -3102,8 +3174,16 @@ class AppLocalizationsEn extends AppLocalizations {
       'Fullscreen compact invite QR';
 
   @override
-  String uiValueCharactersIncreaseScreenBrightnessA5AF7D(String value) {
-    return '$value characters. Increase screen brightness if scanning is unreliable.';
+  String uiValueCharactersIncreaseScreenBrightnessA5AF7D(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other:
+          '$value characters. Increase screen brightness if scanning is unreliable.',
+      one:
+          '$value character. Increase screen brightness if scanning is unreliable.',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -3143,8 +3223,14 @@ class AppLocalizationsEn extends AppLocalizations {
       'Connectivity is fully off — the app will not send or receive.';
 
   @override
-  String uiValueCandidateRouteSAre175673(String value) {
-    return '$value candidate route(s) are available right now.';
+  String uiValueCandidateRouteSAre175673(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value candidate routes are available right now.',
+      one: '$value candidate route are available right now.',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -3276,8 +3362,14 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String uiThisWillRemoveValueRelay330EEB(String value, String value2) {
-    return 'This will remove $value relay route(s) imported from $value2.';
+  String uiThisWillRemoveValueRelay330EEB(int value, String value2) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'This will remove $value relay routes imported from $value2.',
+      one: 'This will remove $value relay route imported from $value2.',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -3295,9 +3387,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String uiValueValueValueRouteS40FB98(
     String value,
     String value2,
-    String value3,
+    int value3,
   ) {
-    return '$value · $value2 · $value3 route(s)';
+    String _temp0 = intl.Intl.pluralLogic(
+      value3,
+      locale: localeName,
+      other: '$value · $value2 · $value3 routes',
+      one: '$value · $value2 · $value3 route',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -3405,13 +3503,27 @@ class AppLocalizationsEn extends AppLocalizations {
   String get uiDeleteAlbum52E30F => 'Delete album';
 
   @override
-  String uiValueSelectedB1DFAF(String value) {
-    return '$value selected';
+  String uiValueSelectedB1DFAF(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value selected',
+      one: '$value selected',
+    );
+    return '$_temp0';
   }
 
   @override
-  String uiThisWillCancelValueActiveB3425E(String value, String value2) {
-    return 'This will cancel $value active transfer$value2 and clear the transfer list. Chat messages and completed downloaded files will stay.';
+  String uiThisWillCancelValueActiveB3425E(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other:
+          'This will cancel $value active transfers and clear the transfer list. Chat messages and completed downloaded files will stay.',
+      one:
+          'This will cancel $value active transfer and clear the transfer list. Chat messages and completed downloaded files will stay.',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -3524,8 +3636,14 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String uiShareValueFilesToA46E17(String value) {
-    return 'Share $value files to…';
+  String uiShareValueFilesToA46E17(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'Share $value files to…',
+      one: 'Share $value file to…',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -3580,8 +3698,14 @@ class AppLocalizationsEn extends AppLocalizations {
       'Accounts that sign in through Google, GitHub or another provider, or through matrix.org, use the browser.';
 
   @override
-  String uiThisAccountIsOnValueB78C80(String value) {
-    return 'This account is on $value devices.';
+  String uiThisAccountIsOnValueB78C80(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'This account is on $value devices.',
+      one: 'This account is on $value device.',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -3597,8 +3721,14 @@ class AppLocalizationsEn extends AppLocalizations {
       'Pause syncing with a device out of touch for';
 
   @override
-  String uiValueDaysEE919A(String value) {
-    return '$value days';
+  String uiValueDaysEE919A(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value days',
+      one: '$value day',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -3708,8 +3838,14 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String uiStartedByValueValueParticipants99F03D(String value, String value2) {
-    return 'Started by $value · $value2 participants';
+  String uiStartedByValueValueParticipants99F03D(String value, int value2) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value2,
+      locale: localeName,
+      other: 'Started by $value · $value2 participants',
+      one: 'Started by $value · $value2 participant',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -3812,8 +3948,14 @@ class AppLocalizationsEn extends AppLocalizations {
   String get uiLIVE67B40B => '● LIVE';
 
   @override
-  String uiValueChatsAD9A3B(String value) {
-    return '$value chats';
+  String uiValueChatsAD9A3B(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value chats',
+      one: '$value chat',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -3885,11 +4027,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get uiOffBitchatUsersDoNot054F9A =>
-      'Off: bitchat users do not see this phone. You can still read the mesh chat.';
+      'Off: bitchat users do not see this device. You can still read the mesh chat.';
 
   @override
   String uiPhonesNearbyWithoutInternetCan27CC7F(String value) {
-    return 'Phones nearby without internet can use bitchat\'s location channels through this phone. Only those public, signed messages pass. This phone connects to the relays of the areas they use$value: those relays see your internet address and the area, so they can tell roughly where you are.';
+    return 'Phones nearby without internet can use bitchat\'s location channels through this device. Only those public, signed messages pass. This device connects to the relays of the areas they use$value: those relays see your internet address and the area, so they can tell roughly where you are.';
   }
 
   @override
@@ -3897,8 +4039,14 @@ class AppLocalizationsEn extends AppLocalizations {
       'Off: bitchat users nearby without internet cannot reach location channels through you.';
 
   @override
-  String uiValueNearbyTheMeshChat31C0CA(String value) {
-    return '$value nearby · the mesh chat and private chats';
+  String uiValueNearbyTheMeshChat31C0CA(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: '$value nearby · the mesh chat and private chats',
+      one: '$value nearby · the mesh chat and private chats',
+    );
+    return '$_temp0';
   }
 
   @override
@@ -4028,4 +4176,985 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get uiPointTheCameraAtA9BAFAF =>
       'Point the camera at a Conest invite QR code.';
+
+  @override
+  String get statusMatrixRoomsShowJoinsAndE8AC9E =>
+      'Matrix rooms show joins and leaves.';
+
+  @override
+  String get statusMatrixRoomsHideJoinsAndE00610 =>
+      'Matrix rooms hide joins and leaves.';
+
+  @override
+  String statusAppMode95B48F(String value) {
+    return 'App mode: $value.';
+  }
+
+  @override
+  String statusCalling7A8C67(String value) {
+    return 'Calling $value…';
+  }
+
+  @override
+  String get statusUpdatedHistoryVisibilityForFutureDA1A23 =>
+      'Updated history visibility for future group members.';
+
+  @override
+  String statusVaultUnlockFailedAE7813(String value) {
+    return 'Vault unlock failed: $value';
+  }
+
+  @override
+  String get statusDirectOnlineTransportIsUnavailableB1EFAE =>
+      'Direct online transport is unavailable; relay fallback remains active.';
+
+  @override
+  String get statusNostrCarrierSetUpE82998 => 'Nostr carrier set up.';
+
+  @override
+  String get statusNostrCarrierRemovedCB968A => 'Nostr carrier removed.';
+
+  @override
+  String get statusNostrRelaysUpdatedARelay03F8F3 =>
+      'Nostr relays updated: a relay shut down.';
+
+  @override
+  String get statusTorCarrierSetUp3D2304 => 'Tor carrier set up.';
+
+  @override
+  String get statusTorCarrierRemovedAAC23E => 'Tor carrier removed.';
+
+  @override
+  String get statusBluetoothMeshOn11FD21 => 'Bluetooth mesh on.';
+
+  @override
+  String get statusBluetoothMeshOff2CE954 => 'Bluetooth mesh off.';
+
+  @override
+  String get statusNostrMessagesOn35ABF5 => 'Nostr messages on.';
+
+  @override
+  String get statusNostrMessagesOff16BCA7 => 'Nostr messages off.';
+
+  @override
+  String get statusDeltaChatOn1F38AA => 'Delta Chat on.';
+
+  @override
+  String get statusDeltaChatOff8BDBD4 => 'Delta Chat off.';
+
+  @override
+  String statusBitchatUsersNearbyCanNow5536CD(String value) {
+    return 'bitchat users nearby can now see you as $value.';
+  }
+
+  @override
+  String get statusBitchatUsersNoLongerSee68B46D =>
+      'bitchat users no longer see you.';
+
+  @override
+  String statusMeshcoreCarrierSetUpThroughE51369(String value) {
+    return 'MeshCore carrier set up through $value.';
+  }
+
+  @override
+  String get statusMeshcoreCarrierRemoved38FC35 => 'MeshCore carrier removed.';
+
+  @override
+  String statusMeshtasticCarrierSetUpThroughAFA24A(String value) {
+    return 'Meshtastic carrier set up through $value.';
+  }
+
+  @override
+  String get statusMeshtasticCarrierRemoved66387E =>
+      'Meshtastic carrier removed.';
+
+  @override
+  String get statusMeshtasticAppMessagesOn2C1888 =>
+      'Meshtastic app messages on.';
+
+  @override
+  String get statusMeshtasticAppMessagesOffAFB9E8 =>
+      'Meshtastic app messages off.';
+
+  @override
+  String get statusMeshcoreAppMessagesOn2BF1E3 => 'MeshCore app messages on.';
+
+  @override
+  String get statusMeshcoreAppMessagesOffE59C90 => 'MeshCore app messages off.';
+
+  @override
+  String statusReticulumCarrierSetUpThrough7EB41E(String value) {
+    return 'Reticulum carrier set up through $value.';
+  }
+
+  @override
+  String get statusReticulumCarrierRemoved301C05 =>
+      'Reticulum carrier removed.';
+
+  @override
+  String statusEmailCarrierSetUpAs8427FD(String value) {
+    return 'Email carrier set up as $value.';
+  }
+
+  @override
+  String get statusEmailCarrierRemoved036E51 => 'Email carrier removed.';
+
+  @override
+  String statusImportedRelaySFromB1DB2D(int value, String value2) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'Imported $value relays from $value2.',
+      one: 'Imported $value relay from $value2.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String statusRemovedImportedRelaySource3F4540(String value) {
+    return 'Removed imported relay source $value.';
+  }
+
+  @override
+  String get statusPairingCodeRotatedAndAdvertised722FB9 =>
+      'Pairing code rotated and advertised.';
+
+  @override
+  String statusCheckedRouteSAvailableE9B9D6(
+    int value,
+    int value2,
+    String value3,
+  ) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'Checked $value routes; $value2 available. $value3',
+      one: 'Checked $value route; $value2 available. $value3',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String statusCheckedIrohPathSFor038B43(
+    String value,
+    String value2,
+    String value3,
+  ) {
+    return 'Checked Iroh path(s) for $value; reachability is $value2. $value3';
+  }
+
+  @override
+  String statusNoPathsAreAdvertisedForA37EA3(String value) {
+    return 'No paths are advertised for $value.';
+  }
+
+  @override
+  String statusCheckedPathSForAvailable0970F6(
+    int value,
+    String value2,
+    int value3,
+    String value4,
+    String value5,
+    String value6,
+  ) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other:
+          'Checked $value paths for $value2; $value3 available$value4. Reachability is $value5. $value6',
+      one:
+          'Checked $value path for $value2; $value3 available$value4. Reachability is $value5. $value6',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get statusDisplayNameUpdated3BD31A => 'Display name updated.';
+
+  @override
+  String get statusBioCleared543896 => 'Bio cleared.';
+
+  @override
+  String get statusBioUpdated440110 => 'Bio updated.';
+
+  @override
+  String get statusContactProfileUpdated47ECF6 => 'Contact profile updated.';
+
+  @override
+  String get statusRelayModeEnabledB9ACB8 => 'Relay mode enabled.';
+
+  @override
+  String get statusRelayModeDisabled723F4D => 'Relay mode disabled.';
+
+  @override
+  String get statusContactsCanNowContributeRelay147ECE =>
+      'Contacts can now contribute relay routes automatically.';
+
+  @override
+  String get statusAutomaticContactRelayUsageDisabledE762A7 =>
+      'Automatic contact relay usage disabled.';
+
+  @override
+  String get statusNotificationsEnabledF70668 => 'Notifications enabled.';
+
+  @override
+  String get statusNotificationsDisabledForThisDeviceE10A46 =>
+      'Notifications disabled for this device.';
+
+  @override
+  String get statusExperimentalVoiceCallsEnabledOn4081DE =>
+      'Experimental voice calls enabled on this device.';
+
+  @override
+  String get statusExperimentalVoiceCallsDisabledOn19A5AE =>
+      'Experimental voice calls disabled on this device.';
+
+  @override
+  String get statusAndroidBackgroundRuntimeEnabledIfAA5168 =>
+      'Android background runtime enabled. If system battery/background access is blocked, notifications can still be late or never arrive.';
+
+  @override
+  String get statusAndroidBackgroundRuntimeDisabled5FC9A0 =>
+      'Android background runtime disabled.';
+
+  @override
+  String get statusBackgroundVoiceCallAvailabilityEnabledA87223 =>
+      'Background voice-call availability enabled for this device. Calls can arrive only while the Conest service is allowed to run.';
+
+  @override
+  String get statusBackgroundVoiceCallAvailabilityDisabledA71AD1 =>
+      'Background voice-call availability disabled.';
+
+  @override
+  String get statusFreeSpaceReserveEnabledD7CE0E =>
+      '10% free-space reserve enabled.';
+
+  @override
+  String get statusFreeSpaceReserveDisabledD3E635 =>
+      '10% free-space reserve disabled.';
+
+  @override
+  String statusRoutingPreferencesUpdatedFor05867B(String value) {
+    return 'Routing preferences updated for $value.';
+  }
+
+  @override
+  String statusLocalRelayPortUpdatedTo7F815D(String value) {
+    return 'Local relay port updated to $value.';
+  }
+
+  @override
+  String statusRelayAdded800692(String value) {
+    return 'Relay $value added.';
+  }
+
+  @override
+  String statusRelayAddedFor087398(String value, String value2, String value3) {
+    return 'Relay $value:$value2 added for $value3.';
+  }
+
+  @override
+  String statusRelayRemoved546A15(String value) {
+    return 'Relay $value removed.';
+  }
+
+  @override
+  String statusTrustedNewIdentityForRelay4CDBFE(String value) {
+    return 'Trusted new identity for relay $value.';
+  }
+
+  @override
+  String get statusContactRemovedE31CE0 => 'Contact removed.';
+
+  @override
+  String get statusContactRemovedLocallySendingA40D607 =>
+      'Contact removed locally. Sending a removal notice in the background.';
+
+  @override
+  String get statusDeviceCreatedShareAQr06E7B6 =>
+      'Device created. Share a QR invite or the current codephrase to add this contact.';
+
+  @override
+  String statusContactAcceptedSendingApprovalOverDAD10C(String value) {
+    return 'Contact $value accepted. Sending approval over available routes.';
+  }
+
+  @override
+  String statusContactSavedWaitingForThe41F77D(String value) {
+    return 'Contact $value saved. Waiting for the other person to approve the request.';
+  }
+
+  @override
+  String statusReconnectedWithBC62EC(String value) {
+    return 'Reconnected with $value.';
+  }
+
+  @override
+  String statusAskingToReconnectE93389(String value) {
+    return 'Asking $value to reconnect.';
+  }
+
+  @override
+  String statusConfirmedIdentityReplacementForC93359(String value) {
+    return 'Confirmed identity replacement for $value.';
+  }
+
+  @override
+  String statusRejectedIdentityReplacementForDEC894(String value) {
+    return 'Rejected identity replacement for $value.';
+  }
+
+  @override
+  String get statusContactRequestCancelledQueuedItemsEC2567 =>
+      'Contact request cancelled. Queued items remain blocked.';
+
+  @override
+  String get statusSaved9D4AF6 => 'Saved.';
+
+  @override
+  String statusMessageSavedLocallyItWill0DBD03(String value) {
+    return 'Message saved locally. It will send after $value accepts the contact request.';
+  }
+
+  @override
+  String statusTryingLanFirstThenRelay1F5BEC(String value) {
+    return 'Trying LAN first, then relay for $value.';
+  }
+
+  @override
+  String get statusMessageQueuedTheAppWillA89BCC =>
+      'Message queued. The app will retry direct routes and relays while polling.';
+
+  @override
+  String statusAttachmentIsWaitingForA3F032B(String value) {
+    return 'Attachment is waiting for a route: $value';
+  }
+
+  @override
+  String statusCouldNotPrepareForDownloadE8FB18(String value) {
+    return 'Could not prepare $value for download.';
+  }
+
+  @override
+  String statusCreatedGroupF5D335(String value) {
+    return 'Created group $value.';
+  }
+
+  @override
+  String statusUpdatedGroup2140B7(String value) {
+    return 'Updated group $value.';
+  }
+
+  @override
+  String statusRemovedAMemberFrom68CF04(String value) {
+    return 'Removed a member from $value.';
+  }
+
+  @override
+  String statusLeftGroup9E3412(String value) {
+    return 'Left group $value.';
+  }
+
+  @override
+  String statusRemovedGroupFromYourList047F4B(String value) {
+    return 'Removed group $value from your list.';
+  }
+
+  @override
+  String statusTransferredOwnershipOfToA126A1(String value, String value2) {
+    return 'Transferred ownership of $value to $value2.';
+  }
+
+  @override
+  String statusDeletedGroupForEveryoneDB26F8(String value) {
+    return 'Deleted group $value for everyone.';
+  }
+
+  @override
+  String statusUpdatedIn642C0A(String value, String value2) {
+    return 'Updated $value in $value2.';
+  }
+
+  @override
+  String statusSendingGroupMessageToD77236(String value) {
+    return 'Sending group message to $value.';
+  }
+
+  @override
+  String statusSentToAsAPlainAF2DE6(String value) {
+    return 'Sent to $value as a plain Matrix message.';
+  }
+
+  @override
+  String statusCanceledAndDeletedPendingMessageCDCA88(String value) {
+    return 'Canceled and deleted pending message to $value.';
+  }
+
+  @override
+  String get statusMessageDeletedLocallyCE90EE => 'Message deleted locally.';
+
+  @override
+  String statusMessageDeletedHereAndDeletion7C4E80(String value) {
+    return 'Message deleted here and deletion was sent to $value.';
+  }
+
+  @override
+  String get statusMessageDeletedHereRemoteDeletionB6AE62 =>
+      'Message deleted here. Remote deletion could not be sent yet.';
+
+  @override
+  String get statusMessageEditedLocally187334 => 'Message edited locally.';
+
+  @override
+  String statusMessageEditQueuedTo695B15(String value) {
+    return 'Message edit queued to $value.';
+  }
+
+  @override
+  String get statusReactionUpdatedLocally97D795 => 'Reaction updated locally.';
+
+  @override
+  String statusReactionQueuedToD43BED(String value) {
+    return 'Reaction queued to $value.';
+  }
+
+  @override
+  String get statusLanLobbyMessageSavedLocallyFDE86E =>
+      'LAN lobby message saved locally; no nearby LAN participants were reachable.';
+
+  @override
+  String statusLanLobbyMessageSentTo82F0B0(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'LAN lobby message sent to $value nearby routes.',
+      one: 'LAN lobby message sent to $value nearby route.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String statusGroupMembershipAckFrom43FCF1(String value, String value2) {
+    return 'Group $value membership ack from $value2.';
+  }
+
+  @override
+  String statusReceivedItemSVia58B082(int value, String value2) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'Received $value items via $value2.',
+      one: 'Received $value item via $value2.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String statusRoutePollFailedA1FD0C(String value) {
+    return 'Route poll failed: $value';
+  }
+
+  @override
+  String statusLanReceivingIsOffPort5F04CB(String value) {
+    return 'LAN receiving is off: port $value is in use. Pick another local relay port in Settings.';
+  }
+
+  @override
+  String statusRediscoveredLanRouteFor587829(String value, String value2) {
+    return 'Rediscovered LAN route $value for $value2.';
+  }
+
+  @override
+  String statusLanDiscoveryUnavailable0E99AE(String value) {
+    return 'LAN discovery unavailable: $value';
+  }
+
+  @override
+  String get statusUpdatedNearbyLanRoutesF8CAFC => 'Updated nearby LAN routes.';
+
+  @override
+  String statusRejectedMalformedAttachmentOfferFrom9FC96A(String value) {
+    return 'Rejected malformed attachment offer from $value.';
+  }
+
+  @override
+  String get statusRejectedInvalidAttachmentMetadata849465 =>
+      'Rejected invalid attachment metadata.';
+
+  @override
+  String statusDeclinedTheRequestQueuedMessagesABFFCB(String value) {
+    return '$value declined the request. Queued messages and files remain blocked.';
+  }
+
+  @override
+  String statusNewContactRequestFromCF70B9(String value) {
+    return 'New contact request from $value.';
+  }
+
+  @override
+  String statusLeftF4FE32(String value, String value2) {
+    return '$value left $value2.';
+  }
+
+  @override
+  String statusRemovedYouTheConversationRemains3BB516(String value) {
+    return '$value removed you. The conversation remains archived locally.';
+  }
+
+  @override
+  String statusUpdatedEditedMessageFrom1AB90D(String value) {
+    return 'Updated edited message from $value.';
+  }
+
+  @override
+  String statusDeletedMessageRemovedBy5A9E79(String value) {
+    return 'Deleted message removed by $value.';
+  }
+
+  @override
+  String statusAppliedAReactionFrom41011B(String value) {
+    return 'Applied a reaction from $value.';
+  }
+
+  @override
+  String get statusAppliedDeferredDirectReactions1414C8 =>
+      'Applied deferred direct reactions.';
+
+  @override
+  String statusEncryptedMessageStoredForVia029324(String value, String value2) {
+    return 'Encrypted message stored for $value via $value2.';
+  }
+
+  @override
+  String statusSentToViaWaitingForEA766D(String value, String value2) {
+    return 'Sent to $value via $value2; waiting for a delivery receipt.';
+  }
+
+  @override
+  String statusDeliveryRetryPending93EAA3(String value) {
+    return 'Delivery retry pending: $value';
+  }
+
+  @override
+  String statusGroupDeliveryRetryPending691CA4(String value) {
+    return 'Group delivery retry pending: $value';
+  }
+
+  @override
+  String statusRelayIdentityChangedVerifyWith6F3689(String value) {
+    return 'Relay $value identity changed — verify with the operator.';
+  }
+
+  @override
+  String statusRelayIdentityMismatchVerifyWith2D3B10(
+    String value,
+    String value2,
+  ) {
+    return 'Relay $value:$value2 identity mismatch — verify with the operator.';
+  }
+
+  @override
+  String get statusTheMatrixSignInExpired76ABA4 =>
+      'The Matrix sign-in expired. Sign in again to use Matrix.';
+
+  @override
+  String statusSignedInToMatrixAs5103D2(String value) {
+    return 'Signed in to Matrix as $value.';
+  }
+
+  @override
+  String get statusSignedOutOfMatrix1D1860 => 'Signed out of Matrix.';
+
+  @override
+  String statusSOtherDevicesHaveNot07F30F(String value, String value2) {
+    return '$value\'s other devices have not heard from $value2 for a while: messages from it may not be theirs.';
+  }
+
+  @override
+  String statusReceivedItemSInstantlyViaA7773B(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'Received $value items instantly via local relay.',
+      one: 'Received $value item instantly via local relay.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String statusReceivedItemSViaLocal71A104(int value) {
+    String _temp0 = intl.Intl.pluralLogic(
+      value,
+      locale: localeName,
+      other: 'Received $value items via local inbox.',
+      one: 'Received $value item via local inbox.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get statusNoNewProtocols => 'No new relay protocols detected.';
+
+  @override
+  String get statusRouteExchangeRequested => 'Route info exchange requested.';
+
+  @override
+  String get statusRouteExchangePending =>
+      'Route info exchange could not be sent yet.';
+
+  @override
+  String get statusKnownRoutes => 'known routes';
+
+  @override
+  String get statusReachable => 'reachable';
+
+  @override
+  String get statusUnreachable => 'unreachable';
+
+  @override
+  String get statusUnknown => 'unknown';
+
+  @override
+  String get statusExpired => 'stale';
+
+  @override
+  String get connectionsTitle => 'Connections';
+
+  @override
+  String get connectionsDescription =>
+      'Which devices reach which, both ways or one way.';
+
+  @override
+  String get relayUdpHint => 'udp://host:port forces UDP';
+
+  @override
+  String get deltaFileActions => 'File actions';
+
+  @override
+  String get deltaForward => 'Forward';
+
+  @override
+  String get deltaAttach => 'Attach';
+
+  @override
+  String get deltaSendVoice => 'Send voice message';
+
+  @override
+  String get deltaDiscardVoice => 'Discard voice message';
+
+  @override
+  String get deltaRecordVoice => 'Record voice message';
+
+  @override
+  String get deltaReact => 'React';
+
+  @override
+  String get savedMessagesPreview => 'Notes, files and forwards for yourself';
+
+  @override
+  String networkChatsTitle(String network) {
+    return '$network chats';
+  }
+
+  @override
+  String get networkEncryptedMatrixChat => 'Encrypted Matrix chat';
+
+  @override
+  String get networkMatrixChat => 'Matrix chat';
+
+  @override
+  String get networkEveryoneBluetooth => 'Everyone in Bluetooth range';
+
+  @override
+  String get inviteNoRoutes => 'no routes advertised';
+
+  @override
+  String get deliveryPending => 'Waiting for a reachable path';
+
+  @override
+  String get deliveryLocal => 'Sent over LAN; waiting for delivery receipt';
+
+  @override
+  String get deliveryRelayed =>
+      'Queued on a relay; waiting for delivery receipt';
+
+  @override
+  String get deliveryDelivered => 'Delivered';
+
+  @override
+  String get deliveryRead => 'Read';
+
+  @override
+  String get reachabilityOnline => 'online';
+
+  @override
+  String get reachabilityRecent => 'seen recently';
+
+  @override
+  String get reachabilityKnown => 'known';
+
+  @override
+  String get transferApproval => 'Waiting for approval';
+
+  @override
+  String get transferPeer => 'Waiting for peer';
+
+  @override
+  String get routeLanDirect => 'LAN direct';
+
+  @override
+  String get routeInternetDirect => 'Internet direct';
+
+  @override
+  String get routeIrohDirect => 'Iroh direct';
+
+  @override
+  String get routeConestRelay => 'Conest relay';
+
+  @override
+  String get routeOptical => 'Optical';
+
+  @override
+  String get routeViaContact => 'Via a contact';
+
+  @override
+  String get themeSystem => 'System';
+
+  @override
+  String get themeLight => 'Signature · Light';
+
+  @override
+  String get themeDark => 'Signature · Dark';
+
+  @override
+  String get themeBlack => 'Signature · Black (OLED)';
+
+  @override
+  String get themeAdaptive => 'Adaptive (wallpaper)';
+
+  @override
+  String get layoutSignalCards => 'Signal Cards';
+
+  @override
+  String get layoutStationFeed => 'Station Feed';
+
+  @override
+  String get layoutClassic => 'Classic rows';
+
+  @override
+  String get layoutSignalDescription => 'Peers as dashboard link tiles.';
+
+  @override
+  String get layoutFeedDescription => 'A chronological packet/activity log.';
+
+  @override
+  String get layoutClassicDescription => 'A compact one-line list.';
+
+  @override
+  String get shellSignatureDescription => 'Conest\'s native dashboard sidebar.';
+
+  @override
+  String get shellGarrisonDescription =>
+      'Discord-shaped: a rail of cells + conversations.';
+
+  @override
+  String get shellCourierDescription =>
+      'Telegram-shaped: one clean conversation list.';
+
+  @override
+  String get connectionsBothWays => 'both ways';
+
+  @override
+  String get connectionsInbound => 'only from them';
+
+  @override
+  String get connectionsFailing => 'failing';
+
+  @override
+  String get connectionsUnknown => 'no recent word';
+
+  @override
+  String voiceConnected(String time) {
+    return 'Connected · $time';
+  }
+
+  @override
+  String messageClockAhead(String amount) {
+    return 'Their clock is about $amount ahead; times here are by this device.';
+  }
+
+  @override
+  String messageClockBehind(String amount) {
+    return 'Their clock is about $amount behind; times here are by this device.';
+  }
+
+  @override
+  String messageNotRecentlyConfirmed(String date) {
+    return 'Not recently confirmed: their other devices last counted this one as theirs on $date.';
+  }
+
+  @override
+  String get routeLanDirectDescription =>
+      'Straight to the other device on your local network.';
+
+  @override
+  String get routeLanRelayDescription =>
+      'Through another device\'s relay node on your local network.';
+
+  @override
+  String get routeLanLobbyDescription =>
+      'The LAN lobby\'s shared mailbox; anyone on the network can read it.';
+
+  @override
+  String get routeInternetDirectDescription =>
+      'Straight to the other device\'s relay node over the internet.';
+
+  @override
+  String get routeIrohDirectDescription =>
+      'Peer to peer over Iroh, end-to-end encrypted.';
+
+  @override
+  String get routeIrohRelayDescription =>
+      'Through an Iroh relay server, which sees only encrypted traffic.';
+
+  @override
+  String get routeConestRelayDescription =>
+      'Stored and forwarded by a Conest relay server, which sees only encrypted envelopes.';
+
+  @override
+  String get routeMatrixDescription =>
+      'Carried by Matrix, still end-to-end encrypted by Conest; the homeserver sees who talks and when.';
+
+  @override
+  String get routePlainMatrixDescription =>
+      'Sent as an ordinary Matrix message; the homeserver can read it unless the room is encrypted.';
+
+  @override
+  String get routeNostrDescription =>
+      'Carried by Nostr relays, still end-to-end encrypted by Conest; relays see the recipient and when, not the sender.';
+
+  @override
+  String get routeEmailDescription =>
+      'Carried by email, still end-to-end encrypted by Conest; the mail servers see both addresses and when.';
+
+  @override
+  String get routeReticulumDescription =>
+      'Over Reticulum, by radio or a Reticulum network, end-to-end encrypted.';
+
+  @override
+  String get routeMeshtasticDescription =>
+      'Over a Meshtastic radio mesh, end-to-end encrypted.';
+
+  @override
+  String get routeMeshCoreDescription =>
+      'Over a MeshCore radio mesh, end-to-end encrypted.';
+
+  @override
+  String get routeBluetoothDescription =>
+      'Over the Bluetooth mesh through nearby devices, end-to-end encrypted.';
+
+  @override
+  String get routeTorDescription =>
+      'Between onion services over Tor; no one on the way sees who talks to whom.';
+
+  @override
+  String get routeContactDescription =>
+      'Passed on by a contact who could reach the other device; still end-to-end encrypted, the contact saw only who it was for and when.';
+
+  @override
+  String routeTestRoundTrip(String route, String ms) {
+    return '$route: $ms ms there and back';
+  }
+
+  @override
+  String routeTestStored(String route) {
+    return '$route: left on the relay (answers once they fetch it)';
+  }
+
+  @override
+  String routeTestNoAnswer(String route) {
+    return '$route: no answer';
+  }
+
+  @override
+  String transferTimeLeft(String time) {
+    return '$time left';
+  }
+
+  @override
+  String transferQueuePosition(String position) {
+    return 'queue #$position';
+  }
+
+  @override
+  String get transferTapRetry => 'tap to retry';
+
+  @override
+  String get transferRerouting => 'Rerouting';
+
+  @override
+  String get routeShortLobby => 'Lobby';
+
+  @override
+  String get routeShortDirect => 'Direct';
+
+  @override
+  String get routeShortRelay => 'Relay';
+
+  @override
+  String get routeShortContact => 'Via contact';
+
+  @override
+  String chatDraftPreview(String text) {
+    return 'Draft: $text';
+  }
+
+  @override
+  String get routeAutomaticFallback => 'automatic fallback ✓';
+
+  @override
+  String get releaseNightly => 'nightly';
+
+  @override
+  String get releaseStable => 'stable';
+
+  @override
+  String get callActive => 'Call active';
+
+  @override
+  String get callGeneric => 'Call';
+
+  @override
+  String get contactNotPinned => 'Not pinned';
+
+  @override
+  String get groupUnknownMember => 'A member';
+
+  @override
+  String get relaySourceSigned => 'signed';
+
+  @override
+  String get relaySourceUnsigned => 'unsigned';
+
+  @override
+  String get beamFingerprintUnavailable => 'fingerprint unavailable';
+
+  @override
+  String get fileOriginalMetadataWarning =>
+      'Its location, camera, author and date details will be sent with it.';
+
+  @override
+  String get routeMarkSent => 'sent';
+
+  @override
+  String get routeMarkStored => 'waiting on the relay';
+
+  @override
+  String get routeMarkReached => 'reached their device';
+
+  @override
+  String get routeMarkDelivered => 'delivered';
+
+  @override
+  String get routeMarkReceived => 'received';
 }

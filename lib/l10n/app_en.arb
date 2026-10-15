@@ -527,7 +527,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiCouldNotShareValueValue7BA3A3": "Could not share {value}: {value2}",
   "@uiCouldNotShareValueValue7BA3A3": {
@@ -541,7 +542,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiCouldNotSaveSidebarWidthB4DACB": "Could not save sidebar width: {value}",
   "@uiCouldNotSaveSidebarWidthB4DACB": {
@@ -551,11 +553,13 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiNoAudioOutputDevicesWere17E473": "No audio output devices were found.",
   "@uiNoAudioOutputDevicesWere17E473": {
-    "description": "App-owned interface/status text in lib/main.dart:1894. English: No audio output devices were found."
+    "description": "App-owned interface/status text in lib/main.dart:1894. English: No audio output devices were found.",
+    "x-ui-text-lookup": true
   },
   "uiCallAudioOutput0C276F": "Call audio output",
   "@uiCallAudioOutput0C276F": {
@@ -569,7 +573,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiCouldNotChangeCallAudio6CE7B1": "Could not change call audio output: {value}",
   "@uiCouldNotChangeCallAudio6CE7B1": {
@@ -579,7 +584,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiCouldNotOpenInviteValue6C4D06": "Could not open invite: {value}",
   "@uiCouldNotOpenInviteValue6C4D06": {
@@ -589,7 +595,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiCouldNotSendAttachmentValueEFF771": "Could not send attachment: {value}",
   "@uiCouldNotSendAttachmentValueEFF771": {
@@ -599,7 +606,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiCouldNotSendMessageValue042C4F": "Could not send message: {value}",
   "@uiCouldNotSendMessageValue042C4F": {
@@ -609,7 +617,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiSendFromOriginalFFF29A": "Send from original",
   "@uiSendFromOriginalFFF29A": {
@@ -623,7 +632,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiCouldNotSendLANLobby8E7487": "Could not send LAN lobby message: {value}",
   "@uiCouldNotSendLANLobby8E7487": {
@@ -633,7 +643,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiCouldNotStageValuePathless514094": "Could not stage {value}: pathless drops are limited to 8 MB to protect memory.",
   "@uiCouldNotStageValuePathless514094": {
@@ -643,11 +654,13 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiSelectAGroupBeforeDropping9DAB4C": "Select a group before dropping files.",
   "@uiSelectAGroupBeforeDropping9DAB4C": {
-    "description": "App-owned interface/status text in lib/main.dart:2591. English: Select a group before dropping files."
+    "description": "App-owned interface/status text in lib/main.dart:2591. English: Select a group before dropping files.",
+    "x-ui-text-lookup": true
   },
   "uiValueLocalFilePathUnavailable217177": "{value}: local file path unavailable.",
   "@uiValueLocalFilePathUnavailable217177": {
@@ -657,7 +670,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiValueSentWithoutIt7E0635": "{value} Sent without it.",
   "@uiValueSentWithoutIt7E0635": {
@@ -667,11 +681,13 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiGroupFileScheduledB1DC66": "Group file scheduled.",
   "@uiGroupFileScheduledB1DC66": {
-    "description": "App-owned interface/status text in lib/main.dart:2804. English: Group file scheduled."
+    "description": "App-owned interface/status text in lib/main.dart:2804. English: Group file scheduled.",
+    "x-ui-text-lookup": true
   },
   "uiCouldNotScheduleValueValue25CED3": "Could not schedule {value}: {value2}",
   "@uiCouldNotScheduleValueValue25CED3": {
@@ -685,7 +701,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiCouldNotOpenFilePicker8FF0C0": "Could not open file picker: {value}",
   "@uiCouldNotOpenFilePicker8FF0C0": {
@@ -695,7 +712,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiValuePickerReturnedNoData4670CA": "{value}: picker returned no data.",
   "@uiValuePickerReturnedNoData4670CA": {
@@ -705,7 +723,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiOnlyTheFirstValueFiles45FC47": "Only the first {value} files will be staged (got {value2}).",
   "@uiOnlyTheFirstValueFiles45FC47": {
@@ -719,7 +738,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiValueSkippedValueMBExceeds487B2A": "{value} skipped: {value2} MB exceeds the {value} MB cap.",
   "@uiValueSkippedValueMBExceeds487B2A": {
@@ -733,7 +753,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiTransfers812412": "Transfers",
   "@uiTransfers812412": {
@@ -747,7 +768,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiPreparingCallE86D6C": "Preparing call…",
   "@uiPreparingCallE86D6C": {
@@ -759,7 +781,8 @@
   },
   "uiIncomingVoiceCallF68FD3": "Incoming voice call",
   "@uiIncomingVoiceCallF68FD3": {
-    "description": "App-owned interface/status text in lib/main.dart:3514. English: Incoming voice call"
+    "description": "App-owned interface/status text in lib/main.dart:3514. English: Incoming voice call",
+    "x-ui-text-lookup": true
   },
   "uiConnectingFD3E79": "Connecting…",
   "@uiConnectingFD3E79": {
@@ -781,7 +804,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiMinimizeCall6CB0F0": "Minimize call",
   "@uiMinimizeCall6CB0F0": {
@@ -841,7 +865,7 @@
   },
   "uiSaveEFC007": "Save",
   "@uiSaveEFC007": {
-    "description": "App-owned interface/status text in lib/main.dart:4186. English: Save"
+    "description": "Button that saves changes, including the name shown to nearby bitchat users."
   },
   "uiAddToFolderBFAD96": "Add to folder",
   "@uiAddToFolderBFAD96": {
@@ -905,7 +929,8 @@
   },
   "uiConestBeamE98B77": "Conest Beam",
   "@uiConestBeamE98B77": {
-    "description": "App-owned interface/status text in lib/main.dart:5538. English: Conest Beam"
+    "description": "App-owned interface/status text in lib/main.dart:5538. English: Conest Beam",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiMyInviteF80A7A": "My invite",
   "@uiMyInviteF80A7A": {
@@ -949,7 +974,8 @@
   },
   "uiNoOtherActiveMembersToF9DE12": "No other active members to transfer ownership to.",
   "@uiNoOtherActiveMembersToF9DE12": {
-    "description": "App-owned interface/status text in lib/main.dart:6851. English: No other active members to transfer ownership to."
+    "description": "App-owned interface/status text in lib/main.dart:6851. English: No other active members to transfer ownership to.",
+    "x-ui-text-lookup": true
   },
   "uiTransferOwnershipA6819E": "Transfer ownership",
   "@uiTransferOwnershipA6819E": {
@@ -967,7 +993,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiEveryMemberWillBeRemoved75A3FC": "Every member will be removed from the group and the group will be marked left in each member's list. Local message history is not deleted automatically — each member can clear it via Remove from list. This cannot be undone.",
   "@uiEveryMemberWillBeRemoved75A3FC": {
@@ -1023,11 +1050,13 @@
   },
   "uiThisAttachmentIsNotAvailableFE641A": "This attachment is not available locally yet.",
   "@uiThisAttachmentIsNotAvailableFE641A": {
-    "description": "App-owned interface/status text in lib/main.dart:7337. English: This attachment is not available locally yet."
+    "description": "App-owned interface/status text in lib/main.dart:7337. English: This attachment is not available locally yet.",
+    "x-ui-text-lookup": true
   },
   "uiDownloadThisFileBeforeForwarding60D7B5": "Download this file before forwarding it.",
   "@uiDownloadThisFileBeforeForwarding60D7B5": {
-    "description": "App-owned interface/status text in lib/main.dart:7364. English: Download this file before forwarding it."
+    "description": "App-owned interface/status text in lib/main.dart:7364. English: Download this file before forwarding it.",
+    "x-ui-text-lookup": true
   },
   "uiSearchMessagesABEA65": "Search messages",
   "@uiSearchMessagesABEA65": {
@@ -1085,7 +1114,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiMessageScheduledForValueD2D788": "Message scheduled for {value}.",
   "@uiMessageScheduledForValueD2D788": {
@@ -1095,7 +1125,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiNewPoll6D62BD": "New poll",
   "@uiNewPoll6D62BD": {
@@ -1125,33 +1156,40 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiNothingToCopyFromTheEC27E3": "Nothing to copy from the selected messages.",
   "@uiNothingToCopyFromTheEC27E3": {
-    "description": "App-owned interface/status text in lib/main.dart:8573. English: Nothing to copy from the selected messages."
+    "description": "App-owned interface/status text in lib/main.dart:8573. English: Nothing to copy from the selected messages.",
+    "x-ui-text-lookup": true
   },
-  "uiCopiedValueMessageSC97E6E": "Copied {value} message(s).",
+  "uiCopiedValueMessageSC97E6E": "{value, plural, one{Copied {value} message.} other{Copied {value} messages.}}",
   "@uiCopiedValueMessageSC97E6E": {
     "description": "App-owned interface/status text in lib/main.dart:8577. English: Copied {value} message(s).",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
-    }
+    },
+    "x-ui-text-lookup": true,
+    "x-ui-template": "Copied {value} message(s)."
   },
   "uiNoSelectedAttachmentIsReady536B54": "No selected attachment is ready yet — still transferring.",
   "@uiNoSelectedAttachmentIsReady536B54": {
-    "description": "App-owned interface/status text in lib/main.dart:8590. English: No selected attachment is ready yet — still transferring."
+    "description": "App-owned interface/status text in lib/main.dart:8590. English: No selected attachment is ready yet — still transferring.",
+    "x-ui-text-lookup": true
   },
   "uiCopiedMessageText9DC18F": "Copied message text.",
   "@uiCopiedMessageText9DC18F": {
-    "description": "App-owned interface/status text in lib/main.dart:8738. English: Copied message text."
+    "description": "App-owned interface/status text in lib/main.dart:8738. English: Copied message text.",
+    "x-ui-text-lookup": true
   },
   "uiTheGroupFileIsNotF8A236": "The group file is not available locally.",
   "@uiTheGroupFileIsNotF8A236": {
-    "description": "App-owned interface/status text in lib/main.dart:8745. English: The group file is not available locally."
+    "description": "App-owned interface/status text in lib/main.dart:8745. English: The group file is not available locally.",
+    "x-ui-text-lookup": true
   },
   "uiSavedValue0463E5": "Saved {value}.",
   "@uiSavedValue0463E5": {
@@ -1161,7 +1199,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiCouldNotSaveValueValue178005": "Could not save {value}: {value2}",
   "@uiCouldNotSaveValueValue178005": {
@@ -1175,15 +1214,18 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiTheAndroidFileSaverIsDF910B": "The Android file saver is unavailable.",
   "@uiTheAndroidFileSaverIsDF910B": {
-    "description": "App-owned interface/status text in lib/main.dart:8780. English: The Android file saver is unavailable."
+    "description": "App-owned interface/status text in lib/main.dart:8780. English: The Android file saver is unavailable.",
+    "x-ui-text-lookup": true
   },
   "uiOpeningFilesIsUnavailableOnC6ADA2": "Opening files is unavailable on this platform.",
   "@uiOpeningFilesIsUnavailableOnC6ADA2": {
-    "description": "App-owned interface/status text in lib/main.dart:8791. English: Opening files is unavailable on this platform."
+    "description": "App-owned interface/status text in lib/main.dart:8791. English: Opening files is unavailable on this platform.",
+    "x-ui-text-lookup": true
   },
   "uiCouldNotOpenValueValue283326": "Could not open {value}: {value2}",
   "@uiCouldNotOpenValueValue283326": {
@@ -1197,7 +1239,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiYou905CB3": "You",
   "@uiYou905CB3": {
@@ -1213,7 +1256,8 @@
   },
   "uiTheAttachmentIsStillDownloadingF77317": "The attachment is still downloading.",
   "@uiTheAttachmentIsStillDownloadingF77317": {
-    "description": "App-owned interface/status text in lib/main.dart:9218. English: The attachment is still downloading."
+    "description": "App-owned interface/status text in lib/main.dart:9218. English: The attachment is still downloading.",
+    "x-ui-text-lookup": true
   },
   "uiShareOrScheduleAGroup2989F0": "Share or schedule a group file",
   "@uiShareOrScheduleAGroup2989F0": {
@@ -1285,7 +1329,8 @@
   },
   "uiScheduleOneAttachmentAtAC580C3": "Schedule one attachment at a time.",
   "@uiScheduleOneAttachmentAtAC580C3": {
-    "description": "App-owned interface/status text in lib/main.dart:10180. English: Schedule one attachment at a time."
+    "description": "App-owned interface/status text in lib/main.dart:10180. English: Schedule one attachment at a time.",
+    "x-ui-text-lookup": true
   },
   "uiNotDeliveredYetSendViaF056E1": "Not delivered yet. Send via Matrix…",
   "@uiNotDeliveredYetSendViaF056E1": {
@@ -1293,11 +1338,13 @@
   },
   "uiVoiceCallsAreTurnedOff692843": "Voice calls are turned off. Enable them in Settings to call.",
   "@uiVoiceCallsAreTurnedOff692843": {
-    "description": "App-owned interface/status text in lib/main.dart:11298. English: Voice calls are turned off. Enable them in Settings to call."
+    "description": "App-owned interface/status text in lib/main.dart:11298. English: Voice calls are turned off. Enable them in Settings to call.",
+    "x-ui-text-lookup": true
   },
   "uiVoiceCallAudioIsUnavailable0B6C43": "Voice-call audio is unavailable in this build.",
   "@uiVoiceCallAudioIsUnavailable0B6C43": {
-    "description": "App-owned interface/status text in lib/main.dart:11305. English: Voice-call audio is unavailable in this build."
+    "description": "App-owned interface/status text in lib/main.dart:11305. English: Voice-call audio is unavailable in this build.",
+    "x-ui-text-lookup": true
   },
   "uiRouteInspector0E65DE": "Route inspector",
   "@uiRouteInspector0E65DE": {
@@ -1521,7 +1568,8 @@
   },
   "uiLAN2ECD17": "LAN",
   "@uiLAN2ECD17": {
-    "description": "App-owned interface/status text in lib/main.dart:14574. English: LAN"
+    "description": "App-owned interface/status text in lib/main.dart:14574. English: LAN",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiSameNetworkListenerPairingBeacons5CF0A2": "Same-network listener, pairing beacons, LAN delivery.",
   "@uiSameNetworkListenerPairingBeacons5CF0A2": {
@@ -1791,19 +1839,20 @@
   "@uiWhenThisContactCannotReach5C3FF8": {
     "description": "App-owned interface/status text in lib/main.dart:17841. English: When this contact cannot reach someone but this device can, pass their messages on. You see only who they are for and when; the content stays encrypted."
   },
-  "uiSaveValueFileSToB46C57": "Save {value} file(s) to…",
+  "uiSaveValueFileSToB46C57": "{value, plural, one{Save {value} file to…} other{Save {value} files to…}}",
   "@uiSaveValueFileSToB46C57": {
     "description": "App-owned interface/status text in lib/main.dart:18137. English: Save {value} file(s) to…",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
   "uiSaveCanceled1939D0": "Save canceled.",
   "@uiSaveCanceled1939D0": {
-    "description": "App-owned interface/status text in lib/main.dart:18141. English: Save canceled."
+    "description": "App-owned interface/status text in lib/main.dart:18141. English: Save canceled.",
+    "x-ui-text-lookup": true
   },
   "uiAlbumActions7B6D70": "Album actions",
   "@uiAlbumActions7B6D70": {
@@ -1933,7 +1982,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiGallerySaveFailedValueFalling0B82BB": "Gallery save failed ({value}); falling back to file dialog.",
   "@uiGallerySaveFailedValueFalling0B82BB": {
@@ -1943,7 +1993,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiSaveValue5769AA": "Save {value}",
   "@uiSaveValue5769AA": {
@@ -1963,11 +2014,13 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiTheAttachmentFileIsNotA67009": "The attachment file is not available locally.",
   "@uiTheAttachmentFileIsNotA67009": {
-    "description": "App-owned interface/status text in lib/main.dart:19057. English: The attachment file is not available locally."
+    "description": "App-owned interface/status text in lib/main.dart:19057. English: The attachment file is not available locally.",
+    "x-ui-text-lookup": true
   },
   "uiCopiedValueToClipboard669D0B": "Copied {value} to clipboard.",
   "@uiCopiedValueToClipboard669D0B": {
@@ -1977,7 +2030,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiCopiedValueTextOnlySystemB51B8D": "Copied \"{value}\" (text only — system clipboard binary surface unavailable).",
   "@uiCopiedValueTextOnlySystemB51B8D": {
@@ -1987,7 +2041,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiCopyFailedValueFilenameCopiedF71C87": "Copy failed: {value}. Filename copied as text fallback.",
   "@uiCopyFailedValueFilenameCopiedF71C87": {
@@ -1997,11 +2052,13 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiCachePathIsNotReady0404B5": "Cache path is not ready yet — still transferring.",
   "@uiCachePathIsNotReady0404B5": {
-    "description": "App-owned interface/status text in lib/main.dart:19233. English: Cache path is not ready yet — still transferring."
+    "description": "App-owned interface/status text in lib/main.dart:19233. English: Cache path is not ready yet — still transferring.",
+    "x-ui-text-lookup": true
   },
   "uiCachePathCopiedValue4CC1C4": "Cache path copied: {value}",
   "@uiCachePathCopiedValue4CC1C4": {
@@ -2011,11 +2068,13 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiVideoIsnTCachedLocally8920DD": "Video isn't cached locally yet — wait for the transfer to finish.",
   "@uiVideoIsnTCachedLocally8920DD": {
-    "description": "App-owned interface/status text in lib/main.dart:19257. English: Video isn't cached locally yet — wait for the transfer to finish."
+    "description": "App-owned interface/status text in lib/main.dart:19257. English: Video isn't cached locally yet — wait for the transfer to finish.",
+    "x-ui-text-lookup": true
   },
   "uiCouldNotOpenVideoIn054087": "Could not open video in the system player: {value}",
   "@uiCouldNotOpenVideoIn054087": {
@@ -2025,11 +2084,13 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiImageIsNotAvailableLocally12017F": "Image is not available locally.",
   "@uiImageIsNotAvailableLocally12017F": {
-    "description": "App-owned interface/status text in lib/main.dart:19348. English: Image is not available locally."
+    "description": "App-owned interface/status text in lib/main.dart:19348. English: Image is not available locally.",
+    "x-ui-text-lookup": true
   },
   "uiVideoStillTransferringValue3F4049": "Video still transferring ({value}%).",
   "@uiVideoStillTransferringValue3F4049": {
@@ -2039,11 +2100,13 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiVoiceMessageBytesAreNotF8339B": "Voice message bytes are not ready.",
   "@uiVoiceMessageBytesAreNotF8339B": {
-    "description": "App-owned interface/status text in lib/main.dart:19787. English: Voice message bytes are not ready."
+    "description": "App-owned interface/status text in lib/main.dart:19787. English: Voice message bytes are not ready.",
+    "x-ui-text-lookup": true
   },
   "uiSendMode265A2D": "Send mode",
   "@uiSendMode265A2D": {
@@ -2063,7 +2126,8 @@
   },
   "uiIroh84642D": "Iroh",
   "@uiIroh84642D": {
-    "description": "App-owned interface/status text in lib/main.dart:20718. English: Iroh"
+    "description": "App-owned interface/status text in lib/main.dart:20718. English: Iroh",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiIrohRelayB128EA": "Iroh relay",
   "@uiIrohRelayB128EA": {
@@ -2075,7 +2139,8 @@
   },
   "uiMatrix58947E": "Matrix",
   "@uiMatrix58947E": {
-    "description": "App-owned interface/status text in lib/main.dart:20721. English: Matrix"
+    "description": "App-owned interface/status text in lib/main.dart:20721. English: Matrix",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiPlainMatrixBA9DE1": "Plain Matrix",
   "@uiPlainMatrixBA9DE1": {
@@ -2083,7 +2148,8 @@
   },
   "uiNostr4D3AD8": "Nostr",
   "@uiNostr4D3AD8": {
-    "description": "App-owned interface/status text in lib/main.dart:20723. English: Nostr"
+    "description": "App-owned interface/status text in lib/main.dart:20723. English: Nostr",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiEmail84ADD5": "Email",
   "@uiEmail84ADD5": {
@@ -2091,23 +2157,28 @@
   },
   "uiReticulumC27E52": "Reticulum",
   "@uiReticulumC27E52": {
-    "description": "App-owned interface/status text in lib/main.dart:20725. English: Reticulum"
+    "description": "App-owned interface/status text in lib/main.dart:20725. English: Reticulum",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiMeshtastic29C887": "Meshtastic",
   "@uiMeshtastic29C887": {
-    "description": "App-owned interface/status text in lib/main.dart:20726. English: Meshtastic"
+    "description": "App-owned interface/status text in lib/main.dart:20726. English: Meshtastic",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiMeshCoreBA58A2": "MeshCore",
   "@uiMeshCoreBA58A2": {
-    "description": "App-owned interface/status text in lib/main.dart:20727. English: MeshCore"
+    "description": "App-owned interface/status text in lib/main.dart:20727. English: MeshCore",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiBluetoothC3B414": "Bluetooth",
   "@uiBluetoothC3B414": {
-    "description": "App-owned interface/status text in lib/main.dart:20728. English: Bluetooth"
+    "description": "App-owned interface/status text in lib/main.dart:20728. English: Bluetooth",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiTorED7088": "Tor",
   "@uiTorED7088": {
-    "description": "App-owned interface/status text in lib/main.dart:20729. English: Tor"
+    "description": "App-owned interface/status text in lib/main.dart:20729. English: Tor",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiViaContactCF1F8E": "Via contact",
   "@uiViaContactCF1F8E": {
@@ -2133,7 +2204,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiMessageRoutesFBF32C": "Message routes",
   "@uiMessageRoutesFBF32C": {
@@ -2357,7 +2429,8 @@
   },
   "uiThisDeviceIsNowLinked7EA826": "This device is now linked to your account.",
   "@uiThisDeviceIsNowLinked7EA826": {
-    "description": "App-owned interface/status text in lib/src/ui/devices_panel.dart:401. English: This device is now linked to your account."
+    "description": "App-owned interface/status text in lib/src/ui/devices_panel.dart:401. English: This device is now linked to your account.",
+    "x-ui-text-lookup": true
   },
   "uiWaitingForTheOtherDeviceB39C3F": "Waiting for the other device…",
   "@uiWaitingForTheOtherDeviceB39C3F": {
@@ -2369,11 +2442,13 @@
   },
   "uiDeltaChat8BDA67": "Delta Chat",
   "@uiDeltaChat8BDA67": {
-    "description": "App-owned interface/status text in lib/src/ui/network_chat_sources.dart:176. English: Delta Chat"
+    "description": "App-owned interface/status text in lib/src/ui/network_chat_sources.dart:176. English: Delta Chat",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiBitchatA99B50": "bitchat",
   "@uiBitchatA99B50": {
-    "description": "App-owned interface/status text in lib/src/ui/network_chat_sources.dart:272. English: bitchat"
+    "description": "App-owned interface/status text in lib/src/ui/network_chat_sources.dart:272. English: bitchat",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiWithAFilterOfTheir4FD18E": "With a filter of their own. Off: open them from the network's settings only.",
   "@uiWithAFilterOfTheir4FD18E": {
@@ -2505,7 +2580,8 @@
   },
   "uiNameMatrixOrgD0BB06": "@name:matrix.org",
   "@uiNameMatrixOrgD0BB06": {
-    "description": "App-owned interface/status text in lib/src/ui/matrix_room_screen.dart:32. English: @name:matrix.org"
+    "description": "App-owned interface/status text in lib/src/ui/matrix_room_screen.dart:32. English: @name:matrix.org",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiStartChat18BB58": "Start chat",
   "@uiStartChat18BB58": {
@@ -2545,7 +2621,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiValue134796": "📎 {value}",
   "@uiValue134796": {
@@ -2555,7 +2632,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiValueValue6EF45D": "{value}: {value2}",
   "@uiValueValue6EF45D": {
@@ -2569,7 +2647,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiDeclineB59CF9": "Decline",
   "@uiDeclineB59CF9": {
@@ -2641,39 +2720,39 @@
   },
   "uiNameBitchatUsersSee1CE7E3": "Name bitchat users see",
   "@uiNameBitchatUsersSee1CE7E3": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:64. English: Name bitchat users see"
+    "description": "Settings → Connectivity, Bluetooth mesh: Name bitchat users see"
   },
   "uiANameYouChooseStays17E677": "A name you choose stays when your identity changes, so people nearby can tell it is still you. Leave it empty for a new \"anon\" name with each identity.",
   "@uiANameYouChooseStays17E677": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:75. English: A name you choose stays when your identity changes, so people nearby can tell it is still you. Leave it empty for a new \"anon\" name with each identity."
+    "description": "Settings → Connectivity, Bluetooth mesh: A name you choose stays when your identity changes, so people nearby can tell it is still you. Leave it empty for a new \"anon\" name with each identity."
   },
   "uiBluetoothMeshC8B7F1": "Bluetooth mesh",
   "@uiBluetoothMeshC8B7F1": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:112. English: Bluetooth mesh"
+    "description": "Settings → Connectivity, Bluetooth mesh: Bluetooth mesh"
   },
-  "uiReachContactsNearbyWithoutAny9E9649": "Reach contacts nearby without any network: messages hop from phone to phone over Bluetooth, through Conest and bitchat users alike, and this phone relays for others. This phone does not show up in bitchat, and what it sends looks like any bitchat private message, with ids that change every hour.",
+  "uiReachContactsNearbyWithoutAny9E9649": "Reach contacts nearby without any network: messages hop from device to device over Bluetooth, through Conest and bitchat users alike, and this device relays for others. This device does not show up in bitchat, and what it sends looks like any bitchat private message, with ids that change every hour.",
   "@uiReachContactsNearbyWithoutAny9E9649": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:114. English: Reach contacts nearby without any network: messages hop from phone to phone over Bluetooth, through Conest and bitchat users alike, and this phone relays for others. This phone does not show up in bitchat, and what it sends looks like any bitchat private message, with ids that change every hour."
+    "description": "Settings → Connectivity, Bluetooth mesh: Reach contacts nearby without any network: messages hop from device to device over Bluetooth, through Conest and bitchat users alike, and this device relays for others. This device does not show up in bitchat, and what it sends looks like any bitchat private message, with ids that change every hour."
   },
   "uiReachableByBitchatUsers568021": "Reachable by bitchat users",
   "@uiReachableByBitchatUsers568021": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:151. English: Reachable by bitchat users"
+    "description": "Settings → Connectivity, Bluetooth mesh: Reachable by bitchat users"
   },
   "uiShareInternetWithBitchatUsers572F90": "Share internet with bitchat users",
   "@uiShareInternetWithBitchatUsers572F90": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:171. English: Share internet with bitchat users"
+    "description": "Settings → Connectivity, Bluetooth mesh: Share internet with bitchat users"
   },
   "uiChangeNameE46692": "Change name",
   "@uiChangeNameE46692": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:195. English: Change name"
+    "description": "Settings → Connectivity, Bluetooth mesh: Change name"
   },
   "uiNewIdentityA119CF": "New identity",
   "@uiNewIdentityA119CF": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:200. English: New identity"
+    "description": "Settings → Connectivity, Bluetooth mesh: New identity"
   },
   "uiBitchatChatsC74EC3": "bitchat chats",
   "@uiBitchatChatsC74EC3": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:212. English: bitchat chats"
+    "description": "Settings → Connectivity, Bluetooth mesh: bitchat chats"
   },
   "uiTheMatrixClientIsNot01A5B4": "The Matrix client is not available on this device, so Conest cannot run in Matrix-only mode here.",
   "@uiTheMatrixClientIsNot01A5B4": {
@@ -2697,11 +2776,13 @@
   },
   "uiEEFEBFE80B7A": "192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413",
   "@uiEEFEBFE80B7A": {
-    "description": "App-owned interface/status text in lib/src/ui/tor_carrier_panel.dart:102. English: 192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413"
+    "description": "App-owned interface/status text in lib/src/ui/tor_carrier_panel.dart:102. English: 192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiObfsEEFEAD0EDF": "obfs4 192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413 cert=… iat-mode=0",
   "@uiObfsEEFEAD0EDF": {
-    "description": "App-owned interface/status text in lib/src/ui/tor_carrier_panel.dart:103. English: obfs4 192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413 cert=… iat-mode=0"
+    "description": "App-owned interface/status text in lib/src/ui/tor_carrier_panel.dart:103. English: obfs4 192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413 cert=… iat-mode=0",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiLinesFromBridgesTorprojectOrgF08389": "Lines from bridges.torproject.org, starting with the type: obfs4, webtunnel, snowflake or meek_lite (or plain bridges: address and fingerprint).",
   "@uiLinesFromBridgesTorprojectOrgF08389": {
@@ -2779,7 +2860,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiSavingTheErrorHistoryFailed72A33A": "Saving the error history failed: {value}",
   "@uiSavingTheErrorHistoryFailed72A33A": {
@@ -2789,7 +2871,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiSaveToAFile5BB648": "Save to a file",
   "@uiSaveToAFile5BB648": {
@@ -3013,7 +3096,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiDefaultRelayValueBD3FD1": "default relay {value}",
   "@uiDefaultRelayValueBD3FD1": {
@@ -3037,7 +3121,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiConversation2A20C7": "Conversation",
   "@uiConversation2A20C7": {
@@ -3051,7 +3136,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiSharedValueWithTheGroupAE4134": "Shared {value} with the group.",
   "@uiSharedValueWithTheGroupAE4134": {
@@ -3061,7 +3147,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiValueBackoffValueSStreak25FF09": "{value} backoff {value2}s streak {value3}",
   "@uiValueBackoffValueSStreak25FF09": {
@@ -3079,7 +3166,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiNone3C6B18": "(none)",
   "@uiNone3C6B18": {
@@ -3107,7 +3195,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiRelayValueDownD6B267": "relay {value} down",
   "@uiRelayValueDownD6B267": {
@@ -3145,7 +3234,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiValueHasBeenOutOf039D48": "{value} has been out of touch for a while: nothing syncs with it until you confirm it in Settings → Devices.",
   "@uiValueHasBeenOutOf039D48": {
@@ -3155,7 +3245,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiValueIsOneOfYourE4FD9C": "{value} is one of your own devices now; its old chat is no longer listed.",
   "@uiValueIsOneOfYourE4FD9C": {
@@ -3165,7 +3256,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiYourDevicesDisagreeOnWhich2E7001": "Your devices disagree on which devices are in the account, and together there would be more than {value}. Remove one in Settings → Devices.",
   "@uiYourDevicesDisagreeOnWhich2E7001": {
@@ -3175,7 +3267,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiValueAddedADeviceValue710908": "{value} added a device: {value2}.",
   "@uiValueAddedADeviceValue710908": {
@@ -3189,7 +3282,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiUnknownValue9B520C": "Unknown {value}",
   "@uiUnknownValue9B520C": {
@@ -3236,19 +3330,20 @@
       }
     }
   },
-  "uiWaitingForValueMemberS5A8BA6": "Waiting for {value} member(s)",
+  "uiWaitingForValueMemberS5A8BA6": "{value, plural, one{Waiting for {value} member} other{Waiting for {value} members}}",
   "@uiWaitingForValueMemberS5A8BA6": {
     "description": "App-owned interface/status text in lib/src/messenger_controller.dart:32231. English: Waiting for {value} member(s)",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
   "uiConest26885B": "Conest",
   "@uiConest26885B": {
-    "description": "App-owned interface/status text in lib/main.dart:333. English: Conest"
+    "description": "App-owned interface/status text in lib/main.dart:333. English: Conest",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiValueValueValueE9AA4A": "{value}{value2}{value3}",
   "@uiValueValueValueE9AA4A": {
@@ -3266,7 +3361,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiValueSkippedValueMBExceedsD0800C": "{value} skipped: {value2} MB exceeds the {value3} MB cap.",
   "@uiValueSkippedValueMBExceedsD0800C": {
@@ -3284,7 +3380,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-ui-text-lookup": true
   },
   "uiRoute499952": "Route",
   "@uiRoute499952": {
@@ -3338,15 +3435,16 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
-  "uiValueMembersCEF563": "{value} members",
+  "uiValueMembersCEF563": "{value, plural, one{{value} member} other{{value} members}}",
   "@uiValueMembersCEF563": {
     "description": "App-owned interface/status text in lib/main.dart:9423. English: {value} members",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -3400,15 +3498,18 @@
   },
   "uiWARNC2FD77": "WARN",
   "@uiWARNC2FD77": {
-    "description": "App-owned interface/status text in lib/main.dart:16148. English: WARN"
+    "description": "App-owned interface/status text in lib/main.dart:16148. English: WARN",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiDOWN30E504": "DOWN",
   "@uiDOWN30E504": {
-    "description": "App-owned interface/status text in lib/main.dart:16156. English: DOWN"
+    "description": "App-owned interface/status text in lib/main.dart:16156. English: DOWN",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiAVGRTTE96B26": "AVG RTT",
   "@uiAVGRTTE96B26": {
-    "description": "App-owned interface/status text in lib/main.dart:16164. English: AVG RTT"
+    "description": "App-owned interface/status text in lib/main.dart:16164. English: AVG RTT",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiRoutingValueFC4557": "Routing — {value}",
   "@uiRoutingValueFC4557": {
@@ -3494,7 +3595,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiPrimaryChannel53B8E1": "Primary channel",
   "@uiPrimaryChannel53B8E1": {
@@ -3556,7 +3658,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiValueF36340": "{value}…",
   "@uiValueF36340": {
@@ -3566,19 +3669,20 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiConestTransfer406028": "Conest transfer",
   "@uiConestTransfer406028": {
     "description": "App-owned interface/status text in lib/src/messenger_controller.dart:17708. English: Conest transfer"
   },
-  "uiValueConestTransfersF846F8": "{value} Conest transfers",
+  "uiValueConestTransfersF846F8": "{value, plural, one{{value} Conest transfers} other{{value} Conest transfers}}",
   "@uiValueConestTransfersF846F8": {
     "description": "App-owned interface/status text in lib/src/messenger_controller.dart:17709. English: {value} Conest transfers",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -3804,17 +3908,13 @@
   "@uiContactDetailsD4EC65": {
     "description": "App-owned interface/status text in lib/main.dart:3783. English: Contact details"
   },
-  "uiValueActiveMemberValue6700F2": "{value} active member{value2}",
+  "uiValueActiveMemberValue6700F2": "{value, plural, one{{value} active member} other{{value} active members}}",
   "@uiValueActiveMemberValue6700F2": {
     "description": "App-owned interface/status text in lib/main.dart:3924. English: {value} active member{value2}",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
-      },
-      "value2": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -3902,13 +4002,13 @@
   "@uiNoGroupsYet5009C6": {
     "description": "App-owned interface/status text in lib/main.dart:6207. English: No groups yet."
   },
-  "uiValueMemberSE75249": "{value} member(s)",
+  "uiValueMemberSE75249": "{value, plural, one{{value} member} other{{value} members}}",
   "@uiValueMemberSE75249": {
     "description": "App-owned interface/status text in lib/main.dart:6283. English: {value} member(s)",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -3960,13 +4060,13 @@
       }
     }
   },
-  "uiValueMemberSOwnerValueE42E13": "{value} member(s) • owner {value2}",
+  "uiValueMemberSOwnerValueE42E13": "{value, plural, one{{value} member • owner {value2}} other{{value} members • owner {value2}}}",
   "@uiValueMemberSOwnerValueE42E13": {
     "description": "App-owned interface/status text in lib/main.dart:7080. English: {value} member(s) • owner {value2}",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       },
       "value2": {
         "type": "String",
@@ -3976,7 +4076,8 @@
   },
   "uiGROUPTRUSTFANOUTMintPaired5DDF6E": "// GROUP TRUST FANOUT · mint = paired",
   "@uiGROUPTRUSTFANOUTMintPaired5DDF6E": {
-    "description": "App-owned interface/status text in lib/main.dart:7125. English: // GROUP TRUST FANOUT · mint = paired"
+    "description": "App-owned interface/status text in lib/main.dart:7125. English: // GROUP TRUST FANOUT · mint = paired",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiAddTrustedContact126717": "Add trusted contact",
   "@uiAddTrustedContact126717": {
@@ -4034,7 +4135,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiVoiceMessageValue2F0300": "Voice message · {value}",
   "@uiVoiceMessageValue2F0300": {
@@ -4100,7 +4202,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiSingleChoice68E3E0": "Single choice",
   "@uiSingleChoice68E3E0": {
@@ -4124,17 +4227,13 @@
   "@uiCouldNotLocateThisMessage220E83": {
     "description": "App-owned interface/status text in lib/main.dart:8457. English: Could not locate this message in the current chat"
   },
-  "uiDeleteValueMessageValueForABA7AC": "Delete {value} message{value2} for the group?",
+  "uiDeleteValueMessageValueForABA7AC": "{value, plural, one{Delete {value} message for the group?} other{Delete {value} messages for the group?}}",
   "@uiDeleteValueMessageValueForABA7AC": {
     "description": "App-owned interface/status text in lib/main.dart:8519. English: Delete {value} message{value2} for the group?",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
-      },
-      "value2": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -4150,7 +4249,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiNewC2A6B0": "new",
   "@uiNewC2A6B0": {
@@ -4204,13 +4304,13 @@
   "@uiVisibleVotes460E7A": {
     "description": "App-owned interface/status text in lib/main.dart:10054. English: Visible votes"
   },
-  "uiValueVoteSWereNot02CC9A": "{value} vote(s) were not in the creator’s close checkpoint.",
+  "uiValueVoteSWereNot02CC9A": "{value, plural, one{{value} vote were not in the creator’s close checkpoint.} other{{value} votes were not in the creator’s close checkpoint.}}",
   "@uiValueVoteSWereNot02CC9A": {
     "description": "App-owned interface/status text in lib/main.dart:10061. English: {value} vote(s) were not in the creator’s close checkpoint.",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -4322,7 +4422,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiShareInviteDBCC1E": "Share invite",
   "@uiShareInviteDBCC1E": {
@@ -4348,13 +4449,13 @@
   "@uiScanningTheCompactQRIs9459D9": {
     "description": "App-owned interface/status text in lib/main.dart:13043. English: Scanning the compact QR is enough on its own. If the camera still struggles, open it full screen or use only the current codephrase."
   },
-  "uiQRPayloadValueCharactersBABEDF": "QR payload: {value} characters",
+  "uiQRPayloadValueCharactersBABEDF": "{value, plural, one{QR payload: {value} character} other{QR payload: {value} characters}}",
   "@uiQRPayloadValueCharactersBABEDF": {
     "description": "App-owned interface/status text in lib/main.dart:13050. English: QR payload: {value} characters",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -4402,7 +4503,7 @@
   "@uiSIGNEDCONTACTINVITE752317": {
     "description": "App-owned interface/status text in lib/main.dart:13490. English: SIGNED CONTACT INVITE"
   },
-  "uiFrameValueValueSourceBlocks9C37CB": "Frame {value} · {value2} source blocks · {value3}",
+  "uiFrameValueValueSourceBlocks9C37CB": "{value2, plural, one{Frame {value} · {value2} source blocks · {value3}} other{Frame {value} · {value2} source blocks · {value3}}}",
   "@uiFrameValueValueSourceBlocks9C37CB": {
     "description": "App-owned interface/status text in lib/main.dart:13499. English: Frame {value} · {value2} source blocks · {value3}",
     "placeholders": {
@@ -4411,8 +4512,8 @@
         "description": "Opaque display value; preserve it unchanged."
       },
       "value2": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       },
       "value3": {
         "type": "String",
@@ -4478,13 +4579,13 @@
   "@uiFullscreenCompactInviteQRCF6B8B": {
     "description": "App-owned interface/status text in lib/main.dart:13986. English: Fullscreen compact invite QR"
   },
-  "uiValueCharactersIncreaseScreenBrightnessA5AF7D": "{value} characters. Increase screen brightness if scanning is unreliable.",
+  "uiValueCharactersIncreaseScreenBrightnessA5AF7D": "{value, plural, one{{value} character. Increase screen brightness if scanning is unreliable.} other{{value} characters. Increase screen brightness if scanning is unreliable.}}",
   "@uiValueCharactersIncreaseScreenBrightnessA5AF7D": {
     "description": "App-owned interface/status text in lib/main.dart:14004. English: {value} characters. Increase screen brightness if scanning is unreliable.",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -4532,13 +4633,13 @@
   "@uiConnectivityIsFullyOffTheB12483": {
     "description": "App-owned interface/status text in lib/main.dart:14793. English: Connectivity is fully off — the app will not send or receive."
   },
-  "uiValueCandidateRouteSAre175673": "{value} candidate route(s) are available right now.",
+  "uiValueCandidateRouteSAre175673": "{value, plural, one{{value} candidate route are available right now.} other{{value} candidate routes are available right now.}}",
   "@uiValueCandidateRouteSAre175673": {
     "description": "App-owned interface/status text in lib/main.dart:14884. English: {value} candidate route(s) are available right now.",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -4632,7 +4733,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiNoPendingContactRequests697615": "No pending contact requests",
   "@uiNoPendingContactRequests697615": {
@@ -4680,7 +4782,8 @@
   },
   "uiContactRequestRejected447EE8": "Contact request rejected.",
   "@uiContactRequestRejected447EE8": {
-    "description": "App-owned interface/status text in lib/main.dart:15473. English: Contact request rejected."
+    "description": "App-owned interface/status text in lib/main.dart:15473. English: Contact request rejected.",
+    "x-ui-text-lookup": true
   },
   "uiContactRequestFromValue50B6AC": "Contact request from {value}",
   "@uiContactRequestFromValue50B6AC": {
@@ -4790,13 +4893,13 @@
       }
     }
   },
-  "uiThisWillRemoveValueRelay330EEB": "This will remove {value} relay route(s) imported from {value2}.",
+  "uiThisWillRemoveValueRelay330EEB": "{value, plural, one{This will remove {value} relay route imported from {value2}.} other{This will remove {value} relay routes imported from {value2}.}}",
   "@uiThisWillRemoveValueRelay330EEB": {
     "description": "App-owned interface/status text in lib/main.dart:15801. English: This will remove {value} relay route(s) imported from {value2}.",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       },
       "value2": {
         "type": "String",
@@ -4822,7 +4925,7 @@
   "@uiNoImportedLists6CBC34": {
     "description": "App-owned interface/status text in lib/main.dart:15872. English: No imported lists."
   },
-  "uiValueValueValueRouteS40FB98": "{value} · {value2} · {value3} route(s)",
+  "uiValueValueValueRouteS40FB98": "{value3, plural, one{{value} · {value2} · {value3} route} other{{value} · {value2} · {value3} routes}}",
   "@uiValueValueValueRouteS40FB98": {
     "description": "App-owned interface/status text in lib/main.dart:15886. English: {value} · {value2} · {value3} route(s)",
     "placeholders": {
@@ -4835,8 +4938,8 @@
         "description": "Opaque display value; preserve it unchanged."
       },
       "value3": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -4852,7 +4955,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiThemeA797E3": "Theme",
   "@uiThemeA797E3": {
@@ -4890,7 +4994,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiQRUnavailable12869A": "QR unavailable",
   "@uiQRUnavailable12869A": {
@@ -4922,15 +5027,18 @@
   },
   "uiUnavailable1D5EE3": "unavailable",
   "@uiUnavailable1D5EE3": {
-    "description": "App-owned interface/status text in lib/main.dart:17354. English: unavailable"
+    "description": "App-owned interface/status text in lib/main.dart:17354. English: unavailable",
+    "x-ui-status-atom": true
   },
   "uiUsable829A7C": "usable",
   "@uiUsable829A7C": {
-    "description": "App-owned interface/status text in lib/main.dart:17366. English: usable"
+    "description": "App-owned interface/status text in lib/main.dart:17366. English: usable",
+    "x-ui-status-atom": true
   },
   "uiOneWay5EF4D0": "one-way",
   "@uiOneWay5EF4D0": {
-    "description": "App-owned interface/status text in lib/main.dart:17368. English: one-way"
+    "description": "App-owned interface/status text in lib/main.dart:17368. English: one-way",
+    "x-ui-status-atom": true
   },
   "uiSkipC7E168": "skip",
   "@uiSkipC7E168": {
@@ -4980,27 +5088,23 @@
   "@uiDeleteAlbum52E30F": {
     "description": "App-owned interface/status text in lib/main.dart:18330. English: Delete album"
   },
-  "uiValueSelectedB1DFAF": "{value} selected",
+  "uiValueSelectedB1DFAF": "{value, plural, one{{value} selected} other{{value} selected}}",
   "@uiValueSelectedB1DFAF": {
     "description": "App-owned interface/status text in lib/main.dart:18413. English: {value} selected",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
-  "uiThisWillCancelValueActiveB3425E": "This will cancel {value} active transfer{value2} and clear the transfer list. Chat messages and completed downloaded files will stay.",
+  "uiThisWillCancelValueActiveB3425E": "{value, plural, one{This will cancel {value} active transfer and clear the transfer list. Chat messages and completed downloaded files will stay.} other{This will cancel {value} active transfers and clear the transfer list. Chat messages and completed downloaded files will stay.}}",
   "@uiThisWillCancelValueActiveB3425E": {
     "description": "App-owned interface/status text in lib/main.dart:18491. English: This will cancel {value} active transfer{value2} and clear the transfer list. Chat messages and completed downloaded files will stay.",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
-      },
-      "value2": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -5114,7 +5218,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiValueCannotBeReachedOver14E8C2": "{value} cannot be reached over Conest right now. Send this message to {value2} as an ordinary Matrix message instead?\n\nIt goes to your Matrix direct chat with them, not through Conest encryption: the homeserver can read it unless that chat is encrypted. Conest stops trying to deliver it.",
   "@uiValueCannotBeReachedOver14E8C2": {
@@ -5138,7 +5243,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiCouldNotPlayThisVideoF7D318": "Could not play this video: {value}",
   "@uiCouldNotPlayThisVideoF7D318": {
@@ -5188,7 +5294,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiSendNowDAE330": "Send now",
   "@uiSendNowDAE330": {
@@ -5212,13 +5319,13 @@
       }
     }
   },
-  "uiShareValueFilesToA46E17": "Share {value} files to…",
+  "uiShareValueFilesToA46E17": "{value, plural, one{Share {value} file to…} other{Share {value} files to…}}",
   "@uiShareValueFilesToA46E17": {
     "description": "App-owned interface/status text in lib/main.dart:21594. English: Share {value} files to…",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -5288,7 +5395,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiMatrixFallbackAA082C": "Matrix fallback",
   "@uiMatrixFallbackAA082C": {
@@ -5302,13 +5410,13 @@
   "@uiAccountsThatSignInThrough64868A": {
     "description": "App-owned interface/status text in lib/src/ui/matrix_account_panel.dart:437. English: Accounts that sign in through Google, GitHub or another provider, or through matrix.org, use the browser."
   },
-  "uiThisAccountIsOnValueB78C80": "This account is on {value} devices.",
+  "uiThisAccountIsOnValueB78C80": "{value, plural, one{This account is on {value} device.} other{This account is on {value} devices.}}",
   "@uiThisAccountIsOnValueB78C80": {
     "description": "App-owned interface/status text in lib/src/ui/devices_panel.dart:87. English: This account is on {value} devices.",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -5324,13 +5432,13 @@
   "@uiPauseSyncingWithADevice89642E": {
     "description": "App-owned interface/status text in lib/src/ui/devices_panel.dart:151. English: Pause syncing with a device out of touch for"
   },
-  "uiValueDaysEE919A": "{value} days",
+  "uiValueDaysEE919A": "{value, plural, one{{value} day} other{{value} days}}",
   "@uiValueDaysEE919A": {
     "description": "App-owned interface/status text in lib/src/ui/devices_panel.dart:166. English: {value} days",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -5500,7 +5608,7 @@
       }
     }
   },
-  "uiStartedByValueValueParticipants99F03D": "Started by {value} · {value2} participants",
+  "uiStartedByValueValueParticipants99F03D": "{value2, plural, one{Started by {value} · {value2} participant} other{Started by {value} · {value2} participants}}",
   "@uiStartedByValueValueParticipants99F03D": {
     "description": "App-owned interface/status text in lib/src/ui/group_call_screen.dart:442. English: Started by {value} · {value2} participants",
     "placeholders": {
@@ -5509,8 +5617,8 @@
         "description": "Opaque display value; preserve it unchanged."
       },
       "value2": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -5668,13 +5776,13 @@
   "@uiLIVE67B40B": {
     "description": "App-owned interface/status text in lib/src/ui/signature_panels.dart:198. English: ● LIVE"
   },
-  "uiValueChatsAD9A3B": "{value} chats",
+  "uiValueChatsAD9A3B": "{value, plural, one{{value} chat} other{{value} chats}}",
   "@uiValueChatsAD9A3B": {
     "description": "App-owned interface/status text in lib/src/ui/radio_chats_screen.dart:182. English: {value} chats",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -5690,7 +5798,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiNotDeliveredTheirRadioCould75D581": "not delivered (their radio could not read it)",
   "@uiNotDeliveredTheirRadioCould75D581": {
@@ -5748,7 +5857,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiVerifyThisSessionB5065C": "Verify this session",
   "@uiVerifyThisSessionB5065C": {
@@ -5756,51 +5866,49 @@
   },
   "uiBluetoothMeshOn5A96FE": "Bluetooth mesh on",
   "@uiBluetoothMeshOn5A96FE": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:134. English: Bluetooth mesh on"
+    "description": "Settings → Connectivity, Bluetooth mesh: Bluetooth mesh on"
   },
   "uiStartingBluetoothE6928A": "Starting Bluetooth",
   "@uiStartingBluetoothE6928A": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:135. English: Starting Bluetooth"
+    "description": "Settings → Connectivity, Bluetooth mesh: Starting Bluetooth"
   },
   "uiBluetoothUnavailableF4B751": "Bluetooth unavailable",
   "@uiBluetoothUnavailableF4B751": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:136. English: Bluetooth unavailable"
+    "description": "Settings → Connectivity, Bluetooth mesh: Bluetooth unavailable"
   },
   "uiBitchatUsersNearbySeeYou1B54FC": "bitchat users nearby see you as \"{value}\" while you are in range, and can write to you. The identity they see is new every week and has nothing to do with your Conest identity.",
   "@uiBitchatUsersNearbySeeYou1B54FC": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:149. English: bitchat users nearby see you as \"{value}\" while you are in range, and can write to you. The identity they see is new every week and has nothing to do with your Conest identity.",
+    "description": "Explains public bitchat visibility. value is the chosen nickname; preserve it exactly.",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "String"
       }
     }
   },
-  "uiOffBitchatUsersDoNot054F9A": "Off: bitchat users do not see this phone. You can still read the mesh chat.",
+  "uiOffBitchatUsersDoNot054F9A": "Off: bitchat users do not see this device. You can still read the mesh chat.",
   "@uiOffBitchatUsersDoNot054F9A": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:154. English: Off: bitchat users do not see this phone. You can still read the mesh chat."
+    "description": "Settings → Connectivity, Bluetooth mesh: Off: bitchat users do not see this device. You can still read the mesh chat."
   },
-  "uiPhonesNearbyWithoutInternetCan27CC7F": "Phones nearby without internet can use bitchat's location channels through this phone. Only those public, signed messages pass. This phone connects to the relays of the areas they use{value}: those relays see your internet address and the area, so they can tell roughly where you are.",
+  "uiPhonesNearbyWithoutInternetCan27CC7F": "Phones nearby without internet can use bitchat's location channels through this device. Only those public, signed messages pass. This device connects to the relays of the areas they use{value}: those relays see your internet address and the area, so they can tell roughly where you are.",
   "@uiPhonesNearbyWithoutInternetCan27CC7F": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:169. English: Phones nearby without internet can use bitchat's location channels through this phone. Only those public, signed messages pass. This phone connects to the relays of the areas they use{value}: those relays see your internet address and the area, so they can tell roughly where you are.",
+    "description": "Explains internet sharing and its privacy tradeoff. value is an optional localized area-count suffix, including spacing.",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "String"
       }
     }
   },
   "uiOffBitchatUsersNearbyWithout030CFB": "Off: bitchat users nearby without internet cannot reach location channels through you.",
   "@uiOffBitchatUsersNearbyWithout030CFB": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:176. English: Off: bitchat users nearby without internet cannot reach location channels through you."
+    "description": "Settings → Connectivity, Bluetooth mesh: Off: bitchat users nearby without internet cannot reach location channels through you."
   },
-  "uiValueNearbyTheMeshChat31C0CA": "{value} nearby · the mesh chat and private chats",
+  "uiValueNearbyTheMeshChat31C0CA": "{value, plural, one{{value} nearby · the mesh chat and private chats} other{{value} nearby · the mesh chat and private chats}}",
   "@uiValueNearbyTheMeshChat31C0CA": {
     "description": "App-owned interface/status text in lib/src/ui/bitchat_carrier_panel.dart:209. English: {value} nearby · the mesh chat and private chats",
     "placeholders": {
       "value": {
-        "type": "String",
-        "description": "Opaque display value; preserve it unchanged."
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
       }
     }
   },
@@ -5864,7 +5972,8 @@
   },
   "uiUSB09716C": "USB",
   "@uiUSB09716C": {
-    "description": "App-owned interface/status text in lib/src/ui/meshcore_carrier_panel.dart:130. English: USB"
+    "description": "App-owned interface/status text in lib/src/ui/meshcore_carrier_panel.dart:130. English: USB",
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiCopiedTheErrorHistoryCE02E2": "Copied the error history.",
   "@uiCopiedTheErrorHistoryCE02E2": {
@@ -5886,7 +5995,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiValueValueValueValue56C1C1": "{value}: {value2} {value3}{value4}",
   "@uiValueValueValueValue56C1C1": {
@@ -5908,7 +6018,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiRouteValue9D8426": "Route: {value}",
   "@uiRouteValue9D8426": {
@@ -5932,7 +6043,8 @@
         "type": "String",
         "description": "Opaque display value; preserve it unchanged."
       }
-    }
+    },
+    "x-preserve-english": "Protocol name, numeric format, example address or debug-only diagnostic; preserve exactly."
   },
   "uiNetwork53EBC5": "Network",
   "@uiNetwork53EBC5": {
@@ -6015,5 +6127,1693 @@
   "uiPointTheCameraAtA9BAFAF": "Point the camera at a Conest invite QR code.",
   "@uiPointTheCameraAtA9BAFAF": {
     "description": "App-owned interface/status text in lib/src/qr_scan_screen.dart:62. English: Point the camera at a Conest invite QR code."
+  },
+  "statusMatrixRoomsShowJoinsAndE8AC9E": "Matrix rooms show joins and leaves.",
+  "@statusMatrixRoomsShowJoinsAndE8AC9E": {
+    "description": "App-owned controller status shown in the status line or an action notice. Matrix rooms show joins and leaves.",
+    "x-ui-text-lookup": true
+  },
+  "statusMatrixRoomsHideJoinsAndE00610": "Matrix rooms hide joins and leaves.",
+  "@statusMatrixRoomsHideJoinsAndE00610": {
+    "description": "App-owned controller status shown in the status line or an action notice. Matrix rooms hide joins and leaves.",
+    "x-ui-text-lookup": true
+  },
+  "statusAppMode95B48F": "App mode: {value}.",
+  "@statusAppMode95B48F": {
+    "description": "App-owned controller status shown in the status line or an action notice. App mode: {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusCalling7A8C67": "Calling {value}…",
+  "@statusCalling7A8C67": {
+    "description": "App-owned controller status shown in the status line or an action notice. Calling {value}…",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusUpdatedHistoryVisibilityForFutureDA1A23": "Updated history visibility for future group members.",
+  "@statusUpdatedHistoryVisibilityForFutureDA1A23": {
+    "description": "App-owned controller status shown in the status line or an action notice. Updated history visibility for future group members.",
+    "x-ui-text-lookup": true
+  },
+  "statusVaultUnlockFailedAE7813": "Vault unlock failed: {value}",
+  "@statusVaultUnlockFailedAE7813": {
+    "description": "App-owned controller status shown in the status line or an action notice. Vault unlock failed: {value}",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusDirectOnlineTransportIsUnavailableB1EFAE": "Direct online transport is unavailable; relay fallback remains active.",
+  "@statusDirectOnlineTransportIsUnavailableB1EFAE": {
+    "description": "App-owned controller status shown in the status line or an action notice. Direct online transport is unavailable; relay fallback remains active.",
+    "x-ui-text-lookup": true
+  },
+  "statusNostrCarrierSetUpE82998": "Nostr carrier set up.",
+  "@statusNostrCarrierSetUpE82998": {
+    "description": "App-owned controller status shown in the status line or an action notice. Nostr carrier set up.",
+    "x-ui-text-lookup": true
+  },
+  "statusNostrCarrierRemovedCB968A": "Nostr carrier removed.",
+  "@statusNostrCarrierRemovedCB968A": {
+    "description": "App-owned controller status shown in the status line or an action notice. Nostr carrier removed.",
+    "x-ui-text-lookup": true
+  },
+  "statusNostrRelaysUpdatedARelay03F8F3": "Nostr relays updated: a relay shut down.",
+  "@statusNostrRelaysUpdatedARelay03F8F3": {
+    "description": "App-owned controller status shown in the status line or an action notice. Nostr relays updated: a relay shut down.",
+    "x-ui-text-lookup": true
+  },
+  "statusTorCarrierSetUp3D2304": "Tor carrier set up.",
+  "@statusTorCarrierSetUp3D2304": {
+    "description": "App-owned controller status shown in the status line or an action notice. Tor carrier set up.",
+    "x-ui-text-lookup": true
+  },
+  "statusTorCarrierRemovedAAC23E": "Tor carrier removed.",
+  "@statusTorCarrierRemovedAAC23E": {
+    "description": "App-owned controller status shown in the status line or an action notice. Tor carrier removed.",
+    "x-ui-text-lookup": true
+  },
+  "statusBluetoothMeshOn11FD21": "Bluetooth mesh on.",
+  "@statusBluetoothMeshOn11FD21": {
+    "description": "App-owned controller status shown in the status line or an action notice. Bluetooth mesh on.",
+    "x-ui-text-lookup": true
+  },
+  "statusBluetoothMeshOff2CE954": "Bluetooth mesh off.",
+  "@statusBluetoothMeshOff2CE954": {
+    "description": "App-owned controller status shown in the status line or an action notice. Bluetooth mesh off.",
+    "x-ui-text-lookup": true
+  },
+  "statusNostrMessagesOn35ABF5": "Nostr messages on.",
+  "@statusNostrMessagesOn35ABF5": {
+    "description": "App-owned controller status shown in the status line or an action notice. Nostr messages on.",
+    "x-ui-text-lookup": true
+  },
+  "statusNostrMessagesOff16BCA7": "Nostr messages off.",
+  "@statusNostrMessagesOff16BCA7": {
+    "description": "App-owned controller status shown in the status line or an action notice. Nostr messages off.",
+    "x-ui-text-lookup": true
+  },
+  "statusDeltaChatOn1F38AA": "Delta Chat on.",
+  "@statusDeltaChatOn1F38AA": {
+    "description": "App-owned controller status shown in the status line or an action notice. Delta Chat on.",
+    "x-ui-text-lookup": true
+  },
+  "statusDeltaChatOff8BDBD4": "Delta Chat off.",
+  "@statusDeltaChatOff8BDBD4": {
+    "description": "App-owned controller status shown in the status line or an action notice. Delta Chat off.",
+    "x-ui-text-lookup": true
+  },
+  "statusBitchatUsersNearbyCanNow5536CD": "bitchat users nearby can now see you as {value}.",
+  "@statusBitchatUsersNearbyCanNow5536CD": {
+    "description": "App-owned controller status shown in the status line or an action notice. bitchat users nearby can now see you as {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusBitchatUsersNoLongerSee68B46D": "bitchat users no longer see you.",
+  "@statusBitchatUsersNoLongerSee68B46D": {
+    "description": "App-owned controller status shown in the status line or an action notice. bitchat users no longer see you.",
+    "x-ui-text-lookup": true
+  },
+  "statusMeshcoreCarrierSetUpThroughE51369": "MeshCore carrier set up through {value}.",
+  "@statusMeshcoreCarrierSetUpThroughE51369": {
+    "description": "App-owned controller status shown in the status line or an action notice. MeshCore carrier set up through {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusMeshcoreCarrierRemoved38FC35": "MeshCore carrier removed.",
+  "@statusMeshcoreCarrierRemoved38FC35": {
+    "description": "App-owned controller status shown in the status line or an action notice. MeshCore carrier removed.",
+    "x-ui-text-lookup": true
+  },
+  "statusMeshtasticCarrierSetUpThroughAFA24A": "Meshtastic carrier set up through {value}.",
+  "@statusMeshtasticCarrierSetUpThroughAFA24A": {
+    "description": "App-owned controller status shown in the status line or an action notice. Meshtastic carrier set up through {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusMeshtasticCarrierRemoved66387E": "Meshtastic carrier removed.",
+  "@statusMeshtasticCarrierRemoved66387E": {
+    "description": "App-owned controller status shown in the status line or an action notice. Meshtastic carrier removed.",
+    "x-ui-text-lookup": true
+  },
+  "statusMeshtasticAppMessagesOn2C1888": "Meshtastic app messages on.",
+  "@statusMeshtasticAppMessagesOn2C1888": {
+    "description": "App-owned controller status shown in the status line or an action notice. Meshtastic app messages on.",
+    "x-ui-text-lookup": true
+  },
+  "statusMeshtasticAppMessagesOffAFB9E8": "Meshtastic app messages off.",
+  "@statusMeshtasticAppMessagesOffAFB9E8": {
+    "description": "App-owned controller status shown in the status line or an action notice. Meshtastic app messages off.",
+    "x-ui-text-lookup": true
+  },
+  "statusMeshcoreAppMessagesOn2BF1E3": "MeshCore app messages on.",
+  "@statusMeshcoreAppMessagesOn2BF1E3": {
+    "description": "App-owned controller status shown in the status line or an action notice. MeshCore app messages on.",
+    "x-ui-text-lookup": true
+  },
+  "statusMeshcoreAppMessagesOffE59C90": "MeshCore app messages off.",
+  "@statusMeshcoreAppMessagesOffE59C90": {
+    "description": "App-owned controller status shown in the status line or an action notice. MeshCore app messages off.",
+    "x-ui-text-lookup": true
+  },
+  "statusReticulumCarrierSetUpThrough7EB41E": "Reticulum carrier set up through {value}.",
+  "@statusReticulumCarrierSetUpThrough7EB41E": {
+    "description": "App-owned controller status shown in the status line or an action notice. Reticulum carrier set up through {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusReticulumCarrierRemoved301C05": "Reticulum carrier removed.",
+  "@statusReticulumCarrierRemoved301C05": {
+    "description": "App-owned controller status shown in the status line or an action notice. Reticulum carrier removed.",
+    "x-ui-text-lookup": true
+  },
+  "statusEmailCarrierSetUpAs8427FD": "Email carrier set up as {value}.",
+  "@statusEmailCarrierSetUpAs8427FD": {
+    "description": "App-owned controller status shown in the status line or an action notice. Email carrier set up as {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusEmailCarrierRemoved036E51": "Email carrier removed.",
+  "@statusEmailCarrierRemoved036E51": {
+    "description": "App-owned controller status shown in the status line or an action notice. Email carrier removed.",
+    "x-ui-text-lookup": true
+  },
+  "statusImportedRelaySFromB1DB2D": "{value, plural, one{Imported {value} relay from {value2}.} other{Imported {value} relays from {value2}.}}",
+  "@statusImportedRelaySFromB1DB2D": {
+    "description": "App-owned controller status shown in the status line or an action notice. Imported {value} relay(s) from {value2}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
+      },
+      "value2": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    },
+    "x-ui-template": "Imported {value} relay(s) from {value2}."
+  },
+  "statusRemovedImportedRelaySource3F4540": "Removed imported relay source {value}.",
+  "@statusRemovedImportedRelaySource3F4540": {
+    "description": "App-owned controller status shown in the status line or an action notice. Removed imported relay source {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusPairingCodeRotatedAndAdvertised722FB9": "Pairing code rotated and advertised.",
+  "@statusPairingCodeRotatedAndAdvertised722FB9": {
+    "description": "App-owned controller status shown in the status line or an action notice. Pairing code rotated and advertised.",
+    "x-ui-text-lookup": true
+  },
+  "statusCheckedRouteSAvailableE9B9D6": "{value, plural, one{Checked {value} route; {value2} available. {value3}} other{Checked {value} routes; {value2} available. {value3}}}",
+  "@statusCheckedRouteSAvailableE9B9D6": {
+    "description": "App-owned controller status shown in the status line or an action notice. Checked {value} route(s); {value2} available. {value3}",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
+      },
+      "value2": {
+        "type": "int",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value3": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    },
+    "x-ui-template": "Checked {value} route(s); {value2} available. {value3}",
+    "x-ui-status-atoms": [
+      "value3"
+    ]
+  },
+  "statusCheckedIrohPathSFor038B43": "Checked Iroh path(s) for {value}; reachability is {value2}. {value3}",
+  "@statusCheckedIrohPathSFor038B43": {
+    "description": "App-owned controller status shown in the status line or an action notice. Checked Iroh path(s) for {value}; reachability is {value2}. {value3}",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value2": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value3": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    },
+    "x-ui-status-atoms": [
+      "value2",
+      "value3"
+    ]
+  },
+  "statusNoPathsAreAdvertisedForA37EA3": "No paths are advertised for {value}.",
+  "@statusNoPathsAreAdvertisedForA37EA3": {
+    "description": "App-owned controller status shown in the status line or an action notice. No paths are advertised for {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusCheckedPathSForAvailable0970F6": "{value, plural, one{Checked {value} path for {value2}; {value3} available{value4}. Reachability is {value5}. {value6}} other{Checked {value} paths for {value2}; {value3} available{value4}. Reachability is {value5}. {value6}}}",
+  "@statusCheckedPathSForAvailable0970F6": {
+    "description": "App-owned controller status shown in the status line or an action notice. Checked {value} path(s) for {value2}; {value3} available{value4}. Reachability is {value5}. {value6}",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
+      },
+      "value2": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value3": {
+        "type": "int",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value4": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value5": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value6": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    },
+    "x-ui-template": "Checked {value} path(s) for {value2}; {value3} available{value4}. Reachability is {value5}. {value6}",
+    "x-ui-status-atoms": [
+      "value5",
+      "value6"
+    ]
+  },
+  "statusDisplayNameUpdated3BD31A": "Display name updated.",
+  "@statusDisplayNameUpdated3BD31A": {
+    "description": "App-owned controller status shown in the status line or an action notice. Display name updated.",
+    "x-ui-text-lookup": true
+  },
+  "statusBioCleared543896": "Bio cleared.",
+  "@statusBioCleared543896": {
+    "description": "App-owned controller status shown in the status line or an action notice. Bio cleared.",
+    "x-ui-text-lookup": true
+  },
+  "statusBioUpdated440110": "Bio updated.",
+  "@statusBioUpdated440110": {
+    "description": "App-owned controller status shown in the status line or an action notice. Bio updated.",
+    "x-ui-text-lookup": true
+  },
+  "statusContactProfileUpdated47ECF6": "Contact profile updated.",
+  "@statusContactProfileUpdated47ECF6": {
+    "description": "App-owned controller status shown in the status line or an action notice. Contact profile updated.",
+    "x-ui-text-lookup": true
+  },
+  "statusRelayModeEnabledB9ACB8": "Relay mode enabled.",
+  "@statusRelayModeEnabledB9ACB8": {
+    "description": "App-owned controller status shown in the status line or an action notice. Relay mode enabled.",
+    "x-ui-text-lookup": true
+  },
+  "statusRelayModeDisabled723F4D": "Relay mode disabled.",
+  "@statusRelayModeDisabled723F4D": {
+    "description": "App-owned controller status shown in the status line or an action notice. Relay mode disabled.",
+    "x-ui-text-lookup": true
+  },
+  "statusContactsCanNowContributeRelay147ECE": "Contacts can now contribute relay routes automatically.",
+  "@statusContactsCanNowContributeRelay147ECE": {
+    "description": "App-owned controller status shown in the status line or an action notice. Contacts can now contribute relay routes automatically.",
+    "x-ui-text-lookup": true
+  },
+  "statusAutomaticContactRelayUsageDisabledE762A7": "Automatic contact relay usage disabled.",
+  "@statusAutomaticContactRelayUsageDisabledE762A7": {
+    "description": "App-owned controller status shown in the status line or an action notice. Automatic contact relay usage disabled.",
+    "x-ui-text-lookup": true
+  },
+  "statusNotificationsEnabledF70668": "Notifications enabled.",
+  "@statusNotificationsEnabledF70668": {
+    "description": "App-owned controller status shown in the status line or an action notice. Notifications enabled.",
+    "x-ui-text-lookup": true
+  },
+  "statusNotificationsDisabledForThisDeviceE10A46": "Notifications disabled for this device.",
+  "@statusNotificationsDisabledForThisDeviceE10A46": {
+    "description": "App-owned controller status shown in the status line or an action notice. Notifications disabled for this device.",
+    "x-ui-text-lookup": true
+  },
+  "statusExperimentalVoiceCallsEnabledOn4081DE": "Experimental voice calls enabled on this device.",
+  "@statusExperimentalVoiceCallsEnabledOn4081DE": {
+    "description": "App-owned controller status shown in the status line or an action notice. Experimental voice calls enabled on this device.",
+    "x-ui-text-lookup": true
+  },
+  "statusExperimentalVoiceCallsDisabledOn19A5AE": "Experimental voice calls disabled on this device.",
+  "@statusExperimentalVoiceCallsDisabledOn19A5AE": {
+    "description": "App-owned controller status shown in the status line or an action notice. Experimental voice calls disabled on this device.",
+    "x-ui-text-lookup": true
+  },
+  "statusAndroidBackgroundRuntimeEnabledIfAA5168": "Android background runtime enabled. If system battery/background access is blocked, notifications can still be late or never arrive.",
+  "@statusAndroidBackgroundRuntimeEnabledIfAA5168": {
+    "description": "App-owned controller status shown in the status line or an action notice. Android background runtime enabled. If system battery/background access is blocked, notifications can still be late or never arrive.",
+    "x-ui-text-lookup": true
+  },
+  "statusAndroidBackgroundRuntimeDisabled5FC9A0": "Android background runtime disabled.",
+  "@statusAndroidBackgroundRuntimeDisabled5FC9A0": {
+    "description": "App-owned controller status shown in the status line or an action notice. Android background runtime disabled.",
+    "x-ui-text-lookup": true
+  },
+  "statusBackgroundVoiceCallAvailabilityEnabledA87223": "Background voice-call availability enabled for this device. Calls can arrive only while the Conest service is allowed to run.",
+  "@statusBackgroundVoiceCallAvailabilityEnabledA87223": {
+    "description": "App-owned controller status shown in the status line or an action notice. Background voice-call availability enabled for this device. Calls can arrive only while the Conest service is allowed to run.",
+    "x-ui-text-lookup": true
+  },
+  "statusBackgroundVoiceCallAvailabilityDisabledA71AD1": "Background voice-call availability disabled.",
+  "@statusBackgroundVoiceCallAvailabilityDisabledA71AD1": {
+    "description": "App-owned controller status shown in the status line or an action notice. Background voice-call availability disabled.",
+    "x-ui-text-lookup": true
+  },
+  "statusFreeSpaceReserveEnabledD7CE0E": "10% free-space reserve enabled.",
+  "@statusFreeSpaceReserveEnabledD7CE0E": {
+    "description": "App-owned controller status shown in the status line or an action notice. 10% free-space reserve enabled.",
+    "x-ui-text-lookup": true
+  },
+  "statusFreeSpaceReserveDisabledD3E635": "10% free-space reserve disabled.",
+  "@statusFreeSpaceReserveDisabledD3E635": {
+    "description": "App-owned controller status shown in the status line or an action notice. 10% free-space reserve disabled.",
+    "x-ui-text-lookup": true
+  },
+  "statusRoutingPreferencesUpdatedFor05867B": "Routing preferences updated for {value}.",
+  "@statusRoutingPreferencesUpdatedFor05867B": {
+    "description": "App-owned controller status shown in the status line or an action notice. Routing preferences updated for {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusLocalRelayPortUpdatedTo7F815D": "Local relay port updated to {value}.",
+  "@statusLocalRelayPortUpdatedTo7F815D": {
+    "description": "App-owned controller status shown in the status line or an action notice. Local relay port updated to {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusRelayAdded800692": "Relay {value} added.",
+  "@statusRelayAdded800692": {
+    "description": "App-owned controller status shown in the status line or an action notice. Relay {value} added.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusRelayAddedFor087398": "Relay {value}:{value2} added for {value3}.",
+  "@statusRelayAddedFor087398": {
+    "description": "App-owned controller status shown in the status line or an action notice. Relay {value}:{value2} added for {value3}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value2": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value3": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusRelayRemoved546A15": "Relay {value} removed.",
+  "@statusRelayRemoved546A15": {
+    "description": "App-owned controller status shown in the status line or an action notice. Relay {value} removed.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusTrustedNewIdentityForRelay4CDBFE": "Trusted new identity for relay {value}.",
+  "@statusTrustedNewIdentityForRelay4CDBFE": {
+    "description": "App-owned controller status shown in the status line or an action notice. Trusted new identity for relay {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusContactRemovedE31CE0": "Contact removed.",
+  "@statusContactRemovedE31CE0": {
+    "description": "App-owned controller status shown in the status line or an action notice. Contact removed.",
+    "x-ui-text-lookup": true
+  },
+  "statusContactRemovedLocallySendingA40D607": "Contact removed locally. Sending a removal notice in the background.",
+  "@statusContactRemovedLocallySendingA40D607": {
+    "description": "App-owned controller status shown in the status line or an action notice. Contact removed locally. Sending a removal notice in the background.",
+    "x-ui-text-lookup": true
+  },
+  "statusDeviceCreatedShareAQr06E7B6": "Device created. Share a QR invite or the current codephrase to add this contact.",
+  "@statusDeviceCreatedShareAQr06E7B6": {
+    "description": "App-owned controller status shown in the status line or an action notice. Device created. Share a QR invite or the current codephrase to add this contact.",
+    "x-ui-text-lookup": true
+  },
+  "statusContactAcceptedSendingApprovalOverDAD10C": "Contact {value} accepted. Sending approval over available routes.",
+  "@statusContactAcceptedSendingApprovalOverDAD10C": {
+    "description": "App-owned controller status shown in the status line or an action notice. Contact {value} accepted. Sending approval over available routes.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusContactSavedWaitingForThe41F77D": "Contact {value} saved. Waiting for the other person to approve the request.",
+  "@statusContactSavedWaitingForThe41F77D": {
+    "description": "App-owned controller status shown in the status line or an action notice. Contact {value} saved. Waiting for the other person to approve the request.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusReconnectedWithBC62EC": "Reconnected with {value}.",
+  "@statusReconnectedWithBC62EC": {
+    "description": "App-owned controller status shown in the status line or an action notice. Reconnected with {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusAskingToReconnectE93389": "Asking {value} to reconnect.",
+  "@statusAskingToReconnectE93389": {
+    "description": "App-owned controller status shown in the status line or an action notice. Asking {value} to reconnect.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusConfirmedIdentityReplacementForC93359": "Confirmed identity replacement for {value}.",
+  "@statusConfirmedIdentityReplacementForC93359": {
+    "description": "App-owned controller status shown in the status line or an action notice. Confirmed identity replacement for {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusRejectedIdentityReplacementForDEC894": "Rejected identity replacement for {value}.",
+  "@statusRejectedIdentityReplacementForDEC894": {
+    "description": "App-owned controller status shown in the status line or an action notice. Rejected identity replacement for {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusContactRequestCancelledQueuedItemsEC2567": "Contact request cancelled. Queued items remain blocked.",
+  "@statusContactRequestCancelledQueuedItemsEC2567": {
+    "description": "App-owned controller status shown in the status line or an action notice. Contact request cancelled. Queued items remain blocked.",
+    "x-ui-text-lookup": true
+  },
+  "statusSaved9D4AF6": "Saved.",
+  "@statusSaved9D4AF6": {
+    "description": "App-owned controller status shown in the status line or an action notice. Saved.",
+    "x-ui-text-lookup": true
+  },
+  "statusMessageSavedLocallyItWill0DBD03": "Message saved locally. It will send after {value} accepts the contact request.",
+  "@statusMessageSavedLocallyItWill0DBD03": {
+    "description": "App-owned controller status shown in the status line or an action notice. Message saved locally. It will send after {value} accepts the contact request.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusTryingLanFirstThenRelay1F5BEC": "Trying LAN first, then relay for {value}.",
+  "@statusTryingLanFirstThenRelay1F5BEC": {
+    "description": "App-owned controller status shown in the status line or an action notice. Trying LAN first, then relay for {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusMessageQueuedTheAppWillA89BCC": "Message queued. The app will retry direct routes and relays while polling.",
+  "@statusMessageQueuedTheAppWillA89BCC": {
+    "description": "App-owned controller status shown in the status line or an action notice. Message queued. The app will retry direct routes and relays while polling.",
+    "x-ui-text-lookup": true
+  },
+  "statusAttachmentIsWaitingForA3F032B": "Attachment is waiting for a route: {value}",
+  "@statusAttachmentIsWaitingForA3F032B": {
+    "description": "App-owned controller status shown in the status line or an action notice. Attachment is waiting for a route: {value}",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusCouldNotPrepareForDownloadE8FB18": "Could not prepare {value} for download.",
+  "@statusCouldNotPrepareForDownloadE8FB18": {
+    "description": "App-owned controller status shown in the status line or an action notice. Could not prepare {value} for download.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusCreatedGroupF5D335": "Created group {value}.",
+  "@statusCreatedGroupF5D335": {
+    "description": "App-owned controller status shown in the status line or an action notice. Created group {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusUpdatedGroup2140B7": "Updated group {value}.",
+  "@statusUpdatedGroup2140B7": {
+    "description": "App-owned controller status shown in the status line or an action notice. Updated group {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusRemovedAMemberFrom68CF04": "Removed a member from {value}.",
+  "@statusRemovedAMemberFrom68CF04": {
+    "description": "App-owned controller status shown in the status line or an action notice. Removed a member from {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusLeftGroup9E3412": "Left group {value}.",
+  "@statusLeftGroup9E3412": {
+    "description": "App-owned controller status shown in the status line or an action notice. Left group {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusRemovedGroupFromYourList047F4B": "Removed group {value} from your list.",
+  "@statusRemovedGroupFromYourList047F4B": {
+    "description": "App-owned controller status shown in the status line or an action notice. Removed group {value} from your list.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusTransferredOwnershipOfToA126A1": "Transferred ownership of {value} to {value2}.",
+  "@statusTransferredOwnershipOfToA126A1": {
+    "description": "App-owned controller status shown in the status line or an action notice. Transferred ownership of {value} to {value2}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value2": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusDeletedGroupForEveryoneDB26F8": "Deleted group {value} for everyone.",
+  "@statusDeletedGroupForEveryoneDB26F8": {
+    "description": "App-owned controller status shown in the status line or an action notice. Deleted group {value} for everyone.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusUpdatedIn642C0A": "Updated {value} in {value2}.",
+  "@statusUpdatedIn642C0A": {
+    "description": "App-owned controller status shown in the status line or an action notice. Updated {value} in {value2}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value2": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusSendingGroupMessageToD77236": "Sending group message to {value}.",
+  "@statusSendingGroupMessageToD77236": {
+    "description": "App-owned controller status shown in the status line or an action notice. Sending group message to {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusSentToAsAPlainAF2DE6": "Sent to {value} as a plain Matrix message.",
+  "@statusSentToAsAPlainAF2DE6": {
+    "description": "App-owned controller status shown in the status line or an action notice. Sent to {value} as a plain Matrix message.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusCanceledAndDeletedPendingMessageCDCA88": "Canceled and deleted pending message to {value}.",
+  "@statusCanceledAndDeletedPendingMessageCDCA88": {
+    "description": "App-owned controller status shown in the status line or an action notice. Canceled and deleted pending message to {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusMessageDeletedLocallyCE90EE": "Message deleted locally.",
+  "@statusMessageDeletedLocallyCE90EE": {
+    "description": "App-owned controller status shown in the status line or an action notice. Message deleted locally.",
+    "x-ui-text-lookup": true
+  },
+  "statusMessageDeletedHereAndDeletion7C4E80": "Message deleted here and deletion was sent to {value}.",
+  "@statusMessageDeletedHereAndDeletion7C4E80": {
+    "description": "App-owned controller status shown in the status line or an action notice. Message deleted here and deletion was sent to {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusMessageDeletedHereRemoteDeletionB6AE62": "Message deleted here. Remote deletion could not be sent yet.",
+  "@statusMessageDeletedHereRemoteDeletionB6AE62": {
+    "description": "App-owned controller status shown in the status line or an action notice. Message deleted here. Remote deletion could not be sent yet.",
+    "x-ui-text-lookup": true
+  },
+  "statusMessageEditedLocally187334": "Message edited locally.",
+  "@statusMessageEditedLocally187334": {
+    "description": "App-owned controller status shown in the status line or an action notice. Message edited locally.",
+    "x-ui-text-lookup": true
+  },
+  "statusMessageEditQueuedTo695B15": "Message edit queued to {value}.",
+  "@statusMessageEditQueuedTo695B15": {
+    "description": "App-owned controller status shown in the status line or an action notice. Message edit queued to {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusReactionUpdatedLocally97D795": "Reaction updated locally.",
+  "@statusReactionUpdatedLocally97D795": {
+    "description": "App-owned controller status shown in the status line or an action notice. Reaction updated locally.",
+    "x-ui-text-lookup": true
+  },
+  "statusReactionQueuedToD43BED": "Reaction queued to {value}.",
+  "@statusReactionQueuedToD43BED": {
+    "description": "App-owned controller status shown in the status line or an action notice. Reaction queued to {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusLanLobbyMessageSavedLocallyFDE86E": "LAN lobby message saved locally; no nearby LAN participants were reachable.",
+  "@statusLanLobbyMessageSavedLocallyFDE86E": {
+    "description": "App-owned controller status shown in the status line or an action notice. LAN lobby message saved locally; no nearby LAN participants were reachable.",
+    "x-ui-text-lookup": true
+  },
+  "statusLanLobbyMessageSentTo82F0B0": "{value, plural, one{LAN lobby message sent to {value} nearby route.} other{LAN lobby message sent to {value} nearby routes.}}",
+  "@statusLanLobbyMessageSentTo82F0B0": {
+    "description": "App-owned controller status shown in the status line or an action notice. LAN lobby message sent to {value} nearby route(s).",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
+      }
+    },
+    "x-ui-template": "LAN lobby message sent to {value} nearby route(s)."
+  },
+  "statusGroupMembershipAckFrom43FCF1": "Group {value} membership ack from {value2}.",
+  "@statusGroupMembershipAckFrom43FCF1": {
+    "description": "App-owned controller status shown in the status line or an action notice. Group {value} membership ack from {value2}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value2": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusReceivedItemSVia58B082": "{value, plural, one{Received {value} item via {value2}.} other{Received {value} items via {value2}.}}",
+  "@statusReceivedItemSVia58B082": {
+    "description": "App-owned controller status shown in the status line or an action notice. Received {value} item(s) via {value2}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
+      },
+      "value2": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    },
+    "x-ui-template": "Received {value} item(s) via {value2}.",
+    "x-ui-status-atoms": [
+      "value2"
+    ]
+  },
+  "statusRoutePollFailedA1FD0C": "Route poll failed: {value}",
+  "@statusRoutePollFailedA1FD0C": {
+    "description": "App-owned controller status shown in the status line or an action notice. Route poll failed: {value}",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusLanReceivingIsOffPort5F04CB": "LAN receiving is off: port {value} is in use. Pick another local relay port in Settings.",
+  "@statusLanReceivingIsOffPort5F04CB": {
+    "description": "App-owned controller status shown in the status line or an action notice. LAN receiving is off: port {value} is in use. Pick another local relay port in Settings.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusRediscoveredLanRouteFor587829": "Rediscovered LAN route {value} for {value2}.",
+  "@statusRediscoveredLanRouteFor587829": {
+    "description": "App-owned controller status shown in the status line or an action notice. Rediscovered LAN route {value} for {value2}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value2": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusLanDiscoveryUnavailable0E99AE": "LAN discovery unavailable: {value}",
+  "@statusLanDiscoveryUnavailable0E99AE": {
+    "description": "App-owned controller status shown in the status line or an action notice. LAN discovery unavailable: {value}",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusUpdatedNearbyLanRoutesF8CAFC": "Updated nearby LAN routes.",
+  "@statusUpdatedNearbyLanRoutesF8CAFC": {
+    "description": "App-owned controller status shown in the status line or an action notice. Updated nearby LAN routes.",
+    "x-ui-text-lookup": true
+  },
+  "statusRejectedMalformedAttachmentOfferFrom9FC96A": "Rejected malformed attachment offer from {value}.",
+  "@statusRejectedMalformedAttachmentOfferFrom9FC96A": {
+    "description": "App-owned controller status shown in the status line or an action notice. Rejected malformed attachment offer from {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusRejectedInvalidAttachmentMetadata849465": "Rejected invalid attachment metadata.",
+  "@statusRejectedInvalidAttachmentMetadata849465": {
+    "description": "App-owned controller status shown in the status line or an action notice. Rejected invalid attachment metadata.",
+    "x-ui-text-lookup": true
+  },
+  "statusDeclinedTheRequestQueuedMessagesABFFCB": "{value} declined the request. Queued messages and files remain blocked.",
+  "@statusDeclinedTheRequestQueuedMessagesABFFCB": {
+    "description": "App-owned controller status shown in the status line or an action notice. {value} declined the request. Queued messages and files remain blocked.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusNewContactRequestFromCF70B9": "New contact request from {value}.",
+  "@statusNewContactRequestFromCF70B9": {
+    "description": "App-owned controller status shown in the status line or an action notice. New contact request from {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusLeftF4FE32": "{value} left {value2}.",
+  "@statusLeftF4FE32": {
+    "description": "App-owned controller status shown in the status line or an action notice. {value} left {value2}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value2": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusRemovedYouTheConversationRemains3BB516": "{value} removed you. The conversation remains archived locally.",
+  "@statusRemovedYouTheConversationRemains3BB516": {
+    "description": "App-owned controller status shown in the status line or an action notice. {value} removed you. The conversation remains archived locally.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusUpdatedEditedMessageFrom1AB90D": "Updated edited message from {value}.",
+  "@statusUpdatedEditedMessageFrom1AB90D": {
+    "description": "App-owned controller status shown in the status line or an action notice. Updated edited message from {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusDeletedMessageRemovedBy5A9E79": "Deleted message removed by {value}.",
+  "@statusDeletedMessageRemovedBy5A9E79": {
+    "description": "App-owned controller status shown in the status line or an action notice. Deleted message removed by {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusAppliedAReactionFrom41011B": "Applied a reaction from {value}.",
+  "@statusAppliedAReactionFrom41011B": {
+    "description": "App-owned controller status shown in the status line or an action notice. Applied a reaction from {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusAppliedDeferredDirectReactions1414C8": "Applied deferred direct reactions.",
+  "@statusAppliedDeferredDirectReactions1414C8": {
+    "description": "App-owned controller status shown in the status line or an action notice. Applied deferred direct reactions.",
+    "x-ui-text-lookup": true
+  },
+  "statusEncryptedMessageStoredForVia029324": "Encrypted message stored for {value} via {value2}.",
+  "@statusEncryptedMessageStoredForVia029324": {
+    "description": "App-owned controller status shown in the status line or an action notice. Encrypted message stored for {value} via {value2}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value2": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusSentToViaWaitingForEA766D": "Sent to {value} via {value2}; waiting for a delivery receipt.",
+  "@statusSentToViaWaitingForEA766D": {
+    "description": "App-owned controller status shown in the status line or an action notice. Sent to {value} via {value2}; waiting for a delivery receipt.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value2": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusDeliveryRetryPending93EAA3": "Delivery retry pending: {value}",
+  "@statusDeliveryRetryPending93EAA3": {
+    "description": "App-owned controller status shown in the status line or an action notice. Delivery retry pending: {value}",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusGroupDeliveryRetryPending691CA4": "Group delivery retry pending: {value}",
+  "@statusGroupDeliveryRetryPending691CA4": {
+    "description": "App-owned controller status shown in the status line or an action notice. Group delivery retry pending: {value}",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusRelayIdentityChangedVerifyWith6F3689": "Relay {value} identity changed — verify with the operator.",
+  "@statusRelayIdentityChangedVerifyWith6F3689": {
+    "description": "App-owned controller status shown in the status line or an action notice. Relay {value} identity changed — verify with the operator.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusRelayIdentityMismatchVerifyWith2D3B10": "Relay {value}:{value2} identity mismatch — verify with the operator.",
+  "@statusRelayIdentityMismatchVerifyWith2D3B10": {
+    "description": "App-owned controller status shown in the status line or an action notice. Relay {value}:{value2} identity mismatch — verify with the operator.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value2": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusTheMatrixSignInExpired76ABA4": "The Matrix sign-in expired. Sign in again to use Matrix.",
+  "@statusTheMatrixSignInExpired76ABA4": {
+    "description": "App-owned controller status shown in the status line or an action notice. The Matrix sign-in expired. Sign in again to use Matrix.",
+    "x-ui-text-lookup": true
+  },
+  "statusSignedInToMatrixAs5103D2": "Signed in to Matrix as {value}.",
+  "@statusSignedInToMatrixAs5103D2": {
+    "description": "App-owned controller status shown in the status line or an action notice. Signed in to Matrix as {value}.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusSignedOutOfMatrix1D1860": "Signed out of Matrix.",
+  "@statusSignedOutOfMatrix1D1860": {
+    "description": "App-owned controller status shown in the status line or an action notice. Signed out of Matrix.",
+    "x-ui-text-lookup": true
+  },
+  "statusSOtherDevicesHaveNot07F30F": "{value}'s other devices have not heard from {value2} for a while: messages from it may not be theirs.",
+  "@statusSOtherDevicesHaveNot07F30F": {
+    "description": "App-owned controller status shown in the status line or an action notice. {value}'s other devices have not heard from {value2} for a while: messages from it may not be theirs.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      },
+      "value2": {
+        "type": "String",
+        "description": "Display value from the controller; preserve its contents."
+      }
+    }
+  },
+  "statusReceivedItemSInstantlyViaA7773B": "{value, plural, one{Received {value} item instantly via local relay.} other{Received {value} items instantly via local relay.}}",
+  "@statusReceivedItemSInstantlyViaA7773B": {
+    "description": "App-owned controller status shown in the status line or an action notice. Received {value} item(s) instantly via local relay.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
+      }
+    },
+    "x-ui-template": "Received {value} item(s) instantly via local relay."
+  },
+  "statusReceivedItemSViaLocal71A104": "{value, plural, one{Received {value} item via local inbox.} other{Received {value} items via local inbox.}}",
+  "@statusReceivedItemSViaLocal71A104": {
+    "description": "App-owned controller status shown in the status line or an action notice. Received {value} item(s) via local inbox.",
+    "x-ui-text-lookup": true,
+    "placeholders": {
+      "value": {
+        "type": "int",
+        "description": "The item count used to select the grammatical plural form."
+      }
+    },
+    "x-ui-template": "Received {value} item(s) via local inbox."
+  },
+  "statusNoNewProtocols": "No new relay protocols detected.",
+  "@statusNoNewProtocols": {
+    "description": "UI label or app-owned status atom: No new relay protocols detected.",
+    "x-ui-text-lookup": true,
+    "x-ui-status-atom": true
+  },
+  "statusRouteExchangeRequested": "Route info exchange requested.",
+  "@statusRouteExchangeRequested": {
+    "description": "UI label or app-owned status atom: Route info exchange requested.",
+    "x-ui-text-lookup": true,
+    "x-ui-status-atom": true
+  },
+  "statusRouteExchangePending": "Route info exchange could not be sent yet.",
+  "@statusRouteExchangePending": {
+    "description": "UI label or app-owned status atom: Route info exchange could not be sent yet.",
+    "x-ui-text-lookup": true,
+    "x-ui-status-atom": true
+  },
+  "statusKnownRoutes": "known routes",
+  "@statusKnownRoutes": {
+    "description": "UI label or app-owned status atom: known routes",
+    "x-ui-text-lookup": true,
+    "x-ui-status-atom": true
+  },
+  "statusReachable": "reachable",
+  "@statusReachable": {
+    "description": "UI label or app-owned status atom: reachable",
+    "x-ui-text-lookup": true,
+    "x-ui-status-atom": true
+  },
+  "statusUnreachable": "unreachable",
+  "@statusUnreachable": {
+    "description": "UI label or app-owned status atom: unreachable",
+    "x-ui-text-lookup": true,
+    "x-ui-status-atom": true
+  },
+  "statusUnknown": "unknown",
+  "@statusUnknown": {
+    "description": "UI label or app-owned status atom: unknown",
+    "x-ui-text-lookup": true,
+    "x-ui-status-atom": true
+  },
+  "statusExpired": "stale",
+  "@statusExpired": {
+    "description": "UI label or app-owned status atom: stale",
+    "x-ui-text-lookup": true,
+    "x-ui-status-atom": true
+  },
+  "connectionsTitle": "Connections",
+  "@connectionsTitle": {
+    "description": "UI label or app-owned status atom: Connections",
+    "x-ui-text-lookup": false
+  },
+  "connectionsDescription": "Which devices reach which, both ways or one way.",
+  "@connectionsDescription": {
+    "description": "UI label or app-owned status atom: Which devices reach which, both ways or one way.",
+    "x-ui-text-lookup": false
+  },
+  "relayUdpHint": "udp://host:port forces UDP",
+  "@relayUdpHint": {
+    "description": "UI label or app-owned status atom: udp://host:port forces UDP",
+    "x-ui-text-lookup": false
+  },
+  "deltaFileActions": "File actions",
+  "@deltaFileActions": {
+    "description": "UI label or app-owned status atom: File actions",
+    "x-ui-text-lookup": false
+  },
+  "deltaForward": "Forward",
+  "@deltaForward": {
+    "description": "UI label or app-owned status atom: Forward",
+    "x-ui-text-lookup": false
+  },
+  "deltaAttach": "Attach",
+  "@deltaAttach": {
+    "description": "UI label or app-owned status atom: Attach",
+    "x-ui-text-lookup": false
+  },
+  "deltaSendVoice": "Send voice message",
+  "@deltaSendVoice": {
+    "description": "UI label or app-owned status atom: Send voice message",
+    "x-ui-text-lookup": false
+  },
+  "deltaDiscardVoice": "Discard voice message",
+  "@deltaDiscardVoice": {
+    "description": "UI label or app-owned status atom: Discard voice message",
+    "x-ui-text-lookup": false
+  },
+  "deltaRecordVoice": "Record voice message",
+  "@deltaRecordVoice": {
+    "description": "UI label or app-owned status atom: Record voice message",
+    "x-ui-text-lookup": false
+  },
+  "deltaReact": "React",
+  "@deltaReact": {
+    "description": "UI label or app-owned status atom: React",
+    "x-ui-text-lookup": false
+  },
+  "savedMessagesPreview": "Notes, files and forwards for yourself",
+  "@savedMessagesPreview": {
+    "description": "UI label or app-owned status atom: Notes, files and forwards for yourself",
+    "x-ui-text-lookup": false
+  },
+  "networkChatsTitle": "{network} chats",
+  "@networkChatsTitle": {
+    "description": "User-facing network chat label: {network} chats",
+    "placeholders": {
+      "network": {
+        "type": "String",
+        "description": "Network name; preserve its spelling."
+      }
+    }
+  },
+  "networkEncryptedMatrixChat": "Encrypted Matrix chat",
+  "@networkEncryptedMatrixChat": {
+    "description": "User-facing network chat label: Encrypted Matrix chat"
+  },
+  "networkMatrixChat": "Matrix chat",
+  "@networkMatrixChat": {
+    "description": "User-facing network chat label: Matrix chat"
+  },
+  "networkEveryoneBluetooth": "Everyone in Bluetooth range",
+  "@networkEveryoneBluetooth": {
+    "description": "User-facing network chat label: Everyone in Bluetooth range"
+  },
+  "inviteNoRoutes": "no routes advertised",
+  "@inviteNoRoutes": {
+    "description": "User-facing network chat label: no routes advertised"
+  },
+  "deliveryPending": "Waiting for a reachable path",
+  "@deliveryPending": {
+    "description": "Label for an app-owned state or display option: Waiting for a reachable path"
+  },
+  "deliveryLocal": "Sent over LAN; waiting for delivery receipt",
+  "@deliveryLocal": {
+    "description": "Label for an app-owned state or display option: Sent over LAN; waiting for delivery receipt"
+  },
+  "deliveryRelayed": "Queued on a relay; waiting for delivery receipt",
+  "@deliveryRelayed": {
+    "description": "Label for an app-owned state or display option: Queued on a relay; waiting for delivery receipt"
+  },
+  "deliveryDelivered": "Delivered",
+  "@deliveryDelivered": {
+    "description": "Label for an app-owned state or display option: Delivered"
+  },
+  "deliveryRead": "Read",
+  "@deliveryRead": {
+    "description": "Label for an app-owned state or display option: Read"
+  },
+  "reachabilityOnline": "online",
+  "@reachabilityOnline": {
+    "description": "Label for an app-owned state or display option: online"
+  },
+  "reachabilityRecent": "seen recently",
+  "@reachabilityRecent": {
+    "description": "Label for an app-owned state or display option: seen recently"
+  },
+  "reachabilityKnown": "known",
+  "@reachabilityKnown": {
+    "description": "Label for an app-owned state or display option: known"
+  },
+  "transferApproval": "Waiting for approval",
+  "@transferApproval": {
+    "description": "Label for an app-owned state or display option: Waiting for approval"
+  },
+  "transferPeer": "Waiting for peer",
+  "@transferPeer": {
+    "description": "Label for an app-owned state or display option: Waiting for peer"
+  },
+  "routeLanDirect": "LAN direct",
+  "@routeLanDirect": {
+    "description": "Label for an app-owned state or display option: LAN direct"
+  },
+  "routeInternetDirect": "Internet direct",
+  "@routeInternetDirect": {
+    "description": "Label for an app-owned state or display option: Internet direct"
+  },
+  "routeIrohDirect": "Iroh direct",
+  "@routeIrohDirect": {
+    "description": "Label for an app-owned state or display option: Iroh direct"
+  },
+  "routeConestRelay": "Conest relay",
+  "@routeConestRelay": {
+    "description": "Label for an app-owned state or display option: Conest relay"
+  },
+  "routeOptical": "Optical",
+  "@routeOptical": {
+    "description": "Label for an app-owned state or display option: Optical"
+  },
+  "routeViaContact": "Via a contact",
+  "@routeViaContact": {
+    "description": "Label for an app-owned state or display option: Via a contact"
+  },
+  "themeSystem": "System",
+  "@themeSystem": {
+    "description": "Label for an app-owned state or display option: System"
+  },
+  "themeLight": "Signature · Light",
+  "@themeLight": {
+    "description": "Label for an app-owned state or display option: Signature · Light"
+  },
+  "themeDark": "Signature · Dark",
+  "@themeDark": {
+    "description": "Label for an app-owned state or display option: Signature · Dark"
+  },
+  "themeBlack": "Signature · Black (OLED)",
+  "@themeBlack": {
+    "description": "Label for an app-owned state or display option: Signature · Black (OLED)"
+  },
+  "themeAdaptive": "Adaptive (wallpaper)",
+  "@themeAdaptive": {
+    "description": "Label for an app-owned state or display option: Adaptive (wallpaper)"
+  },
+  "layoutSignalCards": "Signal Cards",
+  "@layoutSignalCards": {
+    "description": "Label for an app-owned state or display option: Signal Cards"
+  },
+  "layoutStationFeed": "Station Feed",
+  "@layoutStationFeed": {
+    "description": "Label for an app-owned state or display option: Station Feed"
+  },
+  "layoutClassic": "Classic rows",
+  "@layoutClassic": {
+    "description": "Label for an app-owned state or display option: Classic rows"
+  },
+  "layoutSignalDescription": "Peers as dashboard link tiles.",
+  "@layoutSignalDescription": {
+    "description": "Label for an app-owned state or display option: Peers as dashboard link tiles."
+  },
+  "layoutFeedDescription": "A chronological packet/activity log.",
+  "@layoutFeedDescription": {
+    "description": "Label for an app-owned state or display option: A chronological packet/activity log."
+  },
+  "layoutClassicDescription": "A compact one-line list.",
+  "@layoutClassicDescription": {
+    "description": "Label for an app-owned state or display option: A compact one-line list."
+  },
+  "shellSignatureDescription": "Conest's native dashboard sidebar.",
+  "@shellSignatureDescription": {
+    "description": "Label for an app-owned state or display option: Conest's native dashboard sidebar."
+  },
+  "shellGarrisonDescription": "Discord-shaped: a rail of cells + conversations.",
+  "@shellGarrisonDescription": {
+    "description": "Label for an app-owned state or display option: Discord-shaped: a rail of cells + conversations."
+  },
+  "shellCourierDescription": "Telegram-shaped: one clean conversation list.",
+  "@shellCourierDescription": {
+    "description": "Label for an app-owned state or display option: Telegram-shaped: one clean conversation list."
+  },
+  "connectionsBothWays": "both ways",
+  "@connectionsBothWays": {
+    "description": "Label for an app-owned state or display option: both ways"
+  },
+  "connectionsInbound": "only from them",
+  "@connectionsInbound": {
+    "description": "Label for an app-owned state or display option: only from them"
+  },
+  "connectionsFailing": "failing",
+  "@connectionsFailing": {
+    "description": "Label for an app-owned state or display option: failing"
+  },
+  "connectionsUnknown": "no recent word",
+  "@connectionsUnknown": {
+    "description": "Label for an app-owned state or display option: no recent word"
+  },
+  "voiceConnected": "Connected · {time}",
+  "@voiceConnected": {
+    "description": "Label for an app-owned state or display option: Connected · {time}",
+    "placeholders": {
+      "time": {
+        "type": "String",
+        "description": "Elapsed call time, already formatted."
+      }
+    }
+  },
+  "messageClockAhead": "Their clock is about {amount} ahead; times here are by this device.",
+  "@messageClockAhead": {
+    "description": "Label for an app-owned state or display option: Their clock is about {amount} ahead; times here are by this device.",
+    "placeholders": {
+      "amount": {
+        "type": "String",
+        "description": "The formatted magnitude of the clock difference."
+      }
+    }
+  },
+  "messageClockBehind": "Their clock is about {amount} behind; times here are by this device.",
+  "@messageClockBehind": {
+    "description": "Label for an app-owned state or display option: Their clock is about {amount} behind; times here are by this device.",
+    "placeholders": {
+      "amount": {
+        "type": "String",
+        "description": "The formatted magnitude of the clock difference."
+      }
+    }
+  },
+  "messageNotRecentlyConfirmed": "Not recently confirmed: their other devices last counted this one as theirs on {date}.",
+  "@messageNotRecentlyConfirmed": {
+    "description": "Label for an app-owned state or display option: Not recently confirmed: their other devices last counted this one as theirs on {date}.",
+    "placeholders": {
+      "date": {
+        "type": "String",
+        "description": "Local calendar date of the last confirmation."
+      }
+    }
+  },
+  "routeLanDirectDescription": "Straight to the other device on your local network.",
+  "@routeLanDirectDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeLanRelayDescription": "Through another device's relay node on your local network.",
+  "@routeLanRelayDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeLanLobbyDescription": "The LAN lobby's shared mailbox; anyone on the network can read it.",
+  "@routeLanLobbyDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeInternetDirectDescription": "Straight to the other device's relay node over the internet.",
+  "@routeInternetDirectDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeIrohDirectDescription": "Peer to peer over Iroh, end-to-end encrypted.",
+  "@routeIrohDirectDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeIrohRelayDescription": "Through an Iroh relay server, which sees only encrypted traffic.",
+  "@routeIrohRelayDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeConestRelayDescription": "Stored and forwarded by a Conest relay server, which sees only encrypted envelopes.",
+  "@routeConestRelayDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeMatrixDescription": "Carried by Matrix, still end-to-end encrypted by Conest; the homeserver sees who talks and when.",
+  "@routeMatrixDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routePlainMatrixDescription": "Sent as an ordinary Matrix message; the homeserver can read it unless the room is encrypted.",
+  "@routePlainMatrixDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeNostrDescription": "Carried by Nostr relays, still end-to-end encrypted by Conest; relays see the recipient and when, not the sender.",
+  "@routeNostrDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeEmailDescription": "Carried by email, still end-to-end encrypted by Conest; the mail servers see both addresses and when.",
+  "@routeEmailDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeReticulumDescription": "Over Reticulum, by radio or a Reticulum network, end-to-end encrypted.",
+  "@routeReticulumDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeMeshtasticDescription": "Over a Meshtastic radio mesh, end-to-end encrypted.",
+  "@routeMeshtasticDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeMeshCoreDescription": "Over a MeshCore radio mesh, end-to-end encrypted.",
+  "@routeMeshCoreDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeBluetoothDescription": "Over the Bluetooth mesh through nearby devices, end-to-end encrypted.",
+  "@routeBluetoothDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeTorDescription": "Between onion services over Tor; no one on the way sees who talks to whom.",
+  "@routeTorDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeContactDescription": "Passed on by a contact who could reach the other device; still end-to-end encrypted, the contact saw only who it was for and when.",
+  "@routeContactDescription": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeTestRoundTrip": "{route}: {ms} ms there and back",
+  "@routeTestRoundTrip": {
+    "description": "Presentation text for message route information or attachment transfer progress.",
+    "placeholders": {
+      "route": {
+        "type": "String",
+        "description": "Already formatted route name or progress value; preserve it."
+      },
+      "ms": {
+        "type": "String",
+        "description": "Already formatted route name or progress value; preserve it."
+      }
+    }
+  },
+  "routeTestStored": "{route}: left on the relay (answers once they fetch it)",
+  "@routeTestStored": {
+    "description": "Presentation text for message route information or attachment transfer progress.",
+    "placeholders": {
+      "route": {
+        "type": "String",
+        "description": "Already formatted route name or progress value; preserve it."
+      }
+    }
+  },
+  "routeTestNoAnswer": "{route}: no answer",
+  "@routeTestNoAnswer": {
+    "description": "Presentation text for message route information or attachment transfer progress.",
+    "placeholders": {
+      "route": {
+        "type": "String",
+        "description": "Already formatted route name or progress value; preserve it."
+      }
+    }
+  },
+  "transferTimeLeft": "{time} left",
+  "@transferTimeLeft": {
+    "description": "Presentation text for message route information or attachment transfer progress.",
+    "placeholders": {
+      "time": {
+        "type": "String",
+        "description": "Already formatted route name or progress value; preserve it."
+      }
+    }
+  },
+  "transferQueuePosition": "queue #{position}",
+  "@transferQueuePosition": {
+    "description": "Presentation text for message route information or attachment transfer progress.",
+    "placeholders": {
+      "position": {
+        "type": "String",
+        "description": "Already formatted route name or progress value; preserve it."
+      }
+    }
+  },
+  "transferTapRetry": "tap to retry",
+  "@transferTapRetry": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "transferRerouting": "Rerouting",
+  "@transferRerouting": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeShortLobby": "Lobby",
+  "@routeShortLobby": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeShortDirect": "Direct",
+  "@routeShortDirect": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeShortRelay": "Relay",
+  "@routeShortRelay": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "routeShortContact": "Via contact",
+  "@routeShortContact": {
+    "description": "Presentation text for message route information or attachment transfer progress."
+  },
+  "chatDraftPreview": "Draft: {text}",
+  "routeAutomaticFallback": "automatic fallback ✓",
+  "@chatDraftPreview": {
+    "description": "Chat list preview for a locally saved unsent draft.",
+    "placeholders": {
+      "text": {
+        "type": "String",
+        "description": "Draft text; preserve the user content."
+      }
+    }
+  },
+  "@routeAutomaticFallback": {
+    "description": "Route inspector note: automatic fallback is enabled."
+  },
+  "releaseNightly": "nightly",
+  "@releaseNightly": {
+    "description": "App-owned fallback or state label within a release, call, contact, relay or file sharing screen."
+  },
+  "releaseStable": "stable",
+  "@releaseStable": {
+    "description": "App-owned fallback or state label within a release, call, contact, relay or file sharing screen."
+  },
+  "callActive": "Call active",
+  "@callActive": {
+    "description": "App-owned fallback or state label within a release, call, contact, relay or file sharing screen."
+  },
+  "callGeneric": "Call",
+  "@callGeneric": {
+    "description": "App-owned fallback or state label within a release, call, contact, relay or file sharing screen."
+  },
+  "contactNotPinned": "Not pinned",
+  "@contactNotPinned": {
+    "description": "App-owned fallback or state label within a release, call, contact, relay or file sharing screen."
+  },
+  "groupUnknownMember": "A member",
+  "@groupUnknownMember": {
+    "description": "App-owned fallback or state label within a release, call, contact, relay or file sharing screen."
+  },
+  "relaySourceSigned": "signed",
+  "@relaySourceSigned": {
+    "description": "App-owned fallback or state label within a release, call, contact, relay or file sharing screen."
+  },
+  "relaySourceUnsigned": "unsigned",
+  "@relaySourceUnsigned": {
+    "description": "App-owned fallback or state label within a release, call, contact, relay or file sharing screen."
+  },
+  "beamFingerprintUnavailable": "fingerprint unavailable",
+  "@beamFingerprintUnavailable": {
+    "description": "App-owned fallback or state label within a release, call, contact, relay or file sharing screen."
+  },
+  "fileOriginalMetadataWarning": "Its location, camera, author and date details will be sent with it.",
+  "@fileOriginalMetadataWarning": {
+    "description": "App-owned fallback or state label within a release, call, contact, relay or file sharing screen."
+  },
+  "routeMarkSent": "sent",
+  "@routeMarkSent": {
+    "description": "Delivery progress after a route name in message details; lowercase in English."
+  },
+  "routeMarkStored": "waiting on the relay",
+  "@routeMarkStored": {
+    "description": "Delivery progress after a route name in message details; lowercase in English."
+  },
+  "routeMarkReached": "reached their device",
+  "@routeMarkReached": {
+    "description": "Delivery progress after a route name in message details; lowercase in English."
+  },
+  "routeMarkDelivered": "delivered",
+  "@routeMarkDelivered": {
+    "description": "Delivery progress after a route name in message details; lowercase in English."
+  },
+  "routeMarkReceived": "received",
+  "@routeMarkReceived": {
+    "description": "Delivery progress after a route name in message details; lowercase in English."
   }
 }

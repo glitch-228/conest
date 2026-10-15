@@ -1,4 +1,4 @@
-import 'localized_ui_text.dart';
+import '../app_locales.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -98,10 +98,8 @@ class _MeshCoreCarrierPanelState extends State<MeshCoreCarrierPanel> {
         SwitchListTile.adaptive(
           key: const ValueKey('meshcore-carrier-switch'),
           contentPadding: EdgeInsets.zero,
-          title:  Text(localizedUiText(context, 'MeshCore')),
-          subtitle:  Text(
-            localizedUiText(context, 'Carry short messages over a MeshCore LoRa mesh through your ' 'companion radio, without the internet. Conest adds your ' 'contacts to the radio so it accepts their messages.'),
-          ),
+          title: Text(l10nOf(context).uiMeshCoreBA58A2),
+          subtitle: Text(l10nOf(context).uiCarryShortMessagesOverAFA94B6),
           value: config != null,
           onChanged: _busy
               ? null
@@ -127,11 +125,14 @@ class _MeshCoreCarrierPanelState extends State<MeshCoreCarrierPanel> {
           ),
         SegmentedButton<MeshCoreLink>(
           segments: [
-             ButtonSegment(value: MeshCoreLink.serial, label: Text(localizedUiText(context, 'USB'))),
+            ButtonSegment(
+              value: MeshCoreLink.serial,
+              label: Text(l10nOf(context).uiUSB09716C),
+            ),
             if (Platform.isAndroid)
-               ButtonSegment(
+              ButtonSegment(
                 value: MeshCoreLink.bluetooth,
-                label: Text(localizedUiText(context, 'Bluetooth')),
+                label: Text(l10nOf(context).uiBluetoothC3B414),
               ),
           ],
           selected: {_link},
@@ -152,8 +153,8 @@ class _MeshCoreCarrierPanelState extends State<MeshCoreCarrierPanel> {
               icon: const Icon(Icons.search, size: 18),
               label: Text(
                 _link == MeshCoreLink.bluetooth
-                    ? localizedUiText(context, 'Scan for radios')
-                    : localizedUiText(context, 'Find devices'),
+                    ? l10nOf(context).uiScanForRadios2B185E
+                    : l10nOf(context).uiFindDevices98771A,
               ),
             ),
             for (final (id, name) in _devices)
@@ -168,8 +169,8 @@ class _MeshCoreCarrierPanelState extends State<MeshCoreCarrierPanel> {
           enabled: !_busy,
           decoration: InputDecoration(
             labelText: _link == MeshCoreLink.bluetooth
-                ? localizedUiText(context, 'Bluetooth address')
-                : localizedUiText(context, 'USB device'),
+                ? l10nOf(context).uiBluetoothAddress0E2BED
+                : l10nOf(context).uiUSBDeviceB47FF0,
             isDense: true,
           ),
         ),
@@ -178,17 +179,15 @@ class _MeshCoreCarrierPanelState extends State<MeshCoreCarrierPanel> {
             padding: const EdgeInsets.only(top: 8),
             child: FilledButton.tonal(
               onPressed: _busy ? null : () => _run(_save),
-              child:  Text(localizedUiText(context, 'Save')),
+              child: Text(l10nOf(context).uiSaveEFC007),
             ),
           ),
         if (config != null)
           SwitchListTile.adaptive(
             key: const ValueKey('meshcore-app-messages'),
             contentPadding: EdgeInsets.zero,
-            title:  Text(localizedUiText(context, 'Messages with MeshCore app users')),
-            subtitle:  Text(
-              localizedUiText(context, 'Read and write the MeshCore apps\' own messages through this ' 'radio: with its contacts, and on its channels as group chats. ' 'They are protected only as MeshCore protects them.'),
-            ),
+            title: Text(l10nOf(context).uiMessagesWithMeshCoreAppUsersDE77BA),
+            subtitle: Text(l10nOf(context).uiReadAndWriteTheMeshCore98E60E),
             value: controller.meshCoreAppMessages,
             onChanged: _busy
                 ? null
@@ -200,10 +199,12 @@ class _MeshCoreCarrierPanelState extends State<MeshCoreCarrierPanel> {
             key: const ValueKey('meshcore-chats'),
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.forum_outlined),
-            title:  Text(localizedUiText(context, 'MeshCore chats')),
+            title: Text(l10nOf(context).uiMeshCoreChats82C29C),
             trailing: controller.meshCoreChats.totalUnread == 0
                 ? const Icon(Icons.chevron_right)
-                : Badge(label: Text(localizedUiText(context, '${controller.meshCoreChats.totalUnread}'))),
+                : Badge(
+                    label: Text("${(controller.meshCoreChats.totalUnread)}"),
+                  ),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(
                 builder: (_) => RadioChatsScreen(

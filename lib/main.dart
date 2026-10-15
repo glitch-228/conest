@@ -1,3 +1,4 @@
+import 'src/ui/localized_labels.dart';
 import 'src/ui/localized_ui_text.dart';
 import 'dart:async';
 import 'dart:collection';
@@ -334,7 +335,7 @@ class ConestAlreadyRunningApp extends StatelessWidget {
             );
             return MaterialApp(
               debugShowCheckedModeBanner: false,
-              title: localizedUiText(context, 'Conest'),
+              title: l10nOf(context).uiConest26885B,
               theme: palette.themeData(
                 courier: themeController.shell == ConestShell.courier,
               ),
@@ -358,13 +359,15 @@ class ConestAlreadyRunningApp extends StatelessWidget {
                               ),
                               const SizedBox(height: 18),
                               Text(
-                                localizedUiText(context, 'Conest is already running'),
+                                l10nOf(context).uiConestIsAlreadyRunningEE8037,
                                 style: Theme.of(context).textTheme.headlineSmall
                                     ?.copyWith(fontWeight: FontWeight.w800),
                               ),
                               const SizedBox(height: 10),
                               Text(
-                                localizedUiText(context, 'Close the existing Conest window first. A second instance would race the local relay port and encrypted vault.'),
+                                l10nOf(
+                                  context,
+                                ).uiCloseTheExistingConestWindow83B30B,
                                 style: TextStyle(
                                   color: palette.inkSoft,
                                   height: 1.35,
@@ -486,7 +489,7 @@ class _ConestBootstrapAppState extends State<ConestBootstrapApp> {
                   );
             return MaterialApp(
               debugShowCheckedModeBanner: false,
-              title: localizedUiText(context, 'Conest'),
+              title: l10nOf(context).uiConest26885B,
               theme: palette.themeData(
                 courier: widget.themeController.shell == ConestShell.courier,
               ),
@@ -615,13 +618,13 @@ class _FirstLaunchStorageScreenState extends State<FirstLaunchStorageScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          localizedUiText(context, 'Choose where Conest stores data'),
+                          l10nOf(context).uiChooseWhereConestStoresData0CF613,
                           style: Theme.of(context).textTheme.headlineSmall
                               ?.copyWith(fontWeight: FontWeight.w800),
                         ),
                         const SizedBox(height: 10),
                         Text(
-                          localizedUiText(context, 'Ghost mode is best-effort privacy: OS launch history, crash logs, network metadata, shell history, recent files, and platform caches are outside app control.'),
+                          l10nOf(context).uiGhostModeIsBestEffort694912,
                           style: TextStyle(color: palette.inkSoft, height: 1.4),
                         ),
                         const SizedBox(height: 18),
@@ -634,19 +637,27 @@ class _FirstLaunchStorageScreenState extends State<FirstLaunchStorageScreen> {
                           },
                           child: Column(
                             children: [
-                               RadioListTile<AppStorageMode>(
+                              RadioListTile<AppStorageMode>(
                                 value: AppStorageMode.device,
-                                title: Text(localizedUiText(context, 'Default on this device')),
+                                title: Text(
+                                  l10nOf(context).uiDefaultOnThisDevice10343F,
+                                ),
                                 subtitle: Text(
-                                  localizedUiText(context, 'Use the normal app data folder and this device keychain when auto-unlock is selected.'),
+                                  l10nOf(context).uiUseTheNormalAppDataF44F79,
                                 ),
                               ),
                               if (widget.portableSupported)
-                                 RadioListTile<AppStorageMode>(
+                                RadioListTile<AppStorageMode>(
                                   value: AppStorageMode.portable,
-                                  title: Text(localizedUiText(context, 'Ghost/portable beside the app')),
+                                  title: Text(
+                                    l10nOf(
+                                      context,
+                                    ).uiGhostPortableBesideTheApp31A40D,
+                                  ),
                                   subtitle: Text(
-                                    localizedUiText(context, 'Store Conest-controlled files in a conest_data folder next to the app.'),
+                                    l10nOf(
+                                      context,
+                                    ).uiStoreConestControlledFilesIn7DA307,
                                   ),
                                 ),
                             ],
@@ -654,7 +665,7 @@ class _FirstLaunchStorageScreenState extends State<FirstLaunchStorageScreen> {
                         ),
                         const Divider(height: 28),
                         Text(
-                          localizedUiText(context, 'Vault unlock'),
+                          l10nOf(context).uiVaultUnlock602BF6,
                           style: Theme.of(context).textTheme.titleMedium
                               ?.copyWith(fontWeight: FontWeight.w800),
                         ),
@@ -669,26 +680,36 @@ class _FirstLaunchStorageScreenState extends State<FirstLaunchStorageScreen> {
                           child: Column(
                             children: [
                               if (selectedPortable)
-                                 RadioListTile<VaultUnlockMode>(
+                                RadioListTile<VaultUnlockMode>(
                                   value: VaultUnlockMode.keyFile,
-                                  title: Text(localizedUiText(context, 'Key file auto-unlock')),
+                                  title: Text(
+                                    l10nOf(context).uiKeyFileAutoUnlock66AC4A,
+                                  ),
                                   subtitle: Text(
-                                    localizedUiText(context, 'Keeps the key beside the vault. Anyone with the folder can open it.'),
+                                    l10nOf(
+                                      context,
+                                    ).uiKeepsTheKeyBesideTheB045D9,
                                   ),
                                 )
                               else
-                                 RadioListTile<VaultUnlockMode>(
+                                RadioListTile<VaultUnlockMode>(
                                   value: VaultUnlockMode.secureStorage,
-                                  title: Text(localizedUiText(context, 'Auto-unlock with this device')),
+                                  title: Text(
+                                    l10nOf(
+                                      context,
+                                    ).uiAutoUnlockWithThisDeviceE7F781,
+                                  ),
                                   subtitle: Text(
-                                    localizedUiText(context, 'Stores the vault key in the platform secure store.'),
+                                    l10nOf(context).uiStoresTheVaultKeyInC7B1CD,
                                   ),
                                 ),
-                               RadioListTile<VaultUnlockMode>(
+                              RadioListTile<VaultUnlockMode>(
                                 value: VaultUnlockMode.passphrase,
-                                title: Text(localizedUiText(context, 'Passphrase unlock')),
+                                title: Text(
+                                  l10nOf(context).uiPassphraseUnlock13B14C,
+                                ),
                                 subtitle: Text(
-                                  localizedUiText(context, 'Ask for a passphrase on each launch. Forgotten passphrases cannot be recovered.'),
+                                  l10nOf(context).uiAskForAPassphraseOn4BA25C,
                                 ),
                               ),
                             ],
@@ -700,8 +721,8 @@ class _FirstLaunchStorageScreenState extends State<FirstLaunchStorageScreen> {
                             key: firstLaunchPassphraseFieldKey,
                             controller: _passphraseController,
                             obscureText: true,
-                            decoration:  InputDecoration(
-                              labelText: localizedUiText(context, 'Passphrase'),
+                            decoration: InputDecoration(
+                              labelText: l10nOf(context).uiPassphrase89950C,
                             ),
                           ),
                           const SizedBox(height: 12),
@@ -709,8 +730,10 @@ class _FirstLaunchStorageScreenState extends State<FirstLaunchStorageScreen> {
                             key: firstLaunchConfirmPassphraseFieldKey,
                             controller: _confirmPassphraseController,
                             obscureText: true,
-                            decoration:  InputDecoration(
-                              labelText: localizedUiText(context, 'Confirm passphrase'),
+                            decoration: InputDecoration(
+                              labelText: l10nOf(
+                                context,
+                              ).uiConfirmPassphraseEBAAC0,
                             ),
                           ),
                         ],
@@ -731,7 +754,7 @@ class _FirstLaunchStorageScreenState extends State<FirstLaunchStorageScreen> {
                                     strokeWidth: 2,
                                   ),
                                 )
-                              :  Text(localizedUiText(context, 'Continue')),
+                              : Text(l10nOf(context).actionContinue),
                         ),
                       ],
                     ),
@@ -816,13 +839,13 @@ class _PassphraseUnlockScreenState extends State<PassphraseUnlockScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Text(
-                          localizedUiText(context, 'Unlock Conest'),
+                          l10nOf(context).uiUnlockConest033EB6,
                           style: Theme.of(context).textTheme.headlineSmall
                               ?.copyWith(fontWeight: FontWeight.w800),
                         ),
                         const SizedBox(height: 10),
                         Text(
-                          localizedUiText(context, 'Enter the passphrase for this vault.'),
+                          l10nOf(context).uiEnterThePassphraseForThis891200,
                           style: TextStyle(color: palette.inkSoft),
                         ),
                         const SizedBox(height: 18),
@@ -831,8 +854,8 @@ class _PassphraseUnlockScreenState extends State<PassphraseUnlockScreen> {
                           controller: _passphraseController,
                           obscureText: true,
                           onSubmitted: (_) => _unlock(),
-                          decoration:  InputDecoration(
-                            labelText: localizedUiText(context, 'Passphrase'),
+                          decoration: InputDecoration(
+                            labelText: l10nOf(context).uiPassphrase89950C,
                           ),
                         ),
                         if (error != null) ...[
@@ -852,7 +875,7 @@ class _PassphraseUnlockScreenState extends State<PassphraseUnlockScreen> {
                                     strokeWidth: 2,
                                   ),
                                 )
-                              :  Text(localizedUiText(context, 'Unlock')),
+                              : Text(l10nOf(context).uiUnlock1526A1),
                         ),
                       ],
                     ),
@@ -1058,7 +1081,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
             );
             return MaterialApp(
               debugShowCheckedModeBanner: false,
-              title: localizedUiText(context, 'Conest'),
+              title: l10nOf(context).uiConest26885B,
               navigatorKey: _navigatorKey,
               localizationsDelegates: AppLocalizations.localizationsDelegates,
               supportedLocales: AppLocalizations.supportedLocales,
@@ -1144,15 +1167,15 @@ class UpdatePromptDialog extends StatelessWidget {
         final available = updateService.availableUpdate;
         if (available == null) {
           return AlertDialog(
-            title:  Text(localizedUiText(context, 'Updates')),
+            title: Text(l10nOf(context).settingsUpdates),
             content: Text(
               updateService.statusMessage ??
-                  localizedUiText(context, 'No update is available right now.'),
+                  l10nOf(context).uiNoUpdateIsAvailableRightA5EB48,
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
-                child:  Text(localizedUiText(context, 'Close')),
+                child: Text(l10nOf(context).actionClose),
               ),
             ],
           );
@@ -1162,7 +1185,7 @@ class UpdatePromptDialog extends StatelessWidget {
             ? 'Download & Install'
             : 'Download & Restart';
         return AlertDialog(
-          title:  Text(localizedUiText(context, 'Update Available')),
+          title: Text(l10nOf(context).uiUpdateAvailable67FD3A),
           content: SizedBox(
             width: 420,
             child: Column(
@@ -1170,16 +1193,24 @@ class UpdatePromptDialog extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  localizedUiText(context, '${available.release.tagName} is available on the ${available.release.prerelease ? 'nightly' : 'stable'} channel.'),
+                  l10nOf(context).uiValueIsAvailableOnTheD338C4(
+                    (available.release.tagName).toString(),
+                    (available.release.prerelease
+                            ? l10nOf(context).releaseNightly
+                            : l10nOf(context).releaseStable)
+                        .toString(),
+                  ),
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  localizedUiText(context, 'Current build: ${updateService.buildInfo.displayVersion}'),
+                  l10nOf(context).uiCurrentBuildValue2FD415(
+                    (updateService.buildInfo.displayVersion).toString(),
+                  ),
                 ),
                 if ((available.releaseNotes ?? '').trim().isNotEmpty) ...[
                   const SizedBox(height: 14),
                   Text(
-                    localizedUiText(context, "What's new"),
+                    l10nOf(context).uiWhatSNew4D8DC5,
                     style: Theme.of(context).textTheme.titleSmall,
                   ),
                   const SizedBox(height: 6),
@@ -1231,7 +1262,7 @@ class UpdatePromptDialog extends StatelessWidget {
                       );
                       Navigator.of(context).pop();
                     },
-              child:  Text(localizedUiText(context, 'Later')),
+              child: Text(l10nOf(context).uiLater56E2F5),
             ),
             FilledButton(
               onPressed: updateService.isDownloading
@@ -1269,10 +1300,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final _displayNameController = TextEditingController();
   final _internetRelayHostController = TextEditingController();
   final _internetRelayPortController = TextEditingController(
-    text: localizedUiText(context, '$defaultRelayPort'),
+    text: '$defaultRelayPort',
   );
   final _localRelayPortController = TextEditingController(
-    text: localizedUiText(context, '$defaultRelayPort'),
+    text: '$defaultRelayPort',
   );
   bool _submitting = false;
 
@@ -1356,7 +1387,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                localizedUiText(context, 'Conest'),
+                                l10nOf(context).uiConest26885B,
                                 style: Theme.of(context).textTheme.displaySmall
                                     ?.copyWith(
                                       color: palette.textPrimary,
@@ -1365,7 +1396,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               ),
                               const SizedBox(height: 6),
                               Text(
-                                localizedUiText(context, '◢ SERVERLESS SECURE MESSENGER'),
+                                l10nOf(
+                                  context,
+                                ).uiSERVERLESSSECUREMESSENGER1E1891,
                                 style: TextStyle(
                                   fontFamily: ConestPalette.monoFont,
                                   fontSize: 11,
@@ -1453,8 +1486,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                     controller: _internetRelayHostController,
                                     decoration: InputDecoration(
                                       labelText: l10nOf(context).onbRelayHost,
-                                      hintText:
-                                          localizedUiText(context, 'host auto-detects TCP/UDP; udp://host:port forces UDP'),
+                                      hintText: l10nOf(
+                                        context,
+                                      ).uiHostAutoDetectsTCPUDP663D30,
                                     ),
                                   ),
                                   const SizedBox(height: 12),
@@ -1508,7 +1542,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                       null) ...[
                                     const SizedBox(height: 14),
                                     Text(
-                                      widget.controller.statusMessage!,
+                                      localizedUiText(
+                                        context,
+                                        widget.controller.statusMessage!,
+                                      ),
                                       style: Theme.of(context)
                                           .textTheme
                                           .bodySmall
@@ -1599,20 +1636,24 @@ class _HomeScreenState extends State<HomeScreen> {
     final accept = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title:  Text(localizedUiText(context, 'Verification request')),
+        title: Text(l10nOf(context).uiVerificationRequestDA06F9),
         content: Text(
           own
-              ? localizedUiText(context, 'Your Matrix session ${event['fromDevice'] ?? ''} wants to ' 'verify this one. Accept only if you started it.')
-              : localizedUiText(context, '$userId wants to verify you, comparing emojis. Check the ' 'whole address: look-alike ones exist. Accept only if you ' 'can compare with them in person or on a call; verifying ' 'marks their keys as trusted.'),
+              ? l10nOf(context).uiYourMatrixSessionValueWants580E45(
+                  (event['fromDevice'] ?? '').toString(),
+                )
+              : l10nOf(
+                  context,
+                ).uiValueWantsToVerifyYou61FD9D((userId).toString()),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child:  Text(localizedUiText(context, 'Ignore')),
+            child: Text(l10nOf(context).uiIgnore98F55D),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child:  Text(localizedUiText(context, 'Verify')),
+            child: Text(l10nOf(context).uiVerifyDDA6AC),
           ),
         ],
       ),
@@ -1628,9 +1669,13 @@ class _HomeScreenState extends State<HomeScreen> {
       await client.acceptVerification(userId, flowId);
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(localizedUiText(context, 'Could not verify: $error'))));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              l10nOf(context).uiCouldNotVerifyValue3AE1C4((error).toString()),
+            ),
+          ),
+        );
       }
       return;
     }
@@ -1833,7 +1878,9 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     ScaffoldMessenger.maybeOf(context)
       ?..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+      ..showSnackBar(
+        SnackBar(content: Text(localizedUiText(context, message))),
+      );
   }
 
   @override
@@ -1897,7 +1944,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final selected = await showDialog<String>(
         context: context,
         builder: (context) => AlertDialog(
-          title:  Text(localizedUiText(context, 'Call audio output')),
+          title: Text(l10nOf(context).uiCallAudioOutput0C276F),
           content: SizedBox(
             width: 440,
             child: ListView(
@@ -1914,7 +1961,7 @@ class _HomeScreenState extends State<HomeScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child:  Text(localizedUiText(context, 'Cancel')),
+              child: Text(l10nOf(context).actionCancel),
             ),
           ],
         ),
@@ -2304,20 +2351,27 @@ class _HomeScreenState extends State<HomeScreen> {
           builder: (dialogContext) => AlertDialog(
             title: Text(
               error.keepsMetadata
-                  ? localizedUiText(context, 'Send with its details?')
-                  : localizedUiText(context, 'Send without resumable copy?'),
+                  ? l10nOf(context).uiSendWithItsDetailsF287FB
+                  : l10nOf(context).uiSendWithoutResumableCopy0475F4,
             ),
             content: Text(
-              localizedUiText(context, '${attachment.fileName} could not be copied into private ' 'transfer storage.\n\n$error\n\nThe app can read the original ' 'file directly, but the transfer cannot resume after restart ' 'if that file moves or its permission expires.' '${error.keepsMetadata ? '\n\nIts location, camera, author and ' 'date details will be sent with it.' : ''}'),
+              l10nOf(context).uiValueCouldNotBeCopied06F61A(
+                (attachment.fileName).toString(),
+                (error).toString(),
+                (error.keepsMetadata
+                        ? '\n\n${l10nOf(context).fileOriginalMetadataWarning}'
+                        : '')
+                    .toString(),
+              ),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(dialogContext).pop(false),
-                child:  Text(localizedUiText(context, 'Cancel')),
+                child: Text(l10nOf(context).actionCancel),
               ),
               FilledButton(
                 onPressed: () => Navigator.of(dialogContext).pop(true),
-                child:  Text(localizedUiText(context, 'Send from original')),
+                child: Text(l10nOf(context).uiSendFromOriginalFFF29A),
               ),
             ],
           ),
@@ -2426,7 +2480,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final before = tc.text.substring(0, start);
       final after = tc.text.substring(end);
       tc.value = TextEditingValue(
-        text: localizedUiText(context, '$before$text$after'),
+        text: "${(before)}${(text)}${(after)}",
         selection: TextSelection.collapsed(offset: start + text.length),
       );
     } catch (error) {
@@ -3058,7 +3112,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ? null
             : FloatingActionButton.small(
                 heroTag: 'global-transfers',
-                tooltip: localizedUiText(context, 'Transfers'),
+                tooltip: l10nOf(context).uiTransfers812412,
                 onPressed: _showTransfers,
                 child: Badge(
                   isLabelVisible: widget.controller.transferSnapshots.any(
@@ -3067,7 +3121,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         entry.phase == TransferPhase.paused,
                   ),
                   label: Text(
-                    localizedUiText(context, '${widget.controller.transferSnapshots.where((entry) => entry.phase.isActive || entry.phase == TransferPhase.paused).length}'),
+                    "${(widget.controller.transferSnapshots.where((entry) => entry.phase.isActive || entry.phase == TransferPhase.paused).length)}",
                   ),
                   child: const Icon(Icons.downloading_outlined),
                 ),
@@ -3503,20 +3557,22 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
   }
 
   String get _stateLabel => switch (widget.call.state) {
-    VoiceCallState.idle => 'Preparing call…',
-    VoiceCallState.ringing => widget.call.outgoing
-        ? 'Calling…'
-        : 'Incoming voice call',
-    VoiceCallState.connecting => 'Connecting…',
+    VoiceCallState.idle => l10nOf(context).uiPreparingCallE86D6C,
+    VoiceCallState.ringing =>
+      widget.call.outgoing
+          ? l10nOf(context).uiCallingACD4A6
+          : l10nOf(context).uiIncomingVoiceCallF68FD3,
+    VoiceCallState.connecting => l10nOf(context).uiConnectingFD3E79,
     VoiceCallState.connected => _connectedTime(),
-    VoiceCallState.reconnecting => 'Reconnecting…',
-    VoiceCallState.ended => widget.call.failureReason ?? 'Call ended',
+    VoiceCallState.reconnecting => l10nOf(context).uiReconnecting8A8B95,
+    VoiceCallState.ended =>
+      widget.call.failureReason ?? l10nOf(context).uiCallEnded9933A4,
   };
 
   String _connectedTime() {
     final elapsed = DateTime.now().difference(widget.call.startedAt);
     final seconds = elapsed.inSeconds.clamp(0, 24 * 60 * 60);
-    return 'Connected · ${(seconds ~/ 60).toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}';
+    return l10nOf(context).voiceConnected('${(seconds ~/ 60).toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}');
   }
 
   void _run(Future<void> Function() operation) {
@@ -3551,7 +3607,7 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                     Align(
                       alignment: Alignment.topRight,
                       child: IconButton(
-                        tooltip: localizedUiText(context, 'Minimize call'),
+                        tooltip: l10nOf(context).uiMinimizeCall6CB0F0,
                         onPressed: widget.onMinimize,
                         icon: const Icon(Icons.keyboard_arrow_down),
                       ),
@@ -3565,7 +3621,7 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                     ),
                     const SizedBox(height: 24),
                     Text(
-                      widget.contact?.alias ?? localizedUiText(context, 'Unknown contact'),
+                      widget.contact?.alias ?? l10nOf(context).unknownContact,
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.headlineMedium
                           ?.copyWith(fontWeight: FontWeight.w700),
@@ -3598,7 +3654,7 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                               widget.controller.acceptVoiceCall,
                             ),
                             icon: const Icon(Icons.call),
-                            label:  Text(localizedUiText(context, 'Accept')),
+                            label: Text(l10nOf(context).uiAcceptBB54DB),
                           ),
                         if (incoming)
                           OutlinedButton.icon(
@@ -3606,7 +3662,7 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                               widget.controller.rejectVoiceCall,
                             ),
                             icon: const Icon(Icons.call_end),
-                            label:  Text(localizedUiText(context, 'Reject')),
+                            label: Text(l10nOf(context).uiReject2B03B5),
                           ),
                         if (connected)
                           OutlinedButton.icon(
@@ -3616,11 +3672,11 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                             icon: Icon(
                               call.muted ? Icons.mic_off : Icons.mic,
                             ),
-                            label: Text(call.muted ? localizedUiText(context, 'Unmute') : localizedUiText(context, 'Mute')),
+                            label: Text(call.muted ? l10nOf(context).uiUnmute7044C3 : l10nOf(context).uiMute0F0973),
                           ),
                         if (connected)
                           FilterChip(
-                            label:  Text(localizedUiText(context, 'Noise suppression')),
+                            label:  Text(l10nOf(context).uiNoiseSuppression71DE3C),
                             selected:
                                 widget
                                     .controller
@@ -3646,8 +3702,8 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                             ),
                             label: Text(
                               call.speakerphoneEnabled
-                                  ? localizedUiText(context, 'Speaker on')
-                                  : localizedUiText(context, 'Speaker off'),
+                                  ? l10nOf(context).uiSpeakerOn93982E
+                                  : l10nOf(context).uiSpeakerOff97823A,
                             ),
                           ),
                         if (connected &&
@@ -3655,13 +3711,13 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                           OutlinedButton.icon(
                             onPressed: widget.onChooseOutput,
                             icon: const Icon(Icons.speaker_outlined),
-                            label:  Text(localizedUiText(context, 'Audio output')),
+                            label: Text(l10nOf(context).uiAudioOutput2B89CC),
                           ),
                         if (ended)
                           FilledButton.icon(
                             onPressed: widget.onMinimize,
                             icon: const Icon(Icons.check),
-                            label:  Text(localizedUiText(context, 'Done')),
+                            label: Text(l10nOf(context).uiDoneE9B450),
                           )
                         else if (!incoming)
                           FilledButton.icon(
@@ -3676,8 +3732,8 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                             label: Text(
                               call.outgoing &&
                                       call.state == VoiceCallState.ringing
-                                  ? localizedUiText(context, 'Cancel call')
-                                  : localizedUiText(context, 'Hang up'),
+                                  ? l10nOf(context).uiCancelCallCE6C16
+                                  : l10nOf(context).uiHangUp66BE99,
                             ),
                           ),
                       ],
@@ -3725,13 +3781,21 @@ class _CallReturnBar extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                localizedUiText(context, '${call.state == VoiceCallState.reconnecting ? 'Reconnecting' : call.state == VoiceCallState.connected ? 'Call active' : 'Call'}${contact == null ? '' : ' · ${contact!.alias}'} · Return to call'),
+                l10nOf(context).uiValueValueReturnToCall49F82C(
+                  (call.state == VoiceCallState.reconnecting
+                          ? l10nOf(context).uiReconnecting9D80F9
+                          : call.state == VoiceCallState.connected
+                          ? l10nOf(context).callActive
+                          : l10nOf(context).callGeneric)
+                      .toString(),
+                  (contact == null ? '' : ' · ${contact!.alias}').toString(),
+                ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
             ),
             IconButton(
-              tooltip: localizedUiText(context, 'Hang up'),
+              tooltip: l10nOf(context).uiHangUp66BE99,
               onPressed: onHangUp,
               icon: Icon(Icons.call_end, color: palette.danger),
             ),
@@ -3774,7 +3838,7 @@ class _ContactDetailsPane extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      localizedUiText(context, 'Contact details'),
+                      l10nOf(context).uiContactDetailsD4EC65,
                       style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
@@ -3782,7 +3846,7 @@ class _ContactDetailsPane extends StatelessWidget {
                   ),
                   IconButton(
                     onPressed: onClose,
-                    tooltip: localizedUiText(context, 'Close details'),
+                    tooltip: l10nOf(context).uiCloseDetails433DA6,
                     icon: const Icon(Icons.close),
                   ),
                 ],
@@ -3822,17 +3886,21 @@ class _ContactDetailsPane extends StatelessWidget {
                 expand: true,
               ),
               const SizedBox(height: 12),
-              _DetailsValue(label: localizedUiText(context, 'Route'), value: contact.routeSummary),
               _DetailsValue(
-                label: localizedUiText(context, 'Safety number'),
+                label: l10nOf(context).uiRoute499952,
+                value: contact.routeSummary,
+              ),
+              _DetailsValue(
+                label: l10nOf(context).uiSafetyNumber5ED2D3,
                 value: contact.shortSafetyNumber,
               ),
               _DetailsValue(
-                label: localizedUiText(context, 'Iroh endpoint'),
-                value: contact.irohEndpointId ?? 'Not pinned',
+                label: l10nOf(context).uiIrohEndpoint72F674,
+                value:
+                    contact.irohEndpointId ?? l10nOf(context).contactNotPinned,
               ),
               _DetailsValue(
-                label: localizedUiText(context, 'Device'),
+                label: l10nOf(context).uiDeviceA5A74A,
                 value: contact.deviceId,
                 monospace: true,
               ),
@@ -3840,7 +3908,7 @@ class _ContactDetailsPane extends StatelessWidget {
               FilledButton.tonalIcon(
                 onPressed: onOpenFullProfile,
                 icon: const Icon(Icons.open_in_new),
-                label:  Text(localizedUiText(context, 'Open full profile')),
+                label: Text(l10nOf(context).uiOpenFullProfile35063C),
               ),
             ],
           ),
@@ -3882,7 +3950,7 @@ class _GroupDetailsPane extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      localizedUiText(context, 'Group details'),
+                      l10nOf(context).uiGroupDetailsDF844A,
                       style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
@@ -3890,7 +3958,7 @@ class _GroupDetailsPane extends StatelessWidget {
                   ),
                   IconButton(
                     onPressed: onClose,
-                    tooltip: localizedUiText(context, 'Close details'),
+                    tooltip: l10nOf(context).uiCloseDetails433DA6,
                     icon: const Icon(Icons.close),
                   ),
                 ],
@@ -3915,7 +3983,9 @@ class _GroupDetailsPane extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(
-                localizedUiText(context, '${members.length} active member${members.length == 1 ? '' : 's'}'),
+                l10nOf(
+                  context,
+                ).uiValueActiveMemberValue6700F2((members.length)),
                 textAlign: TextAlign.center,
                 style: Theme.of(
                   context,
@@ -3938,14 +4008,16 @@ class _GroupDetailsPane extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                   subtitle: Text(
-                    member == group.ownerDeviceId ? localizedUiText(context, 'Owner') : localizedUiText(context, 'Member'),
+                    member == group.ownerDeviceId
+                        ? l10nOf(context).uiOwner89FF31
+                        : l10nOf(context).roleMember,
                   ),
                 ),
               const SizedBox(height: 12),
               FilledButton.tonalIcon(
                 onPressed: onOpenFullDetails,
                 icon: const Icon(Icons.settings_outlined),
-                label:  Text(localizedUiText(context, 'Open group settings')),
+                label: Text(l10nOf(context).uiOpenGroupSettings0B568E),
               ),
             ],
           ),
@@ -4108,22 +4180,24 @@ class _CourierHomeState extends State<_CourierHome> {
     final value = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title:  Text(localizedUiText(context, 'New folder')),
+        title: Text(l10nOf(context).uiNewFolderA71199),
         content: TextField(
           controller: name,
           autofocus: true,
           maxLength: 48,
-          decoration:  InputDecoration(hintText: localizedUiText(context, 'Folder name')),
+          decoration: InputDecoration(
+            hintText: l10nOf(context).uiFolderNameB2CE02,
+          ),
           onSubmitted: (value) => Navigator.pop(context, value),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, name.text),
-            child:  Text(localizedUiText(context, 'Create')),
+            child: Text(l10nOf(context).actionCreate),
           ),
         ],
       ),
@@ -4137,7 +4211,7 @@ class _CourierHomeState extends State<_CourierHome> {
       if (mounted)
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(localizedUiText(context, '$error'))));
+        ).showSnackBar(SnackBar(content: Text("${(error)}")));
     }
   }
 
@@ -4149,17 +4223,21 @@ class _CourierHomeState extends State<_CourierHome> {
     final action = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(localizedUiText(context, 'Edit ${folder.name}')),
+        title: Text(
+          l10nOf(context).uiEditValue75BE00((folder.name).toString()),
+        ),
         content: TextField(
           controller: name,
           autofocus: true,
           maxLength: 48,
-          decoration:  InputDecoration(labelText: localizedUiText(context, 'Folder name')),
+          decoration: InputDecoration(
+            labelText: l10nOf(context).uiFolderNameB2CE02,
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, 'delete'),
@@ -4168,17 +4246,17 @@ class _CourierHomeState extends State<_CourierHome> {
           if (folderIndex > 0)
             TextButton(
               onPressed: () => Navigator.pop(context, 'moveUp'),
-              child:  Text(localizedUiText(context, 'Move earlier')),
+              child: Text(l10nOf(context).uiMoveEarlier07DD6F),
             ),
           if (folderIndex >= 0 &&
               folderIndex < widget.controller.chatFolders.length - 1)
             TextButton(
               onPressed: () => Navigator.pop(context, 'moveDown'),
-              child:  Text(localizedUiText(context, 'Move later')),
+              child: Text(l10nOf(context).uiMoveLaterBB4C84),
             ),
           FilledButton(
             onPressed: () => Navigator.pop(context, 'save'),
-            child:  Text(localizedUiText(context, 'Save')),
+            child: Text(l10nOf(context).uiSaveEFC007),
           ),
         ],
       ),
@@ -4302,7 +4380,7 @@ class _CourierHomeState extends State<_CourierHome> {
           };
           return StatefulBuilder(
             builder: (context, setDialogState) => AlertDialog(
-              title:  Text(localizedUiText(context, 'Add to folder')),
+              title: Text(l10nOf(context).uiAddToFolderBFAD96),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -4325,11 +4403,11 @@ class _CourierHomeState extends State<_CourierHome> {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context),
-                  child:  Text(localizedUiText(context, 'Cancel')),
+                  child: Text(l10nOf(context).actionCancel),
                 ),
                 FilledButton(
                   onPressed: () => Navigator.pop(context, values),
-                  child:  Text(localizedUiText(context, 'Save')),
+                  child: Text(l10nOf(context).uiSaveEFC007),
                 ),
               ],
             ),
@@ -4362,7 +4440,13 @@ class _CourierHomeState extends State<_CourierHome> {
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(localizedUiText(context, 'Could not save chat settings: $error'))),
+          SnackBar(
+            content: Text(
+              l10nOf(
+                context,
+              ).uiCouldNotSaveChatSettings2372B2((error).toString()),
+            ),
+          ),
         );
       }
     }
@@ -4399,13 +4483,13 @@ class _CourierHomeState extends State<_CourierHome> {
                 children: [
                   SealAvatar(
                     seed: me?.deviceId ?? 'me',
-                    label: me?.displayName ?? localizedUiText(context, 'Conest'),
+                    label: me?.displayName ?? l10nOf(context).uiConest26885B,
                     palette: widget.palette,
                     size: 64,
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    me?.displayName ?? localizedUiText(context, 'Conest'),
+                    me?.displayName ?? l10nOf(context).uiConest26885B,
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   if (me?.bio.isNotEmpty == true)
@@ -4676,7 +4760,7 @@ class _CourierHomeState extends State<_CourierHome> {
       drawer: _drawer(),
       floatingActionButton: FloatingActionButton(
         heroTag: 'courier-new-chat',
-        tooltip: localizedUiText(context, 'New message'),
+        tooltip: l10nOf(context).uiNewMessage1ED2E7,
         onPressed: _newChat,
         backgroundColor: widget.palette.primary,
         foregroundColor: widget.palette.onPrimary,
@@ -4689,7 +4773,9 @@ class _CourierHomeState extends State<_CourierHome> {
             child: Row(
               children: [
                 IconButton(
-                  tooltip: _showArchived ? localizedUiText(context, 'Back to chats') : localizedUiText(context, 'Navigation menu'),
+                  tooltip: _showArchived
+                      ? l10nOf(context).uiBackToChats8DE6F6
+                      : l10nOf(context).uiNavigationMenu6609F1,
                   onPressed: () {
                     if (_showArchived) {
                       setState(() => _showArchived = false);
@@ -4702,7 +4788,9 @@ class _CourierHomeState extends State<_CourierHome> {
                 const SizedBox(width: 8),
                 Flexible(
                   child: Text(
-                    _showArchived ? localizedUiText(context, 'Archived chats') : localizedUiText(context, 'Conest'),
+                    _showArchived
+                        ? l10nOf(context).archivedChats
+                        : l10nOf(context).uiConest26885B,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.titleLarge?.copyWith(
@@ -4748,7 +4836,7 @@ class _CourierHomeState extends State<_CourierHome> {
                     ]
                   else
                     ChoiceChip(
-                      label:  Text(localizedUiText(context, 'All chats')),
+                      label: Text(l10nOf(context).uiAllChats398E5B),
                       selected: _activeFolderId == 'all',
                       onSelected: (_) => setState(() {
                         _activeFolderId = 'all';
@@ -4779,7 +4867,7 @@ class _CourierHomeState extends State<_CourierHome> {
                   const SizedBox(width: 8),
                   ActionChip(
                     avatar: const Icon(Icons.add, size: 18),
-                    label:  Text(localizedUiText(context, 'New folder')),
+                    label: Text(l10nOf(context).uiNewFolderA71199),
                     onPressed: _createFolder,
                   ),
                 ],
@@ -4791,7 +4879,7 @@ class _CourierHomeState extends State<_CourierHome> {
               child: TextButton.icon(
                 onPressed: () => setState(() => _activeFolderId = 'all'),
                 icon: const Icon(Icons.search),
-                label:  Text(localizedUiText(context, 'Search all chats')),
+                label: Text(l10nOf(context).uiSearchAllChatsC825C8),
               ),
             ),
           Padding(
@@ -4807,7 +4895,7 @@ class _CourierHomeState extends State<_CourierHome> {
                 suffixIcon: query.isEmpty
                     ? null
                     : IconButton(
-                        tooltip: localizedUiText(context, 'Clear search'),
+                        tooltip: l10nOf(context).uiClearSearch67300D,
                         icon: const Icon(Icons.close),
                         onPressed: () => setState(_search.clear),
                       ),
@@ -4833,11 +4921,13 @@ class _CourierHomeState extends State<_CourierHome> {
                       Icons.person_add_alt_1_outlined,
                       color: widget.palette.primary,
                     ),
-                    title:  Text(localizedUiText(context, 'Contact requests')),
-                    subtitle:  Text(localizedUiText(context, 'Review people who want to connect')),
+                    title: Text(l10nOf(context).uiContactRequests082691),
+                    subtitle: Text(
+                      l10nOf(context).uiReviewPeopleWhoWantTo24A8CB,
+                    ),
                     trailing: Badge(
                       label: Text(
-                        localizedUiText(context, '${widget.controller.pendingContactRequests.length}'),
+                        "${(widget.controller.pendingContactRequests.length)}",
                       ),
                     ),
                     onTap: _showRequests,
@@ -4846,7 +4936,7 @@ class _CourierHomeState extends State<_CourierHome> {
                   ListTile(
                     leading: const Icon(Icons.archive_outlined),
                     title: Text(l10nOf(context).archivedChats),
-                    trailing: Text(localizedUiText(context, '$archivedCount')),
+                    trailing: Text("${(archivedCount)}"),
                     onTap: () => setState(() => _showArchived = true),
                   ),
                 if (!_showArchived &&
@@ -4855,6 +4945,7 @@ class _CourierHomeState extends State<_CourierHome> {
                   _savedMessagesRow(
                     widget.controller,
                     widget.palette,
+                    context: context,
                     selectedContactId: widget.selectedContactId,
                     onSelected: widget.onContactSelected,
                   ),
@@ -4862,8 +4953,8 @@ class _CourierHomeState extends State<_CourierHome> {
                   _CourierRow(
                     palette: widget.palette,
                     icon: Icons.forum_outlined,
-                    title: localizedUiText(context, 'LAN lobby'),
-                    preview: 'Free-for-all local chat · untrusted',
+                    title: l10nOf(context).uiLANLobbyC16DC8,
+                    preview: l10nOf(context).uiFreeForAllLocalChat5485CC,
                     unread: widget.controller.unreadLanLobbyCount,
                     selected: widget.lanLobbySelected,
                     onTap: widget.onLanLobbySelected,
@@ -4873,11 +4964,11 @@ class _CourierHomeState extends State<_CourierHome> {
                   Padding(
                     padding: const EdgeInsets.all(16),
                     child: query.isNotEmpty
-                        ?  Text(localizedUiText(context, 'No chats found'))
+                        ? Text(l10nOf(context).uiNoChatsFoundC6BD82)
                         : _showArchived
-                        ?  Text(localizedUiText(context, 'No archived chats'))
+                        ? Text(l10nOf(context).uiNoArchivedChatsEAE7F0)
                         : !showConest
-                        ?  Text(localizedUiText(context, 'No Matrix chats yet'))
+                        ? Text(l10nOf(context).uiNoMatrixChatsYet23B023)
                         : _EmptyContactsState(palette: widget.palette),
                   ),
                 for (final entry in entries)
@@ -4888,7 +4979,7 @@ class _CourierHomeState extends State<_CourierHome> {
                     seed: entry.seed,
                     title: entry.title,
                     preview: query.isEmpty && entry.draft.isNotEmpty
-                        ? 'Draft: ${entry.draft}'
+                        ? l10nOf(context).chatDraftPreview(entry.draft)
                         : entry.preview,
                     pinned: entry.pinned,
                     muted: entry.muted,
@@ -4958,7 +5049,7 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
     return Scaffold(
       backgroundColor: widget.palette.panel,
       appBar: AppBar(
-        title:  Text(localizedUiText(context, 'New message')),
+        title: Text(l10nOf(context).uiNewMessage1ED2E7),
         backgroundColor: widget.palette.panel,
       ),
       body: ListenableBuilder(
@@ -4991,7 +5082,7 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
                         suffixIcon: query.isEmpty
                             ? null
                             : IconButton(
-                                tooltip: localizedUiText(context, 'Clear search'),
+                                tooltip: l10nOf(context).uiClearSearch67300D,
                                 icon: const Icon(Icons.close),
                                 onPressed: () => setState(_search.clear),
                               ),
@@ -5004,17 +5095,19 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
                         if (query.isEmpty) ...[
                           ListTile(
                             leading: const Icon(Icons.group_add_outlined),
-                            title:  Text(localizedUiText(context, 'New group')),
+                            title: Text(l10nOf(context).uiNewGroupF9850C),
                             onTap: () => Navigator.pop(context, 'group'),
                           ),
                           ListTile(
                             leading: const Icon(Icons.person_add_alt_1),
-                            title:  Text(localizedUiText(context, 'Add contact')),
+                            title: Text(l10nOf(context).contactAdd),
                             onTap: () => Navigator.pop(context, 'contact'),
                           ),
                           ListTile(
                             leading: const Icon(Icons.center_focus_strong),
-                            title:  Text(localizedUiText(context, 'Add with Conest Beam')),
+                            title: Text(
+                              l10nOf(context).uiAddWithConestBeam19D1E2,
+                            ),
                             onTap: () => Navigator.pop(context, 'beam'),
                           ),
                           const Divider(),
@@ -5024,8 +5117,8 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
                             padding: const EdgeInsets.all(24),
                             child: Text(
                               query.isEmpty
-                                  ? localizedUiText(context, 'Add a contact to start a conversation')
-                                  : localizedUiText(context, 'No contacts found'),
+                                  ? l10nOf(context).uiAddAContactToStart165431
+                                  : l10nOf(context).uiNoContactsFound816015,
                             ),
                           ),
                         for (final contact in contacts)
@@ -5038,9 +5131,12 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
                             ),
                             title: Text(contact.alias),
                             subtitle: Text(
-                              widget.controller
-                                  .reachabilityStateFor(contact.deviceId)
-                                  .label,
+                              reachabilityLabel(
+                                context,
+                                widget.controller.reachabilityStateFor(
+                                  contact.deviceId,
+                                ),
+                              ),
                             ),
                             onTap: () => Navigator.pop(context, contact),
                           ),
@@ -5064,6 +5160,7 @@ class _CourierNewChatScreenState extends State<_CourierNewChatScreen> {
 Widget _savedMessagesRow(
   MessengerController controller,
   ConestPalette palette, {
+  required BuildContext context,
   required String? selectedContactId,
   required ValueChanged<ContactRecord> onSelected,
 }) {
@@ -5074,8 +5171,8 @@ Widget _savedMessagesRow(
     key: const ValueKey('saved-messages-row'),
     palette: palette,
     icon: Icons.bookmark_outline,
-    title: 'Saved messages',
-    preview: last?.bodyPreview ?? 'Notes, files and forwards for yourself',
+    title: l10nOf(context).uiSavedMessagesC0FA7E,
+    preview: last?.bodyPreview ?? l10nOf(context).savedMessagesPreview,
     unread: 0,
     pinned: true,
     selected: selectedContactId == saved.deviceId,
@@ -5166,7 +5263,7 @@ class _CourierRow extends StatelessWidget {
                             ),
                           ),
                           child: Text(
-                            localizedUiText(context, '$memberCount'),
+                            "${(memberCount)}",
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 9,
@@ -5325,7 +5422,7 @@ class _CourierPresenceMark extends StatelessWidget {
           ),
           const SizedBox(width: 4),
           Text(
-            state.label,
+            reachabilityLabel(context, state),
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
               color: accent,
               fontWeight: FontWeight.w600,
@@ -5472,7 +5569,7 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
               children: [
                 _railCell(
                   selected: _cellGroupId == null,
-                  tooltip: localizedUiText(context, 'Direct messages'),
+                  tooltip: l10nOf(context).uiDirectMessagesE7596A,
                   onTap: () => setState(() => _cellGroupId = null),
                   child: Icon(
                     Icons.forum_outlined,
@@ -5501,7 +5598,7 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
                   ),
                 _railCell(
                   selected: false,
-                  tooltip: localizedUiText(context, 'New group'),
+                  tooltip: l10nOf(context).uiNewGroupF9850C,
                   onTap: widget.onCreateGroup,
                   child: Icon(Icons.add, color: palette.primary, size: 22),
                 ),
@@ -5527,24 +5624,24 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
           child: Row(
             children: [
               Text(
-                localizedUiText(context, 'Direct messages'),
+                l10nOf(context).uiDirectMessagesE7596A,
                 style: Theme.of(
                   context,
                 ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
               const Spacer(),
               IconButton(
-                tooltip: localizedUiText(context, 'Conest Beam'),
+                tooltip: l10nOf(context).uiConestBeamE98B77,
                 onPressed: () => unawaited(widget.onShowBeam()),
                 icon: const Icon(Icons.center_focus_strong),
               ),
               IconButton(
-                tooltip: localizedUiText(context, 'My invite'),
+                tooltip: l10nOf(context).uiMyInviteF80A7A,
                 onPressed: () => unawaited(widget.onShowInvite()),
                 icon: const Icon(Icons.qr_code_2),
               ),
               IconButton(
-                tooltip: localizedUiText(context, 'Settings'),
+                tooltip: l10nOf(context).tabSettings,
                 onPressed: () => unawaited(widget.onShowSettings()),
                 icon: const Icon(Icons.settings_outlined),
               ),
@@ -5558,14 +5655,15 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
               _savedMessagesRow(
                 controller,
                 palette,
+                context: context,
                 selectedContactId: widget.selectedContactId,
                 onSelected: widget.onContactSelected,
               ),
               _CourierRow(
                 palette: palette,
                 icon: Icons.forum_outlined,
-                title: localizedUiText(context, 'LAN lobby'),
-                preview: 'Free-for-all local chat · untrusted',
+                title: l10nOf(context).uiLANLobbyC16DC8,
+                preview: l10nOf(context).uiFreeForAllLocalChat5485CC,
                 unread: controller.unreadLanLobbyCount,
                 selected: widget.lanLobbySelected,
                 onTap: widget.onLanLobbySelected,
@@ -5631,7 +5729,7 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
                 ),
               ),
               IconButton(
-                tooltip: localizedUiText(context, 'Group details'),
+                tooltip: l10nOf(context).uiGroupDetailsDF844A,
                 onPressed: () => widget.onGroupDetails(group),
                 icon: const Icon(Icons.groups_2_outlined),
               ),
@@ -5646,14 +5744,18 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
               onPressed: () => widget.onGroupSelected(group),
               icon: const Icon(Icons.chat_bubble_outline),
               label: Text(
-                localizedUiText(context, 'Open #${group.title.toLowerCase().replaceAll(' ', '-')}'),
+                l10nOf(context).uiOpenValue8DF02B(
+                  (group.title.toLowerCase().replaceAll(' ', '-')).toString(),
+                ),
               ),
             ),
           ),
         ),
         MonoSectionLabel(
           palette: palette,
-          label: localizedUiText(context, 'Members · ${memberIds.length}'),
+          label: l10nOf(
+            context,
+          ).uiMembersValue541E72((memberIds.length).toString()),
         ),
         Expanded(
           child: ListView(
@@ -5669,7 +5771,10 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
                   ),
                   title: Text(controller.groupMemberLabel(deviceId)),
                   subtitle: Text(
-                    group.roleFor(deviceId)?.label ?? localizedUiText(context, 'Member'),
+                    groupRoleLabel(
+                      context,
+                      group.roleFor(deviceId) ?? GroupMemberRole.member,
+                    ),
                     style: TextStyle(
                       fontFamily: ConestPalette.monoFont,
                       fontSize: 11,
@@ -5786,7 +5891,8 @@ class _Sidebar extends StatelessWidget {
                         children: [
                           Expanded(
                             child: Text(
-                              preview?.bodyPreview ?? localizedUiText(context, 'No messages yet'),
+                              preview?.bodyPreview ??
+                                  l10nOf(context).uiNoMessagesYetC04921,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(context).textTheme.bodySmall
@@ -5837,7 +5943,7 @@ class _Sidebar extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 12),
           child: Text(
-            localizedUiText(context, 'No activity yet — pair a contact to start the log.'),
+            l10nOf(context).uiNoActivityYetPairA7F5366,
             style: TextStyle(
               fontFamily: ConestPalette.monoFont,
               fontSize: 11,
@@ -5908,7 +6014,9 @@ class _Sidebar extends StatelessWidget {
                               ),
                             ),
                             child: Text(
-                              outbound ? localizedUiText(context, 'SENT') : localizedUiText(context, 'RECV'),
+                              outbound
+                                  ? l10nOf(context).uiSENT5AD0CD
+                                  : l10nOf(context).uiRECVBFC296,
                               style: TextStyle(
                                 fontFamily: ConestPalette.monoFont,
                                 fontSize: 8,
@@ -5968,7 +6076,7 @@ class _Sidebar extends StatelessWidget {
         children: [
           StatusStrip(
             palette: palette,
-            title: localizedUiText(context, 'Node · online'),
+            title: l10nOf(context).uiNodeOnlineFAC64A,
             detail:
                 '$lanSummary · '
                 '${identity.hasInternetRelay ? 'relay ✓' : 'relay optional'} · '
@@ -6010,7 +6118,9 @@ class _Sidebar extends StatelessWidget {
                                   ?.copyWith(fontWeight: FontWeight.w700),
                             ),
                             Text(
-                              localizedUiText(context, 'device ${identity.deviceIdShort}'),
+                              l10nOf(context).uiDeviceValue11AEA9(
+                                (identity.deviceIdShort).toString(),
+                              ),
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(color: palette.inkSoft),
                             ),
@@ -6021,12 +6131,12 @@ class _Sidebar extends StatelessWidget {
                         IconButton(
                           onPressed: onShowDebug,
                           icon: const Icon(Icons.bug_report_outlined),
-                          tooltip: localizedUiText(context, 'Debug'),
+                          tooltip: l10nOf(context).uiDebugBD604D,
                         ),
                       IconButton(
                         onPressed: onShowSettings,
                         icon: const Icon(Icons.settings_outlined),
-                        tooltip: localizedUiText(context, 'Settings'),
+                        tooltip: l10nOf(context).tabSettings,
                       ),
                     ],
                   ),
@@ -6060,7 +6170,9 @@ class _Sidebar extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   _StatusChip(
-                    label: localizedUiText(context, 'safety ${identity.shortSafetyNumber}'),
+                    label: l10nOf(context).uiSafetyValueC542B8(
+                      (identity.shortSafetyNumber).toString(),
+                    ),
                     palette: palette,
                     icon: Icons.verified_user_outlined,
                     expand: true,
@@ -6072,7 +6184,7 @@ class _Sidebar extends StatelessWidget {
                         child: OutlinedButton.icon(
                           onPressed: onShowInvite,
                           icon: const Icon(Icons.qr_code_2),
-                          label:  Text(localizedUiText(context, 'My invite')),
+                          label: Text(l10nOf(context).uiMyInviteF80A7A),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -6080,7 +6192,7 @@ class _Sidebar extends StatelessWidget {
                         child: FilledButton.icon(
                           onPressed: onAddContact,
                           icon: const Icon(Icons.person_add_alt_1),
-                          label:  Text(localizedUiText(context, 'Add')),
+                          label: Text(l10nOf(context).uiAdd61CC55),
                         ),
                       ),
                     ],
@@ -6091,14 +6203,14 @@ class _Sidebar extends StatelessWidget {
                     child: OutlinedButton.icon(
                       onPressed: onShowBeam,
                       icon: const Icon(Icons.center_focus_strong),
-                      label:  Text(localizedUiText(context, 'Conest Beam')),
+                      label: Text(l10nOf(context).uiConestBeamE98B77),
                     ),
                   ),
                   const SizedBox(height: 4),
                   TextButton.icon(
                     onPressed: onPoll,
                     icon: const Icon(Icons.sync),
-                    label:  Text(localizedUiText(context, 'Poll routes now')),
+                    label: Text(l10nOf(context).uiPollRoutesNow22318F),
                   ),
                 ],
               ),
@@ -6109,6 +6221,7 @@ class _Sidebar extends StatelessWidget {
             _savedMessagesRow(
               controller,
               palette,
+              context: context,
               selectedContactId: selectedContactId,
               onSelected: onContactSelected,
             ),
@@ -6145,13 +6258,13 @@ class _Sidebar extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          localizedUiText(context, 'LAN lobby'),
+                          l10nOf(context).uiLANLobbyC16DC8,
                           style: Theme.of(context).textTheme.titleMedium
                               ?.copyWith(fontWeight: FontWeight.w700),
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          localizedUiText(context, 'Free-for-all local chat • untrusted'),
+                          l10nOf(context).uiFreeForAllLocalChat5485CC,
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(color: palette.inkSoft),
                         ),
@@ -6163,7 +6276,7 @@ class _Sidebar extends StatelessWidget {
                     _UnreadBadge(count: lanLobbyUnreadCount, palette: palette),
                   ],
                   Text(
-                    localizedUiText(context, '${controller.lanLobbyMessages.length}'),
+                    "${(controller.lanLobbyMessages.length)}",
                     style: Theme.of(
                       context,
                     ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
@@ -6176,7 +6289,7 @@ class _Sidebar extends StatelessWidget {
           Row(
             children: [
               Text(
-                localizedUiText(context, 'Groups'),
+                l10nOf(context).uiGroupsAE9629,
                 style: Theme.of(
                   context,
                 ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
@@ -6185,10 +6298,10 @@ class _Sidebar extends StatelessWidget {
               IconButton(
                 onPressed: controller.contacts.isEmpty ? null : onCreateGroup,
                 icon: const Icon(Icons.group_add_outlined),
-                tooltip: localizedUiText(context, 'Create group'),
+                tooltip: l10nOf(context).groupCreate,
               ),
               Text(
-                localizedUiText(context, '${controller.visibleGroups.length}'),
+                "${(controller.visibleGroups.length)}",
                 style: Theme.of(
                   context,
                 ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
@@ -6201,8 +6314,8 @@ class _Sidebar extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 12),
               child: Text(
                 controller.contacts.isEmpty
-                    ? localizedUiText(context, 'Add trusted contacts before creating a group.')
-                    : localizedUiText(context, 'No groups yet.'),
+                    ? l10nOf(context).uiAddTrustedContactsBeforeCreating1084CC
+                    : l10nOf(context).uiNoGroupsYet5009C6,
                 style: Theme.of(
                   context,
                 ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
@@ -6272,20 +6385,22 @@ class _Sidebar extends StatelessWidget {
                                 visualDensity: VisualDensity.compact,
                                 onPressed: () => onGroupDetails(group),
                                 icon: const Icon(Icons.groups_2_outlined),
-                                tooltip: localizedUiText(context, 'Group details'),
+                                tooltip: l10nOf(context).uiGroupDetailsDF844A,
                               ),
                             ],
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            localizedUiText(context, '${group.activeMemberDeviceIds.length} member(s)'),
+                            l10nOf(context).uiValueMemberSE75249(
+                              (group.activeMemberDeviceIds.length),
+                            ),
                             style: Theme.of(context).textTheme.bodySmall
                                 ?.copyWith(color: palette.inkSoft),
                           ),
                           const SizedBox(height: 6),
                           Text(
                             preview == null
-                                ? localizedUiText(context, 'No messages yet')
+                                ? l10nOf(context).uiNoMessagesYetC04921
                                 : preview.bodyPreview,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
@@ -6323,14 +6438,14 @@ class _Sidebar extends StatelessWidget {
             Row(
               children: [
                 Text(
-                  localizedUiText(context, 'Contacts'),
+                  l10nOf(context).uiContactsB0DD61,
                   style: Theme.of(
                     context,
                   ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 const Spacer(),
                 Text(
-                  localizedUiText(context, '${controller.contacts.length}'),
+                  "${(controller.contacts.length)}",
                   style: Theme.of(
                     context,
                   ).textTheme.labelLarge?.copyWith(color: palette.inkSoft),
@@ -6431,7 +6546,9 @@ class _Sidebar extends StatelessWidget {
                                         onPressed: () =>
                                             onContactProfile(contact),
                                         icon: const Icon(Icons.badge_outlined),
-                                        tooltip: localizedUiText(context, 'Contact profile'),
+                                        tooltip: l10nOf(
+                                          context,
+                                        ).uiContactProfile1B3A0E,
                                       ),
                                     ],
                                   ),
@@ -6451,7 +6568,7 @@ class _Sidebar extends StatelessWidget {
                                   const SizedBox(height: 6),
                                   Text(
                                     preview == null
-                                        ? localizedUiText(context, 'No messages yet')
+                                        ? l10nOf(context).uiNoMessagesYetC04921
                                         : preview.bodyPreview,
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
@@ -6478,7 +6595,7 @@ class _Sidebar extends StatelessWidget {
             Align(
               alignment: AlignmentDirectional.centerStart,
               child: Text(
-                controller.statusMessage!,
+                localizedUiText(context, controller.statusMessage!),
                 style: Theme.of(
                   context,
                 ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
@@ -6690,21 +6807,29 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
       final selected = await showDialog<bool>(
         context: context,
         builder: (context) => SimpleDialog(
-          title:  Text(localizedUiText(context, 'History for new members')),
+          title: Text(l10nOf(context).uiHistoryForNewMembersF419F2),
           children: [
-             Padding(
+            Padding(
               padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
               child: Text(
-                localizedUiText(context, 'Applies to future admissions. History already received cannot be withdrawn.'),
+                l10nOf(context).uiAppliesToFutureAdmissionsHistory78E3A0,
               ),
             ),
             SimpleDialogOption(
               onPressed: () => Navigator.pop(context, true),
-              child: Text(localizedUiText(context, '${includeEarlier ? '✓ ' : ''}All retained history')),
+              child: Text(
+                l10nOf(context).uiValueAllRetainedHistory5E25F4(
+                  (includeEarlier ? '✓ ' : '').toString(),
+                ),
+              ),
             ),
             SimpleDialogOption(
               onPressed: () => Navigator.pop(context, false),
-              child: Text(localizedUiText(context, '${!includeEarlier ? '✓ ' : ''}Since admission')),
+              child: Text(
+                l10nOf(context).uiValueSinceAdmissionB2617B(
+                  (!includeEarlier ? '✓ ' : '').toString(),
+                ),
+              ),
             ),
           ],
         ),
@@ -6797,20 +6922,20 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
     final choice = await showDialog<_DeleteGroupChoice>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(localizedUiText(context, 'Delete "${group.title}"')),
+        title: Text(l10nOf(context).uiDeleteValueF0396B((group.title).toString())),
         content:  Text(
-          localizedUiText(context, 'Choose how to wind down this group. Transferring ownership ' 'keeps the group alive under a new owner and demotes you to ' 'admin. Deleting for everyone removes the group from every ' "member's list and cannot be undone."),
+          l10nOf(context).uiChooseHowToWindDownF7399D,
         ),
         actions: [
           TextButton(
             onPressed: () =>
                 Navigator.of(context).pop(_DeleteGroupChoice.cancel),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           TextButton(
             onPressed: () =>
                 Navigator.of(context).pop(_DeleteGroupChoice.transfer),
-            child:  Text(localizedUiText(context, 'Transfer ownership…')),
+            child: Text(l10nOf(context).uiTransferOwnershipA563C9),
           ),
           FilledButton.tonal(
             style: FilledButton.styleFrom(
@@ -6819,7 +6944,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
             ),
             onPressed: () =>
                 Navigator.of(context).pop(_DeleteGroupChoice.delete),
-            child:  Text(localizedUiText(context, 'Delete for everyone')),
+            child: Text(l10nOf(context).uiDeleteForEveryoneE055A8),
           ),
         ],
       ),
@@ -6854,7 +6979,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
         String? selected = candidates.first;
         return StatefulBuilder(
           builder: (context, setLocalState) => AlertDialog(
-            title:  Text(localizedUiText(context, 'Transfer ownership')),
+            title: Text(l10nOf(context).uiTransferOwnershipA6819E),
             content: SizedBox(
               width: 360,
               child: ListView(
@@ -6866,7 +6991,10 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
                       leading: Icon(_roleIcon(group.roleFor(deviceId))),
                       title: Text(widget.controller.groupMemberLabel(deviceId)),
                       subtitle: Text(
-                        group.roleFor(deviceId)?.label ?? localizedUiText(context, 'Member'),
+                        groupRoleLabel(
+                          context,
+                          group.roleFor(deviceId) ?? GroupMemberRole.member,
+                        ),
                       ),
                       trailing: Icon(
                         selected == deviceId
@@ -6881,13 +7009,13 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
-                child:  Text(localizedUiText(context, 'Cancel')),
+                child: Text(l10nOf(context).actionCancel),
               ),
               FilledButton(
                 onPressed: selected == null
                     ? null
                     : () => Navigator.of(context).pop(selected),
-                child:  Text(localizedUiText(context, 'Transfer')),
+                child: Text(l10nOf(context).uiTransferCBB4CC),
               ),
             ],
           ),
@@ -6917,14 +7045,14 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(localizedUiText(context, 'Delete "${group.title}" for everyone?')),
+        title: Text(l10nOf(context).uiDeleteValueForEveryone12E724((group.title).toString())),
         content:  Text(
-          localizedUiText(context, 'Every member will be removed from the group and the group ' "will be marked left in each member's list. Local message " 'history is not deleted automatically — each member can clear ' 'it via Remove from list. This cannot be undone.'),
+          l10nOf(context).uiEveryMemberWillBeRemoved75A3FC,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton.tonal(
             style: FilledButton.styleFrom(
@@ -6932,7 +7060,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
               foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
             ),
             onPressed: () => Navigator.of(context).pop(true),
-            child:  Text(localizedUiText(context, 'Delete for everyone')),
+            child: Text(l10nOf(context).uiDeleteForEveryoneE055A8),
           ),
         ],
       ),
@@ -6954,14 +7082,12 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title:  Text(localizedUiText(context, 'Remove this group?')),
-        content:  Text(
-          localizedUiText(context, 'Remove this group from your list? This deletes the local ' 'message history. Other members will not be notified — they ' 'already see you as having left.'),
-        ),
+        title: Text(l10nOf(context).uiRemoveThisGroup38C4E8),
+        content: Text(l10nOf(context).uiRemoveThisGroupFromYourDA7898),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton.tonal(
             style: FilledButton.styleFrom(
@@ -6969,7 +7095,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
               foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
             ),
             onPressed: () => Navigator.of(context).pop(true),
-            child:  Text(localizedUiText(context, 'Remove')),
+            child: Text(l10nOf(context).uiRemoveE96390),
           ),
         ],
       ),
@@ -7010,27 +7136,30 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
       children: [
         if (canChangeRole)
           PopupMenuButton<GroupMemberRole>(
-            tooltip: localizedUiText(context, 'Change role'),
+            tooltip: l10nOf(context).uiChangeRole2B9BFD,
             icon: const Icon(Icons.manage_accounts_outlined),
             initialValue: role,
             onSelected: (value) => _setRole(deviceId, value),
-            itemBuilder: (context) =>  [
+            itemBuilder: (context) => [
               PopupMenuItem(
                 value: GroupMemberRole.member,
-                child: Text(localizedUiText(context, 'Member')),
+                child: Text(l10nOf(context).roleMember),
               ),
               PopupMenuItem(
                 value: GroupMemberRole.moderator,
-                child: Text(localizedUiText(context, 'Moderator')),
+                child: Text(l10nOf(context).roleModerator),
               ),
-              PopupMenuItem(value: GroupMemberRole.admin, child: Text(localizedUiText(context, 'Admin'))),
+              PopupMenuItem(
+                value: GroupMemberRole.admin,
+                child: Text(l10nOf(context).roleAdmin),
+              ),
             ],
           ),
         if (canRemove)
           IconButton(
             onPressed: () => _removeMember(deviceId),
             icon: const Icon(Icons.person_remove_outlined),
-            tooltip: localizedUiText(context, 'Remove member'),
+            tooltip: l10nOf(context).uiRemoveMember1C31D1,
           ),
       ],
     );
@@ -7075,7 +7204,12 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
           shrinkWrap: true,
           children: [
             Text(
-              localizedUiText(context, '${activeIds.length} member(s) • owner ${widget.controller.groupMemberLabel(group.ownerDeviceId)}'),
+              l10nOf(context).uiValueMemberSOwnerValueE42E13(
+                (activeIds.length),
+                (widget.controller.groupMemberLabel(
+                  group.ownerDeviceId,
+                )).toString(),
+              ),
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: widget.palette.inkSoft),
@@ -7086,16 +7220,21 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
                 contentPadding: EdgeInsets.zero,
                 leading: Icon(_roleIcon(group.roleFor(deviceId))),
                 title: Text(widget.controller.groupMemberLabel(deviceId)),
-                subtitle: Text(group.roleFor(deviceId)?.label ?? localizedUiText(context, 'Member')),
+                subtitle: Text(
+                  groupRoleLabel(
+                    context,
+                    group.roleFor(deviceId) ?? GroupMemberRole.member,
+                  ),
+                ),
                 trailing: _memberTrailing(deviceId, group.roleFor(deviceId)),
               ),
             if (myId == group.ownerDeviceId && !group.isDissolved)
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.history),
-                title:  Text(localizedUiText(context, 'History for new members')),
-                subtitle:  Text(
-                  localizedUiText(context, 'Choose what future members can catch up on'),
+                title: Text(l10nOf(context).uiHistoryForNewMembersF419F2),
+                subtitle: Text(
+                  l10nOf(context).uiChooseWhatFutureMembersCanC38992,
                 ),
                 onTap: _savingHistoryVisibility ? null : _editHistoryVisibility,
                 trailing: _savingHistoryVisibility
@@ -7120,7 +7259,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
               const SizedBox(height: 6),
               Center(
                 child: Text(
-                  localizedUiText(context, '// GROUP TRUST FANOUT · mint = paired'),
+                  l10nOf(context).uiGROUPTRUSTFANOUTMintPaired5DDF6E,
                   style: TextStyle(
                     fontFamily: ConestPalette.monoFont,
                     fontSize: 10,
@@ -7133,7 +7272,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
             if (_canAddMembers && addable.isNotEmpty) ...[
               const Divider(),
               Text(
-                localizedUiText(context, 'Add trusted contact'),
+                l10nOf(context).uiAddTrustedContact126717,
                 style: Theme.of(context).textTheme.titleSmall,
               ),
               const SizedBox(height: 8),
@@ -7147,7 +7286,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
                         ? null
                         : () => _addMember(contact),
                     icon: const Icon(Icons.person_add_alt_1),
-                    tooltip: localizedUiText(context, 'Add member'),
+                    tooltip: l10nOf(context).uiAddMember170AD0,
                   ),
                 ),
             ],
@@ -7164,7 +7303,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
             ),
             onPressed: _deleteGroup,
             icon: const Icon(Icons.delete_forever_outlined),
-            label:  Text(localizedUiText(context, 'Delete group…')),
+            label: Text(l10nOf(context).uiDeleteGroup043336),
           )
         else if (_currentDeviceId != null &&
             group.roleFor(_currentDeviceId!) != GroupMemberRole.owner &&
@@ -7172,7 +7311,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
           TextButton.icon(
             onPressed: _leave,
             icon: const Icon(Icons.logout),
-            label:  Text(localizedUiText(context, 'Leave')),
+            label: Text(l10nOf(context).uiLeave7E3520),
           )
         else if (_currentDeviceId != null &&
             !group.hasActiveMember(_currentDeviceId!) &&
@@ -7183,11 +7322,11 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
             ),
             onPressed: _removeFromList,
             icon: const Icon(Icons.delete_outline),
-            label:  Text(localizedUiText(context, 'Remove from list')),
+            label: Text(l10nOf(context).uiRemoveFromList23A976),
           ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child:  Text(localizedUiText(context, 'Close')),
+          child: Text(l10nOf(context).actionClose),
         ),
       ],
     );
@@ -7220,7 +7359,7 @@ Future<void> _forwardTextMessage(
                 group.title.toLowerCase().contains(query),
           );
           return AlertDialog(
-            title:  Text(localizedUiText(context, 'Forward message')),
+            title: Text(l10nOf(context).uiForwardMessage482959),
             content: SizedBox(
               width: 420,
               height: 400,
@@ -7250,11 +7389,15 @@ Future<void> _forwardTextMessage(
                           ListTile(
                             key: const ValueKey('forward-to-saved'),
                             leading: const Icon(Icons.bookmark_outline),
-                            title:  Text(localizedUiText(context, 'Saved messages')),
+                            title: Text(l10nOf(context).uiSavedMessagesC0FA7E),
                             onTap: () => Navigator.pop(context, saved),
                           ),
                         if (contacts.isEmpty && groups.isEmpty)
-                           ListTile(title: Text(localizedUiText(context, 'No available chats'))),
+                          ListTile(
+                            title: Text(
+                              l10nOf(context).uiNoAvailableChats1FAA40,
+                            ),
+                          ),
                         for (final contact in contacts)
                           ListTile(
                             leading: SealAvatar(
@@ -7281,7 +7424,7 @@ Future<void> _forwardTextMessage(
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
-                child:  Text(localizedUiText(context, 'Cancel')),
+                child: Text(l10nOf(context).actionCancel),
               ),
             ],
           );
@@ -7303,15 +7446,19 @@ Future<void> _forwardTextMessage(
         );
     }
     if (context.mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar( SnackBar(content: Text(localizedUiText(context, 'Forwarded message queued'))));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(l10nOf(context).uiForwardedMessageQueuedC82DA4)),
+      );
     }
   } catch (error) {
     if (context.mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(localizedUiText(context, 'Could not forward: $error'))));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            l10nOf(context).uiCouldNotForwardValue80193D((error).toString()),
+          ),
+        ),
+      );
     }
   }
 }
@@ -7426,11 +7573,15 @@ Future<void> _forwardFile(
                           ListTile(
                             key: const ValueKey('forward-to-saved'),
                             leading: const Icon(Icons.bookmark_outline),
-                            title:  Text(localizedUiText(context, 'Saved messages')),
+                            title: Text(l10nOf(context).uiSavedMessagesC0FA7E),
                             onTap: () => Navigator.pop(context, saved),
                           ),
                         if (contacts.isEmpty && groups.isEmpty)
-                           ListTile(title: Text(localizedUiText(context, 'No available chats'))),
+                          ListTile(
+                            title: Text(
+                              l10nOf(context).uiNoAvailableChats1FAA40,
+                            ),
+                          ),
                         for (final contact in contacts)
                           ListTile(
                             leading: SealAvatar(
@@ -7457,7 +7608,7 @@ Future<void> _forwardFile(
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
-                child:  Text(localizedUiText(context, 'Cancel')),
+                child: Text(l10nOf(context).actionCancel),
               ),
             ],
           );
@@ -7494,13 +7645,21 @@ Future<void> _forwardFile(
     }
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-         SnackBar(content: Text(localizedUiText(context, 'Forwarded attachment queued'))),
+        SnackBar(
+          content: Text(l10nOf(context).uiForwardedAttachmentQueued57C88B),
+        ),
       );
     }
   } catch (error) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(localizedUiText(context, 'Could not forward attachment: $error'))),
+        SnackBar(
+          content: Text(
+            l10nOf(
+              context,
+            ).uiCouldNotForwardAttachmentValue5165FD((error).toString()),
+          ),
+        ),
       );
     }
   }
@@ -7537,7 +7696,7 @@ class _TelegramChatHeader extends StatelessWidget {
         children: [
           if (onBack != null)
             IconButton(
-              tooltip: localizedUiText(context, 'Back'),
+              tooltip: l10nOf(context).actionBack,
               onPressed: onBack,
               icon: const Icon(Icons.arrow_back),
             ),
@@ -7583,30 +7742,30 @@ class _TelegramChatHeader extends StatelessWidget {
             ),
           ),
           IconButton(
-            tooltip: localizedUiText(context, 'Search messages'),
+            tooltip: l10nOf(context).uiSearchMessagesABEA65,
             onPressed: onSearch,
             icon: const Icon(Icons.search),
           ),
           if (onCall != null)
             IconButton(
-              tooltip: localizedUiText(context, 'Start voice call (experimental)'),
+              tooltip: l10nOf(context).uiStartVoiceCallExperimental6DE320,
               onPressed: onCall,
               icon: const Icon(Icons.call_outlined),
             ),
           PopupMenuButton<String>(
-            tooltip: localizedUiText(context, 'Chat options'),
+            tooltip: l10nOf(context).uiChatOptionsA40D0F,
             icon: const Icon(Icons.more_vert),
             onSelected: (action) =>
                 action == 'details' ? onDetails() : onConnectionDetails?.call(),
             itemBuilder: (_) => [
-               PopupMenuItem(
+              PopupMenuItem(
                 value: 'details',
-                child: Text(localizedUiText(context, 'Chat details')),
+                child: Text(l10nOf(context).uiChatDetails15DAEC),
               ),
               if (onConnectionDetails != null)
-                 PopupMenuItem(
+                PopupMenuItem(
                   value: 'connection',
-                  child: Text(localizedUiText(context, 'Connection details')),
+                  child: Text(l10nOf(context).uiConnectionDetailsAB30A5),
                 ),
             ],
           ),
@@ -7744,7 +7903,7 @@ class _VoicePreviewPlayerState extends State<_VoicePreviewPlayer> {
           Row(
             children: [
               IconButton(
-                tooltip: playing ? localizedUiText(context, 'Pause preview') : localizedUiText(context, 'Play preview'),
+                tooltip: playing ? l10nOf(context).uiPausePreview805180 : l10nOf(context).uiPlayPreview47BB44,
                 onPressed: () => unawaited(_run(_service.playPreview)),
                 icon: Icon(
                   playing
@@ -7758,13 +7917,13 @@ class _VoicePreviewPlayerState extends State<_VoicePreviewPlayer> {
                   onChanged: (value) => unawaited(_seek(value)),
                 ),
               ),
-              Text(localizedUiText(context, '${_clock(position)} / ${_clock(total)}')),
+              Text("${(_clock(position))} / ${(_clock(total))}"),
             ],
           ),
           Row(
             children: [
               IconButton(
-                tooltip: volume == 0 ? localizedUiText(context, 'Unmute preview') : localizedUiText(context, 'Mute preview'),
+                tooltip: volume == 0 ? l10nOf(context).uiUnmutePreview12A31A : l10nOf(context).uiMutePreviewCE44BD,
                 onPressed: () => unawaited(
                   _run(() => _service.setPlaybackVolume(volume == 0 ? 1 : 0)),
                 ),
@@ -7779,7 +7938,7 @@ class _VoicePreviewPlayerState extends State<_VoicePreviewPlayer> {
               Expanded(
                 child: Slider(
                   value: volume,
-                  label: localizedUiText(context, '${(volume * 100).round()}%'),
+                  label: l10nOf(context).uiValue3072D4((((volume * 100).round())).toString()),
                   divisions: 20,
                   onChanged: (value) =>
                       unawaited(_run(() => _service.setPlaybackVolume(value))),
@@ -7826,8 +7985,8 @@ class _GroupVoiceControls extends StatelessWidget {
               children: [
             IconButton(
               tooltip: isCurrent && service.isPlaying
-                  ? localizedUiText(context, 'Pause voice message')
-                  : localizedUiText(context, 'Play voice message'),
+                  ? l10nOf(context).uiPauseVoiceMessageECD12D
+                  : l10nOf(context).uiPlayVoiceMessageB16684,
               onPressed: path == null
                   ? null
                   : () => unawaited(
@@ -7854,10 +8013,10 @@ class _GroupVoiceControls extends StatelessWidget {
                         ),
                       ),
                     )
-                  : Text(localizedUiText(context, 'Voice message · $label')),
+                  : Text(l10nOf(context).uiVoiceMessageValue2F0300((label).toString())),
             ),
             PopupMenuButton<double>(
-              tooltip: localizedUiText(context, 'Playback speed'),
+              tooltip: l10nOf(context).uiPlaybackSpeed6FF42B,
               icon: const Icon(Icons.speed),
               onSelected: (rate) => unawaited(
                 service
@@ -7880,7 +8039,7 @@ class _GroupVoiceControls extends StatelessWidget {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Text(
-                    localizedUiText(context, 'Playback failed: ${service.playbackError}'),
+                    l10nOf(context).uiPlaybackFailedValue1C0E1A((service.playbackError).toString()),
                     style: TextStyle(color: palette.danger, fontSize: 12),
                   ),
                 ),
@@ -7957,12 +8116,17 @@ class _VoiceComposerPanel extends StatelessWidget {
                   child: Text(
                     voice.error ??
                         (voice.state == VoiceRecordingState.starting
-                            ? localizedUiText(context, 'Preparing microphone…')
+                            ? l10nOf(context).uiPreparingMicrophone0BBF4A
                             : voice.state == VoiceRecordingState.stopping
-                            ? localizedUiText(context, 'Preparing preview…')
+                            ? l10nOf(context).uiPreparingPreview312E7B
                             : preview
-                            ? localizedUiText(context, 'Voice message preview · ${_duration(duration)}')
-                            : localizedUiText(context, 'Recording${locked ? ' · locked' : ''} · ${_duration(voice.elapsed)}')),
+                            ? l10nOf(context).uiVoiceMessagePreviewValue8235CB(
+                                (_duration(duration)).toString(),
+                              )
+                            : l10nOf(context).uiRecordingValueValue111FF1(
+                                (locked ? ' · locked' : '').toString(),
+                                (_duration(voice.elapsed)).toString(),
+                              )),
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ),
@@ -7974,19 +8138,23 @@ class _VoiceComposerPanel extends StatelessWidget {
                   ),
                 if (recording)
                   IconButton(
-                    tooltip: localizedUiText(context, 'Stop recording'),
+                    tooltip: l10nOf(context).uiStopRecordingEE0D9D,
                     onPressed: onStop,
                     icon: const Icon(Icons.stop_circle_outlined),
                   ),
                 IconButton(
-                  tooltip: localizedUiText(context, 'Delete recording'),
+                  tooltip: l10nOf(context).uiDeleteRecording8B58CE,
                   onPressed: onCancel,
                   icon: const Icon(Icons.delete_outline),
                 ),
                 if (preview)
                   FilledButton(
                     onPressed: sending ? null : onSend,
-                    child: Text(sending ? localizedUiText(context, 'Sending…') : localizedUiText(context, 'Send')),
+                    child: Text(
+                      sending
+                          ? l10nOf(context).uiSendingCF7655
+                          : l10nOf(context).composerSend,
+                    ),
                   ),
               ],
             ),
@@ -8021,14 +8189,16 @@ class _VoiceComposerPanel extends StatelessWidget {
               if (service.playingItemId == _VoicePreviewPlayer.itemId &&
                   service.playbackError != null)
                 Text(
-                  localizedUiText(context, 'Playback failed: ${service.playbackError}'),
+                  l10nOf(context).uiPlaybackFailedValue1C0E1A(
+                    (service.playbackError).toString(),
+                  ),
                   style: TextStyle(color: palette.danger),
                 ),
               Align(
                 alignment: AlignmentDirectional.centerEnd,
                 child: PopupMenuButton<double>(
                   initialValue: service.playbackRate,
-                  tooltip: localizedUiText(context, 'Playback speed'),
+                  tooltip: l10nOf(context).uiPlaybackSpeed6FF42B,
                   onSelected: (rate) => unawaited(
                     service.setPlaybackRate(rate).catchError((Object error) {
                       service.reportRecordingError(error);
@@ -8039,7 +8209,7 @@ class _VoiceComposerPanel extends StatelessWidget {
                     PopupMenuItem(value: 1.5, child: Text('1.5×')),
                     PopupMenuItem(value: 2, child: Text('2×')),
                   ],
-                  child: Text(localizedUiText(context, '${service.playbackRate}×')),
+                  child: Text("${(service.playbackRate)}×"),
                 ),
               ),
             ],
@@ -8290,34 +8460,36 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title:  Text(localizedUiText(context, 'New poll')),
+          title: Text(l10nOf(context).uiNewPoll6D62BD),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(
                 controller: question,
-                decoration:  InputDecoration(labelText: localizedUiText(context, 'Question')),
+                decoration: InputDecoration(
+                  labelText: l10nOf(context).uiQuestion002FF5,
+                ),
               ),
               TextField(
                 controller: options,
                 minLines: 2,
                 maxLines: 6,
-                decoration:  InputDecoration(
-                  labelText: localizedUiText(context, 'Options (one per line)'),
+                decoration: InputDecoration(
+                  labelText: l10nOf(context).uiOptionsOnePerLine62FF3D,
                 ),
               ),
               DropdownButton<PollChoiceMode>(
                 value: mode,
                 onChanged: (value) =>
                     setDialogState(() => mode = value ?? mode),
-                items:  [
+                items: [
                   DropdownMenuItem(
                     value: PollChoiceMode.single,
-                    child: Text(localizedUiText(context, 'Single choice')),
+                    child: Text(l10nOf(context).uiSingleChoice68E3E0),
                   ),
                   DropdownMenuItem(
                     value: PollChoiceMode.multiple,
-                    child: Text(localizedUiText(context, 'Multiple choice')),
+                    child: Text(l10nOf(context).uiMultipleChoiceB88936),
                   ),
                 ],
               ),
@@ -8326,7 +8498,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child:  Text(localizedUiText(context, 'Cancel')),
+              child: Text(l10nOf(context).actionCancel),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, (
@@ -8334,7 +8506,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                 options.text.split('\n'),
                 mode,
               )),
-              child:  Text(localizedUiText(context, 'Create')),
+              child: Text(l10nOf(context).actionCreate),
             ),
           ],
         ),
@@ -8362,14 +8534,16 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title:  Text(localizedUiText(context, 'Delete message?')),
+          title: Text(l10nOf(context).uiDeleteMessageD536CF),
           content: Text(
-            localizedUiText(context, 'This removes the message for group members when they synchronize.' '${compatibility == null ? '' : '\n\n$compatibility'}'),
+            l10nOf(context).uiThisRemovesTheMessageFor2247A2(
+              (compatibility == null ? '' : '\n\n$compatibility').toString(),
+            ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child:  Text(localizedUiText(context, 'Cancel')),
+              child: Text(l10nOf(context).actionCancel),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
@@ -8401,7 +8575,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(localizedUiText(context, '$error'))));
+        ).showSnackBar(SnackBar(content: Text("${(error)}")));
       }
     }
   }
@@ -8450,8 +8624,8 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       _flashMessage(target);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-         SnackBar(
-          content: Text(localizedUiText(context, 'Could not locate this message in the current chat')),
+        SnackBar(
+          content: Text(l10nOf(context).uiCouldNotLocateThisMessage220E83),
         ),
       );
     }
@@ -8511,14 +8685,14 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title:  Text(localizedUiText(context, 'Delete selected messages?')),
+        title: Text(l10nOf(context).uiDeleteSelectedMessages190A5F),
         content: Text(
-          localizedUiText(context, 'Delete ${selected.length} message${selected.length == 1 ? '' : 's'} ' 'for the group?'),
+          l10nOf(context).uiDeleteValueMessageValueForABA7AC((selected.length)),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
@@ -8889,7 +9063,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
               widget.onReplyToMessage(message);
             },
       child: Align(
-        alignment: outbound ? AlignmentDirectional.centerEnd : AlignmentDirectional.centerStart,
+        alignment: outbound
+            ? AlignmentDirectional.centerEnd
+            : AlignmentDirectional.centerStart,
         child: AnimatedContainer(
           duration: _replyFlashDuration,
           curve: Curves.easeOut,
@@ -9079,7 +9255,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         children: [
                           for (final entry in message.reactions.entries)
                             ActionChip(
-                              label: Text(localizedUiText(context, '${entry.key} ${entry.value.length}')),
+                              label: Text(
+                                "${(entry.key)} ${(entry.value.length)}",
+                              ),
                               onPressed: () => unawaited(
                                 controller
                                     .toggleGroupReaction(
@@ -9117,7 +9295,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                   if (!outbound && unread) ...[
                     const SizedBox(width: 6),
                     Text(
-                      localizedUiText(context, 'new'),
+                      l10nOf(context).uiNewC2A6B0,
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
                         fontFamily: ConestPalette.monoFont,
                         color: palette.unread,
@@ -9128,7 +9306,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                   if (message.isEdited) ...[
                     const SizedBox(width: 6),
                     Text(
-                      localizedUiText(context, 'edited'),
+                      l10nOf(context).uiEditedA22FCA,
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
                         color: outbound
                             ? palette.outboundMeta
@@ -9157,7 +9335,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                   ],
                   PopupMenuButton<String>(
                     key: _messageActionKey(message.id),
-                    tooltip: localizedUiText(context, 'Message actions'),
+                    tooltip: l10nOf(context).uiMessageActions949184,
                     padding: EdgeInsets.zero,
                     child: const SizedBox.shrink(),
                     onSelected: (value) async {
@@ -9316,16 +9494,16 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           child: Text(l10nOf(context).menuCopyImage),
                         ),
                       if (attachmentAvailable) ...[
-                         PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_copy_path',
-                          child: Text(localizedUiText(context, 'Copy cache path')),
+                          child: Text(l10nOf(context).uiCopyCachePathC23134),
                         ),
                         PopupMenuItem(
                           value: 'attachment_keep_offline',
                           child: Text(
                             controller.attachmentKeptOffline(attachmentDescriptor.id)
-                                ? localizedUiText(context, 'Stop keeping offline')
-                                : localizedUiText(context, 'Keep offline'),
+                                ? l10nOf(context).uiStopKeepingOfflineAABFC7
+                                : l10nOf(context).uiKeepOffline123286,
                           ),
                         ),
                         if (!controller.attachmentKeptOffline(attachmentDescriptor.id) &&
@@ -9353,9 +9531,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         ),
                       if (message.groupFile != null &&
                           controller.groupFilePathFor(message.id) != null)
-                         PopupMenuItem(
+                        PopupMenuItem(
                           value: 'forward_group_file',
-                          child: Text(localizedUiText(context, 'Forward file')),
+                          child: Text(l10nOf(context).uiForwardFileC4B5CB),
                         ),
                       if (!message.hasAttachment &&
                           message.groupFile == null &&
@@ -9413,7 +9591,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                 onSearch: _searchMessages,
                 palette: palette,
                 title: group.title,
-                subtitle: localizedUiText(context, '${group.activeMemberDeviceIds.length} members'),
+                subtitle: l10nOf(
+                  context,
+                ).uiValueMembersCEF563((group.activeMemberDeviceIds.length)),
                 seed: group.groupId,
                 onBack: widget.onBack,
                 onDetails: widget.onShowDetails,
@@ -9446,7 +9626,12 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            localizedUiText(context, '${group.activeMemberDeviceIds.length} member(s) • owner ${controller.groupMemberLabel(group.ownerDeviceId)}'),
+                            l10nOf(context).uiValueMemberSOwnerValueE42E13(
+                              (group.activeMemberDeviceIds.length),
+                              (controller.groupMemberLabel(
+                                group.ownerDeviceId,
+                              )).toString(),
+                            ),
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: Theme.of(context).textTheme.bodySmall
@@ -9456,7 +9641,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       ),
                     ),
                     _StatusChip(
-                      label: localizedUiText(context, 'pairwise'),
+                      label: l10nOf(context).uiPairwise64A0EF,
                       palette: palette,
                       icon: Icons.lock_outline,
                     ),
@@ -9468,7 +9653,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     IconButton(
                       onPressed: widget.onShowDetails,
                       icon: const Icon(Icons.groups_2_outlined),
-                      tooltip: localizedUiText(context, 'Group details'),
+                      tooltip: l10nOf(context).uiGroupDetailsDF844A,
                     ),
                   ],
                 ),
@@ -9516,8 +9701,8 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                               icon: const Icon(Icons.history),
                               label: Text(
                                 _loadingHistory
-                                    ? localizedUiText(context, 'Loading history…')
-                                    : localizedUiText(context, 'Load older messages'),
+                                    ? l10nOf(context).uiLoadingHistory02CB12
+                                    : l10nOf(context).uiLoadOlderMessages07471F,
                               ),
                             ),
                           );
@@ -9623,7 +9808,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       if (widget.onAttach != null) ...[
                         PopupMenuButton<String>(
                           enabled: canSend,
-                          tooltip: localizedUiText(context, 'Share or schedule a group file'),
+                          tooltip: l10nOf(
+                            context,
+                          ).uiShareOrScheduleAGroup2989F0,
                           icon: const Icon(Icons.attach_file_outlined),
                           onSelected: (action) {
                             if (action == 'schedule') {
@@ -9632,14 +9819,14 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                               widget.onAttach?.call();
                             }
                           },
-                          itemBuilder: (_) =>  [
+                          itemBuilder: (_) => [
                             PopupMenuItem(
                               value: 'send',
-                              child: Text(localizedUiText(context, 'Share file now')),
+                              child: Text(l10nOf(context).uiShareFileNow96E2A2),
                             ),
                             PopupMenuItem(
                               value: 'schedule',
-                              child: Text(localizedUiText(context, 'Schedule file')),
+                              child: Text(l10nOf(context).uiScheduleFile690A92),
                             ),
                           ],
                         ),
@@ -9694,20 +9881,34 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                                         : _beginGroupVoiceRecording)
                                   : null,
                               tooltip: foreignRecording
-                                  ? localizedUiText(context, 'Recording belongs to another conversation')
+                                  ? l10nOf(
+                                      context,
+                                    ).uiRecordingBelongsToAnotherConversation87E802
                                   : foreignPreview
-                                  ? localizedUiText(context, 'Finish the voice preview in its original chat')
+                                  ? l10nOf(
+                                      context,
+                                    ).uiFinishTheVoicePreviewIn142571
                                   : preview
-                                  ? localizedUiText(context, 'Review unsent voice message')
+                                  ? l10nOf(
+                                      context,
+                                    ).uiReviewUnsentVoiceMessage24931C
                                   : _voiceRecordingStarting
-                                  ? localizedUiText(context, 'Cancel microphone startup')
+                                  ? l10nOf(
+                                      context,
+                                    ).uiCancelMicrophoneStartup9E9F8A
                                   : _voiceRecordingCancelGesture
-                                  ? localizedUiText(context, 'Release to discard recording')
+                                  ? l10nOf(
+                                      context,
+                                    ).uiReleaseToDiscardRecording4C5C71
                                   : _voiceRecordingLocked
-                                  ? localizedUiText(context, 'Recording locked · tap to finish')
+                                  ? l10nOf(
+                                      context,
+                                    ).uiRecordingLockedTapToFinish40CD88
                                   : recording
-                                  ? localizedUiText(context, 'Release to stop · slide left to cancel · slide up to lock')
-                                  : localizedUiText(context, 'Hold to record a group voice message'),
+                                  ? l10nOf(
+                                      context,
+                                    ).uiReleaseToStopSlideLeft4686F1
+                                  : l10nOf(context).uiHoldToRecordAGroupC11B32,
                               icon: Icon(
                                 _voiceRecordingCancelGesture
                                     ? Icons.delete_outline
@@ -9736,7 +9937,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                               )
                             : null,
                         icon: const Icon(Icons.poll_outlined),
-                        tooltip: localizedUiText(context, 'Create poll'),
+                        tooltip: l10nOf(context).uiCreatePoll8F5663,
                       ),
                       Expanded(
                         child: Shortcuts(
@@ -9775,9 +9976,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                               decoration: InputDecoration(
                                 hintText: canSend
                                     ? activeReplyTarget == null
-                                          ? localizedUiText(context, 'Write to group')
-                                          : localizedUiText(context, 'Write a reply')
-                                    : localizedUiText(context, 'You are no longer in this group'),
+                                          ? l10nOf(context).uiWriteToGroup5878DB
+                                          : l10nOf(context).uiWriteAReply0A58E1
+                                    : l10nOf(context).uiYouAreNoLongerIn571DA7,
                               ),
                               onSubmitted: (_) {
                                 if (canSend) {
@@ -9791,7 +9992,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                                 if (widget.onSmartPaste != null) {
                                   items.add(
                                     ContextMenuButtonItem(
-                                      label: localizedUiText(context, 'Paste media'),
+                                      label: l10nOf(context).uiPasteMedia4831DE,
                                       onPressed: () {
                                         ContextMenuController.removeAny();
                                         widget.onSmartPaste!();
@@ -9814,11 +10015,18 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         onPressed: canSend ? _scheduleText : null,
                         icon: const Icon(Icons.schedule_send_outlined),
                       ),
-                      FilledButton.icon(
-                        onPressed: canSend ? widget.onSend : null,
-                        icon: const Icon(Icons.north_east),
-                        label:  Text(localizedUiText(context, 'Send')),
-                      ),
+                      if (MediaQuery.sizeOf(context).width < 500)
+                        IconButton.filled(
+                          onPressed: canSend ? widget.onSend : null,
+                          icon: const Icon(Icons.send),
+                          tooltip: l10nOf(context).composerSend,
+                        )
+                      else
+                        FilledButton.icon(
+                          onPressed: canSend ? widget.onSend : null,
+                          icon: const Icon(Icons.send),
+                          label: Text(l10nOf(context).composerSend),
+                        ),
                     ],
                   ),
                 ],
@@ -9863,7 +10071,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                   ),
                   alignment: Alignment.center,
                   child: Text(
-                    localizedUiText(context, 'Drop to share this file with the group'),
+                    l10nOf(context).uiDropToShareThisFile0B73E8,
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       color: palette.primary,
                       fontWeight: FontWeight.w700,
@@ -9918,11 +10126,11 @@ class _GroupPollCard extends StatelessWidget {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child:  Text(localizedUiText(context, 'Cancel')),
+              child: Text(l10nOf(context).actionCancel),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, selected.toList()),
-              child:  Text(localizedUiText(context, 'Vote')),
+              child: Text(l10nOf(context).uiVote64F872),
             ),
           ],
         ),
@@ -9986,16 +10194,19 @@ class _GroupPollCard extends StatelessWidget {
                           Expanded(
                             child: Text(
                               poll.options[index],
-                              textAlign: TextAlign.left,
+                              textAlign: TextAlign.start,
                             ),
                           ),
-                          Text(localizedUiText(context, '${counts[index]}')),
+                          Text("${(counts[index])}"),
                         ],
                       ),
                     ),
                     if (projection != null && projection.votes.isNotEmpty)
                       Padding(
-                        padding: const EdgeInsets.only(left: 8, bottom: 4),
+                        padding: const EdgeInsetsDirectional.only(
+                          start: 8,
+                          bottom: 4,
+                        ),
                         child: Text(
                           projection.votes.entries
                               .where(
@@ -10024,7 +10235,7 @@ class _GroupPollCard extends StatelessWidget {
                     (Object error) => controller.setStatus('$error'),
                   ),
                 ),
-                child:  Text(localizedUiText(context, 'Choose options')),
+                child: Text(l10nOf(context).uiChooseOptionsEA120E),
               ),
             if (canParticipate &&
                 !closed &&
@@ -10047,25 +10258,29 @@ class _GroupPollCard extends StatelessWidget {
                           (Object error) => controller.setStatus('$error'),
                         ),
                   ),
-                  child:  Text(localizedUiText(context, 'Retract vote')),
+                  child: Text(l10nOf(context).uiRetractVoteA5DA11),
                 ),
               ),
             Text(
-              closed ? localizedUiText(context, 'Closed') : localizedUiText(context, 'Visible votes'),
+              closed
+                  ? l10nOf(context).uiClosed88D86B
+                  : l10nOf(context).uiVisibleVotes460E7A,
               style: Theme.of(
                 context,
               ).textTheme.labelSmall?.copyWith(color: palette.inkSoft),
             ),
             if (closed && (projection?.unconfirmedVotes.isNotEmpty ?? false))
               Text(
-                localizedUiText(context, '${projection!.unconfirmedVotes.length} vote(s) were not in the creator’s close checkpoint.'),
+                l10nOf(context).uiValueVoteSWereNot02CC9A(
+                  (projection!.unconfirmedVotes.length),
+                ),
                 style: Theme.of(
                   context,
                 ).textTheme.labelSmall?.copyWith(color: palette.inkSoft),
               ),
             if (!canParticipate)
               Text(
-                localizedUiText(context, 'Voting is unavailable with this Conest version.'),
+                l10nOf(context).uiVotingIsUnavailableWithThis9B92E7,
                 style: Theme.of(
                   context,
                 ).textTheme.labelSmall?.copyWith(color: palette.inkSoft),
@@ -10084,7 +10299,7 @@ class _GroupPollCard extends StatelessWidget {
                         ),
                   ),
                   icon: const Icon(Icons.lock_outline, size: 16),
-                  label:  Text(localizedUiText(context, 'Close poll')),
+                  label: Text(l10nOf(context).uiClosePollA6A189),
                 ),
               ),
           ],
@@ -10360,14 +10575,14 @@ class _ChatPanelState extends State<_ChatPanel> {
     final lanActive = lanUp;
     return [
       RouteInspectorPath(
-        label: localizedUiText(context, 'LAN'),
+        label: l10nOf(context).uiLAN2ECD17,
         detail: lanUp ? '${rtt(lanRtt)} · 0 hops' : 'unreachable',
         color: palette.primary,
         active: lanActive,
         available: lanUp,
       ),
       RouteInspectorPath(
-        label: localizedUiText(context, 'RELAY'),
+        label: l10nOf(context).uiRELAYA1C0CF,
         detail: relayUp ? '${rtt(relayRtt)} · 2 hops' : 'unreachable',
         color: palette.secondary,
         active: !lanActive && relayUp,
@@ -10419,8 +10634,8 @@ class _ChatPanelState extends State<_ChatPanel> {
       _flashMessage(target);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-         SnackBar(
-          content: Text(localizedUiText(context, 'Could not locate this message in the current chat')),
+        SnackBar(
+          content: Text(l10nOf(context).uiCouldNotLocateThisMessage220E83),
         ),
       );
     }
@@ -10689,16 +10904,16 @@ class _ChatPanelState extends State<_ChatPanel> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title:  Text(localizedUiText(context, 'Delete message?')),
+        title: Text(l10nOf(context).uiDeleteMessageD536CF),
         content: Text(
           message.outbound && message.state != DeliveryState.pending
-              ? localizedUiText(context, 'This removes the message here and asks the contact to remove their copy if reachable.')
-              : localizedUiText(context, 'This removes the message from this device.'),
+              ? l10nOf(context).uiThisRemovesTheMessageHere61D27C
+              : l10nOf(context).uiThisRemovesTheMessageFrom6A47E2,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
@@ -10832,7 +11047,9 @@ class _ChatPanelState extends State<_ChatPanel> {
               }
             },
       child: Align(
-        alignment: outbound ? AlignmentDirectional.centerEnd : AlignmentDirectional.centerStart,
+        alignment: outbound
+            ? AlignmentDirectional.centerEnd
+            : AlignmentDirectional.centerStart,
         child: AnimatedContainer(
           duration: _replyFlashDuration,
           curve: Curves.easeOut,
@@ -10908,7 +11125,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                         children: [
                           for (final entry in message.reactions.entries)
                             ActionChip(
-                              label: Text(localizedUiText(context, '${entry.key} ${entry.value.length}')),
+                              label: Text("${(entry.key)} ${(entry.value.length)}"),
                               onPressed: () => unawaited(
                                 controller
                                     .toggleMessageReaction(
@@ -10946,7 +11163,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                   if (!outbound && unread) ...[
                     const SizedBox(width: 6),
                     Text(
-                      localizedUiText(context, 'new'),
+                      l10nOf(context).uiNewC2A6B0,
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
                         fontFamily: ConestPalette.monoFont,
                         color: palette.unread,
@@ -10957,7 +11174,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                   if (message.isEdited) ...[
                     const SizedBox(width: 6),
                     Text(
-                      localizedUiText(context, 'edited'),
+                      l10nOf(context).uiEditedA22FCA,
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
                         color: outbound
                             ? palette.outboundMeta
@@ -10978,7 +11195,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                     message,
                   ))
                     IconButton(
-                      tooltip: localizedUiText(context, 'Not delivered yet. Send via Matrix…'),
+                      tooltip: l10nOf(context).uiNotDeliveredYetSendViaF056E1,
                       visualDensity: VisualDensity.compact,
                       iconSize: 16,
                       onPressed: () => _sendViaPlainMatrix(
@@ -10993,8 +11210,8 @@ class _ChatPanelState extends State<_ChatPanel> {
                     const SizedBox(width: 8),
                     Tooltip(
                       message: message.route == MessageRoute.plainMatrix
-                          ? localizedUiText(context, 'Sent as a plain Matrix message')
-                          : message.state.label,
+                          ? l10nOf(context).uiSentAsAPlainMatrixAAE694
+                          : deliveryStateLabel(context, message.state),
                       child: Icon(
                         message.state.icon,
                         size: 16,
@@ -11004,7 +11221,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                   ],
                   PopupMenuButton<String>(
                     key: _messageActionKey(message.id),
-                    tooltip: localizedUiText(context, 'Message actions'),
+                    tooltip: l10nOf(context).uiMessageActions949184,
                     padding: EdgeInsets.zero,
                     child: const SizedBox.shrink(),
                     onSelected: (value) async {
@@ -11160,16 +11377,16 @@ class _ChatPanelState extends State<_ChatPanel> {
                           child: Text(l10nOf(context).menuCopyImage),
                         ),
                       if (attachmentAvailable) ...[
-                         PopupMenuItem(
+                        PopupMenuItem(
                           value: 'attachment_copy_path',
-                          child: Text(localizedUiText(context, 'Copy cache path')),
+                          child: Text(l10nOf(context).uiCopyCachePathC23134),
                         ),
                         PopupMenuItem(
                           value: 'attachment_keep_offline',
                           child: Text(
                             controller.attachmentKeptOffline(attachmentDescriptor.id)
-                                ? localizedUiText(context, 'Stop keeping offline')
-                                : localizedUiText(context, 'Keep offline'),
+                                ? l10nOf(context).uiStopKeepingOfflineAABFC7
+                                : l10nOf(context).uiKeepOffline123286,
                           ),
                         ),
                         if (!controller.attachmentKeptOffline(attachmentDescriptor.id) &&
@@ -11204,9 +11421,9 @@ class _ChatPanelState extends State<_ChatPanel> {
                         contact.deviceId,
                         message,
                       ))
-                         PopupMenuItem(
+                        PopupMenuItem(
                           value: 'plain_matrix',
-                          child: Text(localizedUiText(context, 'Send via Matrix…')),
+                          child: Text(l10nOf(context).uiSendViaMatrix3868FE),
                         ),
                       if (outbound)
                         PopupMenuItem(
@@ -11272,8 +11489,8 @@ class _ChatPanelState extends State<_ChatPanel> {
                 palette: palette,
                 title: contact.alias,
                 subtitle: saved
-                    ? localizedUiText(context, 'Only on this device')
-                    : reachabilityState.label,
+                    ? l10nOf(context).uiOnlyOnThisDevice7D64C4
+                    : reachabilityLabel(context, reachabilityState),
                 seed: contact.deviceId,
                 onBack: widget.onBack,
                 onDetails: saved ? () {} : widget.onShowProfile,
@@ -11341,8 +11558,8 @@ class _ChatPanelState extends State<_ChatPanel> {
                               const SizedBox(height: 4),
                               Text(
                                 saved
-                                    ? localizedUiText(context, 'Notes, files and forwards, only on this device')
-                                    : localizedUiText(context, '${contact.routeSummary} • safety ${contact.shortSafetyNumber}'),
+                                    ? l10nOf(context).uiNotesFilesAndForwardsOnlyB0145F
+                                    : l10nOf(context).uiValueSafetyValue82C755((contact.routeSummary).toString(), (contact.shortSafetyNumber).toString()),
                                 maxLines: compactHeader ? 3 : 2,
                                 overflow: TextOverflow.ellipsis,
                                 style: Theme.of(context).textTheme.bodySmall
@@ -11372,14 +11589,14 @@ class _ChatPanelState extends State<_ChatPanel> {
                           () => _routeInspectorOpen = !_routeInspectorOpen,
                         ),
                         icon: const Icon(Icons.route_outlined),
-                        tooltip: localizedUiText(context, 'Route inspector'),
+                        tooltip: l10nOf(context).uiRouteInspector0E65DE,
                         isSelected: _routeInspectorOpen,
                         color: _routeInspectorOpen ? palette.primary : null,
                       ),
                       IconButton(
                         onPressed: widget.onShowProfile,
                         icon: const Icon(Icons.badge_outlined),
-                        tooltip: localizedUiText(context, 'Contact profile'),
+                        tooltip: l10nOf(context).uiContactProfile1B3A0E,
                       ),
                       ],
                     ];
@@ -11624,14 +11841,14 @@ class _ChatPanelState extends State<_ChatPanel> {
                               enabled: contact.canComposeOutbound,
                               decoration: InputDecoration(
                                 hintText: !contact.canComposeOutbound
-                                    ? localizedUiText(context, 'This contact request is blocked.')
+                                    ? l10nOf(context).uiThisContactRequestIsBlocked944F7D
                                     : !contact.canSendOutbound
-                                    ? localizedUiText(context, 'Message saved here until the contact accepts.')
+                                    ? l10nOf(context).uiMessageSavedHereUntilTheA49A2C
                                     : activeReplyTarget == null
                                     ? (widget.telegramLayout
-                                          ? localizedUiText(context, 'Message')
-                                          : localizedUiText(context, 'Write an encrypted message'))
-                                    : localizedUiText(context, 'Write a reply' ' or add a caption'),
+                                          ? l10nOf(context).uiMessage68F414
+                                          : l10nOf(context).uiWriteAnEncryptedMessage9F7705)
+                                    : l10nOf(context).uiWriteAReplyOrAddFC0A42,
                               ),
                               onSubmitted: (_) => widget.onSend(),
                               contextMenuBuilder: (context, editableTextState) {
@@ -11641,7 +11858,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                                 if (widget.onSmartPaste != null) {
                                   items.add(
                                     ContextMenuButtonItem(
-                                      label: localizedUiText(context, 'Paste media'),
+                                      label: l10nOf(context).uiPasteMedia4831DE,
                                       onPressed: () {
                                         ContextMenuController.removeAny();
                                         widget.onSmartPaste!();
@@ -11697,20 +11914,20 @@ class _ChatPanelState extends State<_ChatPanel> {
                                 : (_) => unawaited(_releaseVoiceRecording()),
                             child: IconButton(
                               tooltip: foreignRecording
-                                  ? localizedUiText(context, 'Recording belongs to another conversation')
+                                  ? l10nOf(context).uiRecordingBelongsToAnotherConversation87E802
                                   : foreignPreview
-                                  ? localizedUiText(context, 'Finish the voice preview in its original chat')
+                                  ? l10nOf(context).uiFinishTheVoicePreviewIn142571
                                   : preview
-                                  ? localizedUiText(context, 'Review unsent voice message')
+                                  ? l10nOf(context).uiReviewUnsentVoiceMessage24931C
                                   : _voiceRecordingStarting
-                                  ? localizedUiText(context, 'Cancel microphone startup')
+                                  ? l10nOf(context).uiCancelMicrophoneStartup9E9F8A
                                   : _voiceRecordingCancelGesture
-                                  ? localizedUiText(context, 'Release to discard recording')
+                                  ? l10nOf(context).uiReleaseToDiscardRecording4C5C71
                                   : _voiceRecordingLocked
-                                  ? localizedUiText(context, 'Recording locked · tap to finish')
+                                  ? l10nOf(context).uiRecordingLockedTapToFinish40CD88
                                   : recording
-                                  ? localizedUiText(context, 'Release to stop · slide left to cancel · slide up to lock')
-                                  : localizedUiText(context, 'Hold to record a voice message'),
+                                  ? l10nOf(context).uiReleaseToStopSlideLeft4686F1
+                                  : l10nOf(context).uiHoldToRecordAVoice06B1B5,
                               onPressed:
                                   contact.canSendOutbound &&
                                       !foreignPreview &&
@@ -11760,7 +11977,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                             ? widget.onSend
                               : null,
                           icon: const Icon(Icons.north_east),
-                          label:  Text(localizedUiText(context, 'Send')),
+                          label: Text(l10nOf(context).composerSend),
                         ),
                     ],
                   ),
@@ -11810,7 +12027,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                   ),
                   alignment: Alignment.center,
                   child: Text(
-                    localizedUiText(context, 'Drop files to send (max ${MessengerController.maxAttachmentsPerSend})'),
+                    l10nOf(context).uiDropFilesToSendMax106011((MessengerController.maxAttachmentsPerSend).toString()),
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       color: palette.primary,
                       fontWeight: FontWeight.w700,
@@ -11867,20 +12084,22 @@ class _EditMessageDialogState extends State<_EditMessageDialog> {
             maxLines: 6,
             autofocus: true,
             onChanged: (_) => setState(() {}),
-            decoration:  InputDecoration(labelText: localizedUiText(context, 'Message')),
+            decoration: InputDecoration(
+              labelText: l10nOf(context).uiMessage68F414,
+            ),
           ),
         ],
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child:  Text(localizedUiText(context, 'Cancel')),
+          child: Text(l10nOf(context).actionCancel),
         ),
         FilledButton(
           onPressed: _controller.text.trim().isEmpty
               ? null
               : () => Navigator.of(context).pop(_controller.text),
-          child:  Text(localizedUiText(context, 'Save')),
+          child: Text(l10nOf(context).uiSaveEFC007),
         ),
       ],
     );
@@ -11936,13 +12155,13 @@ class _LanLobbyPanel extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          localizedUiText(context, 'LAN lobby'),
+                          l10nOf(context).uiLANLobbyC16DC8,
                           style: Theme.of(context).textTheme.headlineSmall
                               ?.copyWith(fontWeight: FontWeight.w700),
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          localizedUiText(context, 'Free-for-all local chat. Messages are session-signed but people here are not trusted contacts.'),
+                          l10nOf(context).uiFreeForAllLocalChatBC90D2,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodySmall
@@ -11952,7 +12171,7 @@ class _LanLobbyPanel extends StatelessWidget {
                     ),
                   ),
                   _StatusChip(
-                    label: localizedUiText(context, 'LAN only'),
+                    label: l10nOf(context).uiLANOnly94945D,
                     palette: palette,
                     icon: Icons.lan_outlined,
                   ),
@@ -11966,7 +12185,7 @@ class _LanLobbyPanel extends StatelessWidget {
                       child: Padding(
                         padding: const EdgeInsets.all(24),
                         child: Text(
-                          localizedUiText(context, 'No LAN lobby messages yet. Nearby Conest peers will receive messages while they are on this LAN.'),
+                          l10nOf(context).uiNoLANLobbyMessagesYetBCDC4B,
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.bodyMedium
                               ?.copyWith(color: palette.inkSoft),
@@ -12011,7 +12230,11 @@ class _LanLobbyPanel extends StatelessWidget {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  outbound ? localizedUiText(context, 'You') : localizedUiText(context, '$sender • untrusted'),
+                                  outbound
+                                      ? l10nOf(context).uiYou905CB3
+                                      : l10nOf(context).uiValueUntrusted519A32(
+                                          (sender).toString(),
+                                        ),
                                   style: Theme.of(context).textTheme.labelSmall
                                       ?.copyWith(
                                         color: outbound
@@ -12044,7 +12267,7 @@ class _LanLobbyPanel extends StatelessWidget {
                                 if (!outbound && unread) ...[
                                   const SizedBox(width: 6),
                                   Text(
-                                    localizedUiText(context, 'new'),
+                                    l10nOf(context).uiNewC2A6B0,
                                     style: Theme.of(context)
                                         .textTheme
                                         .labelSmall
@@ -12073,8 +12296,8 @@ class _LanLobbyPanel extends StatelessWidget {
                       controller: composerController,
                       minLines: 1,
                       maxLines: 5,
-                      decoration:  InputDecoration(
-                        hintText: localizedUiText(context, 'Write to nearby LAN users'),
+                      decoration: InputDecoration(
+                        hintText: l10nOf(context).uiWriteToNearbyLANUsers291142,
                       ),
                       onSubmitted: (_) => onSend(),
                     ),
@@ -12083,7 +12306,7 @@ class _LanLobbyPanel extends StatelessWidget {
                   FilledButton.icon(
                     onPressed: onSend,
                     icon: const Icon(Icons.campaign_outlined),
-                    label:  Text(localizedUiText(context, 'Broadcast')),
+                    label: Text(l10nOf(context).uiBroadcast77CA3F),
                   ),
                 ],
               ),
@@ -12245,18 +12468,18 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(localizedUiText(context, 'Remove ${widget.contact.alias}?')),
+        title: Text(l10nOf(context).uiRemoveValueF4FE4B((widget.contact.alias).toString())),
         content:  Text(
-          localizedUiText(context, 'This removes the local contact and message history. The app will also try to send a removal notice so this contact disappears on the other side.'),
+          l10nOf(context).uiThisRemovesTheLocalContact0D6D1E,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child:  Text(localizedUiText(context, 'Remove')),
+            child: Text(l10nOf(context).uiRemoveE96390),
           ),
         ],
       ),
@@ -12291,7 +12514,7 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
       fullscreenOnMobile: widget.fullscreenOnMobile,
       scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-      title:  Text(localizedUiText(context, 'Contact profile')),
+      title: Text(l10nOf(context).uiContactProfile1B3A0E),
       content: SizedBox(
         width: 680,
         child: SingleChildScrollView(
@@ -12307,7 +12530,9 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
                     width: 260,
                     child: TextField(
                       controller: _aliasController,
-                      decoration:  InputDecoration(labelText: localizedUiText(context, 'Alias')),
+                      decoration: InputDecoration(
+                        labelText: l10nOf(context).contactAlias,
+                      ),
                     ),
                   ),
                   SizedBox(
@@ -12316,8 +12541,8 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
                       controller: _bioController,
                       minLines: 1,
                       maxLines: 4,
-                      decoration:  InputDecoration(
-                        labelText: localizedUiText(context, 'Description / bio'),
+                      decoration: InputDecoration(
+                        labelText: l10nOf(context).uiDescriptionBio505243,
                       ),
                     ),
                   ),
@@ -12351,7 +12576,7 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
                   children: [
                     Expanded(
                       child: Text(
-                        localizedUiText(context, 'Available paths'),
+                        l10nOf(context).uiAvailablePaths6EE503,
                         style: Theme.of(context).textTheme.titleMedium
                             ?.copyWith(fontWeight: FontWeight.w700),
                       ),
@@ -12359,7 +12584,7 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
                     OutlinedButton.icon(
                       onPressed: _busy ? null : _checkPaths,
                       icon: const Icon(Icons.network_check),
-                      label:  Text(localizedUiText(context, 'Check Paths')),
+                      label: Text(l10nOf(context).uiCheckPaths917FF3),
                     ),
                     const SizedBox(width: 8),
                     OutlinedButton.icon(
@@ -12367,21 +12592,21 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
                           ? null
                           : _copyPathState,
                       icon: const Icon(Icons.copy),
-                      label:  Text(localizedUiText(context, 'Copy State')),
+                      label: Text(l10nOf(context).uiCopyState9BFD16),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
                 if (checks == null)
                   Text(
-                    localizedUiText(context, 'Run a check to measure latency, availability, and reachability freshness. Paths are sorted by best direct/LAN route first, then relay fallback.'),
+                    l10nOf(context).uiRunACheckToMeasure5D76A5,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: widget.palette.inkSoft,
                     ),
                   )
                 else if (checks.isEmpty)
                   Text(
-                    localizedUiText(context, 'No route hints are advertised for this contact.'),
+                    l10nOf(context).uiNoRouteHintsAreAdvertisedB25540,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: widget.palette.inkSoft,
                     ),
@@ -12419,15 +12644,15 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
       actions: [
         TextButton(
           onPressed: _busy ? null : _confirmRemove,
-          child:  Text(localizedUiText(context, 'Remove Contact')),
+          child: Text(l10nOf(context).uiRemoveContact7F9A8A),
         ),
         TextButton(
           onPressed: _busy ? null : () => Navigator.of(context).pop(),
-          child:  Text(localizedUiText(context, 'Close')),
+          child: Text(l10nOf(context).actionClose),
         ),
         FilledButton(
           onPressed: _busy ? null : _saveProfile,
-          child:  Text(localizedUiText(context, 'Save Profile')),
+          child: Text(l10nOf(context).uiSaveProfile909BF3),
         ),
       ],
     );
@@ -12582,8 +12807,7 @@ class _AddContactDialogState extends State<AddContactDialog> {
               _ConnectivityOfflineBanner(
                 controller: widget.controller,
                 palette: widget.palette,
-                message:
-                    localizedUiText(context, 'Connectivity is off. Turn on LAN or Online to exchange this invite.'),
+                message: l10nOf(context).uiConnectivityIsOffTurnOnE42D4A,
               ),
               TextField(
                 controller: _aliasController,
@@ -12625,7 +12849,7 @@ class _AddContactDialogState extends State<AddContactDialog> {
               Align(
                 alignment: AlignmentDirectional.centerStart,
                 child: Text(
-                  localizedUiText(context, 'Either input is enough on its own. Scan or paste a QR invite to trust it directly, or enter only the current codephrase to discover the sender over nearby LAN routes or the configured relay. If automatic exchange fails, the app will suggest asking the other side to add you back or aborting.'),
+                  l10nOf(context).uiEitherInputIsEnoughOn020B90,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: widget.palette.inkSoft,
                   ),
@@ -12636,7 +12860,7 @@ class _AddContactDialogState extends State<AddContactDialog> {
                 Align(
                   alignment: AlignmentDirectional.centerStart,
                   child: Text(
-                    localizedUiText(context, 'Invite preview'),
+                    l10nOf(context).uiInvitePreview6433A0,
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
@@ -12646,7 +12870,7 @@ class _AddContactDialogState extends State<AddContactDialog> {
                 Align(
                   alignment: AlignmentDirectional.centerStart,
                   child: Text(
-                    localizedUiText(context, '${preview.displayName}${preview.bio.isEmpty ? '' : ' • ${preview.bio}'} • ${preview.routeHints.isEmpty ? 'no routes advertised' : preview.routeHints.map((route) => '${route.kind.name}:${route.label}').join(' • ')}'),
+                    "${(preview.displayName)}${(preview.bio.isEmpty ? '' : ' • ${preview.bio}')} • ${(preview.routeHints.isEmpty ? l10nOf(context).inviteNoRoutes : preview.routeHints.map((route) => '${route.kind.name}:${route.label}').join(' • '))}",
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: widget.palette.inkSoft,
                     ),
@@ -12852,7 +13076,7 @@ class _InviteScreenState extends State<InviteScreen> {
                           children: [
                             Expanded(
                               child: Text(
-                                localizedUiText(context, 'Share invite'),
+                                l10nOf(context).uiShareInviteDBCC1E,
                                 style: Theme.of(context).textTheme.headlineSmall
                                     ?.copyWith(fontWeight: FontWeight.w700),
                               ),
@@ -12860,7 +13084,7 @@ class _InviteScreenState extends State<InviteScreen> {
                             IconButton(
                               onPressed: () => Navigator.of(context).pop(),
                               icon: const Icon(Icons.close),
-                              tooltip: localizedUiText(context, 'Close'),
+                              tooltip: l10nOf(context).actionClose,
                             ),
                           ],
                         ),
@@ -12868,15 +13092,16 @@ class _InviteScreenState extends State<InviteScreen> {
                         _ConnectivityOfflineBanner(
                           controller: widget.controller,
                           palette: palette,
-                          message:
-                              localizedUiText(context, 'Connectivity is off. Turn on LAN or Online before sharing this invite.'),
+                          message: l10nOf(
+                            context,
+                          ).uiConnectivityIsOffTurnOnFA573F,
                         ),
                         if (!widget.controller.invitesReachOverInternet)
                           Padding(
                             key: const ValueKey('invite-lan-only'),
                             padding: const EdgeInsets.only(bottom: 12),
                             child: Text(
-                              localizedUiText(context, 'This invite works only on the same network: ' 'no internet route is on. Turn on Iroh relays, ' 'a Conest relay or a carrier (Nostr, email) in ' 'Settings → Connectivity so contacts can add you ' 'from anywhere.'),
+                              l10nOf(context).uiThisInviteWorksOnlyOnB106B0,
                               style: TextStyle(
                                 color: Theme.of(context).colorScheme.error,
                               ),
@@ -12901,7 +13126,9 @@ class _InviteScreenState extends State<InviteScreen> {
                                 ),
                                 const SizedBox(height: 10),
                                 Text(
-                                  localizedUiText(context, 'This invite also lists your routes for ' 'blocked networks, which makes it too large ' 'for one QR code. Show it as Beam, an ' 'animated QR the other camera reads in a ' 'few seconds.'),
+                                  l10nOf(
+                                    context,
+                                  ).uiThisInviteAlsoListsYourEF3A4F,
                                   textAlign: TextAlign.center,
                                   style: Theme.of(context).textTheme.bodyMedium,
                                 ),
@@ -12909,12 +13136,16 @@ class _InviteScreenState extends State<InviteScreen> {
                                 FilledButton.icon(
                                   onPressed: _showAsBeam,
                                   icon: const Icon(Icons.animation_outlined),
-                                  label:  Text(localizedUiText(context, 'Show as Beam')),
+                                  label: Text(
+                                    l10nOf(context).uiShowAsBeam74375F,
+                                  ),
                                 ),
                                 TextButton(
                                   onPressed: () =>
                                       setState(() => _qrDespiteSize = true),
-                                  child:  Text(localizedUiText(context, 'Show the QR anyway')),
+                                  child: Text(
+                                    l10nOf(context).uiShowTheQRAnyway0B0CDF,
+                                  ),
                                 ),
                               ],
                             ),
@@ -12962,12 +13193,16 @@ class _InviteScreenState extends State<InviteScreen> {
                                   OutlinedButton.icon(
                                     onPressed: _openFullscreenQr,
                                     icon: const Icon(Icons.open_in_full),
-                                    label:  Text(localizedUiText(context, 'Open Fullscreen QR')),
+                                    label: Text(
+                                      l10nOf(context).uiOpenFullscreenQRC5418D,
+                                    ),
                                   ),
                                   OutlinedButton.icon(
                                     onPressed: _showAsBeam,
                                     icon: const Icon(Icons.animation_outlined),
-                                    label:  Text(localizedUiText(context, 'Show as Beam')),
+                                    label: Text(
+                                      l10nOf(context).uiShowAsBeam74375F,
+                                    ),
                                   ),
                                 ],
                               ),
@@ -12991,14 +13226,18 @@ class _InviteScreenState extends State<InviteScreen> {
                                 ),
                                 const SizedBox(height: 10),
                                 Text(
-                                  localizedUiText(context, 'QR rendering is deferred on Windows.'),
+                                  l10nOf(
+                                    context,
+                                  ).uiQRRenderingIsDeferredOn8A6997,
                                   textAlign: TextAlign.center,
                                   style: Theme.of(context).textTheme.bodyMedium
                                       ?.copyWith(fontWeight: FontWeight.w700),
                                 ),
                                 const SizedBox(height: 8),
                                 Text(
-                                  localizedUiText(context, 'Use the codephrase below, or render the QR after this page is open.'),
+                                  l10nOf(
+                                    context,
+                                  ).uiUseTheCodephraseBelowOrB6A588,
                                   textAlign: TextAlign.center,
                                   style: Theme.of(context).textTheme.bodySmall
                                       ?.copyWith(color: palette.inkSoft),
@@ -13008,7 +13247,7 @@ class _InviteScreenState extends State<InviteScreen> {
                                   onPressed: () =>
                                       setState(() => _showQr = true),
                                   icon: const Icon(Icons.qr_code_2),
-                                  label:  Text(localizedUiText(context, 'Show QR')),
+                                  label: Text(l10nOf(context).uiShowQRCFBAC6),
                                 ),
                               ],
                             ),
@@ -13036,14 +13275,16 @@ class _InviteScreenState extends State<InviteScreen> {
                         ),
                         const SizedBox(height: 12),
                         Text(
-                          localizedUiText(context, 'Scanning the compact QR is enough on its own. If the camera still struggles, open it full screen or use only the current codephrase.'),
+                          l10nOf(context).uiScanningTheCompactQRIs9459D9,
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(color: palette.inkSoft),
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          localizedUiText(context, 'QR payload: ${_payload.length} characters'),
+                          l10nOf(
+                            context,
+                          ).uiQRPayloadValueCharactersBABEDF((_payload.length)),
                           style: Theme.of(context).textTheme.labelSmall
                               ?.copyWith(color: palette.inkSoft),
                         ),
@@ -13051,7 +13292,15 @@ class _InviteScreenState extends State<InviteScreen> {
                           const SizedBox(height: 6),
                           if (!_legacy)
                             Text(
-                              localizedUiText(context, 'Also lists your addresses on: ' '${_invite.carrierHints.keys.map((kind) => kind.label).join(', ')}.'),
+                              l10nOf(context).uiAlsoListsYourAddressesOnC5D815(
+                                (_invite.carrierHints.keys
+                                        .map(
+                                          (kind) =>
+                                              transportKindLabel(context, kind),
+                                        )
+                                        .join(', '))
+                                    .toString(),
+                              ),
                               textAlign: TextAlign.center,
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(color: palette.inkSoft),
@@ -13060,9 +13309,9 @@ class _InviteScreenState extends State<InviteScreen> {
                             key: const ValueKey('invite-legacy'),
                             contentPadding: EdgeInsets.zero,
                             dense: true,
-                            title:  Text(localizedUiText(context, 'Legacy invite')),
-                            subtitle:  Text(
-                              localizedUiText(context, 'For contacts on Conest 0.3.11 or older. It ' 'leaves out your routes for blocked networks; ' 'they arrive once you are connected.'),
+                            title: Text(l10nOf(context).uiLegacyInviteC61C5D),
+                            subtitle: Text(
+                              l10nOf(context).uiForContactsOnConestOr486754,
                             ),
                             value: _legacy,
                             onChanged: (value) =>
@@ -13080,7 +13329,9 @@ class _InviteScreenState extends State<InviteScreen> {
                                   ),
                                 )
                               : const Icon(Icons.refresh),
-                          label:  Text(localizedUiText(context, 'Rotate Codephrase Now')),
+                          label: Text(
+                            l10nOf(context).uiRotateCodephraseNow89B2D5,
+                          ),
                         ),
                         if (_error != null) ...[
                           const SizedBox(height: 10),
@@ -13187,7 +13438,7 @@ class _BeamHubScreenState extends State<BeamHubScreen> {
   Future<ContactRecord?> _chooseContact() => showDialog<ContactRecord>(
     context: context,
     builder: (context) => SimpleDialog(
-      title:  Text(localizedUiText(context, 'Encrypt for contact')),
+      title: Text(l10nOf(context).uiEncryptForContactE07450),
       children: [
         for (final contact in widget.controller.contacts.where(
           (entry) => entry.canSendOutbound && entry.hasPinnedIrohIdentity,
@@ -13203,15 +13454,19 @@ class _BeamHubScreenState extends State<BeamHubScreen> {
                 size: 36,
               ),
               title: Text(contact.alias),
-              subtitle: Text(localizedUiText(context, 'Pinned · ${contact.shortSafetyNumber}')),
+              subtitle: Text(
+                l10nOf(
+                  context,
+                ).uiPinnedValue834309((contact.shortSafetyNumber).toString()),
+              ),
             ),
           ),
         if (!widget.controller.contacts.any(
           (entry) => entry.canSendOutbound && entry.hasPinnedIrohIdentity,
         ))
-           Padding(
+          Padding(
             padding: EdgeInsets.all(20),
-            child: Text(localizedUiText(context, 'No verified ci6 contacts are available yet.')),
+            child: Text(l10nOf(context).uiNoVerifiedCiContactsAre3FD190),
           ),
       ],
     ),
@@ -13221,18 +13476,16 @@ class _BeamHubScreenState extends State<BeamHubScreen> {
     final allowed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title:  Text(localizedUiText(context, 'Public optical transfer')),
-        content:  Text(
-          localizedUiText(context, 'Anyone who can see the display may reconstruct this file. It is ' 'signed for integrity but it is not confidential.'),
-        ),
+        title: Text(l10nOf(context).uiPublicOpticalTransfer58E3F4),
+        content: Text(l10nOf(context).uiAnyoneWhoCanSeeTheFAB2D0),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child:  Text(localizedUiText(context, 'Choose public file')),
+            child: Text(l10nOf(context).uiChoosePublicFile6E2739),
           ),
         ],
       ),
@@ -13306,28 +13559,28 @@ class _BeamHubScreenState extends State<BeamHubScreen> {
   Widget build(BuildContext context) {
     final palette = widget.palette;
     return Scaffold(
-      appBar: AppBar(title:  Text(localizedUiText(context, 'Conest Beam'))),
+      appBar: AppBar(title: Text(l10nOf(context).uiConestBeamE98B77)),
       body: DecoratedBox(
         decoration: BoxDecoration(gradient: palette.appGradient),
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
             Text(
-              localizedUiText(context, 'Close-up transfer'),
+              l10nOf(context).uiCloseUpTransferE6BA46,
               style: Theme.of(
                 context,
               ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
             Text(
-              localizedUiText(context, 'A looping LT fountain stream survives missed, duplicate, and ' 'out-of-order QR frames. The final file is hash-checked before ' 'you can accept it.'),
+              l10nOf(context).uiALoopingLTFountainStream840218,
               style: TextStyle(color: palette.inkSoft),
             ),
             const SizedBox(height: 20),
             _BeamActionCard(
               palette: palette,
               icon: Icons.download_outlined,
-              title: localizedUiText(context, 'Receive Beam'),
+              title: l10nOf(context).uiReceiveBeam2CB58B,
               detail: widget.controller.supportsScanner
                   ? 'Scan animated frames and review before import.'
                   : 'Uses the native desktop camera when bundled, with manual cb1 input as a fallback.',
@@ -13336,14 +13589,14 @@ class _BeamHubScreenState extends State<BeamHubScreen> {
             _BeamActionCard(
               palette: palette,
               icon: Icons.lock_outline,
-              title: localizedUiText(context, 'Send encrypted file'),
+              title: l10nOf(context).uiSendEncryptedFile99D424,
               detail: 'Pairwise encrypted for a verified ci6 contact.',
               onTap: _busy ? null : _prepareEncrypted,
             ),
             _BeamActionCard(
               palette: palette,
               icon: Icons.public,
-              title: localizedUiText(context, 'Send public file'),
+              title: l10nOf(context).uiSendPublicFileF81389,
               detail: 'Not confidential. The receiver must explicitly accept.',
               warning: true,
               onTap: _busy ? null : _preparePublic,
@@ -13351,7 +13604,7 @@ class _BeamHubScreenState extends State<BeamHubScreen> {
             _BeamActionCard(
               palette: palette,
               icon: Icons.person_add_alt_1,
-              title: localizedUiText(context, 'Beam contact invite'),
+              title: l10nOf(context).uiBeamContactInvite2BAB4C,
               detail: 'Signed ci6 invite with a fingerprint comparison.',
               onTap: _busy ? null : _prepareInvite,
             ),
@@ -13477,10 +13730,10 @@ class _BeamSenderScreenState extends State<BeamSenderScreen> {
                 const SizedBox(height: 12),
                 Text(
                   public
-                      ? localizedUiText(context, 'PUBLIC · visible to anyone nearby')
+                      ? l10nOf(context).uiPUBLICVisibleToAnyoneNearbyA775C2
                       : manifest.mode == BeamMode.contactEncrypted
-                      ? localizedUiText(context, 'CONTACT ENCRYPTED')
-                      : localizedUiText(context, 'SIGNED CONTACT INVITE'),
+                      ? l10nOf(context).uiCONTACTENCRYPTED879896
+                      : l10nOf(context).uiSIGNEDCONTACTINVITE752317,
                   style: TextStyle(
                     color: public ? Colors.red.shade700 : Colors.black87,
                     fontWeight: FontWeight.w800,
@@ -13489,7 +13742,11 @@ class _BeamSenderScreenState extends State<BeamSenderScreen> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  localizedUiText(context, 'Frame ${widget.transfer.encoder.frameIndex} · ' '${widget.transfer.encoder.sourceBlockCount} source blocks · ' '${manifest.senderFingerprint}'),
+                  l10nOf(context).uiFrameValueValueSourceBlocks9C37CB(
+                    (widget.transfer.encoder.frameIndex).toString(),
+                    (widget.transfer.encoder.sourceBlockCount),
+                    (manifest.senderFingerprint).toString(),
+                  ),
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: Colors.black54,
@@ -13497,8 +13754,8 @@ class _BeamSenderScreenState extends State<BeamSenderScreen> {
                   ),
                 ),
                 const SizedBox(height: 6),
-                 Text(
-                  localizedUiText(context, 'Keep this screen visible until the receiver reports 100%.'),
+                Text(
+                  l10nOf(context).uiKeepThisScreenVisibleUntil2261B8,
                   style: TextStyle(color: Colors.black87),
                 ),
               ],
@@ -13682,7 +13939,7 @@ class _BeamReceiverScreenState extends State<BeamReceiverScreen> {
   Widget build(BuildContext context) {
     final result = _result;
     return Scaffold(
-      appBar: AppBar(title:  Text(localizedUiText(context, 'Receive Conest Beam'))),
+      appBar: AppBar(title: Text(l10nOf(context).uiReceiveConestBeamB05BCB)),
       body: result == null
           ? Column(
               children: [
@@ -13707,13 +13964,13 @@ class _BeamReceiverScreenState extends State<BeamReceiverScreen> {
                               color: widget.palette.primary,
                             ),
                             const SizedBox(height: 16),
-                             Text(
-                              localizedUiText(context, 'Desktop camera active'),
+                            Text(
+                              l10nOf(context).uiDesktopCameraActiveDA0F15,
                               style: TextStyle(fontWeight: FontWeight.w700),
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              localizedUiText(context, 'Point this camera at the animated Beam QR. ' 'Only decoded cb1 frames leave the native scanner.'),
+                              l10nOf(context).uiPointThisCameraAtThe2EA3F7,
                               textAlign: TextAlign.center,
                               style: TextStyle(color: widget.palette.inkSoft),
                             ),
@@ -13728,7 +13985,7 @@ class _BeamReceiverScreenState extends State<BeamReceiverScreen> {
                       child: Padding(
                         padding: const EdgeInsets.all(24),
                         child: Text(
-                          localizedUiText(context, 'Native desktop camera capture is unavailable. Paste ' 'cb1 frames below; the protocol decoder and ' 'verification path are identical.'),
+                          l10nOf(context).uiNativeDesktopCameraCaptureIs4619C8,
                           textAlign: TextAlign.center,
                           style: TextStyle(color: widget.palette.inkSoft),
                         ),
@@ -13742,7 +13999,12 @@ class _BeamReceiverScreenState extends State<BeamReceiverScreen> {
                       LinearProgressIndicator(value: _progress.fraction),
                       const SizedBox(height: 8),
                       Text(
-                        localizedUiText(context, '${_progress.solvedBlocks}/${_progress.sourceBlockCount} ' 'blocks · ${_progress.distinctFrames} frames · ' '$_invalidFrames invalid'),
+                        l10nOf(context).uiValueValueBlocksValueFrames66F819(
+                          (_progress.solvedBlocks).toString(),
+                          (_progress.sourceBlockCount).toString(),
+                          (_progress.distinctFrames).toString(),
+                          (_invalidFrames).toString(),
+                        ),
                       ),
                       if (_scanner == null) ...[
                         const SizedBox(height: 10),
@@ -13750,8 +14012,8 @@ class _BeamReceiverScreenState extends State<BeamReceiverScreen> {
                           controller: _frameController,
                           minLines: 2,
                           maxLines: 4,
-                          decoration:  InputDecoration(
-                            labelText: localizedUiText(context, 'Paste one cb1 frame'),
+                          decoration: InputDecoration(
+                            labelText: l10nOf(context).uiPasteOneCbFrame66EA2B,
                           ),
                         ),
                         const SizedBox(height: 8),
@@ -13760,7 +14022,7 @@ class _BeamReceiverScreenState extends State<BeamReceiverScreen> {
                             _addFrame(_frameController.text);
                             _frameController.clear();
                           },
-                          child:  Text(localizedUiText(context, 'Add frame')),
+                          child: Text(l10nOf(context).uiAddFrame2BBA30),
                         ),
                       ],
                       if (_error != null) ...[
@@ -13833,7 +14095,9 @@ class _BeamApprovalView extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         Text(
-          invite != null ? localizedUiText(context, 'Signed contact invite') : manifest.fileName,
+          invite != null
+              ? l10nOf(context).uiSignedContactInviteA7CC8B
+              : manifest.fileName,
           textAlign: TextAlign.center,
           style: Theme.of(
             context,
@@ -13842,15 +14106,16 @@ class _BeamApprovalView extends StatelessWidget {
         const SizedBox(height: 8),
         Text(
           public
-              ? localizedUiText(context, 'PUBLIC / UNTRUSTED. The signature proves that all frames ' 'came from one key; it does not prove who owns that key.')
+              ? l10nOf(context).uiPUBLICUNTRUSTEDTheSignatureProves96FA7F
               : result.contactTrusted
-              ? localizedUiText(context, 'Encrypted and authenticated as a pinned Conest contact.')
-              : localizedUiText(context, 'Signature valid. Compare the fingerprint in person.'),
+              ? l10nOf(context).uiEncryptedAndAuthenticatedAsA68B7E4
+              : l10nOf(context).uiSignatureValidCompareTheFingerprintA8A1FE,
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: 12),
         SelectableText(
-          manifest.senderFingerprint ?? 'fingerprint unavailable',
+          manifest.senderFingerprint ??
+              l10nOf(context).beamFingerprintUnavailable,
           textAlign: TextAlign.center,
           style: const TextStyle(
             fontFamily: ConestPalette.monoFont,
@@ -13861,30 +14126,36 @@ class _BeamApprovalView extends StatelessWidget {
           const SizedBox(height: 18),
           TextField(
             controller: aliasController,
-            decoration:  InputDecoration(labelText: localizedUiText(context, 'Contact alias')),
+            decoration: InputDecoration(
+              labelText: l10nOf(context).uiContactAliasE07C25,
+            ),
           ),
           CheckboxListTile(
             value: fingerprintCompared,
             onChanged: (value) => onFingerprintChanged(value ?? false),
-            title:  Text(localizedUiText(context, 'We compared this fingerprint in person')),
+            title: Text(l10nOf(context).uiWeComparedThisFingerprintIn952BEB),
             contentPadding: EdgeInsets.zero,
           ),
           FilledButton.icon(
             onPressed: saving || !fingerprintCompared ? null : onAcceptInvite,
             icon: const Icon(Icons.person_add_alt_1),
-            label:  Text(localizedUiText(context, 'Trust and add contact')),
+            label: Text(l10nOf(context).uiTrustAndAddContact0962A2),
           ),
         ] else ...[
           const SizedBox(height: 18),
           FilledButton.icon(
             onPressed: saving || savedPath != null ? null : onSave,
             icon: const Icon(Icons.save_alt),
-            label: Text(public ? localizedUiText(context, 'Accept and save public file') : localizedUiText(context, 'Save file')),
+            label: Text(
+              public
+                  ? l10nOf(context).uiAcceptAndSavePublicFile852517
+                  : l10nOf(context).uiSaveFileBEDC84,
+            ),
           ),
         ],
         if (savedPath != null) ...[
           const SizedBox(height: 12),
-           Text(localizedUiText(context, 'Saved in private Conest storage:')),
+          Text(l10nOf(context).uiSavedInPrivateConestStorage4C1334),
           SelectableText(savedPath!),
         ],
         if (error != null) ...[
@@ -13949,7 +14220,7 @@ class FullscreenQrScreen extends StatelessWidget {
                       child: IconButton(
                         onPressed: () => Navigator.of(context).pop(),
                         icon: const Icon(Icons.close),
-                        tooltip: localizedUiText(context, 'Close'),
+                        tooltip: l10nOf(context).actionClose,
                       ),
                     ),
                     QrImageView(
@@ -13968,7 +14239,7 @@ class FullscreenQrScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 18),
                     Text(
-                      localizedUiText(context, 'Fullscreen compact invite QR'),
+                      l10nOf(context).uiFullscreenCompactInviteQRCF6B8B,
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         color: Colors.black,
@@ -13986,7 +14257,11 @@ class FullscreenQrScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      localizedUiText(context, '${payload.length} characters. Increase screen brightness if scanning is unreliable.'),
+                      l10nOf(
+                        context,
+                      ).uiValueCharactersIncreaseScreenBrightnessA5AF7D(
+                        (payload.length),
+                      ),
                       textAlign: TextAlign.center,
                       style: Theme.of(
                         context,
@@ -14035,7 +14310,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
   late final TextEditingController _bioController;
   final TextEditingController _relayHostController = TextEditingController();
   final TextEditingController _relayPortController = TextEditingController(
-    text: localizedUiText(context, '$defaultRelayPort'),
+    text: "${(defaultRelayPort)}",
   );
   late final TextEditingController _localRelayPortController;
   late final TextEditingController _irohRelayUrlsController;
@@ -14051,7 +14326,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     );
     _bioController = TextEditingController(text: identity?.bio ?? '');
     _localRelayPortController = TextEditingController(
-      text: localizedUiText(context, '${identity?.localRelayPort ?? defaultRelayPort}'),
+      text: "${(identity?.localRelayPort ?? defaultRelayPort)}",
     );
     _irohRelayUrlsController = TextEditingController(
       text: identity?.connectivity.irohRelayUrls.join('\n') ?? '',
@@ -14114,18 +14389,18 @@ class _SettingsDialogState extends State<SettingsDialog> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title:  Text(localizedUiText(context, 'Reset identity')),
+        title:  Text(l10nOf(context).uiResetIdentity8B0224),
         content:  Text(
-          localizedUiText(context, 'This clears the encrypted vault, removes contacts and messages, and returns the app to the first-launch state.'),
+          l10nOf(context).uiThisClearsTheEncryptedVault864B3D,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child:  Text(localizedUiText(context, 'Reset')),
+            child: Text(l10nOf(context).uiReset44C57A),
           ),
         ],
       ),
@@ -14162,7 +14437,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       content: SizedBox(
         width: 720,
         child: identity == null
-            ?  Text(localizedUiText(context, 'No identity is active.'))
+            ? Text(l10nOf(context).uiNoIdentityIsActive6B2EE3)
             : SingleChildScrollView(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -14185,22 +14460,22 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 padding: const EdgeInsetsDirectional.only(end: 8),
                                 child: ChoiceChip(
                                   label: Text(switch (category) {
-                                    localizedUiText(context, 'Personal / Preferences') => l10nOf(
+                                    'Personal / Preferences' => l10nOf(
                                       context,
                                     ).settingsPersonal,
-                                    localizedUiText(context, 'Storage') => l10nOf(
+                                    'Storage' => l10nOf(
                                       context,
                                     ).settingsStorage,
-                                    localizedUiText(context, 'Connectivity') => l10nOf(
+                                    'Connectivity' => l10nOf(
                                       context,
                                     ).settingsConnectivity,
-                                    localizedUiText(context, 'Network / Relay') => l10nOf(
+                                    'Network / Relay' => l10nOf(
                                       context,
                                     ).settingsRelays,
-                                    localizedUiText(context, 'Updates') => l10nOf(
+                                    'Updates' => l10nOf(
                                       context,
                                     ).settingsUpdates,
-                                    localizedUiText(context, 'Danger') => l10nOf(context).settingsAccount,
+                                    'Danger' => l10nOf(context).settingsAccount,
                                     _ => category,
                                   }),
                                   selected: _settingsCategory == category,
@@ -14253,8 +14528,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   width: 280,
                                   child: TextField(
                                     controller: _displayNameController,
-                                    decoration:  InputDecoration(
-                                      labelText: localizedUiText(context, 'Display name'),
+                                    decoration: InputDecoration(
+                                      labelText: l10nOf(context).onbDisplayName,
                                     ),
                                   ),
                                 ),
@@ -14267,7 +14542,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                                 _displayNameController.text,
                                               ),
                                         ),
-                                  child:  Text(localizedUiText(context, 'Save Name')),
+                                  child: Text(l10nOf(context).uiSaveNameE73831),
                                 ),
                               ],
                             ),
@@ -14284,7 +14559,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     minLines: 1,
                                     maxLines: 4,
                                     decoration:  InputDecoration(
-                                      labelText: localizedUiText(context, 'Description / bio'),
+                                      labelText: l10nOf(context).uiDescriptionBio505243,
                                     ),
                                   ),
                                 ),
@@ -14296,7 +14571,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             _bioController.text,
                                           ),
                                         ),
-                                  child:  Text(localizedUiText(context, 'Save Bio')),
+                                  child: Text(l10nOf(context).uiSaveBioBE2711),
                                 ),
                               ],
                             ),
@@ -14310,9 +14585,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                       () => widget.controller
                                           .updateNotificationsEnabled(value),
                                     ),
-                              title:  Text(localizedUiText(context, 'Message notifications')),
+                              title:  Text(l10nOf(context).uiMessageNotifications595635),
                               subtitle:  Text(
-                                localizedUiText(context, 'Show a system notification when a direct message arrives.'),
+                                l10nOf(context).uiShowASystemNotificationWhen90113B,
                               ),
                             ),
                             if (widget
@@ -14338,7 +14613,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             value,
                                           ),
                                     ),
-                              title:  Text(localizedUiText(context, 'Experimental voice calls')),
+                              title:  Text(l10nOf(context).uiExperimentalVoiceCalls51098B),
                               subtitle: Text(
                                 widget
                                             .controller
@@ -14346,8 +14621,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             ?.media
                                             .available ==
                                         true
-                                    ? localizedUiText(context, 'Allows one-to-one Iroh voice calls on this device. Turn off to stop placing and receiving calls.')
-                                    : localizedUiText(context, 'Voice-call audio is unavailable in this build.'),
+                                    ? l10nOf(context).uiAllowsOneToOneIroh45EEF1
+                                    : l10nOf(context).uiVoiceCallAudioIsUnavailable0B6C43,
                               ),
                             ),
                             if (!kIsWeb && Platform.isAndroid)
@@ -14367,10 +14642,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             ),
                                       ),
                                 title:  Text(
-                                  localizedUiText(context, 'Experimental Android background receive'),
+                                  l10nOf(context).uiExperimentalAndroidBackgroundReceive60828A,
                                 ),
                                 subtitle:  Text(
-                                  localizedUiText(context, 'Disabled in release builds: the foreground service does not yet host a headless Flutter receiver.'),
+                                  l10nOf(context).uiDisabledInReleaseBuildsThe45B7DF,
                                 ),
                               ),
                             if (!kIsWeb &&
@@ -14405,10 +14680,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             ),
                                       ),
                                 title:  Text(
-                                  localizedUiText(context, 'Allow voice calls in background'),
+                                  l10nOf(context).uiAllowVoiceCallsInBackground73C5C5,
                                 ),
                                 subtitle:  Text(
-                                  localizedUiText(context, 'Keeps call signaling active and shows an ongoing call notification while the Conest service runs. Requires Experimental voice calls; Android battery policy or force-stop can still end availability.'),
+                                  l10nOf(context).uiKeepsCallSignalingActiveAndC0A342,
                                 ),
                               ),
                             if (kDebugMode)
@@ -14422,24 +14697,24 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             .updateSuppressReadReceipts(value),
                                       ),
                                 title:  Text(
-                                  localizedUiText(context, "Don't send read confirmations"),
+                                  l10nOf(context).uiDonTSendReadConfirmations230076,
                                 ),
                                 subtitle:  Text(
-                                  localizedUiText(context, 'Debug-only. Delivery acknowledgements still send; incoming read confirmations are still processed.'),
+                                  l10nOf(context).uiDebugOnlyDeliveryAcknowledgementsStill7D6A9C,
                                 ),
                               ),
                             const SizedBox(height: 12),
                             Text(
-                              localizedUiText(context, 'Privacy of files you send'),
+                              l10nOf(context).uiPrivacyOfFilesYouSend4E4A5B,
                               style: Theme.of(context).textTheme.titleSmall,
                             ),
                             SwitchListTile.adaptive(
                               key: const ValueKey('strip-file-metadata'),
                               contentPadding: EdgeInsets.zero,
                               value: widget.controller.removesFileMetadata,
-                              title:  Text(localizedUiText(context, 'Remove metadata from files')),
+                              title:  Text(l10nOf(context).uiRemoveMetadataFromFilesA4860E),
                               subtitle:  Text(
-                                localizedUiText(context, 'Before sending, removes location, camera, ' 'author and date details from photos, videos, ' 'PDFs and office documents. Pictures are not ' 're-compressed. Other files are sent as they are.'),
+                                l10nOf(context).uiBeforeSendingRemovesLocationCamera4E390D,
                               ),
                               onChanged: (value) => unawaited(
                                 widget.controller
@@ -14454,10 +14729,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               contentPadding: EdgeInsets.zero,
                               value: widget.controller.randomizesFileNames,
                               title:  Text(
-                                localizedUiText(context, 'Send files under random names'),
+                                l10nOf(context).uiSendFilesUnderRandomNames5F79D4,
                               ),
                               subtitle:  Text(
-                                localizedUiText(context, 'Replaces file names with random letters (the ' 'type, such as .jpg, stays), for you and the ' 'recipient.'),
+                                l10nOf(context).uiReplacesFileNamesWithRandom16F099,
                               ),
                               onChanged: (value) => unawaited(
                                 widget.controller
@@ -14483,7 +14758,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     if (!categorized ||
                         _settingsCategory == 'Personal / Preferences') ...[
                       _SettingsSection(
-                        title: localizedUiText(context, 'Devices'),
+                        title: l10nOf(context).uiDevicesDF485C,
                         palette: widget.palette,
                         child: DevicesPanel(
                           controller: widget.controller,
@@ -14512,9 +14787,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   () => widget.controller
                                       .updateStorageReserveEnabled(value),
                                 ),
-                          title:  Text(localizedUiText(context, 'Keep 10% of storage free')),
+                          title:  Text(l10nOf(context).uiKeepOfStorageFreeF00434),
                           subtitle:  Text(
-                            localizedUiText(context, 'Reserve free space for other apps. When off, transfers can use this space but must still fit on disk.'),
+                            l10nOf(context).uiReserveFreeSpaceForOther1AC9CF,
                           ),
                         ),
                       ),
@@ -14532,10 +14807,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 key: const ValueKey('open-connections'),
                                 contentPadding: EdgeInsets.zero,
                                 leading: const Icon(Icons.hub_outlined),
-                                title: const Text('Connections'),
-                                subtitle: const Text(
-                                  'Which devices reach which, both ways or '
-                                  'one way.',
+                                title: Text(l10nOf(context).connectionsTitle),
+                                subtitle: Text(
+                                  l10nOf(context).connectionsDescription,
                                 ),
                                 onTap: () => ConnectionsScreen.show(
                                   context,
@@ -14555,9 +14829,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             ),
                                           ),
                                     ),
-                              title:  Text(localizedUiText(context, 'LAN')),
+                              title:  Text(l10nOf(context).uiLAN2ECD17),
                               subtitle:  Text(
-                                localizedUiText(context, 'Same-network listener, pairing beacons, LAN delivery.'),
+                                l10nOf(context).uiSameNetworkListenerPairingBeacons5CF0A2,
                               ),
                             ),
                             SwitchListTile.adaptive(
@@ -14573,9 +14847,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             ),
                                           ),
                                     ),
-                              title:  Text(localizedUiText(context, 'Online')),
+                              title:  Text(l10nOf(context).uiOnlineC3E839),
                               subtitle:  Text(
-                                localizedUiText(context, 'Iroh messaging and file transfers over the internet. Custom Conest relays are optional.'),
+                                l10nOf(context).uiIrohMessagingAndFileTransfersC4D635,
                               ),
                             ),
                             SwitchListTile.adaptive(
@@ -14592,9 +14866,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             ),
                                           ),
                                     ),
-                              title:  Text(localizedUiText(context, 'Iroh relay fallback')),
+                              title:  Text(l10nOf(context).uiIrohRelayFallbackE954F7),
                               subtitle:  Text(
-                                localizedUiText(context, 'Use Iroh’s built-in relays for messages and files when direct connections cannot get through. Both peers must be online.'),
+                                l10nOf(context).uiUseIrohSBuiltIn631E03,
                               ),
                             ),
                             SwitchListTile.adaptive(
@@ -14610,11 +14884,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             value,
                                           ),
                                     ),
-                              title:  Text(
-                                localizedUiText(context, 'Limit Iroh files to 100 MiB (recommended)'),
+                              title: Text(
+                                l10nOf(context).uiLimitIrohFilesToMiBB58353,
                               ),
                               subtitle:  Text(
-                                localizedUiText(context, 'Applies to direct online and Iroh relay transfers. Disable for larger files; they may take a long time. LAN transfers keep their larger limit.'),
+                                l10nOf(context).uiAppliesToDirectOnlineAnd28F6F1,
                               ),
                             ),
                             SwitchListTile.adaptive(
@@ -14632,17 +14906,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                           ),
                                     ),
                               title:  Text(
-                                localizedUiText(context, 'Share email and Matrix addresses with group members'),
+                                l10nOf(context).uiShareEmailAndMatrixAddressesD762EE,
                               ),
-                              subtitle:  Text(
-                                localizedUiText(context, 'Lets members of your groups who are not your contacts reach you by email or Matrix. Off: they only learn your Nostr, Tor and radio addresses, which do not name you. Turning it off stops sharing from now on; members who already saw an address may keep it.'),
+                              subtitle: Text(
+                                l10nOf(context).uiLetsMembersOfYourGroups9912A5,
                               ),
                             ),
                             ListTile(
                               contentPadding: EdgeInsets.zero,
-                              title:  Text(localizedUiText(context, 'Automatic downloads')),
+                              title:  Text(l10nOf(context).uiAutomaticDownloads5E777B),
                               subtitle:  Text(
-                                localizedUiText(context, 'Verified contacts only. Limits adapt to Wi-Fi/Ethernet, cellular, and roaming.'),
+                                l10nOf(context).uiVerifiedContactsOnlyLimitsAdapt8A1876,
                               ),
                               trailing: DropdownButton<AutoDownloadPreset>(
                                 value:
@@ -14667,18 +14941,18 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                           ),
                                         );
                                       },
-                                items:  [
+                                items: [
                                   DropdownMenuItem(
                                     value: AutoDownloadPreset.low,
-                                    child: Text(localizedUiText(context, 'Low')),
+                                    child: Text(l10nOf(context).uiLowA12494),
                                   ),
                                   DropdownMenuItem(
                                     value: AutoDownloadPreset.medium,
-                                    child: Text(localizedUiText(context, 'Medium')),
+                                    child: Text(l10nOf(context).uiMediumD40496),
                                   ),
                                   DropdownMenuItem(
                                     value: AutoDownloadPreset.high,
-                                    child: Text(localizedUiText(context, 'High')),
+                                    child: Text(l10nOf(context).uiHighB1A595),
                                   ),
                                 ],
                               ),
@@ -14698,9 +14972,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     minLines: 1,
                                     maxLines: 4,
                                     decoration:  InputDecoration(
-                                      labelText: localizedUiText(context, 'Custom Iroh relay URLs'),
+                                      labelText: l10nOf(context).uiCustomIrohRelayURLsDBF979,
                                       helperText:
-                                          localizedUiText(context, 'One HTTPS URL per line; blank uses the standard N0 relay set.'),
+                                          l10nOf(context).uiOneHTTPSURLPerLineDA8E70,
                                     ),
                                   ),
                                 ),
@@ -14732,7 +15006,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                                 ),
                                               );
                                         }),
-                                  child:  Text(localizedUiText(context, 'Save Iroh relays')),
+                                  child:  Text(l10nOf(context).uiSaveIrohRelaysC144AD),
                                 ),
                               ],
                             ),
@@ -14772,7 +15046,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             TorCarrierPanel(controller: widget.controller),
                             const SizedBox(height: 12),
                             Text(
-                              localizedUiText(context, 'Transport policy'),
+                              l10nOf(context).uiTransportPolicy088D79,
                               style: Theme.of(context).textTheme.titleSmall
                                   ?.copyWith(fontWeight: FontWeight.w700),
                             ),
@@ -14789,8 +15063,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             const SizedBox(height: 8),
                             Text(
                               identity.connectivity.anyEnabled
-                                  ? localizedUiText(context, 'Per-contact routing is intersected with these flags. Turning off either restricts traffic; turning off both makes the app idle.')
-                                  : localizedUiText(context, 'Connectivity is fully off — the app will not send or receive.'),
+                                  ? l10nOf(context).uiPerContactRoutingIsIntersected88E292
+                                  : l10nOf(context).uiConnectivityIsFullyOffTheB12483,
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(
                                     color: identity.connectivity.anyEnabled
@@ -14853,7 +15127,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                       widget.controller.checkRelayAvailability,
                                     ),
                               icon: const Icon(Icons.network_check),
-                              label:  Text(localizedUiText(context, 'Check Availability')),
+                              label:  Text(l10nOf(context).uiCheckAvailabilityFCC1A6),
                             ),
                             const SizedBox(height: 12),
                             SwitchListTile.adaptive(
@@ -14865,9 +15139,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                       () => widget.controller
                                           .updateRelayModeEnabled(value),
                                     ),
-                              title:  Text(localizedUiText(context, 'Run this device as a relay')),
+                              title:  Text(l10nOf(context).uiRunThisDeviceAsA9DEA14),
                               subtitle:  Text(
-                                localizedUiText(context, 'Allow trusted contacts to use this device as a relay.'),
+                                l10nOf(context).uiAllowTrustedContactsToUse001771,
                               ),
                             ),
                             SwitchListTile.adaptive(
@@ -14879,9 +15153,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                       () => widget.controller
                                           .updateAutoUseContactRelays(value),
                                     ),
-                              title:  Text(localizedUiText(context, 'Auto-use contacts as relays')),
+                              title:  Text(l10nOf(context).uiAutoUseContactsAsRelaysC62C06),
                               subtitle: Text(
-                                localizedUiText(context, '${contactRelays.length} candidate route(s) are available right now.'),
+                                l10nOf(context).uiValueCandidateRouteSAre175673((contactRelays.length)),
                               ),
                             ),
                             const SizedBox(height: 8),
@@ -14895,7 +15169,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     controller: _localRelayPortController,
                                     keyboardType: TextInputType.number,
                                     decoration:  InputDecoration(
-                                      labelText: localizedUiText(context, 'Local relay port'),
+                                      labelText: l10nOf(context).uiLocalRelayPort28A73C,
                                     ),
                                   ),
                                 ),
@@ -14915,7 +15189,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                           await widget.controller
                                               .updateLocalRelayPort(port);
                                         }),
-                                  child:  Text(localizedUiText(context, 'Save Port')),
+                                  child: Text(l10nOf(context).uiSavePort1876F6),
                                 ),
                               ],
                             ),
@@ -14934,14 +15208,14 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               palette: widget.palette,
                             ),
                             Text(
-                              localizedUiText(context, 'Configured relays'),
+                              l10nOf(context).uiConfiguredRelays3CA0DE,
                               style: Theme.of(context).textTheme.titleMedium
                                   ?.copyWith(fontWeight: FontWeight.w800),
                             ),
                             const SizedBox(height: 8),
                             if (configuredRelays.isEmpty)
                               Text(
-                                localizedUiText(context, 'No relays added yet.'),
+                                l10nOf(context).uiNoRelaysAddedYetF791E7,
                                 style: Theme.of(context).textTheme.bodySmall
                                     ?.copyWith(color: widget.palette.inkSoft),
                               )
@@ -14977,8 +15251,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   child: TextField(
                                     controller: _relayHostController,
                                     decoration:  InputDecoration(
-                                      labelText: localizedUiText(context, 'Relay host / URL'),
-                                      hintText: 'udp://host:port forces UDP',
+                                      labelText: l10nOf(context).uiRelayHostURLF11441,
+                                      hintText: l10nOf(context).relayUdpHint,
                                     ),
                                   ),
                                 ),
@@ -14988,7 +15262,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     controller: _relayPortController,
                                     keyboardType: TextInputType.number,
                                     decoration:  InputDecoration(
-                                      labelText: localizedUiText(context, 'Relay port'),
+                                      labelText: l10nOf(context).uiRelayPortEA05DA,
                                     ),
                                   ),
                                 ),
@@ -15013,7 +15287,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                           _relayPortController.text =
                                               '$defaultRelayPort';
                                         }),
-                                  child:  Text(localizedUiText(context, 'Detect & Add Relay')),
+                                  child:  Text(l10nOf(context).uiDetectAddRelayE825AD),
                                 ),
                               ],
                             ),
@@ -15041,7 +15315,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  localizedUiText(context, 'Current build: ${buildInfo.displayVersion} • ${buildInfo.channelLabel}'),
+                                  l10nOf(context).uiCurrentBuildValueValue9A675D((buildInfo.displayVersion).toString(), (buildInfo.channelLabel).toString()),
                                   style: Theme.of(context).textTheme.bodyLarge
                                       ?.copyWith(fontWeight: FontWeight.w700),
                                 ),
@@ -15049,7 +15323,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     buildInfo.commit!.isNotEmpty) ...[
                                   const SizedBox(height: 6),
                                   Text(
-                                    localizedUiText(context, 'commit ${buildInfo.commit}'),
+                                    l10nOf(context).uiCommitValue2E080C((buildInfo.commit).toString()),
                                     style: Theme.of(context).textTheme.bodySmall
                                         ?.copyWith(
                                           color: widget.palette.inkSoft,
@@ -15063,9 +15337,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     leading: const Icon(
                                       Icons.bug_report_outlined,
                                     ),
-                                    title:  Text(localizedUiText(context, 'Error history')),
+                                    title:  Text(l10nOf(context).uiErrorHistory25AFF8),
                                     subtitle:  Text(
-                                      localizedUiText(context, 'What went wrong, kept across restarts ' 'on this build, to copy for a bug report.'),
+                                      l10nOf(context).uiWhatWentWrongKeptAcross27FC1F,
                                     ),
                                     onTap: () => ErrorHistoryScreen.show(
                                       context,
@@ -15090,16 +15364,16 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                                 ),
                                           ),
                                     title:  Text(
-                                      localizedUiText(context, 'Receive unstable updates'),
+                                      l10nOf(context).uiReceiveUnstableUpdatesBF7122,
                                     ),
                                     subtitle:  Text(
-                                      localizedUiText(context, 'Also offer nightly builds: newer ' 'features, less tested. A newer stable ' 'release is always offered.'),
+                                      l10nOf(context).uiAlsoOfferNightlyBuildsNewerA7FAB0,
                                     ),
                                   ),
                                 if (available != null) ...[
                                   const SizedBox(height: 10),
                                   Text(
-                                    localizedUiText(context, 'Available: ${available.release.tagName}'),
+                                    l10nOf(context).uiAvailableValue4B15F7((available.release.tagName).toString()),
                                   ),
                                 ],
                                 if (updateService.isDownloading) ...[
@@ -15147,8 +15421,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                       icon: const Icon(Icons.system_update_alt),
                                       label: Text(
                                         updateService.isChecking
-                                            ? localizedUiText(context, 'Checking...')
-                                            : localizedUiText(context, 'Check for Updates'),
+                                            ? l10nOf(context).uiChecking494D0F
+                                            : l10nOf(context).uiCheckForUpdates8604FF,
                                       ),
                                     ),
                                     if (available != null)
@@ -15177,7 +15451,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         child: OutlinedButton.icon(
                           onPressed: _busy ? null : _confirmReset,
                           icon: const Icon(Icons.restart_alt),
-                          label:  Text(localizedUiText(context, 'Reset App Identity')),
+                          label: Text(l10nOf(context).uiResetAppIdentity2E0F86),
                         ),
                       ),
                     if (_error != null) ...[
@@ -15196,7 +15470,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       actions: [
         TextButton(
           onPressed: _busy ? null : () => Navigator.of(context).pop(),
-          child:  Text(localizedUiText(context, 'Close')),
+          child: Text(l10nOf(context).actionClose),
         ),
       ],
     );
@@ -15228,14 +15502,20 @@ class _RelayIdentityMismatchBanner extends StatelessWidget {
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text(localizedUiText(context, 'Trust new identity for $relayId?')),
+        title: Text(
+          l10nOf(
+            context,
+          ).uiTrustNewIdentityForValue8B0612((relayId).toString()),
+        ),
         content: Text(
-          localizedUiText(context, 'The relay is now signing with a different Ed25519 public key ' '(${_shortFingerprint(announcedKey)}). Only continue if the ' 'operator has confirmed they rotated the key — otherwise this ' 'could be a man-in-the-middle.'),
+          l10nOf(context).uiTheRelayIsNowSigningFF71FD(
+            (_shortFingerprint(announcedKey)).toString(),
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton.tonal(
             style: FilledButton.styleFrom(
@@ -15247,7 +15527,7 @@ class _RelayIdentityMismatchBanner extends StatelessWidget {
               ).colorScheme.onErrorContainer,
             ),
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child:  Text(localizedUiText(context, 'Trust new key')),
+            child: Text(l10nOf(context).uiTrustNewKeyA181BE),
           ),
         ],
       ),
@@ -15287,7 +15567,7 @@ class _RelayIdentityMismatchBanner extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                localizedUiText(context, 'Relay identity changed'),
+                l10nOf(context).uiRelayIdentityChanged097638,
                 style: Theme.of(context).textTheme.titleSmall?.copyWith(
                   color: Theme.of(context).colorScheme.onErrorContainer,
                   fontWeight: FontWeight.w700,
@@ -15295,7 +15575,7 @@ class _RelayIdentityMismatchBanner extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                localizedUiText(context, 'A configured relay is signing with a new key. Verify with the ' 'operator before trusting it.'),
+                l10nOf(context).uiAConfiguredRelayIsSigning60EED0,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Theme.of(context).colorScheme.onErrorContainer,
                 ),
@@ -15308,7 +15588,7 @@ class _RelayIdentityMismatchBanner extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          localizedUiText(context, '${entry.key} → ${_shortFingerprint(entry.value)}'),
+                          "${(entry.key)} → ${(_shortFingerprint(entry.value))}",
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(
                                 fontFamily: 'monospace',
@@ -15326,7 +15606,7 @@ class _RelayIdentityMismatchBanner extends StatelessWidget {
                           relayId: entry.key,
                           announcedKey: entry.value,
                         ),
-                        child:  Text(localizedUiText(context, 'Trust new key')),
+                        child: Text(l10nOf(context).uiTrustNewKeyA181BE),
                       ),
                     ],
                   ),
@@ -15350,7 +15630,7 @@ class _ContactRequestsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Scaffold(
     backgroundColor: palette.panel,
-    appBar: AppBar(title:  Text(localizedUiText(context, 'Contact requests'))),
+    appBar: AppBar(title: Text(l10nOf(context).uiContactRequests082691)),
     body: SafeArea(
       child: Center(
         child: ConstrainedBox(
@@ -15360,7 +15640,9 @@ class _ContactRequestsScreen extends StatelessWidget {
             builder: (context, _) {
               final requests = controller.pendingContactRequests;
               if (requests.isEmpty) {
-                return  Center(child: Text(localizedUiText(context, 'No pending contact requests')));
+                return Center(
+                  child: Text(l10nOf(context).uiNoPendingContactRequests697615),
+                );
               }
               return ListView.separated(
                 padding: const EdgeInsets.all(16),
@@ -15405,7 +15687,13 @@ class _PendingContactRequestCard extends StatelessWidget {
     } catch (error) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(localizedUiText(context, 'Could not review request: $error'))),
+          SnackBar(
+            content: Text(
+              l10nOf(
+                context,
+              ).uiCouldNotReviewRequestValue82B3D5((error).toString()),
+            ),
+          ),
         );
       }
       return;
@@ -15414,14 +15702,14 @@ class _PendingContactRequestCard extends StatelessWidget {
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text(localizedUiText(context, 'Add ${invite.displayName}?')),
+        title: Text(
+          l10nOf(context).uiAddValueF034EE((invite.displayName).toString()),
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-             Text(
-              localizedUiText(context, 'Verify the person and compare this safety number through another channel before accepting.'),
-            ),
+            Text(l10nOf(context).uiVerifyThePersonAndCompare738F28),
             const SizedBox(height: 16),
             SelectableText(
               safetyNumber,
@@ -15432,11 +15720,11 @@ class _PendingContactRequestCard extends StatelessWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child:  Text(localizedUiText(context, 'Add contact')),
+            child: Text(l10nOf(context).contactAdd),
           ),
         ],
       ),
@@ -15446,9 +15734,13 @@ class _PendingContactRequestCard extends StatelessWidget {
       await controller.approvePendingContactRequest(request.id);
     } catch (error) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(localizedUiText(context, 'Could not add contact: $error'))));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            l10nOf(context).uiCouldNotAddContactValue7F6C38((error).toString()),
+          ),
+        ),
+      );
     }
   }
 
@@ -15458,15 +15750,21 @@ class _PendingContactRequestCard extends StatelessWidget {
     } catch (error) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(localizedUiText(context, 'Could not reject request: $error'))),
+          SnackBar(
+            content: Text(
+              l10nOf(
+                context,
+              ).uiCouldNotRejectRequestValue2EFD58((error).toString()),
+            ),
+          ),
         );
       }
       return;
     }
     if (!context.mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar( SnackBar(content: Text(localizedUiText(context, 'Contact request rejected.'))));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(l10nOf(context).uiContactRequestRejected447EE8)),
+    );
   }
 
   @override
@@ -15492,7 +15790,9 @@ class _PendingContactRequestCard extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  localizedUiText(context, 'Contact request from $name'),
+                  l10nOf(
+                    context,
+                  ).uiContactRequestFromValue50B6AC((name).toString()),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(
@@ -15504,7 +15804,12 @@ class _PendingContactRequestCard extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            localizedUiText(context, 'Unverified · ${request.senderDeviceId.length > 12 ? request.senderDeviceId.substring(0, 12) : request.senderDeviceId}'),
+            l10nOf(context).uiUnverifiedValueC1937C(
+              (request.senderDeviceId.length > 12
+                      ? request.senderDeviceId.substring(0, 12)
+                      : request.senderDeviceId)
+                  .toString(),
+            ),
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 8),
@@ -15513,11 +15818,11 @@ class _PendingContactRequestCard extends StatelessWidget {
             children: [
               FilledButton.tonal(
                 onPressed: invite == null ? null : () => _approve(context),
-                child:  Text(localizedUiText(context, 'Review')),
+                child: Text(l10nOf(context).uiReviewE29A79),
               ),
               TextButton(
                 onPressed: () => _reject(context),
-                child:  Text(localizedUiText(context, 'Reject')),
+                child: Text(l10nOf(context).uiReject2B03B5),
               ),
             ],
           ),
@@ -15547,7 +15852,13 @@ class _ContactPairingStatusBanner extends StatelessWidget {
     } catch (error) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(localizedUiText(context, 'Contact request failed: $error'))),
+          SnackBar(
+            content: Text(
+              l10nOf(
+                context,
+              ).uiContactRequestFailedValue28DD81((error).toString()),
+            ),
+          ),
         );
       }
     }
@@ -15583,7 +15894,11 @@ class _ContactPairingStatusBanner extends StatelessWidget {
               context,
               () => controller.retryContactPairingNow(contact.deviceId),
             ),
-            child: Text(blocked ? localizedUiText(context, 'Request again') : localizedUiText(context, 'Retry')),
+            child: Text(
+              blocked
+                  ? l10nOf(context).uiRequestAgain7B0434
+                  : l10nOf(context).uiRetry9F5CD8,
+            ),
           ),
           if (!blocked)
             TextButton(
@@ -15591,7 +15906,7 @@ class _ContactPairingStatusBanner extends StatelessWidget {
                 context,
                 () => controller.cancelContactPairing(contact.deviceId),
               ),
-              child:  Text(localizedUiText(context, 'Cancel')),
+              child: Text(l10nOf(context).actionCancel),
             ),
           if (blocked)
             TextButton(
@@ -15602,7 +15917,7 @@ class _ContactPairingStatusBanner extends StatelessWidget {
                   notifyPeer: false,
                 ),
               ),
-              child:  Text(localizedUiText(context, 'Discard chat')),
+              child: Text(l10nOf(context).uiDiscardChat319267),
             ),
         ],
       ),
@@ -15628,20 +15943,25 @@ class _PendingVerificationBanner extends StatelessWidget {
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title:  Text(localizedUiText(context, 'Confirm identity replacement?')),
+        title: Text(l10nOf(context).uiConfirmIdentityReplacement0219C5),
         content: Text(
           predecessor == null
-              ? localizedUiText(context, 'Trust ${contact.alias} as a fresh contact? Verify the safety ' 'number out of band first — accepting now archives any ' 'previous "${contact.displayName}" entries as read-only.')
-              : localizedUiText(context, 'Trust this as a reinstall of "${predecessor.alias}"? ' 'The previous contact will be archived (history kept ' 'read-only); the new contact takes over. This cannot be ' 'undone.'),
+              ? l10nOf(context).uiTrustValueAsAFresh7BF87F(
+                  (contact.alias).toString(),
+                  (contact.displayName).toString(),
+                )
+              : l10nOf(
+                  context,
+                ).uiTrustThisAsAReinstallCBA4CC((predecessor.alias).toString()),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child:  Text(localizedUiText(context, "It's them")),
+            child: Text(l10nOf(context).uiItSThem394960),
           ),
         ],
       ),
@@ -15651,9 +15971,13 @@ class _PendingVerificationBanner extends StatelessWidget {
       await controller.confirmContactReplacement(contact.deviceId);
     } catch (error) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(localizedUiText(context, 'Confirm failed: $error'))));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            l10nOf(context).uiConfirmFailedValueBDE200((error).toString()),
+          ),
+        ),
+      );
     }
   }
 
@@ -15661,14 +15985,12 @@ class _PendingVerificationBanner extends StatelessWidget {
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title:  Text(localizedUiText(context, 'Reject this identity?')),
-        content:  Text(
-          localizedUiText(context, 'This deletes the new contact and any held inbound messages. ' 'Use this if you believe this is impersonation.'),
-        ),
+        title: Text(l10nOf(context).uiRejectThisIdentityCB604F),
+        content: Text(l10nOf(context).uiThisDeletesTheNewContactBB4444),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton.tonal(
             style: FilledButton.styleFrom(
@@ -15680,7 +16002,7 @@ class _PendingVerificationBanner extends StatelessWidget {
               ).colorScheme.onErrorContainer,
             ),
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child:  Text(localizedUiText(context, 'Reject')),
+            child: Text(l10nOf(context).uiReject2B03B5),
           ),
         ],
       ),
@@ -15690,9 +16012,13 @@ class _PendingVerificationBanner extends StatelessWidget {
       await controller.rejectContactReplacement(contact.deviceId);
     } catch (error) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(localizedUiText(context, 'Reject failed: $error'))));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            l10nOf(context).uiRejectFailedValue5F5917((error).toString()),
+          ),
+        ),
+      );
     }
   }
 
@@ -15714,7 +16040,9 @@ class _PendingVerificationBanner extends StatelessWidget {
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              localizedUiText(context, 'This contact may be a reset of "$predecessorAlias". Verify ' 'their safety number out of band before exchanging messages.'),
+              l10nOf(
+                context,
+              ).uiThisContactMayBeAD1405D((predecessorAlias).toString()),
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: Theme.of(context).colorScheme.onErrorContainer,
               ),
@@ -15723,11 +16051,11 @@ class _PendingVerificationBanner extends StatelessWidget {
           const SizedBox(width: 8),
           TextButton(
             onPressed: () => _confirm(context),
-            child:  Text(localizedUiText(context, "It's them")),
+            child: Text(l10nOf(context).uiItSThem394960),
           ),
           TextButton(
             onPressed: () => _reject(context),
-            child:  Text(localizedUiText(context, 'Not them')),
+            child: Text(l10nOf(context).uiNotThem685593),
           ),
         ],
       ),
@@ -15767,14 +16095,22 @@ class _DefaultRelaysControlsCardState
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(localizedUiText(context, 'Imported relays from ${result.url}.'))),
+        SnackBar(
+          content: Text(
+            l10nOf(
+              context,
+            ).uiImportedRelaysFromValue37C175((result.url).toString()),
+          ),
+        ),
       );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           backgroundColor: Theme.of(context).colorScheme.errorContainer,
-          content: Text(localizedUiText(context, 'Import failed: $error')),
+          content: Text(
+            l10nOf(context).uiImportFailedValueBAFB4A((error).toString()),
+          ),
         ),
       );
     } finally {
@@ -15786,18 +16122,21 @@ class _DefaultRelaysControlsCardState
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title:  Text(localizedUiText(context, 'Remove imported list?')),
+        title: Text(l10nOf(context).uiRemoveImportedList36FC81),
         content: Text(
-          localizedUiText(context, 'This will remove ${source.routeKeys.length} relay route(s) imported from ${source.url}.'),
+          l10nOf(context).uiThisWillRemoveValueRelay330EEB(
+            (source.routeKeys.length),
+            (source.url).toString(),
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child:  Text(localizedUiText(context, 'Cancel')),
+            child: Text(l10nOf(context).actionCancel),
           ),
           FilledButton.tonal(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child:  Text(localizedUiText(context, 'Remove')),
+            child: Text(l10nOf(context).uiRemoveE96390),
           ),
         ],
       ),
@@ -15807,9 +16146,13 @@ class _DefaultRelaysControlsCardState
       await widget.controller.removeCustomRelaySource(source.id);
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(localizedUiText(context, 'Remove failed: $error'))));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            l10nOf(context).uiRemoveFailedValue58F348((error).toString()),
+          ),
+        ),
+      );
     }
   }
 
@@ -15829,18 +16172,17 @@ class _DefaultRelaysControlsCardState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-               Text(
-                localizedUiText(context, 'No bundled Conest relays. Online connections use Iroh; ' 'you can also configure your own relay.'),
-              ),
+              Text(l10nOf(context).uiNoBundledConestRelaysOnline46529B),
               const Divider(height: 24),
-              Row(
+              Wrap(
+                spacing: 12,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  Expanded(
-                    child: Text(
-                      localizedUiText(context, 'Imported relay lists'),
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                  Text(
+                    l10nOf(context).uiImportedRelayListsB0BD8B,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                   FilledButton.tonal(
@@ -15851,7 +16193,7 @@ class _DefaultRelaysControlsCardState
                             height: 16,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        :  Text(localizedUiText(context, 'Import from URL…')),
+                        : Text(l10nOf(context).uiImportFromURL3F7B77),
                   ),
                 ],
               ),
@@ -15859,7 +16201,7 @@ class _DefaultRelaysControlsCardState
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
-                    localizedUiText(context, 'No imported lists.'),
+                    l10nOf(context).uiNoImportedLists6CBC34,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: widget.palette.inkSoft,
                     ),
@@ -15873,7 +16215,14 @@ class _DefaultRelaysControlsCardState
                       children: [
                         Expanded(
                           child: Text(
-                            localizedUiText(context, '${source.url} · ${source.isSigned ? "signed" : "unsigned"} · ${source.routeKeys.length} route(s)'),
+                            l10nOf(context).uiValueValueValueRouteS40FB98(
+                              (source.url).toString(),
+                              (source.isSigned
+                                      ? l10nOf(context).relaySourceSigned
+                                      : l10nOf(context).relaySourceUnsigned)
+                                  .toString(),
+                              (source.routeKeys.length),
+                            ),
                             style: Theme.of(context).textTheme.bodySmall
                                 ?.copyWith(fontFamily: 'monospace'),
                             overflow: TextOverflow.ellipsis,
@@ -15882,7 +16231,7 @@ class _DefaultRelaysControlsCardState
                         const SizedBox(width: 8),
                         TextButton(
                           onPressed: () => _removeSource(source),
-                          child:  Text(localizedUiText(context, 'Remove')),
+                          child: Text(l10nOf(context).uiRemoveE96390),
                         ),
                       ],
                     ),
@@ -15923,7 +16272,7 @@ class _ImportRelaysDialogState extends State<_ImportRelaysDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title:  Text(localizedUiText(context, 'Import relay list from URL')),
+      title: Text(l10nOf(context).uiImportRelayListFromURL86E363),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -15931,21 +16280,21 @@ class _ImportRelaysDialogState extends State<_ImportRelaysDialog> {
           TextField(
             controller: _urlController,
             autofocus: true,
-            decoration:  InputDecoration(
-              labelText: localizedUiText(context, 'JSON URL'),
+            decoration: InputDecoration(
+              labelText: l10nOf(context).uiJSONURL6918BA,
               hintText: 'https://example.com/relays.json',
             ),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _publicKeyController,
-            decoration:  InputDecoration(
-              labelText: localizedUiText(context, "Operator's public key (optional, base64)"),
+            decoration: InputDecoration(
+              labelText: l10nOf(context).uiOperatorSPublicKeyOptionalA80E7A,
             ),
           ),
           const SizedBox(height: 8),
           Text(
-            localizedUiText(context, 'Leave blank to import unsigned (untrusted; pre-flight probes still gate use). Provide the operator\'s key for cryptographically trusted imports — the signature is fetched from <URL>.ed25519.sig.'),
+            l10nOf(context).uiLeaveBlankToImportUnsigned0D354E,
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -15953,7 +16302,7 @@ class _ImportRelaysDialogState extends State<_ImportRelaysDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child:  Text(localizedUiText(context, 'Cancel')),
+          child: Text(l10nOf(context).actionCancel),
         ),
         FilledButton(
           onPressed: () {
@@ -15967,7 +16316,7 @@ class _ImportRelaysDialogState extends State<_ImportRelaysDialog> {
               ),
             );
           },
-          child:  Text(localizedUiText(context, 'Import')),
+          child: Text(l10nOf(context).uiImportD6FBC9),
         ),
       ],
     );
@@ -16010,7 +16359,7 @@ class _SettingsSection extends StatelessWidget {
           // Signature settings header — mono `// SECTION` in place of the
           // old titleLarge, matching the design's SectionLabel vocabulary.
           Text(
-            localizedUiText(context, '// ${title.toUpperCase()}'),
+            "// ${(title.toUpperCase())}",
             style: TextStyle(
               fontFamily: ConestPalette.monoFont,
               fontSize: 11,
@@ -16106,7 +16455,7 @@ class _RelayHealthDashboard extends StatelessWidget {
                   Expanded(
                     child: RelayStat(
                       palette: palette,
-                      label: localizedUiText(context, 'OK'),
+                      label: l10nOf(context).uiOK9CE3BD,
                       value: '$ok',
                       color: palette.success,
                     ),
@@ -16114,7 +16463,7 @@ class _RelayHealthDashboard extends StatelessWidget {
                   Expanded(
                     child: RelayStat(
                       palette: palette,
-                      label: localizedUiText(context, 'WARN'),
+                      label: l10nOf(context).uiWARNC2FD77,
                       value: '$warn',
                       color: palette.warning,
                     ),
@@ -16122,7 +16471,7 @@ class _RelayHealthDashboard extends StatelessWidget {
                   Expanded(
                     child: RelayStat(
                       palette: palette,
-                      label: localizedUiText(context, 'DOWN'),
+                      label: l10nOf(context).uiDOWN30E504,
                       value: '$down',
                       color: palette.danger,
                     ),
@@ -16130,7 +16479,7 @@ class _RelayHealthDashboard extends StatelessWidget {
                   Expanded(
                     child: RelayStat(
                       palette: palette,
-                      label: localizedUiText(context, 'AVG RTT'),
+                      label: l10nOf(context).uiAVGRTTE96B26,
                       value: avgRtt,
                       color: palette.textPrimary,
                     ),
@@ -16204,7 +16553,7 @@ class _ThemeModeSelector extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              localizedUiText(context, 'Theme'),
+              l10nOf(context).uiThemeA797E3,
               style: Theme.of(
                 context,
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
@@ -16217,7 +16566,7 @@ class _ThemeModeSelector extends StatelessWidget {
                   for (final mode in ConestThemeMode.values)
                     ButtonSegment(
                       value: mode,
-                      label: Text(mode.label),
+                      label: Text(themeModeLabel(context, mode)),
                       icon: Icon(_themeModeIcon(mode)),
                     ),
                 ],
@@ -16232,24 +16581,26 @@ class _ThemeModeSelector extends StatelessWidget {
             Text(
               controller.mode == ConestThemeMode.adaptive &&
                       palette.usingDynamicColor
-                  ? localizedUiText(context, 'Adaptive is using system dynamic colors.')
-                  : localizedUiText(context, 'Mint and pink remain the Conest fallback accents.'),
+                  ? l10nOf(context).uiAdaptiveIsUsingSystemDynamicBAA149
+                  : l10nOf(context).uiMintAndPinkRemainTheC846F3,
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
             ),
             const SizedBox(height: 16),
-            Row(
+            Wrap(
+              spacing: 12,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text(
-                  localizedUiText(context, 'Decoration'),
+                  l10nOf(context).uiDecoration2DB87A,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                   ),
                 ),
-                const Spacer(),
                 Text(
-                  _decorationLabel(controller.decorationIntensity),
+                  _decorationLabel(controller.decorationIntensity, context),
                   style: TextStyle(
                     fontFamily: ConestPalette.monoFont,
                     fontSize: 11,
@@ -16264,19 +16615,19 @@ class _ThemeModeSelector extends StatelessWidget {
               min: 0,
               max: 1.5,
               divisions: 6,
-              label: _decorationLabel(controller.decorationIntensity),
+              label: _decorationLabel(controller.decorationIntensity, context),
               onChanged: (value) =>
                   unawaited(controller.setDecorationIntensity(value)),
             ),
             Text(
-              localizedUiText(context, 'Ambient grid, scanlines, corner reticles and the status ' 'readout. Clean ↔ full atmosphere.'),
+              l10nOf(context).uiAmbientGridScanlinesCornerReticles45D5C5,
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
             ),
             const SizedBox(height: 16),
             Text(
-              localizedUiText(context, 'Shell'),
+              l10nOf(context).uiShellBDC1FD,
               style: Theme.of(
                 context,
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
@@ -16296,7 +16647,7 @@ class _ThemeModeSelector extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              controller.shell.blurb,
+              shellDescription(context, controller.shell),
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
@@ -16305,7 +16656,7 @@ class _ThemeModeSelector extends StatelessWidget {
             if (controller.shell == ConestShell.signature) ...[
               const SizedBox(height: 16),
               Text(
-                localizedUiText(context, 'Home layout'),
+                l10nOf(context).uiHomeLayoutE19685,
                 style: Theme.of(
                   context,
                 ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
@@ -16316,7 +16667,10 @@ class _ThemeModeSelector extends StatelessWidget {
                 child: SegmentedButton<ConestHomeLayout>(
                   segments: [
                     for (final layout in ConestHomeLayout.values)
-                      ButtonSegment(value: layout, label: Text(layout.label)),
+                      ButtonSegment(
+                        value: layout,
+                        label: Text(homeLayoutLabel(context, layout)),
+                      ),
                   ],
                   selected: {controller.homeLayout},
                   onSelectionChanged: (selected) =>
@@ -16325,7 +16679,7 @@ class _ThemeModeSelector extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                controller.homeLayout.blurb,
+                homeLayoutDescription(context, controller.homeLayout),
                 style: Theme.of(
                   context,
                 ).textTheme.bodySmall?.copyWith(color: palette.inkSoft),
@@ -16337,11 +16691,11 @@ class _ThemeModeSelector extends StatelessWidget {
     );
   }
 
-  String _decorationLabel(double intensity) {
-    if (intensity <= 0.05) return 'CLEAN';
-    if (intensity < 0.8) return 'SUBTLE';
-    if (intensity <= 1.05) return 'DEFAULT';
-    return 'FULL';
+  String _decorationLabel(double intensity, BuildContext context) {
+    if (intensity <= 0.05) return l10nOf(context).uiCLEAN2F3D27;
+    if (intensity < 0.8) return l10nOf(context).uiSUBTLEBB048B;
+    if (intensity <= 1.05) return l10nOf(context).uiDEFAULTC18920;
+    return l10nOf(context).uiFULLCC0A74;
   }
 
   IconData _themeModeIcon(ConestThemeMode mode) {
@@ -17148,7 +17502,7 @@ class _RoutePill extends StatelessWidget {
         border: Border.all(color: palette.stroke),
       ),
       child: Text(
-        localizedUiText(context, '${route.kind.name}:${route.label}'),
+        "${(route.kind.name)}:${(route.label)}",
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
@@ -17218,7 +17572,9 @@ class _SignatureQrFrame extends StatelessWidget {
                 border: Border.all(color: _ink),
               ),
               child: Text(
-                localizedUiText(context, 'CONEST · ci5 · ${DateTime.now().year}'),
+                l10nOf(
+                  context,
+                ).uiCONESTCiValue7964DC((DateTime.now().year).toString()),
                 style: const TextStyle(
                   fontFamily: ConestPalette.monoFont,
                   fontSize: 8,
@@ -17259,14 +17615,14 @@ class _QrFallback extends StatelessWidget {
               Icon(Icons.qr_code_2_outlined, color: palette.inkSoft, size: 36),
               const SizedBox(height: 10),
               Text(
-                localizedUiText(context, 'QR unavailable'),
+                l10nOf(context).uiQRUnavailable12869A,
                 style: Theme.of(
                   context,
                 ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 8),
               Text(
-                localizedUiText(context, 'Use the codephrase or payload below.'),
+                l10nOf(context).uiUseTheCodephraseOrPayload187111,
                 textAlign: TextAlign.center,
                 style: Theme.of(
                   context,
@@ -17330,17 +17686,27 @@ class _RouteHealthTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  localizedUiText(context, '${check.route.kind.name.toUpperCase()} ${check.route.label}'),
+                  "${(check.route.kind.name.toUpperCase())} ${(check.route.label)}",
                   style: Theme.of(
                     context,
                   ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 Text(
                   usable
-                      ? localizedUiText(context, 'two-way confirmed${latency == null ? '' : ' • ${latency.inMilliseconds}ms'}')
+                      ? l10nOf(context).uiTwoWayConfirmedValueE5A1A1(
+                          (latency == null
+                                  ? ''
+                                  : ' • ${latency.inMilliseconds}ms')
+                              .toString(),
+                        )
                       : available
-                      ? localizedUiText(context, 'path accepts send; waiting for peer reply${latency == null ? '' : ' • ${latency.inMilliseconds}ms'}')
-                      : check.error ?? localizedUiText(context, 'unavailable'),
+                      ? l10nOf(context).uiPathAcceptsSendWaitingFor10B4B0(
+                          (latency == null
+                                  ? ''
+                                  : ' • ${latency.inMilliseconds}ms')
+                              .toString(),
+                        )
+                      : check.error ?? l10nOf(context).uiUnavailable1D5EE3,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(
@@ -17352,10 +17718,10 @@ class _RouteHealthTile extends StatelessWidget {
           ),
           Text(
             usable
-                ? localizedUiText(context, 'usable')
+                ? l10nOf(context).uiUsable829A7C
                 : available
-                ? localizedUiText(context, 'one-way')
-                : localizedUiText(context, 'skip'),
+                ? l10nOf(context).uiOneWay5EF4D0
+                : l10nOf(context).uiSkipC7E168,
             style: Theme.of(
               context,
             ).textTheme.labelSmall?.copyWith(color: palette.inkSoft),
@@ -17383,7 +17749,7 @@ class _EmptyContactsState extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Text(
-            localizedUiText(context, 'Share your invite, then either scan the QR code or enter only the current codephrase on the other device to add the contact.'),
+            l10nOf(context).uiShareYourInviteThenEither5FEF78,
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyLarge?.copyWith(
               color: palette.inkSoft,
@@ -17423,14 +17789,14 @@ class _EmptyChatState extends StatelessWidget {
                   Icon(Icons.lock_outline, size: 52, color: palette.inkSoft),
                   const SizedBox(height: 16),
                   Text(
-                    localizedUiText(context, 'Start with one trusted contact'),
+                    l10nOf(context).uiStartWithOneTrustedContact650B80,
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    localizedUiText(context, 'This release pairs through a QR invite alone or through a codephrase alone, prefers nearby LAN routes, and falls back to internet relay routes after that.'),
+                    l10nOf(context).uiThisReleasePairsThroughA883AA2,
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                       color: palette.inkSoft,
@@ -17583,34 +17949,39 @@ class _ConnectivityChip extends StatelessWidget {
 
   ({String label, IconData icon, Color color}) _labelFor(
     EffectiveRoutingMode mode,
+    BuildContext context,
   ) {
     switch (mode) {
       case EffectiveRoutingMode.lanFirst:
         return (
-          label: 'LAN first',
+          label: l10nOf(context).uiLANFirstB360D1,
           icon: Icons.swap_horiz,
           color: palette.primary,
         );
       case EffectiveRoutingMode.lanOnly:
         return (
-          label: 'LAN only',
+          label: l10nOf(context).uiLANOnly94945D,
           icon: Icons.wifi_tethering,
           color: palette.primary,
         );
       case EffectiveRoutingMode.onlineFirst:
         return (
-          label: 'Online first',
+          label: l10nOf(context).uiOnlineFirst346B6D,
           icon: Icons.public,
           color: palette.primary,
         );
       case EffectiveRoutingMode.onlineOnly:
         return (
-          label: 'Online only',
+          label: l10nOf(context).uiOnlineOnlyF79CB9,
           icon: Icons.cloud_outlined,
           color: palette.primary,
         );
       case EffectiveRoutingMode.offline:
-        return (label: 'Offline', icon: Icons.cloud_off, color: palette.danger);
+        return (
+          label: l10nOf(context).uiOfflineE01FA7,
+          icon: Icons.cloud_off,
+          color: palette.danger,
+        );
     }
   }
 
@@ -17620,10 +17991,8 @@ class _ConnectivityChip extends StatelessWidget {
         const GlobalConnectivityPreferences();
     if (!global.anyEnabled) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-         SnackBar(
-          content: Text(
-            localizedUiText(context, 'Connectivity is off. Enable LAN or Online in Settings.'),
-          ),
+        SnackBar(
+          content: Text(l10nOf(context).uiConnectivityIsOffEnableLAN39990E),
         ),
       );
       return;
@@ -17631,7 +18000,7 @@ class _ConnectivityChip extends StatelessWidget {
     await showDialog<void>(
       context: context,
       builder: (_) => _ConnectivityDialog(
-        title: localizedUiText(context, 'Routing — ${contact.alias}'),
+        title: l10nOf(context).uiRoutingValueFC4557((contact.alias).toString()),
         initial: contact.routing,
         global: global,
         kinds: controller.configurableTransports,
@@ -17650,7 +18019,7 @@ class _ConnectivityChip extends StatelessWidget {
         controller.identity?.connectivity ??
         const GlobalConnectivityPreferences();
     final mode = contact.routing.effectiveMode(global);
-    final info = _labelFor(mode);
+    final info = _labelFor(mode, context);
     return InkWell(
       borderRadius: BorderRadius.circular(999),
       onTap: () => _open(context),
@@ -17716,17 +18085,17 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
     ).effectiveMode(widget.global);
     switch (effective) {
       case EffectiveRoutingMode.lanFirst:
-        return 'Uses LAN when available, falls back to Online.';
+        return l10nOf(context).uiUsesLANWhenAvailableFallsA810EF;
       case EffectiveRoutingMode.lanOnly:
-        return 'Uses LAN only. No relay traffic for this contact.';
+        return l10nOf(context).uiUsesLANOnlyNoRelay589D55;
       case EffectiveRoutingMode.onlineFirst:
-        return 'Uses Online when available, falls back to LAN.';
+        return l10nOf(context).uiUsesOnlineWhenAvailableFallsCE2CAF;
       case EffectiveRoutingMode.onlineOnly:
-        return 'Uses Online only. No LAN traffic for this contact.';
+        return l10nOf(context).uiUsesOnlineOnlyNoLAN193810;
       case EffectiveRoutingMode.offline:
         return widget.global.anyEnabled
-            ? 'No transport selected — this contact is unreachable.'
-            : 'Global connectivity is off — adjust Settings to send.';
+            ? l10nOf(context).uiNoTransportSelectedThisContact7969EB
+            : l10nOf(context).uiGlobalConnectivityIsOffAdjustA7C644;
     }
   }
 
@@ -17744,10 +18113,10 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
             onChanged: widget.global.lanEnabled
                 ? (v) => setState(() => _lan = v ?? false)
                 : null,
-            title:  Text(localizedUiText(context, 'LAN')),
+            title: Text(l10nOf(context).uiLAN2ECD17),
             subtitle: widget.global.lanEnabled
-                ?  Text(localizedUiText(context, 'Same-network delivery'))
-                :  Text(localizedUiText(context, 'Disabled by global setting')),
+                ? Text(l10nOf(context).uiSameNetworkDelivery94E793)
+                : Text(l10nOf(context).uiDisabledByGlobalSetting2CB06C),
             contentPadding: EdgeInsets.zero,
           ),
           SwitchListTile.adaptive(
@@ -17755,12 +18124,10 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
             onChanged: _online && widget.global.irohRelayEnabled
                 ? (value) => setState(() => _irohRelay = value)
                 : null,
-            title:  Text(localizedUiText(context, 'Allow Iroh relay fallback')),
+            title: Text(l10nOf(context).uiAllowIrohRelayFallback35227B),
             subtitle: widget.global.irohRelayEnabled
-                ?  Text(
-                    localizedUiText(context, 'Visible and online-only; direct Iroh is preferred.'),
-                  )
-                :  Text(localizedUiText(context, 'Disabled by global setting')),
+                ? Text(l10nOf(context).uiVisibleAndOnlineOnlyDirectEA8902)
+                : Text(l10nOf(context).uiDisabledByGlobalSetting2CB06C),
             contentPadding: EdgeInsets.zero,
           ),
           const SizedBox(height: 8),
@@ -17777,22 +18144,25 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
             onChanged: widget.global.onlineEnabled
                 ? (v) => setState(() => _online = v ?? false)
                 : null,
-            title:  Text(localizedUiText(context, 'Online')),
+            title: Text(l10nOf(context).uiOnlineC3E839),
             subtitle: widget.global.onlineEnabled
-                ?  Text(localizedUiText(context, 'Relay / internet delivery'))
-                :  Text(localizedUiText(context, 'Disabled by global setting')),
+                ? Text(l10nOf(context).uiRelayInternetDeliveryD64AB6)
+                : Text(l10nOf(context).uiDisabledByGlobalSetting2CB06C),
             contentPadding: EdgeInsets.zero,
           ),
           if (_lan && _online) ...[
             const SizedBox(height: 8),
-             Text(localizedUiText(context, 'Prefer')),
+            Text(l10nOf(context).uiPrefer13F662),
             const SizedBox(height: 4),
             SegmentedButton<RoutingPreference>(
-              segments:  [
-                ButtonSegment(value: RoutingPreference.lan, label: Text(localizedUiText(context, 'LAN'))),
+              segments: [
+                ButtonSegment(
+                  value: RoutingPreference.lan,
+                  label: Text(l10nOf(context).uiLAN2ECD17),
+                ),
                 ButtonSegment(
                   value: RoutingPreference.online,
-                  label: Text(localizedUiText(context, 'Online')),
+                  label: Text(l10nOf(context).uiOnlineC3E839),
                 ),
               ],
               selected: {_preferred},
@@ -17804,10 +18174,8 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
             key: const ValueKey('carry-for-contact'),
             value: _carry,
             onChanged: (value) => setState(() => _carry = value),
-            title:  Text(localizedUiText(context, 'Carry their messages')),
-            subtitle:  Text(
-              localizedUiText(context, 'When this contact cannot reach someone but this device can, ' 'pass their messages on. You see only who they are for and ' 'when; the content stays encrypted.'),
-            ),
+            title: Text(l10nOf(context).uiCarryTheirMessages22FD33),
+            subtitle: Text(l10nOf(context).uiWhenThisContactCannotReach5C3FF8),
             contentPadding: EdgeInsets.zero,
           ),
           const SizedBox(height: 12),
@@ -17817,7 +18185,7 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child:  Text(localizedUiText(context, 'Cancel')),
+          child: Text(l10nOf(context).actionCancel),
         ),
         FilledButton(
           onPressed: canSave
@@ -17835,7 +18203,7 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
                   Navigator.of(context).pop();
                 }
               : null,
-          child:  Text(localizedUiText(context, 'Save')),
+          child: Text(l10nOf(context).uiSaveEFC007),
         ),
       ],
     );
@@ -17860,7 +18228,7 @@ class _TransportPolicySelector extends StatelessWidget {
     padding: const EdgeInsets.symmetric(vertical: 3),
     child: Row(
       children: [
-        Expanded(child: Text(kind.label)),
+        Expanded(child: Text(transportKindLabel(context, kind))),
         DropdownButton<TransportPolicy>(
           value: value,
           onChanged: enabled
@@ -17873,10 +18241,16 @@ class _TransportPolicySelector extends StatelessWidget {
               DropdownMenuItem(
                 value: policy,
                 child: Text(switch (policy) {
-                  TransportPolicy.automatic => localizedUiText(context, 'Automatic'),
-                  TransportPolicy.preferred => localizedUiText(context, 'Preferred'),
-                  TransportPolicy.disabled => localizedUiText(context, 'Disabled'),
-                  TransportPolicy.askBeforeUse => localizedUiText(context, 'Ask first'),
+                  TransportPolicy.automatic => l10nOf(
+                    context,
+                  ).uiAutomaticAC9041,
+                  TransportPolicy.preferred => l10nOf(
+                    context,
+                  ).uiPreferred0A3E0D,
+                  TransportPolicy.disabled => l10nOf(context).uiDisabledF4F447,
+                  TransportPolicy.askBeforeUse => l10nOf(
+                    context,
+                  ).uiAskFirst1AEB84,
                 }),
               ),
           ],
@@ -18207,7 +18581,9 @@ class _AlbumBubble extends StatelessWidget {
           ? () => onToggleSelection!(members)
           : null,
       child: Align(
-        alignment: outbound ? AlignmentDirectional.centerEnd : AlignmentDirectional.centerStart,
+        alignment: outbound
+            ? AlignmentDirectional.centerEnd
+            : AlignmentDirectional.centerStart,
         child: Container(
           constraints: const BoxConstraints(maxWidth: 520),
           margin: const EdgeInsets.only(bottom: 12),
@@ -18272,7 +18648,7 @@ class _AlbumBubble extends StatelessWidget {
                         }
                       },
                       child: Text(
-                        localizedUiText(context, 'Retry failed'),
+                        l10nOf(context).uiRetryFailed7B6CA4,
                         style: TextStyle(
                           color: outbound
                               ? palette.outboundText
@@ -18290,7 +18666,7 @@ class _AlbumBubble extends StatelessWidget {
                   right: -8,
                   top: -8,
                   child: PopupMenuButton<String>(
-                    tooltip: localizedUiText(context, 'Album actions'),
+                    tooltip: l10nOf(context).uiAlbumActions7B6D70,
                     icon: Icon(
                       Icons.more_horiz,
                       size: 18,
@@ -18310,13 +18686,13 @@ class _AlbumBubble extends StatelessWidget {
                     },
                     itemBuilder: (_) => [
                       if (anyInFlight)
-                         PopupMenuItem(
+                        PopupMenuItem(
                           value: 'cancel',
-                          child: Text(localizedUiText(context, 'Cancel album')),
+                          child: Text(l10nOf(context).uiCancelAlbumDB0A07),
                         ),
-                       PopupMenuItem(
+                      PopupMenuItem(
                         value: 'delete',
-                        child: Text(localizedUiText(context, 'Delete album')),
+                        child: Text(l10nOf(context).uiDeleteAlbum52E30F),
                       ),
                     ],
                   ),
@@ -18395,28 +18771,28 @@ class _MessageSelectionBar extends StatelessWidget {
           IconButton(
             onPressed: onCancel,
             icon: const Icon(Icons.close),
-            tooltip: localizedUiText(context, 'Cancel selection'),
+            tooltip: l10nOf(context).uiCancelSelectionF7F56C,
           ),
           const SizedBox(width: 4),
           Text(
-            localizedUiText(context, '$count selected'),
+            l10nOf(context).uiValueSelectedB1DFAF((count)),
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const Spacer(),
           IconButton(
             onPressed: onCopy,
             icon: const Icon(Icons.copy_outlined),
-            tooltip: localizedUiText(context, 'Copy'),
+            tooltip: l10nOf(context).uiCopyAF74F7,
           ),
           IconButton(
             onPressed: onSave,
             icon: const Icon(Icons.download_outlined),
-            tooltip: localizedUiText(context, 'Save attachments'),
+            tooltip: l10nOf(context).uiSaveAttachments5A74EA,
           ),
           IconButton(
             onPressed: onDelete,
             icon: const Icon(Icons.delete_outline),
-            tooltip: localizedUiText(context, 'Delete'),
+            tooltip: l10nOf(context).menuDelete,
             color: onDelete != null
                 ? Theme.of(context).colorScheme.error
                 : null,
@@ -18442,21 +18818,6 @@ class _TransfersScreen extends StatelessWidget {
     return '${(value / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   }
 
-  String _phase(TransferPhase phase) => switch (phase) {
-    TransferPhase.preparing => 'Preparing',
-    TransferPhase.queued => 'Queued',
-    TransferPhase.awaitingApproval => 'Waiting for approval',
-    TransferPhase.waitingForPeer => 'Waiting for peer',
-    TransferPhase.transferring => 'Transferring',
-    TransferPhase.reconnecting => 'Reconnecting',
-    TransferPhase.paused => 'Paused',
-    TransferPhase.verifying => 'Verifying',
-    TransferPhase.completed => 'Complete',
-    TransferPhase.failed => 'Failed',
-    TransferPhase.canceled => 'Canceled',
-    TransferPhase.unavailable => 'Unavailable',
-  };
-
   String _eta(Duration value) {
     if (value.inHours > 0) {
       return '${value.inHours}h ${value.inMinutes.remainder(60)}m';
@@ -18475,18 +18836,18 @@ class _TransfersScreen extends StatelessWidget {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          title:  Text(localizedUiText(context, 'Cancel and clear all transfers?')),
+          title: Text(l10nOf(context).uiCancelAndClearAllTransfers01B81D),
           content: Text(
-            localizedUiText(context, 'This will cancel $activeCount active transfer${activeCount == 1 ? '' : 's'} and clear the transfer list. Chat messages and completed downloaded files will stay.'),
+            l10nOf(context).uiThisWillCancelValueActiveB3425E((activeCount)),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext, false),
-              child:  Text(localizedUiText(context, 'Keep transfers')),
+              child: Text(l10nOf(context).uiKeepTransfersDB8CC7),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(dialogContext, true),
-              child:  Text(localizedUiText(context, 'Cancel and clear')),
+              child: Text(l10nOf(context).uiCancelAndClearCCF59C),
             ),
           ],
         ),
@@ -18518,10 +18879,10 @@ class _TransfersScreen extends StatelessWidget {
             .toList(growable: false);
         return Scaffold(
           appBar: AppBar(
-            title:  Text(localizedUiText(context, 'Transfers')),
+            title: Text(l10nOf(context).uiTransfers812412),
             actions: [
               IconButton(
-                tooltip: localizedUiText(context, 'Pause all'),
+                tooltip: l10nOf(context).uiPauseAll6F6099,
                 onPressed:
                     active.any(
                       (entry) => entry.phase.isActive && !entry.pausedByPeer,
@@ -18531,14 +18892,14 @@ class _TransfersScreen extends StatelessWidget {
                 icon: const Icon(Icons.pause_circle_outline),
               ),
               IconButton(
-                tooltip: localizedUiText(context, 'Resume all'),
+                tooltip: l10nOf(context).uiResumeAll039916,
                 onPressed: active.any((entry) => entry.pausedByMe)
                     ? () => unawaited(controller.resumeAllTransfers())
                     : null,
                 icon: const Icon(Icons.play_circle_outline),
               ),
               IconButton(
-                tooltip: localizedUiText(context, 'Cancel and clear all transfers'),
+                tooltip: l10nOf(context).uiCancelAndClearAllTransfersACEBB3,
                 onPressed: snapshots.isEmpty
                     ? null
                     : () => unawaited(
@@ -18550,7 +18911,7 @@ class _TransfersScreen extends StatelessWidget {
                 icon: const Icon(Icons.delete_sweep_outlined),
               ),
               IconButton(
-                tooltip: localizedUiText(context, 'Clear completed'),
+                tooltip: l10nOf(context).uiClearCompletedE63FC1,
                 onPressed: recent.isEmpty
                     ? null
                     : controller.clearCompletedTransfers,
@@ -18559,32 +18920,42 @@ class _TransfersScreen extends StatelessWidget {
             ],
           ),
           body: snapshots.isEmpty
-              ?  Center(child: Text(localizedUiText(context, 'No transfers yet.')))
+              ? Center(child: Text(l10nOf(context).uiNoTransfersYetB8E5C1))
               : ListView(
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
                   children: [
                     if (active.isNotEmpty) ...[
-                      _TransferSectionLabel(label: localizedUiText(context, 'Active (${active.length})')),
+                      _TransferSectionLabel(
+                        label: l10nOf(
+                          context,
+                        ).uiActiveValueC78B63((active.length).toString()),
+                      ),
                       for (final snapshot in active)
                         _TransferManagerTile(
                           snapshot: snapshot,
                           controller: controller,
                           palette: palette,
                           bytesLabel: _bytes,
-                          phaseLabel: _phase,
+                          phaseLabel: (phase) =>
+                              transferPhaseLabel(context, phase),
                           etaLabel: _eta,
                         ),
                     ],
                     if (recent.isNotEmpty) ...[
                       const SizedBox(height: 12),
-                      _TransferSectionLabel(label: localizedUiText(context, 'Recent (${recent.length})')),
+                      _TransferSectionLabel(
+                        label: l10nOf(
+                          context,
+                        ).uiRecentValueB82237((recent.length).toString()),
+                      ),
                       for (final snapshot in recent)
                         _TransferManagerTile(
                           snapshot: snapshot,
                           controller: controller,
                           palette: palette,
                           bytesLabel: _bytes,
-                          phaseLabel: _phase,
+                          phaseLabel: (phase) =>
+                              transferPhaseLabel(context, phase),
                           etaLabel: _eta,
                         ),
                     ],
@@ -18633,9 +19004,13 @@ class _TransferManagerTile extends StatelessWidget {
     final details = <String>[
       '${bytesLabel(snapshot.bytesTransferred)} / ${bytesLabel(snapshot.totalBytes)}',
       if (speed != null && speed > 0) '${bytesLabel(speed.round())}/s',
-      if (snapshot.eta != null) '${etaLabel(snapshot.eta!)} left',
+      if (snapshot.eta != null)
+        l10nOf(context).transferTimeLeft(etaLabel(snapshot.eta!)),
       if (route != null && route.isNotEmpty) route,
-      if (snapshot.queuePriority > 0) 'queue #${snapshot.queuePriority}',
+      if (snapshot.queuePriority > 0)
+        l10nOf(
+          context,
+        ).transferQueuePosition(snapshot.queuePriority.toString()),
     ];
     final canCancel =
         snapshot.phase.isActive ||
@@ -18673,7 +19048,7 @@ class _TransferManagerTile extends StatelessWidget {
                           style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                         Text(
-                          localizedUiText(context, '${controller.transferConversationLabel(snapshot.id)} · ${phaseLabel(snapshot.phase)}'),
+                          "${(controller.transferConversationLabel(snapshot.id))} · ${(phaseLabel(snapshot.phase))}",
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
@@ -18681,7 +19056,7 @@ class _TransferManagerTile extends StatelessWidget {
                   ),
                   if (snapshot.queuePriority > 1)
                     IconButton(
-                      tooltip: localizedUiText(context, 'Move to top'),
+                      tooltip: l10nOf(context).uiMoveToTop44AFA6,
                       onPressed: () =>
                           controller.prioritizeTransfer(snapshot.id),
                       icon: const Icon(Icons.vertical_align_top),
@@ -18691,8 +19066,8 @@ class _TransferManagerTile extends StatelessWidget {
                     IconButton(
                       tooltip:
                           controller.attachmentAcceptanceInProgress(snapshot.id)
-                          ? localizedUiText(context, 'Preparing download')
-                          : localizedUiText(context, 'Download'),
+                          ? l10nOf(context).uiPreparingDownloadF9B13B
+                          : l10nOf(context).uiDownloadA479C9,
                       onPressed:
                           controller.attachmentAcceptanceInProgress(snapshot.id)
                           ? null
@@ -18709,14 +19084,14 @@ class _TransferManagerTile extends StatelessWidget {
                     )
                   else if (snapshot.pausedByMe)
                     IconButton(
-                      tooltip: localizedUiText(context, 'Resume'),
+                      tooltip: l10nOf(context).uiResumeB3BD0B,
                       onPressed: () =>
                           unawaited(controller.resumeAttachment(snapshot.id)),
                       icon: const Icon(Icons.play_circle_outline),
                     )
                   else if (snapshot.phase.isActive)
                     IconButton(
-                      tooltip: localizedUiText(context, 'Pause'),
+                      tooltip: l10nOf(context).uiPause781961,
                       onPressed: snapshot.pausedByPeer
                           ? null
                           : () => unawaited(
@@ -18727,13 +19102,13 @@ class _TransferManagerTile extends StatelessWidget {
                   if (snapshot.phase == TransferPhase.failed ||
                       snapshot.phase == TransferPhase.unavailable)
                     IconButton(
-                      tooltip: localizedUiText(context, 'Retry'),
+                      tooltip: l10nOf(context).uiRetry9F5CD8,
                       onPressed: () => controller.retryAttachment(snapshot.id),
                       icon: const Icon(Icons.refresh),
                     ),
                   if (canCancel)
                     IconButton(
-                      tooltip: localizedUiText(context, 'Cancel'),
+                      tooltip: l10nOf(context).actionCancel,
                       onPressed: () =>
                           unawaited(controller.cancelTransfer(snapshot.id)),
                       icon: const Icon(Icons.close),
@@ -18782,7 +19157,7 @@ class _TransferManagerTile extends StatelessWidget {
                       ),
                     ),
                     icon: const Icon(Icons.cloud_upload_outlined),
-                    label:  Text(localizedUiText(context, 'Continue over Iroh relay')),
+                    label: Text(l10nOf(context).uiContinueOverIrohRelay949702),
                   ),
                 ),
               ],
@@ -18813,7 +19188,7 @@ class _StorageReserveOverrideButton extends StatelessWidget {
               ignoreStorageReserve: true,
             ),
           ),
-    child:  Text(localizedUiText(context, 'Download anyway')),
+    child: Text(l10nOf(context).uiDownloadAnyway42859F),
   );
 }
 
@@ -18904,21 +19279,6 @@ class _AttachmentRow extends StatelessWidget {
     return '${value.inSeconds}s';
   }
 
-  String _phaseLabel(TransferPhase phase) => switch (phase) {
-    TransferPhase.preparing => 'Preparing',
-    TransferPhase.queued => 'Queued',
-    TransferPhase.awaitingApproval => 'Download',
-    TransferPhase.waitingForPeer => 'Waiting',
-    TransferPhase.transferring => 'Transferring',
-    TransferPhase.reconnecting => 'Reconnecting',
-    TransferPhase.paused => 'Paused',
-    TransferPhase.verifying => 'Verifying',
-    TransferPhase.completed => 'Complete',
-    TransferPhase.failed => 'Failed',
-    TransferPhase.canceled => 'Canceled',
-    TransferPhase.unavailable => 'Unavailable',
-  };
-
   bool get _isImage => descriptor.mimeType.startsWith('image/');
   bool get _isVideo =>
       descriptor.voiceMetadata == null &&
@@ -19001,6 +19361,7 @@ class _AttachmentRow extends StatelessWidget {
     String mimeType,
     String descriptorId,
   ) async {
+    final strings = l10nOf(context);
     final safeFileName = sanitizeAttachmentFileName(fileName);
     final kind = _saveKindFor(mimeType);
     if (!kIsWeb && Platform.isAndroid) {
@@ -19036,7 +19397,7 @@ class _AttachmentRow extends StatelessWidget {
     try {
       final defaultDir = await _conestDownloadsDir();
       final path = await FilePicker.saveFile(
-        dialogTitle: localizedUiText(context, 'Save $safeFileName'),
+        dialogTitle: strings.uiSaveValue5769AA((safeFileName).toString()),
         fileName: safeFileName,
         bytes: bytes,
         initialDirectory: defaultDir?.path,
@@ -19474,11 +19835,17 @@ class _AttachmentRow extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               accepting
-                  ? localizedUiText(context, '${sizeMb.toStringAsFixed(1)} MB · preparing download…')
+                  ? l10nOf(context).uiValueMBPreparingDownload799D4A(
+                      (sizeMb.toStringAsFixed(1)).toString(),
+                    )
                   : descriptor.sizeBytes >
                         MessengerController.maxAttachmentSizeBytes
-                  ? localizedUiText(context, '${sizeMb.toStringAsFixed(1)} MB · direct route required')
-                  : localizedUiText(context, '${sizeMb.toStringAsFixed(1)} MB · tap to download'),
+                  ? l10nOf(context).uiValueMBDirectRouteRequired6379F0(
+                      (sizeMb.toStringAsFixed(1)).toString(),
+                    )
+                  : l10nOf(context).uiValueMBTapToDownload432280(
+                      (sizeMb.toStringAsFixed(1)).toString(),
+                    ),
               style: TextStyle(color: metaColor),
             ),
             if (snapshot?.error case final error?) ...[
@@ -19496,7 +19863,7 @@ class _AttachmentRow extends StatelessWidget {
                           controller.acceptIncomingAttachment(descriptor.id),
                         ),
                   child: accepting
-                      ?  Row(
+                      ? Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             SizedBox.square(
@@ -19504,10 +19871,10 @@ class _AttachmentRow extends StatelessWidget {
                               child: CircularProgressIndicator(strokeWidth: 2),
                             ),
                             SizedBox(width: 8),
-                            Text(localizedUiText(context, 'Preparing download…')),
+                            Text(l10nOf(context).uiPreparingDownload8CB769),
                           ],
                         )
-                      :  Text(localizedUiText(context, 'Download')),
+                      : Text(l10nOf(context).uiDownloadA479C9),
                 ),
                 if (controller.canDownloadIgnoringStorageReserve(descriptor.id))
                   _StorageReserveOverrideButton(
@@ -19520,7 +19887,7 @@ class _AttachmentRow extends StatelessWidget {
                       : () => unawaited(
                           controller.rejectIncomingAttachment(descriptor.id),
                         ),
-                  child:  Text(localizedUiText(context, 'Reject')),
+                  child: Text(l10nOf(context).uiReject2B03B5),
                 ),
               ],
             ),
@@ -19699,8 +20066,13 @@ class _AttachmentRow extends StatelessWidget {
                   const SizedBox(height: 6),
                   Text(
                     progress != null
-                        ? localizedUiText(context, 'Transferring · ${(progress * 100).toStringAsFixed(0)}% · ' '${_formatBytes(descriptor.sizeBytes)}')
-                        : localizedUiText(context, 'Transferring · ${_formatBytes(descriptor.sizeBytes)}'),
+                        ? l10nOf(context).uiTransferringValueValue10EEBE(
+                            ((progress * 100).toStringAsFixed(0)).toString(),
+                            (_formatBytes(descriptor.sizeBytes)).toString(),
+                          )
+                        : l10nOf(context).uiTransferringValue9D7F13(
+                            (_formatBytes(descriptor.sizeBytes)).toString(),
+                          ),
                     style: Theme.of(
                       context,
                     ).textTheme.labelSmall?.copyWith(color: metaColor),
@@ -19751,7 +20123,7 @@ class _AttachmentRow extends StatelessWidget {
                         right: 8,
                         bottom: 8,
                         child: Text(
-                          localizedUiText(context, '${descriptor.fileName} · ${_formatBytes(descriptor.sizeBytes)}'),
+                          "${(descriptor.fileName)} · ${(_formatBytes(descriptor.sizeBytes))}",
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -19852,11 +20224,11 @@ class _AttachmentRow extends StatelessWidget {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                localizedUiText(context, 'Voice message'),
+                                l10nOf(context).uiVoiceMessage999DEB,
                                 style: TextStyle(color: textColor),
                               ),
                               Text(
-                                localizedUiText(context, '$durationLabel · ${_formatBytes(descriptor.sizeBytes)}'),
+                                "${(durationLabel)} · ${(_formatBytes(descriptor.sizeBytes))}",
                                 style: TextStyle(color: metaColor),
                               ),
                             ],
@@ -19864,7 +20236,7 @@ class _AttachmentRow extends StatelessWidget {
                         ),
                         if (hasLocalFile)
                           PopupMenuButton<double>(
-                            tooltip: localizedUiText(context, 'Playback speed'),
+                            tooltip: l10nOf(context).uiPlaybackSpeed6FF42B,
                             icon: Icon(Icons.speed, color: textColor, size: 20),
                             onSelected: (rate) => unawaited(
                               service
@@ -19905,11 +20277,10 @@ class _AttachmentRow extends StatelessWidget {
                       Align(
                         alignment: AlignmentDirectional.centerStart,
                         child: Text(
-                          localizedUiText(context, 'Playback failed: ${service.playbackError}'),
-                          style: TextStyle(
-                            color: palette.danger,
-                            fontSize: 12,
+                          l10nOf(context).uiPlaybackFailedValue1C0E1A(
+                            (service.playbackError).toString(),
                           ),
+                          style: TextStyle(color: palette.danger, fontSize: 12),
                         ),
                       ),
                   ],
@@ -19926,9 +20297,9 @@ class _AttachmentRow extends StatelessWidget {
         : (_isImage ? Icons.image_outlined : Icons.insert_drive_file_outlined);
     final String pauseSuffix;
     if (pauseState != null && pauseState.pausedByMe) {
-      pauseSuffix = ' · Paused';
+      pauseSuffix = ' · ${l10nOf(context).uiPausedC7DFB6}';
     } else if (pauseState != null && pauseState.pausedByPeer) {
-      pauseSuffix = ' · Paused by peer';
+      pauseSuffix = ' · ${l10nOf(context).uiPausedByPeer63BD05}';
     } else {
       pauseSuffix = '';
     }
@@ -19939,39 +20310,43 @@ class _AttachmentRow extends StatelessWidget {
     // surfaced in nightly.6.
     if (snapshot != null && snapshot.phase != TransferPhase.completed) {
       final details = <String>[
-        _phaseLabel(snapshot.phase),
+        snapshot.phase == TransferPhase.awaitingApproval
+            ? l10nOf(context).uiDownloadA479C9
+            : transferPhaseLabel(context, snapshot.phase),
         '${(snapshot.progress * 100).toStringAsFixed(0)}%',
         '${_formatBytes(snapshot.bytesTransferred)} / ${_formatBytes(snapshot.totalBytes)}',
         if (snapshot.bytesPerSecond != null && snapshot.bytesPerSecond! > 0)
           '${_formatBytes(snapshot.bytesPerSecond!.round())}/s',
-        if (snapshot.eta != null) '${_formatEta(snapshot.eta!)} left',
+        if (snapshot.eta != null)
+          l10nOf(context).transferTimeLeft(_formatEta(snapshot.eta!)),
         if ((snapshot.routeLabel ?? '').isNotEmpty) snapshot.routeLabel!,
       ];
       statusLine = details.join(' · ');
     } else if (messageState == DeliveryState.failed) {
       statusLine =
-          'Failed · ${_formatBytes(descriptor.sizeBytes)}'
-          '${outbound ? " · tap to retry" : ""}';
+          '${l10nOf(context).callFailed} · ${_formatBytes(descriptor.sizeBytes)}'
+          '${outbound ? " · ${l10nOf(context).transferTapRetry}" : ""}';
     } else if (hasLocalFile && !outbound) {
       statusLine = _formatBytes(descriptor.sizeBytes);
     } else if (outbound && outboundProgress != null) {
       final reroutePrefix = controller.isOutboundReroutingFor(descriptor.id)
-          ? 'Rerouting · '
+          ? '${l10nOf(context).transferRerouting} · '
           : '';
       statusLine =
-          '${reroutePrefix}Transferring · ${(outboundProgress * 100).toStringAsFixed(0)}% · '
+          '$reroutePrefix${l10nOf(context).uiTransferring73F753} · ${(outboundProgress * 100).toStringAsFixed(0)}% · '
           '${_formatBytes(descriptor.sizeBytes)}$pauseSuffix';
     } else if (outbound && queuePosition > 0) {
       statusLine =
-          'Queued · #$queuePosition · ${_formatBytes(descriptor.sizeBytes)}';
+          '${l10nOf(context).uiQueued6A5998} · #$queuePosition · ${_formatBytes(descriptor.sizeBytes)}';
     } else if (hasLocalFile) {
       statusLine = _formatBytes(descriptor.sizeBytes);
     } else if (progress != null) {
       statusLine =
-          'Transferring · ${(progress * 100).toStringAsFixed(0)}% · '
+          '${l10nOf(context).uiTransferring73F753} · ${(progress * 100).toStringAsFixed(0)}% · '
           '${_formatBytes(descriptor.sizeBytes)}$pauseSuffix';
     } else {
-      statusLine = 'Transferring · ${_formatBytes(descriptor.sizeBytes)}';
+      statusLine =
+          '${l10nOf(context).uiTransferring73F753} · ${_formatBytes(descriptor.sizeBytes)}';
     }
     return _wrapContextMenu(
       context: context,
@@ -20072,7 +20447,9 @@ class _AttachmentRow extends StatelessWidget {
                         size: 22,
                         color: metaColor,
                       ),
-                      tooltip: pauseState.pausedByMe ? localizedUiText(context, 'Resume') : localizedUiText(context, 'Pause'),
+                      tooltip: pauseState.pausedByMe
+                          ? l10nOf(context).uiResumeB3BD0B
+                          : l10nOf(context).uiPause781961,
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(
@@ -20096,7 +20473,7 @@ class _AttachmentRow extends StatelessWidget {
                         size: 22,
                         color: metaColor,
                       ),
-                      tooltip: localizedUiText(context, 'Cancel'),
+                      tooltip: l10nOf(context).actionCancel,
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(
@@ -20262,7 +20639,7 @@ class _StagedAttachmentTray extends StatelessWidget {
                             shape: BoxShape.circle,
                           ),
                           child: Text(
-                            localizedUiText(context, '${i + 1}'),
+                            "${(i + 1)}",
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 11,
@@ -20275,7 +20652,7 @@ class _StagedAttachmentTray extends StatelessWidget {
                         left: 2,
                         bottom: 2,
                         child: PopupMenuButton<AttachmentPresentation>(
-                          tooltip: localizedUiText(context, 'Send mode'),
+                          tooltip: l10nOf(context).uiSendMode265A2D,
                           initialValue: item.presentation,
                           onSelected: (presentation) =>
                               controller.setStagedPresentation(
@@ -20283,14 +20660,14 @@ class _StagedAttachmentTray extends StatelessWidget {
                                 stagedId: item.id,
                                 presentation: presentation,
                               ),
-                          itemBuilder: (context) =>  [
+                          itemBuilder: (context) => [
                             PopupMenuItem(
                               value: AttachmentPresentation.media,
-                              child: Text(localizedUiText(context, 'Send as media')),
+                              child: Text(l10nOf(context).uiSendAsMedia061D87),
                             ),
                             PopupMenuItem(
                               value: AttachmentPresentation.file,
-                              child: Text(localizedUiText(context, 'Send as file')),
+                              child: Text(l10nOf(context).uiSendAsFileB50EAF),
                             ),
                           ],
                           child: Container(
@@ -20304,8 +20681,8 @@ class _StagedAttachmentTray extends StatelessWidget {
                             ),
                             child: Text(
                               item.presentation == AttachmentPresentation.media
-                                  ? localizedUiText(context, 'MEDIA')
-                                  : localizedUiText(context, 'FILE'),
+                                  ? l10nOf(context).uiMEDIAB85FA2
+                                  : l10nOf(context).uiFILEB4915D,
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 8,
@@ -20414,10 +20791,10 @@ class _TransferOverlay extends StatelessWidget {
                     const SizedBox(height: 6),
                     Text(
                       pausedByMe
-                          ? localizedUiText(context, 'Paused')
+                          ? l10nOf(context).uiPausedC7DFB6
                           : pausedByPeer
-                          ? localizedUiText(context, 'Paused by peer')
-                          : (pct != null ? localizedUiText(context, '$pct%') : ''),
+                          ? l10nOf(context).uiPausedByPeer63BD05
+                          : (pct != null ? "${(pct)}%" : ''),
                       style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.w600,
@@ -20475,7 +20852,7 @@ class _PathImageViewerScreen extends StatelessWidget {
         title: Text(title),
         actions: [
           IconButton(
-            tooltip: localizedUiText(context, 'Save'),
+            tooltip: l10nOf(context).uiSaveEFC007,
             onPressed: () => unawaited(onSave()),
             icon: const Icon(Icons.download_outlined),
           ),
@@ -20493,9 +20870,9 @@ class _PathImageViewerScreen extends StatelessWidget {
                 File(path),
                 cacheWidth: cacheWidth,
                 fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) =>  Center(
+                errorBuilder: (context, error, stackTrace) => Center(
                   child: Text(
-                    localizedUiText(context, 'Could not decode this image.'),
+                    l10nOf(context).uiCouldNotDecodeThisImage3EAA16,
                     style: TextStyle(color: Colors.white),
                   ),
                 ),
@@ -20572,20 +20949,20 @@ class _ImageViewerScreenState extends State<_ImageViewerScreen> {
         foregroundColor: Colors.white,
         title: Text(
           widget.pages.length > 1
-              ? localizedUiText(context, '${activePage.fileName}  ·  ${_index + 1}/${widget.pages.length}')
+              ? "${(activePage.fileName)}  ·  ${(_index + 1)}/${(widget.pages.length)}"
               : activePage.fileName,
         ),
         actions: [
           if (widget.onCopy != null)
             IconButton(
               icon: const Icon(Icons.copy_outlined),
-              tooltip: localizedUiText(context, 'Copy'),
+              tooltip: l10nOf(context).uiCopyAF74F7,
               onPressed: () => widget.onCopy!(activePage),
             ),
           if (widget.onSave != null)
             IconButton(
               icon: const Icon(Icons.download_outlined),
-              tooltip: localizedUiText(context, 'Save'),
+              tooltip: l10nOf(context).uiSaveEFC007,
               onPressed: () => widget.onSave!(activePage),
             ),
         ],
@@ -20651,23 +21028,23 @@ class _RouteChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final info = switch (route) {
       OutboundDeliveryRoute.lanDirect => (
-        label: localizedUiText(context, 'LAN'),
+        label: l10nOf(context).uiLAN2ECD17,
         color: const Color(0xFF4ADE80),
       ),
       OutboundDeliveryRoute.irohDirect => (
-        label: localizedUiText(context, 'direct'),
+        label: l10nOf(context).uiDirect24A173,
         color: const Color(0xFF22D3EE),
       ),
       OutboundDeliveryRoute.irohRelay => (
-        label: localizedUiText(context, 'Iroh relay'),
+        label: l10nOf(context).uiIrohRelayB128EA,
         color: const Color(0xFFC084FC),
       ),
       OutboundDeliveryRoute.conestRelay => (
-        label: localizedUiText(context, 'relay'),
+        label: l10nOf(context).uiRelayBD28B2,
         color: const Color(0xFFFBBF24),
       ),
       OutboundDeliveryRoute.unknown => (
-        label: localizedUiText(context, 'routing'),
+        label: l10nOf(context).uiRoutingECF60A,
         color: const Color(0xFF94A3B8),
       ),
     };
@@ -20727,24 +21104,24 @@ extension MessageRouteStyle on MessageRoute {
     MessageRoute.viaContact => const Color(0xFFEF6C00),
   };
 
-  String get shortLabel => switch (this) {
+  String shortLabel(BuildContext context) => switch (this) {
     MessageRoute.lanDirect => 'LAN',
-    MessageRoute.lanRelay => 'LAN relay',
-    MessageRoute.lanLobby => 'Lobby',
-    MessageRoute.internetDirect => 'Direct',
+    MessageRoute.lanRelay => l10nOf(context).uiLANRelayA05D48,
+    MessageRoute.lanLobby => l10nOf(context).routeShortLobby,
+    MessageRoute.internetDirect => l10nOf(context).routeShortDirect,
     MessageRoute.irohDirect => 'Iroh',
-    MessageRoute.irohRelay => 'Iroh relay',
-    MessageRoute.conestRelay => 'Relay',
+    MessageRoute.irohRelay => l10nOf(context).uiIrohRelayB128EA,
+    MessageRoute.conestRelay => l10nOf(context).routeShortRelay,
     MessageRoute.matrixCarrier => 'Matrix',
-    MessageRoute.plainMatrix => 'Plain Matrix',
+    MessageRoute.plainMatrix => l10nOf(context).uiPlainMatrixBA9DE1,
     MessageRoute.nostrCarrier => 'Nostr',
-    MessageRoute.emailCarrier => 'Email',
+    MessageRoute.emailCarrier => l10nOf(context).uiEmail84ADD5,
     MessageRoute.reticulum => 'Reticulum',
     MessageRoute.meshtastic => 'Meshtastic',
     MessageRoute.meshCore => 'MeshCore',
     MessageRoute.bitchat => 'Bluetooth',
     MessageRoute.torOnion => 'Tor',
-    MessageRoute.viaContact => 'Via contact',
+    MessageRoute.viaContact => l10nOf(context).routeShortContact,
   };
 }
 
@@ -20761,18 +21138,21 @@ Future<void> _sendViaPlainMatrix(
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
-      title:  Text(localizedUiText(context, 'Send via Matrix?')),
+      title: Text(l10nOf(context).uiSendViaMatrix062A08),
       content: Text(
-        localizedUiText(context, '${contact.alias} cannot be reached over Conest right now. Send this ' 'message to $userId as an ordinary Matrix message instead?\n\n' 'It goes to your Matrix direct chat with them, not through Conest ' 'encryption: the homeserver can read it unless that chat is ' 'encrypted. Conest stops trying to deliver it.'),
+        l10nOf(context).uiValueCannotBeReachedOver14E8C2(
+          (contact.alias).toString(),
+          (userId).toString(),
+        ),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context, false),
-          child:  Text(localizedUiText(context, 'Keep waiting')),
+          child: Text(l10nOf(context).uiKeepWaiting9BE1AB),
         ),
         FilledButton(
           onPressed: () => Navigator.pop(context, true),
-          child:  Text(localizedUiText(context, 'Send via Matrix')),
+          child: Text(l10nOf(context).uiSendViaMatrix638038),
         ),
       ],
     ),
@@ -20796,8 +21176,8 @@ class _MessageRouteLegend extends StatelessWidget {
   Widget build(BuildContext context) {
     return ExpansionTile(
       tilePadding: EdgeInsets.zero,
-      title:  Text(localizedUiText(context, 'Message routes')),
-      subtitle:  Text(localizedUiText(context, 'What the coloured marks on messages mean')),
+      title: Text(l10nOf(context).uiMessageRoutesFBF32C),
+      subtitle: Text(l10nOf(context).uiWhatTheColouredMarksOnA10C8E),
       children: [
         for (final route in MessageRoute.values)
           if (route.carrierKind?.userVisible ?? true)
@@ -20805,8 +21185,8 @@ class _MessageRouteLegend extends StatelessWidget {
               dense: true,
               contentPadding: EdgeInsets.zero,
               leading: CircleAvatar(radius: 6, backgroundColor: route.color),
-              title: Text(route.label),
-              subtitle: Text(route.description),
+              title: Text(messageRouteLabel(context, route)),
+              subtitle: Text(messageRouteDescription(context, route)),
             ),
       ],
     );
@@ -20841,9 +21221,9 @@ class _MessageRouteChip extends StatelessWidget {
     final tooltip = reached.length > 1
         ? [
             for (final entry in reached.entries)
-              '${entry.key.label}: ${MessageInfoDialog.markLabel(entry.value, outbound: message.outbound)}',
+              '${messageRouteLabel(context, entry.key)}: ${MessageInfoDialog.markLabel(entry.value, outbound: message.outbound, context: context)}',
           ].join('\n')
-        : '${route.label}: ${route.description}'
+        : '${messageRouteLabel(context, route)}: ${messageRouteDescription(context, route)}'
               '${detail == null || detail.isEmpty ? '' : '\n$detail'}';
     return Tooltip(
       message: tooltip,
@@ -20869,12 +21249,12 @@ class _MessageRouteChip extends StatelessWidget {
                 ],
                 if (dots.length > 4)
                   Text(
-                    localizedUiText(context, '+${dots.length - 4}'),
+                    "+${(dots.length - 4)}",
                     style: TextStyle(fontSize: 9, color: route.color),
                   ),
                 const SizedBox(width: 1),
                 Text(
-                  route.shortLabel,
+                  route.shortLabel(context),
                   style: TextStyle(
                     fontSize: 9,
                     fontWeight: FontWeight.w600,
@@ -20891,7 +21271,7 @@ class _MessageRouteChip extends StatelessWidget {
                 borderRadius: BorderRadius.circular(999),
               ),
               child: Text(
-                route.label,
+                messageRouteLabel(context, route),
                 style: TextStyle(
                   fontSize: 9,
                   fontWeight: FontWeight.w600,
@@ -20919,7 +21299,7 @@ class _QueueBadge extends StatelessWidget {
       ),
       alignment: Alignment.center,
       child: Text(
-        localizedUiText(context, '$position'),
+        "${(position)}",
         style: const TextStyle(
           color: Colors.white,
           fontSize: 11,
@@ -21088,7 +21468,7 @@ class _VideoPlayerScreenState extends State<_VideoPlayerScreen> {
           if (widget.onSave != null)
             IconButton(
               icon: const Icon(Icons.download_outlined),
-              tooltip: localizedUiText(context, 'Save'),
+              tooltip: l10nOf(context).uiSaveEFC007,
               onPressed: () => widget.onSave!(),
             ),
         ],
@@ -21120,7 +21500,9 @@ class _VideoPlayerScreenState extends State<_VideoPlayerScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        localizedUiText(context, 'Could not play this video: $_initError'),
+                        l10nOf(context).uiCouldNotPlayThisVideoF7D318(
+                          (_initError).toString(),
+                        ),
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Colors.white70),
                       ),
@@ -21128,7 +21510,9 @@ class _VideoPlayerScreenState extends State<_VideoPlayerScreen> {
                       FilledButton.icon(
                         onPressed: _openInSystemPlayer,
                         icon: const Icon(Icons.open_in_new),
-                        label:  Text(localizedUiText(context, 'Open in default player')),
+                        label: Text(
+                          l10nOf(context).uiOpenInDefaultPlayerE64C20,
+                        ),
                       ),
                     ],
                   ),
@@ -21213,7 +21597,7 @@ class _GroupLeftBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
-        localizedUiText(context, 'You left'),
+        l10nOf(context).uiYouLeft9F2CDB,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
           color: palette.inkSoft,
           fontWeight: FontWeight.w700,
@@ -21243,7 +21627,7 @@ class _ReachabilityChip extends StatelessWidget {
       ContactReachabilityState.unknown => palette.danger,
     };
     final labelWidget = Text(
-      state.label,
+      reachabilityLabel(context, state),
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
     );
@@ -21294,7 +21678,7 @@ class _QuotedReference extends StatelessWidget {
             ? palette.primary.withValues(alpha: 0.10)
             : palette.selection,
         borderRadius: BorderRadius.circular(12),
-        border: Border(left: BorderSide(color: borderColor, width: 3)),
+        border: BorderDirectional(start: BorderSide(color: borderColor, width: 3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -21352,7 +21736,9 @@ class _ComposerReplyPreview extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  localizedUiText(context, 'Replying to $senderLabel'),
+                  l10nOf(
+                    context,
+                  ).uiReplyingToValue645786((senderLabel).toString()),
                   style: Theme.of(context).textTheme.labelMedium?.copyWith(
                     color: palette.primary,
                     fontWeight: FontWeight.w700,
@@ -21373,7 +21759,7 @@ class _ComposerReplyPreview extends StatelessWidget {
           ),
           IconButton(
             onPressed: onCancel,
-            tooltip: localizedUiText(context, 'Cancel reply'),
+            tooltip: l10nOf(context).uiCancelReplyBD62D2,
             icon: const Icon(Icons.close),
           ),
         ],
@@ -21416,7 +21802,7 @@ class _ScheduledMessagesScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title:  Text(localizedUiText(context, 'Scheduled messages'))),
+      appBar: AppBar(title: Text(l10nOf(context).uiScheduledMessages98CEF4)),
       body: ListenableBuilder(
         listenable: controller,
         builder: (context, _) {
@@ -21428,7 +21814,9 @@ class _ScheduledMessagesScreen extends StatelessWidget {
               )
               .toList(growable: false);
           if (entries.isEmpty) {
-            return  Center(child: Text(localizedUiText(context, 'No scheduled messages')));
+            return Center(
+              child: Text(l10nOf(context).uiNoScheduledMessages1DDB60),
+            );
           }
           return ListView.separated(
             padding: const EdgeInsets.all(16),
@@ -21447,13 +21835,14 @@ class _ScheduledMessagesScreen extends StatelessWidget {
                 ),
                 title: Text(
                   entry.body.isEmpty
-                      ? (entry.attachmentFileName ?? localizedUiText(context, 'Scheduled attachment'))
+                      ? (entry.attachmentFileName ??
+                            l10nOf(context).uiScheduledAttachment08DB0E)
                       : entry.body,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
                 subtitle: Text(
-                  localizedUiText(context, '${entry.conversationKind} • ${entry.scheduledAtUtc.toLocal()}\n${entry.failureReason ?? entry.state.name}'),
+                  "${(entry.conversationKind)} • ${(entry.scheduledAtUtc.toLocal())}\n${(entry.failureReason ?? entry.state.name)}",
                 ),
                 isThreeLine: true,
                 trailing: PopupMenuButton<String>(
@@ -21463,7 +21852,9 @@ class _ScheduledMessagesScreen extends StatelessWidget {
                       final body = await showDialog<String>(
                         context: context,
                         builder: (dialogContext) => AlertDialog(
-                          title:  Text(localizedUiText(context, 'Edit scheduled message')),
+                          title: Text(
+                            l10nOf(context).uiEditScheduledMessage62AF88,
+                          ),
                           content: TextField(
                             controller: editor,
                             autofocus: true,
@@ -21471,19 +21862,19 @@ class _ScheduledMessagesScreen extends StatelessWidget {
                             maxLines: 5,
                             decoration: InputDecoration(
                               hintText: entry.attachmentPath == null
-                                  ? localizedUiText(context, 'Message')
-                                  : localizedUiText(context, 'Caption'),
+                                  ? l10nOf(context).uiMessage68F414
+                                  : l10nOf(context).uiCaption3428D9,
                             ),
                           ),
                           actions: [
                             TextButton(
                               onPressed: () => Navigator.pop(dialogContext),
-                              child:  Text(localizedUiText(context, 'Cancel')),
+                              child: Text(l10nOf(context).actionCancel),
                             ),
                             FilledButton(
                               onPressed: () =>
                                   Navigator.pop(dialogContext, editor.text),
-                              child:  Text(localizedUiText(context, 'Save')),
+                              child: Text(l10nOf(context).uiSaveEFC007),
                             ),
                           ],
                         ),
@@ -21535,12 +21926,18 @@ class _ScheduledMessagesScreen extends StatelessWidget {
                       value: 'edit',
                       child: Text(l10nOf(context).menuEdit),
                     ),
-                     PopupMenuItem(value: 'send', child: Text(localizedUiText(context, 'Send now'))),
-                     PopupMenuItem(
-                      value: 'reschedule',
-                      child: Text(localizedUiText(context, 'Reschedule')),
+                    PopupMenuItem(
+                      value: 'send',
+                      child: Text(l10nOf(context).uiSendNowDAE330),
                     ),
-                     PopupMenuItem(value: 'cancel', child: Text(localizedUiText(context, 'Cancel'))),
+                    PopupMenuItem(
+                      value: 'reschedule',
+                      child: Text(l10nOf(context).uiReschedule34B2DC),
+                    ),
+                    PopupMenuItem(
+                      value: 'cancel',
+                      child: Text(l10nOf(context).actionCancel),
+                    ),
                   ],
                 ),
               );
@@ -21624,15 +22021,17 @@ class _ShareTargetDialog extends StatelessWidget {
     return AlertDialog(
       title: Text(
         count == 0
-            ? localizedUiText(context, 'Share text to…')
+            ? l10nOf(context).uiShareTextTo7B5086
             : count == 1
-            ? localizedUiText(context, 'Share ${shared.files.single.name} to…')
-            : localizedUiText(context, 'Share $count files to…'),
+            ? l10nOf(
+                context,
+              ).uiShareValueTo6E3BDD((shared.files.single.name).toString())
+            : l10nOf(context).uiShareValueFilesToA46E17((count)),
       ),
       content: SizedBox(
         width: 380,
         child: contacts.isEmpty && groups.isEmpty
-            ?  Text(localizedUiText(context, 'No chats to share into yet.'))
+            ? Text(l10nOf(context).uiNoChatsToShareIntoB50F2F)
             : ListView(
                 shrinkWrap: true,
                 children: [
@@ -21654,7 +22053,7 @@ class _ShareTargetDialog extends StatelessWidget {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child:  Text(localizedUiText(context, 'Cancel')),
+          child: Text(l10nOf(context).actionCancel),
         ),
       ],
     );
@@ -21759,18 +22158,18 @@ class _WindowsFirewallTileState extends State<_WindowsFirewallTile> {
     key: const ValueKey('windows-firewall'),
     contentPadding: EdgeInsets.zero,
     leading: const Icon(Icons.shield_outlined),
-    title:  Text(localizedUiText(context, 'Let devices on this network reach this PC')),
-    subtitle: Text(
-      _result ??
-          localizedUiText(context, 'If messages and files from a phone on the same network never ' 'arrive (but yours reach it), Windows Firewall is blocking ' 'them. This lets other devices on any network reach Conest ' 'on this PC; Windows asks to confirm.'),
-    ),
+    title: Text(l10nOf(context).uiLetDevicesOnThisNetwork42E2F0),
+    subtitle: Text(_result ?? l10nOf(context).uiIfMessagesAndFilesFrom3DED27),
     trailing: _busy
         ? const SizedBox(
             width: 20,
             height: 20,
             child: CircularProgressIndicator(strokeWidth: 2),
           )
-        : TextButton(onPressed: _allow, child:  Text(localizedUiText(context, 'Allow'))),
+        : TextButton(
+            onPressed: _allow,
+            child: Text(l10nOf(context).uiAllow3AD0E3),
+          ),
   );
 }
 

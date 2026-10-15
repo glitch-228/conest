@@ -1,4 +1,4 @@
-import 'localized_ui_text.dart';
+import '../app_locales.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -40,11 +40,7 @@ Future<void> openGroupCallScreen(
   } catch (_) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-         SnackBar(
-          content: Text(
-            localizedUiText(context, 'Could not join the call. Check your route or leave the current call.'),
-          ),
-        ),
+        SnackBar(content: Text(l10nOf(context).uiCouldNotJoinTheCall252D45)),
       );
     }
   }
@@ -61,8 +57,8 @@ class GroupCallButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) => IconButton(
     tooltip: controller.groupCallService?.roomFor(groupId) == null
-        ? localizedUiText(context, 'Start group call')
-        : localizedUiText(context, 'Join group call'),
+        ? l10nOf(context).uiStartGroupCallC2A083
+        : l10nOf(context).uiJoinGroupCallC9ECF8,
     onPressed: controller.groupVoiceCallsAvailable
         ? () => openGroupCallScreen(context, controller, groupId)
         : null,
@@ -99,8 +95,14 @@ class GroupCallBanner extends StatelessWidget {
               Expanded(
                 child: Text(
                   room.joined
-                      ? localizedUiText(context, 'Call in ${group.title}')
-                      : localizedUiText(context, '${caller?.name ?? 'A member'} started a call in ${group.title}'),
+                      ? l10nOf(
+                          context,
+                        ).uiCallInValue16F998((group.title).toString())
+                      : l10nOf(context).uiValueStartedACallIn278E96(
+                          (caller?.name ?? l10nOf(context).groupUnknownMember)
+                              .toString(),
+                          (group.title).toString(),
+                        ),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -110,7 +112,11 @@ class GroupCallBanner extends StatelessWidget {
                     ? () =>
                           openGroupCallScreen(context, controller, room.groupId)
                     : null,
-                child: Text(room.joined ? localizedUiText(context, 'Return') : localizedUiText(context, 'Join')),
+                child: Text(
+                  room.joined
+                      ? l10nOf(context).uiReturn24F096
+                      : l10nOf(context).uiJoinE0D731,
+                ),
               ),
             ],
           ),
@@ -177,7 +183,9 @@ class _GroupCallScreenState extends State<GroupCallScreen>
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-           SnackBar(content: Text(localizedUiText(context, 'Could not update the call.'))),
+          SnackBar(
+            content: Text(l10nOf(context).uiCouldNotUpdateTheCall33517D),
+          ),
         );
       }
     } finally {
@@ -245,17 +253,26 @@ class _GroupCallScreenState extends State<GroupCallScreen>
                     const SizedBox(height: 12),
                     Text(
                       room == null
-                          ? localizedUiText(context, 'Call ended')
+                          ? l10nOf(context).uiCallEnded9933A4
                           : room.connected
-                          ? localizedUiText(context, 'Voice call')
-                          : localizedUiText(context, 'Connecting…'),
+                          ? l10nOf(context).uiVoiceCallB8499D
+                          : l10nOf(context).uiConnectingFD3E79,
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                     if (room?.forwarder != null)
                       Padding(
                         padding: const EdgeInsets.all(8),
                         child: Text(
-                          localizedUiText(context, 'Call via ${members.where((m) => m.deviceId == room!.forwarder).firstOrNull?.name ?? 'a member'}'),
+                          l10nOf(context).uiCallViaValue0A68E8(
+                            (members
+                                        .where(
+                                          (m) => m.deviceId == room!.forwarder,
+                                        )
+                                        .firstOrNull
+                                        ?.name ??
+                                    l10nOf(context).groupUnknownMember)
+                                .toString(),
+                          ),
                         ),
                       ),
                     Expanded(
@@ -275,12 +292,14 @@ class _GroupCallScreenState extends State<GroupCallScreen>
                               ),
                               title: Text(
                                 member.deviceId == widget.service.localDeviceId
-                                    ? localizedUiText(context, '${member.name} (you)')
+                                    ? l10nOf(context).uiValueYouEFED9A(
+                                        (member.name).toString(),
+                                      )
                                     : member.name,
                               ),
                               subtitle: Text(
                                 room == null
-                                    ? localizedUiText(context, 'Call ended')
+                                    ? l10nOf(context).uiCallEnded9933A4
                                     : _quality(member, room),
                               ),
                             ),
@@ -300,10 +319,14 @@ class _GroupCallScreenState extends State<GroupCallScreen>
                                     () => widget.service.setMuted(!room!.muted),
                                   ),
                             icon: Icon(room!.muted ? Icons.mic_off : Icons.mic),
-                            label: Text(room.muted ? localizedUiText(context, 'Unmute') : localizedUiText(context, 'Mute')),
+                            label: Text(
+                              room.muted
+                                  ? l10nOf(context).uiUnmute7044C3
+                                  : l10nOf(context).uiMute0F0973,
+                            ),
                           ),
                           FilterChip(
-                            label:  Text(localizedUiText(context, 'Push-to-talk')),
+                            label: Text(l10nOf(context).uiPushToTalk032E78),
                             selected: room.pushToTalk,
                             onSelected: _busy
                                 ? null
@@ -312,7 +335,9 @@ class _GroupCallScreenState extends State<GroupCallScreen>
                                   ),
                           ),
                           FilterChip(
-                            label:  Text(localizedUiText(context, 'Noise suppression')),
+                            label: Text(
+                              l10nOf(context).uiNoiseSuppression71DE3C,
+                            ),
                             selected: widget.service.noiseSuppressionEnabled,
                             onSelected: _busy
                                 ? null
@@ -335,7 +360,7 @@ class _GroupCallScreenState extends State<GroupCallScreen>
                             onPointerUp: (_) => _hold(false),
                             onPointerCancel: (_) => _hold(false),
                             child: Semantics(
-                              label: localizedUiText(context, 'Hold to talk, or hold Space'),
+                              label: l10nOf(context).uiHoldToTalkOrHold74FC22,
                               button: true,
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
@@ -354,8 +379,8 @@ class _GroupCallScreenState extends State<GroupCallScreen>
                                 ),
                                 child: Text(
                                   room.holdingToTalk
-                                      ? localizedUiText(context, 'Talking…')
-                                      : localizedUiText(context, 'Hold to talk · Space'),
+                                      ? l10nOf(context).uiTalkingC34D84
+                                      : l10nOf(context).uiHoldToTalkSpace869505,
                                 ),
                               ),
                             ),
@@ -378,7 +403,7 @@ class _GroupCallScreenState extends State<GroupCallScreen>
                                   }
                                 }),
                           icon: const Icon(Icons.call_end),
-                          label:  Text(localizedUiText(context, 'Leave')),
+                          label: Text(l10nOf(context).uiLeave7E3520),
                         ),
                       ),
                     ] else
@@ -386,7 +411,7 @@ class _GroupCallScreenState extends State<GroupCallScreen>
                         padding: const EdgeInsets.all(16),
                         child: FilledButton(
                           onPressed: () => Navigator.of(context).pop(),
-                          child:  Text(localizedUiText(context, 'Done')),
+                          child: Text(l10nOf(context).uiDoneE9B450),
                         ),
                       ),
                   ],
@@ -437,9 +462,14 @@ class GroupCallSummaryTile extends StatelessWidget {
     return Card(
       child: ListTile(
         leading: const Icon(Icons.call_end_outlined),
-        title: Text(localizedUiText(context, 'Voice call · $duration')),
+        title: Text(
+          l10nOf(context).uiVoiceCallValueBD3141((duration).toString()),
+        ),
         subtitle: Text(
-          localizedUiText(context, 'Started by ${labelFor(summary.startedBy)} · ${summary.participants.length} participants'),
+          l10nOf(context).uiStartedByValueValueParticipants99F03D(
+            (labelFor(summary.startedBy)).toString(),
+            (summary.participants.length),
+          ),
         ),
       ),
     );

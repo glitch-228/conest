@@ -1,4 +1,4 @@
-import 'localized_ui_text.dart';
+import '../app_locales.dart';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -46,7 +46,7 @@ class CodephraseRing extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  localizedUiText(context, 'CODEPHRASE'),
+                  l10nOf(context).uiCODEPHRASEE2C724,
                   style: TextStyle(
                     fontFamily: ConestPalette.monoFont,
                     fontSize: 10,
@@ -68,7 +68,9 @@ class CodephraseRing extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  localizedUiText(context, 'ROTATES IN ${secondsRemaining}s'),
+                  l10nOf(
+                    context,
+                  ).uiROTATESINValueS5745B8((secondsRemaining).toString()),
                   style: TextStyle(
                     fontFamily: ConestPalette.monoFont,
                     fontSize: 11,
@@ -186,7 +188,7 @@ class RouteInspector extends StatelessWidget {
           Row(
             children: [
               Text(
-                localizedUiText(context, 'ROUTE INSPECTOR'),
+                l10nOf(context).uiROUTEINSPECTOR321AA4,
                 style: TextStyle(
                   fontFamily: ConestPalette.monoFont,
                   fontSize: 11,
@@ -196,7 +198,7 @@ class RouteInspector extends StatelessWidget {
               ),
               const Spacer(),
               Text(
-                localizedUiText(context, '● LIVE'),
+                l10nOf(context).uiLIVE67B40B,
                 style: TextStyle(
                   fontFamily: ConestPalette.monoFont,
                   fontSize: 10,
